@@ -8,6 +8,8 @@ import * as currentDb from '../../client/current';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
 import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
 import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
+import type { DbClient } from '../../client/DbClient';
+import { captureMediaUserTurn, refreshMediaUserTurnCost } from '../../../usage/mediaTurnCost';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -1415,5 +1417,58 @@ describe('readPriorUserRoundCost', () => {
       costUsd: 0.5,
       hasEstimatedValue: false,
     });
+  });
+});
+
+describe('media user-round costs', () => {
+  const actual = (amount: number) => ({ amount, currency: 'USD', approximate: false, kind: 'actual-cost' });
+  function fixture() {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id) VALUES (?)').run('s1');
+    const db = {
+      drizzle: h.db,
+      queryOne: async (query: string, params: unknown[] = []) => sqlite.prepare(query).get(...params),
+      exec: async (query: string, params: unknown[] = []) => sqlite.prepare(query).run(...params),
+    } as unknown as DbClient;
+    return { sqlite, db };
+  }
+
+  it('adds media to the visible round, keeps raw subscription valuation, and does not carry it to the next user', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1, agentMeta: { mediaCosts: [actual(0.75)] } });
+    insertCostMessage(sqlite, { id: 'segment', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(0.25) } });
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 3, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'final', role: 'assistant', createdAt: 4,
+      agentMeta: { turnCostUsd: 2, turnCostIsEstimate: true, model: 'keep-model' } });
+    expect(await captureMediaUserTurn(db, 's1')).toEqual({ clientId: 'user' });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+      clientId: 'final', userTurnMoney: { amount: 3, kind: 'actual-cost' }, userTurnCostIsEstimate: true,
+    });
+    const meta = JSON.parse((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'final'").get() as { agent_meta: string }).agent_meta);
+    expect(meta).toMatchObject({ turnCostUsd: 2, turnCostIsEstimate: true, model: 'keep-model', userTurnCost: { amount: 3 } });
+    // The next real user begins a new round, including for same-millisecond rows.
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 4 });
+    insertCostMessage(sqlite, { id: 'next-answer', role: 'assistant', createdAt: 4 });
+    expect((await readPriorUserRoundCost('s1', 'next-answer')).money).toBeNull();
+    expect((await refreshMediaUserTurnCost(db, 's1', 'user'))?.clientId).toBe('final');
+  });
+
+  it('projects media-only responses without inventing a chat segment price and ignores clear/rewind', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 10, agentMeta: { mediaCosts: [actual(0.75)] } });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 11 });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+      clientId: 'answer', userTurnMoney: actual(0.75), userTurnCostIsEstimate: false,
+    });
+    const meta = JSON.parse((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'answer'").get() as { agent_meta: string }).agent_meta);
+    expect(meta.turnCost).toBeUndefined();
+    sqlite.prepare("UPDATE messages SET rewind_at = 12 WHERE id = 'user'").run();
+    expect(await captureMediaUserTurn(db, 's1')).toBeNull();
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+    sqlite.prepare('UPDATE messages SET rewind_at = NULL').run();
+    sqlite.prepare('UPDATE sessions SET cleared_at = 10').run();
+    expect(await captureMediaUserTurn(db, 's1')).toBeNull();
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
   });
 });

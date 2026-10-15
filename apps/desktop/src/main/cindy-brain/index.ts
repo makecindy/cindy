@@ -567,6 +567,7 @@ import { createXaiImageChannel } from './xaiImageClient.js';
 import {
   getCindyProxyMediaService,
   getCindyVideoProviderRegistry,
+  withCindyMediaBillingSession,
 } from '../mcp-integrations/cindyProxyMedia.js';
 import { getCindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { normalizeImageParameters } from '../cindy-media/imageParameters.js';
@@ -8416,7 +8417,11 @@ export function registerGhostIpc(): void {
     }
     // cindy-request = 请 Cindy 本体代办;旧名 model-request 静默兼容(更名前的老包)。
     if (type === 'cindy-request' || type === 'model-request') {
-      return getGhostCindySlot().handleModelRequest(id, payload);
+      const callId = (payload as { callId?: unknown } | null)?.callId;
+      const sessionId = getPluginTaskSourceSessionId(id, typeof callId === 'string' ? callId : undefined);
+      return withCindyMediaBillingSession(sessionId, () =>
+        getGhostCindySlot().handleModelRequest(id, payload),
+      );
     }
     // fetch-request = network 槽代理 HTTP(invoke 返回值即响应,机制同上)。
     if (type === 'download-request') return pluginDownloads.handle(id, payload, () => !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);

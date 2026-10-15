@@ -1834,7 +1834,7 @@ export function getCindyGhostsMcpDeps(
         : undefined;
       let result: Record<string, unknown>;
       try {
-        result = await callCindyMedia(request, downloadContext);
+        result = await callCindyMedia(request, downloadContext, sessionId);
       } finally {
         downloadContext?.dispose?.();
       }

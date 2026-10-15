@@ -276,6 +276,42 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[]) 
   };
 }
 
+it.each(['api', 'subscription', 'tool-only'])('includes media in both run history and schedule totals for %s runs', async (mode) => {
+  const harness = createStorageHarness();
+  try {
+    harness.sqlite.prepare(`INSERT INTO sessions (id, title, created_at, updated_at)
+      VALUES ('sess-media', 'media task', 1, 1)`).run();
+    await harness.storage.insert(baseSchedule({ targetSessionId: 'sess-media' }));
+    await harness.storage.insertRun({ id: 'run-media', scheduleId: 'sch-1', sessionId: 'sess-media',
+      firedAt: 10, status: 'success', costAttribution: 'exact' });
+    const origin = { kind: 'scheduler', scheduleId: 'sch-1', runId: 'run-media' };
+    const insert = harness.sqlite.prepare(`INSERT INTO messages
+      (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES (?, ?, 'sess-media', ?, '{}', ?, ?)`);
+    insert.run('user-media', 'user-media', 'user', JSON.stringify({ origin,
+      mediaCosts: [{ amount: 0.75, currency: 'USD', approximate: false, kind: 'actual-cost' }],
+    }), 10);
+    if (mode !== 'tool-only') {
+      insert.run('answer-media', 'answer-media', 'assistant', JSON.stringify({ origin,
+        turnCostUsd: 0.25, turnCostIsEstimate: mode === 'subscription',
+        // Display totals must not be counted a second time by scheduler billing.
+        userTurnCostUsd: 1,
+      }), 11);
+    }
+    const actual = mode === 'api' ? 1 : 0.75;
+    const estimated = mode === 'subscription' ? 0.25 : 0;
+    for (let read = 0; read < 2; read++) {
+      expect(await harness.storage.listRuns('sch-1')).toMatchObject([{
+        costMoney: { amount: actual }, estimatedValueMoney: { amount: estimated }, costAttribution: 'exact',
+      }]);
+      expect(await harness.storage.listCostSummaries()).toMatchObject([{
+        scheduleId: 'sch-1', totalMoney: { amount: actual },
+        totalEstimatedValueMoney: { amount: estimated },
+      }]);
+    }
+  } finally { harness.close(); }
+});
+
 function enableLegacySessionFallback(
   harness: ReturnType<typeof createStorageHarness>,
   scheduleId: string,

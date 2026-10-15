@@ -45,6 +45,7 @@ import {
 
 import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import { isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap.js';
 import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
@@ -161,9 +162,11 @@ export async function readTodaySpend(): Promise<TodaySpendPayload> {
  * (cost=0, 不走 recordTurnSpend), renderer 的 useUsageHistory 以 spend/tokens push
  * 为仪表盘刷新信号, 用它通知"按模型数据有更新"(对齐 rebroadcastCodexTodayUsage)。
  */
-export async function rebroadcastTodaySpend(): Promise<void> {
+export async function rebroadcastTodaySpend(ownerScope?: DataOwnerBroadcastScope): Promise<void> {
   try {
-    broadcastTodaySpend(await readTodaySpend());
+    const payload = await readTodaySpend();
+    if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+    broadcastTodaySpend(payload);
   } catch (err) {
     log.warn(
       'rebroadcastTodaySpend failed:',

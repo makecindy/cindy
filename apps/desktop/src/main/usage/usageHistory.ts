@@ -90,8 +90,12 @@ export interface UsageHistoryDay {
   tokens: number;
 }
 
+function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
+  return value === 'codex' || value === 'pi' || value === 'media' ? value : 'claude-code';
+}
+
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -106,7 +110,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -523,12 +527,13 @@ export function piSubscriptionUsageModelKey(model: string): string {
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 export function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media',
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
+  if (agentKind === 'media') return undefined;
   if (agentKind === 'codex') {
     return (
       getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
@@ -808,7 +813,7 @@ export async function readUsageHistoryWith(
     if (row.day === todayKey) todayTokens += rowTokens;
   }
   for (const row of modelRows) {
-    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+    const agentKind = usageAgentKind(row.agentKind);
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
     const model = displayModelName(row.model);
@@ -868,11 +873,7 @@ export async function readUsageHistoryWith(
   // 每日 × 模型明细 (30 天窗口) — 堆叠柱状图分段。金额口径与 models 一致:
   // Claude 实报 $, Codex 行按价格表折算 (无价格 → 0, 该模型只出现在图例 token 行)。
   const modelDaily: UsageHistoryModelDay[] = modelRows.map((row) => {
-    const agentKind = row.agentKind === 'codex'
-      ? ('codex' as const)
-      : row.agentKind === 'pi'
-        ? ('pi' as const)
-        : ('claude-code' as const);
+    const agentKind = usageAgentKind(row.agentKind);
     const model = displayModelName(row.model);
     const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
     const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model)

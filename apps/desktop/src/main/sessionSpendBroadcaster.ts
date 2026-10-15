@@ -141,7 +141,7 @@ export async function recordSessionTurnSpend(
           : current
         : (current ?? legacy);
     if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcast(
+    broadcastSessionSpend(
       {
       sessionId,
       totalMoney,
@@ -154,7 +154,8 @@ export async function recordSessionTurnSpend(
   }
 }
 
-function broadcast(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
+export function broadcastSessionSpend(payload: SessionSpendPayload, ownerScope: OwnerScope | null = null): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   // device-link 旁路:控制端经 sessions topic(列表订阅常开,会话未打开也不丢)收到
   // 累计 cost 镜像(本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的

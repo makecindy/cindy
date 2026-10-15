@@ -1,4 +1,5 @@
 import { runTaskTagsTransaction } from './taskTagsTx.js';
+import { recordMediaSpend } from './mediaSpendTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
@@ -58,6 +59,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'usage.recordMediaSpend':
+      return recordMediaSpend(db, txArgs as import('../../client/tx/types.js').MediaSpendArgs);
     case 'authorization.readProjection':
       return readAutoReviewProjectionTransaction(db, txArgs);
     case 'codex.importMessages':

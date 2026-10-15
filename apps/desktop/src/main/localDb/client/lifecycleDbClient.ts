@@ -1,4 +1,5 @@
 import type { CreateDbClientOptions, DbClient } from './DbClient.js';
+import { waitForRetainedDbClient } from './pendingOperations.js';
 
 export type LifecycleDbClientMode =
   | 'worker'
@@ -53,6 +54,7 @@ export function createLifecycleDbClientManager(
     lifecycleDbClientMode = null;
     deps.clearCurrentDbClient(client);
     try {
+      await waitForRetainedDbClient(client);
       await client.dispose();
       deps.log.info('[DbClient] disposed', { reason });
     } catch (err) {

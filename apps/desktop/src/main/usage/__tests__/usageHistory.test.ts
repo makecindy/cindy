@@ -337,6 +337,22 @@ describe('getSubscriptionValuePriceFor', () => {
 });
 
 describe('readUsageHistoryWith', () => {
+  it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {
+    const money = actual(1.25);
+    const result = await readUsageHistoryWith(makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [money] }],
+      getModelUsageSince: async () => [{
+        ...modelRow(TODAY, 'pi', 'seedance-2.0', money), agentKind: 'media',
+      }],
+    }));
+    expect(result.totals.today.amount).toBe(1.25);
+    expect(result.totals.last30DaysTokens).toBe(0);
+    expect(result.models).toEqual([expect.objectContaining({
+      agentKind: 'media', model: 'seedance-2.0', money, estimatedMoney: null,
+    })]);
+    expect(result.modelDaily[0]).toMatchObject({ agentKind: 'media', apiMoney: money, tokens: 0 });
+  });
+
   it('supports an all-time request without changing the default 30-day model window', async () => {
     const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
       inputTokens: 123,

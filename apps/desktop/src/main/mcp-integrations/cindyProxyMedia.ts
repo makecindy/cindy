@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createCindyProxyMediaService } from '../cindy-proxy-media/service.js';
 import type { CindyProxyMediaService } from '../cindy-proxy-media/types.js';
 import {
@@ -15,6 +16,12 @@ import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js'
 import { getAppCapabilities } from '../appCapabilities.js';
 
 const log = createLogger('art');
+const billingSession = new AsyncLocalStorage<string | undefined>();
+
+/** The session comes from the Host's active same-plugin call, never plugin arguments. */
+export function withCindyMediaBillingSession<T>(sessionId: string | undefined, run: () => T): T {
+  return billingSession.run(sessionId, run);
+}
 
 let artService: CindyProxyMediaService | null = null;
 /** 构建单例时捕获的 baseUrl;model-access 下发切换 endpoint 后据此重建。 */
@@ -30,6 +37,30 @@ function getGatewayBaseUrl(): string {
   // 与 key 同源的生效 endpoint(model-access 下发值优先,回落端点清单)。
   return effectiveXdGatewayBaseUrl();
 }
+
+/** Only Gateway creates are billable. Polling and CDN downloads bypass accounting. */
+const gatewayMediaFetch: typeof fetch = async (input, init) => {
+  if (init?.method?.toUpperCase() !== 'POST') return fetch(input, init);
+  let model = 'unknown';
+  if (typeof init.body === 'string') {
+    try {
+      const body = JSON.parse(init.body) as { model?: unknown };
+      if (typeof body?.model === 'string') model = body.model;
+    } catch { /* The response header remains the authoritative model. */ }
+  } else if (init.body instanceof FormData) {
+    const value = init.body.get('model');
+    if (typeof value === 'string') model = value;
+  }
+  const { prepareGatewayMediaBilling } = await import('../usage/gatewayMediaBilling.js');
+  const recordBilling = await prepareGatewayMediaBilling({ model, sessionId: billingSession.getStore() });
+  try {
+    const response = await fetch(input, init);
+    await recordBilling(response);
+    return response;
+  } finally {
+    recordBilling.finish();
+  }
+};
 
 /**
  * XD Gateway 图像/视频后端单例。lizi_art MCP 工具层已退役(2026-07-12),
@@ -56,6 +87,7 @@ export function getCindyProxyMediaService(): CindyProxyMediaService {
     artService = createCindyProxyMediaService({
       imageApi: {
         getApiKey: readApiKey,
+        fetchImplementation: gatewayMediaFetch,
         proxy: {
           baseUrl: getGatewayBaseUrl(),
           generatePath: '/v1/images/generations',
@@ -81,6 +113,7 @@ function createGatewayVideoProviders(baseUrl: string) {
   return [
     createSeedanceProvider({
       baseUrl,
+      fetchImplementation: gatewayMediaFetch,
       getApiKey: readApiKey,
       logger: log,
     }),
@@ -89,11 +122,13 @@ function createGatewayVideoProviders(baseUrl: string) {
     // seedance-fast 之后,不抢出厂默认。
     createSeedance25Provider({
       baseUrl,
+      fetchImplementation: gatewayMediaFetch,
       getApiKey: readApiKey,
       logger: log,
     }),
     createHappyhorseProvider({
       baseUrl,
+      fetchImplementation: gatewayMediaFetch,
       getApiKey: readApiKey,
       logger: log,
     }),
