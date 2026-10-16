@@ -202,6 +202,14 @@ beforeEach(() => {
   registerDeviceLinkIpc();
 });
 
+it('rejects Renderer-supplied remote Skill approval before forwarding any request', async () => {
+  await expect(call(DEVICE_LINK_INVOKE.INVOKE, {
+    deviceId: 'private-peer', channel: 'maker:remote-resources:invoke',
+    args: [{ collectionId: 'skills', actionId: 'management:answer', input: { accepted: true } }],
+  })).rejects.toThrow('PERMISSION_DENIED');
+  expect(remoteInvoke).not.toHaveBeenCalled();
+});
+
 it.each([1_000, 30_000])('flushes completed calls on quit after %i ms without duplicate summaries', async (elapsed) => {
   vi.useFakeTimers();
   try {

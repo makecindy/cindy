@@ -148,6 +148,25 @@ function page(entry: string, withRetirementNavigation = false) {
   );
 }
 
+it('keeps linked computer and project scope in the page heading without changing recommendation', async () => {
+  Object.assign(window.electronAPI, { showOpenDirectoryDialog: vi.fn(async () => ({ canceled: false, path: '/fixture/Cindy' })) });
+  Object.assign(window.electronAPI.ghosts, { workdirPrefsSync: vi.fn(() => ({ disabled: [] })) });
+  render(page('/plugins'));
+  const recommended = await screen.findByText(detail.name);
+  const scope = screen.getByRole('button', { name: 'settings.ghosts.remote.device' });
+  expect(scope.closest('[data-catalog-region="heading"]')).toBeTruthy();
+  expect(document.querySelector('[data-catalog-region="notice"]')).toBeNull();
+  fireEvent.keyDown(scope, { key: 'ArrowDown' });
+  fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'settings.ghosts.scopePicker.ariaLabel' }), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.ghosts.scopePicker.browse' }));
+  await screen.findByText('settings.ghosts.projectBanner.desc');
+  expect(screen.getByText(detail.name)).toBe(recommended);
+  expect(window.electronAPI.ghosts.workdirPrefsSync).toHaveBeenCalledWith('/fixture/Cindy');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.projectBanner.backToGlobal' }));
+  expect(document.querySelector('[data-catalog-region="notice"]')).toBeNull();
+  expect(screen.getByText(detail.name)).toBe(recommended);
+});
+
 async function openFromCatalog() {
   const plugin = await screen.findByText(detail.name);
   const catalog = screen.getByRole('main');

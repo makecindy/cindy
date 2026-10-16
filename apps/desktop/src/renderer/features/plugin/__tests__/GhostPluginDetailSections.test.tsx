@@ -6,6 +6,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import path from 'node:path';
 import type { InstalledGhost } from '../../../../shared/ghost';
 
@@ -32,7 +33,7 @@ vi.mock('@/hooks/useConnectedSource', () => ({
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
-  GhostSettingsWebview: ({ account, reloadKey }: any) => (
+  GhostSettingsWebview: ({ account, reloadKey }: { account?: ReactNode; reloadKey?: number }) => (
     <>
       {account}
       <div key={reloadKey} data-testid="ghost-settings-webview" />
@@ -98,6 +99,7 @@ import {
   ToolsSection,
 } from '../GhostPluginDetailView';
 import { toGhostPluginDetail, type GhostPluginDetail } from '../lib/ghostPluginViewModel';
+import { RemotePluginReadOnlyDetail } from '../RemotePluginReadOnlyDetail';
 
 const permissions: GhostPermissionItem[] = [
   {
@@ -183,6 +185,69 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('shows target shared counts without reading local personal usage for a remote installation', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const usageSummary = vi.fn();
+    Object.assign(window.electronAPI, { ghosts: { usageSummary } });
+    render(
+      <GhostPluginDetailView
+        remote
+        ghost={{ manifest: { id: detail.ghostId }, enabled: true } as InstalledGhost}
+        detail={detail}
+        marketItem={
+          {
+            sourceType: 'server',
+            scope: 'organization',
+            downloadStatistics: { requestCount: '1284' },
+          } as import('../../../../shared/pluginMarket').PluginMarketItem
+        }
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+    expect(screen.getByText('1,284 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.usage.title')).toBeNull();
+    expect(usageSummary).not.toHaveBeenCalled();
+  });
+
+  it('keeps unknown older-Host details honest and renders no local configuration or file actions', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const { container } = render(<RemotePluginReadOnlyDetail
+      detail={{ id: '_ns__team__notes', name: 'Team notes', description: 'Installed on A' }}
+      notice={<p>Read only on A</p>} loading={false} failed={false} online
+      onBack={vi.fn()} onRetry={vi.fn()}
+    />);
+    expect(screen.getByRole('heading', { name: 'Team notes' })).toBeTruthy();
+    expect(screen.getByText('_ns__team__notes')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.remote.detailUnavailable')).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.detail.configurationTitle')).toBeNull();
+    expect(screen.queryByLabelText('Open Install Location')).toBeNull();
+    expect(container.textContent).not.toMatch(/undefined|unverified|已停用|Disabled/);
+  });
+  it('renders Host permission descriptions through the existing permission dialog and disables retry offline', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    render(<RemotePluginReadOnlyDetail
+      detail={{ id: 'notes', name: 'Notes', description: '', permissions: [{ title: 'Read service', description: 'Only the declared service' }] }}
+      notice={<p>Offline</p>} loading={false} failed online={false}
+      onBack={vi.fn()} onRetry={vi.fn()}
+    />);
+    expect((screen.getByRole('button', { name: 'settings.ghosts.remote.refreshDetail' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions: Read service' }));
+    expect(within(await screen.findByRole('dialog')).getByText('Only the declared service')).toBeTruthy();
+  });
   it('does not advertise host login for a locally imported unverified GitHub plugin', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -197,7 +262,7 @@ describe('Ghost plugin detail sections', () => {
     render(
       <GhostPluginDetailView
         ghost={
-          { manifest: { id: 'cindy-github' }, enabled: true, trust: { level: 'unverified' } } as any
+          { manifest: { id: 'cindy-github' }, enabled: true, trust: { level: 'unverified' } } as InstalledGhost
         }
         detail={{ ...detail, id: 'cindy-github', ghostId: 'cindy-github', hasSettingsUi: true }}
         panelStatus={null}
@@ -344,6 +409,30 @@ describe('Ghost plugin detail sections', () => {
     fireEvent.click(toggle);
     fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
     expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders a remote disabled notice without a configuration heading or local settings', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    render(
+      <GhostPluginDetailView
+        remote
+        remoteConfiguration={<p>Enable this plugin before configuring.</p>}
+        ghost={null}
+        detail={{ ...detail, enabled: false, hasSettingsUi: true }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    expect(screen.getByText('Enable this plugin before configuring.')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'settings.ghosts.detail.configurationTitle' })).toBeNull();
+    expect(screen.queryByTestId('ghost-settings-webview')).toBeNull();
   });
 
   it('shows the main-view preference alongside the plugin settings UI', () => {

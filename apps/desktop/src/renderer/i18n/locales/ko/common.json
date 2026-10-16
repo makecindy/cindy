@@ -6358,7 +6358,7 @@
         "bodyInvalid": "이 플러그인의 설치 확인 기록이 손상되어 실행을 중지했습니다. 원래 마켓 버전을 다시 설치하거나 해당 .cindy 패키지를 다시 선택해 주세요.",
         "bodyBuiltinRestart": "이 내장 플러그인의 설치 확인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며 다른 조치는 필요하지 않습니다."
       },
-      "install": "플러그인 설치…",
+      "install": "파일에서 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
       "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
       "legacyRecovery": {
@@ -6382,14 +6382,19 @@
       "projectDisabledTag": "이 프로젝트에서 꺼짐",
       "projectSwitchLockedTip": "이 플러그인은 전역에서 비활성 상태입니다. 먼저 '전역' 보기에서 활성화해 주세요",
       "projectBanner": {
-        "title": "프로젝트 \"{{name}}\" 설정 중",
-        "desc": "여기 스위치는 이 프로젝트에만 적용됩니다. 끈 플러그인은 이 프로젝트에서 사용할 수 없습니다",
+        "title": "현재 프로젝트: {{name}}",
+        "desc": "스위치 변경은 이 프로젝트에만 적용됩니다. 설치, 업데이트, 제거 및 설정은 {{device}} 전체에 적용됩니다.",
         "backToGlobal": "전역으로 돌아가기"
       },
       "scopePicker": {
         "global": "전역(기본값)",
         "ariaLabel": "플러그인 적용 범위 선택",
-        "browse": "다른 폴더 선택…"
+        "browse": "다른 폴더 선택…",
+        "management": "관리 범위",
+        "globalScope": "전역",
+        "computers": "컴퓨터",
+        "projectScope": "프로젝트 범위",
+        "projectsForComputer": "{{device}}의 프로젝트"
       },
       "enableAria": "{{name}} 활성화",
       "uninstall": "제거",
@@ -6887,6 +6892,49 @@
           "requirements": "Apple Silicon Mac, macOS 15 이상 및 전체 Xcode가 필요합니다.",
           "dataNotice": "기존 시뮬레이터 기기와 App 데이터는 삭제되지 않습니다. Baguette를 설치해도 기기, App, 로그인 상태는 자동으로 이전되지 않습니다."
         }
+      },
+      "remote": {
+        "device": "관리할 컴퓨터",
+        "thisComputer": "현재 컴퓨터",
+        "offline": "오프라인",
+        "confirmOn": "{{device}}의 {{name}}",
+        "targetOnly": "설정은 {{device}}에 저장됩니다.",
+        "hostPreferencesUnavailable": "이 컴퓨터는 모델, 작업 및 사이드바 환경설정의 원격 편집을 지원하지 않습니다. {{device}}에서 설정하세요.",
+        "taskWorkdirBoundary": "작업 디렉터리는 대상 컴퓨터의 설정을 유지합니다. 대상 컴퓨터에서 변경하세요.",
+        "configurationLoading": "설정을 불러오는 중…",
+        "configurationReadFailed": "설정을 불러오지 못했습니다.",
+        "refreshConfiguration": "설정 새로고침",
+        "enableBeforeConfigure": "이 플러그인은 비활성화되어 있습니다. 설정하려면 위의 스위치를 켜세요.",
+        "settingsPageUnavailable": "{{device}}의 Cindy에서 이 플러그인의 설정 페이지를 열어 주세요. 대상 컴퓨터의 현재 버전은 원격 표시를 지원하지 않습니다。",
+        "offlineNotice": "{{device}}이(가) 오프라인입니다. 연결이 복구되면 관리를 계속할 수 있습니다.",
+        "managingTarget": "관리 대상: {{device}}",
+        "managingDescription": "변경 사항은 이 컴퓨터에 저장됩니다.",
+        "viewingTarget": "{{device}}에 설치된 플러그인",
+        "unsupported": "{{device}}의 Cindy 버전은 아직 원격 관리를 지원하지 않습니다. 설치된 플러그인은 여기서 확인할 수 있습니다. 설치, 업데이트, 제거, 활성화·비활성화, 설정 및 프로젝트 관리를 하려면 해당 컴퓨터에서 Cindy를 업데이트하세요.",
+        "refresh": "플러그인 새로 고침",
+        "instanceId": "플러그인 인스턴스",
+        "detailLoading": "플러그인 세부 정보를 불러오는 중…",
+        "detailReadFailed": "플러그인 세부 정보를 불러오지 못했습니다.",
+        "refreshDetail": "세부 정보 새로 고침",
+        "detailUnavailable": "이 컴퓨터에서 플러그인의 전체 세부 정보를 제공하지 않아 반환된 정보만 표시합니다.",
+        "retry": "다시 시도",
+        "readFailed": "플러그인을 읽을 수 없습니다.",
+        "unknown": "작업 결과가 확인되지 않았습니다. 원래 작업 결과를 조회하세요.",
+        "success": "대상 컴퓨터에서 완료했습니다.",
+        "cancelled": "취소했습니다.",
+        "actionFailed": "작업에 실패했습니다. 목록을 새로 고친 후 다시 시도하세요.",
+        "changed": "플러그인이 변경되었습니다. 새로 고친 후 다시 시도하세요.",
+        "uninstallOn": "{{device}}에서 {{name}}을(를) 제거할까요?",
+        "uninstall": "제거",
+        "empty": "이 컴퓨터에 설치된 플러그인이 없습니다.",
+        "marketUnavailable": "대상 컴퓨터의 마켓을 사용할 수 없습니다.",
+        "personalInstall": "개인 설치",
+        "loading": "플러그인 읽는 중…",
+        "installDestination": "설치 대상: {{device}}",
+        "projectsUnsupported": "프로젝트 설정을 관리하려면 대상 컴퓨터의 Cindy를 업데이트하세요.",
+        "noProjects": "이 컴퓨터에는 아직 선택할 프로젝트가 없습니다.",
+        "projectLoading": "프로젝트 설정을 읽는 중…",
+        "projectReadFailed": "프로젝트 설정을 읽지 못했습니다. 다시 시도하세요."
       },
       "usage": {
         "title": "내 호출",
@@ -13697,6 +13745,17 @@
     "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
+    "remote": {
+      "loading": "스킬을 불러오는 중…",
+      "readFailed": "스킬을 불러오지 못했습니다. 다시 시도해 주세요.",
+      "unsupported": "원격으로 스킬을 관리하려면 대상 컴퓨터의 Cindy를 업데이트하세요.",
+      "confirm": {
+        "install": "{{device}}에 {{name}}을 설치할까요?",
+        "update": "{{device}}의 {{name}}을 v{{version}}으로 업데이트할까요?",
+        "uninstall": "{{device}}에서 {{name}}을 제거할까요?",
+        "installDescription": "스킬은 선택한 컴퓨터에 저장됩니다. 업데이트 전에 기존 파일의 백업을 보관합니다."
+      }
+    },
     "unifiedDetail": {
       "contentSource": "콘텐츠 출처",
       "local": "로컬",
@@ -13714,17 +13773,13 @@
     },
     "home": {
       "title": "스킬",
-      "description": "로컬 스킬을 관리하거나 Skill Hub에서 새로운 스킬을 찾아 설치하세요.",
+      "description": "설치된 스킬을 관리하거나 SkillHub에서 더 많은 스킬을 찾아보세요.",
       "descriptionLocalOnly": "이 기기에 설치된 로컬 스킬을 관리하세요.",
       "search": "스킬 검색",
       "clearSearch": "스킬 검색 지우기",
       "noSearchResults": "일치하는 스킬을 찾을 수 없습니다",
       "catalogFiltersAria": "SkillHub 카테고리",
       "categoryFiltersAria": "카테고리로 스킬 필터링",
-      "scrollCategoriesLeft": "왼쪽 카테고리 더 보기",
-      "scrollCategoriesRight": "오른쪽 카테고리 더 보기",
-      "categoryScrollAtStart": "첫 번째 카테고리입니다",
-      "categoryScrollAtEnd": "마지막 카테고리입니다",
       "catalogFilter": {
         "public": "공개",
         "organization": "조직",

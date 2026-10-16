@@ -80,7 +80,12 @@ export function initializePluginOauthHost(
   authenticated = new AuthenticatedOauthHost({
     ...deps,
     identity: currentIdentity,
-    request: (peer, raw) => transactions.request(peer, raw),
+    request: (peer, raw) => {
+      const request = raw as import('@cindy/device-link').PluginOauthRequest;
+      return request.op === 'settings' && deps.settingsRequest
+        ? deps.settingsRequest(peer, request)
+        : transactions.request(peer, raw);
+    },
   });
   unsubscribe = onOauthCardClosed((id) => host?.cancelRequest(id));
 }

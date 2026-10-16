@@ -194,6 +194,34 @@ export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: stri
   };
 }
 
+/** Same configuration executors as local settings, with the remote lease checked at persistence. */
+export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string, method: string, body: string | undefined, current: () => boolean, confirmConnection?: (label: string, host: string) => Promise<boolean>) {
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
+  if (!partition || !current()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  ensureGhostProtocolRegistered(ghost);
+  const target = captureGhostProtocolTargetGuard(partition);
+  const isCurrent = () => current() && target();
+  const id = installedGhostStoragePart(ghost), path = new URL(pathname, 'https://plugin.invalid').pathname;
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
+  const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
+    : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+  let result: { status: number; body?: string };
+  if (handler) result = await handler(args);
+  else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
+    method, readBodyText: args.readBodyText, store: ghostKvStore, ghostId: id, isCurrent,
+  });
+  else {
+    if (method !== 'GET') return { status: 405, mime: 'application/json', base64: '' };
+    const response = await fetchGhostMobilePage(ghost, pathname, method);
+    if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+    return response;
+  }
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  return { status: result.status, mime: 'application/json', base64: Buffer.from(result.body ?? '').toString('base64') };
+}
+
 // 管子桥 preload 的产物路径(与 main bundle 同目录,forge VitePlugin 出的
 // .vite/build/ghostPreload.js;__dirname 在 dev/prod 都指向 .vite/build)。
 const GHOST_PRELOAD_PATH = path.join(
@@ -312,6 +340,7 @@ type GhostConnectionsProtocolHandler = (args: {
   pathname: string;
   readBodyText: () => Promise<string>;
   isCurrent: () => boolean;
+  confirmConnection?: (label: string, host: string) => Promise<boolean>;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostConnectionsHandler: GhostConnectionsProtocolHandler | null = null;
@@ -373,7 +402,7 @@ export function revokeLegacyGhostProtocolPartition(ghostId: string): void {
  * data:/blob:。
  * 与分区级断网(onBeforeRequest)构成双保险。
  */
-const GHOST_HTML_CSP =
+export const GHOST_HTML_CSP =
   "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:";
 
 function createGhostProtocolTargetGuard(

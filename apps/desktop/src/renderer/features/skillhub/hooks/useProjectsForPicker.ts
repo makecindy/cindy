@@ -12,6 +12,7 @@ import { useMemo } from 'react';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
+import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 export interface PickerProject {
   projectRoot: string;
@@ -19,6 +20,7 @@ export interface PickerProject {
 }
 
 export function useProjectsForPicker(): { projects: PickerProject[]; loading: boolean } {
+  const target = useSkillhubTarget();
   const { sessions, isLoading } = useCCSessions();
 
   const projects = useMemo<PickerProject[]>(() => {
@@ -30,5 +32,5 @@ export function useProjectsForPicker(): { projects: PickerProject[]; loading: bo
     }));
   }, [sessions, isLoading]);
 
-  return { projects, loading: isLoading };
+  return target ? { projects: target.projects, loading: !target.state.bootstrapped } : { projects, loading: isLoading };
 }

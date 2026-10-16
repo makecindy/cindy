@@ -255,6 +255,7 @@ import {
   getGhostManager,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
+  remotePluginSettings,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import {
@@ -3201,6 +3202,7 @@ initGhostSetupCoordinator({
 });
 
 initializePluginOauthCards({
+  settings: remotePluginSettings,
   bindConnection: bindGhostSetupConnectionAction,
   identity: currentOauthIdentityScope,
   loadKey: loadOauthSigningKey,

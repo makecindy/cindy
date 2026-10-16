@@ -6358,7 +6358,7 @@
         "bodyInvalid": "这个插件的安装验证记录已损坏，因此已暂停运行。请重新安装原市场版本，或重新选择对应的 .cindy 包。",
         "bodyBuiltinRestart": "这个内置插件的安装验证记录出了问题。重启 Cindy 即可自动恢复，无需其他操作。"
       },
-      "install": "安装插件…",
+      "install": "从文件安装…",
       "empty": "还没有安装任何插件",
       "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
       "legacyRecovery": {
@@ -6382,14 +6382,19 @@
       "projectDisabledTag": "本项目已停用",
       "projectSwitchLockedTip": "该插件已在全局停用；请先切回「全局」视图启用",
       "projectBanner": {
-        "title": "正在配置项目「{{name}}」",
-        "desc": "开关只影响此项目：关闭的插件在该项目中不可用",
+        "title": "当前项目：{{name}}",
+        "desc": "开关仅影响此项目；安装、更新、卸载和配置作用于{{device}}。",
         "backToGlobal": "返回全局"
       },
       "scopePicker": {
         "global": "全局(默认)",
         "ariaLabel": "选择插件启用范围",
-        "browse": "选择其它目录…"
+        "browse": "选择其它目录…",
+        "management": "管理范围",
+        "globalScope": "全局",
+        "computers": "电脑",
+        "projectScope": "项目范围",
+        "projectsForComputer": "{{device}}上的项目"
       },
       "enableAria": "启用 {{name}}",
       "uninstall": "卸载",
@@ -6887,6 +6892,49 @@
           "requirements": "需要 Apple Silicon Mac、macOS 15 或更高版本及完整 Xcode。",
           "dataNotice": "原模拟器的设备和应用数据不会被删除。安装 Baguette 不会自动迁移设备、App 或登录状态。"
         }
+      },
+      "remote": {
+        "device": "管理电脑",
+        "thisComputer": "当前电脑",
+        "offline": "离线",
+        "confirmOn": "在 {{device}} 上操作 {{name}}",
+        "targetOnly": "配置保存在 {{device}}。",
+        "hostPreferencesUnavailable": "这台电脑暂不支持远程编辑模型、任务和侧栏偏好，请在{{device}}上配置。",
+        "taskWorkdirBoundary": "工作目录沿用目标电脑的设置，请在目标电脑修改。",
+        "configurationLoading": "正在读取设置…",
+        "configurationReadFailed": "未能读取设置。",
+        "refreshConfiguration": "刷新设置",
+        "enableBeforeConfigure": "插件已停用，请先打开上方开关，再进行配置。",
+        "settingsPageUnavailable": "请在 {{device}} 的 Cindy 中打开此插件的设置页，目标电脑当前版本暂不支持远程显示。",
+        "offlineNotice": "「{{device}}」已离线，暂时无法管理。连接恢复后可继续。",
+        "managingTarget": "正在管理「{{device}}」",
+        "managingDescription": "更改将保存在这台电脑上。",
+        "viewingTarget": "「{{device}}」的已装插件",
+        "unsupported": "「{{device}}」的 Cindy 版本尚不支持远程管理。当前可查看它的已装插件；如需安装、升级、卸载、启停、配置或项目管理，请先在该电脑更新 Cindy。",
+        "refresh": "刷新插件",
+        "instanceId": "插件实例",
+        "detailLoading": "正在读取插件详情…",
+        "detailReadFailed": "未能读取插件详情",
+        "refreshDetail": "刷新详情",
+        "detailUnavailable": "该电脑未提供完整的插件详情，此处仅展示已返回的信息。",
+        "retry": "重试",
+        "readFailed": "无法读取插件，请重试。",
+        "unknown": "操作结果尚未确认，可查询原操作结果。",
+        "success": "目标电脑已完成操作。",
+        "cancelled": "已取消。",
+        "actionFailed": "操作失败，请刷新列表后重试。",
+        "changed": "插件已发生变化，请刷新后重试。",
+        "uninstallOn": "从 {{device}} 卸载 {{name}}？",
+        "uninstall": "卸载",
+        "empty": "这台电脑尚未安装插件。",
+        "marketUnavailable": "目标电脑的插件市场暂时不可用。",
+        "personalInstall": "个人安装",
+        "loading": "正在读取插件…",
+        "installDestination": "安装到：{{device}}",
+        "projectsUnsupported": "目标电脑暂不支持项目管理，请更新该电脑上的 Cindy。",
+        "noProjects": "这台电脑还没有可选项目。",
+        "projectLoading": "正在读取项目开关…",
+        "projectReadFailed": "项目开关读取失败，请重试。"
       },
       "usage": {
         "title": "个人调用",
@@ -13697,6 +13745,17 @@
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
+    "remote": {
+      "loading": "正在读取技能…",
+      "readFailed": "无法读取技能，请重试。",
+      "unsupported": "目标电脑暂不支持远程技能管理，请更新其 Cindy。",
+      "confirm": {
+        "install": "在“{{device}}”安装“{{name}}”？",
+        "update": "将“{{device}}”的“{{name}}”更新至 v{{version}}？",
+        "uninstall": "从“{{device}}”卸载“{{name}}”？",
+        "installDescription": "技能将写入所选电脑，更新前保留原文件备份。"
+      }
+    },
     "unifiedDetail": {
       "contentSource": "内容来源",
       "local": "本地",
@@ -13714,17 +13773,13 @@
     },
     "home": {
       "title": "技能",
-      "description": "管理本地技能，或从 Skill Hub 发现并安装更多技能。",
+      "description": "管理已安装的技能，或从 SkillHub 发现更多技能。",
       "descriptionLocalOnly": "管理本机安装的本地技能。",
       "search": "搜索技能",
       "clearSearch": "清除技能搜索",
       "noSearchResults": "没有找到匹配的技能",
       "catalogFiltersAria": "SkillHub 分类",
       "categoryFiltersAria": "按分类筛选技能",
-      "scrollCategoriesLeft": "向左查看更多分类",
-      "scrollCategoriesRight": "向右查看更多分类",
-      "categoryScrollAtStart": "已经是第一个分类",
-      "categoryScrollAtEnd": "已经是最后一个分类",
       "catalogFilter": {
         "public": "公开",
         "organization": "组织",

@@ -50,6 +50,8 @@ import {
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
+import { REMOTE_PLUGIN_SETTINGS_PARTITION } from '../shared/remotePluginSettings.js';
+import { resolveRemoteSettingsAttach } from './cindy-brain/remotePluginSettingsController.js';
 import {
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
@@ -942,8 +944,23 @@ export function installWebviewHardener(): void {
     // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
     let pendingCaptchaAttach = false;
+    let pendingRemoteSettings: ReturnType<typeof resolveRemoteSettingsAttach> = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
+      pendingRemoteSettings = null;
+      pendingGhostAttach = null;
+      if (typeof params.partition === 'string' && params.partition.startsWith(REMOTE_PLUGIN_SETTINGS_PARTITION)) {
+        const view = resolveRemoteSettingsAttach(contents, params.partition, params.src);
+        if (!view) { e.preventDefault(); return; }
+        params.partition = view.partition;
+        webPreferences.partition = view.partition;
+        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
+        webPreferences.experimentalFeatures = false;
+        webPreferences.navigateOnDragDrop = false;
+        delete webPreferences.enableBlinkFeatures;
+        pendingRemoteSettings = view;
+        return;
+      }
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
       // (绝不回落到浏览器分区,那会让 cindy-ghost:// 内容跑进错误 session)。
@@ -993,6 +1010,12 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      if (pendingRemoteSettings) {
+        const view = pendingRemoteSettings;
+        pendingRemoteSettings = null;
+        try { view.current(); view.attach(guestContents); } catch { guestContents.close(); }
+        return;
+      }
       if (pendingCaptchaAttach) {
         pendingCaptchaAttach = false;
         // 挑战页零弹窗;顶层导航只允许停留在托管挑战页白名单内(Turnstile 的

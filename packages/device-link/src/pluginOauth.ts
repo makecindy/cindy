@@ -1,18 +1,30 @@
-/** Host-to-Host OAuth control only. Never expose its replies to a Renderer. */
+import {
+  parsePluginSettingsRequest,
+  type PluginSettingsRequest,
+} from "./pluginSettings.js";
+
+/** Host-to-Host encrypted control only. Never expose its envelope replies to a Renderer. */
 export const PLUGIN_OAUTH_CHANNEL = "device-link:plugin-oauth:v3";
 export const PLUGIN_OAUTH_LOCAL_CHANNEL = "plugin-oauth:assist";
 export const PLUGIN_OAUTH_TTL_MS = 5 * 60_000;
 /**
- * Sealed JSON body limits. A Host offer may carry one 代输入 step screenshot;
- * what the owner device sends back stays as small as before.
+ * Sealed JSON limits: offers may contain one 代输入 screenshot; callbacks may
+ * contain a settings request body. Each inner operation retains its own limits.
  */
-export const PLUGIN_OAUTH_SEALED_MAX_BYTES = { offer: 480_000, callback: 32_000 } as const;
+export const PLUGIN_OAUTH_SEALED_MAX_BYTES = {
+  offer: 480_000,
+  callback: 144_000,
+} as const;
 /** A well-formed base64url box for a direction: IV (12) + body + tag (16). */
-export function isPluginOauthBox(direction: "offer" | "callback", box: unknown): box is string {
+export function isPluginOauthBox(
+  direction: "offer" | "callback",
+  box: unknown,
+): box is string {
   return (
     typeof box === "string" &&
     box.length >= 40 &&
-    box.length <= Math.ceil(((PLUGIN_OAUTH_SEALED_MAX_BYTES[direction] + 28) * 4) / 3) &&
+    box.length <=
+      Math.ceil(((PLUGIN_OAUTH_SEALED_MAX_BYTES[direction] + 28) * 4) / 3) &&
     /^[A-Za-z0-9_-]+$/.test(box)
   );
 }
@@ -24,6 +36,7 @@ export interface PluginOauthAction {
 }
 
 export type PluginOauthRequest =
+  | PluginSettingsRequest
   | { op: "capabilities" }
   | ({
       op: "start";
@@ -69,9 +82,13 @@ export function oauthId(v: unknown): v is string {
   return typeof v === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v);
 }
 export function oauthGhostId(value: unknown): value is string {
-  return oauthId(value) ||
+  return (
+    oauthId(value) ||
     (typeof value === "string" &&
-      /^_ns__[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?__[a-z0-9][a-z0-9-]{0,31}$/.test(value));
+      /^_ns__[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?__[a-z0-9][a-z0-9-]{0,31}$/.test(
+        value,
+      ))
+  );
 }
 export function parsePluginOauthAction(
   value: unknown,
@@ -98,6 +115,7 @@ export function parsePluginOauthRequest(
   value: unknown,
 ): PluginOauthRequest | null {
   if (!record(value)) return null;
+  if (value.op === "settings") return parsePluginSettingsRequest(value);
   if (value.op === "capabilities" && exact(value, ["op"]))
     return { op: value.op };
   if (

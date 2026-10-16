@@ -68,12 +68,12 @@ describe('production plugin instance boundaries', () => {
     expect(fixture.stop).not.toHaveBeenCalled();
     const currentApproval = ghostInstallApprovalToken(fixture.organization.approval);
     await fixture.setGhostEnabledForUser('helper', false, currentApproval);
-    expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval);
+    expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval, undefined);
   });
   it('does not disable a logical twin after the original physical target disappears', async () => {
     const fixture = harness();
     await fixture.setGhostEnabledForUser('helper', false);
-    expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval));
+    expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval), undefined);
     fixture.setEnabled.mockClear();
     fixture.stop.mockClear();
     fixture.ghosts.splice(0, 1);

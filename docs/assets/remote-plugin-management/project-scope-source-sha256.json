@@ -1,0 +1,91 @@
+{
+  "comparisonBase": "main@6e2ba9286a6153e376b07830d51ef7a3b199eaea",
+  "parentCommit": "2817ec131454354578eb8e3c5a7c69d9d534689b",
+  "runtime": {
+    "environment": "One Mac, two isolated live Electron Hosts, real device-link, no IPC fixtures",
+    "initialTheme": "dark",
+    "targetRecent": [
+      "/tmp/cindy-remote-management-acceptance.ZVaG21/skill-install-project-1016"
+    ],
+    "controllerRecent": [],
+    "views": [
+      {
+        "view": "light remote browser",
+        "fixedTarget": "device:dev-remote-plugin-target-1015-5336ed5b7a1c3db46de67997e73394df88"
+      },
+      {
+        "view": "light target project menu",
+        "paths": [
+          "/private/tmp/cindy-remote-management-acceptance.ZVaG21/scope-browser-check/skill-install-project-1016",
+          "/private/tmp/cindy-remote-management-acceptance.ZVaG21/scope-browser-check/skill-install-project-1016",
+          "/tmp/cindy-remote-management-acceptance.ZVaG21/skill-install-project-1016",
+          "/tmp/cindy-remote-management-acceptance.ZVaG21/skill-install-project-1016"
+        ]
+      },
+      {
+        "view": "dark target project menu",
+        "paths": [
+          "/private/tmp/cindy-remote-management-acceptance.ZVaG21/scope-browser-check/skill-install-project-1016",
+          "/private/tmp/cindy-remote-management-acceptance.ZVaG21/scope-browser-check/skill-install-project-1016",
+          "/tmp/cindy-remote-management-acceptance.ZVaG21/skill-install-project-1016",
+          "/tmp/cindy-remote-management-acceptance.ZVaG21/skill-install-project-1016"
+        ]
+      }
+    ],
+    "cancelPreservesScope": true,
+    "browsed": {
+      "id": "34c3541bd21478038013ceaa21938a2ed5b3d1d438610927cb6440d99d2a2fb8",
+      "name": "skill-install-project-1016",
+      "path": "/private/tmp/cindy-remote-management-acceptance.ZVaG21/scope-browser-check/skill-install-project-1016"
+    },
+    "recentListsUnchanged": true,
+    "projectToggleAcceptance": {
+      "script": "project-scope-finish-1016.cjs",
+      "projectDisableOnlyTarget": true,
+      "globalUnchanged": true,
+      "otherProjectUnchanged": true,
+      "controllerUnchanged": true,
+      "restored": true,
+      "note": "Live UI toggle acceptance completed before the final browse-only catalogue refresh; toggle implementation unchanged."
+    }
+  },
+  "files": [
+    {
+      "file": "apps/desktop/src/main/cindy-brain/index.ts",
+      "sha256": "699eb29ebbf1b79e5774a915a20af45664ca500054cf0e0f2b8bc0e643900496"
+    },
+    {
+      "file": "apps/desktop/src/main/cindy-brain/remotePluginProjects.ts",
+      "sha256": "3a0976e5701ec6a53a493f7e76d3af56e23633c2cf81d03c77e84bb22d1d04b6"
+    },
+    {
+      "file": "apps/desktop/src/main/cindy-brain/remotePluginManagement.ts",
+      "sha256": "4e8cb8465421cebdd557e8f2a11c1b4e8126029a4c5f20193397232d8627ee5b"
+    },
+    {
+      "file": "apps/desktop/src/shared/pluginManagement.ts",
+      "sha256": "4122459476afc134d48efd63a78da36e308207f5a5b9ae8dc7388be884941e6e"
+    },
+    {
+      "file": "apps/desktop/src/renderer/features/plugin/PluginScopePicker.tsx",
+      "sha256": "261d8667e5d1f91e99a530ecd5bf086e567ac1c46f34bb87b5de8f9e0fdf9708"
+    },
+    {
+      "file": "apps/desktop/src/renderer/features/plugin/RemotePluginPage.tsx",
+      "sha256": "7012c3dee313b0782a5590dfc6bdd8b145b3816f9f0b54b3227c1263489b4808"
+    },
+    {
+      "file": "apps/desktop/src/renderer/features/plugin/remotePluginManagementClient.ts",
+      "sha256": "4916d079ceee183606f9dcd1807c1b85436de2f9a79419d9e34b0de5a62d5258"
+    },
+    {
+      "file": "apps/desktop/src/renderer/components/new-chat/AddRemoteProjectDialog.tsx",
+      "sha256": "1f9d1f94c601bfba345e4e2f85af4ee5812b9b84a1e524852bcfe499cf8030f2"
+    },
+    {
+      "file": "apps/desktop/src/renderer/components/new-chat/remoteBrowseAdapters.ts",
+      "sha256": "947d2818b369dc7288436b39f4e6b483264b7166e8183e24c1ff5369142f2ff8"
+    }
+  ],
+  "targetHostFilesMatchControllerSource": true
+}

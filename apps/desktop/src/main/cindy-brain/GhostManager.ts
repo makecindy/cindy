@@ -2802,8 +2802,12 @@ export class GhostManager {
     id: string,
     enabled: boolean,
     expectedInstalledApproval?: string,
+    assertCurrent?: () => void,
   ): Promise<{ ok: true } | { rejection: UninstallRejection }> {
-    return this.runExclusiveMutation(() => this.setEnabledUnlocked(id, enabled, expectedInstalledApproval));
+    return this.runExclusiveMutation(() => {
+      assertCurrent?.();
+      return this.setEnabledUnlocked(id, enabled, expectedInstalledApproval);
+    });
   }
 
   private async setEnabledUnlocked(

@@ -1,0 +1,161 @@
+{
+  "environment": "One Mac, two isolated live Electron Hosts, real device-link, no IPC fixtures",
+  "screenshots": [
+    "skills-filters-compact-light.png",
+    "project-scope-compact-light.png",
+    "skills-filters-compact-dark.png",
+    "project-scope-compact-dark.png",
+    "skills-filters-compact-narrow-dark.png"
+  ],
+  "measurements": [
+    {
+      "mode": "light",
+      "width": 1440,
+      "root": {
+        "x": 0,
+        "y": 46,
+        "width": 1439,
+        "height": 914
+      },
+      "heading": {
+        "x": 307.5,
+        "y": 142,
+        "width": 824,
+        "height": 103
+      },
+      "target": {
+        "x": 931.5,
+        "y": 142,
+        "width": 200,
+        "height": 36
+      },
+      "notice": {
+        "x": 307.5,
+        "y": 225,
+        "width": 824,
+        "height": 20
+      },
+      "filters": {
+        "x": 307.5,
+        "y": 265,
+        "width": 824,
+        "height": 78
+      },
+      "pageOverflow": false,
+      "noticeBorder": "0px"
+    },
+    {
+      "mode": "light",
+      "projectMenuWidth": 320,
+      "pathClipped": true,
+      "fullPathOnHover": true
+    },
+    {
+      "mode": "dark",
+      "width": 1440,
+      "root": {
+        "x": 0,
+        "y": 46,
+        "width": 1439,
+        "height": 914
+      },
+      "heading": {
+        "x": 307.5,
+        "y": 142,
+        "width": 824,
+        "height": 103
+      },
+      "target": {
+        "x": 931.5,
+        "y": 142,
+        "width": 200,
+        "height": 36
+      },
+      "notice": {
+        "x": 307.5,
+        "y": 225,
+        "width": 824,
+        "height": 20
+      },
+      "filters": {
+        "x": 307.5,
+        "y": 265,
+        "width": 824,
+        "height": 78
+      },
+      "pageOverflow": false,
+      "noticeBorder": "0px"
+    },
+    {
+      "mode": "dark",
+      "projectMenuWidth": 320,
+      "pathClipped": true,
+      "fullPathOnHover": true
+    },
+    {
+      "mode": "dark",
+      "width": 640,
+      "root": {
+        "x": 0,
+        "y": 46,
+        "width": 639,
+        "height": 854
+      },
+      "heading": {
+        "x": 44,
+        "y": 190,
+        "width": 551,
+        "height": 127
+      },
+      "target": {
+        "x": 395,
+        "y": 190,
+        "width": 200,
+        "height": 36
+      },
+      "notice": {
+        "x": 44,
+        "y": 297,
+        "width": 551,
+        "height": 20
+      },
+      "filters": {
+        "x": 44,
+        "y": 337,
+        "width": 551,
+        "height": 78
+      },
+      "pageOverflow": false,
+      "noticeBorder": "0px"
+    }
+  ],
+  "sourceSwitching": true,
+  "categorySwitching": true,
+  "searchAndClear": true,
+  "date": "2026-10-16",
+  "sources": {
+    "apps/desktop/src/renderer/features/plugin/PluginScopePicker.tsx": "fef99c7bca31b7f09ff14cdeb804f74f07e15f1bf82db04d2d302dd1e3fd85e8",
+    "apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx": "885538c55246ab2fc7aed380b13ad891f094e852065c933eb935547c5ad74f67",
+    "apps/desktop/src/renderer/features/skillhub/SkillhubHomeView.tsx": "3cd8eb8e6d00717e26f3f4be45186bd9cc7c33c5fe3dffc72a9838039f25f487",
+    "apps/desktop/src/renderer/features/skillhub/RemoteSkillsPage.tsx": "ceebd317476b086aee7364ed521afbba4d88ad54ccf4a24110fd1494ad251c87"
+  },
+  "validation": {
+    "desktopTests": {
+      "files": 6,
+      "passed": 80
+    },
+    "desktopTypecheck": "passed",
+    "changedSourceEslint": "passed",
+    "visual": [
+      "1440px Light",
+      "1440px Dark",
+      "640px Dark"
+    ],
+    "notVerified": [
+      "physical two-computer",
+      "Windows",
+      "Mobile"
+    ],
+    "localFullSuite": "not run; waiting for PR CI"
+  }
+}

@@ -223,3 +223,25 @@ Claude/Codex/Pi 二进制，也不能证明 Anthropic 原生缓存、真实双 D
 Node 回收、设备码/保密表单和重配回执。OS secureStorage、relay 准入及第三方 HTTP 可为
 测试替身，不能将这些结果报告为真实平台登录或线上部署完成。
 发布前应另行验证各目标平台安全存储、双 Desktop 实际登录、provider 风控/MFA/回调策略。
+
+
+## 插件页发起的配置
+
+Desktop A 的远程插件详情直接展示 B 包内原 settingsHtml、脚本与样式，不按凭证类型
+重新生成表单，也不要求作者追加 mobile 声明。A Main 使用临时内存分区承载原页面，
+复用本机 CSP 和 WebView 隔离；页面没有 Node、preload 或任意外网访问能力。
+
+资源读取、KV、Secret、OAuth、connection 和原 BroadcastChannel 经绑定页面租约的
+签名、密封 v3 exchange 交给 B 的原执行器。凭证留在 B；A 的应用 Renderer 只持有
+页面标识，不接收凭证、通用密封回复或保险库内容。原页面继续使用原保存按钮与错误
+回显；读取凭证状态时仍只返回已有的 saved/tail 与脱敏账号信息。
+
+OAuth connect 为原 endpoint 创建一次性页面动作，复用浏览器授权桥，返回原 HTTP
+结果。目录选择复用 A 已有的远程目录选择器，固定 B；选择结果交回 B 校验并授权，
+不把 A 路径交给 B。模型、任务与侧栏偏好继续使用原 Host 控件及 B 的偏好存储。
+
+租约绑定 controllerDeviceId、owner、peer 代次、物理安装实例及批准版本。普通 OAuth
+卡片的签名连接不能执行 settings 操作；另一控制端不能接管页面。关闭、切设备、
+撤权、断链或重装使旧页面失效，配置写入在原持久化边界再次检查；不重放未知写操作。
+无假任务，无凭证复制。协议及验收边界见
+[兼容合同](dev-rules/protocol-compatibility.md)与[实施记录](remote-plugin-management-implementation.md)。

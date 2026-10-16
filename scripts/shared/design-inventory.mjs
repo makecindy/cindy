@@ -601,23 +601,27 @@ export function catalogSurfaces() {
       title: 'SkillHub 本地技能',
       productionEntry:
         'hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向）',
-      // SkillhubHomeView 直接渲染 PluginManagementLayout（features/plugin 共享布局）、
-      // 统一详情布局与 InstallTargetPicker——只扫列表组件文件
-      // 会漏掉这些子组件的样式事实。
+      // 包含本机、远程页面及跨 feature 共用的电脑入口和布局。
       reachableComponents: [
         'SkillhubLocalLayout',
         'SkillhubHomeView',
+        'RemoteSkillsPage',
+        'SkillCategoryFilterBar',
         'SkillhubDetailView',
         'SkillhubDetailRoute',
         'SkillDetailLayout',
         'SkillhubFeatureLayout',
         'PluginManagementLayout',
+        'PluginDevicePicker',
         'SkillhubMarketDetailView',
         'InstallTargetPicker',
       ],
       styleRoots: [
         'apps/desktop/src/renderer/features/skillhub/SkillhubLocalLayout.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubHomeView.tsx',
+        'apps/desktop/src/renderer/features/skillhub/skillhub-home.css',
+        'apps/desktop/src/renderer/features/skillhub/components/SkillCategoryFilterBar.tsx',
+        'apps/desktop/src/renderer/features/skillhub/RemoteSkillsPage.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubDetailRoute.tsx',
         'apps/desktop/src/renderer/features/skillhub/components/SkillDetailLayout.tsx',
@@ -625,6 +629,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/skillhub/SkillhubMarketDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/components/InstallTargetPicker.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginDevicePicker.tsx',
       ],
       routerPaths: [
         // The pathless parent renders the retained catalog itself at /skillhub/local.
@@ -681,15 +686,18 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: '已装插件',
       productionEntry: 'hash `/plugins`（GhostPluginPage）',
-      // GhostPluginPage 直接渲染 PluginManagementLayout、MarketPluginDetailView、
-      // PluginScopePicker、MyPublishesSection、AddMarketplaceDialog、UpdateAllDialog,
-      // 并直接导入 plugin-motion.css——只扫页面与详情两个文件会漏掉这些样式事实。
+      // 覆盖本机、远程管理与页面共用的菜单、详情及动效。
       reachableComponents: [
         'GhostPluginPage',
         'GhostPluginDetailView',
+        'GhostPluginActions',
+        'RemotePluginPage',
+        'RemotePluginConfiguration',
+        'RemotePluginReadOnlyDetail',
+        'PluginDevicePicker',
         'PluginManagementLayout',
         'MarketPluginDetailView',
-        'PluginScopePicker',
+        'PluginProjectMenu',
         'MyPublishesSection',
         'AddMarketplaceDialog',
         'UpdateAllDialog',
@@ -697,6 +705,11 @@ export function catalogSurfaces() {
       styleRoots: [
         'apps/desktop/src/renderer/features/plugin/GhostPluginPage.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx',
+        'apps/desktop/src/renderer/features/plugin/GhostPluginActions.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginPage.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginConfiguration.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginReadOnlyDetail.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginDevicePicker.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
         'apps/desktop/src/renderer/features/plugin/MarketPluginDetailView.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginScopePicker.tsx',

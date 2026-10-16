@@ -1,4 +1,8 @@
 import { inspectSkillListGrants } from './customizationScanHost';
+import { createRemoteSkillsHost } from './remoteManagementHost';
+import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
+import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
+import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap';
 import fs from 'node:fs';
 import { t } from '../i18n.js';
 import { throwIpcError } from '../utils/ipcValidate';
@@ -105,6 +109,7 @@ function assertReviewOwnerCurrent(ownerScope: string): void {
 }
 
 export interface RegisterSkillhubIpcOptions {
+  remoteIsRelayOnline?: () => boolean;
   getMaker: () => Maker;
   getManagedSkillRoots: () => readonly string[];
   getBuiltInSkills?: () => readonly BuiltInSkillDescriptor[];
@@ -171,6 +176,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     return JSON.stringify([fs.realpathSync.native(source), st.dev, st.ino]);
   };
   const broadcastLocalChange = () => {
+    if (options.remoteIsRelayOnline && !isAppSessionBoundaryPending()) tapWindowBroadcast(REMOTE_RESOURCE_CHANGED_CHANNEL, { collectionId: 'skills' }, getSafeDataOwnerPushStamp());
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         try { win.webContents.send('skillhub:local-state-changed'); } catch { /* Window closed. */ }
@@ -378,6 +384,9 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   const publishService = options.publishService ?? new SkillPublishService({
     onProgress: broadcastPublishProgress,
   });
+  if (options.remoteIsRelayOnline) {
+    remoteResourceRegistry.register(createRemoteSkillsHost(options, marketService, broadcastLocalChange, refreshCodexProjectSkillCache).provider());
+  }
   configureSkillhubAgentServices({
     market: marketService,
     publisher: publishService,

@@ -23,6 +23,8 @@ import {
   FolderOpen,
   LayoutTemplate,
   MoreVertical,
+  Shield,
+  type LucideIcon,
   Trash2,
   X,
 } from 'lucide-react';
@@ -64,6 +66,10 @@ import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBa
 import './plugin-motion.css';
 
 interface GhostPluginDetailViewProps {
+  /** Remote configuration section, including its heading or disabled notice. */
+  remoteConfiguration?: ReactNode;
+  remote?: boolean;
+  remoteFileUpdate?: boolean;
   ghost: InstalledGhost | null;
   detail: GhostPluginDetail;
   marketItem?: PluginMarketItem | null;
@@ -108,6 +114,9 @@ const DETAIL_SURFACE_INTERACTIVE_CLASS =
 
 /** Installed Ghost detail surface, ordered around configuration and capability review. */
 export function GhostPluginDetailView({
+  remote = false,
+  remoteFileUpdate = false,
+  remoteConfiguration,
   ghost,
   detail,
   panelStatus,
@@ -133,13 +142,9 @@ export function GhostPluginDetailView({
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
-  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [taskApprovalPending, setTaskApprovalPending] = useState(false);
-  const [descriptionOverflows, setDescriptionOverflows] = useState(false);
-  const descriptionRef = useRef<HTMLParagraphElement>(null);
-  // 安装记录不完整时不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
-  // 看起来只是"被关掉了"),再喂 main 改版的 primaryAction/primaryEnabled。
+  // 未批准的安装不可运行；恢复入口与普通停用区分。
   const needsReapproval = detail.approvalState !== 'approved';
   const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
   const primaryAction = ghostPrimaryAction(detail);
@@ -150,7 +155,7 @@ export function GhostPluginDetailView({
   // Local imports with the same id cannot use the host gh credential. Match the
   // official receipt before advertising that connection in this plugin's UI.
   const hasGithubConnection =
-    detail.ghostId === 'cindy-github' &&
+    !remote && detail.ghostId === 'cindy-github' &&
     Boolean(ghost) &&
     ghost?.trust?.level === 'cindy-official' &&
     ghost.trust.publisherSigned &&
@@ -165,61 +170,11 @@ export function GhostPluginDetailView({
   const summary = hasGithubConnection
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
-  /**
-   * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
-   * 构建**上会被 Main 的用户装入通道以 GHOST_ID_RESERVED 直接拒绝(见
-   * main/cindy-brain/index.ts 的 rejectReservedGhostId),把这个必失败的动作摆在
-   * 菜单里只会让用户选文件、等一下、然后吃一个错误。
-   *
-   * 判据用 `import.meta.env.DEV` 而不是新开一条 IPC 去问 app.isPackaged:打包产物
-   * 必然 DEV=false,覆盖 Main 拒绝的全部场景;唯一偏差是「本地 build 但未打包运行」
-   * 会多隐藏一次入口——方向保守(少一个入口 vs 给用户一个必失败按钮),可接受。
-   * 普通第三方插件不受影响。
-   */
-  const localUpdateAvailable = import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
+  // 远程文件更新按目标 Host 能力判断，不能使用控制端的 DEV 状态。
+  const localUpdateAvailable = remote
+    ? remoteFileUpdate && !isUserInstallReservedGhostId(detail.ghostId)
+    : import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
-
-  useLayoutEffect(() => {
-    setDescriptionExpanded(false);
-    const description = descriptionRef.current;
-    if (!description) return;
-    const measure = () => {
-      const computedStyle = window.getComputedStyle(description);
-      const lineHeight = Number.parseFloat(computedStyle.lineHeight);
-      const width = description.getBoundingClientRect().width;
-      if (!Number.isFinite(lineHeight) || width <= 0) {
-        setDescriptionOverflows(false);
-        return;
-      }
-
-      // Chromium reports the clamped element's scrollHeight as the visible height.
-      // Measure an unclamped, off-screen clone so the affordance only appears when
-      // the complete description genuinely exceeds three lines.
-      const measurement = description.cloneNode(true) as HTMLParagraphElement;
-      measurement.classList.remove('line-clamp-3');
-      Object.assign(measurement.style, {
-        position: 'fixed',
-        left: '-10000px',
-        top: '0',
-        width: `${width}px`,
-        height: 'auto',
-        maxHeight: 'none',
-        overflow: 'visible',
-        visibility: 'hidden',
-        pointerEvents: 'none',
-        WebkitLineClamp: 'unset',
-        WebkitBoxOrient: 'initial',
-      });
-      document.body.appendChild(measurement);
-      const fullHeight = measurement.getBoundingClientRect().height;
-      measurement.remove();
-      setDescriptionOverflows(fullHeight > lineHeight * 3 + 1);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(description);
-    return () => observer.disconnect();
-  }, [detail.id, summary]);
 
   return (
     <main
@@ -232,22 +187,16 @@ export function GhostPluginDetailView({
         scrolled={scrolled}
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
-        <header>
-          <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
-            <GhostPluginIcon
-              iconDataUrl={detail.iconDataUrl}
-              iconId={detail.id}
-              iconName={detail.name}
-              size="detail"
-              onIconLoadError={onIconLoadError}
-            />
-            <div className="plugin-detail-heading min-w-0">
-              <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
-                {detail.name}
-              </h1>
-              <GhostPluginMetadata author={detail.author} version={detail.version} marketItem={marketItem} />
-            </div>
-
+        <PluginDetailHeader
+          id={detail.id}
+          name={detail.name}
+          description={summary}
+          author={detail.author}
+          version={detail.version}
+          marketItem={marketItem}
+          iconDataUrl={detail.iconDataUrl}
+          onIconLoadError={onIconLoadError}
+          actions={
             <div
               className="plugin-detail-actions flex shrink-0 flex-nowrap items-center gap-1.5"
               style={WINDOW_NO_DRAG_STYLE}
@@ -286,7 +235,7 @@ export function GhostPluginDetailView({
                   </>
                 </Button>
               ) : null}
-              {primaryAction !== 'manage' ? (
+              {!remote && primaryAction !== 'manage' ? (
                 <Button
                   variant={updateVersion ? 'secondary' : 'cta'}
                   size="lg"
@@ -373,6 +322,7 @@ export function GhostPluginDetailView({
                   ) : null}
                   <DropdownMenuItem
                     onSelect={onUninstall}
+                    disabled={updateBusy}
                     variant="danger"
                     className="gap-2.5"
                   >
@@ -382,33 +332,8 @@ export function GhostPluginDetailView({
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          </div>
-
-          <div className="mt-5">
-            <p
-              ref={descriptionRef}
-              className={cn(
-                'text-14 leading-[1.571] text-[var(--text-secondary)]',
-                !descriptionExpanded && 'line-clamp-3',
-              )}
-            >
-              {summary}
-            </p>
-            {descriptionOverflows ? (
-              <button
-                type="button"
-                onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-                aria-expanded={descriptionExpanded}
-                className="mt-1.5 rounded-full text-13 leading-5 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-              >
-                {t(
-                  descriptionExpanded
-                    ? 'settings.ghosts.detail.descriptionCollapse'
-                    : 'settings.ghosts.detail.descriptionExpand',
-                )}
-              </button>
-            ) : null}
-          </div>
+          }
+        >
 
           {needsReapproval ? (
             <div className={cn('mt-5 rounded-xl px-4 py-3.5', DETAIL_SURFACE_CLASS)} role="status">
@@ -426,9 +351,9 @@ export function GhostPluginDetailView({
               </p>
             </div>
           ) : null}
-        </header>
+        </PluginDetailHeader>
 
-        {ghost ? (
+        {ghost && !remote ? (
           <PluginUsageCard
             key={`${usageOwnerKey ?? 'local'}:${detail.id}`}
             ghostId={detail.id}
@@ -436,7 +361,7 @@ export function GhostPluginDetailView({
           />
         ) : null}
 
-        {hasConfiguration ? (
+        {remote ? remoteConfiguration : hasConfiguration ? (
           <section
             className={hasGithubConnection ? 'mt-6' : DETAIL_SECTION_CLASS}
             aria-labelledby={hasGithubConnection ? undefined : 'ghost-configuration-title'}
@@ -546,7 +471,7 @@ export function GhostPluginDetailView({
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
-        {enabled && ghost?.manifest.agent?.tasks === true && ghost.taskCapabilityApproved !== true ? (
+        {!remote && enabled && ghost?.manifest.agent?.tasks === true && ghost.taskCapabilityApproved !== true ? (
           <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
             try {
@@ -561,9 +486,9 @@ export function GhostPluginDetailView({
           </Button>
         ) : null}
 
-        <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} />
+        {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
 
-        <DetailsSection detail={detail} panelStatus={panelStatus} />
+        <DetailsSection detail={remote ? { ...detail, installDir: null } : detail} panelStatus={panelStatus} />
       </article>
     </main>
   );
@@ -583,6 +508,123 @@ export function OauthScopeStaleBadge() {
   );
 }
 
+export function PluginDetailHeader({
+  id,
+  name,
+  description,
+  author,
+  version,
+  marketItem,
+  iconDataUrl,
+  actions,
+  children,
+  onIconLoadError,
+}: {
+  id: string;
+  name: string;
+  description: string;
+  author?: string | null;
+  version?: string;
+  marketItem?: PluginMarketItem | null;
+  iconDataUrl?: string;
+  actions?: ReactNode;
+  children?: ReactNode;
+  onIconLoadError?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [descriptionOverflows, setDescriptionOverflows] = useState(false);
+  const descriptionRef = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    setDescriptionExpanded(false);
+    const description = descriptionRef.current;
+    if (!description) return;
+    const measure = () => {
+      const computedStyle = window.getComputedStyle(description);
+      const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+      const width = description.getBoundingClientRect().width;
+      if (!Number.isFinite(lineHeight) || width <= 0) {
+        setDescriptionOverflows(false);
+        return;
+      }
+
+      // Chromium reports the clamped element's scrollHeight as the visible height.
+      // Measure an unclamped, off-screen clone so the affordance only appears when
+      // the complete description genuinely exceeds three lines.
+      const measurement = description.cloneNode(true) as HTMLParagraphElement;
+      measurement.classList.remove('line-clamp-3');
+      Object.assign(measurement.style, {
+        position: 'fixed',
+        left: '-10000px',
+        top: '0',
+        width: `${width}px`,
+        height: 'auto',
+        maxHeight: 'none',
+        overflow: 'visible',
+        visibility: 'hidden',
+        pointerEvents: 'none',
+        WebkitLineClamp: 'unset',
+        WebkitBoxOrient: 'initial',
+      });
+      document.body.appendChild(measurement);
+      const fullHeight = measurement.getBoundingClientRect().height;
+      measurement.remove();
+      setDescriptionOverflows(fullHeight > lineHeight * 3 + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(description);
+    return () => observer.disconnect();
+  }, [id, description]);
+  return (
+    <header>
+      <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
+        <GhostPluginIcon
+          iconDataUrl={iconDataUrl}
+          iconId={id}
+          iconName={name}
+          size="detail"
+          onIconLoadError={onIconLoadError}
+        />
+        <div className="min-w-0">
+          <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
+            {name}
+          </h1>
+          <GhostPluginMetadata author={author} version={version} marketItem={marketItem} />
+        </div>
+
+        {actions}
+      </div>
+      <div className="mt-5">
+        <p
+          ref={descriptionRef}
+          className={cn(
+            'text-14 leading-[1.571] text-[var(--text-secondary)]',
+            !descriptionExpanded && 'line-clamp-3',
+          )}
+        >
+          {description}
+        </p>
+        {descriptionOverflows ? (
+          <button
+            type="button"
+            onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+            aria-expanded={descriptionExpanded}
+            className="mt-1.5 rounded-full text-13 leading-5 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+          >
+            {t(
+              descriptionExpanded
+                ? 'settings.ghosts.detail.descriptionCollapse'
+                : 'settings.ghosts.detail.descriptionExpand',
+            )}
+          </button>
+        ) : null}
+      </div>
+      {children}
+    </header>
+  );
+}
+
 /** Compact factual metadata with one shared color and stable product order. */
 export function GhostPluginMetadata({
   author,
@@ -590,10 +632,11 @@ export function GhostPluginMetadata({
   marketItem,
 }: {
   author?: string | null;
-  version: string;
+  version?: string;
   marketItem?: PluginMarketItem | null;
 }) {
   const { t } = useTranslation();
+  if (!author && !version && !marketItem) return null;
   return (
     <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-5 text-[var(--text-tertiary)]">
       {author ? (
@@ -601,10 +644,10 @@ export function GhostPluginMetadata({
           <span className="min-w-0 truncate">
             {t('settings.ghosts.detail.byAuthor', { author })}
           </span>
-          <MetadataDivider />
+          {version ? <MetadataDivider /> : null}
         </>
       ) : null}
-      <span className="shrink-0">v{version}</span>
+      {version ? <span className="shrink-0">v{version}</span> : null}
       {marketItem ? <PluginSharedUsage detail={marketItem} /> : null}
     </div>
   );
@@ -618,7 +661,7 @@ function MetadataDivider() {
   );
 }
 
-function DetailSectionHeader({
+export function DetailSectionHeader({
   id,
   title,
   action,
@@ -658,7 +701,11 @@ function SectionTextAction({
   );
 }
 
-export function ToolsSection({ tools }: { tools: readonly GhostToolDecl[] }) {
+export function ToolsSection({
+  tools,
+}: {
+  tools: readonly (Pick<GhostToolDecl, 'name' | 'description'> & Partial<GhostToolDecl>)[];
+}) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const canExpand = tools.length > 6;
@@ -695,7 +742,7 @@ export function ToolsSection({ tools }: { tools: readonly GhostToolDecl[] }) {
 }
 
 /** A Tool exposes only its author-provided description after explicit activation. */
-export function ToolDescriptionChip({ tool }: { tool: GhostToolDecl }) {
+export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name' | 'description'> & Partial<GhostToolDecl> }) {
   const { t } = useTranslation();
   return (
     <Popover>
@@ -730,11 +777,40 @@ export function ToolDescriptionChip({ tool }: { tool: GhostToolDecl }) {
 
 export function PermissionSummary({ items }: { items: readonly GhostPermissionItem[] }) {
   const { t } = useTranslation();
-  const permissionItems = items.filter((item) => item.kind !== 'tool');
+  return (
+    <PluginPermissionSummary
+      items={items
+        .filter((item) => item.kind !== 'tool')
+        .map((item) => ({
+          key: item.key,
+          title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
+          descriptions: [
+            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
+            item.detail ?? '',
+          ].filter(Boolean),
+          icon: permissionItemIcon(item),
+        }))}
+    />
+  );
+}
+
+interface PluginPermissionFact {
+  key: string;
+  title: string;
+  descriptions: readonly string[];
+  icon?: LucideIcon;
+}
+
+export function PluginPermissionSummary({
+  items: permissionItems,
+}: {
+  items: readonly PluginPermissionFact[];
+}) {
+  const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
   if (permissionItems.length === 0) return null;
   const permissionCardLabel = `${t('settings.ghosts.detail.permissionsTitle')}: ${permissionItems
-    .map((item) => t(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs))
+    .map((item) => item.title)
     .join(', ')}`;
   return (
     <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-permissions-title">
@@ -759,7 +835,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
         )}
       >
         {permissionItems.map((item) => {
-          const Icon = permissionItemIcon(item);
+          const Icon = item.icon ?? Shield;
           return (
             <span
               key={item.key}
@@ -772,7 +848,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
                 aria-hidden="true"
               />
               <span className="min-w-0 break-words text-13 font-normal leading-5">
-                {t(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs)}
+                {item.title}
               </span>
             </span>
           );
@@ -787,12 +863,8 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
   );
 }
 
-function PermissionDetailRow({ item }: { item: GhostPermissionItem }) {
-  const { t } = useTranslation();
-  const Icon = permissionItemIcon(item);
-  const hostDescription = item.detailKey
-    ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs)
-    : null;
+function PermissionDetailRow({ item }: { item: PluginPermissionFact }) {
+  const Icon = item.icon ?? Shield;
   return (
     <div className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
       <Icon
@@ -803,18 +875,16 @@ function PermissionDetailRow({ item }: { item: GhostPermissionItem }) {
       />
       <div className="min-w-0 flex-1">
         <p className="break-words text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
-          {t(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs)}
+          {item.title}
         </p>
-        {hostDescription ? (
-          <p className="mt-1 whitespace-pre-line break-words text-13 leading-5 text-[var(--text-secondary)]">
-            {hostDescription}
+        {item.descriptions.map((description, index) => (
+          <p
+            key={index}
+            className="mt-1 whitespace-pre-line break-words text-13 leading-5 text-[var(--text-secondary)]"
+          >
+            {description}
           </p>
-        ) : null}
-        {item.detail ? (
-          <p className="mt-1 whitespace-pre-line break-words text-13 leading-5 text-[var(--text-secondary)]">
-            {item.detail}
-          </p>
-        ) : null}
+        ))}
       </div>
     </div>
   );
@@ -931,6 +1001,22 @@ export function DetailsSection({
         ]
       : []),
   ];
+  return <PluginDetailFactsSection facts={facts} />;
+}
+
+export function PluginDetailFactsSection({
+  facts,
+}: {
+  facts: readonly {
+    key: string;
+    label: string;
+    value: string;
+    monospace?: boolean;
+    action?: ReactNode;
+    fullWidth?: boolean;
+  }[];
+}) {
+  const { t } = useTranslation();
   return (
     <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-details-title">
       <DetailSectionHeader id="ghost-details-title" title={t('settings.ghosts.detail.infoTitle')} />
@@ -1065,7 +1151,7 @@ function PermissionDetailDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  items: readonly GhostPermissionItem[];
+  items: readonly PluginPermissionFact[];
 }) {
   const { t } = useTranslation();
   return (

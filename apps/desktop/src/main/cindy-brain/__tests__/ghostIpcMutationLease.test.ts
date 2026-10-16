@@ -67,7 +67,7 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     expect(lease).toBeLessThan(fn.indexOf('await '));
     expect(fn).toContain('const relId = installedGhostPhysicalRelId(target)');
     expect(fn).toContain('const storagePart = installedGhostStoragePart(target)');
-    expect(fn).toContain('await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken)');
+    expect(fn).toContain('await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken, assertCurrent)');
     expect(fn).toMatch(/finally\s*\{\s*releaseMutation\(\)/);
   });
 

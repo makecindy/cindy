@@ -167,6 +167,7 @@ export class AuthenticatedOauthHost {
       const currentIdentity = await this.deps.identity();
       if (
         !binding?.current() ||
+        (binding.controllerDeviceId !== undefined && binding.controllerDeviceId !== peer) ||
         this.deps.owner() !== owner ||
         !this.deps.available(peer) ||
         generation !== this.generation ||
@@ -229,7 +230,15 @@ export class AuthenticatedOauthHost {
       return prior.promise;
     }
     if (c.messages.size >= 1024) throw fail();
-    if (request.op === 'start') {
+    if (c.binding.settingsPage) {
+      if (
+        request.op !== 'settings' ||
+        request.id !== c.hello.action.requestId ||
+        !c.binding.current()
+      )
+        throw fail();
+    } else if (request.op === 'settings') throw fail();
+    else if (request.op === 'start') {
       if (c.started || !sameAction(request, c.hello.action) || !c.binding.current()) throw fail();
       c.started = true;
     } else if (request.op !== 'capabilities' && (!c.innerId || request.id !== c.innerId))
@@ -247,6 +256,7 @@ export class AuthenticatedOauthHost {
         }
         if (
           request.op === 'cancel' ||
+          (request.op === 'settings' && request.command.kind === 'close') ||
           ['succeeded', 'failed', 'cancelled', 'expired'].includes(
             String((result as { phase?: unknown })?.phase),
           )

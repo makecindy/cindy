@@ -178,6 +178,20 @@ const commandPlugin: GhostPluginListItem = {
   oauthAuthorizationExpired: false,
 };
 
+it('renders older Host facts in the standard card without invented version, updates or local actions', () => {
+  const manage = vi.fn();
+  const item = { id: 'remote-notes', name: 'Remote notes', description: 'Saved on the selected computer', enabled: false,
+    iconDataUrl: 'data:image/png;base64,aWNvbg==' };
+  const { container } = render(<GhostPluginCard item={item} readOnly showLocalUnread={false} onManage={manage} onPrimary={vi.fn()} />);
+  expect(container.querySelector('img')?.getAttribute('src')).toBe(item.iconDataUrl);
+  expect(screen.getByText('settings.ghosts.detail.disabledLabel')).toBeTruthy();
+  expect(screen.queryByText('settings.ghosts.page.upToDate')).toBeNull();
+  expect(screen.queryByText('settings.ghosts.page.manageAction')).toBeNull();
+  expect(container.textContent).not.toContain('undefined');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.details' }));
+  expect(manage).toHaveBeenCalledTimes(1);
+});
+
 const panelPlugin: GhostPluginListItem = {
   ...commandPlugin,
   id: 'signoff-board',
@@ -526,6 +540,16 @@ describe('GhostPluginCard', () => {
     // 摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻的信息。
     expect(screen.getByText('2 封新邮件')).toBeTruthy();
     expect(screen.queryByText('Google services')).toBeNull();
+  });
+
+  it('keeps a remote card with the same id independent of local unread content', () => {
+    __ingestGhostBadgeForTest('filo-google', { unread: true, summary: 'local private summary', at: 1 });
+    const { container } = render(
+      <GhostPluginCard item={commandPlugin} showLocalUnread={false} onPrimary={vi.fn()} onManage={vi.fn()} />,
+    );
+    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(screen.queryByText('local private summary')).toBeNull();
+    expect(screen.getByText('Google services')).toBeTruthy();
   });
 
   it('有未读但插件没给摘要:只点亮,静态描述保留(不留空白)', () => {

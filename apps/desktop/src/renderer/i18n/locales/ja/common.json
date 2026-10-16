@@ -6358,7 +6358,7 @@
         "bodyInvalid": "このプラグインのインストール検証記録が破損しているため、実行を停止しています。元のマーケット版を再インストールするか、対応する .cindy パッケージをもう一度選択してください。",
         "bodyBuiltinRestart": "この内蔵プラグインのインストール検証記録に問題が発生しました。Cindy を再起動すると自動的に復旧します。他の操作は不要です。"
       },
-      "install": "プラグインをインストール…",
+      "install": "ファイルからインストール…",
       "empty": "まだプラグインがインストールされていません",
       "emptyHint": "マーケットからインストールするか、上のメニューから .cindy ファイルを読み込めます",
       "legacyRecovery": {
@@ -6382,14 +6382,19 @@
       "projectDisabledTag": "このプロジェクトでは無効",
       "projectSwitchLockedTip": "このプラグインはグローバルで無効です。先に「グローバル」ビューで有効にしてください",
       "projectBanner": {
-        "title": "プロジェクト「{{name}}」を設定中",
-        "desc": "ここのスイッチはこのプロジェクトのみに適用されます。オフにしたプラグインはこのプロジェクトでは使用できません",
+        "title": "現在のプロジェクト：{{name}}",
+        "desc": "スイッチの変更はこのプロジェクトにのみ適用されます。インストール・更新・アンインストール・設定は{{device}}全体に適用されます。",
         "backToGlobal": "グローバルに戻る"
       },
       "scopePicker": {
         "global": "グローバル(デフォルト)",
         "ariaLabel": "プラグインの適用範囲を選択",
-        "browse": "別のフォルダを選択…"
+        "browse": "別のフォルダを選択…",
+        "management": "管理範囲",
+        "globalScope": "グローバル",
+        "computers": "コンピューター",
+        "projectScope": "プロジェクト範囲",
+        "projectsForComputer": "{{device}}のプロジェクト"
       },
       "enableAria": "{{name}} を有効化",
       "uninstall": "アンインストール",
@@ -6887,6 +6892,49 @@
           "requirements": "Apple Silicon Mac、macOS 15 以降、フルバージョンの Xcode が必要です。",
           "dataNotice": "元のシミュレーターのデバイスや App データは削除されません。Baguette をインストールしても、デバイス、App、ログイン状態は自動移行されません。"
         }
+      },
+      "remote": {
+        "device": "管理するコンピューター",
+        "thisComputer": "このコンピューター",
+        "offline": "オフライン",
+        "confirmOn": "{{device}} 上の {{name}}",
+        "targetOnly": "設定は {{device}} に保存されます。",
+        "hostPreferencesUnavailable": "このコンピューターはモデル・タスク・サイドバーの設定のリモート編集に対応していません。{{device}}で設定してください。",
+        "taskWorkdirBoundary": "作業ディレクトリは対象コンピューターの設定を維持します。変更は対象コンピューターで行ってください。",
+        "configurationLoading": "設定を読み込み中…",
+        "configurationReadFailed": "設定を読み込めませんでした。",
+        "refreshConfiguration": "設定を更新",
+        "enableBeforeConfigure": "このプラグインは無効です。設定するには、上のスイッチをオンにしてください。",
+        "settingsPageUnavailable": "{{device}} の Cindy でこのプラグインの設定ページを開いてください。接続先の現在のバージョンではリモート表示に対応していません。",
+        "offlineNotice": "{{device}}はオフラインです。接続が復旧すると管理を再開できます。",
+        "managingTarget": "管理対象：{{device}}",
+        "managingDescription": "変更はこのコンピューターに保存されます。",
+        "viewingTarget": "{{device}} にインストール済み",
+        "unsupported": "{{device}} の Cindy は、まだリモート管理に対応していません。インストール済みプラグインはここで確認できます。インストール、更新、アンインストール、有効・無効の切り替え、設定、プロジェクト管理を行うには、そのコンピューターの Cindy を更新してください。",
+        "refresh": "プラグインを再読み込み",
+        "instanceId": "プラグインインスタンス",
+        "detailLoading": "プラグインの詳細を読み込み中…",
+        "detailReadFailed": "プラグインの詳細を読み込めませんでした。",
+        "refreshDetail": "詳細を再読み込み",
+        "detailUnavailable": "このコンピューターからプラグインの詳細がすべて提供されていないため、取得できた情報のみ表示しています。",
+        "retry": "再試行",
+        "readFailed": "プラグインを読み込めませんでした。",
+        "unknown": "操作結果は未確認です。元の操作結果を確認してください。",
+        "success": "対象コンピューターで完了しました。",
+        "cancelled": "キャンセルしました。",
+        "actionFailed": "操作に失敗しました。一覧を更新して再試行してください。",
+        "changed": "プラグインが変更されました。更新して再試行してください。",
+        "uninstallOn": "{{device}} から {{name}} をアンインストールしますか？",
+        "uninstall": "アンインストール",
+        "empty": "このコンピューターにはプラグインがありません。",
+        "marketUnavailable": "対象コンピューターのマーケットを利用できません。",
+        "personalInstall": "個人のインストール",
+        "loading": "プラグインを読み込み中…",
+        "installDestination": "インストール先：{{device}}",
+        "projectsUnsupported": "プロジェクト設定を管理するには、対象コンピューターの Cindy を更新してください。",
+        "noProjects": "このコンピューターには選択できるプロジェクトがまだありません。",
+        "projectLoading": "プロジェクト設定を読み込み中…",
+        "projectReadFailed": "プロジェクト設定を読み込めませんでした。再試行してください。"
       },
       "usage": {
         "title": "自分の呼び出し",
@@ -13697,6 +13745,17 @@
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
+    "remote": {
+      "loading": "スキルを読み込み中…",
+      "readFailed": "スキルを読み込めませんでした。再試行してください。",
+      "unsupported": "リモートでスキルを管理するには、対象のコンピューターの Cindy を更新してください。",
+      "confirm": {
+        "install": "{{device}} に {{name}} をインストールしますか？",
+        "update": "{{device}} の {{name}} を v{{version}} に更新しますか？",
+        "uninstall": "{{device}} から {{name}} をアンインストールしますか？",
+        "installDescription": "スキルは選択したコンピューターに保存されます。更新時は元のファイルのバックアップを保持します。"
+      }
+    },
     "unifiedDetail": {
       "contentSource": "表示する内容",
       "local": "ローカル",
@@ -13714,17 +13773,13 @@
     },
     "home": {
       "title": "スキル",
-      "description": "ローカルスキルを管理し、Skill Hub から新しいスキルを見つけてインストールできます。",
+      "description": "インストール済みのスキルを管理し、SkillHub で新しいスキルを探します。",
       "descriptionLocalOnly": "このデバイスにインストールされたローカルスキルを管理します。",
       "search": "スキルを検索",
       "clearSearch": "スキル検索をクリア",
       "noSearchResults": "一致するスキルが見つかりません",
       "catalogFiltersAria": "SkillHub カテゴリ",
       "categoryFiltersAria": "カテゴリでスキルを絞り込む",
-      "scrollCategoriesLeft": "左のカテゴリをさらに表示",
-      "scrollCategoriesRight": "右のカテゴリをさらに表示",
-      "categoryScrollAtStart": "最初のカテゴリです",
-      "categoryScrollAtEnd": "最後のカテゴリです",
       "catalogFilter": {
         "public": "公開",
         "organization": "組織",

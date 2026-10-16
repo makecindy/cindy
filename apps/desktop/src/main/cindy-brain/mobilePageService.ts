@@ -10,10 +10,15 @@ import {
   type PluginPageSurface,
   type PluginPageAsset,
   type PluginPageFile,
+  PLUGIN_SETTINGS_ACTION,
+  type PluginSettingsRequest,
+  type PluginOauthAction,
   type RemoteCollectionItem,
   type PluginConfigurationSummary,
 } from '@cindy/device-link';
-import { ghostContentKeys, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
+import { ghostContentKeys, ghostInstallApprovalToken, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
+import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/context.js';
+import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { resolvePreferredSystemLocale } from '../../shared/locale.js';
 import { t } from '../i18n.js';
@@ -26,6 +31,9 @@ import {
 } from '../device-link/remoteResourceRegistry.js';
 
 interface Page {
+  desktopSettings?: true;
+  channels?: string[];
+  authorizations?: Map<string, { path: string; body?: string; running: boolean; result?: import('@cindy/device-link').PluginPageFetchResult }>;
   id: string;
   controller: string;
   plugin: string;
@@ -59,6 +67,7 @@ interface Page {
   previews?: Map<string, MobilePluginPreview>;
 }
 interface Dependencies {
+  management?: import('./remotePluginManagement.js').RemotePluginManagement;
   list(): InstalledGhost[];
   listOrder?(): ReadonlyMap<string, NonNullable<RemoteCollectionItem['pluginOrder']>>;
   setupAssessment?(id: string): GhostSetupAssessment;
@@ -85,6 +94,7 @@ interface Dependencies {
     revision?: string,
   ): Promise<import('@cindy/device-link').PluginPageFetchResult>;
   fetchPreview?: MobilePreviewReader;
+  settingsFetch?(ghost: InstalledGhost, path: string, method: string, body: string | undefined, current: () => boolean, confirmConnection?: (label: string, host: string) => Promise<boolean>): Promise<import('@cindy/device-link').PluginPageFetchResult>;
   resolveMedia?(
     ghostId: string,
     url: string,
@@ -146,6 +156,7 @@ export class MobilePluginPages {
   }
   private close(page: Page) {
     this.pages.delete(page.id);
+    for (const id of page.authorizations?.keys() ?? []) notifyOauthCardClosed(id);
     this.cancelDirectory(page);
     page.previews?.clear();
     for (const pending of page.confirms.values()) {
@@ -162,6 +173,248 @@ export class MobilePluginPages {
       } catch {
         this.close(page);
       }
+    }
+  }
+  settingsBinding(action: PluginOauthAction): OauthCardBinding | null {
+    if (action.actionId !== PLUGIN_SETTINGS_ACTION || action.expectedRevision !== 0) return null;
+    const page = this.pages.get(action.requestId);
+    if (!page?.desktopSettings) return null;
+    return {
+      ghostId: page.plugin,
+      controllerDeviceId: page.controller,
+      settingsPage: true,
+      current: () => {
+        try {
+          this.page(page.id, page.controller);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    };
+  }
+  settingsAuthorizationBinding(action: PluginOauthAction): OauthCardBinding | null {
+    if (action.actionId !== 'settings-oauth' || action.expectedRevision !== 0) return null;
+    const page = [...this.pages.values()].find(
+      (p) => p.desktopSettings && p.authorizations?.has(action.requestId),
+    );
+    if (!page) return null;
+    return {
+      ghostId: page.plugin,
+      controllerDeviceId: page.controller,
+      current: () => {
+        try {
+          this.page(page.id, page.controller);
+          return page.authorizations!.has(action.requestId);
+        } catch {
+          return false;
+        }
+      },
+    };
+  }
+  runSettingsAuthorization(action: PluginOauthAction): boolean {
+    const binding = this.settingsAuthorizationBinding(action),
+      remote = getRemoteOauthContext();
+    if (!binding?.current() || !remote || remote.peer !== binding.controllerDeviceId) return false;
+    const page = [...this.pages.values()].find((p) => p.authorizations?.has(action.requestId))!;
+    const authorization = page.authorizations!.get(action.requestId)!;
+    if (authorization.running) return false;
+    authorization.running = true;
+    const ghost = this.check(page);
+    void (async () => {
+      try {
+        // The original endpoint owns OAuth validation, exchange and persistence.
+        const result = await this.deps.settingsFetch!(
+          ghost,
+          authorization.path,
+          'POST',
+          authorization.body,
+          binding.current,
+        );
+        if (!binding.current()) throw new Error('PLUGIN_PAGE_CLOSED');
+        authorization.result = result;
+        remote.finish(
+          result.status === 200 &&
+            JSON.parse(Buffer.from(result.base64, 'base64').toString()).ok === true,
+        );
+      } catch {
+        if (binding.current())
+          authorization.result = {
+            status: 200,
+            mime: 'application/json',
+            base64: Buffer.from(JSON.stringify({ ok: false, error: 'CANCELLED' })).toString(
+              'base64',
+            ),
+          };
+        remote.finish(false);
+      } finally {
+        authorization.body = undefined;
+      }
+    })();
+    return true;
+  }
+  async settingsRequest(controller: string, request: PluginSettingsRequest): Promise<unknown> {
+    const page = this.page(request.id, controller);
+    if (!page.desktopSettings) return fail();
+    const ghost = this.check(page),
+      command = request.command;
+    const current = () => {
+      try {
+        return this.page(page.id, controller) === page;
+      } catch {
+        return false;
+      }
+    };
+    const done = <T>(value: T): T => {
+      if (!current()) return fail();
+      return value;
+    };
+    switch (command.kind) {
+      case 'close':
+        this.close(page);
+        return {};
+      case 'asset': {
+        const file = page.files.find((f) => f.path === command.path);
+        if (!file || command.offset > file.size) return fail();
+        return done(await this.deps.asset(ghost, file, command.offset));
+      }
+      case 'subscribe': {
+        const channels = [...new Set([...(page.channels ?? []), ...command.channels])];
+        if (channels.length > 16) return fail();
+        await this.deps.connect(ghost, page.id, channels);
+        page.channels = channels;
+        return done({});
+      }
+      case 'post':
+        if (!page.channels?.includes(command.channel)) return fail();
+        await this.deps.post(ghost, page.id, command.channel, command.data);
+        return done({});
+      case 'unsubscribe': {
+        const channels = (page.channels ?? []).filter((name) => name !== command.channel);
+        await this.deps.connect(ghost, page.id, channels);
+        page.channels = channels;
+        return done({});
+      }
+      case 'poll':
+        return done({
+          events: page.channels?.length ? await this.deps.poll(ghost, page.id, command.after) : [],
+          confirms: [...page.confirms.values()].map((p) => p.value),
+          notifications: page.notices.splice(0),
+          directories: page.directory ? [page.directory.value] : [],
+        });
+      case 'confirm': {
+        const pending = page.confirms.get(command.requestId);
+        if (!pending || pending.value.expiresAt <= this.now()) return fail();
+        clearTimeout(pending.timer);
+        page.confirms.delete(command.requestId);
+        pending.answer(command.accepted);
+        return {};
+      }
+      case 'answer-directory':
+        await this.answerDirectory(page, command);
+        return done({});
+      case 'authorization-result': {
+        const authorization = page.authorizations?.get(command.requestId);
+        if (!authorization?.result) return fail();
+        const result = authorization.result;
+        page.authorizations!.delete(command.requestId);
+        return result;
+      }
+      case 'authorize': {
+        const match = /^\/oauth\/([a-zA-Z0-9_-]+)\/connect$/.exec(command.path);
+        if (
+          !match ||
+          !ghost.manifest.network?.secrets?.some((s) => s.key === match[1] && s.source === 'oauth')
+        )
+          return fail();
+        page.authorizations ??= new Map();
+        if (page.authorizations.size >= 4) return fail();
+        const id = randomUUID();
+        page.authorizations.set(id, { path: command.path, body: command.body, running: false });
+        return { requestId: id, actionId: 'settings-oauth', expectedRevision: 0 };
+      }
+      case 'fetch': {
+        if (!command.path.startsWith('/') || command.path.startsWith('//')) return fail();
+        const url = new URL(command.path, 'https://plugin.invalid');
+        if (
+          url.origin !== 'https://plugin.invalid' ||
+          url.hash ||
+          !/^\/(?:kv|app-context|agent-models|media-models|secrets(?:\/[^/]+)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
+            url.pathname,
+          )
+        )
+          return fail();
+        return done(
+          await this.deps.settingsFetch!(
+            ghost,
+            url.pathname + url.search,
+            command.method,
+            command.body,
+            current,
+            (label, host) =>
+              this.confirm(page.id, {
+                ghostId: page.plugin,
+                ghostName: ghost.manifest.name,
+                iconDataUrl: ghost.iconDataUrl,
+                body:
+                  t('settings.ghosts.connections.confirmMessage')
+                    .replaceAll('{{name}}', ghost.manifest.name)
+                    .replaceAll('{{host}}', host) +
+                  '\n\n' +
+                  t('settings.ghosts.connections.confirmDetail').replaceAll('{{label}}', label),
+                confirmText: t('settings.ghosts.connections.confirmAllow'),
+                cancelText: t('settings.ghosts.connections.confirmCancel'),
+                danger: false,
+              }),
+          ),
+        );
+      }
+    }
+  }
+  private async answerDirectory(
+    page: Page,
+    input: { requestId?: unknown; path?: unknown },
+  ): Promise<void> {
+    if (
+      !page.active ||
+      typeof input.requestId !== 'string' ||
+      !(
+        input.path === null ||
+        (typeof input.path === 'string' && input.path.length > 0 && input.path.length <= 4096)
+      )
+    )
+      return fail();
+    const receipt = createHash('sha256').update(JSON.stringify(input.path)).digest('hex');
+    const previous = page.directoryAnswers?.get(input.requestId);
+    if (previous) {
+      if (previous !== receipt) return fail();
+      return;
+    }
+    const pending = page.directory;
+    if (
+      !pending ||
+      pending.value.id !== input.requestId ||
+      pending.answering ||
+      pending.value.expiresAt <= this.now()
+    )
+      return fail();
+    pending.answering = true;
+    try {
+      const path =
+        input.path === null ? null : await this.deps.validateDirectory!(input.path as string);
+      this.check(page);
+      if (!page.active || page.directory !== pending || pending.value.expiresAt <= this.now())
+        return fail();
+      clearTimeout(pending.timer);
+      page.directory = undefined;
+      page.directoryAnswers ??= new Map();
+      page.directoryAnswers.set(input.requestId, receipt);
+      if (page.directoryAnswers.size > 32)
+        page.directoryAnswers.delete(page.directoryAnswers.keys().next().value!);
+      pending.answer(path);
+      return;
+    } finally {
+      pending.answering = false;
     }
   }
   private cancelDirectory(page: Page) {
@@ -304,7 +557,10 @@ export class MobilePluginPages {
       });
     });
   }
-  private item(ghost: InstalledGhost, order?: RemoteCollectionItem['pluginOrder']): RemoteCollectionItem {
+  private item(
+    ghost: InstalledGhost,
+    order?: RemoteCollectionItem['pluginOrder'],
+  ): RemoteCollectionItem {
     const m = ghost.manifest;
     const id = installedGhostStoragePart(ghost);
     const mobile = parsePluginMobileDeclaration(m.mobile);
@@ -358,11 +614,18 @@ export class MobilePluginPages {
         resourceKind: 'plugin',
         title: { fallback: 'Plugins', translations: { 'zh-CN': '插件' } },
         icon: { name: 'puzzle', fallbackText: 'P' },
+        ...(this.deps.management
+          ? { actions: [{ id: 'management:snapshot', label: 'Manage plugins' }] }
+          : {}),
       },
       list: async (_ctx, request) => {
         this.sweep();
         let order: ReturnType<NonNullable<Dependencies['listOrder']>> | undefined;
-        try { order = this.deps.listOrder?.(); } catch { /* Optional ordering cannot block the list. */ }
+        try {
+          order = this.deps.listOrder?.();
+        } catch {
+          /* Optional ordering cannot block the list. */
+        }
         const q = request.query?.toLocaleLowerCase();
         const items = this.deps
           .list()
@@ -384,24 +647,77 @@ export class MobilePluginPages {
         const locale = resolvePreferredSystemLocale([request.client.locale ?? 'en']);
         // Read-only declaration facts and copy shared with PC; no saved values leave Host.
         const permissionText = (key: string, args?: Record<string, string>) =>
-          t(`settings.ghosts.perm.${key}`, locale).replace(/\{\{(\w+)\}\}/g, (match, name: string) => args?.[name] ?? match);
+          t(`settings.ghosts.perm.${key}`, locale).replace(
+            /\{\{(\w+)\}\}/g,
+            (match, name: string) => args?.[name] ?? match,
+          );
         const permissions = ghostPermissionItems(ghost.manifest)
-          .filter(permission => permission.kind !== 'tool')
-          .map(permission => ({
+          .filter((permission) => permission.kind !== 'tool')
+          .map((permission) => ({
             title: permissionText(permission.labelKey, permission.labelArgs),
             description: [
-              permission.detailKey ? permissionText(permission.detailKey, permission.detailArgs) : '',
+              permission.detailKey
+                ? permissionText(permission.detailKey, permission.detailArgs)
+                : '',
               permission.detail ?? '',
-            ].filter(Boolean).join('\n\n'),
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
           }));
         const detailFacts = [
-          {key: 'version', title: t('settings.ghosts.detail.infoVersion', locale), value: 'v' + ghost.manifest.version},
-          ...(ghost.manifest.author ? [{key: 'author', title: t('settings.ghosts.detail.infoAuthor', locale), value: ghost.manifest.author}] : []),
-          {key: 'trust', title: t('settings.ghosts.detail.infoTrust', locale), value: t('settings.ghosts.trust.' + ghostTrustLabelKey(ghost.trust), locale).replaceAll('{{publisher}}', ghost.trust?.publisherName ?? t('settings.ghosts.trust.unknownPublisher', locale))},
-          {key: 'identifier', title: t('settings.ghosts.detail.infoId', locale), value: ghost.manifest.id},
-          {key: 'contents', title: t('settings.ghosts.detail.infoContents', locale), value: ghostContentKeys(ghost.manifest).map(key => t('settings.ghosts.contents.' + key, locale)).join(' · ')},
-          {key: 'panel', title: t('settings.ghosts.detail.infoPanel', locale), value: t(ghost.manifest.panel ? 'settings.ghosts.contents.panel' : 'settings.ghosts.detail.panelNone', locale)},
-          ...(ghost.dir ? [{key: 'location', title: t('settings.ghosts.detail.infoLocation', locale), value: ghost.dir}] : []),
+          {
+            key: 'version',
+            title: t('settings.ghosts.detail.infoVersion', locale),
+            value: 'v' + ghost.manifest.version,
+          },
+          ...(ghost.manifest.author
+            ? [
+                {
+                  key: 'author',
+                  title: t('settings.ghosts.detail.infoAuthor', locale),
+                  value: ghost.manifest.author,
+                },
+              ]
+            : []),
+          {
+            key: 'trust',
+            title: t('settings.ghosts.detail.infoTrust', locale),
+            value: t('settings.ghosts.trust.' + ghostTrustLabelKey(ghost.trust), locale).replaceAll(
+              '{{publisher}}',
+              ghost.trust?.publisherName ?? t('settings.ghosts.trust.unknownPublisher', locale),
+            ),
+          },
+          {
+            key: 'identifier',
+            title: t('settings.ghosts.detail.infoId', locale),
+            value: ghost.manifest.id,
+          },
+          {
+            key: 'contents',
+            title: t('settings.ghosts.detail.infoContents', locale),
+            value: ghostContentKeys(ghost.manifest)
+              .map((key) => t('settings.ghosts.contents.' + key, locale))
+              .join(' · '),
+          },
+          {
+            key: 'panel',
+            title: t('settings.ghosts.detail.infoPanel', locale),
+            value: t(
+              ghost.manifest.panel
+                ? 'settings.ghosts.contents.panel'
+                : 'settings.ghosts.detail.panelNone',
+              locale,
+            ),
+          },
+          ...(ghost.dir
+            ? [
+                {
+                  key: 'location',
+                  title: t('settings.ghosts.detail.infoLocation', locale),
+                  value: ghost.dir,
+                },
+              ]
+            : []),
         ];
         let assessment: GhostSetupAssessment | undefined;
         try {
@@ -411,7 +727,9 @@ export class MobilePluginPages {
         }
         let configuration = mobilePluginConfiguration(ghost.manifest, undefined, assessment);
         try {
-          configuration = this.deps.configuration?.(installedGhostStoragePart(ghost), assessment) ?? configuration;
+          configuration =
+            this.deps.configuration?.(installedGhostStoragePart(ghost), assessment) ??
+            configuration;
         } catch {
           // A failed configuration read retains declarations with unknown status.
         }
@@ -451,6 +769,14 @@ export class MobilePluginPages {
       },
       invoke: async (context, request) => {
         this.sweep();
+        if (request.actionId.startsWith('management:')) {
+          if (!this.deps.management)
+            throw new RemoteResourceRegistryError(
+              'UNSUPPORTED_CAPABILITY',
+              'Update Cindy on the target computer',
+            );
+          return this.deps.management.invoke(context.controllerDeviceId, request);
+        }
         const input = record(request.input);
         const id = request.resourceRef?.id;
         if (!id) return fail();
@@ -509,6 +835,49 @@ export class MobilePluginPages {
             for (const page of this.pages.values()) if (page.plugin === id) this.close(page);
           return { effects: [{ kind: 'refresh-collection', collectionId: PLUGIN_COLLECTION }] };
         }
+        if (request.actionId === 'settings:open') {
+          const ghost = this.ghost(id);
+          if (
+            !this.deps.settingsFetch ||
+            !ghost.enabled ||
+            !ghost.manifest.settingsHtml ||
+            input.expectedInstalledApproval !== ghostInstallApprovalToken(ghost.approval) ||
+            this.pages.size >= 32
+          )
+            return fail();
+          const page: Page = {
+            id: randomUUID(),
+            plugin: id,
+            controller: context.controllerDeviceId,
+            revision: this.deps.revision(ghost),
+            currentOwner: this.deps.captureOwner(),
+            currentController: this.deps.captureController(context.controllerDeviceId),
+            surface: 'settings',
+            desktopSettings: true,
+            active: true,
+            touchedAt: this.now(),
+            files: [],
+            confirms: new Map(),
+            notices: [],
+            answered: new Map(),
+          };
+          this.check(page);
+          page.files = await this.deps.bundle(ghost, ghost.manifest.settingsHtml);
+          this.check(page);
+          if (this.pages.size >= 32) return fail();
+          this.pages.set(page.id, page);
+          return {
+            effects: [],
+            result: {
+              pageId: page.id,
+              pluginId: id,
+              manifestId: ghost.manifest.id,
+              name: ghost.manifest.name,
+              entry: ghost.manifest.settingsHtml,
+              files: page.files,
+            },
+          };
+        }
         if (request.actionId.startsWith('open:')) {
           const surface = request.actionId.slice(5);
           if (!isPluginPageSurface(surface)) return fail();
@@ -564,6 +933,8 @@ export class MobilePluginPages {
           return { effects: [], result };
         }
         const page = this.page(input.pageId, context.controllerDeviceId);
+        // Desktop configuration values only cross the authenticated encrypted bridge.
+        if (page.desktopSettings) return fail();
         if (page.plugin !== id) return fail();
         const ghost = this.check(page);
         switch (request.actionId) {
@@ -696,57 +1067,9 @@ export class MobilePluginPages {
             page.previews?.delete(input.intentId);
             return { effects: [] };
           }
-          case 'answer-directory': {
-            if (
-              !page.active ||
-              typeof input.requestId !== 'string' ||
-              !(
-                input.path === null ||
-                (typeof input.path === 'string' &&
-                  input.path.length > 0 &&
-                  input.path.length <= 4096)
-              )
-            )
-              return fail();
-            const receipt = createHash('sha256').update(JSON.stringify(input.path)).digest('hex');
-            const previous = page.directoryAnswers?.get(input.requestId);
-            if (previous) {
-              if (previous !== receipt) return fail();
-              return { effects: [] };
-            }
-            const pending = page.directory;
-            if (
-              !pending ||
-              pending.value.id !== input.requestId ||
-              pending.answering ||
-              pending.value.expiresAt <= this.now()
-            )
-              return fail();
-            pending.answering = true;
-            try {
-              const path =
-                input.path === null
-                  ? null
-                  : await this.deps.validateDirectory!(input.path as string);
-              this.check(page);
-              if (
-                !page.active ||
-                page.directory !== pending ||
-                pending.value.expiresAt <= this.now()
-              )
-                return fail();
-              clearTimeout(pending.timer);
-              page.directory = undefined;
-              page.directoryAnswers ??= new Map();
-              page.directoryAnswers.set(input.requestId, receipt);
-              if (page.directoryAnswers.size > 32)
-                page.directoryAnswers.delete(page.directoryAnswers.keys().next().value!);
-              pending.answer(path);
-              return { effects: [] };
-            } finally {
-              pending.answering = false;
-            }
-          }
+          case 'answer-directory':
+            await this.answerDirectory(page, input);
+            return { effects: [] };
           case 'answer': {
             const pending =
               typeof input.confirmId === 'string' ? page.confirms.get(input.confirmId) : null;

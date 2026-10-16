@@ -809,6 +809,8 @@ test('skillhub.local 纳入保留列表布局及直接渲染子组件的样式�
   const generated = surfaces.find((surface) => surface.id === 'desktop.skillhub.local');
   assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubLocalLayout.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubHomeView.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('skillhub-home.css')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('SkillCategoryFilterBar.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('PluginManagementLayout.tsx')));
   assert.ok(generated.tokenCount > 33, `子组件并入后 token 数应高于只扫路由组件(实际 ${generated.tokenCount})`);
 });
@@ -820,7 +822,7 @@ test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () =>
   for (const component of [
     'PluginManagementLayout',
     'MarketPluginDetailView',
-    'PluginScopePicker',
+    'PluginProjectMenu',
     'MyPublishesSection',
     'AddMarketplaceDialog',
     'UpdateAllDialog',

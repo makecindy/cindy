@@ -6,16 +6,21 @@ import {
   OauthHostIdentity,
 } from '../authentication.js';
 import { OauthBox } from '../box.js';
-import { parsePluginOauthHelloReply, type PluginOauthAction, type PluginOauthPeerIdentity } from '@cindy/device-link';
+import {
+  parsePluginOauthHelloReply,
+  type PluginOauthAction,
+  type PluginOauthPeerIdentity,
+} from '@cindy/device-link';
 
 const action: PluginOauthAction = {
   requestId: 'card-1',
   actionId: 'oauth_connect:account',
   expectedRevision: 1,
 };
-function fixture(ghostId = 'test-plugin') {
+function fixture(ghostId = 'test-plugin', controllerDeviceId?: string, settingsPage = false) {
   let now = Date.now(),
-    owner: string | null = 'membership:g1';
+    owner: string | null = 'membership:g1',
+    current = true;
   const identity = {
     key: new OauthHostIdentity(),
     deviceId: 'cloud-device',
@@ -31,7 +36,7 @@ function fixture(ghostId = 'test-plugin') {
     identity: () => identity,
     owner: () => owner,
     available: () => true,
-    bind: async () => ({ ghostId, current: () => true }),
+    bind: async () => ({ ghostId, controllerDeviceId, ...(settingsPage ? { settingsPage: true as const } : {}), current: () => current }),
     request,
     now: () => now,
   });
@@ -66,25 +71,30 @@ function fixture(ghostId = 'test-plugin') {
     owner: (v: string | null) => {
       owner = v;
     },
+    invalidateBinding: () => {
+      current = false;
+    },
   };
 }
 
 describe('signed OAuth transport with explicit peer trust', () => {
   it.each(['test-plugin', '_root__test-plugin', '_ns__' + 'a'.repeat(128) + '__test-plugin'])(
-    'authenticates %s before side effects and encrypts subsequent bodies', async (ghostId) => {
-    const context = fixture(ghostId),
-      call = await authenticateOauthController(context.options);
-    expect(context.request).not.toHaveBeenCalled();
-    await expect(call({ op: 'capabilities' })).resolves.toMatchObject({
-      marker: 'synthetic-private-result',
-    });
-    expect(JSON.stringify(context.invoke.mock.calls)).not.toContain('capabilities');
-    const frame = context.invoke.mock.calls[1][0];
-    expect(JSON.stringify(await context.host.request('desktop', frame))).not.toContain(
-      'synthetic-private-result',
-    );
-    expect(context.request).toHaveBeenCalledTimes(1); // identical retry returns the cached ciphertext, without replaying work
-  });
+    'authenticates %s before side effects and encrypts subsequent bodies',
+    async (ghostId) => {
+      const context = fixture(ghostId),
+        call = await authenticateOauthController(context.options);
+      expect(context.request).not.toHaveBeenCalled();
+      await expect(call({ op: 'capabilities' })).resolves.toMatchObject({
+        marker: 'synthetic-private-result',
+      });
+      expect(JSON.stringify(context.invoke.mock.calls)).not.toContain('capabilities');
+      const frame = context.invoke.mock.calls[1][0];
+      expect(JSON.stringify(await context.host.request('desktop', frame))).not.toContain(
+        'synthetic-private-result',
+      );
+      expect(context.request).toHaveBeenCalledTimes(1); // identical retry returns the cached ciphertext, without replaying work
+    },
+  );
   it('rejects the former raw v1 transport', async () => {
     const f = fixture();
     await expect(
@@ -93,16 +103,62 @@ describe('signed OAuth transport with explicit peer trust', () => {
     await expect(f.host.request('desktop', { op: 'capabilities' })).rejects.toThrow();
     expect(f.request).not.toHaveBeenCalled();
   });
+  it('rejects a settings command inside an authenticated ordinary OAuth exchange', async () => {
+    const f = fixture(),
+      call = await authenticateOauthController(f.options);
+    await expect(
+      call({ op: 'settings', id: action.requestId, command: { kind: 'close' } }),
+    ).rejects.toThrow();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it('binds an authenticated settings exchange to its page and its live lease', async () => {
+    const f = fixture('test-plugin', 'desktop', true);
+    const settingsAction = { requestId: 'page-1', actionId: 'settings-page', expectedRevision: 0 };
+    const call = await authenticateOauthController({ ...f.options, action: settingsAction });
+    await expect(call({ op: 'capabilities' })).rejects.toThrow();
+    await expect(
+      call({ op: 'settings', id: 'other-page', command: { kind: 'close' } }),
+    ).rejects.toThrow();
+    expect(f.request).not.toHaveBeenCalled();
+    await expect(
+      call({ op: 'settings', id: settingsAction.requestId, command: { kind: 'poll', after: 0 } }),
+    ).resolves.toBeDefined();
+    expect(f.request).toHaveBeenCalledTimes(1);
+    f.invalidateBinding();
+    await expect(
+      call({
+        op: 'settings',
+        id: settingsAction.requestId,
+        command: { kind: 'fetch', path: '/kv', method: 'PUT', body: '{}' },
+      }),
+    ).rejects.toThrow();
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
   it('rejects reuse of an authenticated nonce with a different ciphertext before dispatch', async () => {
-    const f = fixture(), key = new OauthBox();
-    const reply = parsePluginOauthHelloReply(await f.host.request('desktop', {
-      op: 'hello', version: 3, nonce: randomBytes(32).toString('base64url'),
-      publicKey: key.publicKey, action,
-    }));
-    const payload = { nonce: randomBytes(32).toString('base64url'), request: { op: 'capabilities' } };
+    const f = fixture(),
+      key = new OauthBox();
+    const reply = parsePluginOauthHelloReply(
+      await f.host.request('desktop', {
+        op: 'hello',
+        version: 3,
+        nonce: randomBytes(32).toString('base64url'),
+        publicKey: key.publicKey,
+        action,
+      }),
+    );
+    const payload = {
+      nonce: randomBytes(32).toString('base64url'),
+      request: { op: 'capabilities' },
+    };
     const frame = () => ({
-      op: 'exchange', id: reply.id,
-      box: key.seal(reply.publicKey, `authenticated-plugin-oauth-v3:${reply.id}`, 'callback', payload),
+      op: 'exchange',
+      id: reply.id,
+      box: key.seal(
+        reply.publicKey,
+        `authenticated-plugin-oauth-v3:${reply.id}`,
+        'callback',
+        payload,
+      ),
     });
     const first = frame();
     const result = await f.host.request('desktop', first);
@@ -112,12 +168,15 @@ describe('signed OAuth transport with explicit peer trust', () => {
   });
 
   it('rejects a mutated authenticated envelope without invoking the transaction', async () => {
-    const f = fixture(), call = await authenticateOauthController(f.options);
+    const f = fixture(),
+      call = await authenticateOauthController(f.options);
     await call({ op: 'capabilities' });
     const frame = f.invoke.mock.calls[1][0] as { op: string; id: string; box: string };
     const ciphertext = Buffer.from(frame.box, 'base64url');
     ciphertext[16] ^= 1;
-    await expect(f.host.request('desktop', { ...frame, box: ciphertext.toString('base64url') })).rejects.toThrow();
+    await expect(
+      f.host.request('desktop', { ...frame, box: ciphertext.toString('base64url') }),
+    ).rejects.toThrow();
     expect(f.request).toHaveBeenCalledTimes(1);
   });
   it('rejects relay substitution of the client ephemeral key, before provider or browser work', async () => {
@@ -194,6 +253,12 @@ describe('signed OAuth transport with explicit peer trust', () => {
     await expect(f.host.request('desktop', frame)).rejects.toThrow();
     expect(f.request).toHaveBeenCalledTimes(1);
   });
+  it('rejects a page configuration opened by another controller before producing an offer', async () => {
+    const f = fixture('test-plugin', 'desktop-other');
+    await expect(authenticateOauthController(f.options)).rejects.toThrow();
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
   it('prevents a connection from starting another card', async () => {
     const f = fixture(),
       call = await authenticateOauthController(f.options);

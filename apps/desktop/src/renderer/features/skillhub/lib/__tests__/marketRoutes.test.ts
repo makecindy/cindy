@@ -90,6 +90,7 @@ describe('market route scope', () => {
     expect(homeSource).not.toContain("title={t('skillhub.home.catalog')}");
     expect(homeSource).toContain("t('skillhub.home.catalogMore')");
     expect(homeSource).toContain('headerActions={(');
+    expect(homeSource).toContain('<CatalogTargetControls computer={deviceControl} />');
     expect(homeSource).toContain('plugin-management-action-trigger');
     expect(homeSource).toContain('<HomeMarketCard');
     const homeCardSource = readFileSync(resolve(skillhubDir, 'components/HomeMarketCard.tsx'), 'utf8');

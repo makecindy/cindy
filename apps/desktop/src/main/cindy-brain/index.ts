@@ -1,14 +1,44 @@
+import { RemotePluginPreferences } from './remotePluginPreferences.js';
+import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { isSharedTaskPeer, isProviderSharePeer } from '@cindy/device-link';
+import { RemotePluginManagement, type RemotePluginManagementDeps } from './remotePluginManagement.js';
+import { projectPluginWorkdir, resolvePluginWorkdir } from './remotePluginProjects.js';
+import { takePeerAttachment } from '../device-link/peerAttachmentStore.js';
+import { parsePeerAttachmentRef } from '@cindy/device-link';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
 import { readMobilePreview } from './mobilePreview.js';
 import { MobileTaskSettings } from './mobileTaskSettings.js';
 import { MobilePluginPages } from './mobilePageService.js';
 import { listMobilePageFiles, readMobilePageChunk } from './mobilePageAssets.js';
-import { invokeGhostMobileRelay, fetchGhostMobilePage } from './runtime/electronSandboxAdapter.js';
+import { invokeGhostMobileRelay, fetchGhostMobilePage, fetchGhostSettings } from './runtime/electronSandboxAdapter.js';
 import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry.js';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, PLUGIN_COLLECTION, type PluginPagePoll } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 
 let mobilePluginPages: MobilePluginPages | null = null;
+let remotePluginManagement: RemotePluginManagement | null = null;
+export const remotePluginSettings = {
+  bind: (action: import('@cindy/device-link').PluginOauthAction) => mobilePluginPages?.settingsBinding(action) ?? null,
+  bindAuthorization: (action: import('@cindy/device-link').PluginOauthAction) => mobilePluginPages?.settingsAuthorizationBinding(action) ?? null,
+  runAuthorization: (action: import('@cindy/device-link').PluginOauthAction) => mobilePluginPages?.runSettingsAuthorization(action) ?? false,
+  request: (peer: string, request: import('@cindy/device-link').PluginSettingsRequest) =>
+    mobilePluginPages?.settingsRequest(peer, request) ?? Promise.reject(new Error('PLUGIN_PAGE_UNAVAILABLE')),
+};
+interface RemotePluginManagementServices {
+  isRelayOnline(): boolean;
+  market: RemotePluginManagementDeps['market'];
+  listProjects(): Promise<Array<{ path: string; exists: boolean }>>;
+  sidebar: { read(id: string): boolean; write(id: string, visible: boolean, assertCurrent: () => void): Promise<void> };
+}
+let remotePluginManagementServices: RemotePluginManagementServices | null = null;
+/** Bootstrap owns cross-host service wiring, keeping the plugin module import graph acyclic. */
+export function setRemotePluginManagementServices(services: RemotePluginManagementServices): void {
+  remotePluginManagementServices = services;
+}
+function requireRemotePluginManagementServices(): RemotePluginManagementServices {
+  if (!remotePluginManagementServices) throwIpcError('PRECONDITION_FAILED', 'Remote plugin management unavailable');
+  return remotePluginManagementServices!;
+}
 /** Dedicated Host permission presentation. The existing capability/write gates still own the decision and persistence. */
 export async function showMobilePluginTaskPermission(pluginId: string, pageId: string, presentation: {
   title: string; message: string; detail: string; allow: string; cancel: string;
@@ -24,6 +54,7 @@ export async function showMobilePluginTaskPermission(pluginId: string, pageId: s
 
 function notifyMobilePluginsChanged(): void {
   mobilePluginPages?.invalidate();
+  remotePluginManagement?.invalidate();
   tapWindowBroadcast(REMOTE_RESOURCE_CHANGED_CHANNEL, { collectionId: PLUGIN_COLLECTION }, getSafeDataOwnerPushStamp());
 }
 
@@ -95,7 +126,7 @@ function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm
   }));
 }
 
-import { isValidPluginNamespace, supportsCindyVersion } from '@cindy/plugin-protocol';
+import { isValidPluginNamespace, supportsCindyVersion, PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { buildGhostRecommendationSnapshot } from './ghostRecommendationSnapshot.js';
 import {
   readGhostRecommendationEntries,
@@ -7049,12 +7080,12 @@ async function updateLocalGhostPackageLocked(
         installOrigin: installOrigin ?? 'manual',
         ...(sourceChanged ? { sourceStateArchiveId: ghostSourceStateArchiveId(previousGhost) } : {}),
         ...deliveryNamespaceFields(previousGhost),
-        beforePackageCommit: () =>
-          getGhostOauthAccountManager().prepareAccountsForChangedClients(
-            previousGhost.manifest,
-            inspected.canonicalManifest,
-            instanceId,
-          ),
+        beforePackageCommit: () => {
+          if (isCurrent?.() === false) throwIpcError('PRECONDITION_FAILED', 'Plugin operation is no longer current');
+          return getGhostOauthAccountManager().prepareAccountsForChangedClients(
+            previousGhost.manifest, inspected.canonicalManifest, instanceId,
+          );
+        },
         onPackagePlaced: () => {
           packagePlaced = true;
         },
@@ -7585,7 +7616,7 @@ export function setGhostUninstallLedgerPreparer(preparer: GhostUninstallLedgerPr
  */
 export async function uninstallGhostAndCleanup(
   id: string,
-  options?: { skipMarketLedger?: boolean },
+  options?: { skipMarketLedger?: boolean; assertCurrent?: () => void },
 ): Promise<void> {
   // Install lock is the catalog ghostId so public and org instances of the
   // same name stay serial. OAuth/vault lock is the storage part, never a
@@ -7595,6 +7626,7 @@ export async function uninstallGhostAndCleanup(
     throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
   }
   return withGhostInstallLock(identity.ghostId, () => {
+    options?.assertCurrent?.();
     const ghost = findGhostForInstanceId(id);
     if (!ghost) throwIpcError('NOT_FOUND', '目标插件实例已不存在');
     return withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(ghost), () =>
@@ -7605,10 +7637,11 @@ export async function uninstallGhostAndCleanup(
 
 async function uninstallGhostAndCleanupLocked(
   id: string,
-  options?: { skipMarketLedger?: boolean },
+  options?: { skipMarketLedger?: boolean; assertCurrent?: () => void },
 ): Promise<void> {
   const releaseMutation = beginGhostMutation();
   try {
+    options?.assertCurrent?.();
     requireGhostAvailableForActiveSession(id);
     const ghost = findGhostForInstanceId(id);
     if (!ghost) throwIpcError('NOT_FOUND', '目标插件实例已不存在');
@@ -7635,6 +7668,7 @@ async function uninstallGhostAndCleanupLocked(
     const uninstallTasks = pluginTaskUninstaller;
     if (!uninstallTasks) throw new Error('Plugin task storage is not ready for uninstall');
     await manager.runExclusiveMutation(mutation => uninstallTasks(storagePart, async () => {
+      options?.assertCurrent?.();
       const result = await mutation.uninstall(relId, { notify: false });
       if ('rejection' in result) throwUninstallError(result.rejection);
     }));
@@ -7782,7 +7816,8 @@ function readLegacyEncryptedSecret(file: string): LegacyMigrationRead<string> {
 }
 
 
-async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInstalledApproval?: string) {
+async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInstalledApproval?: string, assertCurrent?: () => void) {
+  assertCurrent?.();
   const target = findGhostForPhysicalStoragePart(id);
   if (!target) throwIpcError('NOT_FOUND', '目标插件实例已不存在');
   const approvalToken = ghostInstallApprovalToken(target.approval);
@@ -7811,7 +7846,7 @@ async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInst
         // 不得继续后台读写(数据本体不动,重新启用后重开)。
         await getGhostLibrarySlot().disposeGhost(storagePart);
       }
-      const result = await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken);
+      const result = await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken, assertCurrent);
       if ('rejection' in result) throwUninstallError(result.rejection);
       if (enabled) {
         runtime.resetFuse(storagePart); // 重新唤醒 = 清熔断记账,可再拉起
@@ -7846,6 +7881,44 @@ async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInst
     }
 }
 
+/** Materialize only an authenticated peer inbox ticket, then reuse ordinary file install/update. */
+async function installRemoteGhostFile(peer: string, attachment: string, target: string | undefined,
+  expectedApproval: string | undefined, prompt: GhostInstallConsentPrompt, assertCurrent: () => void): Promise<void> {
+  const ref = parsePeerAttachmentRef(attachment);
+  if (!ref || ref.size > PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES) throwIpcError('INVALID_PARAMS', 'Invalid plugin attachment');
+  const owner = captureGhostMutationOwner();
+  assertCurrent();
+  const dir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'cindy-remote-plugin-'));
+  const file = path.join(dir, 'package.cindy');
+  try {
+    await takePeerAttachment(peer, ref, file);
+    assertCurrent();
+    const manager = getGhostManager();
+    const inspected = await manager.inspect(file);
+    if ('rejection' in inspected) throwInstallError(inspected.rejection);
+    rejectReservedGhostId(inspected.manifest.id);
+    rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
+    const existing = target ? findInstalledGhostForLocalUpdate(manager.list(), inspected.manifest.id, target, expectedApproval!) :
+      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id, namespace: null });
+    if (target && !existing) throwIpcError('PRECONDITION_FAILED', 'Plugin installation changed');
+    if (existing && typeof existing.namespace === 'string') throwIpcError('PRECONDITION_FAILED', 'Use the organization marketplace to update this plugin');
+    const updateSource = existing ? readLocalGhostUpdateSource(manager, existing, inspected) : undefined;
+    rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource?.authorizationOverrides);
+    const token = existing ? ghostInstallApprovalToken(existing.approval) : undefined;
+    const consent = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'local-file' },
+      existing, inspected.manifest, inspected.packageSha256);
+    assertCurrent();
+    const release = beginGhostMutation(owner);
+    try {
+      const current = () => { assertCurrent(); return true; };
+      if (existing) await withGhostInstallLock(inspected.manifest.id, () => updateLocalGhostPackageLocked(
+        manager, file, inspected, inspected.packageSha256, token!, installedGhostStoragePart(existing), consent, undefined, current));
+      else await installAndDock(manager, file, { ghostId: inspected.manifest.id, namespace: null, enable: true,
+        expectedPackageSha256: inspected.packageSha256, consent: { decision: consent, manifest: inspected.manifest }, beforePackagePlacement: assertCurrent });
+    } finally { release(); }
+  } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
+}
+
 export function registerGhostIpc(): void {
   registerGhostCardRemoteProvider((id) => {
     const ghost = findGhostForRemotePluginIdentity(availableGhosts(), id);
@@ -7862,7 +7935,61 @@ export function registerGhostIpc(): void {
   ipcRegistered = true;
   const manager = getGhostManager();
   const runtime = getGhostRuntime();
+  const taskSettings = new MobileTaskSettings({
+      read: readPluginTaskConfig, write: writePluginTaskConfig, validate: validatePluginTaskConfig,
+      providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+      agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
+    });
+  remotePluginManagement = new RemotePluginManagement({
+    list: availableGhosts,
+    settingsPage: true,
+    preferences: new RemotePluginPreferences({
+      auxiliaryModelLabel: () => {
+        const ref = getEffectiveAuxiliaryModelChain().refs[0] ?? null;
+        return ref === null ? null : formatAuxiliaryModelRefLabel(ref);
+      },
+      tasks: taskSettings,
+      sidebar: {
+        read: id => requireRemotePluginManagementServices().sidebar.read(id),
+        write: (id, visible, assertCurrent) => requireRemotePluginManagementServices().sidebar.write(id, visible, assertCurrent),
+      },
+    }),
+    projects: {
+      list: async () => {
+        const entries = await requireRemotePluginManagementServices().listProjects();
+        return [...new Map(entries.map((entry) => {
+          const project = projectPluginWorkdir(entry.path);
+          return [project.id, project] as const;
+        })).values()];
+      },
+      resolve: resolvePluginWorkdir,
+      disabled: listDisabledGhostIdsForWorkdir,
+      setDisabled: (workdir, instance, disabled, assertCurrent) => {
+        assertCurrent();
+        setGhostWorkdirDisabledAndNotify(workdir, instance, disabled);
+      },
+    },
+    capture: peer => {
+      const scope = captureDataOwnerBroadcastScope(), checkPeer = capturePluginOauthPeer(peer);
+      return () => { try { checkPeer(); const settings = readDeviceLinkSettings(); return !isSharedTaskPeer(peer) && !isProviderSharePeer(peer) && remotePluginManagementServices?.isRelayOnline() === true && settings.remoteControlEnabled && !settings.revokedControllers.includes(peer) && isDataOwnerBroadcastScopeCurrent(scope); } catch { return false; } };
+    },
+    captureReceipt: peer => {
+      const scope = captureDataOwnerBroadcastScope();
+      return () => { const settings = readDeviceLinkSettings(); return !isSharedTaskPeer(peer) && !isProviderSharePeer(peer) && settings.remoteControlEnabled && !settings.revokedControllers.includes(peer) && isDataOwnerBroadcastScopeCurrent(scope); };
+    },
+    market: {
+      snapshot: () => requireRemotePluginManagementServices().market.snapshot(),
+      detail: id => requireRemotePluginManagementServices().market.detail(id),
+      install: async (id, options, prompt, assertCurrent) => {
+        await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent);
+      },
+    },
+    setEnabled: async (id, enabled, approval, assertCurrent) => { await setGhostEnabledForUser(id, enabled, approval, assertCurrent); },
+    uninstall: async (id, _approval, assertCurrent) => { assertCurrent(); await uninstallGhostAndCleanup(id, { assertCurrent }); },
+    installFile: installRemoteGhostFile,
+  });
   mobilePluginPages = new MobilePluginPages({
+    management: remotePluginManagement,
     list: availableGhosts,
     listOrder: () => {
       const order = new Map<string, { addedAt?: number; recentIndex?: number }>();
@@ -7889,11 +8016,20 @@ export function registerGhostIpc(): void {
     },
     revision: ghost => JSON.stringify([ghost.manifest.version, ghostInstallApprovalToken(ghost.approval)]),
     captureOwner: () => { const scope = captureDataOwnerBroadcastScope(); return () => isDataOwnerBroadcastScopeCurrent(scope); },
-    // This existing peer fence is invalidated on disconnect, revoke, owner switch and relay teardown.
-    captureController: id => { const assertCurrent = capturePluginOauthPeer(id); return () => { try { assertCurrent(); return true; } catch { return false; } }; },
+    captureController: id => {
+      const assertCurrent = capturePluginOauthPeer(id);
+      return () => { try {
+        assertCurrent();
+        const settings = readDeviceLinkSettings();
+        return !isSharedTaskPeer(id) && !isProviderSharePeer(id) &&
+          remotePluginManagementServices?.isRelayOnline() === true && settings.remoteControlEnabled &&
+          !settings.revokedControllers.includes(id);
+      } catch { return false; } };
+    },
     unread: id => visibleGhostUnread().find(entry => entry.ghostId === id) ?? null,
     clearUnread: extinguishGhostUnread,
     setEnabled: async (id, enabled) => { await setGhostEnabledForUser(id, enabled); },
+    settingsFetch: fetchGhostSettings,
     bundle: listMobilePageFiles,
     asset: readMobilePageChunk,
     connect: async (ghost, pageId, channels) => {
@@ -7915,11 +8051,7 @@ export function registerGhostIpc(): void {
       if (!(await fs.promises.stat(real)).isDirectory()) throw new Error('INVALID_DIRECTORY');
       return real;
     },
-    taskSettings: new MobileTaskSettings({
-      read: readPluginTaskConfig, write: writePluginTaskConfig, validate: validatePluginTaskConfig,
-      providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
-      agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
-    }),
+    taskSettings,
   });
   remoteResourceRegistry.register(mobilePluginPages.provider());
   // 启动即对账一次 skill 槽链接:上次会话崩溃/异常退出留下的悬空链接、
@@ -8113,7 +8245,7 @@ export function registerGhostIpc(): void {
   // 关键闸:**新增地址必须过 main 侧受信确认弹窗**——意识设置页是意识自绘
   // 的不可信界面,动态白名单扩张必须由主机模态拿到用户点头(规则 9:用代码
   // 保证,不靠意识自觉)。
-  setGhostConnectionsHandler(async ({ ghostId, method, pathname, readBodyText, isCurrent }) => {
+  setGhostConnectionsHandler(async ({ ghostId, method, pathname, readBodyText, isCurrent, confirmConnection }) => {
     const ghost = findGhostForInstanceId(ghostId);
     if (!ghost) return { status: 404 };
     const connectionDecls = ghost.manifest.network?.connections ?? [];
@@ -8135,6 +8267,7 @@ export function registerGhostIpc(): void {
       // 受信确认:main 侧系统模态(对照 bootstrap 的 moveToApplications 弹窗
       // 用法),默认落在「取消」上防误触;意识名从在装清单现查。
       confirmAddHost: async (declLabel, host) => {
+        if (confirmConnection) return confirmConnection(declLabel, host);
         const ghostName = (findGhostForInstanceId(ghostId))?.manifest.name ?? ghostId;
         // main 迷你 i18n 只内置 {{appName}} 插值,其余变量按其约定在调用点
         // 自行 replace(对照 bootstrap 菜单的用法)。
@@ -8962,18 +9095,7 @@ export function registerGhostIpc(): void {
       }
       const target = findGhostForInstanceId(ghostId);
       const storedId = target ? installedGhostStoragePart(target) : ghostId;
-      const wasDisabled = isGhostDisabledForWorkdir(storedId, workdir);
-      const next = setGhostDisabledForWorkdir(workdir, storedId, disabled);
-      // A setup card may already be waiting for this plugin in the affected
-      // project. Wake all waiters for the plugin; each one revalidates its own
-      // captured workdir and only the matching scope is rejected.
-      if (wasDisabled !== disabled) {
-        getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
-      }
-      // 生效面变了(新会话花名册 / $ 菜单),借 ghosts:changed 通知所有窗口
-      // 重拉——载荷仍是完整已装清单,消费方按需再 sendSync 取目录级清单。
-      broadcastGhostsChanged(manager.list());
-      return { disabled: next };
+      return { disabled: setGhostWorkdirDisabledAndNotify(workdir, storedId, disabled) };
     },
   );
 
@@ -9827,6 +9949,15 @@ export function resolveGhostWebviewAttach(
     partition,
     owner: { mode: owner.mode, dataOwnerId: owner.dataOwnerId! },
   };
+}
+
+/** Local and remote project controls share persistence, setup wake-up and list invalidation. */
+function setGhostWorkdirDisabledAndNotify(workdir: string, storedId: string, disabled: boolean): string[] {
+  const wasDisabled = isGhostDisabledForWorkdir(storedId, workdir);
+  const next = setGhostDisabledForWorkdir(workdir, storedId, disabled);
+  if (wasDisabled !== disabled) getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
+  broadcastGhostsChanged(getGhostManager().list());
+  return next;
 }
 
 /** 播种进行中提示广播(renderer 显示/收起非阻塞胶囊;与退出 overlay 同款视觉)。 */
