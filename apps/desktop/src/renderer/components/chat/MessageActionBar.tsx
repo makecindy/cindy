@@ -27,7 +27,7 @@
  *     the default Copy icon again).
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Check,
   Copy,
@@ -42,11 +42,14 @@ import {
   Split,
   Trash2,
   Undo2,
+  Volume2,
+  Square,
 } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import { cn } from '@/lib/utils';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
+import { MessageReadAloudContext } from './MessageReadAloudContext';
 import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
@@ -82,6 +85,8 @@ interface MessageActionBarProps {
   hovered: boolean;
   /** 伙伴对话专属精简态：操作栏常显，隐藏费用和 Fork，并把引用入口外显为“回复”。 */
   simplifiedBotConversation?: boolean;
+  /** Only completed companion replies opt in; ordinary task/user messages do not. */
+  readAloudMessage?: { sessionId: string; messageId: string };
   /** When provided, render a Fork button (user messages fork *before* the
    *  question; assistant messages fork *through* the reply's turn — the
    *  parent decides whether to wire it). Returning a promise keeps the
@@ -150,6 +155,7 @@ export function MessageActionBar({
   align,
   hovered,
   simplifiedBotConversation = false,
+  readAloudMessage,
   onFork,
   onAddToChat,
   onShareAsImage,
@@ -170,6 +176,7 @@ export function MessageActionBar({
   turnUsageDetails,
 }: MessageActionBarProps) {
   const { t } = useTranslation();
+  const readAloud = useContext(MessageReadAloudContext);
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -693,6 +700,40 @@ export function MessageActionBar({
     </DropdownMenu>
   );
 
+  const canReadAloud = simplifiedBotConversation && readAloudMessage && readAloud?.available
+    && readAloud.sessionId === readAloudMessage.sessionId && readAloud.canRead(copyText);
+  const reading = canReadAloud && readAloud.messageId === readAloudMessage.messageId;
+  const readAloudLabel = t(reading ? 'bots.voiceMode.stopReadAloud' : 'bots.voiceMode.readAloud');
+  const readAloudBtn = canReadAloud && (
+    <Tooltip.Root key="read-aloud">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          className={actionButtonClass}
+          aria-label={readAloudLabel}
+          aria-pressed={Boolean(reading)}
+          aria-busy={Boolean(reading && readAloud.phase === 'preparing')}
+          disabled={readAloud.disabled && !reading}
+          onClick={(event) => {
+            event.stopPropagation();
+            readAloud.toggle(readAloudMessage.messageId, copyText);
+          }}
+        >
+          {reading && readAloud.phase === 'preparing' ? (
+            <Spinner size={14} strokeWidth={2} className={actionIconClass} />
+          ) : reading ? (
+            <Square size={14} strokeWidth={2} className={actionIconClass} />
+          ) : (
+            <Volume2 size={14} strokeWidth={2} className={actionIconClass} />
+          )}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>
+        {readAloud.disabled && !reading ? t('bots.voiceMode.finishBeforeReadAloud') : readAloudLabel}
+      </Tooltip.Content>
+    </Tooltip.Root>
+  );
+
   // 普通任务:
   // align='left'  → [copy][share][fork][edit][more][time][cost]
   // align='right' → [time][copy][share][fork][edit][more]   (user)
@@ -706,13 +747,14 @@ export function MessageActionBar({
           forkBtn,
           quoteBtn,
           replyBtn,
+          readAloudBtn,
           reactionBtn,
           editBtn,
           moreMenu,
           timeText,
           simplifiedBotConversation ? null : costText || tokensText,
         ]
-      : [timeText, copyBtn, shareBtn, forkBtn, quoteBtn, replyBtn, reactionBtn, editBtn, moreMenu];
+      : [timeText, copyBtn, shareBtn, forkBtn, quoteBtn, replyBtn, readAloudBtn, reactionBtn, editBtn, moreMenu];
 
   return (
     <div

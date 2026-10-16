@@ -313,18 +313,23 @@ describe('guest mid-task calls', () => {
   async function startAndCall(controller: string, method: string, args: unknown[], sessionId = 'task-1') {
     const started: Started[] = [];
     const host = makeHost(started);
-    await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload(sessionId) } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
-    await vi.waitFor(async () => {
-      const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
-      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"started"');
-    });
-    await host.handle(controller, { op: 'call', runId: RUN_1, callId: CALL_1, method, payload: { json: args } });
-    await vi.waitFor(() => expect(started[0].calls).toHaveLength(1));
-    host.dispose();
-    // 等这个实例收尾删掉影子目录，下一个用例的实例不与它交错。
-    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, sessionId))).toBe(false));
-    return started[0].calls[0].args;
+    try {
+      await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'codex', payload: { json: openPayload(sessionId) } });
+      // open 先确认接收，再异步准备目录与启动 Agent。等协议的 started 事件后才发调用，
+      // 沿用本文件的启动等待预算，不用 waitFor 默认的 1 秒充当 Windows 磁盘性能断言。
+      await vi.waitFor(async () => {
+        const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+        expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"t":"started"');
+      }, { timeout: 10_000 });
+      expect(started).toHaveLength(1);
+      await host.handle(controller, { op: 'call', runId: RUN_1, callId: CALL_1, method, payload: { json: args } });
+      await vi.waitFor(() => expect(started[0].calls).toHaveLength(1));
+      return started[0].calls[0].args;
+    } finally {
+      host.dispose();
+      // 断言失败时也收尾；目录删除完成前，不让下一个实例与旧实例交错。
+      await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, sessionId))).toBe(false), { timeout: 10_000 });
+    }
   }
 
   const patch = {

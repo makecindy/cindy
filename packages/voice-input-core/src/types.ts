@@ -43,6 +43,9 @@ export type AsrEvent =
   | { type: 'stable'; text: string; at: number }
   | { type: 'error'; message: string; at: number };
 
+/** One provider-owned utterance, independent of the cumulative dictation transcript. */
+export type AsrSegment = { id: string; text: string; final: boolean; order?: number };
+
 export type VoiceInputDraftSource = 'partial' | 'stable' | 'refinement';
 
 export type VoiceInputDraftReason = 'asr_partial' | 'asr_stable' | 'refinement_preview';
@@ -56,6 +59,10 @@ export type AudioTrace = {
 };
 
 export interface AsrProvider {
+  /** Optional continuous-input contract. Existing dictation consumers are unchanged. */
+  onSegment?(callback: (segment: AsrSegment) => void): void;
+  /** Commit an utterance without closing the connection; server-VAD providers need no action. */
+  commitUtterance?(): void;
   start(): Promise<void>;
   stop(): Promise<void>;
   appendAudio(chunk: ArrayBuffer, trace?: AudioTrace): void;

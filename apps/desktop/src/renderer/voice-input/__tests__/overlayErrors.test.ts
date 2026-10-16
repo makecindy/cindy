@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 import { createInstance } from 'i18next';
-import { VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../../shared/voiceInputErrors';
+import { VOICE_CONVERSATION_ACTIVE_MESSAGE, VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../../shared/voiceInputErrors';
 import { getVoiceInputErrorMessageKey, isVoiceInputServiceConnectionError } from '../overlayErrors';
 
 describe('voice input overlay error classification', () => {
@@ -18,6 +18,7 @@ describe('voice input overlay error classification', () => {
     expect(local.t(getVoiceInputErrorMessageKey(VOICE_INPUT_RATE_LIMITED_MESSAGE)!)).toBe('Japanese limit message');
     expect(getVoiceInputErrorMessageKey('Upstream HTTP 429')).toBeUndefined();
     expect(getVoiceInputErrorMessageKey('WebSocket connection timed out')).toBe('voiceInputOverlay.asrServiceUnavailable');
+    expect(getVoiceInputErrorMessageKey(VOICE_CONVERSATION_ACTIVE_MESSAGE)).toBe('bots.voiceMode.finishBeforeDictation');
   });
 
   it('detects transport failures as service connection errors', () => {

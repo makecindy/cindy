@@ -103,7 +103,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
  * mounting registers, unmounting clears, and only the route-owning chat instance
  * renders it.
  */
-export function BotSessionContentHeaderRegistration({ bot }: { bot: BotChatIdentity }) {
+export function BotSessionContentHeaderRegistration(props: { bot: BotChatIdentity }) {
+  const { bot } = props;
   useRegisterContentHeader(useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]));
   return null;
 }

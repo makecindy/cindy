@@ -38,6 +38,7 @@ export function BotSettingsDrawer() {
 
   const requestedPage = searchParams.get('settingsPage');
   const initialPage = requestedPage === 'memory' || requestedPage === 'capabilities' ? requestedPage : 'home';
+  const localInitialPage = requestedPage === 'model' || requestedPage === 'voice' ? requestedPage : initialPage;
   const allowNavigation = useRef(false);
   const pendingGuard = useRef<Promise<boolean> | null>(null);
   const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -150,8 +151,8 @@ export function BotSettingsDrawer() {
             ) : bot ? (
               <BotPronounProvider bot={bot}>
                 <BotSettings
-                  key={`${bot.id}:${open}:${requestedPage === 'model' ? 'model' : initialPage}`}
-                  initialPage={requestedPage === 'model' ? 'model' : initialPage}
+                  key={`${bot.id}:${open}:${localInitialPage}`}
+                  initialPage={localInitialPage}
                   beforeCloseRef={beforeCloseRef}
                   bot={bot}
                   onBack={performClose}

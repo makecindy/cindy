@@ -83,7 +83,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
     expect(sessionViewSource).toContain(
-      'ownsHardwareComposerActions={ownsHardwareTaskActions}',
+      'ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}',
     );
     expect(chatInputSource).toContain('workLouderVoiceGestureRef.current?.cancelHeldPress();');
     expect(sessionViewSource).toContain(

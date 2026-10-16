@@ -135,6 +135,11 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
+vi.mock('../voice/CompanionVoiceSettings', () => ({
+  CompanionVoiceSettings: ({ botId, sessionId }: { botId: string; sessionId?: string }) =>
+    <div data-testid="companion-voice-settings">{botId}:{sessionId}</div>,
+}));
+
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
 
 function capabilities(overrides: Partial<BotCapabilities> = {}): BotCapabilities {
@@ -1138,4 +1143,17 @@ describe('same-Bot capability updates while editing settings', () => {
     fireEvent.click(screen.getByRole('switch', { name: /Contacts/ }));
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { capabilities: { toolsets: [] }, capabilityBaseline: { toolsets: ['contacts'] } }));
   });
+});
+
+it('opens voice settings from the companion settings list and supports the dedicated entry page', async () => {
+  const companion = { ...bot(), canonicalSessionId: 'canonical-voice' };
+  const view = render(<BotSettings bot={companion} onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' }));
+  expect(screen.getByTestId('companion-voice-settings').textContent).toBe(`${companion.id}:canonical-voice`);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+  await waitFor(() => expect(screen.queryByTestId('companion-voice-settings')).toBeNull());
+  expect(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' })).toBe(document.activeElement);
+  view.unmount();
+  render(<BotSettings bot={companion} initialPage="voice" onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  expect(screen.getByTestId('companion-voice-settings')).toBeTruthy();
 });

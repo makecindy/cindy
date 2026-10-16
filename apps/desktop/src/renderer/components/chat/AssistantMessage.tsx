@@ -427,6 +427,9 @@ export const AssistantMessage = memo(function AssistantMessage({
           align="left"
           hovered={hovered}
           simplifiedBotConversation={simplifiedBotConversation}
+          readAloudMessage={simplifiedBotConversation && !ghostReplyPending && currentSessionId && messageClientId
+            ? { sessionId: currentSessionId, messageId: messageClientId }
+            : undefined}
           onFork={!sharedGuest && canFork ? handleFork : undefined}
           onAddToChat={messageDeepLink ? handleAddToChat : undefined}
           onShareAsImage={handleShareAsImage}

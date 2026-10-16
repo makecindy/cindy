@@ -1,3 +1,6 @@
+import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
+import { useMessageReadAloud } from '../bots/voice/useMessageReadAloud';
+import { MessageReadAloudContext } from '@/components/chat/MessageReadAloudContext';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
@@ -1001,7 +1004,17 @@ function CCAgentSessionContent({
 
   // Bot route gates have already checked durable ownership. The async runtime
   // snapshot may be absent during load/reconnect; it must never change the skin.
+  const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+  const closeVoiceMode = useCallback(() => setVoiceModeOpen(false), []);
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
+  const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
+  const openVoiceSettings = useCallback(() => {
+    setVoiceModeOpen(false);
+    const search = new URLSearchParams(location.search);
+    search.set('settings', '1');
+    search.set('settingsPage', 'voice');
+    navigate(`${location.pathname}?${search.toString()}`);
+  }, [location.pathname, location.search, navigate]);
   const showCenteredControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
@@ -3771,6 +3784,9 @@ function CCAgentSessionContent({
       mentions?: MentionedResource[],
       opts?: {
         deliveryMode?: MessageDeliveryMode;
+        literalText?: boolean;
+        beforeEnqueue?: () => Promise<boolean>;
+        onInputCreated?: (clientId: string) => void;
         quotesEncoded?: boolean;
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
@@ -3786,11 +3802,11 @@ function CCAgentSessionContent({
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
       const navigationRequestVersion =
-        deliveryMode !== 'steer' && matchNavigationCommandName(message)
+        !opts?.literalText && deliveryMode !== 'steer' && matchNavigationCommandName(message)
           ? ++sessionNavigationVersionRef.current
           : null;
       if (
-        deliveryMode !== 'steer' &&
+        !opts?.literalText && deliveryMode !== 'steer' &&
         (await tryHandleNavigationCommand(message, {
           navigate,
           t,
@@ -3805,7 +3821,7 @@ function CCAgentSessionContent({
         return;
       }
 
-      if (deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
+      if (!opts?.literalText && deliveryMode !== 'steer' && (await maybeShowContextUsage(message))) {
         return;
       }
 
@@ -3816,7 +3832,7 @@ function CCAgentSessionContent({
       // Codex only supports upstream automatic compaction, so keep the task
       // intact and explain that it manages compaction automatically.
       const botNewMatch =
-        deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
+        !opts?.literalText && deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
           ? message.match(/^\/new(?:\s+(.*))?$/s)
           : null;
       if (botNewMatch) {
@@ -3856,7 +3872,7 @@ function CCAgentSessionContent({
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
       const slashDispatch =
-        deliveryMode === 'steer'
+        opts?.literalText ? { handled: false, message, accepted: false } : deliveryMode === 'steer'
           ? await maybeDispatchDesktopSlashCommand(message, files, {
               allowDesktopDispatch: false,
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
@@ -3930,6 +3946,7 @@ function CCAgentSessionContent({
         if (!proceed) return false;
       }
 
+      if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;
       // 会话交接尚未完成(建 worktree / 远程开协同)时不放行:否则新输入会插到
@@ -3992,6 +4009,8 @@ function CCAgentSessionContent({
 
       // ④ Execute send — effort + permissionMode came straight from ChatInput (fresh value)
       const sendOptions = {
+        beforeEnqueue: opts?.beforeEnqueue,
+        onInputCreated: opts?.onInputCreated,
         ...orcaLeadVendorOptions,
         ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
         ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
@@ -4073,6 +4092,41 @@ function CCAgentSessionContent({
       cindyMakeInputLocked,
     ],
   );
+
+  const voiceModeAvailable = Boolean(botChatIdentity && !botChatIdentity.deviceId && sessionId
+    && !remoteDeviceId && !session?.remoteHostId && !readOnly && ownsRoute && viewVisible && !companionSettingsOpen);
+  useEffect(() => { if (!voiceModeAvailable) setVoiceModeOpen(false); }, [voiceModeAvailable]);
+  const voiceModeBlocked = Boolean(pendingPermission || pendingAskUser || pendingPlanReview
+    || pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm
+    || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation || pendingInputHandoff || sessionBinding.attached
+    || remoteHandoffPreparing || cindyMakeInputLocked || queuePaused);
+  const messageReadAloud = useMessageReadAloud({
+    botId: botChatIdentity?.id,
+    sessionId: sessionId ?? '',
+    enabled: voiceModeAvailable,
+    voiceModeOpen,
+  });
+  const voiceEntryRef = useRef({ sessionId, available: voiceModeAvailable });
+  voiceEntryRef.current = { sessionId, available: voiceModeAvailable };
+  const startVoiceMode = useCallback(() => {
+    const target = sessionId;
+    // Release message playback before the panel starts its exclusive voice lease.
+    void messageReadAloud.stopForVoiceMode().then((current) => {
+      if (current && voiceEntryRef.current.sessionId === target && voiceEntryRef.current.available)
+        setVoiceModeOpen(true);
+    });
+  }, [sessionId, messageReadAloud.stopForVoiceMode]);
+  const sendVoiceMessage = useCallback(async (text: string, onCreated: (id: string) => void, isCurrent: () => boolean) => {
+    if (!session?.workingDir || !session.model || voiceModeBlocked || !isCurrent()) return false;
+    const accepted = await handleSend(text, session.model, session.effort ?? '', session.permissionMode ?? 'default', undefined, undefined, {
+      deliveryMode: isRunningRef.current ? 'steer' : 'queue',
+      literalText: true,
+      slashCommandRanges: [],
+      beforeEnqueue: async () => isCurrent(),
+      onInputCreated: onCreated,
+    });
+    return accepted === true;
+  }, [session, voiceModeBlocked, handleSend]);
 
   const handleStopSession = useCallback(() => {
     if (remoteSessionUnavailable) {
@@ -4240,10 +4294,10 @@ function CCAgentSessionContent({
   ]);
 
   const handleBeforeVoiceInputStart = useCallback(async () => {
-    if (cindyMakeInputLocked) return false;
+    if (cindyMakeInputLocked || voiceModeOpen) return false;
     const { proceed } = await vendorAuthGate.checkAndConfirm('codex', { purpose: 'voice-input' });
     return proceed;
-  }, [vendorAuthGate, cindyMakeInputLocked]);
+  }, [vendorAuthGate, cindyMakeInputLocked, voiceModeOpen]);
 
   // M32: Retry — ErrorBanner 的 retryText 现在只是兼容展示值。真正的
   // recovery target 由 main coordinator 持有，避免把已发出的文本重新走普通
@@ -4860,6 +4914,7 @@ function CCAgentSessionContent({
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
   const messageStreamEl = (
+    <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       key={sessionId}
       sessionId={sessionId}
@@ -4906,6 +4961,7 @@ function CCAgentSessionContent({
       ownsHardwareScrollActions={ownsHardwareTaskActions}
       onInlinePlanVisibilityChange={handleInlinePlanVisibilityChange}
     />
+    </MessageReadAloudContext.Provider>
   );
 
   const composerRuntimeVisible =
@@ -5611,6 +5667,7 @@ function CCAgentSessionContent({
                   getContentWidth={getMessageWidth}
                 />
               ) : (
+                <div className={voiceModeOpen && voiceModeAvailable ? 'hidden' : 'contents'}>
                 <ChatInput
                   topSlot={cindyMakeRecoveryId && session ? (
                     <CindyMakeEditingActions
@@ -5621,8 +5678,11 @@ function CCAgentSessionContent({
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
+                  onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}
+                  voiceConversationDisabled={voiceModeBlocked}
+                  voiceConversationActive={voiceModeOpen}
                   sessionId={sessionId}
-                  ownsHardwareComposerActions={ownsHardwareTaskActions}
+                  ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
@@ -5771,7 +5831,12 @@ function CCAgentSessionContent({
                   botMentions={botMentions}
                   hideRuntimeControls={Boolean(botChatIdentity)}
                 />
+                </div>
               )}
+              {voiceModeOpen && voiceModeAvailable && botChatIdentity && sessionId ? (
+                <CompanionVoicePanel key={sessionId} bot={botChatIdentity} sessionId={sessionId} messages={messages}
+                  blocked={voiceModeBlocked} onSend={sendVoiceMessage} onClose={closeVoiceMode} onConfigure={openVoiceSettings} />
+              ) : null}
 
               {/* F-FP-5: workingDir — always rendered to prevent layout shift
                 worktree-parallel-sessions:worktree 创建过程的反馈(creating/failed)

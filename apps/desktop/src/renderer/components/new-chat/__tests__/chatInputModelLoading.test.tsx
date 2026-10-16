@@ -426,3 +426,34 @@ it.each([320, 480, 800])('preserves the model slot across hydration (width=%s)',
   await act(async () => {});
   expect(onSend).not.toHaveBeenCalled();
 });
+
+it('places the companion call action between dictation and send without consuming the draft', async () => {
+  const onSend = vi.fn();
+  const onStartVoiceConversation = vi.fn();
+  const inputProps = { ...props, onSend, onStartVoiceConversation };
+  const view = render(<ChatInput {...inputProps} />);
+  await act(async () => { h.editor?.commands.setContent('<p>Keep this draft</p>'); });
+  const call = screen.getByRole('button', { name: 'bots.voiceMode.startConversation' }) as HTMLButtonElement;
+  const dictation = screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' });
+  expect(dictation.compareDocumentPosition(call) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(call.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(call.disabled).toBe(false);
+  fireEvent.click(call);
+  expect(onStartVoiceConversation).toHaveBeenCalledOnce();
+  expect(onSend).not.toHaveBeenCalled();
+  expect(h.editor?.getText()).toBe('Keep this draft');
+
+  view.rerender(<ChatInput {...inputProps} voiceConversationDisabled />);
+  expect(call.disabled).toBe(true);
+  h.listening = true;
+  view.rerender(<ChatInput {...inputProps} />);
+  expect(call.disabled).toBe(true);
+  h.listening = false;
+  view.rerender(<ChatInput {...inputProps} voiceConversationActive />);
+  view.rerender(<ChatInput {...inputProps} voiceConversationActive={false} />);
+  expect(document.activeElement).toBe(call);
+
+  view.rerender(<ChatInput {...props} onSend={onSend} />);
+  expect(screen.queryByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeNull();
+});

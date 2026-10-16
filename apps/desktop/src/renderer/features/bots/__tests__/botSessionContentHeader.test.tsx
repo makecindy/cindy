@@ -53,6 +53,14 @@ afterEach(() => {
 });
 
 describe('BotSessionContentHeader', () => {
+  it('keeps voice startup in the composer and configuration behind settings', () => {
+    render(<BotSessionContentHeader bot={bot} />);
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.title' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settings' }));
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
+  });
+
   it('preserves the local header until a second Cindy is available and restores it when removed', () => {
     deviceData.local = [localCindy];
     const view = render(<BotSessionContentHeader bot={localCindy} />);

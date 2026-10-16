@@ -3521,6 +3521,26 @@ describe('makerChatStore text delta batching', () => {
     expect(snap.messages.some((m) => m.role === 'user' && m.content === 'queued')).toBe(false);
   });
 
+  it.each(['sendMessage', 'steerMessage'] as const)('correlates voice input through %s without serializing the renderer callback', async (method) => {
+    const created = vi.fn<(id: string) => void>();
+    await expect(makerChatStore[method](SESSION_ID, 'spoken sentence', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+      undefined, undefined, { onInputCreated: created, beforeEnqueue: async () => true, slashCommandRanges: [] })).resolves.toBe(true);
+    expect(created).toHaveBeenCalledOnce();
+    const transport = method === 'sendMessage' ? input.enqueue : input.steer;
+    expect(transport).toHaveBeenCalledWith(SESSION_ID, expect.objectContaining({
+      clientId: created.mock.calls[0][0],
+      chatMessage: expect.objectContaining({ clientId: created.mock.calls[0][0], content: 'spoken sentence', slashCommandRanges: [] }),
+    }), expect.any(Object));
+    expect(JSON.stringify(transport.mock.calls)).not.toContain('onInputCreated');
+  });
+
+  it.each(['sendMessage', 'steerMessage'] as const)('cancels a retired voice call before %s reaches the main queue', async (method) => {
+    await expect(makerChatStore[method](SESSION_ID, 'cancelled speech', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+      undefined, undefined, { beforeEnqueue: async () => false })).resolves.toBe(false);
+    expect(input.enqueue).not.toHaveBeenCalled(); expect(input.steer).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.some(m => m.content === 'cancelled speech')).toBe(false);
+  });
+
   it('shows a local busy send before the enqueue projection settles', async () => {
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
       sessionId: SESSION_ID,
