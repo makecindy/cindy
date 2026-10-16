@@ -8911,6 +8911,10 @@
       "moreActions": "{{name}} 추가 작업",
       "sectionExpand": "동료 펼치기",
       "sectionCollapse": "동료 접기",
+      "showAllRows": "파트너 모두 보기",
+      "showAllRowsAria": "파트너 모두 보기, {{count}}개 더 있음",
+      "showFewerRows": "줄여서 보기",
+      "showFewerRowsAria": "최근 대화한 파트너만 표시하기",
       "noResults": "검색과 일치하는 파트너나 그룹이 없어요"
     },
     "cancel": "취소",

@@ -8911,6 +8911,10 @@
       "moreActions": "{{name}} 的更多操作",
       "sectionExpand": "展開夥伴",
       "sectionCollapse": "收起夥伴",
+      "showAllRows": "展開全部夥伴",
+      "showAllRowsAria": "展開全部夥伴，還有 {{count}} 個未顯示",
+      "showFewerRows": "收合",
+      "showFewerRowsAria": "收合夥伴清單，只顯示最近對話的夥伴",
       "noResults": "找不到符合的夥伴或群組"
     },
     "cancel": "取消",

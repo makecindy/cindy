@@ -8911,6 +8911,10 @@
       "moreActions": "{{name}} 的更多操作",
       "sectionExpand": "展开伙伴",
       "sectionCollapse": "收起伙伴",
+      "showAllRows": "展开全部伙伴",
+      "showAllRowsAria": "展开全部伙伴，还有 {{count}} 个未显示",
+      "showFewerRows": "收起",
+      "showFewerRowsAria": "收起伙伴列表，只显示最近对话的伙伴",
       "noResults": "没有匹配的伙伴或群聊"
     },
     "cancel": "取消",

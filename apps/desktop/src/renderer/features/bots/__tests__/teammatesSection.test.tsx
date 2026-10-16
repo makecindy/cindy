@@ -96,6 +96,7 @@ import { TeammatesSection } from '../TeammatesSection';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
 import { readTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
+import { TEAMMATE_ROWS_BY_DEFAULT } from '../teammatesRowLimit';
 
 interface BotFixture {
   id: string;
@@ -837,5 +838,73 @@ describe('cloud companions in the roster', () => {
     expect(screen.queryByText('Local preview')).toBeNull();
     expect(screen.queryByTestId('cindy-device-row')).toBeNull();
     expect(screen.getByText('Laptop preview')).toBeTruthy();
+  });
+});
+
+describe('TeammatesSection 行数收敛', () => {
+  const ROWS = TEAMMATE_ROWS_BY_DEFAULT;
+  const roster = (count: number, pinnedIndex?: number) =>
+    Array.from({ length: count }, (_, index) =>
+      bot({
+        id: `bot-${index}`,
+        name: `Mate ${index}`,
+        // 越大越新:排序 = 最近对话在前。
+        lastMessageAt: index + 1,
+        ...(index === pinnedIndex ? { pinnedAt: 1 } : {}),
+      }),
+    );
+
+  it('默认只展开最近对话的一批,其余收进段尾的「展开全部」', async () => {
+    mocks.profiles = roster(ROWS + 2);
+    await renderSidebar();
+
+    // 最近的一批在,最旧的两个被收起来。
+    expect(screen.getByText(`Mate ${ROWS + 1}`)).toBeTruthy();
+    expect(screen.getByText('Mate 2')).toBeTruthy();
+    expect(screen.queryByText('Mate 1')).toBeNull();
+    expect(screen.queryByText('Mate 0')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.list.showAllRowsAria:{"count":2}' }));
+    expect(screen.getByText('Mate 1')).toBeTruthy();
+    expect(screen.getByText('Mate 0')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.list.showFewerRowsAria' }));
+    expect(screen.queryByText('Mate 0')).toBeNull();
+    expect(screen.queryByText('Mate 1')).toBeNull();
+  });
+
+  it('伙伴没超过默认条数时不出这一行', async () => {
+    mocks.profiles = roster(ROWS);
+    await renderSidebar();
+
+    expect(screen.queryByRole('button', { name: /bots.list.showAllRowsAria/ })).toBeNull();
+  });
+
+  it('展开状态不落盘:重新挂载回到默认条数', async () => {
+    mocks.profiles = roster(ROWS + 2);
+    await renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.list.showAllRowsAria:{"count":2}' }));
+    expect(screen.getByText('Mate 0')).toBeTruthy();
+
+    cleanup();
+    await renderSidebar();
+    expect(screen.queryByText('Mate 0')).toBeNull();
+    expect(screen.getByText('Mate 2')).toBeTruthy();
+  });
+
+  it('置顶的伙伴与正在看的聊天不被收起来,也不占上限', async () => {
+    // 置顶的 Mate 2 与正在看的 Mate 1 都排在最近一批之外。
+    const total = ROWS + 9;
+    mocks.profiles = roster(total, 2);
+    mocks.params = { botId: 'bot-1' };
+    await renderSidebar();
+
+    expect(screen.getByText('Mate 2')).toBeTruthy();
+    expect(screen.getByText('Mate 1')).toBeTruthy();
+    // 豁免两个以后仍然只多显示一批:最新的 ROWS 条在,再旧一条就不在。
+    expect(screen.getByText(`Mate ${total - ROWS}`)).toBeTruthy();
+    expect(screen.queryByText(`Mate ${total - ROWS - 1}`)).toBeNull();
+    const hidden = total - (ROWS + 2);
+    expect(screen.getByRole('button', { name: `bots.list.showAllRowsAria:{"count":${hidden}}` })).toBeTruthy();
   });
 });

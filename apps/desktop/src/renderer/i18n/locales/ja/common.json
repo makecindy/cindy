@@ -8911,6 +8911,10 @@
       "moreActions": "{{name}} のその他の操作",
       "sectionExpand": "仲間を展開",
       "sectionCollapse": "仲間を折りたたむ",
+      "showAllRows": "パートナーをすべて表示",
+      "showAllRowsAria": "パートナーをすべて表示（未表示 {{count}} 件）",
+      "showFewerRows": "表示を減らす",
+      "showFewerRowsAria": "最近の会話のパートナーだけ表示する",
       "noResults": "一致するパートナーやグループはありません"
     },
     "cancel": "キャンセル",

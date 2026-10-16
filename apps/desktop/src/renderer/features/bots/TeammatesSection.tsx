@@ -8,6 +8,7 @@ import {
   Users,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   Eye,
   EyeOff,
@@ -59,6 +60,7 @@ import {
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { limitTeammateRows } from './teammatesRowLimit';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
@@ -156,6 +158,7 @@ export function TeammatesSection() {
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
   const archivedBots = bots.filter((bot) => bot.status === 'archived');
   const [showHidden, setShowHidden] = useState(false);
+  const [showAllChats, setShowAllChats] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const archiveBusyRef = useRef(false);
   const [archiveError, setArchiveError] = useState('');
@@ -322,6 +325,25 @@ export function TeammatesSection() {
     ...(showCindy && currentCindy ? [{ kind: 'cindy' as const, pinned: cindyOptions.some(option => 'pinnedAt' in option.bot && Boolean(option.bot.pinnedAt)),
       activityAt: Math.max(...cindyOptions.map(option => 'activityAt' in option.bot ? option.bot.activityAt : option.bot.lastMessageAt ?? option.bot.createdAt)) }] : []),
   ].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.activityAt - a.activityAt);
+
+  // 「这一条是不是当前打开的那个聊天」:与收起态头像行同一条判断(那段在行内自己
+  // 算了一遍,因为要顺带算未读点)。侧栏槽位可能在群聊路由上下文之外,所以群聊
+  // 同时认路由参数和 pathname。
+  const isOpenChat = (chat: (typeof visibleChats)[number]): boolean => {
+    if (chat.kind === 'group') return chat.group.id === (selectedGroupId ?? groupId);
+    if (chat.kind === 'cindy') return Boolean(routeCindy);
+    return 'deviceId' in chat.bot
+      ? chat.bot.id === botId && chat.bot.deviceId === deviceId
+      : !deviceId && chat.bot.id === botId;
+  };
+  // 默认只展开最近对话的一批(置顶与正在看的行豁免),其余收进段尾的「展开全部」:
+  // 伙伴段与下面的任务列表共用一条滚动轴,这里不能无限长。展开是本次挂载的临时
+  // 状态,不落盘 —— 「默认」就是 5 条,重开一次回到默认。
+  const { rows: displayedChats, hiddenCount: hiddenChatCount } = showAllChats
+    ? { rows: visibleChats, hiddenCount: 0 }
+    : limitTeammateRows(visibleChats, {
+        keep: (chat) => chat.pinned || isOpenChat(chat),
+      });
 
   useEffect(() => {
     if (roster.visible.length + remoteBots.length + groups.length === 0) return;
@@ -576,7 +598,7 @@ export function TeammatesSection() {
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {visibleChats.map(entry => {
+            {displayedChats.map(entry => {
               if (entry.kind === 'group') return renderGroupRow(entry.group);
               if (entry.kind === 'cindy') {
                 if (!currentCindy) return null;
@@ -759,6 +781,33 @@ export function TeammatesSection() {
                 </div>
               );
             })}
+            {showAllChats || hiddenChatCount > 0 ? (
+              // 段尾的「展开全部 / 收起」:与行同宽、同圆角,单行高度;折叠只是显示
+              // 收敛,不换滚动容器(§ 伙伴段与任务并存)。
+              <button
+                type="button"
+                onClick={() => setShowAllChats((value) => !value)}
+                aria-expanded={showAllChats}
+                aria-label={
+                  showAllChats
+                    ? t('bots.list.showFewerRowsAria')
+                    : t('bots.list.showAllRowsAria', { count: hiddenChatCount })
+                }
+                className="flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left text-12 text-[var(--sidebar-list-muted)] outline-none transition-colors hover:bg-sidebar-item-hover focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showAllChats ? (
+                  <ChevronUp size={13} strokeWidth={2} className="shrink-0" />
+                ) : (
+                  <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate">
+                  {t(showAllChats ? 'bots.list.showFewerRows' : 'bots.list.showAllRows')}
+                </span>
+                {showAllChats ? null : (
+                  <span className="shrink-0 tabular-nums">+{hiddenChatCount}</span>
+                )}
+              </button>
+            ) : null}
             {roster.showHiddenSection ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
                 <button
