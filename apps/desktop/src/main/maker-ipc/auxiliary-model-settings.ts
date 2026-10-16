@@ -124,7 +124,7 @@ export function buildAuxiliaryModelOptions(args: {
     if (!decoded) continue;
     result.push({
       id: pin,
-      label: `${decoded.agentKind === 'codex' ? 'Codex' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
+      label: `${decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
       group: decoded.providerId,
       providerId: decoded.providerId,
       agentKind: decoded.agentKind,
@@ -132,7 +132,7 @@ export function buildAuxiliaryModelOptions(args: {
       modelName: decoded.model,
       budget: false,
       subscription: false,
-      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : 'Claude Code',
+      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code',
       available: false,
     });
   }

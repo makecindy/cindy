@@ -139,7 +139,9 @@ export function formatAuxiliaryModelRefLabel(ref: string): string {
   if (parsed.route.providerId === 'xd') {
     return `${parsed.route.model} · Cindy AI`;
   }
-  const agent = parsed.route.agentKind === 'claude-code' ? 'Claude' : 'Codex';
+  const agent = parsed.route.agentKind === 'claude-code'
+    ? 'Claude'
+    : parsed.route.agentKind === 'pi' ? 'Pi' : 'Codex';
   const provider = parsed.route.providerId === 'anthropic' || parsed.route.providerId === 'openai'
     ? agent
     : parsed.route.providerId;
