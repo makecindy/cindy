@@ -4,6 +4,8 @@
     "receivedMessage": "Open Cindy manually to continue.",
     "failedTitle": "Couldn’t receive files",
     "failedMessage": "Share the files again.",
+    "saveFailedTitle": "Couldn’t Save the Shared Item",
+    "saveFailedMessage": "Cindy received it but could not store a copy, so it wasn’t added to a new task.",
     "done": "Close Share"
   },
   "zh-Hans": {
@@ -11,6 +13,8 @@
     "receivedMessage": "请手动打开 Cindy 继续。",
     "failedTitle": "未能接收文件",
     "failedMessage": "请重新分享文件。",
+    "saveFailedTitle": "未能保存接收到的文件",
+    "saveFailedMessage": "Cindy 已收到内容，但没能保存副本，无法带入新任务。",
     "done": "关闭分享"
   },
   "zh-Hant": {
@@ -18,6 +22,8 @@
     "receivedMessage": "請手動開啟 Cindy 繼續。",
     "failedTitle": "無法接收檔案",
     "failedMessage": "請重新分享檔案。",
+    "saveFailedTitle": "未能儲存接收到的檔案",
+    "saveFailedMessage": "Cindy 已收到內容，但沒能儲存副本，無法帶入新任務。",
     "done": "關閉分享"
   },
   "ja": {
@@ -25,6 +31,8 @@
     "receivedMessage": "Cindy を手動で開いて続けてください。",
     "failedTitle": "ファイルを受け取れませんでした",
     "failedMessage": "もう一度ファイルを共有してください。",
+    "saveFailedTitle": "受け取ったファイルを保存できませんでした",
+    "saveFailedMessage": "Cindy は内容を受け取りましたが、コピーを保存できず、新しいタスクに追加できませんでした。",
     "done": "共有を閉じる"
   },
   "ko": {
@@ -32,6 +40,8 @@
     "receivedMessage": "Cindy를 직접 열어 계속해 주세요.",
     "failedTitle": "파일을 받지 못했어요",
     "failedMessage": "파일을 다시 공유해 주세요.",
+    "saveFailedTitle": "받은 파일을 저장하지 못했어요",
+    "saveFailedMessage": "Cindy가 내용을 받았지만 사본을 저장하지 못해 새 작업에 추가하지 못했어요.",
     "done": "공유 닫기"
   }
 }

@@ -17,29 +17,52 @@ const template = readFileSync(
   "utf8",
 );
 
-it("runs the generated Swift launch and feedback behavior", ({ skip }) => {
+function runSwiftHarness(
+  label: string,
+  scriptName: string,
+  passMarker: string,
+  skip: () => void,
+) {
   const script = join(
     dirname(fileURLToPath(import.meta.url)),
-    "../../scripts/test-incoming-share-feedback.mjs",
+    `../../scripts/${scriptName}`,
   );
   const started = performance.now();
-  console.info("[share-feedback] START harness (timeout=150000ms)");
+  console.info(`[${label}] START harness (timeout=150000ms)`);
   const result = spawnSync(process.execPath, [script], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
-    // The script bounds compilation at 120s and execution at 10s. Leave room
+    // Each script bounds compilation at 120s and execution at 10s. Leave room
     // for Node startup and cleanup. Compilation also checks Swift availability.
     timeout: 150_000,
     killSignal: "SIGKILL",
   });
   console.info(
-    `[share-feedback] END harness (${Math.round(performance.now() - started)}ms, status=${result.status}, error=${(result.error as NodeJS.ErrnoException | undefined)?.code ?? "none"})`,
+    `[${label}] END harness (${Math.round(performance.now() - started)}ms, status=${result.status}, error=${(result.error as NodeJS.ErrnoException | undefined)?.code ?? "none"})`,
   );
   if (result.error) throw result.error;
-  // The harness reserves 77 for compile ENOENT, never for a timeout or failure.
+  // The harnesses reserve 77 for compile ENOENT, never for a timeout or failure.
   if (result.status === 77) return skip();
   expect(result.status).toBe(0);
-  expect(result.stdout).toContain("PASS: generated Swift share feedback");
+  expect(result.stdout).toContain(passMarker);
+}
+
+it("runs the generated Swift launch and feedback behavior", ({ skip }) => {
+  runSwiftHarness(
+    "share-feedback",
+    "test-incoming-share-feedback.mjs",
+    "PASS: generated Swift share feedback",
+    skip,
+  );
+}, 180_000);
+
+it("parses the providers a share host can hand over", ({ skip }) => {
+  runSwiftHarness(
+    "share-parse",
+    "test-incoming-share-parse.mjs",
+    "PASS: generated Swift share parsing",
+    skip,
+  );
 }, 180_000);
 
 describe("incoming share native file ownership", () => {
@@ -73,6 +96,49 @@ describe("incoming share native file ownership", () => {
     ).toThrow("expo-sharing template changed");
   });
 
+  it("accepts data-only providers and asks the system for a file copy", () => {
+    const patched = patchShareExtension(template);
+    // Upstream ended the chain at file URLs and PDFs, so a host that vends
+    // `public.data` (or a document UTI) was dropped without a trace.
+    expect(patched).toContain(
+      "provider.hasItemConformingToTypeIdentifier(UTType.data.identifier)",
+    );
+    expect(patched).toContain(
+      "return await loadFilePayload(provider, identifier: identifier, type: type)",
+    );
+    expect(patched).toContain(
+      "provider.loadFileRepresentation(forTypeIdentifier: identifier)",
+    );
+    expect(patched).toContain("url.startAccessingSecurityScopedResource()");
+    // `public.text` also conforms to `public.data`, so the fallback must stay
+    // behind the text branch.
+    expect(
+      patched.indexOf("return await handleText(provider)"),
+    ).toBeLessThan(
+      patched.indexOf("UTType.data.identifier) {\n      return await handleFile"),
+    );
+    // The upstream body that copied the vending app's URL is replaced entirely;
+    // only the loader's own fallback still calls loadItem.
+    expect(patched).not.toContain(
+      "if let url = item as? URL {\n          let result = self.copyAndProcessFile(url: url, type: type)",
+    );
+  });
+
+  it("records why a share failed without file names or paths", () => {
+    const patched = patchShareExtension(template);
+    expect(patched).toContain('recordShareFailure(step: "no-matching-type"');
+    expect(patched).toContain('recordShareFailure(step: "save-slot", error: error)');
+    expect(patched).toContain("func writeShareDiagnostic()");
+    expect(patched).toContain(
+      "try? IncomingShareSlot.writeDiagnostic(data, group: appGroupId)",
+    );
+    expect(patched).toContain('recordShareFailure(step: "load-item"');
+    // The record keeps identifiers and step names only.
+    const diagnostic = patched.slice(patched.indexOf("struct IncomingShareFailure"));
+    expect(diagnostic).not.toContain("absoluteString");
+    expect(diagnostic).not.toContain("lastPathComponent");
+  });
+
   it("keeps the extension alive until launch succeeds or the user dismisses feedback", () => {
     const patched = patchShareExtension(template);
     expect(patched).not.toContain("openURL(url)\n    self.close()");
@@ -93,14 +159,14 @@ describe("incoming share native file ownership", () => {
       "guard !shareClosed else { return }\n      if !payload.isEmpty",
     );
     expect(patched).toContain("override func didSelectCancel()");
-    // Invalid input, an empty parsed payload and a failed persistent write all
-    // report reception failure, not "received" or silent completeRequest.
-    expect(patched.match(/showShareFeedback\(received: false\)/g)).toHaveLength(
-      3,
-    );
+    // Nothing received, a failed App Group write and a failed open each keep
+    // their own feedback; only Cancel and Done complete the request.
+    expect(patched.match(/showShareFeedback\(\.failed\)/g)).toHaveLength(2);
+    expect(patched.match(/showShareFeedback\(\.saveFailed\)/g)).toHaveLength(1);
+    expect(patched.match(/showShareFeedback\(\.received\)/g)).toHaveLength(1);
     expect(patched.match(/completeRequest\(returningItems:/g)).toHaveLength(1);
     expect(patched).toContain(
-      "guard saveToUserDefaults(payload) else {\n          showShareFeedback(received: false)",
+      "guard saveToUserDefaults(payload) else {\n          showShareFeedback(.saveFailed)",
     );
   });
 
@@ -122,6 +188,8 @@ describe("incoming share native file ownership", () => {
         "failedTitle",
         "receivedMessage",
         "receivedTitle",
+        "saveFailedMessage",
+        "saveFailedTitle",
       ]);
       expect(
         Object.values(values).every((value) => value.trim().length > 0),

@@ -1,6 +1,7 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { setMobileDebugSink } from '@/debug/mobileDebugLog';
 
-const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), clearSnapshot: vi.fn() }));
+const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), clearSnapshot: vi.fn(), readDiagnostic: vi.fn(), clearDiagnostic: vi.fn() }));
 const fs = vi.hoisted(() => {
   const listings = new Map<string, Array<{ uri: string; name: string }> | Error>();
   class Directory {
@@ -26,6 +27,64 @@ beforeEach(() => {
   vi.resetAllMocks();
   fs.listings.clear();
   native.clearSnapshot.mockReturnValue(true);
+});
+
+afterEach(() => setMobileDebugSink(undefined));
+
+const diagnostic = JSON.stringify({ step: 'no-matching-type', types: ['public.data'], error: 'NSCocoaErrorDomain:257' });
+
+function captureDebugLog(): unknown[][] {
+  const entries: unknown[][] = [];
+  setMobileDebugSink((level, scope, args) => entries.push([level, scope, ...args]));
+  return entries;
+}
+
+it('logs the extension-side failure and clears it, even with no payload to read', () => {
+  const entries = captureDebugLog();
+  native.readDiagnostic.mockReturnValue(diagnostic);
+  native.clearDiagnostic.mockReturnValue(true);
+  native.readSnapshot.mockReturnValue(null);
+  expect(getSharedPayloads()).toEqual([]);
+  expect(entries).toEqual([
+    ['warn', 'files', 'incoming share failed', {
+      step: 'no-matching-type',
+      types: ['public.data'],
+      error: 'NSCocoaErrorDomain:257',
+    }],
+  ]);
+  expect(native.clearDiagnostic).toHaveBeenCalledExactlyOnceWith(diagnostic);
+});
+
+it('logs nothing when the extension left no diagnostic', () => {
+  const entries = captureDebugLog();
+  native.readDiagnostic.mockReturnValue(null);
+  native.readSnapshot.mockReturnValue(null);
+  getSharedPayloads();
+  expect(entries).toEqual([]);
+  expect(native.clearDiagnostic).not.toHaveBeenCalled();
+});
+
+it('reports an unreadable diagnostic without disturbing the inbox', () => {
+  const entries = captureDebugLog();
+  native.readDiagnostic.mockReturnValue('not json');
+  native.readSnapshot.mockReturnValue(JSON.stringify([{ type: 'file', value: 'file:///original.pdf' }]));
+  expect(getSharedPayloads()).toHaveLength(1);
+  expect(entries).toEqual([['warn', 'files', 'incoming share failed', { unreadable: true }]]);
+  expect(native.clearDiagnostic).toHaveBeenCalledWith('not json');
+});
+
+it('never fails the inbox when reading or clearing the diagnostic throws', () => {
+  const entries = captureDebugLog();
+  native.readDiagnostic.mockImplementation(() => { throw new Error('native read failed'); });
+  native.readSnapshot.mockReturnValue(null);
+  expect(getSharedPayloads()).toEqual([]);
+  expect(entries).toEqual([]);
+  // The record survives a failed clear and is logged again on the next read.
+  native.readDiagnostic.mockReturnValue(diagnostic);
+  native.clearDiagnostic.mockImplementation(() => { throw new Error('native clear failed'); });
+  expect(() => getSharedPayloads()).not.toThrow();
+  expect(entries).toHaveLength(1);
+  expect(native.clearDiagnostic).toHaveBeenCalledExactlyOnceWith(diagnostic);
 });
 
 it('acknowledges the exact captured bytes, not a subsequent read or re-encoded payload', () => {

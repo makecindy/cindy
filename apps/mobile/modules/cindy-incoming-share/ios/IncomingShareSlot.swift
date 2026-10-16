@@ -6,6 +6,12 @@ import Darwin
 enum IncomingShareSlot {
   static let key = "expo-sharing"
 
+  // Why the most recent share attempt failed: the failing step, the provider's
+  // type identifiers and the error domain/code. No file names or paths. Kept
+  // apart from the payload slot so a diagnostic never replaces a share that is
+  // still waiting to be picked up.
+  static let diagnosticKey = "expo-sharing-diagnostic"
+
   static func withLock<T>(at url: URL, _ operation: () throws -> T) throws -> T {
     let fd = open(url.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
     guard fd >= 0 else { throw POSIXError(.EIO) }
@@ -37,5 +43,23 @@ enum IncomingShareSlot {
       defaults.set(data, forKey: key)
       guard defaults.synchronize() else { throw POSIXError(.EIO) }
     }
+  }
+
+  static func writeDiagnostic(_ data: Data, group: String) throws {
+    try withDefaults(group: group) { defaults in
+      defaults.set(data, forKey: diagnosticKey)
+      guard defaults.synchronize() else { throw POSIXError(.EIO) }
+    }
+  }
+
+  static func readDiagnostic(from defaults: UserDefaults) -> Data? {
+    defaults.data(forKey: diagnosticKey)
+  }
+
+  static func clearDiagnostic(_ expected: Data, from defaults: UserDefaults) throws -> Bool {
+    guard defaults.data(forKey: diagnosticKey) == expected else { return false }
+    defaults.removeObject(forKey: diagnosticKey)
+    guard defaults.synchronize() else { throw POSIXError(.EIO) }
+    return true
   }
 }

@@ -1,5 +1,16 @@
 // Appended to Expo's generated controller by with-incoming-share-feedback.js.
 // UIKit's standard alert owns Light/Dark colors, Dynamic Type and accessibility.
+//
+// A share can fail in two ways the user cannot tell apart from the alert alone:
+// nothing was received at all, or the received item could not be stored for the
+// app. Each keeps its own copy, and a failure also records the diagnostic the
+// loader collected (see incoming-share-loader.swift).
+enum ShareFeedback: String {
+  case received
+  case failed
+  case saveFailed
+}
+
 private extension ShareIntoViewController {
   func finishOpening(opened: Bool) {
     guard !shareClosed, !openResultHandled else { return }
@@ -8,13 +19,16 @@ private extension ShareIntoViewController {
       close()
     } else {
       // The payload remains in the existing App Group slot for manual opening.
-      showShareFeedback(received: true)
+      showShareFeedback(.received)
     }
   }
 
-  func showShareFeedback(received: Bool) {
+  func showShareFeedback(_ outcome: ShareFeedback) {
     guard !shareClosed else { return }
-    let prefix = received ? "received" : "failed"
+    if outcome != .received {
+      writeShareDiagnostic()
+    }
+    let prefix = outcome.rawValue
     let alert = UIAlertController(
       title: shareString(prefix + "Title"),
       message: shareString(prefix + "Message"),

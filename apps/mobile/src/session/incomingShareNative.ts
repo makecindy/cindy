@@ -6,8 +6,48 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 const native = requireOptionalNativeModule<{
   readSnapshot(): string | null;
   clearSnapshot(expected: string): boolean;
+  readDiagnostic?(): string | null;
+  clearDiagnostic?(expected: string): boolean;
 }>('CindyIncomingShare');
 const snapshots = new WeakMap<SharePayload[], string>();
+
+/**
+ * Shares that fail inside the extension leave a diagnostic in the App Group:
+ * the failing step, the provider's type identifiers and the error domain/code —
+ * never a file name or path. Logging it here is what makes a field report
+ * diagnosable, because an App Store build cannot be attached to a debugger.
+ * Best effort throughout: the diagnostic must never break reading the inbox, and
+ * a stale one is simply logged again after a failed clear.
+ */
+function reportIncomingShareDiagnostic(): void {
+  const read = native?.readDiagnostic;
+  if (!read) return;
+  let diagnostic: string | null = null;
+  try {
+    diagnostic = read.call(native) ?? null;
+  } catch {
+    return;
+  }
+  if (!diagnostic) return;
+  try {
+    const parsed: unknown = JSON.parse(diagnostic);
+    const fields = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    mobileDebugLog('warn', 'files', 'incoming share failed', {
+      step: typeof fields.step === 'string' ? fields.step : undefined,
+      types: Array.isArray(fields.types)
+        ? fields.types.filter((value): value is string => typeof value === 'string')
+        : undefined,
+      error: typeof fields.error === 'string' ? fields.error : undefined,
+    });
+  } catch {
+    mobileDebugLog('warn', 'files', 'incoming share failed', { unreadable: true });
+  }
+  try {
+    native?.clearDiagnostic?.(diagnostic);
+  } catch {
+    /* keep the record until the next successful clear */
+  }
+}
 
 /** Only discard a managed copy when a successful directory listing proves it is gone.
  * File.exists alone also returns false for inaccessible files (e.g. device protection).
@@ -30,6 +70,7 @@ function isMissingShareCopy(uri: string): boolean {
 }
 
 export function getSharedPayloads(): SharePayload[] {
+  reportIncomingShareDiagnostic();
   const snapshot = native?.readSnapshot();
   if (!snapshot) return [];
   const raw: SharePayload[] = JSON.parse(snapshot).map((item: { value: string; type: SharePayload['shareType']; mimeType?: string }) => ({
