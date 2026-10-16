@@ -394,6 +394,16 @@ describe('Xbox gamepad helper packaging contract', () => {
     );
   });
 
+  it('detaches the demoted controller when the family winner swaps', () => {
+    const source = readFileSync(
+      new URL('../../../../native/xbox-gamepad/macos-xbox-gamepad-helper.swift', import.meta.url),
+      'utf8',
+    );
+    const refreshFn = source.match(/func refresh\(\) \{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+    expect(refreshFn).toContain('observed[family]?.extendedGamepad?.valueChangedHandler = nil');
+    expect(source).toContain('pad.valueChangedHandler = ');
+  });
+
   it('compiles switch2_usb.c with clang before linking the object into swiftc', () => {
     const forge = readFileSync(new URL('../../../../forge.config.ts', import.meta.url), 'utf8');
     const host = readFileSync(new URL('../host.ts', import.meta.url), 'utf8');

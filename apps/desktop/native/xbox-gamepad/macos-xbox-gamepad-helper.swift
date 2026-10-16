@@ -243,6 +243,10 @@ final class XboxGamepadReporter {
         continue
       }
       if observed[family] !== controller {
+        // Detach the demoted controller first: GCController.controllers() order is not
+        // guaranteed, and two pads emitting frames for one family make the JS side
+        // diff phantom button edges from interleaved state.
+        observed[family]?.extendedGamepad?.valueChangedHandler = nil
         observed[family] = controller
         attach(controller)
       }
