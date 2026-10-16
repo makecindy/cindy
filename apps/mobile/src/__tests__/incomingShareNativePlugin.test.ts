@@ -120,6 +120,7 @@ describe("incoming share native file ownership", () => {
       "let fileName = self.incomingShareFileName(\n            provider,",
     );
     expect(patched).toContain("let name = (suggested as NSString).lastPathComponent");
+    expect(patched).toContain("guard (name as NSString).pathExtension.isEmpty else { return name }");
     // `public.text` also conforms to `public.data`, so the fallback must stay
     // behind the text branch.
     expect(

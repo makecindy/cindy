@@ -39,12 +39,17 @@ private extension ShareIntoViewController {
 
   /// The name a host asks us to use for the item. Only the last path component
   /// is kept, so a provider can never place the copy outside its own directory.
-  func incomingShareFileName(_ provider: NSItemProvider, fallback: String) -> String {
+  /// A suggested name without an extension ("Report" for "Report.pdf") keeps the
+  /// extension of the source file or of the type identifier, so the attachment
+  /// stays openable after upload and download.
+  func incomingShareFileName(_ provider: NSItemProvider, fallback: String, extensionHint: String? = nil) -> String {
     guard let suggested = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines),
           !suggested.isEmpty else { return fallback }
     let name = (suggested as NSString).lastPathComponent
     guard !name.isEmpty, name != ".", name != "..", name != "/" else { return fallback }
-    return name
+    guard (name as NSString).pathExtension.isEmpty else { return name }
+    let hint = extensionHint ?? (fallback as NSString).pathExtension
+    return hint.isEmpty ? name : name + "." + hint
   }
 
   private func loadFileRepresentation(_ provider: NSItemProvider, identifier: String, type: ShareType) async -> SharePayload? {
@@ -58,7 +63,11 @@ private extension ShareIntoViewController {
         let result = self.copyAndProcessFile(
           url: url,
           type: type,
-          preferredName: self.incomingShareFileName(provider, fallback: url.lastPathComponent)
+          preferredName: self.incomingShareFileName(
+            provider,
+            fallback: url.lastPathComponent,
+            extensionHint: UTType(identifier)?.preferredFilenameExtension
+          )
         )
         if result == nil {
           self.recordShareFailure(step: "file-representation-copy", types: [identifier], storage: true)
@@ -77,7 +86,11 @@ private extension ShareIntoViewController {
           let result = self.copyAndProcessFile(
             url: url,
             type: type,
-            preferredName: self.incomingShareFileName(provider, fallback: url.lastPathComponent)
+            preferredName: self.incomingShareFileName(
+              provider,
+              fallback: url.lastPathComponent,
+              extensionHint: url.pathExtension.isEmpty ? UTType(identifier)?.preferredFilenameExtension : url.pathExtension
+            )
           )
           if result == nil {
             self.recordShareFailure(step: "copy", types: [identifier], storage: true)

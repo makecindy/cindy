@@ -149,6 +149,15 @@ func fileRepresentationOnlyProvider() -> NSItemProvider {
   return provider
 }
 
+func zipDataProviderWithoutExtension() -> NSItemProvider {
+  let provider = NSItemProvider()
+  provider.suggestedName = "wechat-file"
+  provider.registerItem(forTypeIdentifier: UTType.zip.identifier) { completion, _, _ in
+    completion?(Data(repeating: 0x47, count: 96) as NSData, nil)
+  }
+  return provider
+}
+
 func unsupportedProvider() -> NSItemProvider {
   let provider = NSItemProvider()
   provider.registerItem(forTypeIdentifier: "com.example.unknown-share-type") { completion, _, _ in
@@ -182,6 +191,10 @@ Task.detached {
   check(representation != nil, "a file-representation provider must be copied")
   check(representation?.value.hasSuffix("wechat-file.zip") == true, "the system copy keeps the provider's name")
 
+  // A provider may hand over a name without an extension; the type keeps it.
+  let extensionless = await controller.parseProvider(zipDataProviderWithoutExtension())
+  check(extensionless?.value.hasSuffix("wechat-file.zip") == true, "an extensionless suggested name keeps the type's extension")
+
   let text = await controller.parseProvider(textProvider())
   check(text?.type == .text, "the text branch is unchanged")
 
@@ -209,7 +222,7 @@ Task.detached {
   check(unreadable == nil, "an unsupported provider still fails")
   check(unreadableController.shareFailureFeedback == .failed, "a read failure keeps the reception wording")
 
-  print("PASS: generated Swift share parsing (data-only + original name, file representation, text, unsupported, storage failure, diagnostic)")
+  print("PASS: generated Swift share parsing (data-only + original name, extensionless name, file representation, text, unsupported, storage failure, diagnostic)")
   exit(0)
 }
 RunLoop.main.run()
