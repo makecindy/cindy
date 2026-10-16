@@ -11,9 +11,12 @@ const PopoverAnchor = PopoverPrimitive.Anchor;
 
 const PopoverContent = React.forwardRef<
   React.ComponentRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = 'center', sideOffset = 4, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> & {
+    /** Keep a nested popover inside its dialog's scroll-lock boundary. */
+    portalContainer?: React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Portal>['container'];
+  }
+>(({ className, align = 'center', sideOffset = 4, portalContainer, ...props }, ref) => (
+  <PopoverPrimitive.Portal container={portalContainer}>
     <PopoverPrimitive.Content
       ref={ref}
       align={align}

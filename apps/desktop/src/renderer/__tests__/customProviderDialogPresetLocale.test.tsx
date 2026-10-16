@@ -4,7 +4,7 @@ import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { PiModelApi, ProviderPreset } from '@cindy/model-providers';
+import type { ProviderPreset } from '@cindy/model-providers';
 
 const i18nState = vi.hoisted(() => ({ language: 'zh-TW' }));
 
@@ -190,6 +190,38 @@ afterEach(() => {
 });
 
 describe('ProviderConnectionDialog preset locale ownership', () => {
+  it('allows wheel scrolling in the preset menu while keeping the background locked', async () => {
+    renderDialog();
+    fireEvent.click(await findReadyPresetTrigger());
+    const listbox = await screen.findByRole('listbox', {
+      name: 'settings.providers.custom.presets.label',
+    });
+    const menu = listbox.parentElement!;
+    // jsdom has no layout/CSS pipeline. Supply an overflowing menu's geometry,
+    // then exercise the real Radix Dialog / react-remove-scroll event handling.
+    menu.style.overflowY = 'auto';
+    Object.defineProperties(menu, {
+      clientHeight: { configurable: true, value: 280 },
+      scrollHeight: { configurable: true, value: 1200 },
+    });
+
+    const wheel = createEvent.wheel(within(listbox).getAllByRole('option')[0], {
+      deltaY: 120,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(within(listbox).getAllByRole('option')[0], wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+
+    const backgroundWheel = createEvent.wheel(document.body, {
+      deltaY: 120,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(document.body, backgroundWheel);
+    expect(backgroundWheel.defaultPrevented).toBe(true);
+  });
+
   it.each([
     ['zh-TW', '繁體供應商'],
     ['en', 'English Provider'],
@@ -358,11 +390,11 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
   });
 
   it.each([
-    ['settings.providers.custom.wireProtocol.piChat', 'openai-chat'],
-    ['settings.providers.custom.wireProtocol.piAnthropic', 'anthropic-messages'],
+    'settings.providers.custom.wireProtocol.piChat',
+    'settings.providers.custom.wireProtocol.piAnthropic',
   ] as const)(
     'hides %s for a bound PI preset and preserves its model override',
-    async (buttonName, _wireProtocol) => {
+    async (buttonName) => {
       i18nState.language = 'en';
       renderDialog();
 
