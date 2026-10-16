@@ -81,11 +81,13 @@ ${constants}
 class UIImage { func pngData() -> Data? { nil } }
 
 ${method("struct IncomingShareFailure")}
+${method("enum ShareFeedback: String {")}
 ${method("private extension UUID")}
 
 final class ShareIntoViewController {
   var shareFailure: IncomingShareFailure?
   var copied: [String] = []
+  var failWrites = false
   ${method("func parseProvider(")}
   ${method("private func handleFile(")}
   ${method("private func handleText(")}
@@ -93,15 +95,24 @@ final class ShareIntoViewController {
   ${method("func loadFilePayload(")}
   ${method("private func loadFileRepresentation(")}
   ${method("private func loadItem(")}
+  ${method("func incomingShareFileName(")}
+  ${method("var shareFailureFeedback: ShareFeedback")}
   ${method("func recordShareFailure(")}
   // Doubles for the App Group helpers: the real ones need the group container,
-  // which a command line process does not have. The per-share directory contract
-  // itself is asserted by incomingShareNativePlugin.test.ts.
-  func copyAndProcessFile(url: URL, type: ShareType) -> SharePayload? {
+  // which a command line process does not have. They keep the same contract
+  // (per-share directory, preferredName) that incomingShareNativePlugin.test.ts
+  // asserts on the generated template.
+  func copyAndProcessFile(url: URL, type: ShareType, preferredName: String? = nil) -> SharePayload? {
     guard let data = try? Data(contentsOf: url) else { return nil }
-    return saveDataToAppGroup(data: data, fileName: url.lastPathComponent, type: type, mimeType: "application/octet-stream")
+    return saveDataToAppGroup(
+      data: data,
+      fileName: preferredName ?? url.lastPathComponent,
+      type: type,
+      mimeType: "application/octet-stream"
+    )
   }
   func saveDataToAppGroup(data: Data, fileName: String, type: ShareType, mimeType: String?) -> SharePayload? {
+    if failWrites { return nil }
     let directory = "cindy-share-" + UUID().uuidString
     copied.append(fileName)
     return SharePayload(type: type, value: "file:///" + directory + "/" + fileName, mimeType: mimeType ?? "application/octet-stream", metadata: nil)
@@ -164,9 +175,12 @@ Task.detached {
   check(dataOnly?.mimeType == "application/octet-stream", "mime falls back to octet-stream")
   check(controller.shareFailure == nil, "a served provider leaves no diagnostic")
 
+  check(dataOnly?.value.hasSuffix("wechat-file.zip") == true, "the provider's own name survives the data fallback")
+
   // No file URL at all: loadFileRepresentation is what makes this work.
   let representation = await controller.parseProvider(fileRepresentationOnlyProvider())
   check(representation != nil, "a file-representation provider must be copied")
+  check(representation?.value.hasSuffix("wechat-file.zip") == true, "the system copy keeps the provider's name")
 
   let text = await controller.parseProvider(textProvider())
   check(text?.type == .text, "the text branch is unchanged")
@@ -181,7 +195,21 @@ Task.detached {
   let diagnostic = String(data: controller.shareFailure!.json!, encoding: .utf8) ?? ""
   check(!diagnostic.contains("wechat-file.zip"), "the diagnostic carries no file name")
 
-  print("PASS: generated Swift share parsing (data-only, file representation, text, unsupported + diagnostic)")
+  // Content that was read but could not be stored is a storage failure, not
+  // "nothing arrived": the feedback must say so.
+  let failingController = ShareIntoViewController()
+  failingController.failWrites = true
+  let unwritable = await failingController.parseProvider(dataOnlyProvider())
+  check(unwritable == nil, "an unwritable copy produces no payload")
+  check(failingController.shareFailureFeedback == .saveFailed, "a storage failure keeps the storage wording")
+  check(failingController.shareFailure?.step == "write-data", "the failing step names the write")
+
+  let unreadableController = ShareIntoViewController()
+  let unreadable = await unreadableController.parseProvider(unsupportedProvider())
+  check(unreadable == nil, "an unsupported provider still fails")
+  check(unreadableController.shareFailureFeedback == .failed, "a read failure keeps the reception wording")
+
+  print("PASS: generated Swift share parsing (data-only + original name, file representation, text, unsupported, storage failure, diagnostic)")
   exit(0)
 }
 RunLoop.main.run()

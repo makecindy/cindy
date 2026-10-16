@@ -110,6 +110,16 @@ describe("incoming share native file ownership", () => {
       "provider.loadFileRepresentation(forTypeIdentifier: identifier)",
     );
     expect(patched).toContain("url.startAccessingSecurityScopedResource()");
+    // The name the sharing app asked for survives both the system copy and the
+    // data fallback; only the last path component is ever used.
+    expect(patched).toContain(
+      "private func copyAndProcessFile(url: URL, type: ShareType, preferredName: String? = nil) -> SharePayload?",
+    );
+    expect(patched).toContain("let fileName = preferredName ?? (url.lastPathComponent.isEmpty");
+    expect(patched).toContain(
+      "let fileName = self.incomingShareFileName(\n            provider,",
+    );
+    expect(patched).toContain("let name = (suggested as NSString).lastPathComponent");
     // `public.text` also conforms to `public.data`, so the fallback must stay
     // behind the text branch.
     expect(
@@ -128,15 +138,25 @@ describe("incoming share native file ownership", () => {
     const patched = patchShareExtension(template);
     expect(patched).toContain('recordShareFailure(step: "no-matching-type"');
     expect(patched).toContain('recordShareFailure(step: "save-slot", error: error)');
+    // Storage failures are marked so the empty-payload branch can keep the
+    // storage wording instead of "nothing was received".
+    expect(patched).toContain('recordShareFailure(step: "write-data", types: [identifier], storage: true)');
+    expect(patched).toContain("var shareFailureFeedback: ShareFeedback");
+    expect(patched).toContain("shareFailure?.storage == true ? .saveFailed : .failed");
     expect(patched).toContain("func writeShareDiagnostic()");
     expect(patched).toContain(
       "try? IncomingShareSlot.writeDiagnostic(data, group: appGroupId)",
     );
     expect(patched).toContain('recordShareFailure(step: "load-item"');
     // The record keeps identifiers and step names only.
-    const diagnostic = patched.slice(patched.indexOf("struct IncomingShareFailure"));
+    const diagnosticStart = patched.indexOf("struct IncomingShareFailure");
+    const diagnostic = patched.slice(
+      diagnosticStart,
+      patched.indexOf("private extension ShareIntoViewController {", diagnosticStart),
+    );
     expect(diagnostic).not.toContain("absoluteString");
     expect(diagnostic).not.toContain("lastPathComponent");
+    expect(diagnostic).not.toContain("suggestedName");
   });
 
   it("keeps the extension alive until launch succeeds or the user dismisses feedback", () => {
@@ -161,7 +181,8 @@ describe("incoming share native file ownership", () => {
     expect(patched).toContain("override func didSelectCancel()");
     // Nothing received, a failed App Group write and a failed open each keep
     // their own feedback; only Cancel and Done complete the request.
-    expect(patched.match(/showShareFeedback\(\.failed\)/g)).toHaveLength(2);
+    expect(patched.match(/showShareFeedback\(\.failed\)/g)).toHaveLength(1);
+    expect(patched.match(/showShareFeedback\(shareFailureFeedback\)/g)).toHaveLength(1);
     expect(patched.match(/showShareFeedback\(\.saveFailed\)/g)).toHaveLength(1);
     expect(patched.match(/showShareFeedback\(\.received\)/g)).toHaveLength(1);
     expect(patched.match(/completeRequest\(returningItems:/g)).toHaveLength(1);

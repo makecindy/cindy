@@ -55,6 +55,14 @@ it('logs the extension-side failure and clears it, even with no payload to read'
   expect(native.clearDiagnostic).toHaveBeenCalledExactlyOnceWith(diagnostic);
 });
 
+it('keeps the diagnostic in place while Debug logging is off', () => {
+  native.readDiagnostic.mockReturnValue(diagnostic);
+  native.readSnapshot.mockReturnValue(null);
+  getSharedPayloads();
+  expect(native.readDiagnostic).not.toHaveBeenCalled();
+  expect(native.clearDiagnostic).not.toHaveBeenCalled();
+});
+
 it('logs nothing when the extension left no diagnostic', () => {
   const entries = captureDebugLog();
   native.readDiagnostic.mockReturnValue(null);

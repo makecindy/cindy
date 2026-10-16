@@ -40,7 +40,7 @@ function patchShareFeedback(source) {
   );
   replace(
     "        self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)",
-    "        showShareFeedback(.failed)",
+    "        showShareFeedback(shareFailureFeedback)",
   );
   replace(
     "    openURL(url)\n    self.close()",

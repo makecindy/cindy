@@ -113,6 +113,18 @@ function patchShareExtension(source) {
     "        guard saveToUserDefaults(payload) else {\n          self.close()\n          return\n        }",
     1,
   );
+  // The system copy handed back by loadFileRepresentation carries a generic name
+  // ("Zip archive.zip"); keep the name the sharing app asked for instead.
+  replace(
+    "  private func copyAndProcessFile(url: URL, type: ShareType) -> SharePayload? {",
+    "  private func copyAndProcessFile(url: URL, type: ShareType, preferredName: String? = nil) -> SharePayload? {",
+    1,
+  );
+  replace(
+    "    let fileName = url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent",
+    "    let fileName = preferredName ?? (url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent)",
+    1,
+  );
   replace(
     "  private func saveToUserDefaults(_ payload: [SharePayload]) {",
     "  private func saveToUserDefaults(_ payload: [SharePayload]) -> Bool {",

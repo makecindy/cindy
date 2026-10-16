@@ -203,10 +203,11 @@ pnpm --filter mobile test:smoke
 - 扩展接收的 provider 范围是 file URL / PDF / 任意 `public.data`；取文件优先用
   `loadFileRepresentation`（系统把副本放进扩展自己的容器），失败才回退 `loadItem`
   （URL 包一层 security scope）。不把对方 App 容器里的 URL 直接交给 `copyItem`。
-- 扩展失败分两种，用户看到的文案与留下的诊断都区分：没解析出文件（`failed*`）与已解析出
-  内容但写 App Group 失败（`saveFailed*`，写失败时留不下诊断，只能靠文案区分）。第一种在
-  App Group 可用时写入 `expo-sharing-diagnostic`（失败步骤 + provider 类型标识 + error
-  domain/code，无文件名与路径），App 读取信箱时记进 Debug 日志并清除。
+- 扩展失败分两种，用户看到的文案与留下的诊断都区分：读不到内容（`failed*`）与已经收到、
+  但没能落盘（`saveFailed*`：复制/写副本失败，或写 App Group 信箱失败；信箱本身写失败时
+  留不下诊断，只能靠文案区分）。第一种在 App Group 可用时写入 `expo-sharing-diagnostic`
+  （失败步骤 + provider 类型标识 + error domain/code，无文件名与路径），App 在 Debug 记录
+  开启时读取并清除，未开启记录时保留到下次。
 
 实现：`src/session/incomingShareNative.ts`、`incomingShare.ts`、`incomingShareCleanup.ts`
 与 `IncomingShareBridge.tsx`。回归：`src/__tests__/incomingShare*.test.ts` 和

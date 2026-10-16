@@ -1,7 +1,7 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { Directory } from 'expo-file-system';
 import type { SharePayload } from 'expo-sharing';
-import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 
 const native = requireOptionalNativeModule<{
   readSnapshot(): string | null;
@@ -20,6 +20,9 @@ const snapshots = new WeakMap<SharePayload[], string>();
  * a stale one is simply logged again after a failed clear.
  */
 function reportIncomingShareDiagnostic(): void {
+  // Recording off writes nothing anywhere, so the record must survive: reading
+  // it here would clear the only evidence before the user can turn logging on.
+  if (!mobileDebugEnabled()) return;
   const read = native?.readDiagnostic;
   if (!read) return;
   let diagnostic: string | null = null;
