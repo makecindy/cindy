@@ -43,7 +43,7 @@ import { MAKER_INVOKE } from './channels.js';
 const log = createLogger('maker-ipc/auxiliary-model-settings');
 
 function toWireOption(option: TextOneshotPinOption, available: boolean): AuxiliaryModelOption {
-  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code') {
+  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code' && option.agentKind !== 'pi') {
     throw new Error(`unsupported auxiliary model agent: ${option.agentKind}`);
   }
   return {
