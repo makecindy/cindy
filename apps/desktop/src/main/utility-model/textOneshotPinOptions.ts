@@ -78,9 +78,10 @@ export function decodeCatalogPin(
  * requestUtilityText 显式路径的静态闸:内置供应商只收执行侧硬编码认的
  * 四家(见 ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS);自定义供应商要求 routing
  * 未禁用 + 鉴权策略受支持 + 有上游地址 + 声明的 wire 与执行侧该 agent 的
- * 实际出线一致(claude-code 恒发 anthropic-messages;codex 与 pi 发不出
- * anthropic-messages,会被静默当 responses;google-generative-ai 两条执行路
- * 都拒绝——配置错线的组合钉上恒失败,不进清单)。
+ * 实际出线一致(claude-code 恒发 anthropic-messages;pi 的出线跟随 runtime
+ * 声明,声明什么发什么;codex 发不出 anthropic-messages,会被静默当
+ * responses;google-generative-ai 两条执行路都拒绝——配置错线的组合钉上
+ * 恒失败,不进清单)。
  */
 function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean {
   if (!provider.agents.includes(agentKind)) return false;
@@ -92,7 +93,8 @@ function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean
   if (agentKind === 'claude-code') {
     if (routing.wireProtocol !== undefined && routing.wireProtocol !== 'anthropic-messages') return false;
   } else if (
-    routing.wireProtocol === 'anthropic-messages'
+    // codex 发不出 anthropic-messages;pi 的出线跟随声明,声明的协议都发得出。
+    (routing.wireProtocol === 'anthropic-messages' && agentKind === 'codex')
     // 执行侧(requestExplicitProviderText)对 google wire 直接 no_candidate,
     // 清单侧同步排除(含存量 codex 档的同一缺口)。
     || routing.wireProtocol === 'google-generative-ai'

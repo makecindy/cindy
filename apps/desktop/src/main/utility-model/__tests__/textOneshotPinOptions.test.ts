@@ -204,7 +204,7 @@ describe('buildTextOneshotPinOptions', () => {
     ]);
   });
 
-  it('pi 档:缺 routing 不进清单;声明完整的 pi runtime 与 codex 同待遇', () => {
+  it('pi 档:缺 routing 不进清单;声明完整的 pi runtime 声明即出线(含 anthropic-messages)', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({ id: 'pi-prov', agents: ['pi'], models: { pi: [chat('pi-m')] as never } }),
@@ -227,6 +227,7 @@ describe('buildTextOneshotPinOptions', () => {
     );
     expect(options.map((o) => [o.id, o.agentSuffix])).toEqual([
       ['cat:pi-full:pi:pi-m', 'Pi'],
+      ['cat:pi-anthropic:pi:pi-m2', 'Pi'],
     ]);
   });
 
@@ -266,8 +267,9 @@ describe('buildTextOneshotPinOptions', () => {
   });
 
   it('自定义供应商 wire 与执行侧出线不一致的组合不进清单', () => {
-    // 执行侧:claude-code 恒发 anthropic-messages;codex 与 pi 发不出
-    // anthropic-messages(会被静默当 responses)。配置错线的组合钉上恒失败,清单提前过滤。
+    // 执行侧:claude-code 恒发 anthropic-messages;pi 的出线跟随声明(声明的
+    // 协议都发得出);codex 发不出 anthropic-messages(会被静默当 responses);
+    // google-generative-ai 执行路直接拒绝。错线/拒线组合钉上恒失败,清单提前过滤。
     const custom = (id: string, agentKind: 'codex' | 'claude-code' | 'pi', wireProtocol?: string) =>
       provider({
         id,
@@ -302,6 +304,7 @@ describe('buildTextOneshotPinOptions', () => {
       'cat:cx-chat:codex:m',
       'cat:cx-default:codex:m',
       'cat:pi-chat:pi:m',
+      'cat:pi-anthropic:pi:m',
       'cat:pi-default:pi:m',
     ]);
   });
