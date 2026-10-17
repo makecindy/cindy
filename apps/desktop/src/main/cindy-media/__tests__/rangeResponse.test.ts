@@ -33,6 +33,15 @@ describe('buildRangedMediaResponse', () => {
     expect(Buffer.from(await r.arrayBuffer()).toString()).toBe('2345');
   });
 
+  it('共享媒体响应把超过 EOF 的结束位收窄到最后一个字节', async () => {
+    const r = buildRangedMediaResponse({ ...base, rangeHeader: 'bytes=4-99' });
+
+    expect(r.status).toBe(206);
+    expect(r.headers.get('Content-Range')).toBe('bytes 4-9/10');
+    expect(r.headers.get('Content-Length')).toBe('6');
+    expect(Buffer.from(await r.arrayBuffer()).toString()).toBe('456789');
+  });
+
   it('开区间 Range(bytes=8-)→ 206 到末尾;越界 → 416 带总长', async () => {
     const open = buildRangedMediaResponse({ ...base, rangeHeader: 'bytes=8-' });
     expect(open.status).toBe(206);
