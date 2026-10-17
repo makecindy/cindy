@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createGhostConfirmDialogMainWindowSender,
   GhostConfirmDialogBridge,
   type GhostConfirmPush,
   type GhostConfirmDialogBridgeDeps,
@@ -29,6 +30,110 @@ function makeBridge(overrides: Partial<GhostConfirmDialogBridgeDeps> = {}) {
   };
   return { bridge: new GhostConfirmDialogBridge(deps), sent };
 }
+
+describe('createGhostConfirmDialogMainWindowSender', () => {
+  it('只把确认请求投给主 App 窗口,不依赖焦点辅助窗', () => {
+    const mainWindow = {
+      kind: 'main',
+      isMinimized: vi.fn(() => false),
+      restore: vi.fn(),
+      show: vi.fn(),
+    };
+    const focusedAuxiliaryWindow = { kind: 'auxiliary' };
+    const payload: GhostConfirmPush = { requestId: 'request-1', ...ASK };
+    const send = vi.fn();
+    const sender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => mainWindow,
+      isTrustedMainWindow: (window) => window === mainWindow,
+      send,
+    });
+
+    expect(sender(payload)).toBe(true);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(mainWindow, payload);
+    expect(send).not.toHaveBeenCalledWith(focusedAuxiliaryWindow, payload);
+    expect(mainWindow.show).toHaveBeenCalledOnce();
+    expect(mainWindow.restore).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      windowState: '隐藏',
+      visible: false,
+      minimized: false,
+      expectedOrder: ['trusted', 'show', 'send'],
+    },
+    {
+      windowState: '最小化',
+      visible: false,
+      minimized: true,
+      expectedOrder: ['trusted', 'restore', 'show', 'send'],
+    },
+  ])('$windowState 的主窗口会在投递前恢复并显示', ({ visible, minimized, expectedOrder }) => {
+    const state = { visible, minimized };
+    const order: string[] = [];
+    const mainWindow = {
+      kind: 'main',
+      isMinimized: vi.fn(() => state.minimized),
+      restore: vi.fn(() => {
+        order.push('restore');
+        state.minimized = false;
+      }),
+      show: vi.fn(() => {
+        order.push('show');
+        state.visible = true;
+      }),
+    };
+    const payload: GhostConfirmPush = { requestId: 'request-1', ...ASK };
+    const sender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => mainWindow,
+      isTrustedMainWindow: (window) => {
+        order.push('trusted');
+        return window === mainWindow;
+      },
+      send: () => {
+        order.push('send');
+        expect(state.visible).toBe(true);
+      },
+    });
+
+    expect(sender(payload)).toBe(true);
+    expect(order).toEqual(expectedOrder);
+    expect(mainWindow.show).toHaveBeenCalledOnce();
+    if (minimized) {
+      expect(mainWindow.restore).toHaveBeenCalledOnce();
+    } else {
+      expect(mainWindow.restore).not.toHaveBeenCalled();
+    }
+  });
+
+  it('主 App 窗口缺失或不可信时失败关闭', () => {
+    const mainWindow = {
+      kind: 'main',
+      isMinimized: vi.fn(() => true),
+      restore: vi.fn(),
+      show: vi.fn(),
+    };
+    const send = vi.fn();
+    const missingWindowSender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => null,
+      isTrustedMainWindow: vi.fn(() => true),
+      send,
+    });
+    const untrustedWindowSender = createGhostConfirmDialogMainWindowSender({
+      getMainWindow: () => mainWindow,
+      isTrustedMainWindow: () => false,
+      send,
+    });
+
+    expect(missingWindowSender({ requestId: 'request-1', ...ASK })).toBe(false);
+    expect(untrustedWindowSender({ requestId: 'request-2', ...ASK })).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    expect(mainWindow.isMinimized).not.toHaveBeenCalled();
+    expect(mainWindow.restore).not.toHaveBeenCalled();
+    expect(mainWindow.show).not.toHaveBeenCalled();
+  });
+});
 
 describe('ghostConfirmDialogBridge · 正常往返', () => {
   it('投出去 → renderer 回包 → resolve 用户的点击', async () => {
