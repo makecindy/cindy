@@ -8,6 +8,9 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
+  // i18n 初始化在 import 期就 i18n.use(initReactI18next).init(...);mock 缺这个导出会直接抛
+  // No "initReactI18next" export is defined（与 ErrorMessageCard.test.tsx 同一口径）。
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string, vars?: Record<string, unknown>) =>
       vars && Object.keys(vars).length > 0 ? `${key}:${JSON.stringify(vars)}` : key,

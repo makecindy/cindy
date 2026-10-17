@@ -110,6 +110,11 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain(
       'childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir',
     );
+    // 后台命令控制通道的 bearer 不得继承给子 Pi:子代理的 bash 也走同一个 bridge,
+    // 拿到 bearer 就能伪造控制请求、绕过审批直接让 host 以父会话 env/cwd 跑命令。
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toContain(
+      'delete childEnv.CINDY_PI_BACKGROUND_COMMANDS',
+    );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR'",
     );

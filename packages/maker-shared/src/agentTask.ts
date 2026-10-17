@@ -180,11 +180,17 @@ export function deriveAgentTaskStatus(
   options?: {
     resultIsLaunchReceipt?: boolean;
     persistedStatus?: AgentTaskTerminalStatus;
-
+    /**
+     * 配对的 tool_result 是**后台命令**的启动回执,且没有 live update(重载后的历史行)。
+     * 后台命令不落库(messagePersistBroadcaster 对 local_bash 不做终态投影),历史行
+     * 拿不到终态 —— 那时任务已不在运行快照里,报 completed 会把一条可能在上次退出时
+     * 被当作 stopped 杀掉的命令说成成功。按 stopped(被中断)呈现。
+     */
+    backgroundCommandReceipt?: boolean;
+    /** Claude `<tool_use_error>` 等协议级失败证据（见 isSubagentResultError）。 */
     resultIsError?: boolean;
-
+    /** 跨重启持久的运行态（上游引入），优先于 result 推断。 */
     durableStatus?: AgentTaskStatus;
-
   },
 ): AgentTaskStatus {
   const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
@@ -194,6 +200,7 @@ export function deriveAgentTaskStatus(
   const resultIsLaunchReceipt =
     options?.resultIsLaunchReceipt === true || options?.durableStatus === 'running';
   const hasResult = typeof result === 'string' && result.trim().length > 0;
+  if (options?.backgroundCommandReceipt && updateStatus === undefined) return 'stopped';
   // resultIsError 只应收口 stale `running` / 缺失 live update 的历史回放;显式
   // failed / stopped 是用户或系统声明的终态,不得被配对的 tool result 覆盖 ——
   // live `stopped`(用户中断)配上 SDK 的 <tool_use_error> 回执会被误显示为失败。
@@ -326,6 +333,69 @@ export function isClaudeSubagentToolName(toolName: string | undefined): boolean 
 
 /** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
 export const PI_SUBAGENT_TOOL_NAME = 'subagent';
+
+/** PI 的 bash 工具名(小写;CC 是 `Bash`)—— 后台命令卡与面板识别共用。 */
+export const PI_BASH_TOOL_NAME = 'bash';
+
+/**
+ * Pi 后台命令启动回执前缀(单一字面量)。
+ *
+ * 生成端是 cindy-bridge(见 maker-core `cindy-bridge-source.ts`,经本常量插值);
+ * 消费端是状态推导 —— 回执只是「已启动」,配对结果不得把仍在跑的 running update
+ * 收敛成 completed。两端共用一个字面量,避免文案改动后判据静默失配。
+ */
+export const PI_BACKGROUND_COMMAND_RECEIPT_PREFIX = 'Cindy background command started';
+
+/**
+ * Pi 后台命令的启动回执判据:只认 `bash` 工具 + 固定前缀,不碰其它工具。
+ * 前缀命中即代表任务在后台继续跑(tool_result 只是回执,不是终态结果)。
+ */
+export function isBackgroundCommandLaunchReceipt(
+  toolName: string | undefined,
+  result: string | null | undefined,
+): boolean {
+  if (toolName !== PI_BASH_TOOL_NAME) return false;
+  const trimmed = typeof result === 'string' ? result.trim() : '';
+  if (!trimmed.startsWith(PI_BACKGROUND_COMMAND_RECEIPT_PREFIX)) return false;
+  // 第二行 `Output: ` 是回执格式的一部分(见 bridge 的 backgroundCommandReceiptText)。
+  // 只认前缀的话,一条**前台** bash 的输出恰好以同样文字开头就会被当成启动回执 →
+  // 历史行被派生为 stopped(展示层误判)。带上第二行,误判面收窄到「输出同时伪造两行」。
+  return trimmed.includes('\nOutput: ');
+}
+
+/**
+ * 卡片 / 面板共用的「启动回执」总判据:命中即表示配对的 tool_result 只是启动回执
+ * (子代理/后台命令仍在跑),deriveAgentTaskStatus 不得据此收口成 completed。
+ *
+ * 覆盖:codex collab 启动回执(`subagentSpawnReceiptName`)、Claude 异步 Agent /
+ * Codex V1 collab:spawnAgent / PI durable subagent 的文本回执
+ * (`subagentSpawnResultIndicatesRunning`)、PI 后台命令回执。
+ *
+ * 具体判据定义在下方各自函数旁,本函数只负责汇总 —— 新增一种回执时同时改这里。
+ */
+export function isAgentTaskLaunchReceipt(
+  toolName: string | undefined,
+  toolInput: unknown,
+  result: string | null | undefined,
+): boolean {
+  return subagentSpawnReceiptName(toolName, toolInput, result ?? undefined) !== undefined
+    || subagentSpawnResultIndicatesRunning(toolName, result)
+    || isBackgroundCommandLaunchReceipt(toolName, result);
+}
+
+/**
+ * 无 live update 时的 provider 兵底(历史回放 / 水合前):按工具名判 harness。
+ * `Bash`(大写)是 Claude Code,小写 `bash` 是 PI 覆盖后的工具;Cindy 自己的
+ * `subagent` 扩展也是 PI。判错了只影响未水合窗口中卡片的 harness 标签与停止门,
+ * 水位上来后 update 会覆盖它。
+ */
+export function agentTaskProviderForToolName(
+  toolName: string | undefined,
+): 'claude-code' | 'codex' | 'pi' {
+  if (toolName?.startsWith('collab:')) return 'codex';
+  if (toolName === PI_SUBAGENT_TOOL_NAME || toolName === PI_BASH_TOOL_NAME) return 'pi';
+  return 'claude-code';
+}
 
 /**
  * Validate + shape a raw `agent_task_update` event payload into an `AgentTaskUpdate`.
@@ -581,32 +651,28 @@ export function buildAgentTaskCardModel(input: {
   durableStatus?: AgentTaskStatus;
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result, persistedStatus, durableStatus } = input;
+  const provider: 'claude-code' | 'codex' | 'pi' = update?.provider
+    ?? agentTaskProviderForToolName(toolName);
   // `<tool_use_error>` is only a trustworthy failure witness for Claude
   // subagent tools (Agent/Task). PI `subagent` / Codex `collab:*` results are
   // arbitrary work products that may legitimately start with that marker, so
   // the shared card model narrows by tool name exactly like the desktop
   // callers (AgentTaskCard / listSessionTasks). With no tool name (history
-  // replay of a legacy update card) fall back to the provider heuristic below,
+  // replay of a legacy update card) fall back to the provider heuristic above,
   // matching AgentTaskCard's claudeProtocolResult.
-  const providerFallback: 'claude-code' | 'codex' | 'pi' =
-    update?.provider
-    ?? (toolName?.startsWith('collab:')
-      ? 'codex'
-      : toolName === PI_SUBAGENT_TOOL_NAME
-        ? 'pi'
-        : 'claude-code');
   const claudeProtocolResult = toolName !== undefined
     ? isClaudeSubagentToolName(toolName)
-    : providerFallback === 'claude-code';
+    : provider === 'claude-code';
   const status = deriveAgentTaskStatus(update?.status, result, {
     persistedStatus,
     durableStatus,
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
+      isAgentTaskLaunchReceipt(toolName, toolInput, result)
       || subagentSpawnResultIndicatesRunning(toolName, result),
+    // 后台命令（local_bash）不落终态：配对的 tool_result 只是启动回执，历史行按 stopped 呈现。
+    backgroundCommandReceipt: isBackgroundCommandLaunchReceipt(toolName, result),
     resultIsError: claudeProtocolResult && isSubagentResultError(result),
   });
-  const provider = providerFallback;
   const title = compactText(
     formatAgentTaskTitle(provider, update?.title
       ?? readInputString(toolInput, ['description', 'task', 'name'])

@@ -5,7 +5,7 @@
  *   - seedBackgroundTaskSnapshots + staleRunningCandidates:候选集内、仍
  *     running、不在快照中的 claude-code 条目收口为 stopped;快照命中 / 非候选 /
  *     非 claude-code / 已终态条目一律不动;收口后迟到的真实事件仍能覆盖。
- *   - captureRunningClaudeTaskIds:候选集捕获口径。
+ *   - captureReconcilableRunningTaskIds:候选集捕获口径(claude-code 全部 + PI local_bash)。
  *   - initGlobalListeners 的活动熄灭触发:active:false → 延迟拉快照对账;
  *     active:true 取消;远程会话豁免;无 running 条目不发 IPC。
  */
@@ -112,7 +112,7 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
         status: 'running',
         taskType: 'local_agent',
       });
-      const candidates = makerChatStore.captureRunningClaudeTaskIds(sid);
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
       expect(candidates.has('t-stale')).toBe(true);
 
       makerChatStore.seedBackgroundTaskSnapshots(sid, [], {
@@ -139,7 +139,7 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
         status: 'running',
         taskType: 'local_bash',
       });
-      const candidates = makerChatStore.captureRunningClaudeTaskIds(sid);
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
 
       makerChatStore.seedBackgroundTaskSnapshots(
         sid,
@@ -163,7 +163,7 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
     const sid = `rec3-${Math.random().toString(36).slice(2, 8)}`;
     try {
       applyTask(sid, { taskId: 't-old', status: 'running', taskType: 'local_agent' });
-      const candidates = makerChatStore.captureRunningClaudeTaskIds(sid);
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
       // 候选捕获之后才启动的任务(模拟请求在飞窗口)
       applyTask(sid, { taskId: 't-fresh', status: 'running', taskType: 'local_agent' });
       // 已终态条目
@@ -195,7 +195,7 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
     try {
       applyTask(sid, { taskId: 't-late', status: 'running', taskType: 'local_agent' });
       applyTask(sid, { taskId: 't-back', status: 'running', taskType: 'local_bash' });
-      const candidates = makerChatStore.captureRunningClaudeTaskIds(sid);
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
       makerChatStore.seedBackgroundTaskSnapshots(sid, [], {
         staleRunningCandidates: candidates,
       });
@@ -214,7 +214,7 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
     }
   });
 
-  it('captureRunningClaudeTaskIds 只含 running 的 claude-code 任务,按 taskId 去重', () => {
+  it('captureReconcilableRunningTaskIds 只含 running 的 claude-code 任务,按 taskId 去重', () => {
     const sid = `cap-${Math.random().toString(36).slice(2, 8)}`;
     try {
       applyTask(sid, {
@@ -231,8 +231,54 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
         data: { provider: 'codex', taskId: 't-codex', status: 'running' },
       } as CCAgentStreamEvent);
 
-      const ids = makerChatStore.captureRunningClaudeTaskIds(sid);
+      const ids = makerChatStore.captureReconcilableRunningTaskIds(sid);
       expect([...ids]).toEqual(['t-run']);
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('PI 后台命令(local_bash)同样纳入对账:快照缺席即 stopped', () => {
+    const sid = `rec-pi-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 'pi-bash-1',
+        parentToolUseId: 'pi-bash-1',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      // PI 的终态 update 走会话自己的事件队列,Pi 进程被强杀时队列随 end() 消失 ——
+      // 没有这条对账就是永久转圈的僵尸行(且 Stop 已无记录可停)。
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
+      expect(candidates.has('pi-bash-1')).toBe(true);
+
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [], {
+        staleRunningCandidates: candidates,
+      });
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('pi-bash-1')?.status).toBe('stopped');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('PI durable subagent 不在对账范围内(可能活得比父进程久,快照缺席不等于已停)', () => {
+    const sid = `rec-pi-sub-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 'pi-sub-1',
+        parentToolUseId: 'pi-sub-1',
+        status: 'running',
+        taskType: 'pi_subagent',
+      });
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
+      expect(candidates.has('pi-sub-1')).toBe(false);
+
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [], {
+        staleRunningCandidates: new Set(['pi-sub-1']),
+      });
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('pi-sub-1')?.status).toBe('running');
     } finally {
       makerChatStore.purgeSession(sid);
     }
@@ -242,7 +288,7 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
     const sid = `rec5-${Math.random().toString(36).slice(2, 8)}`;
     try {
       applyTask(sid, { taskId: 't-stale', status: 'running', taskType: 'local_agent' });
-      const candidates = makerChatStore.captureRunningClaudeTaskIds(sid);
+      const candidates = makerChatStore.captureReconcilableRunningTaskIds(sid);
 
       makerChatStore.seedBackgroundTaskSnapshots(
         sid,
@@ -326,6 +372,97 @@ describe('活动熄灭触发的 stale running 对账', () => {
       expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('t1')?.status).toBe('stopped');
     } finally {
       makerChatStore.purgeSession(sid);
+    }
+  });
+
+  // 停止点击后的自愈(用户批准项):stopAgentTask 对「main 侧其实已不在」的 id 是静默
+  // 成功的,点完立刻对一次账,行要么很快翻成已停止,要么证明它确实还在跑。
+  it('停止点击后的对账默认 1.2s 触发,僵尸行自愈为已停止', async () => {
+    const sid = `stop-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 'bash-gone',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      makerChatStore.requestBackgroundTaskReconcile(sid);
+      // 比活动熄灭对账(3s)早,点击后很快可见
+      await vi.advanceTimersByTimeAsync(1199);
+      expect(listTasks).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(listTasks).toHaveBeenCalledWith(sid);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('bash-gone')?.status).toBe('stopped');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('停止点击后的对账被 active:true 取消后会按新代际补挂一次(僵尸行不会永远滞留)', async () => {
+    const sid = `stop3-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 'bash-zombie',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      makerChatStore.requestBackgroundTaskReconcile(sid);
+      // 会话在该窗口内重新活跃(同一会话里另一条任务在跑 / 迟到的 activity 广播):
+      // 熄灭沿的定时器被取消,但停止对账必须补挂 —— 否则僵尸行要等到下一次全熄灭
+      // 沿才可能被收口(dev server 常驻时可能几小时)。
+      await vi.advanceTimersByTimeAsync(300);
+      emitActivity({ sessionId: sid, active: true });
+      await vi.advanceTimersByTimeAsync(1199);
+      expect(listTasks).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(listTasks).toHaveBeenCalledWith(sid);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('bash-zombie')?.status).toBe('stopped');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('停止点击后的补挂有预算上限(活跃会话里不会退化成轮询)', async () => {
+    const sid = `stop4-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 'bash-stuck',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      makerChatStore.requestBackgroundTaskReconcile(sid, 100);
+      // 每次 active:true 都取消定时器并按预算补挂(预算 2 次);用完后不再补挂。
+      for (let i = 0; i < 3; i += 1) {
+        emitActivity({ sessionId: sid, active: true });
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      await vi.advanceTimersByTimeAsync(600);
+      expect(listTasks).not.toHaveBeenCalled();
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('停止点击后的对账豁免远程会话(不发本机 IPC)', async () => {
+    const remoteSid = 'remote-stop-1';
+    try {
+      // 远程侧有一条 running —— 只有豁免生效才不发本机 IPC(拿本机空快照会把镜像里
+      // 真实在跑的任务错误收口,所以这条豁免是双向的)。
+      applyTask(remoteSid, {
+        provider: 'pi',
+        taskId: 'bash-remote',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      makerChatStore.requestBackgroundTaskReconcile(remoteSid, 100);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(listTasks).not.toHaveBeenCalled();
+    } finally {
+      makerChatStore.purgeSession(remoteSid);
     }
   });
 
