@@ -81,6 +81,7 @@ export function parsePackageArgs(argv, defaults = {}) {
     skipSmoke: false,
     allowUnsigned: false,
     noSign: false,
+    linuxDebOnly: false,
   };
   let archFlag = null;
   let regionSpecified = false;
@@ -105,18 +106,22 @@ export function parsePackageArgs(argv, defaults = {}) {
         break;
       case '--version': out.versionSpec = takeValue(a, i); i++; break;
       case '--skip-smoke': out.skipSmoke = true; break;
+      case '--linux-deb-only': out.linuxDebOnly = true; break;
       case '--allow-unsigned': out.allowUnsigned = true; break;
       // 主动跳过签名(即使签名配置在手)。外部签名命令依赖发布方自己的构建
       // 环境,不具备该环境的机器打版本无关包时用它;与 --allow-unsigned
       // (放行"缺配置")语义互补。
       case '--no-sign': out.noSign = true; out.allowUnsigned = true; break;
       default:
-        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign)`);
+        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign/--linux-deb-only)`);
     }
   }
 
   if (!SUPPORTED_PLATFORMS.includes(out.platform)) {
     throw new Error(`不支持的 platform: ${out.platform}(可选 ${SUPPORTED_PLATFORMS.join('/')})`);
+  }
+  if (out.linuxDebOnly && out.platform !== 'linux') {
+    throw new Error('--linux-deb-only 仅支持 linux');
   }
   const supportedArchs = PLATFORM_ARCHS[out.platform];
   const hostArch = defaults.arch ?? process.arch;

@@ -224,3 +224,12 @@ test('debianArch: deb 架构名与 maker-deb 一致', () => {
   assert.equal(debianArch('armv7l'), 'armhf');
   assert.equal(debianArch('arm'), 'armel');
 });
+
+// The personal-build caller only consumes the existing DEB installer role.
+test('personal Linux builds can select DEB only while release builds retain both formats', () => {
+  assert.equal(parsePackageArgs([], { platform: 'linux', arch: 'x64' }).linuxDebOnly, false);
+  for (const arch of ['x64', 'arm64']) {
+    assert.equal(parsePackageArgs(['--linux-deb-only'], { platform: 'linux', arch }).linuxDebOnly, true);
+  }
+  assert.throws(() => parsePackageArgs(['--linux-deb-only'], { platform: 'darwin', arch: 'arm64' }), /仅支持 linux/);
+});
