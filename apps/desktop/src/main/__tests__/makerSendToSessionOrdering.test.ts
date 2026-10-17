@@ -627,7 +627,8 @@ describe('sendToSession ordering', () => {
       'restoreControlStores();',
       'throw persistenceError;',
     );
-    expect(preloadSource).toContain('selection?: { effort: string | null; fastMode: boolean },');
+    // #5044 在 selection 上加了可选 thinking 载体；upstream 用例的旧字符串同步。
+    expect(preloadSource).toContain('selection?: { effort: string | null; fastMode: boolean; thinking?: boolean },');
     expectOrder(
       preloadSource,
       'expectedAgentSwitchRevision,',
