@@ -2073,3 +2073,37 @@ it('main provider form contains Tab and blocks dismissal only during the actual 
   await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
   expect(screen.queryByRole('dialog')).toBeNull();
 });
+
+
+it('keeps the outer Codex summary on the saved upstream protocol', async () => {
+  const chat = {
+    id: 'relay',
+    name: 'Relay',
+    runtimes: {
+      codex: {
+        baseUrl: 'https://relay.example.test/v1',
+        wireProtocol: 'openai-chat' as const,
+        models: [{ id: 'chat-model', name: 'Chat model' }],
+      },
+    },
+  };
+  const user = userEvent.setup();
+  const { rerender } = render(<ProviderConnectionDialog initial={chat} onSaved={vi.fn()} onClose={vi.fn()} />);
+  await screen.findByRole('tab', { name: 'settings.providers.custom.protocol.codex' });
+  expect(screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.chat' }).getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getAllByText('settings.providers.custom.wireProtocol.chat').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getAllByText('settings.providers.custom.wireProtocol.responses')).toHaveLength(1);
+
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }));
+  expect(screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }).getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getAllByText('settings.providers.custom.wireProtocol.responses').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getAllByText('settings.providers.custom.wireProtocol.chat')).toHaveLength(1);
+
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.chat' }));
+  rerender(<ProviderConnectionDialog initial={chat} onSaved={vi.fn()} onClose={vi.fn()} />);
+  await screen.findByRole('button', { name: 'settings.providers.custom.wireProtocol.chat' });
+  expect(screen.getAllByText('settings.providers.custom.wireProtocol.chat').length).toBeGreaterThanOrEqual(2);
+
+  render(<ProviderConnectionDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  expect(screen.getAllByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }).some((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true);
+});

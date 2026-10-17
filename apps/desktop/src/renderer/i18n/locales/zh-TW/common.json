@@ -3095,6 +3095,7 @@
           "claudeDesc": "Claude Code 遵循 Anthropic 協議(用 x-api-key 鑑權)。填該來源用於 Claude Code 的 baseURL、金鑰與模型，留空則此來源不提供 Claude Code。",
           "codex": "Codex",
           "codexDesc": "Codex 使用 OpenAI Responses 協議。上游可選擇原生 Responses，或由 Cindy 橋接 Chat Completions、Anthropic Messages。填該來源用於 Codex 的 baseURL、金鑰與模型，留空則此來源不提供 Codex。",
+          "codexUpstream": "目前上游協議：",
           "pi": "Pi",
           "piDesc": "Pi 是多協議 harness：你的自定義或本地模型（Ollama、vLLM、自建端點）原生直連，不經 Cindy 的相容 Proxy。先在下方選 API 型別，再填該來源給 Pi 用的 base URL、金鑰與模型；留空則本來源不配置 Pi。"
         },
