@@ -8,7 +8,11 @@
  */
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { AgentKind } from '@cindy/maker-core';
-import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
+import {
+  effectiveSourceIdForModel,
+  movedCindyAutoSourceId,
+  type ProviderView,
+} from '@cindy/model-providers';
 
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings.js';
 import { getDbClient } from '../../localDb/client/current';
@@ -133,11 +137,24 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
 
 /**
  * 隐式来源按「新路由选择」口径落到具体来源 —— 系统建会话钉住 / 切换时独占改道
- * 用的就是这个口径, 与它钉出的具体 id 视为同一条路由。显式来源原样比较。
+ * 用的就是这个口径, 与它钉出的具体 id 视为同一条路由。显式来源原样比较;
+ * 唯一例外是被服务端挪到另一家 Cindy 来源的 Auto, 新旧位置视为同一条路由, 否则
+ * 任务跟着 Auto 换了来源后会被误判成用户单独改过, 从此不再跟随渠道默认。
  */
 function providerNormalizer(providers: ProviderView[]) {
-  return (route: ImDefaultRoute): string | null =>
-    route.agentDeviceId ? route.providerId : route.providerId ?? effectiveSourceIdForModel(providers, null, route.model, route.agentKind as AgentKind);
+  return (route: ImDefaultRoute): string | null => {
+    if (route.agentDeviceId) return route.providerId;
+    const agent = route.agentKind as AgentKind;
+    return (
+      movedCindyAutoSourceId(providers, {
+        agent,
+        model: route.model,
+        providerId: route.providerId,
+      }) ??
+      route.providerId ??
+      effectiveSourceIdForModel(providers, null, route.model, agent)
+    );
+  };
 }
 
 async function listProviders(): Promise<ProviderView[] | null> {

@@ -3,6 +3,7 @@ import type { ModelAccessStatus } from '../../../shared/modelAccess.js';
 
 import {
   buildModelsSyncRequest,
+  cindyAutoModelIdsChanged,
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
@@ -438,5 +439,27 @@ describe('waitForModelsSyncRefresh', () => {
         lastSuccessfulAttempt: () => 8,
       }),
     ).resolves.toBe('failed');
+  });
+});
+
+describe('cindyAutoModelIdsChanged', () => {
+  const ids = (...values: string[]) => values.map((id) => ({ id }));
+
+  it('号池 → 平台：Cindy AI 列表新增 Auto 算变化', () => {
+    expect(cindyAutoModelIdsChanged(ids('p1'), ids('p1', 'auto/group-a'))).toBe(true);
+  });
+
+  it('平台 → 号池：Cindy AI 列表移除 Auto 算变化', () => {
+    expect(cindyAutoModelIdsChanged(ids('auto/group-a', 'p1'), ids('p1'))).toBe(true);
+  });
+
+  it('负向：只有普通模型变化、顺序变化或形似 auto 的 ID 不算', () => {
+    expect(cindyAutoModelIdsChanged(ids('auto/group-a', 'p1'), ids('p2', 'auto/group-a'))).toBe(
+      false,
+    );
+    expect(cindyAutoModelIdsChanged(ids('autopilot', 'vendor/auto'), ids('automation'))).toBe(
+      false,
+    );
+    expect(cindyAutoModelIdsChanged([], [])).toBe(false);
   });
 });

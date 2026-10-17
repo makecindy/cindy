@@ -13,6 +13,7 @@ import {
   effectiveSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
+  movedCindyAutoSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -289,6 +290,12 @@ function resolveProviderId(
   modelId: string,
   providerId: string | null,
 ): string | null {
+  // 保存的 Auto 路由在使用时跟随服务端：Auto 被挪到另一家 Cindy 来源后改用新来源，
+  // 与新建任务同一规则；渠道设置里存的值不改写。
+  const movedAuto = providers
+    ? movedCindyAutoSourceId(providers, { agent: agentKind, model: modelId, providerId })
+    : null;
+  if (movedAuto) return movedAuto;
   if (!providerId) {
     if (!providers) return null;
     // 隐式默认(未选来源)同样过裁决:原生默认落点的拷贝被停用而有启用替代时,

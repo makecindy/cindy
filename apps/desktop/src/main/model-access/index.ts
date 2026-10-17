@@ -45,6 +45,7 @@ import {
 } from './credentialsSync.js';
 import {
   buildModelsSyncRequest,
+  cindyAutoModelIdsChanged,
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
@@ -165,6 +166,11 @@ let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
 let modelsSyncRerunQueued = false;
 /**
+ * Cindy AI 列表里的 Auto 有增减时刷新企业号池（初始化时接上）。Auto 在两边之间换位置时，
+ * 只刷新一边会让进行中任务的跟随看到不一致的列表；另一边刷新后回头不再有增减，联动自然停止。
+ */
+let onXdCindyAutoModelsChanged: (() => void) | null = null;
+/**
  * 认证世代:登出或 userId / realm 变化时自增(与 credentialsSync 的 epoch 同语义)。
  * 目录请求以发起时世代为闸——旧身份的在途 /models 响应在换号或同账号跨区后
  * 一律丢弃,且新身份会补发自己的请求。
@@ -268,14 +274,22 @@ async function runModelsSync(
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
+  const cindyAutoChanged = cindyAutoModelIdsChanged(getXdGatewayModels(), models);
+  const refreshPoolIfCindyAutoMoved = () => {
+    if (!cindyAutoChanged || !onXdCindyAutoModelsChanged) return;
+    log.info('Cindy Auto changed in Cindy AI models; refreshing the enterprise pool directory');
+    onXdCindyAutoModelsChanged();
+  };
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], { authenticatedUserId, authoritative: true });
     lastModelsSyncSucceededAttempt = myAttempt;
+    refreshPoolIfCindyAutoMoved();
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
   applyGatewayModels(models, { authenticatedUserId, authoritative: true });
+  refreshPoolIfCindyAutoMoved();
   try {
     const availability = await listExecutableMediaModels([], {
       includeDisabled: true,
@@ -518,7 +532,14 @@ export function initModelAccess(): void {
     broadcastReferenceModelPricing,
     createByokCache(byokSnapshotSecretIo),
     scheduleByokCodexHostRefresh,
+    () => {
+      // 号池里的 Auto 有增减：Auto 可能换到了 Cindy AI（或从那里搬来），让 Cindy AI 列表也刷新。
+      if (!lastAuthUserId || getSync().getStatus().state !== 'ok') return;
+      log.info('Cindy Auto changed in the enterprise pool directory; refreshing Cindy AI models');
+      scheduleModelsSync();
+    },
   );
+  onXdCindyAutoModelsChanged = () => scheduleByokSync(byok, true);
 
   const noteAuthState = (
     isAuthenticated: boolean,
@@ -608,6 +629,7 @@ export function resetModelAccessForTest(): void {
     foregroundRefreshListener = null;
   }
   installCindyGatewayKeyRejectionReporter(null);
+  onXdCindyAutoModelsChanged = null;
   syncInstance = null;
   modelsSyncInflight = null;
   modelsSyncGen = -1;

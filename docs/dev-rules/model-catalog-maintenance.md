@@ -126,10 +126,14 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
 
 未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.1 Sol（Codex）、
-Claude 订阅 Opus 5.5（Claude Code）、Cindy AI 下发的 Auto（Pi），最后保留 xAI 回退。
-订阅按认证身份识别独立账号，始终保留实际账号 ID；Auto 必须存在于 Cindy AI 的可用 Pi
-目录，不依赖旧 GLM 默认标记，也不在客户端将其替换成固定型号。草稿发送校准与无人值守
-默认解析复用同一策略，避免初始化选中 Auto 后又被旧标记改回 GLM。
+Claude 订阅 Opus 5.5（Claude Code）、服务端指定的 Cindy Auto（Pi），最后保留 xAI 回退。
+订阅按认证身份识别独立账号，始终保留实际账号 ID。Cindy Auto 由服务端决定：在 Cindy AI 与
+企业号池供应商（`source: organization`）中跟随被标为 Pi 新任务默认的 Auto 系列模型
+（预设 `auto` 或模型组 Auto `auto/<组ID>`），没有标记时（旧服务端）回退 Cindy AI 的预设 `auto`。
+只认 Auto 系列的标记：个人目录仍把旧 GLM 标为 Pi 默认，客户端不采纳，也不把 Auto 替换成固定型号。
+服务端保证每个引擎只标一个默认；管理员恰在两次拉取之间改配置、两类来源短暂各标一个时，
+以 Cindy AI 为准，不取决于来源列表顺序。上次自动落点不钉住默认：草稿记着的来源是这两类之一时，校准仍在两类来源中整体寻找。
+草稿发送校准与无人值守默认解析复用同一策略，避免初始化选中 Auto 后又被旧标记改回 GLM。
 同一订阅策略先在全部匹配账号中寻找推荐型号，再取该来源按目录排序可见的其他型号；
 无人值守入口没有本地显示开关时按 `defaultEnabled` 判断，不能因缺少推荐型号提前换到下一供应商。
 策略在 `apps/desktop/src/shared/newMakerDefaultTuple.ts`；连接、型号和对应引擎必须实际可用，
@@ -138,6 +142,24 @@ Claude 订阅 Opus 5.5（Claude Code）、Cindy AI 下发的 Auto（Pi），最�
 定时任务、`/learn`、IM 新建任务与分享导入等不由用户当场选模型的入口，
 没指定模型时同样按新建任务口径解析（`apps/desktop/src/shared/draftModelCalibration.ts`
 的 `resolveNewTaskDefaultRoute`），不在代码里写死型号；一个可用来源都没有时明确失败或留空让用户选。
+
+Auto 只按模型 ID 认（`isCindyAutoModelId`）：服务端可以把同一个 Auto 在 Cindy AI 与企业号池
+之间挪动。记住的来源是这两类之一且已不再提供它时，`effectiveSourceIdForModel` 改用当前提供它
+的那一家（同样限于这两类），新建任务提交与手机端 `resolveRecentModelAndProvider` 复用同一规则；
+记住的来源仍列着它（只是断连或停用）、或是用户自己接的供应商时不改道。
+目录刷新后，仍记着旧来源的进行中任务登记一次「下一条消息前切换」：引擎与模型 ID 不变，只换
+供应商与 Key（`apps/desktop/src/main/maker-ipc/cindyAutoRouteFollow.ts`）。用户点选、跨引擎或跨电脑
+的切换，以及等待生效的换凭证、运行时选择都不覆盖；运行时覆盖本身不算改道——目录刷新按原路由重新加载
+进行中任务时也会写上它，这时它就是当前路由，照常跟随——只有故障切换中（`fallbackHop > 0`）的任务
+不跟随。系统登记的 Auto 换来源（configStaged、同引擎、同一个 Auto、只换来源）在 Auto 再次挪动时按
+当前位置重新核对：目标仍提供就不动；当前位置又能用、或哪里都没有了就撤销登记；去了别的来源就改登记
+到那里。远程主机与另一台电脑上运行的任务不在本机改道。Auto 没有推理档位（任务里 effort
+为空串）时按 null 登记。Cindy AI 列表或企业号池目录任一边刷新后 Auto ID 有增减，会顺带刷新另一边
+（`cindyAutoModelIdsChanged`），跟随在两边都更新后才看到一致的位置；只刷新一边会把旧位置当成仍有效。
+请求被拒后刷新目录重试不在客户端处理。
+存下来的「来源 + Auto」（伙伴自己的模型链与用户自定义的伙伴默认、IM 渠道默认路由）在使用时套用
+同一规则（`movedCindyAutoSourceId`，Pi 的 null 来源即 Cindy AI），不改写保存的配置；IM 跟随渠道
+默认时把 Auto 的新旧位置视为同一路由，避免跟过去后被误判成用户单独改过。
 
 设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
 按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。

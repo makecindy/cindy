@@ -14,6 +14,7 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import type { MobileModelOption } from './agentCapabilities';
+import { isCindyAutoModelId } from '@cindy/model-providers/provider-identity';
 import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
@@ -501,6 +502,16 @@ export function resolveRecentModelAndProvider(
   }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
   if (valid) return { model: recent.model, providerId: valid };
+  // Auto 只按模型 ID 认(与桌面 effectiveSourceIdForModel 同一规则):服务端把它从 Cindy AI
+  // 挪到企业号池(或反过来)后,记住的来源不再提供它 —— 改用当前提供它的那一家 Cindy 来源,
+  // 不当失效处理。用户自己接的供应商不参与这条改道。
+  if (isCindyAutoModelId(recent.model)) {
+    const rowProviders = [...new Map(modelRows.map((row) => [row.provider.id, row.provider])).values()];
+    const relocated = effectiveSourceIdForModel(rowProviders, recent.providerId, recent.model, agentKind);
+    if (relocated && validateModelProviderId(modelRows, relocated, recent.model, true)) {
+      return { model: recent.model, providerId: relocated };
+    }
+  }
   // 显式来源失效的替代选择:与 null 分支同口径(codex review P2:按 Agent 默认
   // 规则选择失效来源的替代项)——同名模型多来源时**不得取目录首行**(目录顺序
   // ≠ Agent 原生默认顺序,如 Codex 候选 [custom, xd] 会被首行绑定到 custom,

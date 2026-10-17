@@ -42,3 +42,22 @@ export function isOrganizationManagedProvider(
 ): boolean {
   return provider?.source === 'organization';
 }
+
+/**
+ * Cindy AI (`xd`) or an enterprise pool connection distributed by Cindy. The server decides
+ * which of them carries a model-group Auto and may move it between them; user-added
+ * connections never take part.
+ */
+export function isCindyDistributedProvider(
+  provider: Pick<Provider, 'id' | 'source'> | null | undefined,
+): boolean {
+  return (provider?.source === 'builtin' && provider.id === 'xd') || isOrganizationManagedProvider(provider);
+}
+
+/**
+ * Cindy Auto, recognized by model id alone: the preset `auto` or a model-group Auto
+ * (`auto/<groupId>`). The server routes it upstream and may move it between Cindy sources.
+ */
+export function isCindyAutoModelId(modelId: string): boolean {
+  return modelId === 'auto' || (modelId.startsWith('auto/') && modelId.length > 'auto/'.length);
+}

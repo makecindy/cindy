@@ -14,6 +14,7 @@
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
+  isCindyDistributedProvider,
   isCustomRoutedProvider,
   isModelSelectableForNewRoute,
   nativeDefaultSourceId,
@@ -254,7 +255,12 @@ export function calibrateDraftModel({
       )
     : undefined;
   if (connectedPreferred) {
-    const factory = factoryModelForAgent([connectedPreferred], agent, isModelEnabled);
+    // Cindy AI 与企业号池由服务端统一编排：默认 Auto 可能落在其中任一家，也可能被挪走。
+    // 用户没选过模型时，上次自动落点不能把出厂默认钉在原来那一家。
+    const factoryScope = isCindyDistributedProvider(connectedPreferred)
+      ? connectedProvidersForAgent([...providers], agent).filter(isCindyDistributedProvider)
+      : [connectedPreferred];
+    const factory = factoryModelForAgent(factoryScope, agent, isModelEnabled);
     if (factory) return factory;
     // marker 只需由策略来源声明一次（当前为 XD），用户选定的来源若也提供同一 ID，仍应由
     // 该来源承接；不能因它自己的目录副本没重复 marker 就退回旧模型或偷偷改走 XD。
@@ -364,7 +370,16 @@ export function resolveDraftSessionProviderId({
   effectiveProviderId,
 }: DraftSessionProviderResolutionInput): string | null {
   if (explicitProviderId) {
-    return explicitProviderId;
+    // 显式来源原样提交；唯一例外是服务端把 Auto 挪到了另一家 Cindy 来源，此时来源解析
+    // 已改指新来源，提交旧来源只会让首条请求落到不再提供该模型的连接上。
+    const explicitProvider = providers.find((provider) => provider.id === explicitProviderId);
+    const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
+    return effectiveProvider &&
+      effectiveProvider.id !== explicitProviderId &&
+      isCindyDistributedProvider(explicitProvider) &&
+      isCindyDistributedProvider(effectiveProvider)
+      ? effectiveProvider.id
+      : explicitProviderId;
   }
   if (!effectiveProviderId) return null;
   // 预设通过「添加供应商」落地后同样属于 user provider。即使它是当前模型唯一的

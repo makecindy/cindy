@@ -228,4 +228,67 @@ describe('bot model chain settings store', () => {
     expect((await readBotModelChainSettingsState({ rootPath })).isCustomized).toBe(true);
   });
 
+  describe('模型组 Auto 被服务端挪到另一家 Cindy 来源', () => {
+    const AUTO = 'auto/group-1';
+    const view = (id: string, source: ProviderView['source'], modelIds: string[]) =>
+      ({
+        id,
+        name: id,
+        source,
+        connected: true,
+        agents: ['pi'],
+        auth: { method: 'managed' },
+        access: { kind: 'managed' },
+        routing: { pi: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' } },
+        models: {
+          pi: modelIds.map((id) => ({
+            id,
+            name: id,
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          })),
+        },
+      }) as unknown as ProviderView;
+    // 管理员把 Auto 的目标从号池模型切到平台模型。
+    const providers = [
+      view('xd', 'builtin', ['auto', AUTO]),
+      view('org-pool', 'organization', ['pool-model']),
+    ];
+    const route = (providerId: string | null, model = AUTO) => ({
+      harness: 'pi' as const,
+      model,
+      providerId,
+      effort: '',
+      fastMode: false,
+    });
+
+    it('伙伴自己存的路由在使用时改用新来源，不改写资料里的值', async () => {
+      const rootPath = await testRoot();
+      const config = { modelChainOverride: [route('org-pool'), route('org-pool', 'pool-model')] };
+      expect(await readEffectiveBotModelChain(config, { rootPath, providers })).toEqual([
+        route('xd'),
+        route('org-pool', 'pool-model'),
+      ]);
+      expect(config.modelChainOverride[0].providerId).toBe('org-pool');
+    });
+
+    it('用户自定义的伙伴默认同样跟随；没挪动、预设 auto 与普通模型原样', async () => {
+      const rootPath = await testRoot();
+      await writeBotModelChainSettings([route('org-pool'), route('xd', 'auto')], { rootPath });
+      expect(
+        await readEffectiveBotModelChain({ modelChainOverride: null }, { rootPath, providers }),
+      ).toEqual([route('xd'), route('xd', 'auto')]);
+      // 保存的设置文件仍是原值。
+      expect(
+        (await readBotModelChainSettingsState({ rootPath, providers: [] })).value.modelChain[0],
+      ).toMatchObject({ providerId: 'org-pool' });
+      expect(
+        await readEffectiveBotModelChain(
+          { modelChainOverride: [route('xd')] },
+          { rootPath, providers },
+        ),
+      ).toEqual([route('xd')]);
+    });
+  });
 });

@@ -908,6 +908,57 @@ describe('pickAgentDefaultRuntime', () => {
       ),
     ).toEqual({ model: 'gpt-5.4', providerId: null });
   });
+
+  it('Auto 只按模型 ID 认:服务端把它挪到另一家 Cindy 来源后跟过去,不落到用户自己接的供应商', () => {
+    const autoRow = (
+      providerId: string,
+      source: 'builtin' | 'organization' | 'user',
+      modelIds: readonly string[],
+      modelId: string,
+    ): ProviderModelRow => ({
+      provider: {
+        id: providerId,
+        name: providerId,
+        source,
+        agents: ['pi'],
+        routing: { pi: {} },
+        connected: true,
+        models: { pi: modelIds.map((id) => ({ id, name: id })) },
+      } as unknown as ProviderModelRow['provider'],
+      model: { id: modelId, displayName: modelId, efforts: [], defaultEffort: null, contextWindow: 0 },
+    });
+    const auto = 'auto/group-1';
+    // 号池 → Cindy AI:记住的号池还在(有别的模型),但已不再提供这个 Auto。
+    const toPlatform = [
+      autoRow('custom', 'user', [auto], auto),
+      autoRow('org-pool', 'organization', ['pool-model'], 'pool-model'),
+      autoRow('xd', 'builtin', ['auto', auto], auto),
+    ];
+    expect(
+      resolveRecentModelAndProvider(toPlatform, { model: auto, providerId: 'org-pool' }, 'pi', true),
+    ).toEqual({ model: auto, providerId: 'xd' });
+    // Cindy AI → 号池:用户自己接的供应商排在前面也提供同 ID,不能被通用顶替规则选中。
+    const toPool = [
+      autoRow('custom', 'user', [auto], auto),
+      autoRow('xd', 'builtin', ['auto'], 'auto'),
+      autoRow('org-pool', 'organization', ['pool-model', auto], auto),
+    ];
+    expect(
+      resolveRecentModelAndProvider(toPool, { model: auto, providerId: 'xd' }, 'pi', true),
+    ).toEqual({ model: auto, providerId: 'org-pool' });
+    // 负向:用户自己接的供应商仍提供同名 auto/... 时原样保留,不被拉去 Cindy 来源。
+    expect(
+      resolveRecentModelAndProvider(toPlatform, { model: auto, providerId: 'custom' }, 'pi', true),
+    ).toEqual({ model: auto, providerId: 'custom' });
+    // 负向:Auto 从两份目录都消失时不崩,按既有规则落到目录首项。
+    const gone = [
+      autoRow('xd', 'builtin', ['auto'], 'auto'),
+      autoRow('org-pool', 'organization', ['pool-model'], 'pool-model'),
+    ];
+    expect(
+      resolveRecentModelAndProvider(gone, { model: auto, providerId: 'org-pool' }, 'pi', true),
+    ).toEqual({ model: 'auto', providerId: 'xd' });
+  });
 });
 
 describe('resolveNewSessionAutoDefault', () => {

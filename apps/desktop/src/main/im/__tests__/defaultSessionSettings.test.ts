@@ -237,6 +237,53 @@ describe('resolveImSessionDefaults', () => {
     });
   });
 
+  it.each([
+    ['号池 → Cindy AI（显式来源）', 'org-pool', 'xd', ['auto', 'auto/group-1'], ['pool-model']],
+    [
+      'Cindy AI → 号池（Pi 默认来源 null 即 Cindy AI）',
+      null,
+      'org-pool',
+      ['auto'],
+      ['pool-model', 'auto/group-1'],
+    ],
+  ] as const)(
+    '保存的 Auto 默认在使用时跟随服务端挪动：%s',
+    async (_name, saved, expected, xdModels, poolModels) => {
+      const piModel = (id: string) => ({
+        id,
+        name: id,
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      });
+      const piProvider = (id: string, source: string, models: readonly string[]) => ({
+        id,
+        name: id,
+        source,
+        connected: true,
+        agents: ['pi'],
+        auth: { method: 'managed' },
+        access: { kind: 'managed' },
+        models: { pi: models.map(piModel) },
+        routing: { pi: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' } },
+      });
+      mocks.listProviders.mockResolvedValue([
+        piProvider('xd', 'builtin', xdModels),
+        piProvider('org-pool', 'organization', poolModels),
+      ]);
+      mocks.readImDefaultSettings.mockReturnValue({
+        agentKind: 'pi',
+        agents: { pi: { providerId: saved, model: 'auto/group-1', effort: 'high' } },
+      });
+
+      await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+        agentKind: 'pi',
+        model: 'auto/group-1',
+        providerId: expected,
+      });
+    },
+  );
+
   it('reroutes an implicit default whose native-default copy is disabled', async () => {
     // providerId 留空(隐式路由):原生默认落点(codex → openai)的拷贝被停用而 xd
     // 有启用拷贝时必须显式改道 —— turnRunner 直建不过路由守卫(第十六轮)。

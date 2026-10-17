@@ -13,6 +13,7 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createByokSync, type ByokConnection } from './byokSync.js';
 import { buildByokProvider } from './byokProvider.js';
 import { buildByokPricing, setByokPricing } from './byokPricing.js';
+import { cindyAutoModelIdsChanged } from './modelsSyncRefresh.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('byokRuntime');
@@ -99,6 +100,8 @@ export function createByokRuntime(
   onPricingChanged?: () => void,
   cache?: ByokCache,
   onCodexRoutesChanged?: () => void,
+  /** 号池目录里的 Cindy Auto 有增减：Auto 可能换了来源，请调用方让 Cindy AI 列表也刷新。 */
+  onCindyAutoModelsChanged?: () => void,
 ) {
   let installed: readonly ByokConnection[] = [];
   let installedDirectory: readonly ByokProvider[] = [];
@@ -183,6 +186,10 @@ export function createByokRuntime(
         isDeepStrictEqual(installedDirectory, directory)
       )
         return;
+      const cindyAutoChanged = cindyAutoModelIdsChanged(
+        installedDirectory.flatMap((provider) => provider.models),
+        directory.flatMap((provider) => provider.models),
+      );
       const previousDispatchState = dispatchState(installedDirectory, installed);
       const nextDispatchState = dispatchState(directory, connections);
       const previousCodexState = codexHostState(installedDirectory, installed);
@@ -248,6 +255,13 @@ export function createByokRuntime(
         onPricingChanged?.();
       } catch {
         log.warn('reference price notification failed');
+      }
+      if (cindyAutoChanged) {
+        try {
+          onCindyAutoModelsChanged?.();
+        } catch {
+          log.warn('Cindy Auto refresh notification failed');
+        }
       }
     },
   });

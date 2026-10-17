@@ -211,6 +211,55 @@ beforeEach(() => {
 });
 
 describe('syncUnderLock', () => {
+  it('Auto 被服务端挪到另一家 Cindy 来源、任务已跟过去时，仍算在跟随渠道默认', async () => {
+    const auto = 'auto/group-1';
+    const view = (id: string, source: string, models: string[]) => ({
+      id,
+      name: id,
+      source,
+      connected: true,
+      agents: ['pi'],
+      auth: { method: 'managed' },
+      access: { kind: 'managed' },
+      routing: { pi: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' } },
+      models: {
+        pi: models.map((model) => ({
+          id: model,
+          name: model,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        })),
+      },
+    });
+    // 管理员把 Auto 从号池挪到 Cindy AI；任务已在下一条消息前跟着换到了 xd。
+    mocks.listProviders.mockResolvedValue([
+      view('xd', 'builtin', [auto]),
+      view('org-pool', 'organization', ['pool-model']),
+    ]);
+    const saved: ImDefaultRoute = {
+      agentKind: 'pi',
+      model: auto,
+      providerId: 'org-pool',
+      effort: 'high',
+    };
+    const moved: ImDefaultRoute = { ...saved, providerId: 'xd' };
+    await insertTask('t1', moved, { record: buildImDefaultRouteRecord('fp-old', saved) });
+    // 之后用户改了渠道默认的其它设置，解析出的目标仍是这个 Auto 的新位置。
+    mocks.resolveDefaults.mockResolvedValue({
+      ...moved,
+      permissionMode: 'auto',
+      fastMode: false,
+      fingerprint: 'fp-new',
+    });
+    await sync().syncUnderLock('t1');
+
+    expect(mocks.applyRoute).not.toHaveBeenCalled();
+    const record = parseImDefaultRouteRecord((await rowOf('t1')).imDefaultRoute);
+    expect(record?.manual).toBeFalsy();
+    expect(record).toMatchObject({ fp: 'fp-new', route: moved });
+  });
+
   it('moves a following task to a share and back even when provider and model are identical', async () => {
     await insertTask('t1', OLD);
     const shared = { ...OLD, agentDeviceId: 'share:owner' };

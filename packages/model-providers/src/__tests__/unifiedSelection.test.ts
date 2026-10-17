@@ -1233,6 +1233,16 @@ describe('unifiedModelEntries', () => {
     expect(entries[0].group).toBe('anthropic');
     expect(entries[0].sortOrder).toBe(3);
   });
+
+  it('模型组 Auto 按服务端给的名称显示，行身份不剥 auto/', () => {
+    const named = { name: 'Auto (研发组)', mode: 'chat' as const };
+    const gateway = view({ id: 'xd', authStrategy: 'gateway-key', models: { pi: [m('auto/grp_123', named)] } });
+    const pool = view({ id: 'org-pool', source: 'organization', models: { pi: [m('auto/grp_456', { ...named, name: 'Auto (销售组)' })] } });
+    const entries = unifiedModelEntries({ providers: [gateway, pool], isVisible: alwaysVisible });
+    expect(find(entries, 'xd', 'auto/grp_123')?.displayName).toBe('Auto (研发组)');
+    expect(find(entries, 'org-pool', 'auto/grp_456')?.displayName).toBe('Auto (销售组)');
+    expect(unifiedModelKeyId('auto/grp_123')).toBe('auto/grp_123');
+  });
 });
 
 // ── 原生底座排序 ──────────────────────────────────────────────────────────────
