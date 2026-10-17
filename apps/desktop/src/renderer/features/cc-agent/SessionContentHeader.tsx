@@ -23,7 +23,7 @@ import { TaskMigrationStatus } from './TaskMigrationStatus';
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Ellipsis, Pin } from 'lucide-react';
+import { Ellipsis, Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -40,14 +40,7 @@ import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import {
-  DropdownMenu,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
@@ -71,13 +64,14 @@ import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessi
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
-import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './sidebar/menuStyles';
+import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -143,10 +137,12 @@ function AgentDeviceIndicator({
 export function SessionContentHeaderRegistration({
   session,
   remoteSessionUnavailable = false,
+  remoteSyncing = false,
   readOnly = false,
 }: {
   session: Session;
   remoteSessionUnavailable?: boolean;
+  remoteSyncing?: boolean;
   readOnly?: boolean;
 }) {
   useRegisterContentHeader(
@@ -155,10 +151,11 @@ export function SessionContentHeaderRegistration({
         <SessionContentHeader
           session={session}
           remoteSessionUnavailable={remoteSessionUnavailable}
+          remoteSyncing={remoteSyncing}
           readOnly={readOnly}
         />
       ),
-      [readOnly, session, remoteSessionUnavailable],
+      [readOnly, session, remoteSessionUnavailable, remoteSyncing],
     ),
   );
   return null;
@@ -167,12 +164,14 @@ export function SessionContentHeaderRegistration({
 interface SessionContentHeaderProps {
   session: Session;
   remoteSessionUnavailable?: boolean;
+  remoteSyncing?: boolean;
   readOnly?: boolean;
 }
 
 export function SessionContentHeader({
   session: sessionProp,
   remoteSessionUnavailable = false,
+  remoteSyncing = false,
   readOnly = false,
 }: SessionContentHeaderProps) {
   const { t } = useTranslation();
@@ -634,6 +633,20 @@ export function SessionContentHeader({
         >
           {displayTitle}
         </span>
+      )}
+
+      {remoteSyncing && (
+        <Tip text={t('ccAgent.remoteSession.syncing')}>
+          <span
+            role="status"
+            aria-label={t('ccAgent.remoteSession.syncing')}
+            aria-busy="true"
+            className="mx-1 inline-flex shrink-0 text-[var(--text-tertiary)]"
+            style={WINDOW_NO_DRAG_STYLE}
+          >
+            <Spinner size={14} />
+          </span>
+        </Tip>
       )}
 
       {!isEditing && !!session.tags?.length && (

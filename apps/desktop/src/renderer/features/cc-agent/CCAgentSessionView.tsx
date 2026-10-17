@@ -2608,14 +2608,21 @@ function CCAgentSessionContent({
         });
     });
   }, [markCurrentUnreadFailedScheduleRun, remoteDeviceId, sessionId]);
-  // device-link 远程会话首屏:历史/元数据经隧道往返(网络),慢网下 historyLoaded=false
-  // 期间消息区空白。仅远程 + 延迟防闪后给「正在从被控端加载」提示(本机会话恒 false)。
-  // 冷缓存已经把最近一页画出来时(messages 非空)不再显示覆盖层 —— 它会盖住可读内容。
-  const showRemoteLoading = useRemoteSessionLoading(
+  const showRemoteConnectionNotice =
+    remoteSync.suspectStall ||
+    remoteConn === 'reconnecting' ||
+    remoteConn === 'host-offline' ||
+    remoteConn === 'degraded' ||
+    remoteLinkIssue?.kind === 'unstable';
+  const remoteLoading = useRemoteSessionLoading({
+    sessionId,
     remoteDeviceId,
     historyLoaded,
-    messages.length > 0,
-  );
+    contentSyncing: remoteSync.contentState === 'syncing',
+    hasMessages: messages.length > 0,
+    connectionNotice: showRemoteConnectionNotice,
+    hasTaskHeader: ownsRoute && !!session && !botChatIdentity,
+  });
   // 远程回执「真实展示」放行 + 本次访问的新鲜度对账。放行表示「视图挂载、真实可见
   // (viewVisible:rail 收起 / Orca 面板隐藏时为 false,挂载 ≠ 看得见)且历史已渲染」;
   // 回执真正发出还要求入队之后有一轮 sync 成功完成(sessionAttentionStore 的同步代数
@@ -4935,6 +4942,7 @@ function CCAgentSessionContent({
           <SessionContentHeaderRegistration
             session={session}
             remoteSessionUnavailable={remoteSessionUnavailable}
+            remoteSyncing={remoteLoading === 'syncing'}
             readOnly={readOnly}
           />
         )
@@ -5086,10 +5094,7 @@ function CCAgentSessionContent({
             onResync={remoteSync.resync}
             onFinalize={remoteSync.forceFinalize}
           />
-        ) : remoteConn === 'reconnecting' ||
-          remoteConn === 'host-offline' ||
-          remoteConn === 'degraded' ||
-          remoteLinkIssue?.kind === 'unstable' ? (
+        ) : showRemoteConnectionNotice ? (
           <RemoteSessionBanner
             status={
               remoteLinkIssue?.kind === 'unstable'
@@ -5106,7 +5111,8 @@ function CCAgentSessionContent({
         ) : null}
 
         {/* 远程会话首屏:等被控端经隧道返回历史/元数据期间的 loading(仅远程、延迟防闪)。 */}
-        {showRemoteLoading && remoteConn === 'connected' && <RemoteSessionLoading />}
+        {remoteLoading === 'loading' && <RemoteSessionLoading />}
+        {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
 
         {/* Full-area drop overlay.
           Keep the event-capture surface for the whole chat area, but leave the

@@ -11988,7 +11988,8 @@
       "degraded": "與遠端裝置的連線不穩定，正在自動重試…",
       "actionsUnavailable": "遠端裝置暫不可用，恢復連線後才能修改該任務",
       "resync": "重新同步",
-      "loading": "正在從遠端裝置載入任務…",
+      "loading": "正在讀取任務…",
+      "syncing": "正在同步任務…",
       "suspectStall": "本輪長時間無更新，可能已斷流",
       "finalizeStuck": "結束本輪",
       "issue": {

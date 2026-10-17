@@ -12041,7 +12041,8 @@
       "degraded": "Connection to the remote device is unstable — retrying automatically…",
       "actionsUnavailable": "The remote device is unavailable. Reconnect it before changing this session.",
       "resync": "Resync",
-      "loading": "Loading session from the remote device…",
+      "loading": "Loading task…",
+      "syncing": "Syncing task…",
       "suspectStall": "This turn hasn't updated in a while — the stream may have dropped",
       "finalizeStuck": "End turn",
       "issue": {

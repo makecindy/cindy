@@ -11988,7 +11988,8 @@
       "degraded": "与远程设备的连接不稳定，正在自动重试…",
       "actionsUnavailable": "远程设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
-      "loading": "正在从远程设备加载任务…",
+      "loading": "正在读取任务…",
+      "syncing": "正在同步任务…",
       "suspectStall": "本轮长时间无更新，可能已断流",
       "finalizeStuck": "结束本轮",
       "issue": {
