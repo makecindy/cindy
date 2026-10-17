@@ -5,6 +5,99 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  it.each(['reasoningEfforts', 'supported_reasoning_levels'])('sorts descending %s before saving and projecting', field => {
+    const descending = ['ultra', 'max', 'xhigh', 'high', 'medium', 'low', 'minimal'];
+    const ascending = [...descending].reverse();
+    const models = parseModelsListResponse({ data: [{ id: 'private-model', [field]:
+      [...descending, 'high'].map(value => field === 'reasoningEfforts' ? { value } : { effort: value }),
+      reasoningEffort: 'high',
+    }] })!;
+    expect(models[0].discoveredMetadata).toMatchObject({ efforts: ascending, defaultEffort: 'high' });
+    const saved = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels([], models)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
+        [agent]: { baseUrl: 'https://proxy.example/v1', models: saved },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({ efforts: ascending, defaultEffort: 'high' });
+    }
+  });
+
+  it.each(['reasoningEffort', 'default_reasoning_level'])('recovers only the declared scalar %s', field => {
+    const parsed = (fields: object) => parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+    const scalar = parsed({ [field]: 'high' });
+    expect(scalar[0].discoveredMetadata).toMatchObject({ efforts: ['high'], defaultEffort: 'high' });
+    const saved = mergeDiscoveredRuntimeModels([{ id: 'private-model', name: 'Private', discoveredMetadata: {} }], scalar);
+    expect(buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
+      codex: { baseUrl: 'https://proxy.example/v1', models: saved },
+    } }).models.codex?.[0]).toMatchObject({ efforts: ['high'], defaultEffort: 'high' });
+    for (const value of ['none', 'future', null, 123]) {
+      expect(parsed({ [field]: value })[0].discoveredMetadata?.efforts).toBeUndefined();
+    }
+    for (const listField of ['reasoningEfforts', 'supported_reasoning_levels', 'supported_efforts', 'efforts']) {
+      for (const value of [[], ['low'], ['future'], null, 'invalid']) {
+        const metadata = parsed({ [field]: 'high', [listField]: value })[0].discoveredMetadata;
+        expect(metadata?.efforts).toEqual(Array.isArray(value) && !value.includes('future') ? value : undefined);
+      }
+    }
+    for (const disabled of [{ supportsReasoningEffort: false }, { reasoning: false },
+      { model_info: { supports_reasoning: false } }, { supported_parameters: ['tools'] }]) {
+      expect(parsed({ [field]: 'high', ...disabled })[0].discoveredMetadata?.efforts).toEqual([]);
+    }
+  });
+
+  it('imports Grok option objects and Codex Sol/Luna levels without model-name heuristics', () => {
+    const levels = ['low', 'medium', 'high', 'xhigh', 'max'];
+    const models = parseModelsListResponse({ models: [
+      { id: 'grok-4.6', supportsReasoningEffort: true, reasoningEffort: 'high',
+        reasoningEfforts: levels.slice(0, 4).map(value => ({ value, label: value })) },
+      ...['gpt-6-sol', 'gpt-6-luna', 'unknown-model'].map(slug => ({ slug,
+        supported_reasoning_levels: levels.map(effort => ({ effort, description: effort })),
+        default_reasoning_level: 'medium',
+      })),
+    ] })!;
+    expect(models[0].discoveredMetadata).toMatchObject({ efforts: levels.slice(0, 4), defaultEffort: 'high' });
+    for (const model of models.slice(1)) {
+      expect(model.discoveredMetadata).toMatchObject({ efforts: levels, defaultEffort: 'medium' });
+    }
+    const refreshed = mergeDiscoveredRuntimeModels([
+      { id: 'gpt-6-luna', name: 'Luna', reasoning: true, reasoningEfforts: ['low'], reasoningDefaultEffort: 'low' },
+    ], models);
+    expect(refreshed.find(model => model.id === 'gpt-6-luna')).toMatchObject({
+      reasoningEfforts: ['low'], reasoningDefaultEffort: 'low',
+      discoveredMetadata: { efforts: levels, defaultEffort: 'medium' },
+    });
+    const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
+      codex: { baseUrl: 'https://proxy.example/v1', models: refreshed },
+    } });
+    expect(provider.models.codex?.find(model => model.id === 'gpt-6-sol'))
+      .toMatchObject({ efforts: levels, defaultEffort: 'medium' });
+    expect(provider.models.codex?.find(model => model.id === 'gpt-6-luna'))
+      .toMatchObject({ efforts: ['low'], defaultEffort: 'low' });
+  });
+
+  it.each(['reasoningEfforts', 'supported_reasoning_levels'])('handles empty, unknown and off levels in %s', field => {
+    const metadata = (value: unknown) => parseModelsListResponse({ data: [{ id: 'model', [field]: value }] })![0].discoveredMetadata;
+    expect(metadata([])?.efforts).toEqual([]);
+    expect(metadata(['none'])?.efforts).toEqual([]);
+    expect(metadata(['future', {}, null])?.efforts).toBeUndefined();
+    expect(metadata('high')?.efforts).toBeUndefined();
+    expect(metadata(['none', 'low', 'future', 'low', { value: 'high' }])?.efforts).toEqual(['low', 'high']);
+    const refreshed = parseModelsListResponse({ data: [{ id: 'model', [field]: ['future'] }] })!;
+    expect(mergeDiscoveredRuntimeModels([{ id: 'model', name: 'Model', discoveredMetadata: { efforts: ['high'] } }], refreshed)[0]
+      .discoveredMetadata?.efforts).toEqual(['high']);
+  });
+
+  it('honors explicit disable, null defaults, canonical fields and option defaults', () => {
+    const metadata = (fields: object) => parseModelsListResponse({ data: [{ id: 'model', ...fields }] })![0].discoveredMetadata;
+    expect(metadata({ supportsReasoningEffort: false, reasoningEfforts: ['high'] })?.efforts).toEqual([]);
+    expect(metadata({ supported_reasoning_levels: ['none'], default_reasoning_level: 'none' }))
+      .toMatchObject({ efforts: [], defaultEffort: null });
+    expect(metadata({ reasoning: { supportedEfforts: [], defaultEffort: null }, reasoningEfforts: ['high'], reasoningEffort: 'high' }))
+      .toMatchObject({ efforts: [], defaultEffort: null });
+    expect(metadata({ reasoningEfforts: [{ value: 'high', default: true }] })?.defaultEffort).toBe('high');
+    expect(metadata({ default_reasoning_level: null, reasoningEffort: 'high' })?.defaultEffort).toBeNull();
+  });
+
   it.each([
     { contextWindow: 128000, contextWindowMax: 64000 },
     { context_window: 128000, contextWindowMax: 64000 },
@@ -268,16 +361,17 @@ describe('Sub2API Grok model discovery', () => {
 
   it('does not invent levels from the support flag and respects explicit disabling', () => {
     const models = parseModelsListResponse({ data: [
-      { id: 'unknown', supportsReasoningEffort: true, reasoningEffort: 'high' },
+      { id: 'unknown', supportsReasoningEffort: true },
       { id: 'disabled', supportsReasoningEffort: false, reasoningEfforts: [{ value: 'high' }] },
       { id: 'empty', supportsReasoningEffort: true, reasoningEfforts: [] },
       { id: 'invalid', reasoningEfforts: [{ label: 'High' }] },
       { id: 'strings', reasoningEfforts: ['low', 'high'], reasoningEffort: null },
       { id: 'canonical', reasoning: { supportedEfforts: ['low'], defaultEffort: null },
         reasoningEfforts: [{ value: 'high' }], reasoningEffort: 'high' },
+      { id: 'scalar', supportsReasoningEffort: true, reasoningEffort: 'high' },
     ] })!;
     expect(models.map(model => model.discoveredMetadata?.efforts))
-      .toEqual([undefined, [], [], undefined, ['low', 'high'], ['low']]);
+      .toEqual([undefined, [], [], undefined, ['low', 'high'], ['low'], ['high']]);
     expect(models[4].discoveredMetadata?.defaultEffort).toBeNull();
     expect(models[5].discoveredMetadata?.defaultEffort).toBeNull();
   });
