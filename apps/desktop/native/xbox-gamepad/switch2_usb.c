@@ -357,6 +357,10 @@ static bool send_init(void) {
   };
   uint8_t reply[64];
   for (size_t i = 0; i < sizeof(packets) / sizeof(packets[0]); i++) {
+    /* Shutdown waits on pthread_join from the helper's main thread; bail out
+       between init packets so a flaky device cannot stretch that wait across
+       the whole 10x200ms handshake. */
+    if (g_stop) return false;
     if (send_bulk(packets[i], (UInt32)sizes[i]) < 0) return false;
     (void)recv_bulk(reply, sizeof(reply), 200);
   }
@@ -376,7 +380,9 @@ static void *poll_thread(void *arg) {
       if (!open_device() || !send_init()) {
         close_iface();
         mark_absent();
-        usleep(500 * 1000);
+        /* Sleep in chunks so shutdown's pthread_join observes g_stop within
+           ~50ms instead of waiting out the full retry delay. */
+        for (int i = 0; i < 10 && !g_stop; i++) usleep(50 * 1000);
         continue;
       }
       (void)open_hid();
