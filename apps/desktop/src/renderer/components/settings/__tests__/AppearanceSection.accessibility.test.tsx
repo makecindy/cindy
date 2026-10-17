@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AppearanceSection } from '../AppearanceSection';
 
+const themeState = vi.hoisted(() => ({ familyId: 'cindy' }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -15,9 +17,8 @@ vi.mock('@/hooks/useTheme', () => ({
   useTheme: () => ({
     theme: 'system',
     setTheme: vi.fn(),
-    familyId: 'cindy',
+    familyId: themeState.familyId,
     setFamily: vi.fn(),
-    fallbackFromType: null,
   }),
 }));
 
@@ -157,5 +158,40 @@ describe('AppearanceSection accessibility', () => {
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.codeSize.label' }),
     ).toBeTruthy();
+  });
+
+  it('locks the appearance mode to the only variant of a single-variant theme', () => {
+    themeState.familyId = 'eclipse';
+    try {
+      render(<AppearanceSection />);
+
+      const modes = within(
+        screen.getByRole('radiogroup', { name: 'settings.appearance.modeLabel' }),
+      ).getAllByRole('radio');
+      expect(modes.map((mode) => (mode as HTMLButtonElement).disabled)).toEqual([true, true, true]);
+      expect(modes.map((mode) => mode.getAttribute('aria-checked'))).toEqual([
+        'false',
+        'true',
+        'false',
+      ]);
+      expect(screen.getByText('settings.appearance.singleVariant.darkNotice')).toBeTruthy();
+    } finally {
+      themeState.familyId = 'cindy';
+    }
+  });
+
+  it('keeps the saved appearance mode selectable for two-variant themes', () => {
+    render(<AppearanceSection />);
+
+    const modes = within(
+      screen.getByRole('radiogroup', { name: 'settings.appearance.modeLabel' }),
+    ).getAllByRole('radio');
+    expect(modes.some((mode) => (mode as HTMLButtonElement).disabled)).toBe(false);
+    expect(modes.map((mode) => mode.getAttribute('aria-checked'))).toEqual([
+      'false',
+      'false',
+      'true',
+    ]);
+    expect(screen.queryByText(/settings\.appearance\.singleVariant\..*Notice/)).toBeNull();
   });
 });

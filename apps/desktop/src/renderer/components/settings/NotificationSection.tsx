@@ -27,7 +27,7 @@ export function NotificationSection() {
       {/* 桌面通知 — 沿用原有卡片样式 */}
       <div
         className={cn(
-          'flex items-center justify-between gap-3 rounded-xl p-5',
+          'flex items-center justify-between gap-3 rounded-xl px-4 py-4',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
         )}

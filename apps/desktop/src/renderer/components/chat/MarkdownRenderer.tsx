@@ -1684,7 +1684,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
   // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
   // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
-  // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
+  // 用户开关(Settings → 外观 → 回复动效,默认开)与 reduced-motion 取 AND:
   // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
   const reducedMotion = useReducedMotion();
   const streamFadeEnabled = useStreamFadeEnabled();

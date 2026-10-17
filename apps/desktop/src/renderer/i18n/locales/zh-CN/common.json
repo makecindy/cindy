@@ -1264,6 +1264,7 @@
     "tabs": {
       "storage": "存储空间",
       "general": "通用",
+      "appearance": "外观",
       "billing": "用量和计费",
       "usage": "用量历史",
       "personalization": "个性化",
@@ -1590,6 +1591,7 @@
     "appearance": {
       "title": "外观",
       "modeLabel": "显示模式",
+      "sidebarAndPanels": "侧边栏与面板",
       "themeLabel": "主题",
       "themeAriaLabel": "主题选择",
       "localBadge": "(本地)",
@@ -1616,6 +1618,7 @@
       },
       "font": {
         "reset": "恢复默认",
+        "title": "字体",
         "defaultPreset": "默认",
         "presets": "预设",
         "custom": "自定义",
@@ -1654,8 +1657,12 @@
           "ui": "中文字体预览，清晰锐利 ABC xyz · a/b/c/d · a,b · 0123456789 !?@&"
         }
       },
-      "missingLightNotice": "{{name}} 主题没有提供浅色方案，已显示其深色方案。",
-      "missingDarkNotice": "{{name}} 主题没有提供深色方案，已显示其浅色方案。",
+      "singleVariant": {
+        "lightOnly": "仅浅色",
+        "darkOnly": "仅深色",
+        "lightNotice": "{{name}} 只有浅色方案，显示模式固定为浅色；换成其他主题后恢复你的选择。",
+        "darkNotice": "{{name}} 只有深色方案，显示模式固定为深色；换成其他主题后恢复你的选择。"
+      },
       "theme": {
         "light": "浅色",
         "dark": "深色",
@@ -1748,7 +1755,7 @@
         "reset": "恢复默认布局",
         "resetSuccess": "已恢复默认面板布局",
         "resetFailed": "未能恢复面板布局",
-        "saved": "面板位置已保存；可在“设置 → 通用”的“外观”区域恢复默认布局",
+        "saved": "面板位置已保存；可在“设置 → 外观”恢复默认布局",
         "saveFailed": "未能保存面板位置"
       }
     },
@@ -4554,7 +4561,7 @@
     "agentResource": {
       "saveFailed": "保存失败，请重试。",
       "title": "Agent 资源占用",
-      "description": "限制 Agent 命令行任务的系统资源占用，避免并行测试、构建把机器拖卡。默认全速（不干预）。并发上限即刻生效；优先级降档对已在跑的 Agent 进程约 15 秒内生效；把优先级调回正常和工具链限核只对新启动的 Agent 进程生效。仅作用于本机 Agent；远端（SSH）机器上的 Agent 不受本设置约束。",
+      "description": "限制 Agent 命令行任务占用的系统资源，避免并行测试或构建拖慢电脑。默认全速，只作用于本机 Agent，不影响远端（SSH）机器。",
       "preset": "档位",
       "presets": {
         "full": "全速",
@@ -4570,18 +4577,19 @@
       "maxConcurrent": "并发命令上限",
       "maxConcurrentHint": "Claude Code 引擎所有命令的并发上限，超出的排队等待；0 表示不限。Codex 命令在自身沙箱内执行、不经此闸门，由优先级与限核层覆盖。",
       "priority": "进程优先级",
-      "priorityHint": "调低后 Agent 只用空闲资源，前台应用优先。从低档调回后只对新启动的 Agent 进程生效。",
+      "priorityHint": "调低后 Agent 只用空闲资源，前台应用优先；约 15 秒内对运行中的 Agent 生效，调回正常只对新启动的 Agent 生效。",
       "priorityOptions": {
         "normal": "正常",
         "low": "低",
         "lowest": "最低"
       },
       "capThreads": "限制工具链并行度",
-      "capThreadsHint": "注入 VITEST_MAX_FORKS、MAKEFLAGS 等环境变量，防止单条测试或构建命令占满全部 CPU 核心；你自己设置过的同名变量不会被覆盖。"
+      "capThreadsHint": "注入 VITEST_MAX_FORKS、MAKEFLAGS 等环境变量，防止单条测试或构建命令占满全部 CPU 核心；只对新启动的 Agent 生效，你自己设置过的同名变量不会被覆盖。"
     },
     "piPackages": {
       "title": "Pi 扩展",
       "entryTitle": "Pi 扩展设置",
+      "manageLabel": "管理扩展",
       "entryDescription": "安装、启用或卸载 Cindy 的 Pi 扩展",
       "backToGeneral": "返回通用",
       "description": "扩展只安装并运行在这台设备的 Cindy 中，不会传到手机或其他设备。无论任务从哪里发起，只要由这台设备的普通 Pi 执行都会生效；Review 不加载。",
@@ -9063,6 +9071,8 @@
     "globalSettings": {
       "restoreHint": "恢复默认后将跟随客户端默认模型设置，单个伙伴的自定义模型保持不变。",
       "restoreFailed": "恢复默认失败，请重试。",
+      "defaultModel": "默认模型",
+      "defaultModelHint": "伙伴默认使用的模型，单个伙伴可以在自己的设置里另选。",
       "title": "伙伴",
       "description": "和伙伴有关的通用设置。单个伙伴的设置在{{pronoun}}自己的页面里。",
       "rosterNote": "预置阵容会随版本更新。"

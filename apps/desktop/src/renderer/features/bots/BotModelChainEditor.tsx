@@ -1,8 +1,16 @@
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { DefaultOverrideControls } from '@/components/settings/DefaultOverrideControls';
+import {
+  SETTINGS_ROW_CLASS,
+  SETTINGS_ROW_DIVIDER_CLASS,
+  SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
+} from '@/components/settings/settingsRowClasses';
+import { cn } from '@/lib/utils';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
@@ -43,6 +51,8 @@ export function BotModelChainEditor({
   onRestoreDefault,
   onNavigateToProviders,
   allowFallbacks = true,
+  layout = 'inline',
+  settingsRows,
 }: {
   value: BotModelRoute[];
   onChange: (next: BotModelRoute[]) => void;
@@ -55,6 +65,13 @@ export function BotModelChainEditor({
   onRestoreDefault?: () => void;
   onNavigateToProviders?: () => void;
   allowFallbacks?: boolean;
+  /**
+   * `settings`:设置页卡片行排法——首选模型一行(左名称说明、右选择器与恢复默认),
+   * 备用模型一行(左名称说明、右添加按钮),已有备用逐条列在其下。需传 `settingsRows`。
+   * 默认 `inline` 保持伙伴页等既有排法不变。
+   */
+  layout?: 'inline' | 'settings';
+  settingsRows?: { primaryLabel: string; primaryHint: string };
 }) {
   const { t } = useBotTranslation();
   const { availableVendors, loaded } = useAvailableAgents(deviceId);
@@ -116,8 +133,8 @@ export function BotModelChainEditor({
     else setPendingRoute(route);
   };
 
-  const picker = (route: BotModelRoute, index: number) => (
-    <div className="min-w-0 flex-1">
+  const picker = (route: BotModelRoute, index: number, wrapperClassName = 'min-w-0 flex-1') => (
+    <div className={wrapperClassName}>
       <ModelSelector
         disabled={disabled || waitingForLocalRoster}
         deviceId={deviceId}
@@ -167,16 +184,138 @@ export function BotModelChainEditor({
         : null}
     </div>
   );
+  const fallbackRows = routes.slice(1).map((route, fallbackIndex) => {
+    const index = fallbackIndex + 1;
+    return (
+      <div key={index} className="flex min-w-0 items-center gap-2">
+        <span className="w-4 shrink-0 text-11">{index}</span>
+        {picker(route, index)}
+        <div className="flex shrink-0 gap-1">
+          <button
+            type="button"
+            disabled={disabled || index === 1}
+            onClick={() => move(index, -1)}
+            aria-label={t('bots.modelChain.moveUp')}
+            className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
+          >
+            <ArrowUp size={14} />
+          </button>
+          <button
+            type="button"
+            disabled={disabled || index === routes.length - 1}
+            onClick={() => move(index, 1)}
+            aria-label={t('bots.modelChain.moveDown')}
+            className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
+          >
+            <ArrowDown size={14} />
+          </button>
+          {routes.length > 1 ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(routes.filter((_, at) => at !== index))}
+              aria-label={t('bots.modelChain.remove')}
+              className="rounded-lg p-1.5 hover:bg-[var(--danger-bg-soft)] hover:text-[var(--text-danger)]"
+            >
+              <Trash2 size={14} />
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  });
+  const pendingRow: ReactNode =
+    pendingRoute && routes.length < BOT_MODEL_CHAIN_MAX ? (
+      <div className="flex min-w-0 items-center gap-2">
+        {picker(pendingRoute, routes.length)}
+        <Button
+          variant="secondary"
+          tone="quiet"
+          size="md"
+          compact
+          type="button"
+          disabled={disabled}
+          onClick={() => setPendingRoute(null)}
+        >
+          {t('bots.cancel')}
+        </Button>
+      </div>
+    ) : null;
+  const addDisabled =
+    disabled ||
+    pendingRoute !== null ||
+    routes.length >= BOT_MODEL_CHAIN_MAX ||
+    visibleVendors.length === 0;
+  const primaryRoute =
+    routes[0] ?? { harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false };
+
+  if (layout === 'settings' && settingsRows) {
+    const listItems = [...fallbackRows, ...(pendingRow ? [pendingRow] : [])];
+    return (
+      <div className="min-w-0" data-testid="bot-model-chain-editor">
+        <div className={cn(SETTINGS_ROW_CLASS, 'cindy-segmented-row')}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {settingsRows.primaryLabel}
+            </p>
+            <p className={SETTINGS_ROW_HINT_CLASS}>{settingsRows.primaryHint}</p>
+          </div>
+          <div className="flex min-w-0 shrink-0 items-center gap-2">
+            {onRestoreDefault ? (
+              <DefaultOverrideControls
+                isCustomized
+                disabled={disabled}
+                onReset={() => {
+                  if (!disabled) onRestoreDefault();
+                }}
+              />
+            ) : null}
+            {picker(primaryRoute, 0, 'min-w-0')}
+          </div>
+        </div>
+        {allowFallbacks ? (
+          <>
+            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+            <div className={SETTINGS_ROW_CLASS}>
+              <div className="flex min-w-0 flex-col gap-1">
+                <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+                  {t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
+                </p>
+                <p className={SETTINGS_ROW_HINT_CLASS}>{t('bots.modelChain.description')}</p>
+              </div>
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                type="button"
+                className="shrink-0"
+                disabled={addDisabled}
+                onClick={add}
+              >
+                <Plus size={14} />
+                {t('bots.modelChain.add')}
+              </Button>
+            </div>
+            {listItems.length > 0 ? (
+              <div className="space-y-2 px-4 pb-4 text-12 text-[var(--text-tertiary)]">
+                {listItems.map((item, at) => (
+                  <Fragment key={at}>{item}</Fragment>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="min-w-0" data-testid="bot-model-chain-editor">
       <div className="flex min-w-0 items-center gap-3">
         {label ? (
           <span className="shrink-0 text-12 text-[var(--text-secondary)]">{label}</span>
         ) : null}
-        {picker(
-          routes[0] ?? { harness: 'pi', model: '', providerId: null, effort: '', fastMode: false },
-          0,
-        )}
+        {picker(primaryRoute, 0)}
       </div>
       {allowFallbacks && <details
         className="mt-1 text-12 text-[var(--text-tertiary)]"
@@ -187,74 +326,15 @@ export function BotModelChainEditor({
         </summary>
         {expanded ? (
           <div className="space-y-2 pt-2">
-            {routes.slice(1).map((route, fallbackIndex) => {
-              const index = fallbackIndex + 1;
-              return (
-                <div key={index} className="flex min-w-0 items-center gap-2">
-                  <span className="w-4 shrink-0 text-11">{index}</span>
-                  {picker(route, index)}
-                  <div className="flex shrink-0 gap-1">
-                    <button
-                      type="button"
-                      disabled={disabled || index === 1}
-                      onClick={() => move(index, -1)}
-                      aria-label={t('bots.modelChain.moveUp')}
-                      className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
-                    >
-                      <ArrowUp size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={disabled || index === routes.length - 1}
-                      onClick={() => move(index, 1)}
-                      aria-label={t('bots.modelChain.moveDown')}
-                      className="rounded-lg p-1.5 hover:bg-[var(--surface-hover)] disabled:opacity-30"
-                    >
-                      <ArrowDown size={14} />
-                    </button>
-                    {routes.length > 1 ? (
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => onChange(routes.filter((_, at) => at !== index))}
-                        aria-label={t('bots.modelChain.remove')}
-                        className="rounded-lg p-1.5 hover:bg-[var(--danger-bg-soft)] hover:text-[var(--text-danger)]"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-            {pendingRoute && routes.length < BOT_MODEL_CHAIN_MAX ? (
-              <div className="flex min-w-0 items-center gap-2">
-                {picker(pendingRoute, routes.length)}
-                <Button
-                  variant="secondary"
-                  tone="quiet"
-                  size="md"
-                  compact
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => setPendingRoute(null)}
-                >
-                  {t('bots.cancel')}
-                </Button>
-              </div>
-            ) : null}
+            {fallbackRows}
+            {pendingRow}
             <Button
               variant="secondary"
               size="md"
               tone="quiet"
               compact
               type="button"
-              disabled={
-                disabled ||
-                pendingRoute !== null ||
-                routes.length >= BOT_MODEL_CHAIN_MAX ||
-                visibleVendors.length === 0
-              }
+              disabled={addDisabled}
               onClick={add}
             >
               <Plus size={14} />

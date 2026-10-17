@@ -44,7 +44,7 @@ export function GitSafetySection() {
 
       <div
         className={cn(
-          'flex flex-col gap-3 rounded-xl p-5',
+          'flex flex-col gap-3 rounded-xl px-4 py-4',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
         )}

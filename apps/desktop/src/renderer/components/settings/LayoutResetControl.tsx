@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import { cn } from '@/lib/utils';
+import { SETTINGS_ROW_CLASS } from './settingsRowClasses';
 
 /** 正式版布局恢复入口：复用 main 的原子 reset + broadcast，不另存 renderer 状态。 */
 export function LayoutResetControl() {
@@ -29,13 +29,7 @@ export function LayoutResetControl() {
   };
 
   return (
-    <div
-      className={cn(
-        'flex items-center justify-between gap-3 rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
-    >
+    <div className={SETTINGS_ROW_CLASS}>
       <div className="flex min-w-0 flex-col gap-1">
         <p
           className="text-13 font-medium text-[var(--settings-section-sublabel)]"

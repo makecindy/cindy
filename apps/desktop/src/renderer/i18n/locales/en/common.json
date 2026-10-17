@@ -1293,6 +1293,7 @@
     "tabs": {
       "storage": "Storage",
       "general": "General",
+      "appearance": "Appearance",
       "billing": "Usage and billing",
       "usage": "Usage history",
       "personalization": "Personalization",
@@ -1619,6 +1620,7 @@
     "appearance": {
       "title": "Appearance",
       "modeLabel": "Appearance Mode",
+      "sidebarAndPanels": "Sidebar & panels",
       "themeLabel": "Theme",
       "themeAriaLabel": "Theme selection",
       "localBadge": "(Local)",
@@ -1645,6 +1647,7 @@
       },
       "font": {
         "reset": "Reset to default",
+        "title": "Fonts",
         "defaultPreset": "Default",
         "presets": "Presets",
         "custom": "Custom",
@@ -1683,8 +1686,12 @@
           "ui": "The quick brown fox jumps over the lazy dog ABC xyz · a/b/c/d · a,b · 0123456789 !?@&"
         }
       },
-      "missingLightNotice": "{{name}} has no light variant; showing its dark variant instead.",
-      "missingDarkNotice": "{{name}} has no dark variant; showing its light variant instead.",
+      "singleVariant": {
+        "lightOnly": "Light only",
+        "darkOnly": "Dark only",
+        "lightNotice": "{{name}} only has a light variant, so the appearance mode stays light. Your choice comes back when you switch themes.",
+        "darkNotice": "{{name}} only has a dark variant, so the appearance mode stays dark. Your choice comes back when you switch themes."
+      },
       "theme": {
         "light": "Light",
         "dark": "Dark",
@@ -1777,7 +1784,7 @@
         "reset": "Restore default layout",
         "resetSuccess": "Default panel layout restored",
         "resetFailed": "Could not restore the panel layout.",
-        "saved": "Panel position saved. Restore the default layout in the Appearance section under Settings → General.",
+        "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
         "saveFailed": "Could not save panel positions."
       }
     },
@@ -4585,7 +4592,7 @@
     "agentResource": {
       "saveFailed": "Failed to save. Try again.",
       "title": "Agent Resource Usage",
-      "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit applies immediately; priority lowering reaches running Agent processes within about 15 seconds; raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes. Applies to local Agents only; Agents on remote (SSH) machines are not governed by these settings.",
+      "description": "Limit the system resources Agent command-line work can use, so parallel tests or builds don't slow down your computer. Defaults to full speed and applies only to local Agents, not remote (SSH) machines.",
       "preset": "Profile",
       "presets": {
         "full": "Full Speed",
@@ -4601,18 +4608,19 @@
       "maxConcurrent": "Concurrent Command Limit",
       "maxConcurrentHint": "Maximum number of commands the Claude Code engine may run at once; extra commands wait in a queue. 0 means unlimited. Codex commands run inside their own sandbox without a per-command hook and are covered by the priority and thread-cap layers instead.",
       "priority": "Process Priority",
-      "priorityHint": "Lower it so Agents only use idle capacity and foreground apps stay responsive. Raising it back only applies to newly started Agent processes.",
+      "priorityHint": "Lower it so Agents only use idle capacity and foreground apps stay responsive. Lowering reaches running Agents within about 15 seconds; raising it back to Normal only applies to newly started Agents.",
       "priorityOptions": {
         "normal": "Normal",
         "low": "Low",
         "lowest": "Lowest"
       },
       "capThreads": "Cap Toolchain Parallelism",
-      "capThreadsHint": "Injects environment variables such as VITEST_MAX_FORKS and MAKEFLAGS so a single test or build command can't take every CPU core. Variables you set yourself are never overridden."
+      "capThreadsHint": "Injects environment variables such as VITEST_MAX_FORKS and MAKEFLAGS so a single test or build command can't take every CPU core. Applies only to newly started Agents; variables you set yourself are never overridden."
     },
     "piPackages": {
       "title": "Pi extensions",
       "entryTitle": "Pi extension settings",
+      "manageLabel": "Manage extensions",
       "entryDescription": "Install, enable, or uninstall extensions for Cindy's Pi",
       "backToGeneral": "Back to General",
       "description": "Extensions stay in Cindy on this device. Any ordinary Pi task executed here can use them, even when started from a phone or another connected client. Review does not load them.",
@@ -9102,6 +9110,8 @@
     "globalSettings": {
       "restoreHint": "Restoring defaults follows the client’s default model settings. Individual teammates’ custom models stay unchanged.",
       "restoreFailed": "Could not restore defaults. Try again.",
+      "defaultModel": "Default model",
+      "defaultModelHint": "Teammates use this model by default. Each teammate can pick a different one in their own settings.",
       "title": "Teammates",
       "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
       "rosterNote": "The shipped roster grows with each release."

@@ -1,5 +1,5 @@
 /**
- * StreamFadeSection — Settings → 个性化 下的「流式动效」开关。
+ * StreamFadeSection — Settings → 外观 下的「回复动效」开关。
  *
  * 控制流式输出时正文的淡入浮现动效(词段 / inline code 原子 + 列表圆点同帧
  * 浮现,见 rehypeStreamWordFade):开(默认)= 新内容淡入;关 = 文字直接显示。
@@ -23,13 +23,13 @@ export function StreamFadeSection() {
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+      <h3 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
         {t('settings.streamFade.title')}
-      </h2>
+      </h3>
 
       <div
         className={cn(
-          'flex items-center justify-between gap-3 rounded-xl px-5 py-4',
+          'flex items-center justify-between gap-3 rounded-xl px-4 py-4',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
         )}

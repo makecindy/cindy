@@ -17,6 +17,7 @@ export type HelpRole = 'user' | 'assistant';
  *  dependency. main validates LLM-emitted tab ids against this same set. */
 export type HelpTabId =
   | 'general'
+  | 'appearance'
   | 'personalization'
   | 'api-keys'
   | 'providers'

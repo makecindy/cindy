@@ -146,7 +146,7 @@ export function FontFamilyPicker({
               'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
             )}
           >
-            <span className="truncate text-13 font-medium text-[var(--settings-input-text)]">
+            <span className="truncate text-13 text-[var(--settings-input-text)]">
               {selectedLabel}
             </span>
             <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
@@ -210,7 +210,7 @@ export function FontFamilyPicker({
                       )}
                     >
                       <span
-                        className="truncate text-13 font-medium text-[var(--settings-input-text)]"
+                        className="truncate text-13 text-[var(--settings-input-text)]"
                         style={{ fontFamily: buildPreviewFamily(option.family) }}
                       >
                         {option.label}
