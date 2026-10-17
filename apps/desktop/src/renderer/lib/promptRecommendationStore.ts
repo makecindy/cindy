@@ -16,7 +16,12 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
  *
  * 推荐只活在当前 renderer 生命周期，不落盘：全局监听记录本次运行期间真实发生的
  * running→stopped + lastTurnEndedAt，ChatInput 只在用户打开对应 session 时调用模型。
- * 这样后台完成不会漏，历史旧 session 也不会因一次普通打开凭空触发付费预测。
+ * 这样后台完成不会漏。
+ *
+ * 打开历史任务时（#6184）由 ChatInput 调 ensureHistoricalPromptRecommendation 补一个
+ * 候选：是否真正生成、是否命中缓存由 main 按「完成点」（sessionId + lastTurnEndedAt）
+ * 的持久缓存决定——命中即复用，未命中才补一次模型调用；同一完成点在本生命周期内
+ * 不会重复请求（historicalAttemptedRevisions）。
  */
 export interface PromptRecommendationSnapshot {
   revision: number;
@@ -34,6 +39,8 @@ const sawRunningSessionIds = new Set<string>();
 const runStartedAtBySession = new Map<string, number>();
 const pendingCompletionRevisions = new Map<string, number>();
 const handledCompletionRevisions = new Map<string, number>();
+/** 已尝试过历史补生成的完成点（同进程内去重；dismiss / 消费后也不再自动重现）。 */
+const historicalAttemptedRevisions = new Map<string, number>();
 const settleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let nextRequestSeq = 0;
 let initialized = false;
@@ -65,6 +72,7 @@ function clearRuntimeState(): void {
   runStartedAtBySession.clear();
   pendingCompletionRevisions.clear();
   handledCompletionRevisions.clear();
+  historicalAttemptedRevisions.clear();
   settleTimers.clear();
   for (const sessionId of changedSessionIds) emitSession(sessionId);
 }
@@ -76,6 +84,7 @@ function handlePreferenceChanged(enabled: boolean): void {
     pendingCompletionRevisions.clear();
     sawRunningSessionIds.clear();
     runStartedAtBySession.clear();
+    historicalAttemptedRevisions.clear();
     for (const timer of settleTimers.values()) clearTimeout(timer);
     settleTimers.clear();
     for (const sessionId of changedSessionIds) emitSession(sessionId);
@@ -98,6 +107,22 @@ function scheduleCompletionSettle(sessionId: string): void {
   settleTimers.set(sessionId, timer);
 }
 
+/**
+ * live 完成与历史补生成共用的完成资格：失败 / 用户停止 / side-task / 后台未收尾
+ * 的轮次都不生成（#6184 review P1）。两处共用同一判据，避免逻辑漂移。
+ */
+function isPromptRecommendationCompletionEligible(
+  status: NonNullable<ReturnType<typeof makerChatStore.getPromptRecommendationCompletionStatus>>,
+): boolean {
+  return (
+    !status.turnStoppedByUser &&
+    !status.hasTerminalError &&
+    !status.sideTask &&
+    !status.hasBackgroundAgentWork &&
+    !status.hasAutoDrainingQueue
+  );
+}
+
 function settleCompletion(sessionId: string): void {
   if (runningSessionIds.has(sessionId)) return;
   const revision = pendingCompletionRevisions.get(sessionId);
@@ -114,11 +139,7 @@ function settleCompletion(sessionId: string): void {
   const eligible =
     getPromptRecommendationPreference() &&
     status != null &&
-    !status.turnStoppedByUser &&
-    !status.hasTerminalError &&
-    !status.sideTask &&
-    !status.hasBackgroundAgentWork &&
-    !status.hasAutoDrainingQueue;
+    isPromptRecommendationCompletionEligible(status);
 
   if (!eligible) {
     sawRunningSessionIds.delete(sessionId);
@@ -127,6 +148,45 @@ function settleCompletion(sessionId: string): void {
     return;
   }
 
+  // 历史候选（ensureHistoricalPromptRecommendation）可能已建好同完成点条目并开始
+  // 预测：保留它，避免把 predicting / ready 打回 candidate 而触发第二次请求（#6184）。
+  const existing = entries.get(sessionId);
+  if (!existing || existing.revision !== revision) {
+    entries.set(sessionId, {
+      revision,
+      phase: 'candidate',
+      prompt: null,
+      requestSeq: 0,
+    });
+    emitSession(sessionId);
+  }
+}
+
+/**
+ * 打开历史任务（或重启后首次打开）时补一次候选（#6184）。
+ *
+ * 是否真正生成由 main 按完成点持久缓存决定：命中直接复用、未命中补一次模型调用。
+ * 本生命周期内同一完成点只尝试一次；新完成点（revision 变化）、开关重新开启后解除。
+ */
+export function ensureHistoricalPromptRecommendation(
+  sessionId: string | undefined,
+  revision: number | null | undefined,
+): void {
+  if (!sessionId || revision == null) return;
+  if (!Number.isFinite(revision) || revision <= 0) return;
+  if (!getPromptRecommendationPreference()) return;
+  // 有运行态时复用完成资格：失败 / 用户停止 / 后台未收尾的轮次不补生成
+  // （#6184 review P1）。重启后的历史会话没有运行态信息，按允许处理。
+  const status = makerChatStore.getPromptRecommendationCompletionStatus(sessionId);
+  if (status != null && !isPromptRecommendationCompletionEligible(status)) return;
+  if (runningSessionIds.has(sessionId)) return;
+  if (entries.has(sessionId)) return;
+  if (historicalAttemptedRevisions.get(sessionId) === revision) return;
+  historicalAttemptedRevisions.set(sessionId, revision);
+  // 同一完成点的 live 完成通知可能与本次历史补生成交错到达：先登记已处理的完成点，
+  // 让 noteTurnEnded / settleCompletion 不删掉这份在途条目（新轮开始时会被清除）。
+  const handled = handledCompletionRevisions.get(sessionId) ?? 0;
+  if (revision > handled) handledCompletionRevisions.set(sessionId, revision);
   entries.set(sessionId, {
     revision,
     phase: 'candidate',
@@ -343,6 +403,11 @@ export function resolvePromptRecommendationPrediction(
 export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
   const current = entries.get(sessionId);
   if (revision != null && current?.revision !== revision) return;
+  // 用户消费 / 显式关闭后，该完成点不再随历史打开自动重现（#6184）；
+  // 开关关闭时（偏好已是 false）不记，重新开启后才能再请求。
+  if (current && getPromptRecommendationPreference()) {
+    historicalAttemptedRevisions.set(sessionId, current.revision);
+  }
   // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
   // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
   if (!runningSessionIds.has(sessionId)) {
@@ -361,6 +426,7 @@ export function clearPromptRecommendationSession(sessionId: string): void {
   runStartedAtBySession.delete(sessionId);
   pendingCompletionRevisions.delete(sessionId);
   handledCompletionRevisions.delete(sessionId);
+  historicalAttemptedRevisions.delete(sessionId);
   deleteEntry(sessionId);
 }
 

@@ -41,6 +41,7 @@ import {
   __testing,
   beginPromptRecommendationPrediction,
   dismissPromptRecommendation,
+  ensureHistoricalPromptRecommendation,
   resolvePromptRecommendationPrediction,
 } from '../promptRecommendationStore';
 
@@ -263,5 +264,110 @@ describe('promptRecommendationStore', () => {
     resolvePromptRecommendationPrediction('session-a', 501, request!, '不应复活');
 
     expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+});
+
+describe('ensureHistoricalPromptRecommendation（打开历史任务补一次，#6184）', () => {
+  it('为历史完成点创建候选，并与预测流程共用同一状态机', () => {
+    ensureHistoricalPromptRecommendation('old-session', 10);
+    expect(__testing.getSessionSnapshot('old-session')).toEqual({
+      revision: 10,
+      phase: 'candidate',
+      prompt: null,
+      requestSeq: 0,
+    });
+
+    const seq = beginPromptRecommendationPrediction('old-session', 10);
+    expect(seq).not.toBeNull();
+    resolvePromptRecommendationPrediction('old-session', 10, seq!, '继续上次的重构');
+    expect(__testing.getSessionSnapshot('old-session')?.prompt).toBe('继续上次的重构');
+  });
+
+  it('同一完成点只尝试一次；新完成点允许再请求', () => {
+    ensureHistoricalPromptRecommendation('old-session', 10);
+    const seq = beginPromptRecommendationPrediction('old-session', 10)!;
+    resolvePromptRecommendationPrediction('old-session', 10, seq, null);
+    expect(__testing.getSessionSnapshot('old-session')).toBeUndefined();
+
+    ensureHistoricalPromptRecommendation('old-session', 10);
+    expect(__testing.getSessionSnapshot('old-session')).toBeUndefined();
+
+    ensureHistoricalPromptRecommendation('old-session', 20);
+    expect(__testing.getSessionSnapshot('old-session')?.revision).toBe(20);
+  });
+
+  it('已有条目（含 live 完成）不被历史补生成覆盖', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 200);
+
+    ensureHistoricalPromptRecommendation('session-a', 100);
+
+    expect(__testing.getSessionSnapshot('session-a')?.revision).toBe(200);
+  });
+
+  it('运行中的会话不创建历史候选', () => {
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+
+    ensureHistoricalPromptRecommendation('session-a', 300);
+
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
+  it('开关关闭或非法完成点不创建候选', () => {
+    h.enabled = false;
+    ensureHistoricalPromptRecommendation('session-a', 300);
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+
+    h.enabled = true;
+    ensureHistoricalPromptRecommendation('session-a', 0);
+    ensureHistoricalPromptRecommendation('session-a', Number.NaN);
+    ensureHistoricalPromptRecommendation(undefined, 300);
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
+  it('有运行态时失败 / 被停止的完成轮不触发历史补生成', () => {
+    h.statusBySession.set('session-a', { ...ELIGIBLE, hasTerminalError: true });
+    ensureHistoricalPromptRecommendation('session-a', 300);
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+
+    h.statusBySession.set('session-b', { ...ELIGIBLE, turnStoppedByUser: true });
+    ensureHistoricalPromptRecommendation('session-b', 300);
+    expect(__testing.getSessionSnapshot('session-b')).toBeUndefined();
+  });
+
+  it('重启后的历史会话没有运行态信息，仍然允许补生成', () => {
+    // statusBySession 未设置 → 运行态为 null（重启后 / 未加载），按历史允许处理。
+    ensureHistoricalPromptRecommendation('old-session', 300);
+    expect(__testing.getSessionSnapshot('old-session')?.revision).toBe(300);
+  });
+
+  it('dismiss 后同一完成点不再自动重现，新完成点恢复', () => {
+    ensureHistoricalPromptRecommendation('session-a', 300);
+    dismissPromptRecommendation('session-a');
+
+    ensureHistoricalPromptRecommendation('session-a', 300);
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+
+    ensureHistoricalPromptRecommendation('session-a', 400);
+    expect(__testing.getSessionSnapshot('session-a')?.revision).toBe(400);
+  });
+
+  it('live 完成与历史补生成同完成点交错时不互相删除，预测正常落地', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    h.startedAtBySession.set('session-a', 499);
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+    __testing.applyRunningSnapshot(new Map());
+    // settle 的 500ms 合并窗口内，打开会话的历史补生成已经发出请求。
+    ensureHistoricalPromptRecommendation('session-a', 500);
+    const seq = beginPromptRecommendationPrediction('session-a', 500);
+    expect(seq).not.toBeNull();
+
+    // 迟到的 live 完成通知与 settle 都不能作废这次在途预测。
+    __testing.noteTurnEnded('session-a', 500);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('session-a')?.phase).toBe('predicting');
+
+    resolvePromptRecommendationPrediction('session-a', 500, seq!, '缓存命中的建议');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('缓存命中的建议');
   });
 });

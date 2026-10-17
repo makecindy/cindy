@@ -27,9 +27,9 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
-it('historical navigation only requests a cached host result', async () => {
+it('historical navigation requests the host result with one allowed generation', async () => {
   await render(); await advance();
-  expect(request).toHaveBeenCalledWith(expect.objectContaining({ cacheOnly: true, completionRevision: 10 }));
+  expect(request).toHaveBeenCalledWith(expect.objectContaining({ cacheOnly: false, completionRevision: 10 }));
   expect(value.prompt).toBe('Suggested next step');
 });
 
@@ -65,26 +65,26 @@ it('waits for the new completion revision even when stopped arrives first', asyn
   await render({ running: true }); await advance();
   expect(request).not.toHaveBeenCalled();
   await render({ running: false }); await advance();
-  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false }));
   await render({ revision: 20 }); await advance();
   expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false, completionRevision: 20 }));
 });
 
-it('metadata refresh after opening cached history stays cache-only, including retries', async () => {
+it('each new completion revision requests again, without timed cache retries', async () => {
   request.mockResolvedValue({ prompt: null });
   await render(); await advance();
   await render({ revision: 20 }); await advance();
   await act(async () => vi.advanceTimersByTimeAsync(10_000));
-  expect(request).toHaveBeenCalledTimes(5);
-  expect(request.mock.calls.every(([args]) => args.cacheOnly === true)).toBe(true);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls.every(([args]) => args.cacheOnly === false)).toBe(true);
 });
 
-it('an observed run authorizes only its completion, and a later run can predict again', async () => {
+it('every completion revision requests once; host dedupes the generation', async () => {
   await render({ running: true });
   await render({ running: false, revision: 20 }); await advance();
   expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false, completionRevision: 20 }));
   await render({ revision: 30 }); await advance();
-  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true, completionRevision: 30 }));
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false, completionRevision: 30 }));
   await render({ running: true });
   await render({ running: false, revision: 40 }); await advance();
   expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false, completionRevision: 40 }));
@@ -173,7 +173,7 @@ it('keeps live completion eligibility when its timestamp settles during debounce
   }));
   expect(value.prompt).toBe('Suggested next step');
   await render({ revision: 50 }); await advance();
-  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: false }));
 });
 
 it('waits for connectivity before requesting a just-completed turn', async () => {
@@ -263,16 +263,14 @@ it('does not restore dismissed recommendations after a failed request and reconn
   expect(value.prompt).toBeNull();
 });
 
-it('resumes cache lookup after connectivity interrupts a bounded cache retry', async () => {
+it('does not re-request an answered revision after connectivity flaps', async () => {
   request.mockResolvedValueOnce({ prompt: null });
   await render(); await advance();
   await render({ available: false });
   await act(async () => vi.advanceTimersByTimeAsync(10_000));
   expect(request).toHaveBeenCalledTimes(1);
   await render({ available: true }); await advance();
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls.every(([args]) => args.cacheOnly === true)).toBe(true);
-  expect(value.prompt).toBe('Suggested next step');
+  expect(request).toHaveBeenCalledTimes(1);
 });
 
 it('consumes terminal failures without predicting, but permits the next successful turn', async () => {
@@ -315,42 +313,41 @@ it('defers attachment-only input and retains results arriving after input is add
   expect(request).toHaveBeenCalledTimes(1);
 });
 
-it('retries a cache miss without promoting navigation to a paid request', async () => {
+it('an empty prediction is not retried on a timer', async () => {
   request.mockResolvedValueOnce({ prompt: null });
   await render(); await advance();
   await act(async () => vi.advanceTimersByTimeAsync(1_000));
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls.every(([args]) => args.cacheOnly === true)).toBe(true);
-  expect(value.prompt).toBe('Suggested next step');
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(value.prompt).toBeNull();
 });
 
-it('bounds cache retries and cancels them on dismissal', async () => {
+it('does not schedule repeat requests and cancels follow-ups on dismissal', async () => {
   request.mockResolvedValue({ prompt: null });
   await render(); await advance();
   await act(async () => vi.advanceTimersByTimeAsync(60_000));
-  expect(request).toHaveBeenCalledTimes(4);
+  expect(request).toHaveBeenCalledTimes(1);
   await render({ sessionId: props.sessionId + '-other' }); await advance();
   await act(async () => value.dismiss());
   await act(async () => vi.advanceTimersByTimeAsync(60_000));
-  expect(request).toHaveBeenCalledTimes(5);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 
-it('finishes bounded cache retries while editing, then reuses the result after clearing', async () => {
+it('retains an in-flight prediction finished while editing and reuses it after clearing', async () => {
   const composerSource = createComposerDraftSource(textComposerDocument(''));
-  request.mockResolvedValueOnce({ prompt: null });
+  let resolve!: (result: { prompt: string }) => void;
+  request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
   await render({ composerSource }); await advance();
+  expect(request).toHaveBeenCalledTimes(1);
   await act(async () => composerSource.setDocument(textComposerDocument('Typing')));
-  await act(async () => vi.advanceTimersByTimeAsync(1_000));
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls.every(([args]) => args.cacheOnly === true)).toBe(true);
+  await act(async () => resolve({ prompt: 'Suggested next step' }));
   await act(async () => composerSource.setDocument(textComposerDocument('')));
   await advance();
   expect(value.prompt).toBe('Suggested next step');
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(1);
 });
 
-it('keeps retries bounded across repeated typing and clearing', async () => {
+it('repeated typing and clearing does not trigger repeat requests', async () => {
   const composerSource = createComposerDraftSource(textComposerDocument(''));
   request.mockResolvedValue({ prompt: null });
   await render({ composerSource }); await advance();
@@ -360,7 +357,7 @@ it('keeps retries bounded across repeated typing and clearing', async () => {
     await act(async () => composerSource.setDocument(textComposerDocument('')));
     await advance();
   }
-  expect(request).toHaveBeenCalledTimes(4);
+  expect(request).toHaveBeenCalledTimes(1);
 });
 
 it('retains the same recommendation through typing, clearing and attachment changes without another request', async () => {

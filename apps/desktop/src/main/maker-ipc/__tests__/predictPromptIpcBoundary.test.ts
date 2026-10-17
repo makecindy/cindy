@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
     void params;
     return '下一步做什么';
   }),
+  readCachedPrompt: vi.fn<(...args: unknown[]) => string | null>(() => null),
+  writeCachedPrompt: vi.fn<(...args: unknown[]) => void>(() => undefined),
+  clearCachedPrompt: vi.fn<(...args: unknown[]) => void>(() => undefined),
   drainPersistQueue: vi.fn<() => Promise<void>>(async () => undefined),
   /** 模拟 DB 读出的最近 user/assistant 素材(来源:latestMessageText.regenerateTitleMaterial)。 */
   regenerateMaterial: vi.fn(
@@ -67,6 +70,8 @@ const h = vi.hoisted(() => ({
         lastTurnEndedAt?: number | null;
       }
     | undefined,
+  /** 落盘前单列 status 复查的返回行；undefined = 按 sessionRow 现状，null = 无会话行。 */
+  writeRecheckRow: undefined as undefined | { status: string } | null,
   /** DB 读取次数计数(区分 drain 前后的两次读取)。 */
   dbReads: 0,
 }));
@@ -252,17 +257,30 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
     drizzle: {
-      select: () => ({
+      select: (fields?: Record<string, unknown>) => ({
         from: () => ({
           where: () => {
             h.dbReads += 1;
-            const row =
-              h.dbReads >= 2 && h.sessionRowAfterDrain !== undefined
-                ? h.sessionRowAfterDrain
-                : h.sessionRow;
-            return Promise.resolve(
-              row ? [{ activeTurnStartedAt: 1, lastTurnEndedAt: 2, ...row }] : [],
-            );
+            // 落盘前的单列 status 复查（title.ts）：只在显式设置 writeRecheckRow 时
+            // 模拟「已删除」，否则按会话行现状返回。
+            let rows: unknown[];
+            if (fields && Object.keys(fields).length === 1 && 'status' in fields) {
+              if (h.writeRecheckRow !== undefined) {
+                rows = h.writeRecheckRow ? [h.writeRecheckRow] : [];
+              } else {
+                const status = h.sessionRow ? (h.sessionRow.status ?? 'active') : null;
+                rows = status ? [{ status }] : [];
+              }
+            } else {
+              const row =
+                h.dbReads >= 2 && h.sessionRowAfterDrain !== undefined
+                  ? h.sessionRowAfterDrain
+                  : h.sessionRow;
+              rows = row ? [{ activeTurnStartedAt: 1, lastTurnEndedAt: 2, ...row }] : [];
+            }
+            const promise = Promise.resolve(rows);
+            // 查询可能以 .where() 或 .where().limit(1) 结尾；两种都支持。
+            return Object.assign(promise, { limit: () => promise });
           },
         }),
       }),
@@ -271,6 +289,11 @@ vi.mock('../../localDb/client/current.js', () => ({
 }));
 vi.mock('../promptPrediction.js', () => ({
   generatePromptPrediction: h.predict,
+}));
+vi.mock('../promptRecommendationCache.js', () => ({
+  readCachedPromptRecommendation: (...args: unknown[]) => h.readCachedPrompt(...args),
+  writeCachedPromptRecommendation: (...args: unknown[]) => h.writeCachedPrompt(...args),
+  clearCachedPromptRecommendation: (...args: unknown[]) => h.clearCachedPrompt(...args),
 }));
 // `maker-ipc/title.ts` statically imports the auxiliary title router, whose
 // production default dependency reads the Maker facade. Keep this boundary
@@ -329,10 +352,12 @@ beforeEach(() => {
     lastTurnEndedAt: 2,
   };
   h.sessionRowAfterDrain = undefined;
+  h.writeRecheckRow = undefined;
   _resetPromptPredictionCacheForTests();
   resetPromptPredictionStopLedgerForTests();
   h.dbReads = 0;
   h.predict.mockResolvedValue('下一步做什么');
+  h.readCachedPrompt.mockReturnValue(null);
   registerMakerTitleIpc();
 });
 
@@ -696,6 +721,69 @@ describe('maker:predict-prompt — 多窗口同轮幂等', () => {
       prompt: null,
     });
 
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('maker:predict-prompt — 完成点持久缓存（#6184）', () => {
+  it('持久缓存命中：直接复用，不调用付费模型、不读素材', async () => {
+    h.readCachedPrompt.mockReturnValue('继续把剩下两个页面做完');
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({
+      prompt: '继续把剩下两个页面做完',
+    });
+    expect(h.readCachedPrompt).toHaveBeenCalledWith('session-1', 2, null);
+    expect(h.predict).not.toHaveBeenCalled();
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+  });
+
+  it('cacheOnly 请求也命中持久缓存（历史导航复用 host 缓存而非重新付费）', async () => {
+    h.readCachedPrompt.mockReturnValue('补一个回归测试');
+
+    await expect(
+      invokePredict({ ...VALID_REQUEST, cacheOnly: true }),
+    ).resolves.toEqual({ prompt: '补一个回归测试' });
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('cacheOnly 且无持久缓存：保持只读，不生成也不排空落盘队列', async () => {
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({
+      prompt: null,
+    });
+    expect(h.predict).not.toHaveBeenCalled();
+    expect(h.drainPersistQueue).not.toHaveBeenCalled();
+  });
+
+  it('新生成的结果写入持久缓存（完成点 + workingDir + prompt）', async () => {
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.writeCachedPrompt).toHaveBeenCalledWith('session-1', {
+      revision: 2,
+      workingDir: null,
+      prompt: '下一步做什么',
+    });
+  });
+
+  it('生成失败（null）不写持久缓存，下次仍可重试', async () => {
+    h.predict.mockResolvedValueOnce(null);
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.writeCachedPrompt).not.toHaveBeenCalled();
+  });
+
+  it('生成完成前任务已被删除：不把建议写回缓存（review P2）', async () => {
+    h.writeRecheckRow = { status: 'deleted' };
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.writeCachedPrompt).not.toHaveBeenCalled();
+  });
+
+  it('同完成点的内存缓存优先于持久缓存，不重复读盘', async () => {
+    await invokePredict(VALID_REQUEST);
+    h.readCachedPrompt.mockReturnValue('不应被采用的旧缓存');
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    // 首次请求读了一次持久缓存（未命中）；第二次命中内存缓存，不再读盘。
+    expect(h.readCachedPrompt).toHaveBeenCalledTimes(1);
     expect(h.predict).toHaveBeenCalledTimes(1);
   });
 });

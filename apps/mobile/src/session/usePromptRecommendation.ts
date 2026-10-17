@@ -51,16 +51,11 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
   const observed = useRef({
     scope,
     running: false,
-    sawRunning: false,
-    revisionAtStart: 0,
-    liveRevision: null as number | null,
   });
   const current = useRef({ scope, revision, running, blocked, hasTerminalError, available });
   current.current = { scope, revision, running, blocked, hasTerminalError, available };
   const dismiss = useCallback(() => {
     if (revision) consumedRevisions.set(scope, revision);
-    observed.current.sawRunning = false;
-    observed.current.liveRevision = null;
     setResult(null);
   }, [scope, revision]);
 
@@ -72,9 +67,6 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       observed.current = {
         scope,
         running: false,
-        sawRunning: false,
-        revisionAtStart: 0,
-        liveRevision: null,
       };
       request.current = null;
       paidRequest.current = null;
@@ -86,9 +78,6 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
         // A fresh running edge starts a new completion generation. A dismissal
         // from the previous generation must not suppress this one.
         consumedRevisions.delete(scope);
-        run.sawRunning = true;
-        run.revisionAtStart = revision ?? 0;
-        run.liveRevision = null;
         request.current = null;
         paidRequest.current = null;
         setResult(null);
@@ -97,25 +86,17 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       return;
     }
     run.running = false;
-    // Only an observed run can authorize a paid prediction. Keep waiting if
-    // stopped arrives before its revision. The completion timestamp can settle
-    // more than once during debounce; consume the live run only on dispatch.
-    // Later metadata refreshes cannot authorize a second paid request.
-    if (run.sawRunning && revision != null && revision > run.revisionAtStart) {
-      run.liveRevision = revision;
-    }
     if (!deviceId || !sessionId || !agentKind || !revision || consumedRevisions.get(scope) === revision) return;
     if (hasTerminalError) {
       // Failed turns are ineligible; ordinary composer interaction only hides.
-      run.sawRunning = false;
-      run.liveRevision = null;
       consumedRevisions.set(scope, revision);
       setResult(null);
       return;
     }
     if (!available || blocked || (result?.scope === scope && result.revision === revision)) return;
-    // Historical navigation only reuses a host result; it never starts a paid prediction.
-    const cacheOnly = run.liveRevision !== revision;
+    // 打开历史任务同样允许一次补生成（#6184）：host 按完成点持久缓存，命中直接复用、
+    // 未命中才生成，每个完成点最多一次模型调用；同端由 paidRequest 去重。
+    const cacheOnly = false;
     const previous = request.current;
     const recovering = previous?.scope === scope && previous.revision === revision
       && previous.cacheOnly === cacheOnly;
@@ -143,7 +124,6 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
       }
       started = true;
       if (!requestCacheOnly) {
-        run.sawRunning = false;
         paidRequest.current = { scope, revision };
       }
       void makerRef.current.predictNextPrompt({ sessionId, agentKind, turnGen: 0, completionRevision: revision, cacheOnly: requestCacheOnly })
@@ -151,9 +131,9 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
           if (!isCurrent()) return;
           if (prompt) setResult({ scope, revision, prompt });
           else if (requestCacheOnly && retry < CACHE_RETRY_DELAYS_MS.length) {
-            // A peer may create the cache just after our first lookup. Never
-            // promote history to a paid request. Link errors wait for recovery
-            // instead of entering this timed retry loop.
+            // A peer may create the cache just after our first lookup. Recovery
+            // lookups stay cache-only and never start another paid request;
+            // link errors wait for recovery instead of this timed retry loop.
             timer = setTimeout(predict, CACHE_RETRY_DELAYS_MS[retry++]);
           }
         }).catch(() => {

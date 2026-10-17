@@ -65,6 +65,7 @@ import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
+import { clearCachedPromptRecommendation } from '../../maker-ipc/promptRecommendationCache.js';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
@@ -2814,6 +2815,8 @@ function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): vo
       });
     });
     scheduleDeletedPiSubagentCleanup(sessionId);
+    // 输入框推荐缓存随任务删除清理；归档保留（归档会话可恢复继续用）。
+    clearCachedPromptRecommendation(sessionId);
     // 个人 IM 渠道(含微信)入站文件随任务删除清理 —— 归档保留, 与微信既有口径一致。
     void removeImAttachmentsIfStillDeleted(sessionId).catch((err) => {
       log.warn('IM session attachment cleanup failed', {

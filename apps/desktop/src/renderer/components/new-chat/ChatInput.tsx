@@ -307,6 +307,7 @@ import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendati
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
 import {
   dismissPromptRecommendation,
+  ensureHistoricalPromptRecommendation,
   usePromptRecommendation,
 } from '@/lib/promptRecommendationStore';
 import { createLogger } from '@/lib/logger';
@@ -532,6 +533,12 @@ interface ChatInputProps {
   sessionOrcaRemoteWorker?: boolean;
   /** Initial workingDir from session data. */
   initialWorkingDir?: string | null;
+  /**
+   * 会话最后一次完成的轮次时间（sessions.lastTurnEndedAt）。打开历史任务时，有完成点、
+   * store 里又没有本会话推荐时补一次候选（#6184）；是否真正生成 / 命中持久缓存由 main
+   * 按完成点决定。null/undefined = 没有可补的完成点。
+   */
+  completionRevision?: number | null;
   /**
    * 远程 host alias;非空 = remote session。remote 的 workingDir 是远端主机路径,
    * 本地 slash skill 扫描 / @ 资源扫描不能按它读本机文件,故 remote 下退化为
@@ -1186,6 +1193,7 @@ export function ChatInput({
   sessionOrcaRole,
   sessionOrcaRemoteWorker,
   initialWorkingDir,
+  completionRevision = null,
   remoteHostId,
   deviceLinkDeviceId: _deviceLinkDeviceId,
   deviceLinkDeviceName = null,
@@ -1474,6 +1482,13 @@ export function ChatInput({
       dismissPromptRecommendation(sessionId);
     }
   }, [recommendationEnabled, sessionId]);
+  // 打开历史任务时补一次候选（#6184）：store 无本会话条目、会话已有一轮完成点时交给
+  // store 的 ensure；是否真正生成 / 命中持久缓存由 main 按完成点决定。运行中不补，
+  // 那种情况由 live 完成路径处理；输入框资格由 usePromptRecommendationPrediction 把关。
+  useEffect(() => {
+    if (!recommendationEnabled || !sessionId || isStreaming || isAgentBusy) return;
+    ensureHistoricalPromptRecommendation(sessionId, completionRevision);
+  }, [recommendationEnabled, sessionId, completionRevision, isStreaming, isAgentBusy]);
 
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
   // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
