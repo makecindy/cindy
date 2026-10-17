@@ -909,6 +909,9 @@ describe('auth login-flow reset', () => {
     expect(guardedRecovery).toBeGreaterThan(-1);
     expect(guardedRecovery).toBeLessThan(timeoutRecovery);
     expect(initializeBody).toContain('pendingState: snapshotLoggedOutAuthState(true)');
+    expect(initializeBody).toContain('timeoutStartEpoch: startupTimeoutEpoch');
+    expect(initializeBody).toContain('currentEpoch: authStateEpoch');
+    expect(initializeBody).toContain('currentState: snapshotAuthState()');
     expect(initializeBody).not.toContain('await ownerChangeShellGate.waitForSettled();\n        return snapshotAuthState();');
     // The fallback must tell the recovery it is the startup-gate fallback, so the
     // epoch it raises is recorded at the moment it is raised (see below).

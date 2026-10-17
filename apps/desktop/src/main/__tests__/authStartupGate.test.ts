@@ -192,6 +192,9 @@ describe('ColdStartAuthFallbackRegistry', () => {
     const recover = vi.fn(async () => ({ mode: 'signed-out', ownerBoundaryPending: false }));
     const result = await resolveColdStartTimeoutRecovery({
       ownerTransitionPending: true,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState: { mode: 'cloud', ownerBoundaryPending: false },
       pendingState,
       recover,
     });
@@ -201,14 +204,34 @@ describe('ColdStartAuthFallbackRegistry', () => {
 
   it('recovers a signed-out owner when no owner transition is pending', async () => {
     const pendingState = { mode: 'signed-out', ownerBoundaryPending: true } as const;
+    const currentState = { mode: 'cloud', ownerBoundaryPending: false } as const;
     const recoveredState = { mode: 'signed-out', ownerBoundaryPending: false } as const;
     const recover = vi.fn(async () => recoveredState);
     await expect(resolveColdStartTimeoutRecovery({
       ownerTransitionPending: false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState,
       pendingState,
       recover,
     })).resolves.toBe(recoveredState);
     expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an explicit login completed before a sibling startup timeout', async () => {
+    const loggedInState = { mode: 'cloud', userId: 'new-owner' } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out' as const }));
+
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 8,
+      currentState: loggedInState,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toBe(loggedInState);
+
+    expect(recover).not.toHaveBeenCalled();
   });
 
   it('preserves a late successful refresh across consecutive renderer startup timeouts', async () => {
@@ -217,8 +240,8 @@ describe('ColdStartAuthFallbackRegistry', () => {
     const flowEpoch = 7;
     let currentEpoch = flowEpoch;
     let committedUser: string | null = null;
-    let resolveRefresh!: (user: unknown) => void;
-    const refresh = new Promise<unknown>((resolve) => {
+    let resolveRefresh!: (user: string) => void;
+    const refresh = new Promise<string>((resolve) => {
       resolveRefresh = resolve;
     });
     const recover = () => {
