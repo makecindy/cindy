@@ -22,6 +22,7 @@ import { readWindowBehaviorSettings } from '../window-behavior-settings-store.js
 import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
+import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
 import { markGhostPanelWebContentsId } from './registry.js';
 
 const log = createLogger('ghost-panel-window');
@@ -100,6 +101,12 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
   win.once('ready-to-show', () => {
     // no-op: 窗口由 controller 控制展示
   });
+
+  // 与 sidebar/resource-usage 窗口同款:hidden 广播驱动装饰性壁纸动画在窗口
+  // 隐藏时暂停 —— 面板挂了视频壁纸解码器(6e4614c2a),而运行中 turn 会关
+  // backgroundThrottling,document.hidden 恒为 false,没有这条广播解码器
+  // 会在隐藏窗口上空转。
+  installWindowHiddenBroadcast(win);
 
   const hash = '/ghost-panel-window';
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
