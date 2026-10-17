@@ -167,8 +167,9 @@ const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFill, zIndex: 40 },
 });
 
-/** Route-owned drawers must be above the root-owned histories, not beneath them. */
-export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
+/** Modal drawers belong above histories. Persistent columns stay in the route,
+ * below their resident list and inside its native measurement ancestry. */
+export function MessageHistoryOverlay({ children, inline = false }: { children: ReactNode; inline?: boolean }) {
   const context = useContext(Context);
   const residentChildren = useResidentHomeListContextBridge(children);
   if (!context) throw new Error('RecentMessageHistoriesProvider is missing');
@@ -179,10 +180,10 @@ export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
   const route = useContext(NavigationRouteContext);
   useLayoutEffect(() => {
     if (NativeHistorySlot || needsResidentHistoryUpgrade) return;
-    setOverlay(owner, focused ? <NavigationContext.Provider value={navigation}>
+    setOverlay(owner, focused && !inline ? <NavigationContext.Provider value={navigation}>
       <NavigationRouteContext.Provider value={route}>{residentChildren}</NavigationRouteContext.Provider>
     </NavigationContext.Provider> : null);
-  }, [setOverlay, owner, focused, navigation, route, residentChildren]);
+  }, [setOverlay, owner, focused, navigation, route, residentChildren, inline]);
   useLayoutEffect(() => () => setOverlay(owner, null), [setOverlay, owner]);
-  return NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
+  return inline || NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
 }

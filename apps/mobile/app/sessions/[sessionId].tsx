@@ -597,7 +597,7 @@ import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/sessio
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
 import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
-import { SessionListDrawer } from '@/session/SessionListDrawer';
+import { SessionListDrawerLayer } from '@/session/SessionListDrawerLayer';
 import {
   switchDrawerSessionInPlace,
   type SessionRouteParamsNavigation,
@@ -10789,21 +10789,20 @@ function SessionScreenContent() {
         onDismiss={dismissTransientNotice}
         top={Math.max(topOverlayHeight, insets.top + 44) + spacing.sm}
       />
-      <MessageHistoryOverlay>
-        {/* Keep the drawer above resident histories, including its closing animation. */}
-        <SessionListDrawer
-          newSessionActionRef={homeNewSessionActionRef}
-          newSessionInSystemBar={paneLayout.persistent && Platform.OS === 'ios' && adaptiveWindow.barEdge !== 'none'}
-          currentSessionId={sessionId}
-          onClose={closeSessionListDrawer}
-          onClosed={handleSessionListDrawerClosed}
-          runNavigation={queueDrawerNavigation}
-          onSelectSession={handleDrawerSelectSession}
-          persistent={paneLayout.persistent && !sessionListDrawerOverlayMounted}
-          open={(paneLayout.persistent && !sessionListDrawerOverlayMounted) || sessionListDrawerOpen}
-          width={paneLayout.persistent && !sessionListDrawerOverlayMounted ? paneLayout.sidebarWidth : sessionListDrawerWidthRef.current}
-        />
-      </MessageHistoryOverlay>
+      <SessionListDrawerLayer
+        newSessionActionRef={homeNewSessionActionRef}
+        newSessionInSystemBar={paneLayout.persistent && Platform.OS === 'ios' && adaptiveWindow.barEdge !== 'none'}
+        currentSessionId={sessionId}
+        onClose={closeSessionListDrawer}
+        onClosed={handleSessionListDrawerClosed}
+        runNavigation={queueDrawerNavigation}
+        onSelectSession={handleDrawerSelectSession}
+        persistent={paneLayout.persistent}
+        overlayMounted={sessionListDrawerOverlayMounted}
+        sidebarWidth={paneLayout.sidebarWidth}
+        open={sessionListDrawerOpen}
+        width={sessionListDrawerWidthRef.current}
+      />
     </View>
   );
 }
