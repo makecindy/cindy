@@ -92,6 +92,11 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
+- 改完 Desktop renderer 界面（组件、样式、布局、文案、深浅色、多语言）后自检，先运行
+  `pnpm ui:check --changed --theme all` 并查看输出的 `overview.png`，无需为此启动完整
+  Desktop；输出中 `UNCOVERED` 的文件未被验证。发 PR 时运行 `pnpm ui:check:publish`，把输出的
+  带图内容写进「UI 变化」。按改动类型选择验证方式见
+  `docs/dev-rules/desktop-development.md`「按改动选择验证方式」。
 - 新增或修改 Mobile（`apps/mobile`）界面上的文字前，必须先查
   `apps/mobile/docs/mobile-design-guide.md` §3「文字规范速查」：先定角色，再整行照抄字号、
   行高、字重、字色；五档中性字色、浅色字不配粗字重、11 档字号、必须配行高四条由

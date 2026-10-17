@@ -1,47 +1,47 @@
 import { useState } from 'react';
-import { createRoot } from 'react-dom/client';
-import i18next from 'i18next';
-import { initReactI18next } from 'react-i18next';
-import { MemoryRouter, useLocation } from 'react-router-dom';
-import zh from '../../../src/renderer/i18n/locales/zh-CN/common.json';
-import '../../../src/renderer/themes/colors';
-import { ThemeService } from '../../../src/renderer/themes/theme-service';
-import { defaultLight } from '../../../src/renderer/themes/builtin/default-light';
-import { defaultDark } from '../../../src/renderer/themes/builtin/default-dark';
+import { useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { AppFrame, mountPage } from '../../ui-page/harness';
 import { CindyDeviceRow } from '../../../src/renderer/features/bots/CindyDeviceRow';
-import { BotSessionContentHeader } from '../../../src/renderer/features/bots/BotSessionContentHeader';
+import { BotSessionContentHeaderRegistration } from '../../../src/renderer/features/bots/BotSessionContentHeader';
 import { cindyDeviceOptions } from '../../../src/renderer/features/bots/cindyDeviceRoster';
 import { Select } from '../../../src/renderer/components/ui/select';
 
-const query = new URLSearchParams(location.search);
-const dark = query.get('theme') === 'dark';
-new ThemeService().applyTheme(dark ? defaultDark : defaultLight);
-document.documentElement.classList.toggle('dark', dark);
-await i18next.use(initReactI18next).init({
-  lng: 'zh-CN',
-  resources: { 'zh-CN': { translation: zh } },
-});
+// Roster hooks are replaced at build time (ui-page.mjs `stubs`); the row, picker, header,
+// Radix select, routing, theme and fonts are the production implementations.
+type Roster = Parameters<typeof cindyDeviceOptions>;
 
-// Only roster hooks are stubbed by the runner; geometry, Radix and routing are real.
-const data = (window as any).devicePickerFixture;
-const options = cindyDeviceOptions(data.bots, data.remoteBots, data.devices, data.unread, '本机');
-function App() {
-  const [current, setCurrent] = useState(options[query.has('long') ? 1 : 0]);
+function DevicePickerPage({ data }: { data: Record<string, unknown> }) {
+  const { t } = useTranslation();
+  const roster = data as unknown as {
+    bots: Roster[0];
+    remoteBots: Roster[1];
+    devices: Roster[2];
+    unread: Roster[3];
+    currentIndex: number;
+    selected: boolean;
+  };
+  const options = cindyDeviceOptions(
+    roster.bots,
+    roster.remoteBots,
+    roster.devices,
+    roster.unread,
+    t('bots.devicePicker.local'),
+  );
+  const [current, setCurrent] = useState(options[roster.currentIndex]);
   const [opens, setOpens] = useState(0);
   const [selections, setSelections] = useState(0);
   const route = useLocation();
-  return (
-    <>
-      <p className="fixture-caption">
-        {query.get('stage')} · {dark ? 'Dark' : 'Light'} · 生产组件浏览器验证（非实机）
-      </p>
-      <div className="fixture-layout">
-        <aside>
+  // Sidebar list containers mirror TeammatesSection (section > list > rows).
+  const sidebar = (
+    <div className="flex w-full flex-col gap-0.5 pt-3" data-sidebar-section="teammates">
+      <div className="flex flex-col pt-1 pr-0 pl-3">
+        <div className="flex flex-col gap-1" data-ui-page-subject>
           <CindyDeviceRow
             current={current}
             options={options}
-            selected={!query.has('unselected')}
-            subtitle="已整理好今天的安排。"
+            selected={roster.selected}
+            subtitle={t('bots.list.startChat')}
             timestamp="13:56"
             onOpen={() => setOpens((count) => count + 1)}
             onSelect={(option) => {
@@ -49,32 +49,39 @@ function App() {
               setSelections((count) => count + 1);
             }}
           />
-        </aside>
-        <main>
-          <header>
-            <BotSessionContentHeader bot={options[query.has('long') ? 1 : 0].bot} />
-          </header>
-          <section className="fixture-results">
-            <output data-testid="opens">{opens}</output>
-            <output data-testid="selections">{selections}</output>
-            <output data-testid="route">{route.pathname}</output>
-            <div data-testid="ordinary-select" style={{ width: 180 }}>
-              <Select
-                label="普通选择器"
-                value="one"
-                options={[{ value: 'one', label: '普通选项' }]}
-                onValueChange={() => {}}
-                className="w-full"
-              />
-            </div>
-          </section>
-        </main>
+        </div>
       </div>
-    </>
+    </div>
+  );
+  return (
+    <AppFrame sidebar={sidebar}>
+      <BotSessionContentHeaderRegistration bot={options[roster.currentIndex].bot} />
+      <div className="min-h-0 flex-1 p-6">
+        <output hidden data-testid="opens">
+          {opens}
+        </output>
+        <output hidden data-testid="selections">
+          {selections}
+        </output>
+        <output hidden data-testid="route">
+          {route.pathname}
+        </output>
+        {/* Control sample: the shared Select must keep its trigger-width menu. */}
+        <div data-testid="ordinary-select" style={{ width: 180 }}>
+          <Select
+            label="Select"
+            value="one"
+            options={[{ value: 'one', label: 'Option' }]}
+            onValueChange={() => {}}
+            className="w-full"
+          />
+        </div>
+      </div>
+    </AppFrame>
   );
 }
-createRoot(document.getElementById('root')!).render(
-  <MemoryRouter>
-    <App />
-  </MemoryRouter>,
-);
+
+void mountPage({
+  route: '/bots/cindy-default',
+  render: (ctx) => <DevicePickerPage data={ctx.data} />,
+});

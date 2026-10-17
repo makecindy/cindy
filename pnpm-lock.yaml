@@ -521,7 +521,7 @@ importers:
     devDependencies:
       '@electron-forge/cli':
         specifier: ^7.11.1
-        version: 7.11.2(lightningcss@1.33.0)(postcss@8.5.19)
+        version: 7.11.2(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)
       '@electron-forge/maker-deb':
         specifier: ^7.11.1
         version: 7.11.2
@@ -597,6 +597,9 @@ importers:
       electron:
         specifier: 42.11.12
         version: 42.11.12
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       eslint:
         specifier: ^9.0.0
         version: 9.39.5(jiti@1.21.7)
@@ -606,6 +609,9 @@ importers:
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1(@noble/hashes@1.8.0)
+      playwright-core:
+        specifier: 1.60.0
+        version: 1.60.0
       postcss:
         specifier: ^8.4.49
         version: 8.5.19
@@ -12440,9 +12446,9 @@ snapshots:
     dependencies:
       '@types/hammerjs': 2.0.46
 
-  '@electron-forge/cli@7.11.2(lightningcss@1.33.0)(postcss@8.5.19)':
+  '@electron-forge/cli@7.11.2(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)':
     dependencies:
-      '@electron-forge/core': 7.11.2(lightningcss@1.33.0)(postcss@8.5.19)
+      '@electron-forge/core': 7.11.2(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)
       '@electron-forge/core-utils': 7.11.2
       '@electron-forge/shared-types': 7.11.2
       '@electron/get': 3.1.0
@@ -12487,7 +12493,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@electron-forge/core@7.11.2(lightningcss@1.33.0)(postcss@8.5.19)':
+  '@electron-forge/core@7.11.2(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)':
     dependencies:
       '@electron-forge/core-utils': 7.11.2
       '@electron-forge/maker-base': 7.11.2
@@ -12498,7 +12504,7 @@ snapshots:
       '@electron-forge/template-vite': 7.11.2
       '@electron-forge/template-vite-typescript': 7.11.2
       '@electron-forge/template-webpack': 7.11.2
-      '@electron-forge/template-webpack-typescript': 7.11.2(lightningcss@1.33.0)(postcss@8.5.19)
+      '@electron-forge/template-webpack-typescript': 7.11.2(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)
       '@electron-forge/tracer': 7.11.2
       '@electron/get': 3.1.0
       '@electron/packager': 18.4.4
@@ -12652,13 +12658,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@electron-forge/template-webpack-typescript@7.11.2(lightningcss@1.33.0)(postcss@8.5.19)':
+  '@electron-forge/template-webpack-typescript@7.11.2(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)':
     dependencies:
       '@electron-forge/shared-types': 7.11.2
       '@electron-forge/template-base': 7.11.2
       fs-extra: 10.1.0
       typescript: 5.4.5
-      webpack: 5.108.4(lightningcss@1.33.0)(postcss@8.5.19)
+      webpack: 5.108.4(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)
     transitivePeerDependencies:
       - '@minify-html/node'
       - '@swc/core'
@@ -20453,14 +20459,15 @@ snapshots:
 
   minimist@1.2.8: {}
 
-  minimizer-webpack-plugin@5.6.1(lightningcss@1.33.0)(postcss@8.5.19)(webpack@5.108.4(lightningcss@1.33.0)(postcss@8.5.19)):
+  minimizer-webpack-plugin@5.6.1(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)(webpack@5.108.4(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.3
       terser: 5.49.0
-      webpack: 5.108.4(lightningcss@1.33.0)(postcss@8.5.19)
+      webpack: 5.108.4(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)
     optionalDependencies:
+      esbuild: 0.28.1
       lightningcss: 1.33.0
       postcss: 8.5.19
 
@@ -22975,7 +22982,7 @@ snapshots:
 
   webpack-sources@3.5.1: {}
 
-  webpack@5.108.4(lightningcss@1.33.0)(postcss@8.5.19):
+  webpack@5.108.4(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19):
     dependencies:
       '@types/estree': 1.0.9
       '@types/json-schema': 7.0.15
@@ -22993,7 +23000,7 @@ snapshots:
       graceful-fs: 4.2.11
       loader-runner: 4.3.2
       mime-db: 1.54.0
-      minimizer-webpack-plugin: 5.6.1(lightningcss@1.33.0)(postcss@8.5.19)(webpack@5.108.4(lightningcss@1.33.0)(postcss@8.5.19))
+      minimizer-webpack-plugin: 5.6.1(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19)(webpack@5.108.4(esbuild@0.28.1)(lightningcss@1.33.0)(postcss@8.5.19))
       neo-async: 2.6.2
       schema-utils: 4.3.3
       tapable: 2.3.3

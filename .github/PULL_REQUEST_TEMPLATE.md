@@ -30,7 +30,12 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 
 ### UI 变化
 
-<!-- 涉及 UI 时附截图或录屏，并注明平台；不涉及则写“不涉及”。 -->
+<!-- 涉及 UI 时附截图或录屏，并注明平台；不涉及则写“不涉及”。
+普通 Desktop 界面改动用单页验证截图即可：`pnpm ui:check --changed --theme all`（修旧问题加
+`--compare` 出改前／改后对照），再运行 `pnpm ui:check:publish`，它把截图发到作者 fork 的
+`pr-assets/<分支>`，输出带图片链接的本段内容，原样贴到这里。涉及登录、发送、跨设备等单页验证
+覆盖不到的变化，仍附完整 Cindy 截图；设计系统 PR 的证据要求见
+docs/design-rules/design-governance.md §6。 -->
 
 - 引用的设计规范：
 

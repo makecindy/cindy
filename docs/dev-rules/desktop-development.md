@@ -7,6 +7,9 @@
 
 ## Agent 启动入口
 
+只为检查界面改动（样式、布局、文案、深浅色、多语言）时不必启动 Desktop，先用下文
+「单页 UI 快速验证」；需要真实 IPC、登录、数据库或跨设备行为时再按本节启动。
+
 Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。restart
 命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
 不再默认共享 Cindy 账号登录态与业务数据。OpenAI 模型登录态是刻意保留的例外：
@@ -202,6 +205,51 @@ pnpm test:unit
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+## 单页 UI 快速验证
+
+`pnpm ui:check` 只编译被改的真实 renderer 组件，在一个隔离的 Electron 窗口（与 Cindy 同一
+Chromium）里按「场景 × 主题 × 语言 × 窗口尺寸」逐个截图、做通用检查后退出，不加载 main、
+登录、数据库或 Agent。一个场景约 0.5 秒，整页全矩阵通常在 20 秒内，可以在每次改 UI 后自检，
+不必为此启动完整 Desktop。
+
+```bash
+pnpm ui:check --changed --theme all
+pnpm ui:check --page group-chat --case all --theme all --locale all
+pnpm ui:check --page group-chat --case long-device --compare
+pnpm ui:check --list
+pnpm ui:preview --page device-picker
+pnpm ui:check:publish
+pnpm ui:check:selftest
+```
+
+- `--changed` 按本分支改动选出加载了这些文件的页面；输出里 `UNCOVERED` 的文件**没有被验证**，
+  需要补场景、用 `--entry` 临时挂载，或回到完整 Desktop。
+- 报告首行 `UI_CHECK passed|failed`，`overview.png`（变体多时还有 `overview-2.png` 等）是截图
+  总览，失败原因、宿主缺失接口和被替换的模块都写在 `summary.json`。自检读 overview 判断视觉
+  效果，不靠“命令通过”下结论。
+- `ui:preview` 只在需要人工手动验收时使用：保持一个窗口、改文件自动重载，关窗或 Ctrl+C 结束。
+- 场景数据、宿主模拟、多语言和对比模式的写法见
+  [单页验证说明](../../apps/desktop/scripts/ui-page/README.md)。
+
+### 按改动选择验证方式
+
+| 改动 | 先做 | 何时升级 |
+| --- | --- | --- |
+| renderer 组件的样式、布局、文案、图标、深浅色 | `pnpm ui:check --changed --theme all` | 有 `UNCOVERED` 时补场景或用 `--entry`；文案改动加 `--locale all`；间距、截断类改动加 `--focus <选择器>` 看放大图和实测尺寸 |
+| 修已有界面 bug，需要改前／改后对照 | `pnpm ui:check --page <页面> --case <场景> --compare` | 修复依赖真实数据流时补定向 vitest |
+| 新组件或还没有页面覆盖的组件 | 写 `tmp/` 下的临时入口：`pnpm ui:check --entry tmp/<名>.tsx` | 会反复回归的组件在 `scripts/fixtures/` 下注册页面 |
+| renderer 逻辑、hook、store、数据转换 | 定向 vitest | 结果显示在界面上时再跑 `ui:check` |
+| main、preload、IPC、数据库、登录、发送、跨设备、窗口生命周期 | 定向测试 + 隔离 Desktop（见「Agent 启动入口」） | `ui:check` 不覆盖这些行为，不能替代 |
+
+普通界面改动的 PR 截图直接用单页验证：检查通过后运行 `pnpm ui:check:publish`，它把最近一次
+运行的总览截图推到作者 fork 的 `pr-assets/<当前分支>`（不进上游仓库，也不动工作区），并输出
+一段带图片链接的「UI 变化」：命令、平台、版本、场景、通过情况、未覆盖的行为和 `--focus` 实测的
+改前／改后数值，原样写进 PR 正文。登录、发送、跨设备等单页验证覆盖不到的变化，仍按原方式附
+完整 Cindy 截图。
+
+`ui:check` 通过只说明列出的场景在真实组件上渲染正确；报告里 `not covered` 列出的行为仍须按
+对应流程验收，正式 PR 前的真实运行验收要求不变。
 
 ## Linux 系统托盘
 
