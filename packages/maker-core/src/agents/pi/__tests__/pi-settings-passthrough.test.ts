@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { buildPiSettingsJsonContent, mergePiUserSettingsPassthrough } from '../index.js';
+import { buildPiSettingsJsonContent, mergePiUserSettingsPassthrough, parsePiModelOverridesToPreserve } from '../index.js';
 
 describe('mergePiUserSettingsPassthrough (#3643)', () => {
   const built = buildPiSettingsJsonContent(128_000, 75);
@@ -68,5 +68,28 @@ describe('mergePiUserSettingsPassthrough (#3643)', () => {
     expect(mergePiUserSettingsPassthrough(built, '')).toBe(built);
     expect(mergePiUserSettingsPassthrough(built, '{not json')).toBe(built);
     expect(mergePiUserSettingsPassthrough(built, '[1,2]')).toBe(built);
+  });
+});
+
+describe('parsePiModelOverridesToPreserve (#5378 收尾)', () => {
+  it('extracts compaction.modelOverrides from valid content', () => {
+    const overrides = { 'gateway/m': { reserveTokens: 20_000 } };
+    expect(parsePiModelOverridesToPreserve(JSON.stringify({ compaction: { modelOverrides: overrides } })))
+      .toEqual(overrides);
+  });
+
+  it('returns undefined for corrupt JSON instead of throwing', () => {
+    // 回归:#5378 的保留读曾裸 JSON.parse —— 损坏/半截 settings.json 会把投影
+    // 或 set_model 后的改写炸掉(remote 侧还以 PI_CATALOG_RELOAD_UNCONFIRMED
+    // 终止已成功的切换)。与 #3643 容错口径同族:损坏 → 跳过保留。
+    expect(parsePiModelOverridesToPreserve('{not json')).toBeUndefined();
+  });
+
+  it('returns undefined for non-object shapes and for content without overrides', () => {
+    expect(parsePiModelOverridesToPreserve('null')).toBeUndefined();
+    expect(parsePiModelOverridesToPreserve('[1,2]')).toBeUndefined();
+    expect(parsePiModelOverridesToPreserve(JSON.stringify({ transport: 'sse' }))).toBeUndefined();
+    expect(parsePiModelOverridesToPreserve(JSON.stringify({ compaction: { modelOverrides: 'bad' } })))
+      .toBeUndefined();
   });
 });
