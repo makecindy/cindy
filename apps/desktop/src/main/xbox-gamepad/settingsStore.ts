@@ -131,6 +131,10 @@ export function writeXboxGamepadSettingsPatch(
   patch: XboxGamepadSettingsPatch,
 ): XboxGamepadSettings {
   const store = stores[family];
+  // 写前失效缓存(一次 stat):writePatch 的读路径不做 mtime 检查,若注册后
+  // 文件被外部(用户/agent 手改)编辑过,旧缓存会按 T0 快照合并并整文件替换,
+  // 静默丢弃外部编辑。先失效让 writePatch 基于最新磁盘状态合并。
+  store.invalidateIfChanged();
   store.writePatch(patch);
   log.info('Xbox gamepad settings written', { family, keys: Object.keys(patch) });
   return store.read();

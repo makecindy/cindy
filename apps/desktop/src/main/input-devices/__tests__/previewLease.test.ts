@@ -11,8 +11,19 @@ function fakeOwner(id: number) {
       bucket.push(listener);
       listeners.set(event, bucket);
     },
+    removeListener(event: 'destroyed' | 'render-process-gone', listener: () => void) {
+      const bucket = listeners.get(event);
+      if (!bucket) return;
+      const index = bucket.indexOf(listener);
+      if (index >= 0) bucket.splice(index, 1);
+    },
+    listenerCount(): number {
+      let total = 0;
+      for (const bucket of listeners.values()) total += bucket.length;
+      return total;
+    },
     emit(event: 'destroyed' | 'render-process-gone') {
-      for (const listener of listeners.get(event) ?? []) listener();
+      for (const listener of [...(listeners.get(event) ?? [])]) listener();
     },
   };
 }
@@ -76,11 +87,53 @@ describe('createLayoutPreviewLease', () => {
     expect(setActive).toHaveBeenCalledWith(false);
   });
 
+  it('removes the release listeners when the same owner deactivates between visits', () => {
+    const setActive = vi.fn();
+    const lease = createLayoutPreviewLease(setActive);
+    const owner = fakeOwner(1);
+
+    lease.setActive(true, owner);
+    expect(owner.listenerCount()).toBe(2);
+    lease.setActive(false, owner);
+
+    lease.setActive(true, owner);
+    lease.setActive(false, owner);
+
+    expect(setActive).toHaveBeenCalledTimes(4);
+    expect(owner.listenerCount()).toBe(0);
+  });
+
+  it('removes the previous owner listeners when another owner takes the lease', () => {
+    const setActive = vi.fn();
+    const lease = createLayoutPreviewLease(setActive);
+    const first = fakeOwner(1);
+    const second = fakeOwner(2);
+
+    lease.setActive(true, first);
+    lease.setActive(true, second);
+
+    expect(first.listenerCount()).toBe(0);
+    expect(second.listenerCount()).toBe(2);
+  });
+
+  it('drops the sibling once listener after the owning renderer disappears', () => {
+    const setActive = vi.fn();
+    const lease = createLayoutPreviewLease(setActive);
+    const owner = fakeOwner(1);
+
+    lease.setActive(true, owner);
+    owner.emit('destroyed');
+
+    expect(setActive).toHaveBeenCalledWith(false);
+    expect(owner.listenerCount()).toBe(0);
+  });
+
   it('extracts a trusted IPC sender and ignores empty events', () => {
     const owner = fakeOwner(7);
     expect(layoutPreviewOwnerFromEvent({ sender: owner })).toEqual(
       expect.objectContaining({ id: 7 }),
     );
     expect(layoutPreviewOwnerFromEvent({})).toBeNull();
+    expect(layoutPreviewOwnerFromEvent({ sender: { id: 3, once: () => undefined } })).toBeNull();
   });
 });
