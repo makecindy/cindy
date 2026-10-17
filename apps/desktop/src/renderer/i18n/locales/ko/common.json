@@ -3402,7 +3402,13 @@
           "showAll": "모든 모델 선택",
           "hideAll": "모든 선택 해제",
           "reset": "기본 선택 복원",
-          "connectionRequired": "연결하면 사용할 수 있습니다. 모델 선택은 유지됩니다."
+          "connectionRequired": "연결하면 사용할 수 있습니다. 모델 선택은 유지됩니다.",
+          "enableEngines": "엔진별로 추가",
+          "enableEngine": {
+            "claude-code": "Claude Code 추가",
+            "codex": "Codex 추가",
+            "pi": "Pi 추가"
+          }
         }
       },
       "remote": {

@@ -3432,7 +3432,13 @@
           "showAll": "Select all models",
           "hideAll": "Clear selection",
           "reset": "Restore default selection",
-          "connectionRequired": "Connect to use these models. Your selections are saved."
+          "connectionRequired": "Connect to use these models. Your selections are saved.",
+          "enableEngines": "Enable by engine",
+          "enableEngine": {
+            "claude-code": "Enable Claude Code",
+            "codex": "Enable Codex",
+            "pi": "Enable Pi"
+          }
         }
       },
       "remote": {

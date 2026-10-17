@@ -386,6 +386,30 @@ export function modelVisibilityTargets(
   return agent && model ? [{ agent, modelId: model.id }] : [];
 }
 
+
+/** Selected engines only, for models that already exist on those engines.
+ * Does not follow the native-only show shortcut and does not create a missing route. */
+export function explicitEngineEnableTargets(
+  provider: ProviderView,
+  rows: readonly UnionModelRow[],
+  engines: readonly AgentKind[],
+): { agent: AgentKind; modelId: string }[] {
+  const userProvider = provider.source === 'user';
+  const wanted = new Set(engines);
+  const targets: { agent: AgentKind; modelId: string }[] = [];
+  for (const row of rows) {
+    if (isRowPaymentRequired(row) || isRowDisabled(row)) continue;
+    for (const agent of row.avail) {
+      if (!wanted.has(agent)) continue;
+      const model = row.byAgent[agent];
+      if (!model || !isAgentSelectableModel(model, { userProvider })) continue;
+      if (model.disabled || model.status === 'retired' || model.availability === 'requires_payment') continue;
+      targets.push({ agent, modelId: model.id });
+    }
+  }
+  return targets;
+}
+
 /** 普通模式的单开关显示值:任一可用 agent 开启即视为开(拨动才归一)。 */
 function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boolean): boolean {
   return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider) === true);
@@ -841,6 +865,12 @@ export function UnifiedModelList({
       mediaReady: rowState(row).canSelect,
     }),
   );
+  const engineEnableItems = (['claude-code', 'codex', 'pi'] as const)
+    .map((engine) => ({
+      engine,
+      targets: explicitEngineEnableTargets(provider, writableRows, [engine]),
+    }))
+    .filter((item) => item.targets.length > 0);
   const visibilityWriteAvailable = writableRows.length > 0;
   // Saved preferences survive disconnection; the count and switches show effective selection.
   const selectedCount = writableRows.filter((row) => rowState(row).selected).length;
@@ -1157,6 +1187,26 @@ export function UnifiedModelList({
                   >
                     {t('settings.providers.models.manage.reset')}
                   </DropdownMenuItem>
+                  {engineEnableItems.length > 0 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.enableEngines')}
+                      </DropdownMenuLabel>
+                      {engineEnableItems.map(({ engine, targets }) => (
+                        <DropdownMenuItem
+                          key={engine}
+                          onSelect={() => {
+                            void setModelVisibilities(provider.id, targets, true).then((success) => {
+                              if (!success) showVisibilityWriteFailure();
+                            });
+                          }}
+                        >
+                          {t(`settings.providers.models.manage.enableEngine.${engine}`)}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

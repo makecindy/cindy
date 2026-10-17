@@ -3402,7 +3402,13 @@
           "showAll": "選用全部模型",
           "hideAll": "取消全部選擇",
           "reset": "恢復預設選擇",
-          "connectionRequired": "連線後可用，已選模型會保留。"
+          "connectionRequired": "連線後可用，已選模型會保留。",
+          "enableEngines": "按引擎補開",
+          "enableEngine": {
+            "claude-code": "補開 Claude Code",
+            "codex": "補開 Codex",
+            "pi": "補開 Pi"
+          }
         }
       },
       "remote": {
