@@ -124,7 +124,7 @@ import {
   notifyOpenAiMediaCredentialChanged,
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
-import { clearXaiMediaModels } from './model-discovery/xai-media.js';
+import { clearAllXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
@@ -448,7 +448,7 @@ function handleProviderSecretsCleared(): void {
   resetSubscriptionAccountCaches();
   clearDiscoveredProviderModels();
   clearXaiDiscoveredModels();
-  clearXaiMediaModels();
+  clearAllXaiMediaModels();
   notifyOpenAiMediaCredentialChanged();
 }
 

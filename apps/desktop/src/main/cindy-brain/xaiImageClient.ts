@@ -27,6 +27,7 @@ interface XaiImageResponse {
 }
 
 export interface CreateXaiImageChannelOptions {
+  providerId?: string;
   /** Alternative API-key source; when present it takes precedence over OAuth. */
   hasApiKey?(): boolean;
   getApiKey?(): string | null | Promise<string | null>;
@@ -47,8 +48,8 @@ export interface CreateXaiImageChannelOptions {
   }): Promise<unknown>;
 }
 
-function upstreamModelId(catalogId: string): string {
-  return catalogId.startsWith('xai/') ? catalogId.slice('xai/'.length) : catalogId;
+function upstreamModelId(catalogId: string, providerId = 'xai'): string {
+  return catalogId.startsWith(`${providerId}/`) ? catalogId.slice(providerId.length + 1) : catalogId;
 }
 
 async function sourceImage(path: string): Promise<{ type: 'image_url'; url: string }> {
@@ -221,7 +222,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     ]);
     const isEdit = images.length > 0;
     const body: Record<string, unknown> = {
-      model: upstreamModelId(params.model),
+      model: upstreamModelId(params.model, opts.providerId),
       prompt: params.prompt,
       response_format: 'b64_json',
       ...(options.resolution ? { resolution: options.resolution } : {}),
