@@ -2067,6 +2067,14 @@ interface ElectronAPI {
     resolveCloseRequest: (approved: boolean) => Promise<void>;
   };
 
+  /** 桌面浮窗(ghost overlay window)用户开关(per-owner 持久化)。 */
+  ghostOverlayWindow: {
+    /** 首帧同步读某插件浮窗的用户开关(默认 true)。 */
+    getUserEnabledSync: (ghostId: string) => boolean;
+    /** 写用户开关;false = 关闭(即时 hide 已可见浮窗),true = 重新开启。 */
+    setUserEnabled: (ghostId: string, enabled: boolean) => Promise<void>;
+  };
+
   agentIsland: {
     setVisibleSession: (sessionId: string | string[] | null) => Promise<{ ok: true }>;
     setEnabled: (enabled: boolean) => Promise<{ ok: true }>;

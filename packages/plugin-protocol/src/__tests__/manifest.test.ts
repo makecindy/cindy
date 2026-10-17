@@ -7,6 +7,9 @@ import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_MAIN_VIEW_ICONS,
+  GHOST_OVERLAY_DEFAULT_SIZE,
+  GHOST_OVERLAY_MAX_SIZE,
+  GHOST_OVERLAY_MIN_SIZE,
   GHOST_OAUTH_SCOPES_MAX,
   LEGACY_GHOST_SLOTS,
   compareCindyVersions,
@@ -1789,6 +1792,82 @@ describe('Ghost manifest contract', () => {
     expect(pending.ok).toBe(false);
     if (!pending.ok) expect(pending.reason).toContain('暂未支持');
     expect(validateGhostManifest(withPanel({ position: 'center' })).ok).toBe(false);
+  });
+
+  it('overlay 声明:html 必填且必须是安装目录内安全相对路径', () => {
+    const withOverlay = (overlay: unknown) => ({ ...validManifest, overlay });
+
+    const minimal = validateGhostManifest(withOverlay({ html: 'overlay.html' }));
+    expect(minimal.ok).toBe(true);
+    if (minimal.ok) expect(minimal.manifest.overlay).toEqual({ html: 'overlay.html' });
+
+    const missing = validateGhostManifest(withOverlay({}));
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.reason).toContain('overlay.html');
+
+    const notObject = validateGhostManifest(withOverlay('overlay.html'));
+    expect(notObject.ok).toBe(false);
+    if (!notObject.ok) expect(notObject.reason).toContain('overlay 必须是对象');
+
+    // 路径穿越与对象保留键名（__proto__ / constructor / prototype）一律拒绝。
+    for (const bad of ['__proto__', 'constructor', 'prototype', '../x', 'a/../b']) {
+      const rejected = validateGhostManifest(withOverlay({ html: bad }));
+      expect(rejected.ok, bad).toBe(false);
+      if (!rejected.ok) expect(rejected.reason).toContain('overlay.html');
+    }
+  });
+
+  it('overlay 尺寸:32–512 的整数通过,越界/非整数/非数字一律拒', () => {
+    const withSize = (size: unknown) => ({
+      ...validManifest,
+      overlay: { html: 'overlay.html', ...(size as Record<string, unknown>) },
+    });
+
+    for (const bad of [31, 513, 128.5, '128', true]) {
+      const width = validateGhostManifest(withSize({ width: bad }));
+      expect(width.ok, `width=${String(bad)}`).toBe(false);
+      if (!width.ok) expect(width.reason).toContain('overlay.width');
+
+      const height = validateGhostManifest(withSize({ height: bad }));
+      expect(height.ok, `height=${String(bad)}`).toBe(false);
+      if (!height.ok) expect(height.reason).toContain('overlay.height');
+    }
+
+    expect(GHOST_OVERLAY_MIN_SIZE).toBe(32);
+    expect(GHOST_OVERLAY_MAX_SIZE).toBe(512);
+    expect(GHOST_OVERLAY_DEFAULT_SIZE).toBe(128);
+    const bounds = validateGhostManifest(
+      withSize({ width: GHOST_OVERLAY_MIN_SIZE, height: GHOST_OVERLAY_MAX_SIZE }),
+    );
+    expect(bounds.ok).toBe(true);
+    if (bounds.ok) {
+      expect(bounds.manifest.overlay).toEqual({ html: 'overlay.html', width: 32, height: 512 });
+    }
+  });
+
+  it('overlay 未声明时字段省略', () => {
+    const parsed = validateGhostManifest(validManifest);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.manifest.overlay).toBeUndefined();
+  });
+
+  it('overlay.html 与 locales 声明的路径冲突时拒绝', () => {
+    // 与 panel.html / mainView.html 同口径:声明文件路径不得与 locales.* 重叠。
+    const samePath = validateGhostManifest({
+      ...validManifest,
+      overlay: { html: 'locales/en.json' },
+      locales: { en: 'locales/en.json' },
+    });
+    expect(samePath.ok).toBe(false);
+    if (!samePath.ok) expect(samePath.reason).toContain('与插件其他声明文件大小写折叠后冲突');
+
+    const descendant = validateGhostManifest({
+      ...validManifest,
+      overlay: { html: 'locales' },
+      locales: { en: 'locales/en.json' },
+    });
+    expect(descendant.ok).toBe(false);
+    if (!descendant.ok) expect(descendant.reason).toContain('冲突');
   });
 });
 

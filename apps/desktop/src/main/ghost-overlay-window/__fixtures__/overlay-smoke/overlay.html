@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>overlay-smoke</title>
+  <style>
+    /* 零桥浮窗：页面底色必须完全透明，透明由「宿主透明窗 + 页面透明」共同决定。 */
+    html,
+    body {
+      margin: 0;
+      width: 160px;
+      height: 160px;
+      background: transparent;
+      overflow: hidden;
+      user-select: none;
+    }
+    #dot {
+      position: absolute;
+      /* 96×96 圆，圆心居中在 (80, 80)，半径 48。 */
+      left: 32px;
+      top: 32px;
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      background: rgba(64, 128, 255, 0.45); /* 半透明蓝 */
+    }
+    #status {
+      position: absolute;
+      left: 8px;
+      bottom: 8px;
+      width: 144px;
+      box-sizing: border-box;
+      padding: 2px 4px;
+      font-family: system-ui, "Segoe UI", sans-serif;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #0b2545;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.6);
+      border-radius: 6px;
+      pointer-events: none; /* 状态块不参与命中/点击，不挡圆外穿透判定。 */
+    }
+  </style>
+</head>
+<body>
+  <div id="dot"></div>
+  <div id="status">hit: no · click: 0 · (—, —)</div>
+  <script src="overlay.js"></script>
+</body>
+</html>

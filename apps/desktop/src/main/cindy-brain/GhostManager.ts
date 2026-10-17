@@ -3197,6 +3197,14 @@ export class GhostManager {
         },
       };
     }
+    if (v.manifest.overlay && !zip.file(`${prefix}${v.manifest.overlay.html}`)) {
+      return {
+        rejection: {
+          code: 'file-invalid',
+          reason: `清单声明了 overlay.html,但压缩包内缺少 ${v.manifest.overlay.html}`,
+        },
+      };
+    }
     let localizedManifest = withGhostResolvedLocale(v.manifest, this.options.getLocale?.());
     const localeResources: Record<string, GhostManifestLocaleResource> = {};
     if (v.manifest.locales !== undefined) {

@@ -3049,6 +3049,24 @@ describe('GhostManager · install', () => {
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 
+  it('overlay 清单声明的 HTML 不在包内 → inspect/install 都拒绝', async () => {
+    const manifest = {
+      ...goodManifest(),
+      overlay: { html: 'overlay.html' },
+    };
+    const cindy = await makeCindy('missing-overlay.cindy', manifest, {
+      'main.js': '// browser entry',
+    });
+
+    expect(await manager.inspect(cindy)).toMatchObject({
+      rejection: {
+        code: 'file-invalid',
+        reason: expect.stringContaining('overlay.html'),
+      },
+    });
+    await expectRejection(await manager.install(cindy), 'file-invalid');
+  });
+
   it.each(['.disabled', '.cindy-trust.json', '.CINDY-TRUST.JSON'])(
     '包不能自带主机保留文件 %s',
     async (reservedFile) => {

@@ -6,6 +6,9 @@ import {
   GHOST_CINDY_EMBED_MAX_TEXTS,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MAIN_VIEW_ICONS,
+  GHOST_OVERLAY_DEFAULT_SIZE,
+  GHOST_OVERLAY_MAX_SIZE,
+  GHOST_OVERLAY_MIN_SIZE,
   changedBuiltinOauthClientSecretKeys,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
@@ -2435,6 +2438,74 @@ describe('ghost · panel.position 校验', () => {
   });
 });
 
+describe('ghost · overlay 声明校验', () => {
+  it('html 必填且必须是安装目录内安全相对路径', () => {
+    const withOverlay = (overlay: unknown) => ({ ...goodManifest(), overlay });
+
+    const minimal = validateGhostManifest(withOverlay({ html: 'overlay.html' }));
+    expect(minimal.ok).toBe(true);
+    if (minimal.ok) expect(minimal.manifest.overlay).toEqual({ html: 'overlay.html' });
+
+    const missing = validateGhostManifest(withOverlay({}));
+    expect(missing.ok).toBe(false);
+    expect(!missing.ok && missing.reason).toContain('overlay.html');
+
+    const notObject = validateGhostManifest(withOverlay('overlay.html'));
+    expect(notObject.ok).toBe(false);
+    expect(!notObject.ok && notObject.reason).toContain('overlay 必须是对象');
+
+    // 路径穿越与对象保留键名（__proto__ / constructor / prototype）一律拒绝。
+    for (const bad of ['__proto__', 'constructor', 'prototype', '../x', 'a/../b']) {
+      const rejected = validateGhostManifest(withOverlay({ html: bad }));
+      expect(rejected.ok, bad).toBe(false);
+      expect(!rejected.ok && rejected.reason).toContain('overlay.html');
+    }
+  });
+
+  it('尺寸:32–512 的整数通过,越界/非整数/非数字一律拒;未声明时字段省略', () => {
+    const withSize = (size: unknown) => ({
+      ...goodManifest(),
+      overlay: { html: 'overlay.html', ...(size as Record<string, unknown>) },
+    });
+
+    for (const bad of [31, 513, 128.5, '128', true]) {
+      const width = validateGhostManifest(withSize({ width: bad }));
+      expect(width.ok, `width=${String(bad)}`).toBe(false);
+      expect(!width.ok && width.reason).toContain('overlay.width');
+
+      const height = validateGhostManifest(withSize({ height: bad }));
+      expect(height.ok, `height=${String(bad)}`).toBe(false);
+      expect(!height.ok && height.reason).toContain('overlay.height');
+    }
+
+    expect(GHOST_OVERLAY_MIN_SIZE).toBe(32);
+    expect(GHOST_OVERLAY_MAX_SIZE).toBe(512);
+    expect(GHOST_OVERLAY_DEFAULT_SIZE).toBe(128);
+    const bounds = validateGhostManifest(
+      withSize({ width: GHOST_OVERLAY_MIN_SIZE, height: GHOST_OVERLAY_MAX_SIZE }),
+    );
+    expect(bounds.ok).toBe(true);
+    if (bounds.ok) {
+      expect(bounds.manifest.overlay).toEqual({ html: 'overlay.html', width: 32, height: 512 });
+    }
+
+    const omitted = validateGhostManifest(goodManifest());
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) expect(omitted.manifest.overlay).toBeUndefined();
+  });
+
+  it('overlay.html 与 locales 声明的路径冲突时拒绝', () => {
+    // 与 panel.html / mainView.html 同口径:声明文件路径不得与 locales.* 大小写折叠后精确撞车。
+    const samePath = validateGhostManifest({
+      ...goodManifest(),
+      overlay: { html: 'locales/en.json' },
+      locales: { en: 'locales/en.json' },
+    });
+    expect(samePath.ok).toBe(false);
+    expect(!samePath.ok && samePath.reason).toContain('与插件其他声明文件大小写折叠后冲突');
+  });
+});
+
 describe('ghost · whenToUse(语义召回线索)', () => {
   it('可带并原样输出;超长/空串拒', () => {
     const chip = validateGhostManifest({ ...goodChipManifest(), whenToUse: '需要出图时找我' });
@@ -2638,6 +2709,41 @@ describe('ghost · 逐项权限清单', () => {
     expect(diff.added).toEqual([
       expect.objectContaining({ key: 'main-view', kind: 'main-view', labelKey: 'mainView' }),
     ]);
+    expect(diff.removed).toEqual([]);
+  });
+
+  it('overlay 权限只在声明时列出:恰有两条且顺序稳定', () => {
+    const without = fullChip();
+    expect(ghostPermissionItems(without).filter((i) => i.kind === 'overlay')).toEqual([]);
+
+    const declared: GhostManifest = { ...fullChip(), overlay: { html: 'overlay.html' } };
+    expect(ghostPermissionItems(declared).map((i) => i.key)).toEqual([
+      'cindy:image.generate',
+      'cindy:image.edit',
+      'tool:gen_image',
+      'tool:edit_image',
+      'command:画图',
+      'panel:left',
+      'overlay',
+      'overlay:mouse-position',
+      'code',
+    ]);
+    // 浮窗本体在前、鼠标位置在后,顺序稳定;kind 与 labelKey 与 panel/preview 同款结构。
+    expect(ghostPermissionItems(declared).filter((i) => i.kind === 'overlay')).toEqual([
+      { key: 'overlay', kind: 'overlay', labelKey: 'overlay' },
+      { key: 'overlay:mouse-position', kind: 'overlay', labelKey: 'overlayMousePosition' },
+    ]);
+  });
+
+  it('diff:overlay 声明视为新增权限(更新判定为需确认)', () => {
+    const previous = fullChip();
+    const next: GhostManifest = {
+      ...fullChip(),
+      version: '2.0.0',
+      overlay: { html: 'overlay.html' },
+    };
+    const diff = diffGhostPermissionItems(previous, next);
+    expect(diff.added.map((i) => i.key)).toEqual(['overlay', 'overlay:mouse-position']);
     expect(diff.removed).toEqual([]);
   });
 

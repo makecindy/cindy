@@ -2007,6 +2007,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onStateChanged: fanOutGhostPanelWindowStateChanged,
   },
 
+  // ── 桌面浮窗(ghost overlay window)用户开关 ────────────────────────
+  // 详情页只用首帧同步读 + 写入;浮窗状态机本身不向主窗 renderer 暴露。
+  ghostOverlayWindow: {
+    /** 首帧同步读某插件浮窗的用户开关(默认 true;per-owner 持久化)。 */
+    getUserEnabledSync: (ghostId: string): boolean =>
+      ipcRenderer.sendSync('ghost-overlay-window:get-user-enabled-sync', ghostId) as boolean,
+    /** 写用户开关;false = 关闭(即时 hide 已可见浮窗),true = 重新开启。 */
+    setUserEnabled: (ghostId: string, enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke('maker:ghost-overlay-window:set-user-enabled', ghostId, enabled),
+  },
+
   // ── 资源用量独立子窗口 ──────────────────────────────────────────────
   // 主窗口只持有打开能力；资源窗口的关闭与就绪能力在专用 preload 中暴露。
   resourceUsageWindow: {

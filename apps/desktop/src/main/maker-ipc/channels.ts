@@ -759,6 +759,15 @@ export const MAKER_INVOKE = {
   GHOST_PANEL_WINDOW_OPEN: 'maker:ghost-panel-window:open',
   GHOST_PANEL_WINDOW_SET_DETACHED: 'maker:ghost-panel-window:set-detached',
   /**
+   * 桌面浮窗(ghost overlay window)——每 ghostId 一扇透明置顶浮窗。
+   * 状态机见 main/ghost-overlay-window/controller.ts。
+   *  - GET_STATE: 拉全量 { <ghostId>: { mounted, visible, interactive } }
+   *  - SET_USER_ENABLED(ghostId, boolean): 用户 kill switch;持久化在 Task 8,
+   *    Task 7 只做通道与载荷校验并写入运行期开关。
+   */
+  GHOST_OVERLAY_WINDOW_GET_STATE: 'maker:ghost-overlay-window:get-state',
+  GHOST_OVERLAY_WINDOW_SET_USER_ENABLED: 'maker:ghost-overlay-window:set-user-enabled',
+  /**
    * 会话内 /goal 自主续跑(goal-host)——
    *  - GOAL_SET: 设/替换目标并立刻发首轮。入参 { sessionId, objective, agentKind, budgetTokens? }(budgetTokens 留空=不设预算)
    *  - GOAL_CLEAR: 用户清除目标(删行 + 停续跑 + 推 null 状态)
@@ -1053,6 +1062,11 @@ export const MAKER_PUSH = {
    * (主窗布局过滤 + 各子窗口自身都消费)。
    */
   GHOST_PANEL_WINDOW_STATE_CHANGED: 'maker:ghost-panel-window:state-changed',
+  /**
+   * 桌面浮窗状态广播(全量 GhostOverlayWindowsState)——发所有窗口
+   * (主窗镜像 store 消费)。
+   */
+  GHOST_OVERLAY_WINDOW_STATE_CHANGED: 'maker:ghost-overlay-window:state-changed',
 } as const;
 
 /**

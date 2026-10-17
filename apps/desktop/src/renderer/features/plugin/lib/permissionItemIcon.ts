@@ -23,6 +23,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  overlay: AppWindow,
 };
 
 /**

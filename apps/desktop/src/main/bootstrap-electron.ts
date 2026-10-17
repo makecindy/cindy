@@ -442,7 +442,11 @@ import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './op
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
-import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
+import {
+  cindyGhostSchemePrivilege,
+  ensureGhostProtocolRegistered,
+  sendOverlayCursorToGhost,
+} from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
@@ -752,6 +756,16 @@ import { isResourceUsageOpenSender } from './resource-usage-window/open-sender.j
 import { GhostPanelWindowsController } from './ghost-panel-window/controller.js';
 import { createGhostPanelWindow } from './ghost-panel-window/window.js';
 import { registerGhostPanelWindowIpc } from './ghost-panel-window/ipc.js';
+import { GhostOverlayWindowsController } from './ghost-overlay-window/controller.js';
+import { createGhostOverlayWindow } from './ghost-overlay-window/window.js';
+import { registerGhostOverlayWindowIpc } from './ghost-overlay-window/ipc.js';
+import { GhostOverlayCursorStream } from './ghost-overlay-window/cursor-stream.js';
+import {
+  readOverlayUserEnabled,
+  setOverlayUserEnabled,
+} from './ghost-overlay-window/user-prefs-store.js';
+import { createGhostOverlaySlot } from './cindy-brain/overlaySlot.js';
+import { ownerScopedGhostPartitionForInstalledGhost } from './cindy-brain/ghostWebviewPartition.js';
 import {
   patchGhostPanelWindowEntry,
   readGhostPanelWindowsSettings,
@@ -1112,17 +1126,20 @@ import {
   getGhostSessionActivityTracker,
   interruptGhostCallsForAccountBoundary,
   isGhostAvailableForActiveSession,
+  findGhostForInstanceId,
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
   refreshPluginUsageBindings,
   registerGhostIpc,
   runStableOwnerPostCommitTask,
   setGhostNodeRuntimeStartAttemptContextReader,
+  setGhostOverlaySlot,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
 import { installedGhostStoragePart } from '../shared/pluginIdentity.js';
+import { ghostInstallApprovalToken } from '../shared/ghost.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
@@ -2342,6 +2359,124 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 
+// ── 桌面浮窗(ghost overlay window)───────────────────────────────────────
+// controller / cursorStream / overlay slot 单例化并接 IPC。浮窗无窗口级持久状态;
+// 用户开关(kill switch)的 per-owner 持久化在 user-prefs-store(默认开启,owner
+// 切换隔离);关闭时的即时 hide 由 ipc.ts 的 SET_USER_ENABLED handler 执行。
+// cursorStream 经 let 变量引用:owner 切换时 dispose 是终态、不可复用,必须重建
+// 实例;controller 的钩子闭包读变量当前值,自动重新接上新实例。
+const isGhostOverlayUserEnabled = (ghostId: string): boolean =>
+  readOverlayUserEnabled(ghostId);
+
+// 资格判据与 reconcile 保持一致:已装 + 未停用 + 声明了 overlay。
+// 消除 disabled-but-declared 的窄竞态(停用广播尚未 reconcile 到位时的窗口)。
+const isGhostOverlayDeclared = (ghostId: string): boolean => {
+  const ghost = findGhostForInstanceId(ghostId);
+  return ghost !== null && ghost.enabled !== false && ghost.manifest.overlay !== undefined;
+};
+
+function createGhostOverlayCursorStream(): GhostOverlayCursorStream {
+  return new GhostOverlayCursorStream({
+    getCursorScreenPoint: () => screen.getCursorScreenPoint(),
+    send: (ghostId, payload) => sendOverlayCursorToGhost(ghostId, payload.x, payload.y),
+    now: () => performance.now(),
+  });
+}
+
+// 分区同源(Task 3 review 结论):ensureProtocolRegistered 与 resolveGhostOverlaySession
+// 都锚定 findGhostForInstanceId + ownerScopedGhostPartitionForInstalledGhost(与
+// electronSandboxAdapter 的注册路径同源),避免 owner 切换窗口期两处解析错配。
+const resolveGhostOverlayPartition = (ghostId: string): string | null => {
+  const ghost = findGhostForInstanceId(ghostId);
+  if (!ghost) return null;
+  return ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
+};
+
+let ghostOverlayCursorStream = createGhostOverlayCursorStream();
+const ghostOverlayWindowsController = new GhostOverlayWindowsController({
+  createWindow: (ghostId, onWindowCreated) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    const decl = ghost?.manifest.overlay;
+    if (!ghost || !decl) {
+      return Promise.reject(new Error(`ghost overlay not declared for ${ghostId}`));
+    }
+    return createGhostOverlayWindow(ghostId, decl, {
+      ensureProtocolRegistered: async (id) => {
+        const installed = findGhostForInstanceId(id);
+        if (!installed) throw new Error(`ghost ${id} is not installed`);
+        ensureGhostProtocolRegistered(installed);
+      },
+      resolveGhostOverlaySession: resolveGhostOverlayPartition,
+      resolveManifestId: (id) => findGhostForInstanceId(id)?.manifest.id ?? null,
+      onWindowCreated,
+      log: createLogger('ghost-overlay-window'),
+    });
+  },
+  isGhostOverlayDeclared,
+  isUserEnabled: isGhostOverlayUserEnabled,
+  resolveInstalledVersion: (id) => {
+    const ghost = findGhostForInstanceId(id);
+    if (!ghost) return null;
+    // 安装身份 = 版本 + 批准 revision:同一版本号但内容变化的本地重装会生成新的
+    // revision,纳入比较后 reconcile 能正确 dispose 旧浮窗并留给下次 mount 重建。
+    return `${ghost.manifest.version}:${ghostInstallApprovalToken(ghost.approval)}`;
+  },
+  broadcastState: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.GHOST_OVERLAY_WINDOW_STATE_CHANGED, state);
+      } catch {
+        // window torn down mid-broadcast — ignore
+      }
+    }
+  },
+  isQuitting: () => isQuitting,
+  log: createLogger('ghost-overlay-window-controller'),
+  onVisibilityChanged: (ghostId, visible) => {
+    ghostOverlayCursorStream.setVisible(ghostId, visible);
+  },
+  onAllWindowsDestroyed: () => {
+    ghostOverlayCursorStream.dispose();
+  },
+});
+registerGhostOverlayWindowIpc({
+  controller: ghostOverlayWindowsController,
+  setUserEnabled: setOverlayUserEnabled,
+  getUserEnabled: readOverlayUserEnabled,
+});
+
+// overlay-request 守门 slot:经 setGhostOverlaySlot 挂回 cindy-brain 分发(未注入时
+// cindy-brain 侧 fail closed)。cursor-subscribe 先订阅(默认不可见)、后回读 controller
+// 权威可见态补一次 setVisible——覆盖插件先 show 后 subscribe 的顺序相反路径。
+setGhostOverlaySlot(
+  createGhostOverlaySlot({
+    isGhostOverlayDeclared,
+    isUserEnabled: isGhostOverlayUserEnabled,
+    isMounted: (ghostId) => ghostOverlayWindowsController.getState()[ghostId]?.mounted === true,
+    prewarm: (ghostId) => ghostOverlayWindowsController.prewarm(ghostId),
+    show: (ghostId) => ghostOverlayWindowsController.show(ghostId),
+    hide: (ghostId) => ghostOverlayWindowsController.hide(ghostId),
+    move: (ghostId, x, y) => ghostOverlayWindowsController.move(ghostId, x, y),
+    setInteractive: (ghostId, interactive) =>
+      ghostOverlayWindowsController.setInteractive(ghostId, interactive),
+    unmount: (ghostId) => ghostOverlayWindowsController.unmount(ghostId),
+    getAllDisplays: () =>
+      screen.getAllDisplays().map((d) => ({
+        id: d.id,
+        bounds: d.bounds,
+        workArea: d.workArea,
+        scaleFactor: d.scaleFactor,
+      })),
+    subscribeCursor: (ghostId) => {
+      ghostOverlayCursorStream.subscribe(ghostId);
+      const entry = ghostOverlayWindowsController.getState()[ghostId];
+      if (entry?.visible) ghostOverlayCursorStream.setVisible(ghostId, true);
+    },
+    unsubscribeCursor: (ghostId) => ghostOverlayCursorStream.unsubscribe(ghostId),
+  }),
+);
+
 // ── 资源监视器辅助窗口 ──────────────────────────────────────────────
 // 单实例轻量辅助窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
 // 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
@@ -2380,6 +2515,7 @@ remoteDesktopViewerWindows.register();
 
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
+  ghostOverlayWindowsController.reconcile(ghosts);
 });
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
@@ -2475,6 +2611,12 @@ setAppSessionCommitBoundaryHook(() => {
   clearAllSessionAttention();
   remoteDesktopViewerWindows.reset();
   ghostPanelWindowsController.closeForOwnerChange();
+  // 浮窗无持久状态:owner 切换时销毁全部窗口;onAllWindowsDestroyed 会 dispose
+  // cursorStream(终态),随后必须重建实例并把 controller 钩子接到新实例上。
+  ghostOverlayWindowsController.disposeAllForOwnerChange();
+  ghostOverlayCursorStream = createGhostOverlayCursorStream();
+  // 用户开关 per-owner 落盘(store 按 owner 数据目录解析路径,切号后下次读自动
+  // 切到新 owner 文件,无需清空运行期占位)。
   clearAllSessionProviders();
   clearAllSessionRuntimeAxes();
   clearAllSessionRuntimeControlStates();
@@ -9860,6 +10002,7 @@ onQuit('windows-process-scan-workers', disposeWindowsProcessScanWorkers, 'sync')
 onQuit('resource-usage-window', () => resourceUsageWindowController.dispose(), 'sync');
 onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
+onQuit('ghost-overlay-windows', () => ghostOverlayWindowsController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
 onQuit('input-devices', () => disposeInputDevices(), 'async');

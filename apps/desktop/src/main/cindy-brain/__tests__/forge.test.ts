@@ -1286,6 +1286,18 @@ describe('packGhostDir', () => {
       ok: false,
       errorCode: 'ENTRY_MISSING',
     });
+
+    const missingOverlayDir = path.join(workDir, 'src4');
+    await fs.promises.mkdir(missingOverlayDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(missingOverlayDir, 'ghost.json'),
+      JSON.stringify({ ...GOOD_MANIFEST, overlay: { html: 'overlay.html' } }),
+    );
+    await fs.promises.writeFile(path.join(missingOverlayDir, 'main.js'), '// browser brain');
+    expect(await packGhostDir(missingOverlayDir)).toMatchObject({
+      ok: false,
+      errorCode: 'ENTRY_MISSING',
+    });
   });
 
   it('形态收敛:老声明型清单(v1 / kind: declaration)打包被拒', async () => {

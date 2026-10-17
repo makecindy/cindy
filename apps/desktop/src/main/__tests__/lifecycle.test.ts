@@ -35,6 +35,7 @@ const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
 const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
 const ghostPanelWebContentsIds = vi.hoisted(() => new Set<number>());
+const ghostOverlayWebContentsIds = vi.hoisted(() => new Set<number>());
 const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
@@ -54,6 +55,11 @@ vi.mock('../right-sidebar-window/registry.js', () => ({
 vi.mock('../ghost-panel-window/registry.js', () => ({
   isGhostPanelWebContentsId: (webContentsId: number) =>
     ghostPanelWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../ghost-overlay-window/registry.js', () => ({
+  isGhostOverlayWebContents: (webContentsId: number) =>
+    ghostOverlayWebContentsIds.has(webContentsId),
 }));
 
 vi.mock('../reviewer/reviewArtifactConfirmWindowRegistry.js', () => ({
@@ -592,6 +598,7 @@ describe('installQuitHandler render-process-gone', () => {
     resourceUsageWebContentsIds.clear();
     rsbWindowWebContentsIds.clear();
     ghostPanelWebContentsIds.clear();
+    ghostOverlayWebContentsIds.clear();
     reviewArtifactConfirmWebContentsIds.clear();
   });
 
@@ -703,6 +710,22 @@ describe('installQuitHandler render-process-gone', () => {
       expect(mocks.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('ghost panel render-process-gone'),
       );
+    } finally {
+      restore();
+    }
+  });
+
+  it('ghost overlay renderer crash does NOT shut the app down', async () => {
+    ghostOverlayWebContentsIds.add(48);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 48, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('ghost overlay render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
     } finally {
       restore();
     }

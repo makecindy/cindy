@@ -146,6 +146,29 @@ export interface GhostPanelDecl {
   defaultFraction?: number;
 }
 
+/**
+ * 桌面浮窗(overlay)声明的尺寸边界(px)。上限 512 是安全设计(见设计 §4.6);
+ * 越界值一律拒装而非静默截断(规则 9)。
+ */
+export const GHOST_OVERLAY_MIN_SIZE = 32;
+export const GHOST_OVERLAY_MAX_SIZE = 512;
+/** 未声明 width / height 时的缺省边长(px),由宿主窗口工厂使用。 */
+export const GHOST_OVERLAY_DEFAULT_SIZE = 128;
+
+/**
+ * 桌面浮窗声明(与 panel 平行的顶层字段,一段意识至多一扇)。
+ * html 必填(安装目录内安全相对路径);尺寸可选,限定 32–512 的整数。
+ * 位置、标题、边框等形态参数由宿主固定,插件不可调。
+ */
+export interface GhostOverlayDecl {
+  /** 浮窗界面入口(安装目录内相对路径,意识自绘,透明置顶页)。 */
+  html: string;
+  /** 浮窗宽度(px),缺省 GHOST_OVERLAY_DEFAULT_SIZE;限定 32–512 的整数。 */
+  width?: number;
+  /** 浮窗高度(px),缺省 GHOST_OVERLAY_DEFAULT_SIZE;限定 32–512 的整数。 */
+  height?: number;
+}
+
 /** 应用级插件主视图可用的 Cindy 系统线性图标。枚举值与图标名保持一致。 */
 export const GHOST_MAIN_VIEW_ICONS = [
   'puzzle',
@@ -966,6 +989,8 @@ export interface GhostManifest {
   keywords?: string[];
   /** 面板声明;没有面板的意识(如纯工具意识)可省略。 */
   panel?: GhostPanelDecl;
+  /** 桌面浮窗声明;没有浮窗的意识可省略。不依赖任何旧 slot。 */
+  overlay?: GhostOverlayDecl;
   /** 应用级主视图声明；v3 直接声明，v2 与 `main-view` slot 成对。 */
   mainView?: GhostMainViewDecl;
   /**
@@ -1151,6 +1176,18 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
   return GHOST_MANIFEST_RESERVED_RECORD_KEYS.has(value);
 }
 
+/**
+ * overlay.html 的路径校验:与 panel.html 同款"安装目录内安全相对路径"规则,
+ * 并额外拒绝对象保留键名段(__proto__ / constructor / prototype)——该路径
+ * 会作为键进入宿主窗口注册表,保留键名存在原型污染风险。
+ */
+function isSafeGhostOverlayHtml(p: unknown): p is string {
+  return (
+    isSafeGhostRelativePath(p) &&
+    !p.split('/').some((segment) => isGhostManifestReservedRecordKey(segment))
+  );
+}
+
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'routineEvents',
   'schemaVersion',
@@ -1180,6 +1217,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'command',
   'keywords',
   'panel',
+  'overlay',
   'mainView',
   'preview',
   'skill',
@@ -1377,6 +1415,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     raw.icon,
     raw.settingsHtml,
     isPlainObject(raw.panel) ? raw.panel.html : undefined,
+    isPlainObject(raw.overlay) ? raw.overlay.html : undefined,
     isPlainObject(raw.mainView) ? raw.mainView.html : undefined,
     isPlainObject(raw.node) ? raw.node.entry : undefined,
     ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
@@ -1581,6 +1620,40 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       html: p.html as string,
       ...(p.minWidth !== undefined ? { minWidth: p.minWidth as number } : {}),
       ...(p.defaultFraction !== undefined ? { defaultFraction: p.defaultFraction as number } : {}),
+    };
+  }
+
+  // 桌面浮窗(overlay):与 panel 平行的顶层声明,一插件至多一扇,无 slot 依赖。
+  let overlay: GhostOverlayDecl | undefined;
+  if (raw.overlay !== undefined) {
+    const o = raw.overlay;
+    if (!isPlainObject(o)) return { ok: false, reason: 'overlay 必须是对象' };
+    if (!isSafeGhostOverlayHtml(o.html)) {
+      return {
+        ok: false,
+        reason: 'overlay.html 必填,且必须是安装目录内的安全相对路径',
+      };
+    }
+    for (const side of ['width', 'height'] as const) {
+      const size = o[side];
+      if (
+        size !== undefined &&
+        (typeof size !== 'number' ||
+          !Number.isInteger(size) ||
+          size < GHOST_OVERLAY_MIN_SIZE ||
+          size > GHOST_OVERLAY_MAX_SIZE)
+      ) {
+        return {
+          ok: false,
+          reason: `overlay.${side} 必须是 ${GHOST_OVERLAY_MIN_SIZE}–${GHOST_OVERLAY_MAX_SIZE} 之间的整数`,
+        };
+      }
+    }
+    overlay = {
+      ...unknownDeclarationFields(o, ['html', 'width', 'height']),
+      html: o.html as string,
+      ...(o.width !== undefined ? { width: o.width as number } : {}),
+      ...(o.height !== undefined ? { height: o.height as number } : {}),
     };
   }
 
@@ -3760,6 +3833,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),
       ...(panel !== undefined ? { panel } : {}),
+      ...(overlay !== undefined ? { overlay } : {}),
       ...(mainView !== undefined ? { mainView } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(skill !== undefined ? { skill } : {}),

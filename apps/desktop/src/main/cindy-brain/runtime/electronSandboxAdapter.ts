@@ -111,6 +111,15 @@ export function sendToGhostLogic(ghostId: string, payload: unknown): boolean {
   return false;
 }
 
+/**
+ * 光标流下行桥(Task 7):把一帧 overlay-cursor 经管子发到指定意识的电子脑
+ * 逻辑页。真实 send 由 bootstrap 接 cursorStream.send 时调用本函数。
+ * 逻辑页不在线时静默丢弃——光标流是尽力而为的节拍器,不因丢帧报错。
+ */
+export function sendOverlayCursorToGhost(ghostId: string, x: number, y: number): void {
+  sendToGhostLogic(ghostId, { type: 'overlay-cursor', x, y });
+}
+
 /** The remote page uses the same owner partition and running logic as desktop. */
 export async function invokeGhostMobileRelay(ghost: InstalledGhost, operation: MobileRelayOperation): Promise<unknown> {
   const ghostId = installedGhostStoragePart(ghost);

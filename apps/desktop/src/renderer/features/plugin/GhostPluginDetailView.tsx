@@ -10,7 +10,7 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
@@ -20,6 +20,7 @@ import {
   Copy,
   Download,
   MessageCircle,
+  Monitor,
   FolderOpen,
   LayoutTemplate,
   MoreVertical,
@@ -137,6 +138,8 @@ export function GhostPluginDetailView({
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [taskApprovalPending, setTaskApprovalPending] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
+  const [overlayEnabled, setOverlayEnabled] = useState<boolean | null>(null);
+  const overlayDeclared = ghost?.manifest.overlay !== undefined;
   const descriptionRef = useRef<HTMLParagraphElement>(null);
   // 安装记录不完整时不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
   // 看起来只是"被关掉了"),再喂 main 改版的 primaryAction/primaryEnabled。
@@ -161,7 +164,8 @@ export function GhostPluginDetailView({
     hasGithubConnection ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
-    detail.hasTaskPreferences;
+    detail.hasTaskPreferences ||
+    overlayDeclared;
   const summary = hasGithubConnection
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
@@ -220,6 +224,24 @@ export function GhostPluginDetailView({
     observer.observe(description);
     return () => observer.disconnect();
   }, [detail.id, summary]);
+
+  useEffect(() => {
+    if (!overlayDeclared) {
+      setOverlayEnabled(null);
+      return;
+    }
+    setOverlayEnabled(window.electronAPI.ghostOverlayWindow.getUserEnabledSync(detail.id));
+  }, [overlayDeclared, detail.id]);
+
+  const handleOverlayEnabledChange = (checked: boolean): void => {
+    setOverlayEnabled(checked);
+    window.electronAPI.ghostOverlayWindow
+      .setUserEnabled(detail.id, checked)
+      .catch(() => {
+        setOverlayEnabled(!checked);
+        toast.error(t('settings.ghosts.detail.overlayToggleError'));
+      });
+  };
 
   return (
     <main
@@ -479,6 +501,34 @@ export function GhostPluginDetailView({
                     checked={mainViewSidebarVisible}
                     onCheckedChange={onMainViewSidebarVisibleChange}
                     aria-label={t('settings.ghosts.detail.showInSidebar')}
+                  />
+                </div>
+              ) : null}
+              {overlayDeclared ? (
+                <div
+                  className={cn(
+                    DETAIL_SURFACE_CLASS,
+                    'flex min-h-20 items-center gap-3 rounded-xl px-5 py-4',
+                  )}
+                >
+                  <Monitor
+                    size={18}
+                    className="shrink-0 text-[var(--text-tertiary)]"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
+                      {t('settings.ghosts.detail.overlayEntryTitle')}
+                    </p>
+                    <p className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">
+                      {t('settings.ghosts.detail.overlayEntryDescription')}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={overlayEnabled === true}
+                    disabled={overlayEnabled === null}
+                    onCheckedChange={handleOverlayEnabledChange}
+                    aria-label={t('settings.ghosts.detail.overlayToggleAria')}
                   />
                 </div>
               ) : null}

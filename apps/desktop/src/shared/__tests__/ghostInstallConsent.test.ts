@@ -65,6 +65,16 @@ describe('plugin install consent', () => {
     expect(evaluateGhostInstallConsent(current, withMoreTools)).toBeNull();
   });
 
+  it('treats a newly declared overlay as newly added permissions on update', () => {
+    const current = installed(manifest());
+    const next = manifest({ version: '2.0.0', overlay: { html: 'overlay.html' } });
+    const facts = evaluateGhostInstallConsent(current, next);
+    expect(facts).toMatchObject({ kind: 'update', previousVersion: '1.0.0', version: '2.0.0' });
+    if (facts?.kind !== 'update') throw new Error('expected update facts');
+    expect(facts.added.map((item) => item.key)).toEqual(['overlay', 'overlay:mouse-position']);
+    expect(ghostUpdateNeedsConsent(current, next)).toBe(true);
+  });
+
   it('asks when an update adds a permission and reports the diff', () => {
     const facts = evaluateGhostInstallConsent(
       installed(manifest()),

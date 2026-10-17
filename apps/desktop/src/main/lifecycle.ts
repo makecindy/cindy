@@ -53,6 +53,7 @@ import { isResourceUsageWebContentsId } from './resource-usage-window/registry.j
 import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isGhostPanelWebContentsId } from './ghost-panel-window/registry.js';
+import { isGhostOverlayWebContents } from './ghost-overlay-window/registry.js';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
 
 /**
@@ -674,6 +675,12 @@ export function installQuitHandler(timeoutMs = 2000): void {
     if (isGhostPanelWebContentsId(webContents.id)) {
       log.warn(
         `ghost panel render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
+    if (isGhostOverlayWebContents(webContents.id)) {
+      log.warn(
+        `ghost overlay render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }

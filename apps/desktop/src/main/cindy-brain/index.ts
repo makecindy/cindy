@@ -365,6 +365,7 @@ import {
   type NodeRuntimeStartAttemptContext,
 } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
+import type { GhostOverlaySlot } from './overlaySlot.js';
 import { recordGhostPickedDir, relocateGhostPickedDirs } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
@@ -3648,6 +3649,23 @@ export function getGhostPickSlot(): GhostPickSlot {
     });
   }
   return pickSlotSingleton;
+}
+
+let overlaySlotSingleton: GhostOverlaySlot | null = null;
+
+/**
+ * 桌面浮窗请求槽(overlay-request):守门/字段校验/错误码在 overlaySlot.ts。
+ * slot 本体由 Task 7 在 bootstrap 组装(controller + screen + cursorStream
+ * 注入后经 setGhostOverlaySlot 挂回),这里只提供管子分发用的访问点,保持
+ * cindy-brain 不反向依赖 ghost-overlay-window 模块(与 setGhostsChangedObserver
+ * 同款倒置)。
+ */
+export function setGhostOverlaySlot(slot: GhostOverlaySlot | null): void {
+  overlaySlotSingleton = slot;
+}
+
+export function getGhostOverlaySlot(): GhostOverlaySlot | null {
+  return overlaySlotSingleton;
 }
 
 let workspaceSlotSingleton: GhostWorkspaceSlot | null = null;
@@ -8392,7 +8410,9 @@ export function registerGhostIpc(): void {
   // fsSlot 三档守门)/ agent-request(Agent 新回合,一次性用户票或后台权限
   // 守门)/ agent-errand-request(派活取件,agent.errand 加档 + 频控守门)/
   // node-request(随包 Node JSON-RPC/MCP stdio 中继)/ pick-request
-  // (系统级选文件夹,用户亲选即授权)/ preview-request(右侧栏开预览标签,
+  // (系统级选文件夹,用户亲选即授权)/ overlay-request(桌面浮窗消息族,
+  // mount 资格审/未 mount 状态守门/move 钳制在 overlaySlot)/
+  // preview-request(右侧栏开预览标签,
   // preview.hosts 白名单守门)/ workspace-request(工作区会话入口,亲选或
   // 确认卡授权,判重/创建在 workspaceSlot)。其它类型一律拒。
   ipcMain.handle('ghost-pipe:ping', (event) => {
@@ -8515,6 +8535,16 @@ export function registerGhostIpc(): void {
       const current = source === undefined ? undefined : mobilePluginPages?.captureSource(source, id);
       if (source !== undefined && !current) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
       return getGhostPickSlot().handleRequest(id, payload, current);
+    }
+    // overlay-request = 桌面浮窗(overlay 槽)消息族:资格审(mount 未声明/
+    // 用户禁用)、未 mount 状态守门、move 坐标钳制与 displays 查询都在
+    // overlaySlot;slot 由 Task 7 bootstrap 注入(未注入 = 失败关闭)。
+    if (type === 'overlay-request') {
+      const kind = (payload as { kind?: unknown } | null)?.kind;
+      if (typeof kind !== 'string') throwIpcError('INVALID_PARAMS', 'overlay-request 缺少 kind');
+      const slot = getGhostOverlaySlot();
+      if (!slot) throwIpcError('INTERNAL', 'overlay 槽未就绪');
+      return slot.handle(id, kind, payload);
     }
     // workspace-request = 工作区会话入口(workspace 槽):目录亲选或确认卡
     // 授权,已有 active 会话复用;限速/判重/创建守门在 workspaceSlot。

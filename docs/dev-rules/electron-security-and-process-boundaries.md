@@ -144,6 +144,40 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 `<webview>`。回归用例钉在 `main/__tests__/webview-security.test.ts` 的 captcha 分区
 测试组。
 
+### 3.2 桌面浮窗（ghost overlay window）受控例外
+
+插件桌面浮窗（`main/ghost-overlay-window/window.ts`）承载意识自绘的透明置顶页，
+与插件面板走 webview 的路线不同：它**不经 `webviewTag`**，由 `BrowserWindow` 直接
+`loadURL('cindy-ghost://<ghostId>/<decl.html>')` 直载 ghost 分区内容。这是对「ghost
+内容一律经 webview 附加闸」的受控例外，必须同时满足：
+
+- `ensureProtocolRegistered` 先于 `loadURL` 幂等挂好 cindy-ghost:// 协议 handler，
+  否则直载 404／空响应，窗口销毁并清理 registry；
+- 分区由注入的 `resolveGhostOverlaySession` 解析，与协议 handler 注册 session
+  **逐字一致**（owner-scoped + namespace 作用域 + approval receipt），工厂只透传；
+- 安全字段照 §3 逐项显式写明（sandbox / contextIsolation / nodeIntegration: false /
+  webSecurity / plugins: false / navigateOnDragDrop: false 等），零 preload、零弹窗、
+  权限请求全拒、导航限定 `cindy-ghost://<ghostId>/` 前缀。
+
+相对 §3.1 的统一生命周期基线，浮窗因平台形态约束逐条偏差，其余项仍适用：
+
+- **透明**：`transparent: true` + 透明 `backgroundColor`，浮窗不遮挡桌面内容——这是
+  形态要求，不豁免安全字段；
+- **置顶**：`setAlwaysOnTop(true, 'floating', 1)` 保持可见但不高于系统级覆盖物——
+  形态要求，不豁免导航/权限闸；
+- **不可聚焦**：`focusable: false` + 展示一律 `showInactive()`，浮窗永不抢焦点；
+  默认 `setIgnoreMouseEvents(true, { forward: true })` 穿透鼠标。
+- **位置不持久化**：`resizable/movable: false`，位置由宿主控制、重启即重置，浮窗
+  没有窗口级持久状态——因此「隐藏复用」保留 Renderer 而非窗口坐标。
+
+仍满足项：后台预热（`prewarm` 按需创建隐藏窗口并加载 Renderer）、双阶段就绪
+（`renderer-ready → presentation-ready`，5s 超时只展示已挂载壳）、隐藏复用
+（普通隐藏只 `hide()`，再次 `show()` 复用同一 Renderer）、隐藏时重置交互态
+（宿主在隐藏路径显式复位鼠标穿透 `setIgnoreMouseEvents(true, { forward: true })`，
+二次显示不继承拦截态，由插件页面重新判定命中）、有界恢复（每 ghostId
+独立计数，稳定 30s 后恢复额度）、sender 校验（就绪 IPC 经 registry 反查真实
+`webContents`，不接受自报 ghostId；管理 IPC 断言 Cindy 自有顶层 renderer）。
+
 ## 4．preload 与 Context Bridge
 
 - 只通过 `contextBridge.exposeInMainWorld` 暴露按用途命名的最小方法。

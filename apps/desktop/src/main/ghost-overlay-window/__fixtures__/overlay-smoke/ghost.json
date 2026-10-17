@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "0.1.61",
+  "id": "overlay-smoke",
+  "name": "Overlay Smoke",
+  "version": "0.0.3",
+  "kind": "chip",
+  "entry": "main.js",
+  "launch": "resident",
+  "overlay": {
+    "html": "overlay.html",
+    "width": 160,
+    "height": 160
+  }
+}
