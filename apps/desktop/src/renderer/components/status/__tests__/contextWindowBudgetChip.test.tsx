@@ -85,7 +85,7 @@ vi.mock('@/components/ui/dropdown-menu', async () => {
   };
 });
 
-import { ContextWindowBudgetChip, isBoundsCacheEntryStale, resetRemoteContextWindowBoundsCache, __clearAllBoundsCachesForTest } from '../ContextWindowBudgetChip';
+import { ContextWindowBudgetChip, isBoundsCacheEntryStale, resetRemoteContextWindowBoundsCache, __clearAllBoundsCachesForTest, __expireAllBoundsCachesForTest } from '../ContextWindowBudgetChip';
 
 const SESSION_ID = 'session-1';
 
@@ -1105,22 +1105,32 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     __clearAllBoundsCachesForTest();
   });
 
-  it('wires reopen-menu stale refresh through openCard (source contract)', () => {
-    // P2「重开菜单仍显示旧档位」：悬浮/点击/键盘三条打开路径都必须经过过期刷新。
-    // 行为判定拆成两半 —— 这里锁接线（openCard 与键盘路径都调 refreshIfStale，
-    // 且 ref 会在 hook 返回后被挂上）；TTL 判定本身由 isBoundsCacheEntryStale 纯函数单测。
-    const source_path_fix = 0; // (resolve 从 node:path 导入，见下)
-    const source = readFileSync(resolve(__dirname, '../ContextWindowBudgetChip.tsx'), 'utf8')
-      .replace(/\r\n/g, '\n');
-    const openCardBlock = source.slice(
-      source.indexOf('const openCard = useCallback'),
-      source.indexOf('const closeCard = useCallback'),
-    );
-    expect(openCardBlock).toContain('refreshIfStaleRef.current?.();');
-    // ref 挂接必须存在（否则 ref 永远是 null，接线等于没接）。
-    expect(source).toContain('refreshIfStaleRef.current = refreshBoundsIfStale;');
-    // 键盘路径（onOpenChange）原本就有刷新，不许回归。
-    expect(source).toContain('refreshBoundsIfStale()');
+  it('reopening the menu after the cache expires pulls fresh values (hover path)', async () => {
+    // P2「重开菜单仍显示旧档位」：过期缓存必须在重开时拉新 —— 验证手段是把缓存
+    // 标记过期（测试助手），断言重开后**选中态**移到新预算（1M 下 500K 档本就存在，
+    // 只有选中态能区分「拉到了新值」与「旧缓存还在」）。
+    let answer = boundsView({ budget: null, defaultEffectiveWindow: 1_000_000 });
+    installElectronApi(vi.fn(async () => { const v = answer; return v; }));
+    renderChip({ providers: null });
+    const trigger = document.querySelector('[data-context-window-budget-chip]')!;
+    // 首次打开：填入缓存（v1：无预算，选中 1M 默认）。
+    fireEvent.pointerEnter(trigger);
+    await waitFor(() => {
+      expect(checkedOf(document, '1000000')).toBe(true);
+    });
+    // 关闭（宽限期后），把缓存标记过期，换成 v2（预算 500K）。
+    fireEvent.pointerLeave(trigger);
+    await waitFor(() => {
+      expect(screen.queryAllByRole('radio').length).toBe(0);
+    });
+    __expireAllBoundsCachesForTest();
+    answer = boundsView({ budget: 500_000, budgetCustomized: true, defaultEffectiveWindow: 1_000_000 });
+    // 重开：必须拉到 v2 —— 500K 选中态点亮，1M 默认熄灭。
+    fireEvent.pointerEnter(trigger);
+    await waitFor(() => {
+      expect(checkedOf(document, '500000')).toBe(true);
+    });
+    expect(checkedOf(document, '1000000')).toBe(false);
   });
 
   it('a cancelled bounds query never writes the shared cache', async () => {

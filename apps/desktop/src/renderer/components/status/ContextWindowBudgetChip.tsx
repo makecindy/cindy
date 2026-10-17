@@ -792,6 +792,11 @@ export function __clearAllBoundsCachesForTest(): void {
   boundsCache.clear();
 }
 
+/** 仅供测试：把所有缓存条目标记为已过期（TTL+1 前移），用于「过期后重开必拉新」的行为测试。 */
+export function __expireAllBoundsCachesForTest(): void {
+  for (const entry of boundsCache.values()) entry.fetchedAt -= BOUNDS_TTL_MS + 1;
+}
+
 export function resetRemoteContextWindowBoundsCache(): void {
   boundsCache.clear();
 }
