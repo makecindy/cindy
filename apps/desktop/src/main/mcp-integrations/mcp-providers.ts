@@ -1,3 +1,4 @@
+import { getTelegramDeliveryBridge } from '../hook-control/telegramDelivery.js';
 import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type preflightTodoEvents } from '@cindy/maker-shared/teammate-todo';
@@ -435,6 +436,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_slack'),
     },
     scheduler: {
+      telegramDelivery: { getBridge: getTelegramDeliveryBridge },
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),

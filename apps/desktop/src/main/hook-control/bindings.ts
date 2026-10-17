@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface HookBindingStore {
+  listKeys?(connectionId: string): string[];
   findBySession?(sessionId: string): Array<{ connectionId: string; externalKey: string }>;
   get(connectionId: string, externalKey: string): string | null;
   /**
@@ -90,6 +91,13 @@ export function createHookBindingStore(deps: {
   }
 
   return {
+    listKeys(connectionId) {
+      const ns: unknown = readAll()[connectionId];
+      if (!ns || typeof ns !== 'object' || Array.isArray(ns)) return [];
+      return Object.entries(ns).filter(([, row]) =>
+        row && typeof row === 'object' && typeof row.sessionId === 'string'
+      ).map(([key]) => key);
+    },
     findBySession(sessionId) {
       const found: Array<{ connectionId: string; externalKey: string }> = [];
       for (const [connectionId, rows] of Object.entries(readAll())) {

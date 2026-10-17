@@ -62,7 +62,7 @@ export interface HookTransportOpts {
 }
 
 export interface HookTransport {
-  send(msg: HookMessage): boolean;
+  send(msg: HookMessage, options?: { throwOnWriteFailure?: boolean }): boolean;
   dispose(): void;
 }
 
@@ -171,13 +171,15 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
     }, delay);
   }
 
-  function send(msg: HookMessage): boolean {
+  function send(msg: HookMessage, options?: { throwOnWriteFailure?: boolean }): boolean {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     try {
       ws.send(serializeHookMessage(msg));
       return true;
     } catch (err) {
       log.warn(`send failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Delivery callers must distinguish a pre-write refusal from an uncertain write.
+      if (options?.throwOnWriteFailure) throw err;
       return false;
     }
   }
