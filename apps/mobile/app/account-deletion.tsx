@@ -2,8 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,6 +26,7 @@ import {
   simpleScrollInsetProps,
   simpleScrollScreenSafeAreaEdges,
 } from '@/platform/chrome';
+import { KeyboardAvoidingFlex } from '@/session/mobileKeyboardAvoidance';
 import { goBackGuarded } from '@/utils/backGuard';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -121,10 +120,7 @@ export default function AccountDeletionScreen() {
         title={loginText('accountDeletionScreenTitle')}
         titleTestID="accountDeletion.title"
       />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.flex}
-      >
+      <KeyboardAvoidingFlex>
         <ScrollView
           {...simpleScrollInsetProps}
           contentContainerStyle={styles.content}
@@ -280,7 +276,7 @@ export default function AccountDeletionScreen() {
             </>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingFlex>
     </SafeAreaView>
   );
 }

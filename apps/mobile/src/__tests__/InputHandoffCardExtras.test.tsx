@@ -59,6 +59,10 @@ vi.mock("react-native", async () => {
     Linking: { openURL },
     Platform: { OS: "android" },
     StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 },
+    // Android 浮层键盘让位（mobileKeyboardAvoidance）会走 Dimensions/键盘 hook;
+    // AccessibilityInfo 由 useReduceMotion 单例读取,空实现即可。
+    AccessibilityInfo: { isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove() {} }) },
+    Keyboard: { isVisible: () => false, metrics: () => null, addListener: () => ({ remove() {} }), removeListener: () => {}, dismiss: () => {} },
   };
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
