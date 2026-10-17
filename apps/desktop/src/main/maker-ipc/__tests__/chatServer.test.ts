@@ -84,6 +84,17 @@ describe('Chat Server production connection', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
   const local = { dispose: vi.fn() } as unknown as BotGroupChatService;
   const deps = {} as BotGroupChatServiceDeps;
+  it('forwards interaction timing to local turns without connecting to the server', () => {
+    fixture.packaged = true;
+    fixture.urls = [];
+    const refreshPendingInteraction = vi.fn();
+    const service = withChatServer({ ...local, refreshPendingInteraction }, deps);
+    try {
+      service.refreshPendingInteraction('local-lane');
+      expect(refreshPendingInteraction).toHaveBeenCalledExactlyOnceWith('local-lane');
+      expect(fixture.urls).toEqual([]);
+    } finally { service.dispose(); }
+  });
   it('enables the installed application without reading a fixture', async () => {
     fixture.packaged = true;
     const service = withChatServer(local, deps);

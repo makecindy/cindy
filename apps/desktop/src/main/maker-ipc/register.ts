@@ -3004,6 +3004,9 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
       request?: GhostSetupInteractionSnapshot;
     };
     if (typeof value.sessionId !== 'string') return;
+    // Setup waits are part of hasPendingAgentInteractionForSession, but bypass the router.
+    // Refresh after the coordinator marks a terminal snapshot complete (before its UI grace).
+    botGroupChatServiceHolder?.refreshPendingInteraction(value.sessionId);
     if (channel === MAKER_PUSH.INTERACTION_REQUEST && value.request?.kind === 'plugin_setup') {
       if (!shouldNotifyAgentIslandForSession(value.sessionId)) return;
       if (value.request.terminal === true) {
@@ -5822,6 +5825,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   installDesktopInteractionListener(session);
   installInteractionLifecycleObserver(session, {
     onStart: (request, route) => {
+      botGroupChatServiceHolder?.refreshPendingInteraction(session.id);
       ghostSessionTap.interactionObserver.onStart(request, route);
       void botDelegationServiceHolder?.handleInteractionStart(session.id, request).catch((error) => {
         log.warn('failed to project child interaction to requesting Bot', {
@@ -5832,6 +5836,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       });
     },
     onEnd: (request, route) => {
+      botGroupChatServiceHolder?.refreshPendingInteraction(session.id);
       ghostSessionTap.interactionObserver.onEnd(request, route);
       void botDelegationServiceHolder?.handleInteractionEnd(session.id, request).catch((error) => {
         log.warn('failed to clear child interaction for requesting Bot', {
