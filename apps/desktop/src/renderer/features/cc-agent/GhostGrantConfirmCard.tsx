@@ -26,11 +26,15 @@ import { cn } from '@/lib/utils';
 import type { PendingGhostGrantConfirm } from '@/lib/makerChatStore';
 
 interface GhostGrantConfirmCardProps {
+  /** Only the task owning hardware actions may consume window-level shortcuts. */
+  keyboardShortcutsEnabled?: boolean;
   pending: PendingGhostGrantConfirm;
   onRespond: (result: { confirmed: true; allowDirs?: boolean } | { confirmed: false }) => void;
 }
 
-export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmCardProps) {
+export function GhostGrantConfirmCard({
+  pending, onRespond, keyboardShortcutsEnabled = true,
+}: GhostGrantConfirmCardProps) {
   const { t } = useTranslation();
   // 目录级授权勾选(仅 attachments 通道展示):允许的同时把文件所在目录记入
   // 会话级记忆,同目录后续媒体文件免弹——跨调用批量任务只点一次。
@@ -50,6 +54,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
   }, [onRespond]);
 
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -61,7 +66,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleAllow, handleDeny]);
+  }, [keyboardShortcutsEnabled, handleAllow, handleDeny]);
 
   const descriptionKey =
     pending.lane === 'attachments'

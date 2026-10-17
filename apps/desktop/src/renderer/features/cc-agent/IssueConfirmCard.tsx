@@ -29,6 +29,8 @@ import { shouldLabelRegion } from '../../../shared/regionCode';
 import { ISSUE_PUBLIC_NAME_MAX, normalizeIssuePublicName } from '../../../shared/issuePublicName';
 
 interface IssueConfirmCardProps {
+  /** Only the task owning hardware actions may consume window-level shortcuts. */
+  keyboardShortcutsEnabled?: boolean;
   sessionId: string;
   pending: PendingIssueConfirm;
   onRespond: (
@@ -52,7 +54,9 @@ const TITLE_MAX = 200;
 // githubIssueSubmitService clamp 到 server 上限 SERVER_DESC_MAX(5000)。
 const BODY_MAX = 4500;
 
-export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirmCardProps) {
+export function IssueConfirmCard({
+  sessionId, pending, onRespond, keyboardShortcutsEnabled = true,
+}: IssueConfirmCardProps) {
   const { t, i18n } = useTranslation();
   const titleInputId = useId();
   const bodyInputId = useId();
@@ -158,6 +162,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
 
   // ── Keyboard shortcuts(textarea 内 Enter 正常换行,只有带修饰键才提交)──
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -169,7 +174,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleSubmit, handleCancel]);
+  }, [keyboardShortcutsEnabled, handleSubmit, handleCancel]);
 
   const identityButton = (identity: PendingIssueConfirm['submissionIdentity'], label: string) => {
     const selected =

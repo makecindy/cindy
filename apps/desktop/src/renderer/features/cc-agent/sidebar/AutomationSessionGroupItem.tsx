@@ -58,6 +58,7 @@ import type { SessionMoveTarget } from './sessionMoveTarget';
 export interface AutomationSessionGroupItemProps {
   group: AutomationSessionGroup;
   activeSessionId?: string;
+  navigationActiveSessionId?: string | null;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
   notifications: ReadonlySet<string>;
@@ -107,6 +108,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     navigate,
     group,
     activeSessionId,
+    navigationActiveSessionId = activeSessionId,
     runningSessionIds,
     attachedSessionIds,
     notifications,
@@ -856,6 +858,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
               const commonProps = {
                 session,
                 isActive: session.id === activeSessionId,
+                isNavigationActive: session.id === navigationActiveSessionId,
                 isRunning: runningSessionIds.has(session.id),
                 isAttached: attachedSessionIds.has(session.id),
                 hasAttentionNotification: notifications.has(session.id),

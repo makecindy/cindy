@@ -40,6 +40,8 @@ function entryHasAttention(
 export interface SessionEntryListProps {
   sessions: readonly Session[];
   activeSessionId?: string;
+  /** Omitted: same as highlight. null: no chat route is active (for example files). */
+  navigationActiveSessionId?: string | null;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
   notifications: ReadonlySet<string>;
@@ -97,6 +99,7 @@ export interface SessionEntryRowsProps extends Omit<
 export function SessionEntryRows({
   entries,
   activeSessionId,
+  navigationActiveSessionId = activeSessionId,
   runningSessionIds,
   attachedSessionIds,
   notifications,
@@ -129,6 +132,7 @@ export function SessionEntryRows({
           const commonProps = {
             session: entry.session,
             isActive: entry.session.id === activeSessionId,
+            isNavigationActive: entry.session.id === navigationActiveSessionId,
             isRunning: runningSessionIds.has(entry.session.id),
             isAttached: attachedSessionIds.has(entry.session.id),
             hasAttentionNotification: notifications.has(entry.session.id),
@@ -166,6 +170,7 @@ export function SessionEntryRows({
             key={entry.group.id}
             group={entry.group}
             activeSessionId={activeSessionId}
+            navigationActiveSessionId={navigationActiveSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
             notifications={notifications}

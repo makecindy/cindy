@@ -34,6 +34,8 @@ import { ListComposerTextarea } from './ListComposerTextarea';
 // ---------------------------------------------------------------------------
 
 interface PlanActionCardProps {
+  /** Only the task owning hardware actions may consume window-level shortcuts. */
+  keyboardShortcutsEnabled?: boolean;
   requestId: string;
   onRespond: (requestId: string, approved: boolean, feedback?: string) => void;
   /**
@@ -47,7 +49,9 @@ interface PlanActionCardProps {
 // Component
 // ---------------------------------------------------------------------------
 
-export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCardProps) {
+export function PlanActionCard({
+  requestId, onRespond, onCancel, keyboardShortcutsEnabled = true,
+}: PlanActionCardProps) {
   const { t } = useTranslation();
   const [feedback, setFeedback] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -107,6 +111,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   // editor — the editor owns both keys there).
   // Mirrors the AskUserQuestionPrompt global-keyboard pattern.
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       if (isEditing || submitted) return;
       if (e.key !== 'Enter' && e.key !== 'Escape') return;
@@ -125,7 +130,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isEditing, submitted, handleApprove, handleCancel, onCancel]);
+  }, [keyboardShortcutsEnabled, isEditing, submitted, handleApprove, handleCancel, onCancel]);
 
   const hasFeedbackText = feedback.trim().length > 0;
 

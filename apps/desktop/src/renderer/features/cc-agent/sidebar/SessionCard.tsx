@@ -1,3 +1,4 @@
+import { usePointerNavigationFocus } from './usePointerNavigationFocus';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -144,6 +145,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   navigate,
   session,
   isActive,
+  isNavigationActive = isActive,
   isRunning,
   isAttached = false,
   hasAttentionNotification,
@@ -317,6 +319,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const [shareExportOpen, setShareExportOpen] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const { onClick: trackPointerNavigation, cancel: cancelPointerNavigation } =
+    usePointerNavigationFocus(cardRef, isNavigationActive);
   const dragStartTargetRef = useRef<Element | null>(null);
 
   // 归档/删除前那次 dirty-worktree 预检要在 main 侧跑 git status,是"点了归档、
@@ -416,13 +420,14 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
 
   const handleClick = useCallback(
-    (e: React.MouseEvent) => {
+    (e: ReactMouseEvent<HTMLDivElement>) => {
       if (isEditing) return;
+      trackPointerNavigation(e);
       // 多选(与列表 SessionItem 同口径):透传 shift/⌘/ctrl 修饰键,支持卡片区
       // 范围/加减选;无修饰键即普通导航。
       onClick(session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey });
     },
-    [isEditing, onClick, session.id],
+    [isEditing, onClick, session.id, trackPointerNavigation],
   );
 
   const handleDoubleClick = useCallback(
@@ -682,10 +687,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         }
       }}
       onClick={handleClick}
+      onBlur={cancelPointerNavigation}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
+          cancelPointerNavigation();
           e.preventDefault();
           onClick(session.id);
         }

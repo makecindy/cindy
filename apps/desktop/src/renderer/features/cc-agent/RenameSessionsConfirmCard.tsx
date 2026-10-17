@@ -14,11 +14,14 @@ import { cn } from '@/lib/utils';
 import type { PendingRenameSessionsConfirm } from '@/lib/makerChatStore';
 
 interface RenameSessionsConfirmCardProps {
+  /** Only the task owning hardware actions may consume window-level shortcuts. */
+  keyboardShortcutsEnabled?: boolean;
   pending: PendingRenameSessionsConfirm;
   onRespond: (result: { confirmed: true } | { confirmed: false }) => void;
 }
 
 export function RenameSessionsConfirmCard({
+  keyboardShortcutsEnabled = true,
   pending,
   onRespond,
 }: RenameSessionsConfirmCardProps) {
@@ -33,6 +36,7 @@ export function RenameSessionsConfirmCard({
   }, [onRespond]);
 
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -44,7 +48,7 @@ export function RenameSessionsConfirmCard({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleSubmit, handleCancel]);
+  }, [keyboardShortcutsEnabled, handleSubmit, handleCancel]);
 
   return (
     <div

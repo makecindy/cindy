@@ -34,6 +34,8 @@ import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallCon
 interface PermissionPromptProps {
   permission: PendingPermission;
   companion?: BotChatIdentity | null;
+  /** Only the task owning hardware actions may consume window-level shortcuts. */
+  keyboardShortcutsEnabled?: boolean;
   onRespond: (result: CCAgentPermissionResult) => void;
 }
 
@@ -101,7 +103,12 @@ const allowActionClass = cn(
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
+export function PermissionPrompt({
+  permission,
+  onRespond,
+  companion,
+  keyboardShortcutsEnabled = true,
+}: PermissionPromptProps) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
@@ -171,6 +178,9 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   // ── Keyboard shortcuts ──
 
   useEffect(() => {
+    // Split panes stay mounted together. Inactive cards retain their native
+    // button actions, but must never consume a key intended for the active task.
+    if (!keyboardShortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
       // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
@@ -192,7 +202,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleAllowOnce, handleAlwaysAllow, handleDeny]);
+  }, [keyboardShortcutsEnabled, handleAllowOnce, handleAlwaysAllow, handleDeny]);
 
   // ── Render ──
 

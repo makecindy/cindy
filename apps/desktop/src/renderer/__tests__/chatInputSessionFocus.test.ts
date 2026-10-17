@@ -82,6 +82,7 @@ describe('ChatInput session switch focus contract', () => {
       'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
+    expect(sessionViewSource).toContain('keyboardShortcutsEnabled={ownsHardwareTaskActions}');
     expect(sessionViewSource).toContain(
       'ownsHardwareComposerActions={ownsHardwareTaskActions}',
     );

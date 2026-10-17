@@ -71,6 +71,8 @@ function AutoGrowingAnswerTextarea({
 // ---------------------------------------------------------------------------
 
 interface AskUserQuestionPromptProps {
+  /** Only the task owning hardware actions may consume window-level shortcuts. */
+  keyboardShortcutsEnabled?: boolean;
   pending: PendingAskUser;
   onAnswer: (requestId: string, answers: Record<string, string>) => void;
   /**
@@ -123,6 +125,7 @@ export function AskUserQuestionPrompt({
 }
 
 function AskUserQuestionForm({
+  keyboardShortcutsEnabled = true,
   pending,
   onAnswer,
   viewerState,
@@ -411,6 +414,7 @@ function AskUserQuestionForm({
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       // F-AUQ-MIN-5: minimized 时数字键 1-N / 回车 / N+1 全部透传，
       // 避免"无视觉反馈地选中选项"。Escape 仍保留——满足 F-AUQ-MIN-5 的取消语义。
@@ -469,6 +473,7 @@ function AskUserQuestionForm({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [
+    keyboardShortcutsEnabled,
     viewerState,
     options,
     showCustomInput,
