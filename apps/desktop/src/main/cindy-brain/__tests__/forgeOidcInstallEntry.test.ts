@@ -82,13 +82,16 @@ describe('Forge OIDC install entry wiring', () => {
     expect(source).not.toContain('function pickTrustedAppWindow');
   });
 
-  it('只把同一 namespace 的已装实例当成更新', () => {
+  it('已知归属按 namespace 解析，旧 Forge 只能通过专用受体核验', () => {
     const body = forgeInstallBody();
     const check = body.indexOf('if (!existingForForge && !isValidNewGhostId(inspected.manifest.id))');
-    const existing = body.indexOf('const existingForForge = findInstalledGhostForDeliveryTarget');
+    const existing = body.indexOf('const forgeTarget = findForgeInstallTarget');
     expect(existing).toBeGreaterThanOrEqual(0);
     expect(check).toBeGreaterThan(existing);
     expect(body).not.toContain('ghost.manifest.id === inspected.manifest.id');
+    const resolver = source.slice(source.indexOf('function findForgeInstallTarget('), source.indexOf('export async function installOrUpdateLocalGhostPackageFromForge'));
+    expect(resolver).toContain('findInstalledGhostForDeliveryTarget(ghosts, { ghostId: inspected.manifest.id, namespace })');
+    expect(resolver).toContain('manager.pendingLegacyForgeUpdateTarget(inspected.manifest.id)');
   });
 
 });

@@ -1784,6 +1784,38 @@ export class GhostManager {
     }
   }
 
+  /** Same-instance Forge update only; this does not establish a namespace. */
+  pendingLegacyForgeUpdateTarget(ghostId: string): { ghost: InstalledGhost; packageSha256: string } | null {
+    this.ensureCurrentOwnerContextSync();
+    if (!isValidGhostId(ghostId) || this.instanceRegistryService.isBlocked()) return null;
+    const registry = this.syncInstanceRegistry();
+    const matches = Object.values(registry.instances).filter((entry) => entry.active && entry.ghostId === ghostId);
+    const record = matches.length === 1 ? matches[0] : undefined;
+    if (!record || record.namespaceState !== 'pending' || record.contentRelId !== ghostId ||
+        record.instanceKey !== ghostId || record.source !== 'agent-forge') return null;
+    const receipt = this.readApprovedInstallReceipt(ghostId, record.receiptRevision ?? undefined);
+    if (!receipt || receipt.id !== ghostId || hasDeliveryNamespace(receipt) ||
+        receipt.installOrigin !== 'agent-forge' || !receipt.packageSha256 ||
+        record.packageSha256 !== receipt.packageSha256 || record.receiptRevision !== receipt.revision) return null;
+    const ghost = this.findInstalledInstance(record.instanceKey);
+    if (!ghost || ghost.builtin || ghost.namespaceState !== 'pending' || hasDeliveryNamespace(ghost)) return null;
+    try {
+      // The receipt hash identifies the original archive, not a digest that can be
+      // reconstructed from installed files. Check the live canonical manifest
+      // against its approved projection without inventing a new content baseline.
+      const file = resolveGhostContentPathSync(ghost.dir, GHOST_MANIFEST_FILE, { expect: 'file', label: 'legacy Forge manifest' });
+      const bytes = readBoundedFileNoFollowSync(file, MAX_GHOST_MANIFEST_BYTES, {
+        containWithin: fs.realpathSync(ghost.dir),
+      });
+      if (!bytes) return null;
+      const parsed = parseInstalledGhostManifest(JSON.parse(bytes.toString('utf8')));
+      if (!parsed.ok || !isDeepStrictEqual(parsed.manifest, receipt.manifest)) return null;
+    } catch {
+      return null;
+    }
+    return { ghost, packageSha256: receipt.packageSha256 };
+  }
+
   /**
    * Host-owned evidence for reconnecting an installation to retained source metadata.
    * A pending package mutation or an invalid approval fails closed. Legacy provenance
@@ -3731,6 +3763,8 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Frozen old archive identity for an explicitly selected pending Forge instance. */
+      expectedLegacyForgePackageSha256?: string;
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
@@ -3749,6 +3783,8 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Frozen old archive identity for an explicitly selected pending Forge instance. */
+      expectedLegacyForgePackageSha256?: string;
       /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
@@ -3791,6 +3827,15 @@ export class GhostManager {
     }
     const fromPart = this.storageKeyForContent(relId);
     const archiveId = opts.sourceStateArchiveId;
+    if (opts.expectedLegacyForgePackageSha256 !== undefined) {
+      const target = this.pendingLegacyForgeUpdateTarget(manifest.id);
+      if (!target || target.packageSha256 !== opts.expectedLegacyForgePackageSha256 ||
+          ghostInstallApprovalToken(target.ghost.approval) !== opts.expectedInstalledApproval ||
+          hasDeliveryNamespace(opts) || opts.installOrigin !== 'agent-forge' || archiveId !== undefined ||
+          this.contentPath(relId) !== target.ghost.dir) {
+        return { rejection: { code: 'state-changed', reason: '旧 Forge 插件实例或来源已变化，请重新检查' } };
+      }
+    }
     if (archiveId !== undefined &&
         (!isValidGhostSourceStateArchiveId(archiveId) || archiveId === fromPart ||
           !this.options.onArchiveSourceState)) {

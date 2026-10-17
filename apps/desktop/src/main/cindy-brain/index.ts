@@ -6972,6 +6972,7 @@ async function updateLocalGhostPackageLocked(
   consent: GhostInstallConsentDecision,
   installOrigin?: 'agent-forge',
   isCurrent?: () => boolean,
+  expectedLegacyForgePackageSha256?: string,
 ): Promise<InstalledGhost> {
   if (isCurrent?.() === false) {
     throwIpcError(
@@ -6996,6 +6997,9 @@ async function updateLocalGhostPackageLocked(
   const { marketRecord, sourceChanged, authorizationOverrides } = readLocalGhostUpdateSource(
     manager, previousGhost, inspected, installOrigin,
   );
+  if (expectedLegacyForgePackageSha256 !== undefined && (sourceChanged || marketRecord !== null)) {
+    throwIpcError('PRECONDITION_FAILED', '旧 Forge 插件来源已变化，请重新检查');
+  }
   if (sourceChanged) assertGhostRelocationIdle(instanceId);
   rejectUnauthorizedTokenBroker(inspected.canonicalManifest, authorizationOverrides);
   runtime.stop(instanceId);
@@ -7046,6 +7050,7 @@ async function updateLocalGhostPackageLocked(
         taskCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest),
         expectedPackageSha256,
         expectedInstalledApproval,
+        ...(expectedLegacyForgePackageSha256 !== undefined ? { expectedLegacyForgePackageSha256 } : {}),
         installOrigin: installOrigin ?? 'manual',
         ...(sourceChanged ? { sourceStateArchiveId: ghostSourceStateArchiveId(previousGhost) } : {}),
         ...deliveryNamespaceFields(previousGhost),
@@ -7101,6 +7106,29 @@ async function updateLocalGhostPackageLocked(
   return result.ghost;
 }
 
+/** Resolve a legacy receiver without assigning root/org ownership or changing its source. */
+function findForgeInstallTarget(
+  manager: GhostManager,
+  inspected: InspectedGhostPackage,
+  namespace: string | null,
+): { ghost?: InstalledGhost; packageSha256?: string } {
+  const ghosts = manager.list();
+  const sameId = ghosts.filter((ghost) => ghost.manifest.id === inspected.manifest.id);
+  if (sameId.length > 1 && sameId.some((ghost) => ghost.namespaceState === 'pending' && !hasDeliveryNamespace(ghost))) {
+    throwIpcError('PRECONDITION_FAILED', '旧 Forge 插件存在同 ID 实例冲突，无法确定原位更新受体');
+  }
+  const known = findInstalledGhostForDeliveryTarget(ghosts, { ghostId: inspected.manifest.id, namespace });
+  if (known) return { ghost: known };
+  const legacy = manager.pendingLegacyForgeUpdateTarget(inspected.manifest.id);
+  if (!legacy) return {};
+  const source = readLocalGhostUpdateSource(manager, legacy.ghost, inspected, 'agent-forge');
+  // Never turn the migration exception into a market takeover or publisher downgrade.
+  if (source.marketRecord !== null || source.sourceChanged) {
+    throwIpcError('PRECONDITION_FAILED', '旧 Forge 插件来源不一致，不能保留原状态更新');
+  }
+  return legacy;
+}
+
 /**
  * Forge 的显式安装入口。确认在 owner 租约外求得；落位前再取安装锁，并与
  * Renderer 本地导入共用相同安装/更新事务。调用方必须先复核精确包哈希。
@@ -7140,10 +7168,8 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     }
     forgeNamespace = user.orgSlug;
   }
-  const existingForForge = findInstalledGhostForDeliveryTarget(
-    manager.list(),
-    { ghostId: inspected.manifest.id, namespace: forgeNamespace },
-  );
+  const forgeTarget = findForgeInstallTarget(manager, inspected, forgeNamespace);
+  const existingForForge = forgeTarget.ghost;
   // A same-id install in another namespace is a new instance, not an update.
   if (!existingForForge && !isValidNewGhostId(inspected.manifest.id)) {
     throwIpcError('GHOST_FILE_INVALID', '新建插件 id 必须以小写字母开头，只能包含小写字母、数字和连字符，最长 32 个字符');
@@ -7190,10 +7216,15 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     // 确认已在 owner 租约外完成；落位再用 packing 时钉住的 owner 取租约。
     const releaseMutation = beginGhostMutation(expected.mutationOwner);
     try {
-      const installed = findInstalledGhostForDeliveryTarget(
-        manager.list(),
-        { ghostId: inspected.manifest.id, namespace: forgeNamespace },
-      );
+      const currentTarget = findForgeInstallTarget(manager, inspected, forgeNamespace);
+      const installed = currentTarget.ghost;
+      if (forgeTarget.packageSha256 !== undefined && (
+        currentTarget.packageSha256 !== forgeTarget.packageSha256 || !installed || !existingForForge ||
+        installedGhostStoragePart(installed) !== installedGhostStoragePart(existingForForge) ||
+        ghostInstallApprovalToken(installed.approval) !== ghostInstallApprovalToken(existingForForge.approval)
+      )) {
+        throwIpcError('PRECONDITION_FAILED', '旧 Forge 插件实例已变化，请重新检查');
+      }
       if (!installed) {
         return {
           ghost: await installAndDockLocked(manager, cindyFilePath, {
@@ -7225,6 +7256,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
           consent,
           installOrigin,
           expected.isCurrent,
+          forgeTarget.packageSha256,
         ),
         action: 'updated',
       };

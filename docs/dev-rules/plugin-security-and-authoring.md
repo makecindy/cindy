@@ -643,6 +643,22 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - 当前组织的前缀对不上这个 ghostId 时保持待迁移，插件按旧规则继续运行，不报错。作者以后登录前缀匹配的组织，再完成迁移。
 - 归属一旦写入注册表并确认，再切换组织也不会改这条记录。
 
+### 5.3 旧 Forge 实例的显式原位更新
+
+无 namespace、仍为 pending 的旧 Forge 实例可以通过用户明确要求的
+`ghost_forge_install` 更新：同 ghostId 必须只有一个 active 实例，原批准回执必须仍是
+agent-forge，且实例键、物理裸目录、revision、原包来源哈希及已批准清单互相一致。
+没有市场来源，也没有发布者降级或其它换源时，复用同实例更新事务；保持 namespace
+缺省、pending 状态、原数据标识、配置和账号，不进行归属推断或换源归档。
+
+确认前冻结原实例 revision 和来源哈希，持 owner 租约及安装锁后复核，Manager 写包前
+再复核一次。账号/实例/回执变化、并发更新、包替换或来源冲突都拒绝旧请求。
+新包仍按原安装权限、Broker/OIDC、OAuth 客户端变更及技能快照规则处理，不提升 trust。
+普通手动导入继续按 manual 通道换源，不能借本例外保留 Forge 资格。
+原 receipt 的 packageSha256 是归档来源指纹，不能从已展开文件反算；旧清单核对 approved
+投影，新包字节核对 inspect/pack 哈希，不把旧来源哈希冒称全目录运行期完整性校验。
+回归见 `legacyForgeUpdate.test.ts`（合成旧布局及真实 Manager 更新事务）。
+
 ## 6. 作者契约与编写手册同步
 
 `FORGE_GUIDE` 是 agent 替用户编写插件的**唯一教材**，由 `ghost_forge_guide` 现拿现读。
