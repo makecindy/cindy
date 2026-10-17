@@ -1986,7 +1986,7 @@ it('keeps a template connection editable without offering protocol or path switc
       models: [{ id: preset.runtimes.codex!.models[0].id, name: 'Gemini' }] },
   } }} onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitFor(() => expect(window.electronAPI.maker.listProviderPresets).toHaveBeenCalled());
-  expect(screen.queryByText('settings.providers.custom.fields.wireProtocol')).toBeNull();
+  expect(screen.queryByText('settings.providers.custom.wireProtocol.defaultLabel')).toBeNull();
   expect(screen.queryByRole('button', { name: 'settings.providers.custom.runtimeFill.action' })).toBeNull();
   const endpoint = screen.getByDisplayValue('https://generativelanguage.googleapis.com/v1beta') as HTMLInputElement;
   expect(endpoint.readOnly).toBe(true);

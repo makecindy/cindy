@@ -34,19 +34,29 @@ export function modelProtocolComparison(
     const model = models[agent];
     if (!model) return null;
     const routing = provider.routing?.[agent];
-    const outbound = model.api ?? (
-      agent === 'pi'
-        ? (model.piApi ?? apiFromWireProtocol(model.route?.wireProtocol ?? routing?.wireProtocol))
-        : apiFromWireProtocol(
-            model.route?.wireProtocol ??
-              routing?.wireProtocol ??
-              // A missing descriptor (e.g. a redacted remote view) is not evidence of a route.
-              (routing?.authStrategy
-                ? agent === 'codex'
-                  ? 'openai-responses'
-                  : 'anthropic-messages'
-                : undefined),
-          ));
+    // Fixed-protocol hosts execute the resolved route, not raw model API metadata.
+    // These can differ for an explicitly configured request path. Pi instead
+    // selects its SDK adapter from the model API before consulting HTTP defaults.
+    const connection = apiFromWireProtocol(routing?.wireProtocol ?? (
+      routing?.authStrategy && agent !== 'pi'
+        ? agent === 'codex' ? 'openai-responses' : 'anthropic-messages'
+        : undefined
+    ));
+    const routeApi = apiFromWireProtocol(model.route?.wireProtocol);
+    const outbound = agent === 'pi'
+      ? model.api ?? model.piApi ?? routeApi ?? connection
+      : routeApi ?? connection ?? model.api ?? null;
+    // Stored customization is separate from the effective source: a custom
+    // path can make stale API metadata inactive, but it must still be resettable.
+    const customized = model.protocolCustomized ?? Boolean(
+      model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route,
+    );
+    const usesModelProtocol = agent === 'pi'
+      ? Boolean(model.api || model.piApi || routeApi)
+      : Boolean(routeApi || (model.api && model.api === outbound));
+    const source: 'model' | 'catalog' | 'connection' = usesModelProtocol
+      ? customized ? 'model' : 'catalog'
+      : 'connection';
     const harness: PiModelApi | null =
       agent === 'pi' ? outbound : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
     const outboundProtocol = compatibilityProtocol(outbound) ?? outbound;
@@ -61,6 +71,9 @@ export function modelProtocolComparison(
     return {
       harness,
       outbound,
+      connection,
+      source,
+      customized,
       localConversion,
       mode: compatibility
         ? ('compatibility' as const)

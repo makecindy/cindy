@@ -27,7 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
 import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
@@ -318,23 +318,31 @@ export function ModelAdvancedDrawer({
     } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setImageCapabilitySaving(false); }
   };
-  const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
+  const setModelApi = async (agent: AgentKind, api: PiModelApi | null) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
     if (!runtime || !model) return;
-    model.api = api;
-    if (agent === 'pi') model.piApi = api;
-    const wire = providerWireProtocolForApi(api);
-    if (!wire) return;
-    const existingRoute = { ...(model.route ?? {}) };
-    delete existingRoute.requestPath;
-    model.route = {
-      ...existingRoute,
-      baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-      wireProtocol: wire,
-    };
+    if (api === null) {
+      // A route is an endpoint/protocol/path unit. Removing its override lets the
+      // connection and catalog supply current defaults without freezing a copy.
+      delete model.api;
+      delete model.piApi;
+      delete model.route;
+    } else {
+      const wire = providerWireProtocolForApi(api);
+      if (!wire) return;
+      model.api = api;
+      if (agent === 'pi') model.piApi = api;
+      const existingRoute = { ...(model.route ?? {}) };
+      delete existingRoute.requestPath;
+      model.route = {
+        ...existingRoute,
+        baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+        wireProtocol: wire,
+      };
+    }
     setProtocolSaving(true);
     try {
       const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
@@ -621,6 +629,11 @@ export function ModelAdvancedDrawer({
                                           onValueChange={value => void setModelApi(agent, value as PiModelApi)}>
                                           {MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
                                         </DropdownMenuRadioGroup>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem disabled={!protocol.customized}
+                                          onSelect={() => void setModelApi(agent, null)}>
+                                          {t('settings.providers.models.advanced.protocol.restoreRoute')}
+                                        </DropdownMenuItem>
                                       </DropdownMenuContent>
                                     </DropdownMenu>
                                   ) : protocolLabel(protocol.outbound)}
@@ -633,6 +646,18 @@ export function ModelAdvancedDrawer({
                                       `settings.providers.models.advanced.protocol.${protocol.mode}`,
                                     )}
                                   </>}
+                                  {canEditProtocol && supported && protocol.outbound && (
+                                    <span className="mt-1 block text-[var(--text-secondary)]">
+                                      <span>{t(protocol.source === 'model'
+                                        ? 'settings.providers.models.advanced.protocol.sourceModel'
+                                        : protocol.source === 'catalog'
+                                          ? 'settings.providers.models.advanced.protocol.sourceCatalog'
+                                          : 'settings.providers.models.advanced.protocol.sourceConnection')}</span>
+                                      {protocol.source !== 'connection' && protocol.connection && protocol.connection !== protocol.outbound && <>
+                                        {' · '}{t('settings.providers.models.advanced.protocol.connectionDefault', { protocol: protocolLabel(protocol.connection) })}
+                                      </>}
+                                    </span>
+                                  )}
                                 </p>
                               )}
                             </div>

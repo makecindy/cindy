@@ -515,9 +515,15 @@ export function buildUserProvider(
             ?? configuredModel.route.baseUrl,
         } }
         : configuredModel;
-      const m = rt.requestPath ? boundConfiguredModel : alignModelApiRoute(
-        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl),
-        resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
+      const interfaceModel = rt.requestPath ? boundConfiguredModel
+        : providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl);
+      // This projector returns the input unchanged for protected user choices;
+      // a replacement applies a maintained catalog interface to a legacy import.
+      // Capture that provenance before API/route alignment (which also handles
+      // explicit user APIs and therefore cannot establish catalog ownership).
+      const catalogInterfaceApplied = interfaceModel !== boundConfiguredModel;
+      const m = rt.requestPath ? interfaceModel : alignModelApiRoute(
+        interfaceModel, resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
       const presetModel = followsPreset
         ? presetRuntime.models.find((model) => model.id === m.id)
@@ -643,6 +649,20 @@ export function buildUserProvider(
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),
+        // applyPreset snapshots protocol fields into storage. Their presence is
+        // not evidence of a user edit while they match this bound preset. Keep
+        // storage intact; only the displayed provenance uses this comparison.
+        // A maintained correction owns the effective route even when the saved
+        // legacy Chat snapshot differs from the current preset (or it is absent).
+        protocolCustomized: !catalogInterfaceApplied && Boolean(
+          (storedModel.api && storedModel.api !== presetModel?.api) ||
+          (storedModel.piApi && storedModel.piApi !== presetModel?.piApi) ||
+          (storedModel.route && (
+            storedModel.route.baseUrl !== presetModel?.route?.baseUrl ||
+            storedModel.route.wireProtocol !== presetModel?.route?.wireProtocol ||
+            storedModel.route.requestPath !== presetModel?.route?.requestPath
+          ))
+        ),
         ...(m.api ? { api: m.api, ...(agent === 'pi' ? { piApi: m.api } : {}) } : {}),
         ...(importedApi && !m.piApi && !m.api ? {
           api: importedApi, ...(agent === 'pi' ? { piApi: importedApi } : {}),
