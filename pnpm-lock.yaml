@@ -22,6 +22,9 @@ patchedDependencies:
   '@expo/cli@57.0.25':
     hash: 84a7e3c44f67c968af0f696e3352c2f912936ad69748126fc24075f1fa8cf3a7
     path: dependency-patches/@expo__cli@57.0.25.patch
+  '@react-native-menu/menu@2.0.0':
+    hash: 9147a68f9adaa3c7850ac276310d2e5061eb9c6ec870700b2f55b2d6f5a77f2d
+    path: dependency-patches/@react-native-menu__menu@2.0.0.patch
   expo-image-manipulator@57.0.14:
     hash: 78594ca2235bdbbee2665f37b86d4e1e892733c4f9bd38fa7085338b90486e2b
     path: dependency-patches/expo-image-manipulator@57.0.14.patch
@@ -680,7 +683,7 @@ importers:
         version: 16.1.2(expo@57.0.23)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       '@react-native-menu/menu':
         specifier: ^2.0.0
-        version: 2.0.0(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
+        version: 2.0.0(patch_hash=9147a68f9adaa3c7850ac276310d2e5061eb9c6ec870700b2f55b2d6f5a77f2d)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       '@types/pako':
         specifier: ^2.0.4
         version: 2.0.4
@@ -14786,7 +14789,7 @@ snapshots:
       react: 19.2.3
       react-native: 0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
 
-  '@react-native-menu/menu@2.0.0(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)':
+  '@react-native-menu/menu@2.0.0(patch_hash=9147a68f9adaa3c7850ac276310d2e5061eb9c6ec870700b2f55b2d6f5a77f2d)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)':
     dependencies:
       react: 19.2.3
       react-native: 0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)

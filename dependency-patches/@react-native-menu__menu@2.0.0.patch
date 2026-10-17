@@ -1,0 +1,22 @@
+diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplementation.swift
+index 5c4e0da4292b15d3a27b5ea1555f11452a470815..7b0d83df923f1d16d693a03866cd2de5b5d2943a 100644
+--- a/ios/Shared/MenuViewImplementation.swift
++++ b/ios/Shared/MenuViewImplementation.swift
+@@ -68,9 +68,17 @@ public class MenuViewImplementation: UIButton {
+     }
+     
+     public override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
++        // UIControl requires super here: it restores the source control alongside the dismissal.
++        super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+         sendMenuClose()
+     }
+ 
++    // Cindy: fade the menu away in place. Morphing the Liquid Glass platter back into a
++    // plain (non-glass) title sweeps its refraction edge across the content below.
++    public override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
++        return nil
++    }
++
+     func setup () {
+         let menu = UIMenu(title: _title,
+             identifier: nil,

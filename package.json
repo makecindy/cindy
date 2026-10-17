@@ -69,6 +69,7 @@
       "@expo/cli@57.0.25": "dependency-patches/@expo__cli@57.0.25.patch",
       "react-native-screens@4.26.2": "dependency-patches/react-native-screens@4.26.2.patch",
       "expo-router@57.0.17": "dependency-patches/expo-router@57.0.17.patch",
+      "@react-native-menu/menu@2.0.0": "dependency-patches/@react-native-menu__menu@2.0.0.patch",
       "react-native-gesture-handler@2.32.0": "dependency-patches/react-native-gesture-handler@2.32.0.patch"
     },
     "allowUnusedPatches": true
