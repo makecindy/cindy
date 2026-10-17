@@ -23,8 +23,21 @@ import { resolveMobileVoiceRecordingPermission } from '@/session/mobileVoiceStar
 
 type AppStateListener = (state: string) => void;
 
+/** Startup aborted because the user stopped or the card went away. */
+export class AskCardVoiceCancelledError extends Error {
+  constructor() {
+    super('语音输入已取消。');
+    this.name = 'AskCardVoiceCancelledError';
+  }
+}
+
+export function isAskCardVoiceCancelled(error: unknown): boolean {
+  return error instanceof AskCardVoiceCancelledError;
+}
+
 export async function startAskCardDictation(input: {
   deviceId: string;
+  signal?: AbortSignal;
   getAccessToken: () => Promise<string | null>;
   refreshAccessToken: () => Promise<string | null>;
   apiFetch: AskCardAuth['apiFetch'];
@@ -46,17 +59,25 @@ export async function startAskCardDictation(input: {
     return () => subscription.remove();
   });
   const abort = new AbortController();
-  const permission = await resolveMobileVoiceRecordingPermission({
-    getPermission: getRecordingPermissionsAsync,
-    requestPermission: requestRecordingPermissionsAsync,
-    isRequestCurrent: () => !abort.signal.aborted,
-    isAppActive,
-    subscribeToAppState,
-    signal: abort.signal,
-    waitForAppActive: () => waitUntilActive(isAppActive, subscribeToAppState, abort.signal),
-  });
-  if (permission === 'denied') throw new Error(mobileVoiceMicPermissionError());
-  if (permission !== 'granted') throw new Error('语音输入已取消。');
+  const forwardAbort = () => abort.abort();
+  if (input.signal?.aborted) throw new AskCardVoiceCancelledError();
+  input.signal?.addEventListener('abort', forwardAbort, { once: true });
+  try {
+    const permission = await resolveMobileVoiceRecordingPermission({
+      getPermission: getRecordingPermissionsAsync,
+      requestPermission: requestRecordingPermissionsAsync,
+      isRequestCurrent: () => !abort.signal.aborted,
+      isAppActive,
+      subscribeToAppState,
+      signal: abort.signal,
+      waitForAppActive: () => waitUntilActive(isAppActive, subscribeToAppState, abort.signal),
+    });
+    if (abort.signal.aborted) throw new AskCardVoiceCancelledError();
+    if (permission === 'denied') throw new Error(mobileVoiceMicPermissionError());
+    if (permission !== 'granted') throw new AskCardVoiceCancelledError();
+  } finally {
+    input.signal?.removeEventListener('abort', forwardAbort);
+  }
 
   const credential = createMobileCindyVoiceCredential(input.deviceId);
   const voiceContext = new MobileCindyVoiceRunContext(
@@ -90,6 +111,12 @@ export async function startAskCardDictation(input: {
     onReadyForEndCue: credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,
   });
   await session.start();
+  // The user may have stopped while the voice service was connecting: the
+  // microphone is now open, so release it right away instead of leaving it on.
+  if (input.signal?.aborted) {
+    await session.cancel().catch(() => undefined);
+    throw new AskCardVoiceCancelledError();
+  }
   return {
     stop: () => session.stop().then(() => undefined),
     cancel: () => session.cancel(),
@@ -110,7 +137,7 @@ function waitUntilActive(
     });
     signal.addEventListener('abort', () => {
       unsubscribe();
-      reject(new Error('语音输入已取消。'));
+      reject(new AskCardVoiceCancelledError());
     }, { once: true });
   });
 }

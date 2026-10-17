@@ -469,6 +469,11 @@ function AskUserQuestionForm({
   }, [showCustomInput]);
 
   useEffect(() => {
+    // A global-shortcut press emits `start` and, on release, `tap` (quick) or
+    // `end` (held). The tap of the press that just started dictation must not
+    // stop it again — otherwise a normal short press starts and immediately
+    // ends the recording.
+    let startedByThisPress = false;
     const claim = (phase?: 'start' | 'tap' | 'end') => {
       if (viewerState === 'minimized') return;
       const now = performance.now();
@@ -476,10 +481,20 @@ function AskUserQuestionForm({
       voiceShortcutAtRef.current = now;
       const session = dictationRef.current;
       if (session.state === 'submitting' || session.state === 'refining') return;
-      if (phase === 'end' || phase === 'tap') {
+      if (phase === 'tap') {
+        if (startedByThisPress) {
+          startedByThisPress = false;
+          return;
+        }
         if (session.isBusy) void session.stop();
         return;
       }
+      if (phase === 'end') {
+        startedByThisPress = false;
+        if (session.isBusy) void session.stop();
+        return;
+      }
+      startedByThisPress = !session.isBusy;
       beginVoiceInput();
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -537,6 +552,10 @@ function AskUserQuestionForm({
       // and Escape that closed a menu, belong to that place — not to this
       // question. The answer inputs handle their own keys.
       if (shouldCardShortcutYield(e, e.key === 'Escape' ? 'dismiss' : 'character', cardRef.current)) return;
+
+      // Dictation owns the answer field until it stops: switching questions
+      // would write the rest of the transcript into a different answer.
+      if (dictationRef.current.isBusy) return;
 
       // If custom input is focused in single-select mode, handle Escape only
       if (showCustomInput && !isMultiSelect) {
@@ -623,6 +642,7 @@ function AskUserQuestionForm({
               size="lg"
               compact
               type="button"
+              disabled={dictation.isBusy}
               onClick={handleBack}
             >
               <span className="flex items-center gap-1.5">
@@ -638,6 +658,7 @@ function AskUserQuestionForm({
             size="lg"
             compact
             type="button"
+            disabled={dictation.isBusy}
             onClick={handleSkip}
           >
             {t('chat.askUserQuestion.skip')}
@@ -659,9 +680,10 @@ function AskUserQuestionForm({
                 }
               }}
               disabled={
-                isMultiSelect
+                dictation.isBusy ||
+                (isMultiSelect
                   ? selectedLabels.size === 0 && !customInput.trim()
-                  : existingAnswer === undefined
+                  : existingAnswer === undefined)
               }
             >
               {isLastQuestion ? t(pending.resumeOnSubmit ? 'chat.askUserQuestion.sendAndContinue' : 'chat.askUserQuestion.submit') : t('chat.askUserQuestion.next')}
@@ -751,7 +773,7 @@ function AskUserQuestionForm({
                   <button
                     type="button"
                     onClick={handleCustomSubmit}
-                    disabled={!customInput.trim()}
+                    disabled={!customInput.trim() || dictation.isBusy}
                     data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                     aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
                     className={cn(
@@ -857,6 +879,7 @@ function AskUserQuestionForm({
                 {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
                 <button
                   type="button"
+                  disabled={dictation.isBusy}
                   className={cn(
                     'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
                     'transition-colors hover:bg-[var(--ask-option-hover)]',
@@ -958,7 +981,7 @@ function AskUserQuestionForm({
                 <button
                   type="button"
                   onClick={submitDirectAnswer}
-                  disabled={!customInput.trim()}
+                  disabled={!customInput.trim() || dictation.isBusy}
                   data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                   aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
                   className={cn(

@@ -5,7 +5,7 @@
  * dictation session against the answer string, and only loads the native audio
  * modules when the user actually taps the microphone.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAskCardAuth } from '@/session/askCardAuth';
 import type { MobileVoiceSelection } from '@/session/mobileVoiceInput';
@@ -30,6 +30,7 @@ export function useAskCardVoice(input: {
   const [error, setError] = useState<string | null>(null);
   const runRef = useRef<VoiceRun | null>(null);
   const startingRef = useRef(false);
+  const startAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
   const authRef = useRef(auth);
@@ -37,11 +38,26 @@ export function useAskCardVoice(input: {
 
   const stop = useCallback(() => {
     startingRef.current = false;
+    // Abort the startup so the microphone closes now instead of waiting for a
+    // slow voice-service handshake to finish.
+    startAbortRef.current?.abort();
+    startAbortRef.current = null;
     const run = runRef.current;
     runRef.current = null;
     setListening(false);
     if (!run) return;
     void run.stop().catch(() => undefined);
+  }, []);
+
+  // The card unmounts when the answer is submitted, skipped or the request
+  // disappears — the recording must not outlive it.
+  useEffect(() => () => {
+    startingRef.current = false;
+    startAbortRef.current?.abort();
+    startAbortRef.current = null;
+    const run = runRef.current;
+    runRef.current = null;
+    void run?.cancel().catch(() => undefined);
   }, []);
 
   const toggle = useCallback(() => {
@@ -57,12 +73,15 @@ export function useAskCardVoice(input: {
     }
     startingRef.current = true;
     setError(null);
+    const abort = new AbortController();
+    startAbortRef.current = abort;
     void (async () => {
       try {
         const { startAskCardDictation } = await import('@/session/askCardVoiceStart');
         if (!startingRef.current) return;
         const run = await startAskCardDictation({
           deviceId,
+          signal: abort.signal,
           getAccessToken: () => currentAuth.getAccessToken(),
           refreshAccessToken: () => currentAuth.refreshAccessToken(),
           apiFetch: currentAuth.apiFetch,
@@ -89,7 +108,12 @@ export function useAskCardVoice(input: {
       } catch (error) {
         startingRef.current = false;
         setListening(false);
-        setError(error instanceof Error ? error.message : String(error));
+        // Stopping during startup is a normal outcome, not a failure.
+        if (!(error instanceof Error && error.name === 'AskCardVoiceCancelledError')) {
+          setError(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (startAbortRef.current === abort) startAbortRef.current = null;
       }
     })();
   }, [stop]);

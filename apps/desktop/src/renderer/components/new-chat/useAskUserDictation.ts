@@ -84,6 +84,7 @@ export function useAskUserDictation(
   const stopInFlightRef = useRef<Promise<void> | null>(null);
   const startReadyRef = useRef<Promise<void>>(Promise.resolve());
   const mutedRef = useRef(false);
+  const pendingMuteRef = useRef<Promise<void> | null>(null);
   targetRef.current = target;
   optionsRef.current = options;
 
@@ -104,6 +105,10 @@ export function useAskUserDictation(
   }, []);
 
   const restoreMute = useCallback(async () => {
+    // The mute IPC is fire-and-forget at start. Waiting for it here keeps a
+    // fast failure from skipping the restore and leaving the system muted.
+    const pendingMute = pendingMuteRef.current;
+    if (pendingMute) await pendingMute;
     if (!mutedRef.current || !supportsSystemAudioMute()) return;
     mutedRef.current = false;
     try {
@@ -201,12 +206,17 @@ export function useAskUserDictation(
       if (event.type === 'state') {
         setVoiceState(event.state);
         if (event.state === 'done' || event.state === 'error') {
-          runIdRef.current = null;
           anchorRef.current = null;
           setLiveText(null);
           if (event.state === 'error') {
-            /* The error event carries the message. */
+            // The controller has given up before the closing `error` event
+            // arrives, so release the microphone now. Keep runIdRef so that
+            // error event still passes the ownership check below.
+            void stopEngine();
+            void restoreMute();
+            return;
           }
+          runIdRef.current = null;
         }
         return;
       }
@@ -217,10 +227,11 @@ export function useAskUserDictation(
         setVoiceState('error');
         setLiveText(null);
         runIdRef.current = null;
+        void stopEngine();
         void restoreMute();
       }
     });
-  }, [formatError, reportError, restoreMute, setVoiceState, t]);
+  }, [formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
 
   const start = useCallback((): boolean => {
     const api = window.electronAPI?.voiceInput;
@@ -255,9 +266,12 @@ export function useAskUserDictation(
         void playVoiceInputStartCue();
       }
       if (settings.muteSystemAudio && supportsSystemAudioMute()) {
-        void api.muteSystemAudio().then((result) => {
+        const muteRequest = api.muteSystemAudio().then((result) => {
           if (result.ok) mutedRef.current = true;
-        }).catch(() => undefined);
+        }).catch(() => undefined).finally(() => {
+          if (pendingMuteRef.current === muteRequest) pendingMuteRef.current = null;
+        });
+        pendingMuteRef.current = muteRequest;
       }
 
       let guards: Awaited<ReturnType<typeof resolveVoiceInputStartGuards>>;
