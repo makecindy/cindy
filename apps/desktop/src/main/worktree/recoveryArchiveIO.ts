@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, type Stats } from 'node:fs';
 import fs from 'node:fs/promises';
+import process from 'node:process';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as tar from 'tar';
@@ -190,12 +191,29 @@ export async function extractRecoveryArchive(archive: WorktreeRecoveryArchive, s
       const target = path.join(staging, name);
       if (!keep || !await fs.lstat(target).then(() => true, () => false)) pending.push({ target, link: file.hash });
     }
-    // Windows fixes a link's file/directory type when it is created, judged by whether its target
-    // exists. Create links whose targets resolve first so chains get the right type; dangling last.
+    // Windows fixes a link's file/directory type at creation from the explicit
+    // `type` argument (default 'file' — libuv does NOT judge by target
+    // existence). The archived link text is relative, so a directory target
+    // needs type 'dir' (not 'junction', which requires absolute targets);
+    // Windows refuses to traverse a file-typed link pointing at a directory,
+    // silently shipping a workspace whose dir links are all broken (the
+    // lstat/readlink verification below cannot catch it). Create links whose
+    // targets resolve first — with the directory type when stat proves it —
+    // and dangling/cycle leftovers last with the default (their type only
+    // matters once someone re-points them, same as pre-#5373 restores).
+    const win32DirType = process.platform === 'win32' ? 'dir' : undefined;
+    const createLink = async (entry: { target: string; link: string }, resolved: string | null): Promise<void> => {
+      await fs.symlink(
+        entry.link,
+        entry.target,
+        resolved !== null && (await fs.stat(resolved)).isDirectory() ? win32DirType : undefined,
+      );
+    };
     while (pending.length) {
       const waiting = [];
       for (const entry of pending) {
-        if (await fs.stat(path.resolve(path.dirname(entry.target), entry.link)).then(() => true, () => false)) await fs.symlink(entry.link, entry.target);
+        const resolved = path.resolve(path.dirname(entry.target), entry.link);
+        if (await fs.stat(resolved).then(() => true, () => false)) await createLink(entry, resolved);
         else waiting.push(entry);
       }
       if (waiting.length === pending.length) {
