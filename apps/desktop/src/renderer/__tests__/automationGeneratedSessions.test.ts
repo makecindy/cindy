@@ -120,6 +120,8 @@ describe('automation-generated sessions', () => {
       'review',
       'shared',
       'plugin',
+      // 外部系统经 partner-bridge 派的活:与 plugin errand 同口径可见可旁观。
+      'bridge',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');

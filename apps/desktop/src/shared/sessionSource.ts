@@ -18,6 +18,7 @@ export const SESSION_SOURCES = [
   'bot',
   'cindy-make',
   'cindy-make-merge',
+  'bridge',
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -71,6 +72,8 @@ export function isReviewSessionSource(source: unknown): source is 'review' {
 //      任务本身仍是 Cindy 的真实 Session，隐藏的是普通列表投影，不是运行时能力。
 // cindy-make: /cindy-make 弹窗选择制作个人版后创建的代码任务，工作目录是 Cindy 受管
 //      源码。Main 据此注入 cindy_make 工具与任务说明；按 workingDir 归到源码项目分组。
+// bridge: 外部系统(自研服务 / 自动化脚本)经本机回环 partner-bridge 派的活。
+//      与 plugin errand 同口径可见可旁观——外部调用不许变成隐形执行。
 export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'desktop',
   'feishu',
@@ -87,6 +90,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'shared',
   'plugin',
   ...(CINDY_MAKE_ENABLED ? (['cindy-make', 'cindy-make-merge'] as const) : []),
+  'bridge',
 ];
 
 /**
@@ -113,7 +117,8 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'plugin' ||
     source === 'bot' ||
     source === 'cindy-make' ||
-    source === 'cindy-make-merge'
+    source === 'cindy-make-merge' ||
+    source === 'bridge'
     ? source
     : 'desktop';
 }

@@ -175,6 +175,10 @@
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 修改外部系统接入入口（partner-bridge 的回环服务、端点文件、任务契约、会话分间或
+  回调投递）前，必须先读 `docs/partner-bridge.md`：这是唯一一个对本机其它进程开放的
+  入口，只绑回环、token 只落 0600 文件、权限档只认 plan／acceptEdits／auto，会话必须
+  可见可停。
 - 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider

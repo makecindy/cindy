@@ -596,7 +596,10 @@ export function groupSessions(
     const dir = normalizeWorkingDir(s.workingDir);
     const noPhysicalMessages = (s._count?.messages ?? 0) === 0;
     const isOrcaLead = isOrcaLeadSession(s);
-    const isAutoPlacedSession = s.source === 'scheduler' || s.source === 'plugin';
+    // bridge: 外部系统经 partner-bridge 建的会话,与 plugin errand 同源 ——
+    // 程序建行后立刻投递,不能因为"用户还没在里面说话"被丢进未分类。
+    const isAutoPlacedSession =
+      s.source === 'scheduler' || s.source === 'plugin' || s.source === 'bridge';
     if (
       dir == null ||
       (!options.includeDraftsInProjects &&

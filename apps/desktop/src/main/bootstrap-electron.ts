@@ -39,6 +39,7 @@ import {
   writeCindyMakeSyncLatestBeforeBuild,
 } from './cindy-make/settingsStore.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
+import { stopPartnerBridgeRuntime } from './partner-bridge/runtime.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
 import {
@@ -3462,6 +3463,7 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
 
 app.on('before-quit', () => {
   isQuitting = true;
+  void stopPartnerBridgeRuntime();
   disposePiRuntimeRecovery?.();
   retryPiRuntimeAfterNetworkRecovery = null;
   disposePiRuntimeRecovery = null;

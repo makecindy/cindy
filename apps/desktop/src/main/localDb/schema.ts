@@ -93,6 +93,7 @@ const SESSION_SOURCES = [
   'bot',
   'cindy-make',
   'cindy-make-merge',
+  'bridge',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(
