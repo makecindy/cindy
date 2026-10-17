@@ -140,12 +140,14 @@ export function LoginBrandStage() {
             height: STAGE.height,
             transform: `translate(-50%, calc(-50% + ${translateY}px)) scale(${scale})`,
             transformOrigin: '50% 50%',
-            // The layout switch is synchronized with panel/slogan playback;
-            // shift and terminal states remain immediate.
+            // Keep the same transform transition while authentication interrupts
+            // panel/slogan playback; dropping it would snap an in-flight move.
+            // Shift and terminal states remain immediate.
             transition:
               handoff.isPlaying &&
               handoff.brandLayout === 'login' &&
-              (handoff.phase === 'panel' || handoff.phase === 'slogan')
+              (handoff.phase === 'panel' || handoff.phase === 'slogan' ||
+                handoff.phase === 'awaiting-cover-release' || handoff.phase === 'brand-exit')
                 ? `transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
                 : undefined,
           }}
