@@ -26,7 +26,7 @@ import { and, eq, isNull, isNotNull, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from '../client/current';
 import { sessions } from '../schema';
-import { noteSessionHidden } from '../hiddenSessionRegistry.js';
+import { noteSessionHidden } from '../sessionFlagRegistry.js';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { pickSessionForWorkdir } from '../pluginWorkspaceDedupe';

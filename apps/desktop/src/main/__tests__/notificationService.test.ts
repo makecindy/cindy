@@ -91,6 +91,12 @@ vi.mock('../appBadgeService', () => ({
   markSessionNeedsAttention,
 }));
 
+// 「消息免打扰」判定：真实实现读账号库的同步索引，这里只验 handler 在哪个时刻用它。
+const isSessionNotificationsMutedSync = vi.fn((_sessionId: string): boolean => false);
+vi.mock('../localDb/sessionFlagRegistry', () => ({
+  isSessionNotificationsMutedSync: (sessionId: string) => isSessionNotificationsMutedSync(sessionId),
+}));
+
 // mobile 通道:真实实现在 device-link host(依赖 electron/ws/authManager 全家桶),
 // 这里只验分发契约 —— channels.mobile === true 才调用。
 const sendMobileSessionNotify = vi.fn(() => true);
@@ -153,6 +159,7 @@ async function freshService() {
   ownerScopeCurrent = true;
   ownerScopeKey = 'account-a:1';
   markSessionNeedsAttention.mockClear();
+  isSessionNotificationsMutedSync.mockReset().mockReturnValue(false);
   sendMobileSessionNotify.mockReset().mockReturnValue(true);
   getMobileNotifyGeneration.mockClear();
   latestMessageText.mockClear();
@@ -196,6 +203,53 @@ describe('notificationService — channels 分发', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('「消息免打扰」任务不发任何外向提醒，但未读照旧记账', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    // done 与 needs-reply 分别走「预览后的异步分支」和「立即桌面分支」，两条都要断。
+    await invokeHandler({ sessionId: 'muted', title: 'Muted', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+    await invokeHandler({ sessionId: 'muted', title: 'Muted', kind: 'needs-reply', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(isSessionNotificationsMutedSync).toHaveBeenCalledWith('muted');
+    expect(markSessionNeedsAttention).toHaveBeenCalledTimes(2);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
+  });
+
+  it('keeps every channel for a task that is not muted', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({ sessionId: 'loud', title: 'Loud', kind: 'needs-reply', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+  });
+
+  it('re-checks the mute after preview enrichment so muting during the wait still suppresses', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    // 交接判定是发出去之前的最后一个 await，就在那里把免打扰打开。
+    const check = vi.fn(async () => {
+      isSessionNotificationsMutedSync.mockReturnValue(true);
+      return false;
+    });
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:1:2', fallbackEventId: 'turn:1:2', ended: true });
+
+    await invokeHandler({ sessionId: 's1', title: 'Mid-flight', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(check).toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
   });
 
   it('hands off delegated completion on every external channel while preserving task attention and consuming retries', async () => {

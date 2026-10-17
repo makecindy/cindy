@@ -103,6 +103,7 @@ function createSearchDb(): Database.Database {
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
       provider_id TEXT,
       user_send_at INTEGER,

@@ -370,6 +370,11 @@ export interface Session {
    */
   hiddenAt?: string | null;
   /**
+   * 用户在该任务上开了「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息，
+   * 任务内的未读与角标照常。老 payload 缺失按未静音处理。
+   */
+  notificationsMuted?: boolean;
+  /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
    * 与 updatedAt 解耦——改 model/effort/title 等字段不会动它。

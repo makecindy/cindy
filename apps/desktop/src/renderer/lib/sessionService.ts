@@ -212,14 +212,21 @@ export async function update(
 }
 
 /**
- * 窄口径会话元数据编辑(status / title / pinnedAt = 删/归档/恢复/重命名/置顶)。按来源路由:
+ * 窄口径会话元数据编辑(status / title / pinnedAt / notificationsMuted = 删/归档/恢复/重命名/置顶/静音通知)。按来源路由:
  *   - device-link 远程会话 → 隧道到被控端的 local-db:sessions:patch-meta(allowlist 内的窄口径写)
  *   - 本机会话 → 保持原 update 路径(零行为变更)
  * 通用 update 写任意字段、故意不进 allowlist,所以远程改这些元数据必须走这个专用通道。
+ * notificationsMuted 当前只在本机写:被控端 patch-meta 的 allowlist 不收它(提醒归任务所在的
+ * 那台设备发,入口也对 device-link 任务隐藏),所以这个字段不会经隧道下发。
  */
 export async function patchMeta(
   sessionId: string,
-  patch: { status?: SessionStatus; title?: string; pinnedAt?: string | null },
+  patch: {
+    status?: SessionStatus;
+    title?: string;
+    pinnedAt?: string | null;
+    notificationsMuted?: boolean;
+  },
 ): Promise<Session> {
   // Metadata writes must stay pinned to the last known device while the
   // relay's session mirror is being rebuilt. Otherwise an archived remote

@@ -157,6 +157,14 @@ export const sessions = sqliteTable(
      */
     hiddenAt: integer('hidden_at'), // unix ms
     /**
+     * 按任务静音通知。true = 用户在该任务的右键菜单里开了「消息免打扰」：
+     * 不再发系统通知（toast/声音）、不上 Agent 灵动岛、不推手机、不发 IM 消息。
+     * 任务内的未读与角标不受影响；存量行全部为 false。
+     */
+    notificationsMuted: integer('notifications_muted', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    /**
      * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
      * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
      * 取消置顶时清空。NULL = 尚未生成或非卡片置顶。

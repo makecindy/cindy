@@ -4829,6 +4829,8 @@ interface ElectronAPI {
           contextWindow?: number;
           clearedAt?: string | null;
           pinnedAt?: string | null;
+          /** 任务级「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息。 */
+          notificationsMuted?: boolean;
           status?: import('@/lib/ccAgent.types').SessionStatus;
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */

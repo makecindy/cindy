@@ -75,6 +75,7 @@ import {
   type AgentIslandScreenLayoutMetrics,
 } from '../../shared/agentIsland.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { createLogger } from '../logger.js';
 import { t } from '../i18n.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
@@ -109,6 +110,7 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
+  setAgentIslandSessionDisplaySuppressed,
   setAgentIslandStrings,
   setAgentIslandToolWording,
   setAgentIslandVisibleSession,
@@ -1197,6 +1199,15 @@ export class AgentIslandService {
   }
 
   /**
+   * 「消息免打扰」发生变化:只影响展示面(岛面 / 菜单栏 / 提示音)。重发一次即可 ——
+   * 抑制集合在 publish() 里从同步索引重新对齐。静音任务的 Agent 事件仍照常进状态机,
+   * 侧栏卡片的实时活动、等待交互态与远端活动镜像不受影响。
+   */
+  handleNotificationMuteChanged(): void {
+    this.publish();
+  }
+
+  /**
    * @param options.reason
    *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除、Orca worker 被策略
    *   清除),条目硬删。
@@ -1697,7 +1708,22 @@ export class AgentIslandService {
     }
   }
 
+  /**
+   * 把「消息免打扰」从同步索引对齐到展示面抑制集合。放在每次 publish 的开头：账号
+   * 切换、索引重载、直接改库都能自愈，不靠某一条写库路径记得来登记。
+   */
+  private syncDisplaySuppression(): void {
+    for (const sessionId of this.state.sessions.keys()) {
+      setAgentIslandSessionDisplaySuppressed(
+        this.state,
+        sessionId,
+        isSessionNotificationsMutedSync(sessionId),
+      );
+    }
+  }
+
   private publish(): void {
+    this.syncDisplaySuppression();
     const now = Date.now();
     if (!this.enabledSynced) {
       this.mutedCompletionSoundSessionIds.clear();

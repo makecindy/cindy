@@ -2495,6 +2495,19 @@
       },
       "checkCase": false,
       "note": "云端伙伴运行的那台电脑（docs/product-rules/cloud-companions.md §3）：伙伴的 Agent、工作目录与连接只在这台电脑上，其他电脑与手机是查看和发消息的入口。手机与桌面同一叫法，伙伴设置行名、离线横幅与侧栏状态共用。英文行名用 Title Case（Main Computer），句中小写 main computer，故 checkCase 为 false。不要写成「主设备」「宿主机」或 home device（代码字段 homeDeviceId 不是界面用语）。先登记为 proposed，待桌面与手机实机走查后再定。"
+    },
+    {
+      "id": "session-notification-mute",
+      "status": "proposed",
+      "en": "Mute notifications",
+      "translations": {
+        "zh-CN": "消息免打扰",
+        "zh-TW": "訊息免打擾",
+        "ja": "通知をミュート",
+        "ko": "알림 끄기"
+      },
+      "checkCase": false,
+      "note": "任务右键菜单里的通知开关，是普通句子不是品牌词，故 checkCase 为 false。开关两态成对出现：未静音时显示「消息免打扰」（点了就静音），已静音时显示「允许消息通知」（点了就恢复）；英文对为 Mute notifications / Allow notifications。与设置里的全局通知开关（ccAgent.settings.notifications）区分：这个是单个任务的。中文不用「免打扰模式」「静音」。「允许消息通知」是反面文案，未列入 translations，待五语用例变多后一并裁决。"
     }
   ]
 }

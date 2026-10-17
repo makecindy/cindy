@@ -29,6 +29,7 @@ import * as path from 'node:path';
 import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
 import { notificationPreview } from './notificationPreview';
+import { isSessionNotificationsMutedSync } from './localDb/sessionFlagRegistry';
 import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
 import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
@@ -238,6 +239,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const wantDesktop = channels?.desktop ?? true;
       const wantFeishu = channels?.feishu === true;
       if (markAttention) markSessionNeedsAttention(sessionId);
+      // 「消息免打扰」任务不再走任何外向提醒通道（系统 toast / 灵动岛 / 手机 / 飞书）；
+      // 未读与角标已在上一行照常记账，任务内的提醒不受影响。
+      if (isSessionNotificationsMutedSync(sessionId)) return;
 
       // Action/error desktop notices have no transcript preview and must be immediate.
       if (wantDesktop && kind !== 'done') {
@@ -332,6 +336,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           const afterHandoffSignal = getSessionNotificationTurnSignal(sessionId);
           if (afterHandoffSignal?.id !== signal?.id || (afterHandoffSignal && !afterHandoffSignal.ended)) return;
         }
+        // 取正文 / 等交接判定期间用户可能刚开了免打扰:真正发之前再确认一次。
+        // 手机通道在 sendMobileSessionNotify 内另有同一道门。
+        if (isSessionNotificationsMutedSync(sessionId)) return;
         if (kind === 'done' && handledByTeammate) {
           // Consume this event in the existing per-channel ledger. Removing a
           // delegation later must not replay a completion already handed off.

@@ -81,7 +81,7 @@ import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
-import { ensureHiddenSessionRegistryLoaded } from '../hiddenSessionRegistry.js';
+import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
   ackSessionTurnEndedDurable,
@@ -1259,8 +1259,9 @@ export function registerSessionIpc(
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
-      // 首次 list 即账号库就绪:预热插件后台任务索引,灵动岛/通知的同步判定从此可用。
-      void ensureHiddenSessionRegistryLoaded();
+      // 首次 list 即账号库就绪:预热 session 标记索引(后台隐藏 + 消息免打扰),
+      // 灵动岛/通知的同步判定从此可用。
+      void ensureSessionFlagRegistryLoaded();
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);
@@ -1759,6 +1760,11 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
+    // renderer payload 不可信:静音是 boolean 语义,字符串 "false" 进 mapper 会被 `!!`
+    // 存成 true(开关反转)。出现就必须是真 boolean,与 set-pinned-card-summaries 同口径。
+    if (p.notificationsMuted !== undefined && typeof p.notificationsMuted !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'notificationsMuted must be a boolean');
+    }
     return updateSessionInDb(sid, p, opts);
   });
 
@@ -1939,6 +1945,7 @@ export async function updateSessionInDb(
       'extraDirs',
       'writableDirs',
       'pinnedAt',
+      'notificationsMuted',
       'workingDir',
       'workspaceKind',
       'title',
@@ -2045,6 +2052,13 @@ export async function updateSessionInDb(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
+    // 「消息免打扰」是通知面专用标记:同步给进程内索引,免得通知/灵动岛路径逐事件查库。
+    if (p.notificationsMuted !== undefined) {
+      noteSessionNotificationsMuted(sid, updated.notificationsMuted === true, dbClient);
+      // 岛面收敛:静音后要把已经上岛的任务从展示面收走,取消静音要放回来。只影响
+      // 展示面 —— 事件仍照常进状态机(侧栏实时活动就长在那份状态上)。
+      notifyAgentIslandSessionPatch(sid, { notificationsMuted: updated.notificationsMuted });
+    }
     if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
       clearSessionAttention(sid, 'explicit');
     }
@@ -2106,7 +2120,8 @@ export async function updateSessionInDb(
       settingsChanged ||
       titleChanged ||
       statusChanged ||
-      p.pinnedAt !== undefined
+      p.pinnedAt !== undefined ||
+      p.notificationsMuted !== undefined
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, broadcastPatch, ownerScope);

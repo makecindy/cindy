@@ -18,6 +18,11 @@ export interface DesktopConfirmNoticeDeps {
   /** 会话绑定的飞书 openId;非飞书会话返回 null(桌面本来就是唯一交互面)。 */
   getFeishuOpenId(sessionId: string): Promise<string | null>;
   sendFeishuText(openId: string, markdown: string): Promise<unknown>;
+  /**
+   * 该任务开了「消息免打扰」→ IM 侧提示也不发,与 toast / 灵动岛 / 手机推送
+   * 同一口径。桌面卡片本身不受影响:提示是提醒,卡片是交互面。
+   */
+  isSuppressed?(sessionId: string): boolean;
   logWarn?(message: string): void;
 }
 
@@ -65,10 +70,14 @@ export function createDesktopConfirmNotifier(
   buildText: (what: string) => string = buildDesktopConfirmNoticeText,
 ): (sessionId: string, what: string) => void {
   return (sessionId, what) => {
+    if (deps.isSuppressed?.(sessionId)) return;
     void (async () => {
       try {
         const openId = await deps.getFeishuOpenId(sessionId);
         if (!openId) return;
+        // 解析 openId 要查库,期间用户可能刚开了免打扰:真正发之前再确认一次
+        // (与 notificationService 在异步富化后、发送前的那道判定同口径)。
+        if (deps.isSuppressed?.(sessionId)) return;
         await deps.sendFeishuText(openId, buildText(what));
       } catch (err) {
         deps.logWarn?.(

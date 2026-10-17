@@ -111,7 +111,7 @@ describeMigrationReplay('migration replay', () => {
       if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129]);
       expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
       expect(tableExists(db, 'plugin_usage_events')).toBe(true);
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
@@ -137,6 +137,23 @@ describeMigrationReplay('migration replay', () => {
       ]);
       db.prepare("UPDATE sessions SET hidden_at = 9 WHERE id = 'a'").run();
       expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE hidden_at IS NULL").get()).toEqual({ n: 1 });
+    } finally { cleanup(); }
+  });
+  it('defaults sessions.notifications_muted to unmuted on a populated database', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+      db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Loud', 'active', 1), ('b', 'Archived', 'archived', 2);");
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 128 });
+      expect(result.applied.map((migration) => migration.seq)).toEqual([129]);
+      expect(columnNames(db, 'sessions')).toContain('notifications_muted');
+      // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
+      expect(db.prepare('SELECT id, notifications_muted FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'a', notifications_muted: 0 },
+        { id: 'b', notifications_muted: 0 },
+      ]);
+      db.prepare("UPDATE sessions SET notifications_muted = 1 WHERE id = 'a'").run();
+      expect(db.prepare('SELECT id FROM sessions WHERE notifications_muted = 0').all()).toEqual([{ id: 'b' }]);
     } finally { cleanup(); }
   });
   it('commits the complete fresh schema and task presets in one outer transaction', () => {
