@@ -54,6 +54,11 @@ vi.mock('electron', () => ({
       ipcHandlers.set(channel, handler);
     },
   },
+  // 预算用例经真实的 session-context-budget-store → ownerScopedUserDataPath →
+  // app.getPath('userData')；mock 必须暴露 app，否则报「No "app" export is defined
+  // on the electron mock」。指向 beforeEach 建的临时目录（userDataDirRef），随
+  // tempDirs 生命周期一起清理，绝不碰真实 userData。
+  app: { getPath: (name: string) => (name === 'userData' ? userDataDirRef.current : `/tmp/cindy-fork-test/${name}`) },
 }));
 vi.mock('../localDb/ipc/sessionCreatedBroadcast.js', () => ({
   emitSessionCreated: sessionCreatedMock,
@@ -124,6 +129,8 @@ let forkSessionStripEncrypted: typeof import('../maker-orchestration/fork').fork
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalXdtUserDataDir = process.env.XDT_USER_DATA_DIR;
 const tempDirs: string[] = [];
+/** electron mock 的 app.getPath('userData') 指向的临时目录；beforeEach 里建、afterEach 随 tempDirs 清。 */
+const userDataDirRef: { current: string } = { current: '' };
 
 beforeEach(async () => {
   ipcHandlers.clear();
@@ -134,6 +141,11 @@ beforeEach(async () => {
   else process.env.XDT_USER_DATA_DIR = originalXdtUserDataDir;
   selectQueue.length = 0;
   txCalls.length = 0;
+  // 预算文件的 userData 隔离：每个用例一个新的临时目录（electron mock 的 app.getPath 指向它）。
+  fs.mkdtemp(path.join(os.tmpdir(), 'cindy-fork-userdata-')).then((dir) => {
+    userDataDirRef.current = dir;
+    tempDirs.push(dir);
+  });
   txMock.mockClear();
   queryOneMock.mockReset();
   queryOneMock.mockResolvedValue(null);
