@@ -36,6 +36,8 @@ export interface VerifiedAsker {
   program: TerminalProgram;
   /** The command the owner should recognise, e.g. `sudo -A brew install x` or `git push origin main`. */
   command: string;
+  /** Origin from the verified Git transport, never from the prompt alone. */
+  gitOrigin?: string;
 }
 
 export type ChainVerdict = { ok: true; asker: VerifiedAsker } | { ok: false; reason: string };
@@ -90,6 +92,30 @@ export async function verifyAskpassChain(
   if (!helperExe || !isSystemPath(helperExe) || path.posix.basename(helperExe) !== 'curl')
     return { ok: false, reason: 'helper' };
 
+  return verifyAsker(probe, helper, userUid);
+}
+
+/** The preflight shell can receive guidance only; the credential path still requires curl. */
+export async function verifyAskpassRecoveryChain(
+  probe: ProcessProbe,
+  helperPid: number,
+  helperPath: string,
+  userUid: number,
+): Promise<ChainVerdict> {
+  const helper = await probe.facts(helperPid);
+  if (!helper || helper.uid !== userUid || argv0Name(helper.args) !== 'sh')
+    return { ok: false, reason: 'helper' };
+  const argv0 = helper.args.trim().split(/\s+/)[0];
+  const invocation = `${argv0} ${helperPath}`;
+  if (helper.args !== invocation && !helper.args.startsWith(`${invocation} `))
+    return { ok: false, reason: 'helper' };
+  const exe = await probe.executable(helperPid);
+  if (!exe || !isSystemPath(exe) || !['sh', 'bash', 'dash'].includes(path.posix.basename(exe)))
+    return { ok: false, reason: 'helper' };
+  return verifyAsker(probe, helper, userUid, true);
+}
+
+async function verifyAsker(probe: ProcessProbe, helper: ProcessFacts, userUid: number, metadataOnly = false): Promise<ChainVerdict> {
   const parent = await probe.facts(helper.ppid);
   if (!parent) return { ok: false, reason: 'parent' };
   const name = argv0Name(parent.args);
@@ -102,8 +128,12 @@ export async function verifyAskpassChain(
 
   if (parent.uid !== userUid) return { ok: false, reason: 'parent' };
   const exe = await probe.executable(parent.pid);
-  if (!exe || !isSystemPath(exe)) return { ok: false, reason: 'parent' };
+  if (!exe) return { ok: false, reason: 'parent' };
   const exeName = path.posix.basename(exe);
+  // Bundled Git may live outside system roots. It can receive non-secret recovery
+  // guidance, but the credential-delivery path keeps its original system-path gate.
+  if (!isSystemPath(exe) && !(metadataOnly && GIT_TRANSPORTS.has(exeName)))
+    return { ok: false, reason: 'parent' };
 
   if (SSH_NAMES.has(exeName)) {
     return { ok: true, asker: { program: exeName as 'ssh' | 'ssh-add', command: shorten(parent.args) } };
@@ -112,9 +142,21 @@ export async function verifyAskpassChain(
   // itself asking (e.g. `git credential fill`) would print the answer.
   if (GIT_TRANSPORTS.has(exeName) || GIT_TRANSPORTS.has(name)) {
     if (!GIT_TRANSPORTS.has(exeName)) return { ok: false, reason: 'git' };
-    return { ok: true, asker: { program: 'git', command: shorten(await gitCommand(probe, parent)) } };
+    const gitOrigin = transportOrigin(parent.args);
+    return { ok: true, asker: {
+      program: 'git', command: shorten(await gitCommand(probe, parent)),
+      ...(gitOrigin ? { gitOrigin } : {}),
+    } };
   }
   return { ok: false, reason: 'parent' };
+}
+
+function transportOrigin(command: string): string | undefined {
+  // Git's transport argv ends with the remote URL. Ambiguous/truncated argv is
+  // insufficient evidence for recovery; ordinary credential handling still works.
+  const remote = command.match(/ (https?:\/\/[^\s]+)$/)?.[1];
+  if (!remote) return undefined;
+  try { return new URL(remote).origin; } catch { return undefined; }
 }
 
 /** The git command the agent ran, skipping git's own `git remote-http` hop. */
