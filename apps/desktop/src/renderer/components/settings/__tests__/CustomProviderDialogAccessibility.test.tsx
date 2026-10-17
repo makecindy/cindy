@@ -1980,12 +1980,20 @@ it('keeps a template connection editable without offering protocol or path switc
   const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
   const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
   vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
-  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  let finishKeyHydration!: (key: null) => void;
+  const keyHydration = new Promise<null>((resolve) => { finishKeyHydration = resolve; });
+  customProviderMocks.readCustomProviderKey.mockReturnValue(keyHydration);
   render(<ProviderConnectionDialog initial={{ id: 'google-test', name: 'Google', runtimes: {
     codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id,
       models: [{ id: preset.runtimes.codex!.models[0].id, name: 'Gemini' }] },
   } }} onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitFor(() => expect(window.electronAPI.maker.listProviderPresets).toHaveBeenCalled());
+  await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalledWith('google-test', 'codex'));
+  // 保存前完成密钥回填并提交 React 状态，避免点击被加载保护提前返回。
+  await act(async () => {
+    finishKeyHydration(null);
+    await keyHydration;
+  });
   expect(screen.queryByText('settings.providers.custom.fields.wireProtocol')).toBeNull();
   expect(screen.queryByRole('button', { name: 'settings.providers.custom.runtimeFill.action' })).toBeNull();
   const endpoint = screen.getByDisplayValue('https://generativelanguage.googleapis.com/v1beta') as HTMLInputElement;
