@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
  * - Cancels the in-flight RAF on unmount or when a new animation starts.
  *
  * @param target   The desired final value.
- * @param duration Animation duration in ms (default 400).
+ * @param duration Animation duration in ms (default 400); non-positive values snap without RAF.
  */
 export function useAnimatedNumber(target: number, duration = 400): number {
   const [displayed, setDisplayed] = useState(target);
@@ -45,7 +45,8 @@ export function useAnimatedNumber(target: number, duration = 400): number {
     // jumps from the previous turn's total (e.g. 8.5k) down to 0 at the start
     // of every new turn (see makerChatStore handleStatusUpdate isTurnStart).
     // Easing through that drop reads as a confusing countdown — snap instead.
-    if (to < from) {
+    // A non-positive duration also snaps (e.g. reduced motion) without scheduling RAF.
+    if (duration <= 0 || to < from) {
       setDisplayed(to);
       return;
     }
