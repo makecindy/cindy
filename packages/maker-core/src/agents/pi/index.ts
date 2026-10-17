@@ -236,6 +236,7 @@ import {
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
   filterPiProjectCliSkills,
+  PI_WINDOWS_SPAWN_ARGV_BUDGET,
   piProjectResourceCliArgs,
 } from './project-resource-cli.js';
 import {
@@ -321,6 +322,16 @@ const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
 const PI_EXTENSION_BUNDLE_HASH_ENV = 'CINDY_PI_EXTENSION_BUNDLE_HASH';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
+/**
+ * 内联 `--append-system-prompt` 的长度上限。host 提示词(Bot 身份 + profile context +
+ * teammate guide + 记忆索引)可达数十 KB,而 Windows 命令行整条上限 32767、超过预算守卫
+ * 就拒绝启动。Pi 对「磁盘上存在的路径」会读取文件内容,所以超限时把提示词写进会话
+ * configHome、命令行只留路径 —— argv 不再随提示词增长。上限取 Windows 预算的四分之一,
+ * 给项目 Skill / 扩展路径留出空间。仅本地会话适用,远端见下面的落盘条件。
+ */
+const PI_APPEND_SYSTEM_PROMPT_INLINE_LIMIT = Math.floor(PI_WINDOWS_SPAWN_ARGV_BUDGET / 4);
+/** 超限提示词在本地会话 configHome (PI_CODING_AGENT_DIR) 内的文件名。 */
+const PI_APPEND_SYSTEM_PROMPT_FILE_NAME = 'append-system-prompt.md';
 /**
  * Compatibility fallback for hosts that do not provide persistent derivation.
  * Desktop injects its owner-scoped safeStorage-backed deriver so restart and
@@ -3962,6 +3973,35 @@ export class PiAgent extends BaseAgent {
         .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)));
       managedSkillRoot = managedLaunchSkills.length ? path.join(configHome, 'cindy-managed-skills') : undefined;
 
+      // Oversized host prompts travel as a file inside the per-session configHome and
+      // only their path stays on the command line: pi resolves an existing path value
+      // as file contents, so argv no longer grows with the Bot profile context,
+      // teammate guide or memory index, and the Windows budget guard keeps its
+      // headroom for explicit Skill / extension paths. A failed write falls back to
+      // the inline value (the guard then still fails closed before spawning).
+      //
+      // Local sessions only. Remote sessions must keep the inline value: the SSH
+      // daemon hashes the whole pi command line (pi-remote-transport launchHash) into
+      // its reattach identity, so a file path that survives content changes would let
+      // a reconnecting session keep running the prompt it loaded at spawn; the stable
+      // remote configHome is also never removed on close, so a spilled prompt would
+      // outlive the session on the remote disk. POSIX argv budgets (128K) leave room
+      // for the inline value anyway.
+      let appendSystemPromptFile: string | undefined;
+      if (!opts.remoteHostId
+        && appendSystemPrompt.length > PI_APPEND_SYSTEM_PROMPT_INLINE_LIMIT) {
+        const spillPath = joinRemotePosixPath(configHome, PI_APPEND_SYSTEM_PROMPT_FILE_NAME);
+        try {
+          await writeFile(spillPath, appendSystemPrompt);
+          appendSystemPromptFile = spillPath;
+        } catch (err) {
+          this.deps.logger.warn('pi append-system-prompt spill failed; keeping inline value', {
+            sessionId: opts.sessionId ?? null,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       args = [
         '--mode',
         'rpc',
@@ -3991,7 +4031,9 @@ export class PiAgent extends BaseAgent {
           .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)))
           .flatMap((skillPath) => ['--skill', skillPath]),
         ...(managedSkillRoot ? ['--skill', managedSkillRoot] : []),
-        ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
+        ...(appendSystemPrompt.length > 0
+          ? ['--append-system-prompt', appendSystemPromptFile ?? appendSystemPrompt]
+          : []),
         // 受邀者的说明文件扩展排在 bridge 之前：托管时 bridge 会按当前选项渲染整段系统提示。
         ...(guestContextExtensionPath ? ['--extension', guestContextExtensionPath] : []),
         '--extension',
