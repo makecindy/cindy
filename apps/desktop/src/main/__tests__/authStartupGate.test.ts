@@ -15,6 +15,9 @@ import {
   LOGIN_PREPARING_GATE_TIMEOUT_MS,
   awaitLoginProvidersWithPreparingGate,
   awaitWithStartupTimeout,
+  ColdStartAuthFallbackRegistry,
+  commitColdStartRefreshIfCurrent,
+  resolveColdStartTimeoutRecovery,
   mapLoginProvidersLoadFailure,
 } from '../authStartupGate';
 
@@ -180,6 +183,123 @@ describe('awaitWithStartupTimeout', () => {
     resolveFlow('ok');
     await expect(p).resolves.toBe('ok');
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+});
+
+describe('ColdStartAuthFallbackRegistry', () => {
+  it('returns a pending boundary when the owner transition exceeds the startup deadline', async () => {
+    const pendingState = { mode: 'signed-out', ownerBoundaryPending: true } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out', ownerBoundaryPending: false }));
+    const result = await resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: true,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState: { mode: 'cloud', ownerBoundaryPending: false },
+      pendingState,
+      recover,
+    });
+    expect(result).toEqual(pendingState);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('recovers a signed-out owner when no owner transition is pending', async () => {
+    const pendingState = { mode: 'signed-out', ownerBoundaryPending: true } as const;
+    const currentState = { mode: 'cloud', ownerBoundaryPending: false } as const;
+    const recoveredState = { mode: 'signed-out', ownerBoundaryPending: false } as const;
+    const recover = vi.fn(async () => recoveredState);
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState,
+      pendingState,
+      recover,
+    })).resolves.toBe(recoveredState);
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an explicit login completed before a sibling startup timeout', async () => {
+    const loggedInState = { mode: 'cloud', userId: 'new-owner' } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out' as const }));
+
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 8,
+      currentState: loggedInState,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toBe(loggedInState);
+
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('preserves a late successful refresh across consecutive renderer startup timeouts', async () => {
+    vi.useFakeTimers();
+    const registry = new ColdStartAuthFallbackRegistry();
+    const flowEpoch = 7;
+    let currentEpoch = flowEpoch;
+    let committedUser: string | null = null;
+    let resolveRefresh!: (user: string) => void;
+    const refresh = new Promise<string>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const recover = () => {
+      const previousEpoch = currentEpoch;
+      currentEpoch += 1;
+      registry.record(previousEpoch, currentEpoch);
+      return { isAuthenticated: false };
+    };
+
+    // Two renderer windows share the same refresh, but each owns a startup timer.
+    const primary = awaitWithStartupTimeout(refresh, { timeoutMs: 1000, onTimeout: recover });
+    const secondary = awaitWithStartupTimeout(refresh, { timeoutMs: 1500, onTimeout: recover });
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(primary).resolves.toEqual({ isAuthenticated: false });
+    await expect(secondary).resolves.toEqual({ isAuthenticated: false });
+    expect(currentEpoch).toBe(9);
+
+    resolveRefresh('owner');
+    const refreshedUser = await refresh;
+    const commit = commitColdStartRefreshIfCurrent({
+      registry,
+      flowEpoch,
+      currentEpoch,
+      commit: () => {
+        committedUser = refreshedUser;
+        return committedUser;
+      },
+    });
+
+    expect(commit).toEqual({ superseded: false, flowEpoch: 9, value: 'owner' });
+    expect(committedUser).toBe('owner');
+  });
+
+  it('does not commit a refresh after an explicit login interrupts the fallback chain', () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    registry.record(8, 9);
+    const commit = vi.fn(() => 'stale-owner');
+
+    const rejected = commitColdStartRefreshIfCurrent({
+      registry,
+      flowEpoch: 7,
+      currentEpoch: 9,
+      commit,
+    });
+    expect(rejected).toEqual({ superseded: true });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a later user auth change after consecutive startup fallbacks', () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    registry.record(7, 8);
+    registry.record(8, 9);
+    expect(registry.containsOnlyFallbacks(7, 10)).toBe(false);
+  });
+
+  it('accepts the unchanged generation without fallback records', () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    expect(registry.containsOnlyFallbacks(7, 7)).toBe(true);
   });
 });
 
