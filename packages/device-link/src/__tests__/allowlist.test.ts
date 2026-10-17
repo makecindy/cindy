@@ -118,6 +118,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:schedule:get-runtime-state',
       'maker:worker:create',
       'maker:worker:dispatch-ui-assignment',
+      'maker:worker:update',
       'maker:session:enable-orca',
       'maker:rewind:commit',
       'maker:fork',

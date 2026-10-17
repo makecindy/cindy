@@ -203,6 +203,133 @@ describe('findFocusTargetWorker', () => {
   });
 });
 
+describe('OrcaTeamService updateWorker', () => {
+  it('normalizes role/label, writes once, and broadcasts to the lead', async () => {
+    const { deps, service, getWorker } = createDeps();
+    const result = await service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: '  Reviewer  ',
+      label: ' Backend-2 ',
+    });
+    expect(result).toEqual({ ok: true, workerId: 'worker-1', role: 'Reviewer', label: 'backend-2' });
+    expect(deps.updateWorkerIdentity).toHaveBeenCalledWith({
+      workerId: 'worker-1',
+      role: 'Reviewer',
+      label: 'backend-2',
+      previousRole: 'Researcher',
+      previousLabel: 'research',
+    });
+    expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledWith('lead-1');
+    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'backend-2' });
+  });
+
+  it('is idempotent when nothing changes', async () => {
+    const { deps, service } = createDeps();
+    const result = await service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Researcher',
+      label: 'research',
+    });
+    expect(result).toEqual({ ok: true, workerId: 'worker-1', role: 'Researcher', label: 'research' });
+    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
+    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-lead refs, invalid input, and an empty patch', async () => {
+    const { deps, service } = createDeps();
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-2',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_NOT_FOUND' });
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: '   ',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: '前端',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
+  });
+
+  it('maps the store duplicate-label result without broadcasting', async () => {
+    const { deps, service } = createDeps({
+      updateWorkerIdentity: vi.fn(async () => ({ ok: false as const, errorCode: 'DUPLICATE_LABEL' as const })),
+    });
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'reviewer',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent partial renames so the later one merges the earlier result', async () => {
+    const { deps, service, getWorker } = createDeps();
+    const original = deps.updateWorkerIdentity;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let writes = 0;
+    deps.updateWorkerIdentity = vi.fn(async (input) => {
+      writes += 1;
+      if (writes === 1) await firstGate;
+      return original(input);
+    });
+
+    const roleOnly = service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    });
+    const labelOnly = service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'backend-2',
+    });
+
+    releaseFirst();
+    await expect(Promise.all([roleOnly, labelOnly])).resolves.toEqual([
+      { ok: true, workerId: 'worker-1', role: 'Reviewer', label: 'research' },
+      { ok: true, workerId: 'worker-1', role: 'Reviewer', label: 'backend-2' },
+    ]);
+    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'backend-2' });
+  });
+
+  it('rejects a label rename locked by the active plugin team plan but still allows role changes', async () => {
+    const isWorkerLabelLockedByPlan = vi.fn(async () => true);
+    const { deps, service, getWorker } = createDeps({ isWorkerLabelLockedByPlan });
+
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'backend-2',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledWith({
+      leadSessionId: 'lead-1',
+      labels: ['research', 'backend-2'],
+    });
+    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
+
+    // 计划只按 label 寻址，role 改名不受影响，也不触发计划查询。
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    })).resolves.toMatchObject({ ok: true, role: 'Reviewer', label: 'research' });
+    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledTimes(1);
+    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'research' });
+  });
+});
+
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
   const calls: string[] = [];
   let workers = [createWorker()];
@@ -310,6 +437,15 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     }),
     restoreManualInterrupt: vi.fn((_sessionId, snapshot) => {
       manualInterrupt = snapshot;
+    }),
+    updateWorkerIdentity: vi.fn(async (input) => {
+      calls.push(`updateWorkerIdentity:${input.role}:${input.label}`);
+      workers = workers.map((worker) =>
+        worker.id === input.workerId
+          ? { ...worker, role: input.role, label: input.label }
+          : worker,
+      );
+      return { ok: true as const };
     }),
     broadcastOrcaWorkerChanged: vi.fn(() => {
       calls.push('broadcastOrcaWorkerChanged');
