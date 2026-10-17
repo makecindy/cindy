@@ -51,6 +51,7 @@ export class RpcClient {
   });
   private readonly options: RpcClientOptions & { logger?: Pick<Console, 'warn' | 'debug'> };
   private helloDone = false;
+  private closeFired = false;
 
   constructor(
     private readonly stream: Duplex,
@@ -96,6 +97,14 @@ export class RpcClient {
     params: unknown,
     opts: { timeoutMs?: number } = {},
   ): Promise<R> {
+    if (this.closeFired) {
+      // 关闭生命周期已启动(end/close 已跑过 rejectAllPending):close 回调期间
+      // 同步新建的请求进不了任何后续清理路径,必须在入口拒绝,否则禁用超时的
+      // 请求会永久挂起(对齐 cc-manager request 的 closedFired 检查)。
+      const err = new Error('pi-manager client stream closed') as Error & { code?: string };
+      err.code = 'STREAM_CLOSED';
+      return Promise.reject(err);
+    }
     if (this.stream.destroyed) {
       const err = new Error('pi-manager client stream is destroyed') as Error & { code?: string };
       err.code = 'STREAM_DESTROYED';
@@ -137,7 +146,8 @@ export class RpcClient {
   }
 
   notify(method: NotificationName | MethodName, params: unknown): void {
-    if (this.stream.destroyed) return;
+    // closeFired 后 stream 只剩 destroy 一条路,别再往垂死的流上写。
+    if (this.closeFired || this.stream.destroyed) return;
     const notification: RpcNotification = { type: 'notification', method, params };
     this.stream.write(encodeMessage(notification));
   }
@@ -165,6 +175,11 @@ export class RpcClient {
 
   /** Reject every in-flight request with a typed error (close/end 共用)。 */
   private rejectAllPending(error: Error): void {
+    // 'end' 先 reject + destroy, destroy 再触发 'close' —— close handler 只能
+    // 触发一次(cc-manager 侧同名 fireClose 的 closedFired 守卫; 消费者的
+    // 重连/清理回调跑两次会重复建连)。
+    if (this.closeFired) return;
+    this.closeFired = true;
     const err = error as Error & { code?: string };
     err.code = err.code ?? 'STREAM_CLOSED';
     for (const [, entry] of this.pending) {
