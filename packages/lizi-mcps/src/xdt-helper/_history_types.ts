@@ -25,6 +25,14 @@ export type HistoryReadErrorCode =
   | 'REMOTE_TIMEOUT'
   | 'REMOTE_PAYLOAD_TOO_LARGE';
 
+/**
+ * history 读取侧可读的 message role 全集。
+ * 'error' 是技术性 role: 由 terminal error 诊断行落库(messagePersistBroadcaster
+ * 写入 role: 'error', content 内 message / sdkError 已过 redactSensitiveText 脱敏,
+ * reason 等其余字段是入库原样内容), 与 tool_use / tool_result / thinking 一样仅在
+ * 调用方显式列出时(roles 数组里包含该项)才返回。跨设备出口会再对 error 行 content
+ * 整体过 redactSensitiveTextDeep, 因此读取侧拿到的是脱敏后的内容。
+ */
 export type HistoryRole =
   | 'user'
   | 'assistant'
@@ -32,7 +40,8 @@ export type HistoryRole =
   | 'tool_result'
   | 'ask_user'
   | 'plan_review'
-  | 'thinking';
+  | 'thinking'
+  | 'error';
 
 export interface HistoryCursor {
   /** unix ms */

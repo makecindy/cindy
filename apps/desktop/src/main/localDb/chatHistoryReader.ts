@@ -304,6 +304,10 @@ export async function listSessionsForHistory(
 
 // ── get_chat_history ────────────────────────────────────────────────────────
 
+/**
+ * history reader 接受的 role 全集。'error' 为技术性 role: terminal error 诊断行
+ * (role: 'error', content 已脱敏) 只有调用方显式列出时才会被返回, 不进默认集。
+ */
 export type HistoryRole =
   | 'user'
   | 'assistant'
@@ -311,7 +315,8 @@ export type HistoryRole =
   | 'tool_result'
   | 'ask_user'
   | 'plan_review'
-  | 'thinking';
+  | 'thinking'
+  | 'error';
 
 export interface GetMessagesParams {
   sessionIds: string[] | null;

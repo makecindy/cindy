@@ -886,6 +886,7 @@ import {
   getOrcaWorkerDiagnosticStatusReadOnly,
   readOrcaWorkerOutputReadOnly,
 } from './orcaDiagnostics.js';
+import { readLatestWorkerTurnError } from './orcaTurnErrorQuery.js';
 import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.js';
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
 import {
@@ -2545,6 +2546,14 @@ interface OrcaCollabService {
         status: string;
         session_status: string;
         result: string;
+        /** Worker 本轮 turn 的 terminal error 摘要(已脱敏);本轮没失败时为 null。 */
+        turnError: {
+          message: string;
+          reason?: string;
+          sdkError?: string;
+          toolLoop?: string;
+          createdAt: string;
+        } | null;
       }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -7765,6 +7774,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         remoteRuntime?.isRemote(workerSessionId)
           ? remoteRuntime.latestReply(workerSessionId)
           : readLatestWorkerAssistantMessage(workerSessionId),
+      // 远端 Worker:错误行在运行设备上,本机没有可靠的低成本读取路径(需要新增 invoke,
+      // 超出本次范围),故按「无摘要」返回 null,不猜测、不用本机代理行冒充。
+      readLatestTurnError: async (workerSessionId: string) =>
+        remoteRuntime?.isRemote(workerSessionId) ? null : readLatestWorkerTurnError(workerSessionId),
     };
   }
 

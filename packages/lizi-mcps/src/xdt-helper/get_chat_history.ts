@@ -13,6 +13,7 @@
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import { redactSensitiveTextDeep } from '@cindy/maker-shared/error-redaction';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
@@ -29,6 +30,7 @@ const ROLE_VALUES = [
   'ask_user',
   'plan_review',
   'thinking',
+  'error',
 ] as const satisfies readonly HistoryRole[];
 
 /**
@@ -66,9 +68,17 @@ const DESCRIPTION = [
   '传 include_full_history=true 解锁。响应里的 query.auto_window_days 会标明窗口是否生效。',
   '',
   '【默认只返问答类 role】不传 roles = 只返 user / assistant / ask_user / plan_review,',
-  '排除 tool_use / tool_result / thinking 这些开发者 debug 用的技术性 role(体积大且',
+  '排除 tool_use / tool_result / thinking / error 这些开发者 debug 用的技术性 role(体积大且',
   '对"回顾对话"无价值)。需要工具调用 / 思考链等技术 role 时, 在 roles 里显式列出',
-  '(例如要全量就传 roles=["user","assistant","tool_use","tool_result","ask_user","plan_review","thinking"])。',
+  '(例如要全量就传 roles=["user","assistant","tool_use","tool_result","ask_user","plan_review","thinking","error"])。',
+  '',
+  '【error 是技术性 role, 需显式列出】role="error" 是终端错误诊断行(worker 派发成功后',
+  '无输出就终止等技术性终止会落一行), 默认集不含它——roles 数组里包含 "error" 就会返回,',
+  '可以和其他 role 一起传(例如 roles=["user","error"]), 不要求 roles 只含 error 一项。',
+  'error 行 content 在出口统一过 redactSensitiveTextDeep 递归脱敏(凭据值呈现为 [REDACTED]',
+  '或 [REDACTED_KEY], Bearer 形态保留前缀如 "Bearer [REDACTED]"); 写入侧只脱敏过 message /',
+  'sdkError, reason 等其余字段是入库原样内容, 由出口这一层兜住。仍只用于判断"这轮是不是',
+  '技术性失败", 不应当作对话正文渲染给用户。',
   '',
   '【返回原始数据】content 是 JSON.parse 后的原始结构 (按 role 形态不同, 调用方自己解析),',
   '不做任何 markdown / 文本拼装。',
@@ -125,7 +135,9 @@ export function registerGetChatHistoryTool(
         .optional()
         .describe(
           '只返这些 role 的消息。不传 = 默认只返问答类(user/assistant/ask_user/plan_review),' +
-            '排除 tool_use/tool_result/thinking 等技术性 role。需要技术 role 时, 在数组里显式列出。',
+            '排除 tool_use/tool_result/thinking/error 等技术性 role。需要技术 role 时, 在数组里显式列出。' +
+            'role="error" 是终端错误诊断行(默认不返), 数组里包含 "error" 即返回, 可与其他 role 混合;' +
+            '其 content 在出口统一过 redactSensitiveTextDeep 递归脱敏(写入侧只脱敏过 message / sdkError)。',
         ),
       include_rewound: z
         .boolean()
@@ -256,11 +268,15 @@ export function registerGetChatHistoryTool(
             title: m.sessionTitle,
           };
         }
+        // error 行的 content：写入侧只对 message / sdkError 过过 redactSensitiveText，
+        // reason 等其余字段是入库原样内容。出口必须自己兜住，否则未知结构的原始字段会
+        // 直接出网 —— 与 desktop 侧历史出口同一口径。
+        // 其余 role 逐字节透传，保持既有行为不变。
         const out: Record<string, unknown> = {
           id: m.id,
           sessionId: m.sessionId,
           role: m.role,
-          content: m.content,
+          content: m.role === 'error' ? redactSensitiveTextDeep(m.content) : m.content,
           createdAt: new Date(m.createdAt).toISOString(),
         };
         if (m.toolUseId !== null) out.toolUseId = m.toolUseId;
