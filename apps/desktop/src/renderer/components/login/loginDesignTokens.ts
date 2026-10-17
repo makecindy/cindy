@@ -136,12 +136,13 @@ export const SPINNER = { size: 24, x: 487, y: 27 } as const; // 247:1546 @load
 export const SOCIAL = { y: 540, size: 80, gap: 70, radius: 50, iconSize: 48 } as const;
 export const BACK = { x: 20, y: 20, size: 60, radius: 40 } as const; // §4.6
 /**
- * 错误提示:占满主按钮底(380)→「跳过登录」容器顶(430)整段,文案垂直居中。
- * 新稿 error_text 容器 680×50 @y380(705:1067),y 不因面板增高/新增跳过入口而移动;
- * 高度回到 50(2026-07-24 的 h60「占满到面板底」是面板 440 时代的等价写法)。
- * 与 SKIP_ENTRY 首尾相接、同时可见互不重叠(文案视觉间距 ≈30 设计px)。
+ * 错误提示(说明/提示类,≤2 行):对齐控件列 540@70,槽高 = 行高 22 × 2 行(394..438),
+ * 文案在槽内垂直居中、clamp 2 行,不会越出槽外(§16.2 禁止的是「小槽 + 居中」双向外溢)。
+ * 槽中心 416 ≈ 主按钮底 380 与「跳过登录」文字顶(≈451)的中点:单行时上下留白各约
+ * 13 CSS px,两行时各约 8 CSS px。原实现 680×50 @y380 + 居中:两行文案贴住主按钮下沿、
+ * 逼近「跳过登录」,左右只剩 3 CSS px。
  */
-export const ERROR_TEXT = { y: 380, width: 680, height: 50, fontSize: 20 } as const;
+export const ERROR_TEXT = { x: 70, y: 394, width: 540, fontSize: 20, lineHeight: 22, maxLines: 2 } as const;
 export const METHOD_ROW = {
   x: 70,
   width: 540,
@@ -161,8 +162,8 @@ export const TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, fontSize: 20 }
  * 组件 = LoginSkipEntry(**不是** LoginTextLink:文字按钮与文字链接是两种组件,
  * 前者不做 hover/pressed 变色;用户拍板 2026-07-27)。
  *
- * 槽位 430..490,面板底余 10(= 500 - 490,新稿下内边距);上接 ERROR_TEXT(380..430),
- * 两者同时可见时首尾相接不重叠。字号取稿值 24(≠ TEXT_LINK 的 20,故单列常量);
+ * 槽位 430..490,面板底余 10(= 500 - 490,新稿下内边距);上方 ERROR_TEXT 槽 394..438
+ * 与本槽在容器上有交叠,但错误文案单行居中于 416、本槽文字居中于 460,墨迹不相交。字号取稿值 24(≠ TEXT_LINK 的 20,故单列常量);
  * 颜色走 --login-secondary-text(#6F6F6F 双模同值,与稿一致)。
  *
  * width 680 / height 60 是**布局容器**,容器自身不可点;hitPaddingX = 可点区在实际

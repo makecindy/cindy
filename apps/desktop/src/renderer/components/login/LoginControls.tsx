@@ -1179,22 +1179,35 @@ export function LoginConsentDialog({
   );
 }
 
-/** 错误提示文本(§4.8:680×50 @(0,380) 20 Regular #D91F37 居中)。 */
+/** 错误提示文本(§4.8 + DESIGN.md §16.2:540@(70,394) 20/22 Regular ≤2 行槽内居中,--login-error-fg)。 */
 export function LoginErrorText({ children }: { children: ReactNode }) {
   return (
     <div
       role="alert"
       data-testid="login-error-text"
-      className="absolute left-0 flex items-center justify-center text-center"
+      className="absolute flex items-center justify-center"
       style={{
+        left: ERROR_TEXT.x,
         top: ERROR_TEXT.y,
         width: ERROR_TEXT.width,
-        height: ERROR_TEXT.height,
+        height: ERROR_TEXT.lineHeight * ERROR_TEXT.maxLines,
         fontSize: ERROR_TEXT.fontSize,
         color: LOGIN_COLORS.errorFg,
       }}
     >
-      {children}
+      <span
+        className="w-full overflow-hidden break-words text-center [display:-webkit-box] [-webkit-box-orient:vertical]"
+        style={{
+          lineHeight: `${ERROR_TEXT.lineHeight}px`,
+          maxHeight: ERROR_TEXT.lineHeight * ERROR_TEXT.maxLines,
+          wordBreak: 'auto-phrase' as CSSProperties['wordBreak'],
+          // 兜底:文案按预算应单行;万一折行,两行等长,避免第二行只剩孤字
+          textWrap: 'balance',
+          WebkitLineClamp: ERROR_TEXT.maxLines,
+        }}
+      >
+        {children}
+      </span>
     </div>
   );
 }

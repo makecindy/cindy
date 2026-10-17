@@ -300,17 +300,20 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('「跳过登录」槽与错误提示槽首尾相接且不重叠(error 出现不推移跳过入口)', async () => {
+  it('错误提示 = 控件列内的 2 行槽、居中于主按钮与跳过入口之间,且不推移跳过入口', async () => {
     mount(await identifierState('providers:both'), { errorCode: 'NETWORK_ERROR' });
     const error = screen.getByTestId('login-error-text');
     const slot = screen.getByTestId('login-skip-entry-slot');
-    // error_text 680×50 @y380(新稿 705:1067)→ 底 430 = 跳过槽顶,零重叠
-    expect(error.style.top).toBe('380px');
-    expect(error.style.height).toBe('50px');
+    // 控件列 540@70;槽 394..438 = 行高 22 × 2 行,文案在槽内居中、clamp 2 行不外溢
+    expect(error.style.left).toBe('70px');
+    expect(error.style.width).toBe('540px');
+    expect(error.style.top).toBe('394px');
+    expect(error.style.height).toBe('44px');
+    const text = error.firstElementChild as HTMLElement;
+    expect(text.style.lineHeight).toBe('22px');
+    expect(text.style.maxHeight).toBe('44px');
+    // 跳过入口槽位不随错误出现而移动
     expect(slot.style.top).toBe('430px');
-    expect(parseFloat(error.style.top) + parseFloat(error.style.height)).toBe(
-      parseFloat(slot.style.top),
-    );
   });
 
   it('「跳过登录」= 文字按钮:统一 #6F6F6F 不随 hover/pressed 变色(用户拍板 2026-07-27)', async () => {

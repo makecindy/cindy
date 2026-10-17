@@ -403,7 +403,7 @@ describe('browser-redirect / error / completed', () => {
     );
   });
 
-  it('error 全屏态:暂时无法登录 + 重试钮 + 错误码文案位(380)', () => {
+  it('error 全屏态:暂时无法登录 + 重试钮 + 错误码文案位(394)', () => {
     mount(
       reduceAuthFlow(null, {
         type: 'failed',
@@ -414,7 +414,7 @@ describe('browser-redirect / error / completed', () => {
     expect(screen.getByText('login.unavailable')).toBeTruthy();
     expect(screen.getByTestId('login-error-retry')).toBeTruthy();
     const errorText = screen.getByTestId('login-error-text');
-    expect(errorText.style.top).toBe('380px');
+    expect(errorText.style.top).toBe('394px');
     expect(errorText.getAttribute('style')).toContain('var(--login-error-fg)');
   });
 
