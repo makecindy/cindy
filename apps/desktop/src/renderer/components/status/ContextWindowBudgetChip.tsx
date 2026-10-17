@@ -874,7 +874,6 @@ export function useSessionContextWindowBounds(
 
   useEffect(() => {
     // eslint-disable-next-line no-console
-    console.log('[DBG effect] token=', reloadToken, 'key=', key.slice(-24), 'cacheAge=', (() => { const c = boundsCache.get(key); return c ? Date.now() - c.fetchedAt : null; })());
     activeKeyRef.current = key;
     if (!model || !sessionId) {
       setBoundsState({ key, value: null, fetchedAt: 0 });
