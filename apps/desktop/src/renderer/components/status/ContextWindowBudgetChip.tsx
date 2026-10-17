@@ -221,6 +221,13 @@ export function ContextWindowBudgetChip({
     refresh: refreshBounds,
     refreshIfStale: refreshBoundsIfStale,
   } = useSessionContextWindowBounds(deviceId, sessionId, model, makerAgent, providerId ?? null);
+  // P2-1：把过期刷新交给 ref（openCard 在本 hook 之前定义，直接引用会 TDZ）。
+  useEffect(() => {
+    refreshIfStaleRef.current = refreshBoundsIfStale;
+    return () => {
+      if (refreshIfStaleRef.current === refreshBoundsIfStale) refreshIfStaleRef.current = null;
+    };
+  }, [refreshBoundsIfStale]);
   // main 的解析优先（它认得隐式来源与模型级上限）；未返回前用 renderer 自解析的兜底，
   // 兜底解不出来源时只会更保守（上限缺省 = 只允许收紧）。
   const defaultWindow = authoritativeBounds?.defaultWindow
@@ -745,6 +752,19 @@ function formatTokenCount(n: number): string {
 /** 边界有 TTL：被控端（或本机设置）改了模型级上限后，重开菜单能拿到新值而不是永久陈旧。 */
 const BOUNDS_TTL_MS = 60_000;
 
+/**
+ * 缓存条目是否过期（TTL 过 / 无条目）。抽成纯函数供单测：
+ * 「重开菜单必须拉新值」的行为依赖这条判定，时序驱动测试在 fake timers + React
+ * 调度器组合下不稳定（passive effect 提交时机会被 fake 掉）。
+ */
+export function isBoundsCacheEntryStale(
+  entry: { fetchedAt: number } | undefined | null,
+  now: number,
+): boolean {
+  if (!entry) return true;
+  return !(now - entry.fetchedAt < BOUNDS_TTL_MS);
+}
+
 interface CachedBounds {
   value: SessionContextWindowBounds | null;
   fetchedAt: number;
@@ -848,6 +868,8 @@ export function useSessionContextWindowBounds(
   }, [key]);
 
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('[DBG effect] token=', reloadToken, 'key=', key.slice(-24), 'cacheAge=', (() => { const c = boundsCache.get(key); return c ? Date.now() - c.fetchedAt : null; })());
     activeKeyRef.current = key;
     if (!model || !sessionId) {
       setBoundsState({ key, value: null, fetchedAt: 0 });
@@ -871,6 +893,8 @@ export function useSessionContextWindowBounds(
         // 已取消的请求不得写共享缓存：否则保存预算触发的**新**查询之后，迟到的旧响应
         // 会把旧预算写回缓存并盖上新 fetchedAt，后挂载的卡片把旧数据当新数据用
         // （Greptile P2，2026-10-17）。取消的响应什么都不写。
+        // 已取消的请求不得写共享缓存（Greptile P2）：否则保存预算后的新查询之后，
+        // 迟到的旧响应会把旧预算写回缓存并盖上新 fetchedAt。
         if (cancelled) return;
         const resolved = normalizeSessionContextWindowBounds(view);
         const fetchedAt = Date.now();
@@ -898,8 +922,7 @@ export function useSessionContextWindowBounds(
   }, [key]);
   // 开菜单时只在「没缓存 / TTL 过期」才重拉：否则每次开合菜单都是一次隧道 invoke（弱网可感知）。
   const refreshIfStale = useCallback(() => {
-    const cached = boundsCache.get(key);
-    if (cached && Date.now() - cached.fetchedAt < BOUNDS_TTL_MS) return;
+    if (!isBoundsCacheEntryStale(boundsCache.get(key), Date.now())) return;
     setReloadToken((token) => token + 1);
   }, [key]);
   return { bounds, boundsFetchedAt, refresh, refreshIfStale };

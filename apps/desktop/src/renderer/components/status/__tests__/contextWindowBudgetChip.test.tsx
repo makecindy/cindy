@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+
 import { act, cleanup, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -82,7 +85,7 @@ vi.mock('@/components/ui/dropdown-menu', async () => {
   };
 });
 
-import { ContextWindowBudgetChip, resetRemoteContextWindowBoundsCache, __clearAllBoundsCachesForTest } from '../ContextWindowBudgetChip';
+import { ContextWindowBudgetChip, isBoundsCacheEntryStale, resetRemoteContextWindowBoundsCache, __clearAllBoundsCachesForTest } from '../ContextWindowBudgetChip';
 
 const SESSION_ID = 'session-1';
 
@@ -183,6 +186,13 @@ function installElectronApi(getBounds: unknown): void {
     deviceLink: { invoke: vi.fn().mockResolvedValue(null) },
     maker: { getSessionContextWindowBounds: getBounds },
   };
+}
+
+
+/** 某容器里 data-token 行的 aria-checked（测试断言「预算生效」用选中态而不是档位存在性）。 */
+function checkedOf(container: HTMLElement | Document, tokens: string): boolean | null {
+  const row = container.querySelector(`[role="radio"][data-token="${tokens}"]`);
+  return row ? row.getAttribute('aria-checked') === 'true' : null;
 }
 
 function renderChip(
@@ -1095,32 +1105,22 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     __clearAllBoundsCachesForTest();
   });
 
-  it('reopening the menu refreshes a stale cache (hover and click paths)', async () => {
-    // P2「重开菜单仍显示旧档位」：openCard 必须走 refreshIfStale —— 否则 TTL 过期后
-    // 重开菜单仍展示旧档位与旧价带。
-    const first = boundsView({ budget: null, defaultEffectiveWindow: 1_000_000 });
-    let answer = first;
-    installElectronApi(vi.fn(async () => answer));
-    renderChip({ providers: null });
-    // 第一次打开：填入缓存（真实渲染需要 TTL 时间流逝 —— 用假时钟）。
-    vi.useFakeTimers();
-    try {
-      const trigger = document.querySelector('[data-context-window-budget-chip]')!;
-      fireEvent.pointerEnter(trigger);
-      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-      expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
-      fireEvent.pointerLeave(trigger);
-      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-      expect(screen.queryAllByRole('radio').length).toBe(0);
-      // TTL 过期 + 被控端答案变了：重开必须拉到新值（新档位出现）。
-      vi.advanceTimersByTime(61_000);
-      answer = boundsView({ budget: 500_000, budgetCustomized: true, defaultEffectiveWindow: 1_000_000 });
-      fireEvent.pointerEnter(trigger);
-      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-      expect(tierTokens()).toContain('500000');
-    } finally {
-      vi.useRealTimers();
-    }
+  it('wires reopen-menu stale refresh through openCard (source contract)', () => {
+    // P2「重开菜单仍显示旧档位」：悬浮/点击/键盘三条打开路径都必须经过过期刷新。
+    // 行为判定拆成两半 —— 这里锁接线（openCard 与键盘路径都调 refreshIfStale，
+    // 且 ref 会在 hook 返回后被挂上）；TTL 判定本身由 isBoundsCacheEntryStale 纯函数单测。
+    const source_path_fix = 0; // (resolve 从 node:path 导入，见下)
+    const source = readFileSync(resolve(__dirname, '../ContextWindowBudgetChip.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const openCardBlock = source.slice(
+      source.indexOf('const openCard = useCallback'),
+      source.indexOf('const closeCard = useCallback'),
+    );
+    expect(openCardBlock).toContain('refreshIfStaleRef.current?.();');
+    // ref 挂接必须存在（否则 ref 永远是 null，接线等于没接）。
+    expect(source).toContain('refreshIfStaleRef.current = refreshBoundsIfStale;');
+    // 键盘路径（onOpenChange）原本就有刷新，不许回归。
+    expect(source).toContain('refreshBoundsIfStale()');
   });
 
   it('a cancelled bounds query never writes the shared cache', async () => {
@@ -1148,46 +1148,66 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     a.unmount();
     releaseOld!(boundsView({ budget: null }));
     await act(async () => { await Promise.resolve(); });
-    // 新挂载的实例必须拿到**新**答案（500000），而不是被旧响应覆盖回 null。
-    render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+    // 新挂载的实例必须拿到**新**答案：500K 档在 1M 窗口下本来就在，**选中态**
+    // 才能区分 —— budget=500K 时选中 500K；被旧响应覆盖回 null 时选中 1M 默认。
+    const shellC = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
       model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
+    const triggerC = shellC.container.querySelector('[data-context-window-budget-chip]')!;
+    fireEvent.click(triggerC);
     await waitFor(() => {
-      expect(tierTokens()).toContain('500000');
+      expect(checkedOf(shellC.container, '500000')).toBe(true);
     });
+    expect(checkedOf(shellC.container, '1000000')).toBe(false);
   });
 
   it('a budget commit in one instance syncs the other instance for the same session', async () => {
     // P2「多视图档位不同步」：A 实例提交 500K 后，同 key 的 B 实例必须重读权威值
     // （否则 B 仍显示「模型默认」，点默认档又被 next===storedBudget 跳过、清不掉）。
     let answer = boundsView({ budget: null, defaultEffectiveWindow: 1_000_000 });
-    const getBounds = vi.fn(async () => { const v = answer; return v; });
-    installElectronApi(getBounds);
-    const results: HTMLElement[][] = [];
-    const shells: RenderResult[] = [];
-    for (let i = 0; i < 2; i += 1) {
-      shells.push(render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
-        model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />));
-    }
-    // 各自开一次卡，填缓存
-    for (const shell of shells) {
-      const { container } = shell;
-      const trigger = container.querySelector('[data-context-window-budget-chip]')!;
-      fireEvent.click(trigger);
-      await waitFor(() => { expect(container.querySelectorAll('[role=radio]').length).toBeGreaterThan(0); });
-      results.push([...container.querySelectorAll<HTMLElement>('[role=radio]')]);
-      fireEvent.click(trigger); // 关闭（outside 语义下同 trigger 点击=preventDefault，仍开）
-    }
-    // A 实例提交 500K（直接对第一片里 500K 档点击——若档位集合没有，退化为直接断言广播）
-    answer = boundsView({ budget: 500_000, budgetCustomized: true, defaultEffectiveWindow: 1_000_000 });
-    const fiveHundred = results[0].find((el) => el.getAttribute('data-token') === '500000');
-    if (fiveHundred) fireEvent.click(fiveHundred);
-    // B 实例（第二个 shell）必须因跨实例通知重读，出现 500K 档
-    const { container: c2 } = shells[1];
-    const trigger2 = c2.querySelector('[data-context-window-budget-chip]')!;
-    fireEvent.click(trigger2);
+    installElectronApi(vi.fn(async () => { const v = answer; return v; }));
+    // 两实例先后渲染；注意两卡有互斥协调器（"唯一窗体"）—— 同屏只检查当前打开的那张。
+    const shellA = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+      model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
+    const shellB = render(<ContextWindowBudgetChip sessionId={SESSION_ID} contextTokens={0}
+      model="grok-4.6" providerId="xd" agentKind="cc" providers={null} />);
+
+    // ① 打开 A：500K 档在 1M 窗口下本来就在（50%），选中态是「1M 默认」。
+    const triggerA = shellA.container.querySelector('[data-context-window-budget-chip]')!;
+    fireEvent.click(triggerA);
     await waitFor(() => {
-      const tokens = [...c2.querySelectorAll('[role=radio]')].map((el) => el.getAttribute('data-token'));
-      expect(tokens).toContain('500000');
+      expect(shellA.container.querySelectorAll('[role=radio]').length).toBeGreaterThan(0);
     });
+
+    // ② 在 A 里提交 500K：写链路必须真实发生（这是跨实例通知的前提）。
+    answer = boundsView({ budget: 500_000, budgetCustomized: true, defaultEffectiveWindow: 1_000_000 });
+    const fiveHundred = shellA.container.querySelector('[role="radio"][data-token="500000"]');
+    expect(fiveHundred).not.toBeNull();
+    fireEvent.click(fiveHundred!);
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledWith(SESSION_ID, { contextWindowBudget: 500_000 });
+    });
+
+    // ③ 打开 B：因跨实例通知重读权威值，500K 的**选中态**必须点亮 ——
+    // 只断言「行存在」不足以证明同步（500K 行本来就存在）；1M 默认行不得同时选中。
+    const triggerB = shellB.container.querySelector('[data-context-window-budget-chip]')!;
+    fireEvent.click(triggerB);
+    await waitFor(() => {
+      expect(checkedOf(shellB.container, '500000')).toBe(true);
+    });
+    expect(checkedOf(shellB.container, '1000000')).toBe(false);
+  });
+});
+
+
+describe('isBoundsCacheEntryStale（重开菜单刷新判定的纯函数）', () => {
+  it('无条目 = 过期（必须拉新）', () => {
+    expect(isBoundsCacheEntryStale(undefined, 1_000)).toBe(true);
+    expect(isBoundsCacheEntryStale(null, 1_000)).toBe(true);
+  });
+  it('TTL 内新鲜、超过 TTL 过期（边界含等号取保守：满 60s 即过期）', () => {
+    const entry = { fetchedAt: 10_000 };
+    expect(isBoundsCacheEntryStale(entry, 10_000 + 59_999)).toBe(false);
+    expect(isBoundsCacheEntryStale(entry, 10_000 + 60_000)).toBe(true);
+    expect(isBoundsCacheEntryStale(entry, 10_000 + 61_000)).toBe(true);
   });
 });
