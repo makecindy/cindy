@@ -32,6 +32,11 @@
 - 现有说明：`[客户端说明]`（手机 / 另一台电脑）、`[消息来源]`（任务 / 伙伴 / 插件 /
   共享成员）、`[Scheduled run context]` 内的 `schedule:` 行、Orca
   `[From Orca Lead]` / `[From Orca Worker <角色> (worker_id: …)]`、IM `[渠道说明]`。
+- send_to_session 完成回执（2026-10-16）：发起方带 `request_receipt` 时，目标任务消费该
+  消息的 turn 收口后（终态失败的轮次不发），宿主向发起任务回投一条隐藏回执唤醒，正文首句
+  `[Handoff receipt]`，声明不是用户消息并只含目标 session id、消息 id 与取结果指引；
+  回执仅表示处理已收口，不保证成功。协议与幂等约束见 protocol-compatibility.md。来源按目标任务盖
+  既有 `origin`，界面标签同源显示「由任务「X」发送」，不新增标签形态；回执本身不再请求回执。
 - 切换引擎、上下文滚动、重建式分叉从落库数据重建交接摘要时，按 `agentMeta` 重新生成
   来源标记；`[UI_ACTION_TRIGGER]` 合成行仍不进交接。
 

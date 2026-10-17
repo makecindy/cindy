@@ -426,6 +426,29 @@ SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integratio
 直接拒绝。仅同账号已建链设备可用（含手机等同账号控制端，它们本来就能用 `maker:send`），不进
 unlinked / shared-task 白名单，共享任务对端被 handler 再次拒绝。
 
+**send_to_session 新增可选 `request_receipt`（完成回执，仅本机既有任务）。** 2026-10-16。带
+`request_receipt: true` 时，投递到目标任务的输入用确定性 clientId
+`handoff-receipt:<dispatcherSessionId>:<nonce>`（幂等约定见 maker-shared `handoff-receipt`）；
+目标任务消费该输入的 turn 收口后，宿主向发起任务回投一条隐藏回执，clientId 为
+`handoff-receipt-done:<nonce>`。回执输入统一走持久队列（宿主强制 `forceQueue`）：
+空闲直发不经输入协调器、`activeTurn` 不会建立、完成钩子观测不到，因此 create 模式
+（首派同样不经持久队列）也被拒绝，`wake_kind` 返 `queued`（空闲目标同样立即派发）。幂等的真实机制：落库行由 messages 表 (sessionId, clientId)
+唯一索引去重；重复唤醒由输入协调器的进程内近期去重窗口拦截，跨重启不保留；回投仅做
+进程内有界重试（3 次），宿主在回投落库前重启的窗口内回执会丢失，不做持久重放账本。
+回执是独立的自动发送路径：来源按目标任务盖既有 `origin`，模型说明首句
+`[Handoff receipt]`（见 message-source.md），不携带对方回复正文。约束：仅本机既有任务
+（`deviceId::sessionId` 与 create 在工具层拒 `INVALID_ARGS`，远端通路不传该参数）；与委派任务互斥
+（委派已有完成自动回传；`coordination` 与 `user-visible` 用途都拒，宿主按
+delegatedContinuation 判定）；dispatcher 未绑定任务或 id 含冒号拒绝；
+发起方传了显式 `clientId` 拒绝。失败闸门：终态 error 的 turn 代次按
+sessionId + sessionInstanceId 归属记录（代次是单实例计数，实例重建后从零重来，跨实例不拦截；
+旧实例关闭时可能只有终态 error 没有配对 done，记录随旧实例键作废），同代次或乱序更旧的 done
+不回投（claude-code translator 在终态 error 后仍无条件推 done，靠该闸门拦住）；
+回执仅表示处理已收口，不保证成功，结果与实际状态由 Agent 用 `get_chat_history` 核实。
+回执投递本身不再请求回执（clientId 前缀互斥），循环抑制由此保证；回投失败仅记日志，
+不阻塞事件路径。工具成功结果回传 `receipt_requested: true` + `receipt_id`；
+旧调用方不传该参数，行为不变。
+
 **新旧版本。** 旧被控端没有 `maker:session:handoff`，返回 `CHANNEL_NOT_ALLOWED`；发起端报
 `REMOTE_UNSUPPORTED` 并说明消息没有发出，不退回成 `maker:send` 或 `maker:input:enqueue`
 （那两条通路会把消息标成用户在另一台电脑上输入）。旧发起端不会发这个 channel，行为不变。

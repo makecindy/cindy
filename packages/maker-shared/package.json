@@ -89,6 +89,7 @@
     "./subscription-usage": "./src/subscriptionUsage.ts",
     "./bot-learning": "./src/botLearning.ts",
     "./botCollaboration": "./src/botCollaboration.ts",
+    "./handoff-receipt": "./src/handoffReceipt.ts",
     "./botDirectMessage": "./src/botDirectMessage.ts",
     "./chatConversationList": "./src/chatConversationList.ts",
     "./botGroupChat": "./src/botGroupChat.ts",

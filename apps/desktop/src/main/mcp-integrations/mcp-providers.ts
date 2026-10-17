@@ -826,6 +826,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         model,
         effort,
         fast,
+        requestReceipt,
       }) => {
         // deviceId::sessionId → 目标在另一台电脑:交给那台电脑按它本机的同一条通路投递。
         const svc = tryGetOrcaCollabService();
@@ -847,6 +848,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             title,
             useWorktree,
             workingDir,
+            ...(requestReceipt !== undefined ? { requestReceipt } : {}),
             ...(hasExecutionOverrides
               ? {
                   execution: {

@@ -310,6 +310,7 @@ function harness() {
     readSessionModelForUsage: vi.fn(async () => 'test-model'),
     turnUsageContextBySession: new Map<string, TurnUsageContext>(),
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
+    deliverHandoffReceipts: vi.fn(async () => {}),
     agentInputCoordinatorHolder: {
       getActiveInputClientId: vi.fn((): string | null => null),
       getActiveInputClientIds: vi.fn((): string[] => []),
@@ -437,6 +438,46 @@ describe('production Session event pipeline', () => {
       h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-delegation-completion:result');
       h.emit(event('text', { text: 'User requested final result', isFinal: true }));
       expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
+  it('delivers a handoff receipt request when the consuming turn settles normally', async () => {
+    const h = harness();
+    const receiptInputId = 'handoff-receipt:disp-1:0f0e0d0c-0b0a-4999-8999-990099887766';
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([receiptInputId]);
+    try {
+      h.emit(event('done', { result: 'ok', finalText: 'ok' }, {
+        sessionTurnGeneration: 3,
+        sessionInstanceId: 'inst-1',
+      }));
+      expect(h.deps.deliverHandoffReceipts).toHaveBeenCalledOnce();
+      expect(h.deps.deliverHandoffReceipts).toHaveBeenCalledWith(h.session.id, [receiptInputId]);
+    } finally { await h.dispose(); }
+  });
+
+  it('never delivers a handoff receipt for a turn that terminated in an error (error→done pairing)', async () => {
+    const h = harness();
+    const receiptInputId = 'handoff-receipt:disp-1:0f0e0d0c-0b0a-4999-8999-990099887766';
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([receiptInputId]);
+    try {
+      // claude-code translator 在终态 error 后仍无条件推 done:失败代次的 done 不得回投。
+      h.emit(event('error', { message: 'gateway 500', isTerminal: true }, {
+        sessionTurnGeneration: 3,
+        sessionInstanceId: 'inst-1',
+      }));
+      h.emit(event('done', { result: '', finalText: '' }, {
+        sessionTurnGeneration: 3,
+        sessionInstanceId: 'inst-1',
+      }));
+      expect(h.deps.deliverHandoffReceipts).not.toHaveBeenCalled();
+      // 更新代次(重试后的新 turn)正常收口时恢复回投。
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([receiptInputId]);
+      h.emit(event('done', { result: 'ok', finalText: 'ok' }, {
+        sessionTurnGeneration: 4,
+        sessionInstanceId: 'inst-1',
+      }));
+      expect(h.deps.deliverHandoffReceipts).toHaveBeenCalledOnce();
+      expect(h.deps.deliverHandoffReceipts).toHaveBeenCalledWith(h.session.id, [receiptInputId]);
     } finally { await h.dispose(); }
   });
 

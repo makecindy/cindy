@@ -5,32 +5,32 @@
  * sessionId(无 dispatcher ctx 时仍调 host,由 host 返 LEAD_NOT_SUPPORTED)。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from "vitest";
 
-import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
-import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
+import { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
+import type { XdtHelperToolResult } from "../lizi_xdtHelperToolRegistry.js";
 import {
   createdNote,
   parseQualifiedSessionId,
   registerSendToSessionTool,
   type SendToRemoteSessionCallback,
   type SendToSessionCallback,
-} from '../xdt-helper/send_to_session.js';
+} from "../xdt-helper/send_to_session.js";
 
 type SendResult = Awaited<ReturnType<SendToSessionCallback>>;
 
-const UUID = '11111111-1111-4111-8111-111111111111';
+const UUID = "11111111-1111-4111-8111-111111111111";
 
 function setup(opts?: { sessionId?: string | undefined; result?: SendResult }) {
-  const sessionId = 'sessionId' in (opts ?? {}) ? opts?.sessionId : 'disp-1';
+  const sessionId = "sessionId" in (opts ?? {}) ? opts?.sessionId : "disp-1";
   const sendToSession = vi.fn(
     async (): Promise<SendResult> =>
       opts?.result ?? {
         ok: true,
-        targetSessionId: 'tgt-1',
-        agentKind: 'claude-code',
-        wakeKind: 'created',
-        targetTitle: 'issue #1',
+        targetSessionId: "tgt-1",
+        agentKind: "claude-code",
+        wakeKind: "created",
+        targetTitle: "issue #1",
         targetLastUserSendAt: null,
       },
   );
@@ -38,8 +38,8 @@ function setup(opts?: { sessionId?: string | undefined; result?: SendResult }) {
   registerSendToSessionTool(registry, {
     getSessionContext: () => ({
       sessionId,
-      agentKind: 'claude-code',
-      workingDir: '/tmp/wd',
+      agentKind: "claude-code",
+      workingDir: "/tmp/wd",
     }),
     sendToSession,
   });
@@ -48,40 +48,56 @@ function setup(opts?: { sessionId?: string | undefined; result?: SendResult }) {
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;
-  if (!block || block.type !== 'text') {
-    throw new Error('Expected first MCP content block to be text');
+  if (!block || block.type !== "text") {
+    throw new Error("Expected first MCP content block to be text");
   }
   return JSON.parse(block.text);
 }
 
-describe('send_to_session tool', () => {
-  it('注册到 handoff 类目, 不混入 control(改名场景选错隔离的核心)', () => {
+describe("send_to_session tool", () => {
+  it("注册到 handoff 类目, 不混入 control(改名场景选错隔离的核心)", () => {
     const { registry } = setup();
-    const handoff = registry.list('handoff').map((t) => t.name);
-    const control = registry.list('control').map((t) => t.name);
-    expect(handoff).toContain('send_to_session');
-    expect(control).not.toContain('send_to_session');
+    const handoff = registry.list("handoff").map((t) => t.name);
+    const control = registry.list("control").map((t) => t.name);
+    expect(handoff).toContain("send_to_session");
+    expect(control).not.toContain("send_to_session");
   });
 
-  it.each(['coordination', 'user-visible'])('passes message purpose with the bound caller identity: %s', async purpose => {
-    const { registry, sendToSession } = setup();
-    const result = await registry.call('send_to_session', { target_session_id: 'parent', message: 'Update', message_purpose: purpose });
-    expect(result.isError).toBeUndefined();
-    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'parent', messagePurpose: purpose, dispatcherSessionId: expect.any(String) }));
-  });
+  it.each(["coordination", "user-visible"])(
+    "passes message purpose with the bound caller identity: %s",
+    async (purpose) => {
+      const { registry, sendToSession } = setup();
+      const result = await registry.call("send_to_session", {
+        target_session_id: "parent",
+        message: "Update",
+        message_purpose: purpose,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(sendToSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetSessionId: "parent",
+          messagePurpose: purpose,
+          dispatcherSessionId: expect.any(String),
+        }),
+      );
+    },
+  );
 
-  it('缺 message → INVALID_ARGS, host 不被调', async () => {
+  it("缺 message → INVALID_ARGS, host 不被调", async () => {
     const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', { title: 'x' });
+    const res = await registry.call("send_to_session", { title: "x" });
     expect(res.isError).toBe(true);
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: "INVALID_ARGS" });
     expect(sendToSession).not.toHaveBeenCalled();
   });
 
-  it('未知字段 → INVALID_ARGS (strictObject), host 不被调', async () => {
+  it("未知字段 → INVALID_ARGS (strictObject), host 不被调", async () => {
     const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', { message: 'hi', foo: 1 });
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    const res = await registry.call("send_to_session", {
+      message: "hi",
+      foo: 1,
+    });
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: "INVALID_ARGS" });
     expect(sendToSession).not.toHaveBeenCalled();
   });
 
@@ -89,401 +105,467 @@ describe('send_to_session tool', () => {
   // session 是 UUID,历史行可能是 cuid2 或 IM 确定性 id。工具层校验格式会让 UUID
   // session 无法 jump 回 cuid/IM session,使 handoff 变成单向。
   it.each([
-    ['cuid2', 'v9lsxy1qlojy6x3z3y7drhxh'],
-    ['IM 确定性 id', 'feishu_cli_abc_ou_xyz'],
-  ])('target_session_id 为非 UUID 的 %s → 透传给 host, 不在 schema 层拦截', async (_kind, id) => {
-    const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', {
-      target_session_id: id,
-      message: 'hi',
-    });
-    expect(res.isError).toBeUndefined();
-    expect(sendToSession).toHaveBeenCalledWith(
-      expect.objectContaining({ targetSessionId: id }),
-    );
-  });
+    ["cuid2", "v9lsxy1qlojy6x3z3y7drhxh"],
+    ["IM 确定性 id", "feishu_cli_abc_ou_xyz"],
+  ])(
+    "target_session_id 为非 UUID 的 %s → 透传给 host, 不在 schema 层拦截",
+    async (_kind, id) => {
+      const { registry, sendToSession } = setup();
+      const res = await registry.call("send_to_session", {
+        target_session_id: id,
+        message: "hi",
+      });
+      expect(res.isError).toBeUndefined();
+      expect(sendToSession).toHaveBeenCalledWith(
+        expect.objectContaining({ targetSessionId: id }),
+      );
+    },
+  );
 
-  it('target_session_id 为空串 → INVALID_ARGS, host 不被调', async () => {
+  it("target_session_id 为空串 → INVALID_ARGS, host 不被调", async () => {
     const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', {
-      target_session_id: '',
-      message: 'hi',
+    const res = await registry.call("send_to_session", {
+      target_session_id: "",
+      message: "hi",
     });
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: "INVALID_ARGS" });
     expect(sendToSession).not.toHaveBeenCalled();
   });
 
-  it('create: 不传 target_session_id → host 收到 undefined + dispatcherSessionId, 返回透传', async () => {
+  it("create: 不传 target_session_id → host 收到 undefined + dispatcherSessionId, 返回透传", async () => {
     const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', {
-      message: '首次处理',
-      title: 'issue #1',
+    const res = await registry.call("send_to_session", {
+      message: "首次处理",
+      title: "issue #1",
     });
     expect(sendToSession).toHaveBeenCalledWith({
       targetSessionId: undefined,
-      message: '首次处理',
-      dispatcherSessionId: 'disp-1',
-      title: 'issue #1',
+      message: "首次处理",
+      dispatcherSessionId: "disp-1",
+      title: "issue #1",
       useWorktree: undefined,
     });
     expect(res.isError).toBeUndefined();
     expect(parse(res)).toEqual({
       ok: true,
-      target_session_id: 'tgt-1',
-      agent_kind: 'claude-code',
-      wake_kind: 'created',
-      note: createdNote('tgt-1'),
-      target_title: 'issue #1',
+      target_session_id: "tgt-1",
+      agent_kind: "claude-code",
+      wake_kind: "created",
+      note: createdNote("tgt-1"),
+      target_title: "issue #1",
       target_last_user_send_at: null,
       worktree_path: null,
     });
   });
 
-  it('create 返回的 note 明确写出「已新建任务 <id>」与「本轮已触发」, 不能被误读为已投给既有任务 (#4884)', async () => {
+  it("create 返回的 note 明确写出「已新建任务 <id>」与「本轮已触发」, 不能被误读为已投给既有任务 (#4884)", async () => {
     const { registry } = setup();
-    const res = await registry.call('send_to_session', { message: '漏传了收件任务' });
+    const res = await registry.call("send_to_session", {
+      message: "漏传了收件任务",
+    });
     const payload = parse(res) as { wake_kind: string; note: string };
-    expect(payload.wake_kind).toBe('created');
-    expect(payload.note).toContain('已新建任务 tgt-1');
-    expect(payload.note).toContain('本轮已触发');
-    expect(payload.note).toContain('不是投递到既有任务');
-    expect(payload.note).toContain('list_sessions');
+    expect(payload.wake_kind).toBe("created");
+    expect(payload.note).toContain("已新建任务 tgt-1");
+    expect(payload.note).toContain("本轮已触发");
+    expect(payload.note).toContain("不是投递到既有任务");
+    expect(payload.note).toContain("list_sessions");
   });
 
-  it('jump 成功返回不带 note(resumed / already-active / queued 都是投给既有任务)', async () => {
-    for (const wakeKind of ['resumed', 'already-active', 'queued'] as const) {
+  it("jump 成功返回不带 note(resumed / already-active / queued 都是投给既有任务)", async () => {
+    for (const wakeKind of ["resumed", "already-active", "queued"] as const) {
       const { registry } = setup({
         result: {
           ok: true,
           targetSessionId: UUID,
-          agentKind: 'codex',
+          agentKind: "codex",
           wakeKind,
-          targetTitle: 'Existing',
+          targetTitle: "Existing",
           targetLastUserSendAt: null,
         },
       });
-      const res = await registry.call('send_to_session', {
+      const res = await registry.call("send_to_session", {
         target_session_id: UUID,
-        message: '增量',
+        message: "增量",
       });
-      expect(parse(res)).not.toHaveProperty('note');
+      expect(parse(res)).not.toHaveProperty("note");
     }
   });
 
-  it('工具描述开头就是硬规则: 发给已有任务时 target_session_id 必传, 不知道 id 先 list_sessions (#4884)', () => {
+  it("工具描述开头就是硬规则: 发给已有任务时 target_session_id 必传, 不知道 id 先 list_sessions (#4884)", () => {
     const { registry } = setup();
-    const tool = registry.list('handoff').find((t) => t.name === 'send_to_session');
+    const tool = registry
+      .list("handoff")
+      .find((t) => t.name === "send_to_session");
     expect(tool).toBeDefined();
-    const firstParagraph = tool!.description.split('\n')[0] ?? '';
-    expect(firstParagraph).toContain('target_session_id 必传');
-    expect(firstParagraph).toContain('list_sessions');
-    expect(firstParagraph).toContain('wake_kind=created');
+    const firstParagraph = tool!.description.split("\n")[0] ?? "";
+    expect(firstParagraph).toContain("target_session_id 必传");
+    expect(firstParagraph).toContain("list_sessions");
+    expect(firstParagraph).toContain("wake_kind=created");
   });
 
-  it('create + use_worktree=true → host 收到 useWorktree=true, worktree_path 回显', async () => {
+  it("create + use_worktree=true → host 收到 useWorktree=true, worktree_path 回显", async () => {
     const { registry, sendToSession } = setup({
       result: {
         ok: true,
-        targetSessionId: 'tgt-2',
-        agentKind: 'claude-code',
-        wakeKind: 'created',
-        targetTitle: 'PR #638',
+        targetSessionId: "tgt-2",
+        agentKind: "claude-code",
+        wakeKind: "created",
+        targetTitle: "PR #638",
         targetLastUserSendAt: null,
-        worktreePath: '/repo/.cindy-worktrees/auto-abc123',
+        worktreePath: "/repo/.cindy-worktrees/auto-abc123",
       },
     });
-    const res = await registry.call('send_to_session', {
-      message: '跟进修复 PR #638',
-      title: 'PR #638',
+    const res = await registry.call("send_to_session", {
+      message: "跟进修复 PR #638",
+      title: "PR #638",
       use_worktree: true,
     });
     expect(sendToSession).toHaveBeenCalledWith(
-      expect.objectContaining({ useWorktree: true, targetSessionId: undefined }),
+      expect.objectContaining({
+        useWorktree: true,
+        targetSessionId: undefined,
+      }),
     );
     expect(parse(res)).toMatchObject({
       ok: true,
-      wake_kind: 'created',
-      worktree_path: '/repo/.cindy-worktrees/auto-abc123',
+      wake_kind: "created",
+      worktree_path: "/repo/.cindy-worktrees/auto-abc123",
     });
   });
 
-  it('create: 显式执行配置完整透传并回显 host 的实际解析结果', async () => {
+  it("create: 显式执行配置完整透传并回显 host 的实际解析结果", async () => {
     const { registry, sendToSession } = setup({
       result: {
         ok: true,
-        targetSessionId: 'tgt-codex',
-        agentKind: 'codex',
-        wakeKind: 'created',
-        targetTitle: 'PR implementation',
+        targetSessionId: "tgt-codex",
+        agentKind: "codex",
+        wakeKind: "created",
+        targetTitle: "PR implementation",
         targetLastUserSendAt: null,
-        model: 'gpt-5.6-sol',
-        effort: 'xhigh',
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
         fastMode: false,
         providerId: null,
       },
     });
-    const res = await registry.call('send_to_session', {
-      message: '实现 PR',
-      agent_kind: 'codex',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
+    const res = await registry.call("send_to_session", {
+      message: "实现 PR",
+      agent_kind: "codex",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
       fast: false,
     });
 
     expect(sendToSession).toHaveBeenCalledWith({
       targetSessionId: undefined,
-      message: '实现 PR',
-      dispatcherSessionId: 'disp-1',
+      message: "实现 PR",
+      dispatcherSessionId: "disp-1",
       title: undefined,
       useWorktree: undefined,
       workingDir: undefined,
-      agentKind: 'codex',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
+      agentKind: "codex",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
       fast: false,
     });
     expect(parse(res)).toMatchObject({
       ok: true,
-      agent_kind: 'codex',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
+      agent_kind: "codex",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
       fast_mode: false,
       provider_id: null,
     });
   });
 
-  it('create: Pi Agent 配置通过 schema 并完整透传', async () => {
+  it("create: Pi Agent 配置通过 schema 并完整透传", async () => {
     const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', {
-      message: '交给 Pi 实现',
-      agent_kind: 'pi',
-      model: 'pi-model',
-      effort: 'max',
+    const res = await registry.call("send_to_session", {
+      message: "交给 Pi 实现",
+      agent_kind: "pi",
+      model: "pi-model",
+      effort: "max",
       fast: true,
     });
 
     expect(res.isError).toBeUndefined();
-    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
-      agentKind: 'pi',
-      model: 'pi-model',
-      effort: 'max',
-      fast: true,
-    }));
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: "pi",
+        model: "pi-model",
+        effort: "max",
+        fast: true,
+      }),
+    );
   });
 
-  it.each([
-    { agent_kind: 'not-an-agent' },
-    { effort: 'extreme' },
-  ])('非法执行配置 %# → INVALID_ARGS, host 不被调', async (invalid) => {
-    const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', { message: 'x', ...invalid });
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(sendToSession).not.toHaveBeenCalled();
-  });
+  it.each([{ agent_kind: "not-an-agent" }, { effort: "extreme" }])(
+    "非法执行配置 %# → INVALID_ARGS, host 不被调",
+    async (invalid) => {
+      const { registry, sendToSession } = setup();
+      const res = await registry.call("send_to_session", {
+        message: "x",
+        ...invalid,
+      });
+      expect(parse(res)).toMatchObject({
+        ok: false,
+        errorCode: "INVALID_ARGS",
+      });
+      expect(sendToSession).not.toHaveBeenCalled();
+    },
+  );
 
-  it('jump: 执行配置字段继续透传给 host，由 host 忽略且不改目标 session', async () => {
+  it("jump: 执行配置字段继续透传给 host，由 host 忽略且不改目标 session", async () => {
     const { registry, sendToSession } = setup({
       result: {
         ok: true,
         targetSessionId: UUID,
-        agentKind: 'claude-code',
-        wakeKind: 'already-active',
-        targetTitle: 'Existing',
+        agentKind: "claude-code",
+        wakeKind: "already-active",
+        targetTitle: "Existing",
         targetLastUserSendAt: null,
       },
     });
-    await registry.call('send_to_session', {
+    await registry.call("send_to_session", {
       target_session_id: UUID,
-      message: '增量',
-      agent_kind: 'codex',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
+      message: "增量",
+      agent_kind: "codex",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
     });
-    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
-      targetSessionId: UUID,
-      agentKind: 'codex',
-      model: 'gpt-5.6-sol',
-      effort: 'xhigh',
-    }));
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionId: UUID,
+        agentKind: "codex",
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+      }),
+    );
   });
 
-  it('host 返 WORKTREE_UNAVAILABLE → 错误码透传, isError=true', async () => {
+  it("host 返 WORKTREE_UNAVAILABLE → 错误码透传, isError=true", async () => {
     const { registry } = setup({
       result: {
         ok: false,
-        errorCode: 'WORKTREE_UNAVAILABLE',
-        message: 'workingDir 不是 git 仓库',
+        errorCode: "WORKTREE_UNAVAILABLE",
+        message: "workingDir 不是 git 仓库",
       },
     });
-    const res = await registry.call('send_to_session', {
-      message: 'x',
+    const res = await registry.call("send_to_session", {
+      message: "x",
       use_worktree: true,
     });
     expect(res.isError).toBe(true);
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+    expect(parse(res)).toMatchObject({
+      ok: false,
+      errorCode: "WORKTREE_UNAVAILABLE",
+    });
   });
 
-  it('jump: 传 target_session_id → host 收到该 id, 返回透传', async () => {
+  it("jump: 传 target_session_id → host 收到该 id, 返回透传", async () => {
     const { registry, sendToSession } = setup({
       result: {
         ok: true,
         targetSessionId: UUID,
-        agentKind: 'codex',
-        wakeKind: 'resumed',
+        agentKind: "codex",
+        wakeKind: "resumed",
         targetTitle: null,
-        targetLastUserSendAt: '2026-06-24T00:00:00.000Z',
+        targetLastUserSendAt: "2026-06-24T00:00:00.000Z",
       },
     });
-    const res = await registry.call('send_to_session', {
+    const res = await registry.call("send_to_session", {
       target_session_id: UUID,
-      message: '增量',
+      message: "增量",
     });
     expect(sendToSession).toHaveBeenCalledWith({
       targetSessionId: UUID,
-      message: '增量',
-      dispatcherSessionId: 'disp-1',
+      message: "增量",
+      dispatcherSessionId: "disp-1",
       title: undefined,
     });
-    expect(parse(res)).toMatchObject({ ok: true, wake_kind: 'resumed', target_title: null });
+    expect(parse(res)).toMatchObject({
+      ok: true,
+      wake_kind: "resumed",
+      target_title: null,
+    });
   });
 
-  it('jump 排队时返回可供后续修改或撤回的 queued_message_id', async () => {
+  it("jump 排队时返回可供后续修改或撤回的 queued_message_id", async () => {
     const { registry } = setup({
       result: {
         ok: true,
         targetSessionId: UUID,
-        agentKind: 'codex',
-        wakeKind: 'queued',
-        queuedMessageId: 'queued-by-session-1',
-        targetTitle: 'Busy target',
-        targetLastUserSendAt: '2026-08-16T01:00:00.000Z',
+        agentKind: "codex",
+        wakeKind: "queued",
+        queuedMessageId: "queued-by-session-1",
+        targetTitle: "Busy target",
+        targetLastUserSendAt: "2026-08-16T01:00:00.000Z",
       },
     });
 
-    const res = await registry.call('send_to_session', {
+    const res = await registry.call("send_to_session", {
       target_session_id: UUID,
-      message: '稍后处理这条',
+      message: "稍后处理这条",
     });
 
     expect(parse(res)).toMatchObject({
       ok: true,
-      wake_kind: 'queued',
-      queued_message_id: 'queued-by-session-1',
+      wake_kind: "queued",
+      queued_message_id: "queued-by-session-1",
     });
   });
 
-  it('无 dispatcher sessionId → host 仍被调(dispatcherSessionId=undefined), host 返 LEAD_NOT_SUPPORTED 透传', async () => {
+  it("无 dispatcher sessionId → host 仍被调(dispatcherSessionId=undefined), host 返 LEAD_NOT_SUPPORTED 透传", async () => {
     const { registry, sendToSession } = setup({
       sessionId: undefined,
-      result: { ok: false, errorCode: 'LEAD_NOT_SUPPORTED', message: 'no dispatcher ctx' },
+      result: {
+        ok: false,
+        errorCode: "LEAD_NOT_SUPPORTED",
+        message: "no dispatcher ctx",
+      },
     });
-    const res = await registry.call('send_to_session', { message: 'x' });
+    const res = await registry.call("send_to_session", { message: "x" });
     expect(sendToSession).toHaveBeenCalledWith(
       expect.objectContaining({ dispatcherSessionId: undefined }),
     );
     expect(res.isError).toBe(true);
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'LEAD_NOT_SUPPORTED' });
+    expect(parse(res)).toMatchObject({
+      ok: false,
+      errorCode: "LEAD_NOT_SUPPORTED",
+    });
   });
 
-  it('host 错误码透传 (NOT_FOUND / ARCHIVED / BUSY), isError=true', async () => {
-    for (const errorCode of ['NOT_FOUND', 'ARCHIVED', 'BUSY'] as const) {
+  it("host 错误码透传 (NOT_FOUND / ARCHIVED / BUSY), isError=true", async () => {
+    for (const errorCode of ["NOT_FOUND", "ARCHIVED", "BUSY"] as const) {
       const { registry } = setup({
         result: { ok: false, errorCode, message: `msg:${errorCode}` },
       });
-      const res = await registry.call('send_to_session', {
+      const res = await registry.call("send_to_session", {
         target_session_id: UUID,
-        message: 'x',
+        message: "x",
       });
       expect(res.isError).toBe(true);
       expect(parse(res)).toMatchObject({ ok: false, errorCode });
     }
   });
 
-  it('host 返 HOST_NOT_READY → 友好提示透传', async () => {
+  it("host 返 HOST_NOT_READY → 友好提示透传", async () => {
     const { registry } = setup({
-      result: { ok: false, errorCode: 'HOST_NOT_READY', message: 'not ready' },
+      result: { ok: false, errorCode: "HOST_NOT_READY", message: "not ready" },
     });
-    const res = await registry.call('send_to_session', { message: 'x' });
+    const res = await registry.call("send_to_session", { message: "x" });
     expect(res.isError).toBe(true);
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    expect(parse(res)).toMatchObject({
+      ok: false,
+      errorCode: "HOST_NOT_READY",
+    });
   });
 });
 
-describe('send_to_session · working_dir (#811)', () => {
-  it('create + working_dir → host 收到 workingDir 覆盖', async () => {
+describe("send_to_session · working_dir (#811)", () => {
+  it("create + working_dir → host 收到 workingDir 覆盖", async () => {
     const { registry, sendToSession } = setup();
-    const res = await registry.call('send_to_session', {
-      message: '请接手项目 B 的任务',
-      title: '项目 B · 任务交接',
-      working_dir: '/abs/path/project-b',
+    const res = await registry.call("send_to_session", {
+      message: "请接手项目 B 的任务",
+      title: "项目 B · 任务交接",
+      working_dir: "/abs/path/project-b",
     });
     expect(sendToSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        workingDir: '/abs/path/project-b',
+        workingDir: "/abs/path/project-b",
         targetSessionId: undefined,
       }),
     );
-    expect(parse(res)).toMatchObject({ ok: true, wake_kind: 'created' });
+    expect(parse(res)).toMatchObject({ ok: true, wake_kind: "created" });
   });
 
-  it('working_dir 与 use_worktree 可组合透传', async () => {
+  it("working_dir 与 use_worktree 可组合透传", async () => {
     const { registry, sendToSession } = setup();
-    await registry.call('send_to_session', {
-      message: 'x',
-      working_dir: '/abs/path/project-b',
+    await registry.call("send_to_session", {
+      message: "x",
+      working_dir: "/abs/path/project-b",
       use_worktree: true,
     });
     expect(sendToSession).toHaveBeenCalledWith(
-      expect.objectContaining({ workingDir: '/abs/path/project-b', useWorktree: true }),
+      expect.objectContaining({
+        workingDir: "/abs/path/project-b",
+        useWorktree: true,
+      }),
     );
   });
 
-  it('省略 working_dir → host 收到 undefined(继承 dispatcher 目录的既有行为不变)', async () => {
+  it("省略 working_dir → host 收到 undefined(继承 dispatcher 目录的既有行为不变)", async () => {
     const { registry, sendToSession } = setup();
-    await registry.call('send_to_session', { message: 'x' });
+    await registry.call("send_to_session", { message: "x" });
     expect(sendToSession).toHaveBeenCalledWith(
       expect.objectContaining({ workingDir: undefined }),
     );
   });
 
-  it('host 返 INVALID_ARGS(路径校验失败)→ 错误码透传', async () => {
+  it("host 返 INVALID_ARGS(路径校验失败)→ 错误码透传", async () => {
     const { registry } = setup({
       result: {
         ok: false,
-        errorCode: 'INVALID_ARGS',
-        message: 'working_dir 不存在或不可访问:/nope',
+        errorCode: "INVALID_ARGS",
+        message: "working_dir 不存在或不可访问:/nope",
       },
     });
-    const res = await registry.call('send_to_session', {
-      message: 'x',
-      working_dir: '/nope',
+    const res = await registry.call("send_to_session", {
+      message: "x",
+      working_dir: "/nope",
     });
-    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: "INVALID_ARGS" });
   });
 });
 
-
-it('reports a failed responsibility write without hiding successful task creation', async () => {
-  const { registry, sendToSession } = setup({ result: { ok: true, targetSessionId: 'new-task', agentKind: 'claude-code', wakeKind: 'created', responsibilityRecorded: false, targetTitle: null, targetLastUserSendAt: null } });
-  expect(parse(await registry.call('send_to_session', { message: 'Work' }))).toMatchObject({ ok: true, target_session_id: 'new-task', responsibility_recorded: false });
+it("reports a failed responsibility write without hiding successful task creation", async () => {
+  const { registry, sendToSession } = setup({
+    result: {
+      ok: true,
+      targetSessionId: "new-task",
+      agentKind: "claude-code",
+      wakeKind: "created",
+      responsibilityRecorded: false,
+      targetTitle: null,
+      targetLastUserSendAt: null,
+    },
+  });
+  expect(
+    parse(await registry.call("send_to_session", { message: "Work" })),
+  ).toMatchObject({
+    ok: true,
+    target_session_id: "new-task",
+    responsibility_recorded: false,
+  });
   expect(sendToSession).toHaveBeenCalledOnce();
 });
 
-describe('send_to_session → 另一台电脑上的任务', () => {
-  const remoteId = 'mbp::sess-9';
-  function remoteSetup(opts: {
-    result?: Awaited<ReturnType<SendToRemoteSessionCallback>>;
-    sessionId?: string;
-    remote?: boolean;
-  } = {}) {
+describe("send_to_session → 另一台电脑上的任务", () => {
+  const remoteId = "mbp::sess-9";
+  function remoteSetup(
+    opts: {
+      result?: Awaited<ReturnType<SendToRemoteSessionCallback>>;
+      sessionId?: string;
+      remote?: boolean;
+    } = {},
+  ) {
     const sendToSession = vi.fn<SendToSessionCallback>();
-    const sendToRemoteSession = vi.fn<SendToRemoteSessionCallback>(async () => opts.result ?? {
-      ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: 'remote task', targetLastUserSendAt: null,
-    });
+    const sendToRemoteSession = vi.fn<SendToRemoteSessionCallback>(
+      async () =>
+        opts.result ?? {
+          ok: true,
+          agentKind: "codex",
+          wakeKind: "queued",
+          targetTitle: "remote task",
+          targetLastUserSendAt: null,
+        },
+    );
     const registry = new XdtHelperToolRegistry();
     registerSendToSessionTool(registry, {
       getSessionContext: () => ({
-        sessionId: 'sessionId' in opts ? opts.sessionId : 'disp-1', agentKind: 'claude-code', workingDir: '/tmp/wd',
+        sessionId: "sessionId" in opts ? opts.sessionId : "disp-1",
+        agentKind: "claude-code",
+        workingDir: "/tmp/wd",
       }),
       sendToSession,
       ...(opts.remote === false ? {} : { sendToRemoteSession }),
@@ -491,60 +573,170 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     return { registry, sendToSession, sendToRemoteSession };
   }
 
-  it('deviceId::sessionId 交给跨电脑通路, 不走本机投递也不新建', async () => {
+  it("deviceId::sessionId 交给跨电脑通路, 不走本机投递也不新建", async () => {
     const s = remoteSetup();
-    const sent = parse(await s.registry.call('send_to_session', {
-      target_session_id: remoteId, message: 'hi', use_worktree: true, title: 'ignored',
-    }));
+    const sent = parse(
+      await s.registry.call("send_to_session", {
+        target_session_id: remoteId,
+        message: "hi",
+        use_worktree: true,
+        title: "ignored",
+      }),
+    );
     expect(s.sendToRemoteSession).toHaveBeenCalledWith({
-      deviceId: 'mbp', sessionId: 'sess-9', message: 'hi', dispatcherSessionId: 'disp-1',
+      deviceId: "mbp",
+      sessionId: "sess-9",
+      message: "hi",
+      dispatcherSessionId: "disp-1",
     });
     expect(s.sendToSession).not.toHaveBeenCalled();
     expect(sent).toEqual({
-      ok: true, target_session_id: remoteId, target_device_id: 'mbp', agent_kind: 'codex',
-      wake_kind: 'queued', target_title: 'remote task', target_last_user_send_at: null,
+      ok: true,
+      target_session_id: remoteId,
+      target_device_id: "mbp",
+      agent_kind: "codex",
+      wake_kind: "queued",
+      target_title: "remote task",
+      target_last_user_send_at: null,
     });
   });
 
-  it('投递错误如实透传, 区分没有发出与结果未知', async () => {
-    for (const errorCode of ['REMOTE_UNSUPPORTED', 'REMOTE_DEVICE_OFFLINE', 'DELIVERY_UNKNOWN', 'ARCHIVED']) {
-      const s = remoteSetup({ result: { ok: false, errorCode, message: errorCode } });
-      const result = await s.registry.call('send_to_session', { target_session_id: remoteId, message: 'hi' });
+  it("投递错误如实透传, 区分没有发出与结果未知", async () => {
+    for (const errorCode of [
+      "REMOTE_UNSUPPORTED",
+      "REMOTE_DEVICE_OFFLINE",
+      "DELIVERY_UNKNOWN",
+      "ARCHIVED",
+    ]) {
+      const s = remoteSetup({
+        result: { ok: false, errorCode, message: errorCode },
+      });
+      const result = await s.registry.call("send_to_session", {
+        target_session_id: remoteId,
+        message: "hi",
+      });
       expect(result.isError).toBe(true);
       expect(parse(result)).toMatchObject({ ok: false, errorCode });
     }
   });
 
-  it('宿主不支持、内部协调用途、无来源任务时明确拒绝, 不发出', async () => {
+  it("宿主不支持、内部协调用途、无来源任务时明确拒绝, 不发出", async () => {
     const cases = [
-      [remoteSetup({ remote: false }), {}, 'REMOTE_UNSUPPORTED'],
-      [remoteSetup(), { message_purpose: 'coordination' }, 'INVALID_ARGS'],
-      [remoteSetup({ sessionId: undefined }), {}, 'LEAD_NOT_SUPPORTED'],
+      [remoteSetup({ remote: false }), {}, "REMOTE_UNSUPPORTED"],
+      [remoteSetup(), { message_purpose: "coordination" }, "INVALID_ARGS"],
+      [remoteSetup({ sessionId: undefined }), {}, "LEAD_NOT_SUPPORTED"],
     ] as const;
     for (const [s, extra, errorCode] of cases) {
-      const result = await s.registry.call('send_to_session', { target_session_id: remoteId, message: 'hi', ...extra });
+      const result = await s.registry.call("send_to_session", {
+        target_session_id: remoteId,
+        message: "hi",
+        ...extra,
+      });
       expect(parse(result)).toMatchObject({ ok: false, errorCode });
       expect(s.sendToRemoteSession).not.toHaveBeenCalled();
       expect(s.sendToSession).not.toHaveBeenCalled();
     }
   });
 
-  it('local::<id> 是本机任务; 残缺前缀按本机 id 原样处理', async () => {
+  it("local::<id> 是本机任务; 残缺前缀按本机 id 原样处理", async () => {
     const s = remoteSetup();
     s.sendToSession.mockResolvedValue({
-      ok: true, targetSessionId: 'sess-1', agentKind: 'claude-code', wakeKind: 'resumed',
-      targetTitle: null, targetLastUserSendAt: null,
+      ok: true,
+      targetSessionId: "sess-1",
+      agentKind: "claude-code",
+      wakeKind: "resumed",
+      targetTitle: null,
+      targetLastUserSendAt: null,
     });
-    await s.registry.call('send_to_session', { target_session_id: 'local::sess-1', message: 'hi' });
-    await s.registry.call('send_to_session', { target_session_id: 'mbp::', message: 'hi' });
-    expect(s.sendToSession.mock.calls.map(([params]) => params.targetSessionId)).toEqual(['sess-1', 'mbp::']);
+    await s.registry.call("send_to_session", {
+      target_session_id: "local::sess-1",
+      message: "hi",
+    });
+    await s.registry.call("send_to_session", {
+      target_session_id: "mbp::",
+      message: "hi",
+    });
+    expect(
+      s.sendToSession.mock.calls.map(([params]) => params.targetSessionId),
+    ).toEqual(["sess-1", "mbp::"]);
     expect(s.sendToRemoteSession).not.toHaveBeenCalled();
-    expect(parseQualifiedSessionId('mbp::a::b')).toEqual({ deviceId: 'mbp', sessionId: 'a::b' });
+    expect(parseQualifiedSessionId("mbp::a::b")).toEqual({
+      deviceId: "mbp",
+      sessionId: "a::b",
+    });
   });
 
-  it('工具说明写明跨电脑寻址与结果未知时的处理', () => {
-    const description = remoteSetup().registry.list('handoff')[0]!.description;
-    expect(description).toContain('deviceId::sessionId');
-    expect(description).toContain('DELIVERY_UNKNOWN');
+  it("工具说明写明跨电脑寻址与结果未知时的处理", () => {
+    const description = remoteSetup().registry.list("handoff")[0]!.description;
+    expect(description).toContain("deviceId::sessionId");
+    expect(description).toContain("DELIVERY_UNKNOWN");
+  });
+
+  // request_receipt:工具层只做透传与远端拒绝;回投语义由宿主(maker-ipc handoffReceipts)守约。
+  it("request_receipt 透传给本机既有任务投递, 结果回传 receipt_id", async () => {
+    const { registry, sendToSession } = setup();
+    (sendToSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      targetSessionId: "tgt-1",
+      agentKind: "claude-code",
+      wakeKind: "queued",
+      targetTitle: null,
+      targetLastUserSendAt: null,
+      receiptId: "nonce-1",
+    });
+    const sent = parse(
+      await registry.call("send_to_session", {
+        target_session_id: "tgt-1",
+        message: "do work",
+        request_receipt: true,
+      }),
+    );
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionId: "tgt-1",
+        requestReceipt: true,
+      }),
+    );
+    expect(sent).toMatchObject({
+      ok: true,
+      receipt_requested: true,
+      receipt_id: "nonce-1",
+    });
+  });
+
+  it("request_receipt 省略时不透传; create 模式与远端目标都明确拒绝且不发出", async () => {
+    const omitted = setup();
+    await omitted.registry.call("send_to_session", {
+      target_session_id: "parent",
+      message: "hi",
+    });
+    expect(omitted.sendToSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ requestReceipt: expect.anything() }),
+    );
+
+    // create 模式拒绝:首派不经持久队列,宿主观测不到 turn 完成。
+    const createCase = setup();
+    const createResult = await createCase.registry.call("send_to_session", {
+      message: "new task",
+      request_receipt: true,
+    });
+    expect(parse(createResult)).toMatchObject({
+      ok: false,
+      errorCode: "INVALID_ARGS",
+    });
+    expect(createCase.sendToSession).not.toHaveBeenCalled();
+
+    const s = remoteSetup();
+    const result = await s.registry.call("send_to_session", {
+      target_session_id: remoteId,
+      message: "hi",
+      request_receipt: true,
+    });
+    expect(parse(result)).toMatchObject({
+      ok: false,
+      errorCode: "INVALID_ARGS",
+    });
+    expect(s.sendToRemoteSession).not.toHaveBeenCalled();
+    expect(s.sendToSession).not.toHaveBeenCalled();
   });
 });

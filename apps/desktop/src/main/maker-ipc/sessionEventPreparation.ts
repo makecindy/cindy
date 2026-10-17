@@ -1,4 +1,6 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
+import { HANDOFF_RECEIPT_INPUT_PREFIX } from '@cindy/maker-shared/handoff-receipt';
+import { createHandoffReceiptGate } from './handoffReceipts.js';
 import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
@@ -41,6 +43,9 @@ import {
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
+
+// send_to_session 完成回执的失败闸门:终态 error 的 turn 代次记下,同代次 done 不回投。
+const handoffReceiptGate = createHandoffReceiptGate();
 import { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
@@ -118,6 +123,11 @@ export interface PrepareSessionEventDeps {
     AgentInputCoordinator,
     'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'isActiveTaskCoordination'
   > | null;
+  /** send_to_session 完成回执回投;实现在 register(setup 作用域),fire-and-forget。 */
+  readonly deliverHandoffReceipts?: (
+    targetSessionId: string,
+    inputClientIds: readonly string[],
+  ) => Promise<void>;
   readonly handleSilentStopTurnEnd: (
     session: Session,
     doneAt: number,
@@ -210,6 +220,15 @@ export function prepareSessionEvent(
   const botTaskResultInputIds = event.type === 'done' && event.turnScope !== 'background'
     ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
       .filter(id => taskResultClientIdForInput(id) !== null) : [];
+  // send_to_session 完成回执:同一时点快照本 turn 消费的回执请求输入。
+  const handoffReceiptInputIds = event.type === 'done' && event.turnScope !== 'background'
+    ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
+      .filter(id => id.startsWith(HANDOFF_RECEIPT_INPUT_PREFIX)) : [];
+  // 同代次内 error→done 配对时(claude-code translator 无条件推 done),该 done 不得回投回执。
+  // 代次是单实例计数,归属必须含 sessionInstanceId。
+  const handoffReceiptTurnFailed = event.type === 'done'
+    ? handoffReceiptGate.isFailedTurn(session.id, event.sessionInstanceId, event.sessionTurnGeneration)
+    : false;
   const activeInputId = event.turnScope === 'background' ? null
     : deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
   // The host's accepted input owns provenance across all three SDKs. Explicit
@@ -430,6 +449,15 @@ export function prepareSessionEvent(
         sessionTurnGeneration: event.sessionTurnGeneration,
         sessionInstanceId: event.sessionInstanceId,
       });
+      // 真实产品终态才回投 send_to_session 完成回执;续跑边界、silent-stop 与终态失败的 turn 不算正常结束。
+      if (handoffReceiptInputIds.length > 0 && !handoffReceiptTurnFailed) {
+        void deps.deliverHandoffReceipts?.(session.id, handoffReceiptInputIds).catch((error) => {
+          deps.log.warn('handoff receipt delivery crashed', {
+            sessionId: session.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
     } else {
       // silent-stop 自动续跑:translator 判定本 turn 被上游空内容消息静默收尾时在
       // done.data 附加 silentStop 标记(见 maker-core translator)。延迟一拍再决策,
@@ -460,6 +488,7 @@ export function prepareSessionEvent(
   let isGatewayProxyTokenRecovery = false;
   if (isTerminalTurnErrorEvent(event)) {
     finalizeTurnChangeSet(session.id, null, 'partial');
+    handoffReceiptGate.markTerminalError(session.id, event.sessionInstanceId, event.sessionTurnGeneration);
     // **任何**终态失败都先把上一条重连记录钉成失败 —— 不管这次错误本身是否值得自愈。
     // 只在"命中白名单、准备再接管"时才 settle 的话,非白名单的终态(认证 / 计费 /
     // invalid-request)会让记录悬空,随后一个无关 turn 的首个产出事件就把它标成

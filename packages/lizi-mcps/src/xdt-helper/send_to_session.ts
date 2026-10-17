@@ -36,6 +36,9 @@ export type SendToSessionCallback = (params: {
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
   fast?: boolean;
+  /** 可选:true = 目标任务消费本消息的 turn 正常结束后,宿主自动回投一条完成回执到发起任务。
+   * 仅本机目标;远端与委派协调关系不支持。 */
+  requestReceipt?: boolean;
 }) => Promise<
   ControlResult<
     {
@@ -47,10 +50,20 @@ export type SendToSessionCallback = (params: {
       targetLastUserSendAt: string | null;
       /** jump 进入队列时的可寻址句柄，可用于本人编辑/撤回。 */
       queuedMessageId?: string;
+      /** request_receipt 接受时回传回执 id；目标任务完成回执会携带同一 id。 */
+      receiptId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
       model?: string;
-      effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
+      effort?:
+        | "minimal"
+        | "low"
+        | "medium"
+        | "high"
+        | "xhigh"
+        | "max"
+        | "ultra"
+        | null;
       fastMode?: boolean;
       providerId?: string | null;
     },
@@ -121,6 +134,8 @@ const DESCRIPTION = [
   "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建),message_purpose 只能是 user-visible 或省略。",
   "- 不传 target_session_id → create:为业务对象新建一个专属 session。workingDir / Agent / model / effort / Fast 缺省继承当前 session；可用 agent_kind / model / effort / fast 显式覆盖目标执行配置。host 会在创建前按目标 Agent 的模型能力校验，非法组合结构化失败，不静默换模型。wake_kind 返 created,并回传 target_session_id 供调用方建立绑定。",
   "",
+  "【request_receipt(完成回执,可选)】true 时,目标任务消费本消息的 turn 收口后,宿主自动向发起任务回投一条隐藏回执(含 target_session_id 与回执 id,不含对方回复正文)。仅支持本机既有任务(必传 target_session_id;create 模式与 deviceId::sessionId 都拒绝);与委派任务互斥(委派已有完成自动回传);终态失败的 turn 不发回执。回执仅表示处理已收口,不保证成功,结果与实际状态用 get_chat_history 核实;宿主重启窗口或极端插话时序下回执可能丢失(尽力而为)。为可靠观测完成,回执请求的输入统一走持久队列,wake_kind 返 queued(空闲目标也会立即派发,无需重试)。回执会在发起任务里唤醒一轮,用于接续工作。",
+  "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
   "",
   "【working_dir(仅 create 模式)】缺省新 session 继承当前 session 的 workingDir;传 working_dir(绝对路径,目录须已存在)可把新 session 直接落到另一个项目目录——「从项目 A 的对话把任务 handoff 到项目 B 的全新对话」一次调用完成,无需先在 B 里找一个旧对话中转。与 use_worktree 组合时,worktree 的 base git 仓库从 working_dir 解析。路径不是绝对路径 / 不存在 / 不是目录 → 返 INVALID_ARGS(message 带原因)。jump 模式忽略此参数。",
@@ -190,9 +205,12 @@ export function registerSendToSessionTool(
         .describe(
           "要 handoff 给目标 session 的消息正文(create 模式下作为新 session 的首条消息)。",
         ),
-      message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
-        "委派子任务发给发起伙伴默认 coordination：送达模型但内部文字不进正文或通知。user-visible 用于用户要求的结果、需要用户介入的消息。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系。正常完成自动回传，无需重发。",
-      ),
+      message_purpose: z
+        .enum(["coordination", "user-visible"])
+        .optional()
+        .describe(
+          "委派子任务发给发起伙伴默认 coordination：送达模型但内部文字不进正文或通知。user-visible 用于用户要求的结果、需要用户介入的消息。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系。正常完成自动回传，无需重发。",
+        ),
       title: z
         .string()
         .optional()
@@ -236,6 +254,12 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:Fast 模式开关。目标 Agent/provider/model 不支持时创建前失败；jump 模式忽略。",
         ),
+      request_receipt: z
+        .boolean()
+        .optional()
+        .describe(
+          "可选:true = 目标任务消费本消息的 turn 收口后,宿主自动回投完成回执到发起任务(不含对方回复正文)。仅本机既有任务(传了它就必传 target_session_id);与委派任务互斥;终态失败的 turn 不发回执;回执为尽力而为,不保证成功,结果以 get_chat_history 为准。",
+        ),
     },
     handler: async ({
       target_session_id,
@@ -248,14 +272,33 @@ export function registerSendToSessionTool(
       model,
       effort,
       fast,
+      request_receipt,
     }) => {
       const ctx = deps.getSessionContext();
       const qualified = parseQualifiedSessionId(target_session_id);
+      if (request_receipt && !target_session_id) {
+        return errorPayload(
+          "INVALID_ARGS",
+          "request_receipt 仅支持发给既有任务;create 模式不支持回执(新建任务的完成回传用委派链路)。省略 target_session_id 会静默新建,若本意是发给既有任务请先 list_sessions 查 id。",
+        );
+      }
+      if (request_receipt && qualified && qualified.deviceId !== "local") {
+        return errorPayload(
+          "INVALID_ARGS",
+          "request_receipt 仅支持本机任务;发给其它电脑上的任务时不支持回执。",
+        );
+      }
       // 设备目录里本机的 id 是 "local":local::<id> 就是本机任务。
-      const localTargetId = qualified?.deviceId === "local" ? qualified.sessionId : target_session_id;
+      const localTargetId =
+        qualified?.deviceId === "local"
+          ? qualified.sessionId
+          : target_session_id;
       if (qualified && qualified.deviceId !== "local") {
         if (!deps.sendToRemoteSession) {
-          return errorPayload("REMOTE_UNSUPPORTED", "当前宿主不支持给其它电脑上的任务发消息。");
+          return errorPayload(
+            "REMOTE_UNSUPPORTED",
+            "当前宿主不支持给其它电脑上的任务发消息。",
+          );
         }
         if (message_purpose === "coordination") {
           return errorPayload(
@@ -264,7 +307,10 @@ export function registerSendToSessionTool(
           );
         }
         if (!ctx.sessionId) {
-          return errorPayload("LEAD_NOT_SUPPORTED", "当前调用未绑定任务,无法标明消息来源。");
+          return errorPayload(
+            "LEAD_NOT_SUPPORTED",
+            "当前调用未绑定任务,无法标明消息来源。",
+          );
         }
         const remote = await deps.sendToRemoteSession({
           deviceId: qualified.deviceId,
@@ -286,7 +332,9 @@ export function registerSendToSessionTool(
         targetSessionId: localTargetId,
         message,
         dispatcherSessionId: ctx.sessionId,
-        ...(message_purpose !== undefined ? { messagePurpose: message_purpose } : {}),
+        ...(message_purpose !== undefined
+          ? { messagePurpose: message_purpose }
+          : {}),
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,
@@ -294,6 +342,9 @@ export function registerSendToSessionTool(
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
         ...(fast !== undefined ? { fast } : {}),
+        ...(request_receipt !== undefined
+          ? { requestReceipt: request_receipt }
+          : {}),
       });
 
       if (!result.ok) {
@@ -310,18 +361,33 @@ export function registerSendToSessionTool(
         target_session_id: result.targetSessionId,
         agent_kind: result.agentKind,
         wake_kind: result.wakeKind,
-        ...(result.responsibilityRecorded === false ? { responsibility_recorded: false, responsibility_note: "Task creation succeeded, but the responsibility record could not be saved. Do not recreate or resend this task; reconcile the responsibility with the host." } : {}),
+        ...(result.responsibilityRecorded === false
+          ? {
+              responsibility_recorded: false,
+              responsibility_note:
+                "Task creation succeeded, but the responsibility record could not be saved. Do not recreate or resend this task; reconcile the responsibility with the host.",
+            }
+          : {}),
         ...(result.wakeKind === "created"
           ? { note: createdNote(result.targetSessionId) }
           : {}),
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
-        ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
+        ...(result.queuedMessageId
+          ? { queued_message_id: result.queuedMessageId }
+          : {}),
+        ...(result.receiptId
+          ? { receipt_id: result.receiptId, receipt_requested: true }
+          : {}),
         worktree_path: result.worktreePath ?? null,
         ...(result.model !== undefined ? { model: result.model } : {}),
         ...(result.effort !== undefined ? { effort: result.effort } : {}),
-        ...(result.fastMode !== undefined ? { fast_mode: result.fastMode } : {}),
-        ...(result.providerId !== undefined ? { provider_id: result.providerId } : {}),
+        ...(result.fastMode !== undefined
+          ? { fast_mode: result.fastMode }
+          : {}),
+        ...(result.providerId !== undefined
+          ? { provider_id: result.providerId }
+          : {}),
       });
     },
   });

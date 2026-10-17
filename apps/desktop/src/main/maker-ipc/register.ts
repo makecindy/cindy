@@ -1029,6 +1029,8 @@ import {
 import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
+import { handoffReceiptInputClientId } from '@cindy/maker-shared/handoff-receipt';
+import { createHandoffReceiptSender } from './handoffReceipts.js';
 import {
   createContextOverflowRollover,
   canContinueContextRecovery,
@@ -2220,6 +2222,8 @@ type SendToSessionInternalResult =
       targetLastUserSendAt: string | null;
       /** jump 排队时的可寻址句柄；直发 / create 时省略。 */
       queuedMessageId?: string;
+      /** request_receipt 接受时回传回执 id；目标任务完成回执携带同一 id。 */
+      receiptId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
       model?: string;
@@ -2402,6 +2406,8 @@ interface OrcaCollabService {
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
     execution?: SendToSessionExecutionOverrides;
+    /** 可选:true = 目标任务消费本消息的 turn 正常结束后回投完成回执到发起任务。仅本机;与委派协调互斥。 */
+    requestReceipt?: boolean;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
     createDefaults?: SendToSessionCreateDefaults;
   }) => Promise<SendToSessionInternalResult>;
@@ -5490,6 +5496,11 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
 
 let pluginTaskServiceForCurrentOwner: (() => PluginTaskService) | null = null;
 let drainPluginTaskReceipts: (() => Promise<void>) | null = null;
+// send_to_session 完成回执的回投实现在 setup 作用域里(sendToSessionInternal 闭包),
+// 事件路径经此 holder 调用,模式同 drainPluginTaskReceipts。
+let deliverHandoffReceiptsImpl:
+  | ((targetSessionId: string, inputClientIds: readonly string[]) => Promise<void>)
+  | null = null;
 export async function flushPluginTaskLifecycle(): Promise<void> {
   await drainPluginTaskReceipts?.();
 }
@@ -5580,6 +5591,9 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
 // operation. Capturing these services when wiring a Session would freeze the
 // pre-initialization or previous runtime value for later events.
 const sessionEventDependencies: SessionEventDependencies = {
+  deliverHandoffReceipts: async (sessionId, inputClientIds) => {
+    await deliverHandoffReceiptsImpl?.(sessionId, inputClientIds);
+  },
   onPluginTaskTerminal: (sessionId, execution, outcome, outputMessageId) => {
     notePluginTaskLifecycle(service => service.settle(sessionId, execution, outcome, outputMessageId));
   },
@@ -10797,7 +10811,67 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       log.warn('Todo input receipt could not be saved');
     });
 
+  deliverHandoffReceiptsImpl = createHandoffReceiptSender({
+    send: (params) => sendToSessionInternalBase(params),
+    warn: (message, details) => log.warn(message, details),
+  });
+
+  /**
+   * send_to_session 完成回执的拦截层:验证合法性后给这条输入盖上确定性回执 clientId
+   * (`handoff-receipt:<dispatcher>:<nonce>`,见 maker-shared handoffReceipt),目标任务
+   * 的完成钩子按同一前缀识别并回投。基础投递逻辑全部在 sendToSessionInternalBase。
+   */
   async function sendToSessionInternal(params: {
+    botTaskCoordination?: BotTaskCoordination;
+    targetSessionId?: string;
+    message: string;
+    persistedContent?: string;
+    clientId?: string;
+    dispatcherSessionId?: string;
+    title?: string;
+    useWorktree?: boolean;
+    workingDir?: string;
+    execution?: SendToSessionExecutionOverrides;
+    requestReceipt?: boolean;
+    onAccepted?: () => void | Promise<void>;
+    onAcceptedRollback?: () => void | Promise<void>;
+    onAcceptedCommit?: () => void | Promise<void>;
+    origin?: AgentInputQueuedMessage['origin'];
+    autoReviewUserText?: { kind: 'delegated-continuation' };
+    authorizationGuard?: BotAuthorizationInputGuard;
+    createDefaults?: SendToSessionCreateDefaults;
+    inheritSourcePermissionMode?: boolean;
+    forceQueue?: boolean;
+    resumeWithStoredPermissionMode?: boolean;
+    sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
+  }): Promise<SendToSessionInternalResult> {
+    if (!params.requestReceipt) return sendToSessionInternalBase(params);
+    if (!params.targetSessionId) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: 'request_receipt v1 supports existing sessions only; create mode dispatches its first message outside the durable input queue and cannot observe turn completion. Delegate tasks already return completion automatically.' };
+    }
+    if (!params.dispatcherSessionId || params.dispatcherSessionId.includes(':')) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: 'request_receipt requires a session-bound caller whose session id contains no colon' };
+    }
+    if (params.botTaskCoordination) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: 'request_receipt is unnecessary for delegated coordination; completion is returned automatically.' };
+    }
+    if (params.clientId) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: 'request_receipt cannot be combined with an explicit clientId.' };
+    }
+    const nonce = randomUUID();
+    const receiptClientId = handoffReceiptInputClientId(params.dispatcherSessionId, nonce);
+    if (!receiptClientId) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: 'request_receipt could not build a receipt client id.' };
+    }
+    const { requestReceipt: _requestReceipt, ...baseParams } = params;
+    // 回执输入必须走持久队列(forceQueue):空闲直发不经 inputCoordinator,
+    // activeTurn.item 不会建立,完成钩子从 getActiveInputClientIds 读不到该输入,
+    // 回执永远不会触发。与 coordination / delegated-continuation 同一模式。
+    const result = await sendToSessionInternalBase({ ...baseParams, clientId: receiptClientId, forceQueue: true });
+    return result.ok ? { ...result, receiptId: nonce } : result;
+  }
+
+  async function sendToSessionInternalBase(params: {
     botTaskCoordination?: BotTaskCoordination;
     targetSessionId?: string;
     message: string;
@@ -11098,7 +11172,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             });
           }
         }
-        const clientId = createId();
+        // request_receipt 的回执标记随显式 clientId 进入 create 首条输入(包装层保证仅回执路径带显式 id)。
+        const clientId = explicitClientId ?? createId();
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {
@@ -15811,6 +15886,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
+      }
+      // user-visible 用途时 classification.coordination 为 null,委派互斥必须看 delegatedContinuation,
+      // 否则委派子任务会拿到回执 + 委派完成回传双重唤醒。
+      if (params.requestReceipt && classification.delegatedContinuation) {
+        return { ok: false, errorCode: 'INVALID_ARGS', message: 'request_receipt is unnecessary for delegated tasks; completion is returned automatically.' };
       }
       return sendToSessionInternal({
         ...params,
