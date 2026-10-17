@@ -16,13 +16,13 @@ const mocks = vi.hoisted(() => ({
   },
   market: {
     items: [], loading: false, loadingMore: false, hasMore: false,
-    resolvedScope: 'market', resolvedMine: false, categoryFilter: 'all',
+    resolvedScope: 'market', resolvedMine: false, categoryFilter: 'all', sortBy: 'downloads',
     setSearchQuery: vi.fn(), setSortBy: vi.fn(), setCatalogScope: vi.fn(),
     setCategoryFilter: vi.fn(), setVisibility: vi.fn(), loadMore: vi.fn(), reload: vi.fn(),
   },
 }));
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t, i18n: { language: 'en' } }) }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ user: mocks.user, dataOwnerId: mocks.dataOwnerId, mode: 'cloud' }),
 }));
@@ -132,6 +132,29 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Skill home navigation', () => {
+  it('offers download/update sorting and does not reset it when switching catalogs', async () => {
+    mocks.user = { membershipKind: 'org' };
+    mocks.market.setSortBy.mockClear();
+    renderCatalog();
+    const trigger = screen.getByRole('button', { name: 'skillhub.home.sortDownloads' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    mocks.market.setSortBy.mockClear();
+    const updateOption = await screen.findByRole('menuitemradio', { name: 'skillhub.home.sortUpdated' });
+    fireEvent.click(updateOption);
+    expect(mocks.market.setSortBy).toHaveBeenCalledExactlyOnceWith('updated_at');
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.organization' }));
+    expect(mocks.market.setSortBy).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.local' }));
+    expect(screen.queryByRole('button', { name: 'skillhub.home.sortDownloads' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave catalog' }));
+    mocks.market.setSortBy.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    expect(mocks.market.setSortBy).toHaveBeenLastCalledWith('updated_at');
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.public' }));
+    expect(screen.getByRole('button', { name: 'skillhub.home.sortUpdated' })).toBeTruthy();
+
+  });
+
   it('still opens a fresh catalog on Public', () => {
     renderCatalog();
     expectTab('public');

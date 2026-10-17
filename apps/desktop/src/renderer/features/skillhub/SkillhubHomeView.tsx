@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { buildMarketSkillRoute, withSkillDetailReturn } from './lib/detailRoutes';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams, type Location } from 'react-router-dom';
+import { useNavigate, type Location } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
@@ -29,7 +29,6 @@ import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
   PluginManagementLayout,
   PluginManagementPage,
 } from '@/features/plugin/PluginManagementLayout';
@@ -55,10 +54,12 @@ import {
 } from './lib/homeMarketFilter';
 import { deriveSkillSource } from './lib/skillSource';
 import { InstallTargetPicker, type InstallTargetSkill } from './components/InstallTargetPicker';
+import { SkillSortMenu } from './components/SkillSortMenu';
 import { SkillCategoryFilterBar } from './components/SkillCategoryFilterBar';
 import { MarketListError } from './components/MarketListError';
 import { HomeMarketCard } from './components/HomeMarketCard';
 import { SkillIcon } from './components/SkillIcon';
+import { SKILL_HOME_CARD_GRID_CLASS as SKILL_CARD_GRID_CLASS } from './lib/cardLayout';
 import { SkillPublishUpdateHint } from './SkillPublishUpdateHint';
 import { OfficialSkillBadge } from './components/OfficialSkillBadge';
 import { useSkillhubHomeNavigation } from './hooks/useSkillhubHomeNavigation';
@@ -88,9 +89,8 @@ export function SkillhubHomeView({
 } = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [initialSearch] = useSearchParams();
   const { skills, projects, bootstrapped, syncResults } = useSkillhub();
-  const { catalogTab, query, setCatalogTab, setQuery } = useSkillhubHomeNavigation(navigationLocation);
+  const { catalogTab, query, setCatalogTab, setQuery, sort: savedSort, category: savedCategory, setSort: saveSort, setCategory: saveCategory } = useSkillhubHomeNavigation(navigationLocation);
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
   // 未登录也请求公开 Skill 目录；登录身份只扩大服务端可见范围。
@@ -120,20 +120,18 @@ export function SkillhubHomeView({
   } = useMarketList('all', {
     enabled: active && catalogTab !== 'local',
     initialScope: 'market',
-    initialSort: 'trending',
-    initialSearchQuery: initialSearch.get('q') ?? '',
-    initialCategoryFilter: initialSearch.get('category') ?? CATEGORY_ALL,
+    initialSort: savedSort,
+    initialSearchQuery: query,
+    initialCategoryFilter: savedCategory,
   });
+  useEffect(() => { setSortBy(savedSort); }, [savedSort, setSortBy]);
+  useEffect(() => { setCategoryFilter(savedCategory); }, [savedCategory, setCategoryFilter]);
   const categoryScope = marketRequest.scope === 'team' ? 'team' : 'market';
   const { categories } = useCategoryList(categoryScope);
-  const previousMarketRequest = useRef(marketRequest);
   useEffect(() => {
     setCatalogScope(marketRequest.scope);
     setVisibility(marketRequest.visibility);
-    setSortBy(marketRequest.sort);
-    if (previousMarketRequest.current !== marketRequest) setCategoryFilter(CATEGORY_ALL);
-    previousMarketRequest.current = marketRequest;
-  }, [marketRequest, setCatalogScope, setCategoryFilter, setSortBy, setVisibility]);
+  }, [marketRequest, setCatalogScope, setVisibility]);
   useEffect(() => {
     setSearchQuery(query);
   }, [query, setSearchQuery]);
@@ -218,10 +216,10 @@ export function SkillhubHomeView({
   const [importPickerOpen, setImportPickerOpen] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
 
-  const returnTo = `/skillhub/local?${new URLSearchParams({ tab: catalogTab, q: query, category: categoryFilter })}`;
+  const returnTo = `/skillhub/local?${new URLSearchParams({ tab: catalogTab, q: query, category: savedCategory, sort: savedSort })}`;
   const openLocal = (local: SkillhubSkill) => {
     const route = withSkillDetailReturn(buildLocalSkillRoute(local), returnTo);
-    navigate(route, { state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query } } });
+    navigate(route, { state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query, sort: savedSort, category: savedCategory } } });
   };
   const openMarket = () => navigate('/skillhub/market');
   const openCatalogSkill = (skill: MarketSkill) => navigate(buildMarketSkillRoute(skill, returnTo));
@@ -296,9 +294,6 @@ export function SkillhubHomeView({
                 <h1 className="text-28 font-medium leading-tight text-[var(--text-primary)]">
                   {t('skillhub.home.title')}
                 </h1>
-                <p className="mt-2 max-w-2xl text-14 leading-6 text-[var(--text-secondary)]">
-                  {t('skillhub.home.description')}
-                </p>
               </div>
               <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1" style={WINDOW_NO_DRAG_STYLE}>
                 <SegmentedControl
@@ -337,37 +332,43 @@ export function SkillhubHomeView({
             {/* ① 当前云端目录摘要 */}
             {catalogTab !== 'local' && (!normalizedQuery || catalogItems.length > 0 || marketLoading || marketError) ? (
               <section className="plugin-motion-page-section min-w-0">
-                {categories.length > 0 ? (
-                  <SkillCategoryFilterBar
-                    categories={categories}
-                    selectedCategory={categoryFilter}
-                    allLabel={t('skillhub.market.categoryAll')}
-                    ariaLabel={t('skillhub.home.categoryFiltersAria')}
-                    scrollLeftLabel={t('skillhub.home.scrollCategoriesLeft')}
-                    scrollRightLabel={t('skillhub.home.scrollCategoriesRight')}
-                    scrollStartLabel={t('skillhub.home.categoryScrollAtStart')}
-                    scrollEndLabel={t('skillhub.home.categoryScrollAtEnd')}
-                    onSelectCategory={setCategoryFilter}
-                    className="mb-4"
-                  />
-                ) : null}
+                <div className="mb-4 flex min-w-0 items-center justify-between gap-3">
+                  {categories.length > 0 ? (
+                    <SkillCategoryFilterBar
+                      categories={categories}
+                      selectedCategory={categoryFilter}
+                      allLabel={t('skillhub.market.categoryAll')}
+                      ariaLabel={t('skillhub.home.categoryFiltersAria')}
+                      scrollLeftLabel={t('skillhub.home.scrollCategoriesLeft')}
+                      scrollRightLabel={t('skillhub.home.scrollCategoriesRight')}
+                      scrollStartLabel={t('skillhub.home.categoryScrollAtStart')}
+                      scrollEndLabel={t('skillhub.home.categoryScrollAtEnd')}
+                      onSelectCategory={saveCategory}
+                      className="min-w-0 flex-1"
+                    />
+                  ) : <div className="flex-1" />}
+                  <SkillSortMenu value={savedSort} onChange={saveSort} />
+                </div>
 
                 <MarketListError error={marketError} loading={marketLoading} onRetry={reloadMarket} />
                 {(marketLoading || !marketResponseCurrent) && catalogItems.length === 0 ? (
-                  // 占位骨架:与真实卡片同栅格、同行数、同高度,内容到位后原地替换不跳动。
-                  <div className={PLUGIN_MANAGEMENT_CARD_GRID_CLASS} aria-hidden>
+                  // 占位骨架沿用卡片的栅格与最小高度。
+                  <div className={SKILL_CARD_GRID_CLASS} aria-hidden>
                     {Array.from({ length: MARKET_PAGE_SIZE }).map((_, i) => (
                       <div
                         key={i}
-                        className="flex min-h-[100px] flex-col gap-2 rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 shadow-[var(--plugin-card-shadow)]"
+                        className="flex min-h-[108px] w-full items-start gap-4 rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4"
                       >
-                        <div className="flex items-center gap-2">
-                          <div className="size-9 shrink-0 animate-pulse rounded-xl bg-[var(--cmd-palette-item-hover)] opacity-60" />
-                          <div className="h-3.5 w-2/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-60" />
+                        <div className="size-12 shrink-0 animate-pulse rounded-xl bg-[var(--cmd-palette-item-hover)] opacity-60" />
+                        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                          <div className="h-5 w-2/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-60" />
+                          <div className="h-6 w-1/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                          <div className="h-5 w-full animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
                         </div>
-                        <div className="h-3 w-full animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="h-3 w-4/5 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="flex w-12 flex-col gap-2">
+                          <div className="h-5 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                          <div className="h-4 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -376,7 +377,7 @@ export function SkillhubHomeView({
                     {t('skillhub.home.catalogEmpty')}
                   </div>
                 ) : (
-                  <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
+                  <div className={cn('plugin-motion-stagger', SKILL_CARD_GRID_CLASS)}>
                     {catalogItems.map((s) => (
                       <HomeMarketCard
                         key={skillhubCatalogKey(s.name, s.catalogScope)}
@@ -476,7 +477,7 @@ export function SkillhubHomeView({
                 : undefined;
               if (imported) {
                 navigate(buildLocalSkillRoute(imported), {
-                  state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query } },
+                  state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query, sort: savedSort, category: savedCategory } },
                 });
                 return;
               }
@@ -493,7 +494,7 @@ export function SkillhubHomeView({
                 name: result.name,
               };
               navigate(buildLocalSkillRoute(fallback), {
-                state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query } },
+                state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query, sort: savedSort, category: savedCategory } },
               });
             });
           }}
@@ -521,7 +522,7 @@ function LocalGroup({
   return (
     <div className="flex flex-col gap-3">
       {label ? <span className="px-1 text-13 font-medium text-[var(--text-secondary)]">{label}</span> : null}
-      <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
+      <div className={cn('plugin-motion-stagger', SKILL_CARD_GRID_CLASS)}>
         {skills.map((s) => {
           const Icon = KIND_ICON[s.kind] ?? Package;
           const descriptionKey = builtInSkillDescriptionKey(s);
@@ -542,7 +543,7 @@ function LocalGroup({
               type="button"
               onClick={() => onOpen(s)}
               className={cn(
-                'group flex w-full items-start gap-3 rounded-[12px] border-[0.5px] border-[var(--border-default)] px-3 py-2.5 text-left',
+                'group flex min-h-[108px] w-full min-w-0 items-start gap-4 rounded-[12px] border-[0.5px] border-[var(--border-default)] p-4 text-left',
                 'bg-[var(--surface-elevated)] shadow-[var(--plugin-card-shadow)]',
                 'transition-[background-color,border-color,transform] duration-150 ease-out',
                 'hover:-translate-y-0.5 hover:border-[var(--text-tertiary)]',
@@ -551,7 +552,7 @@ function LocalGroup({
               )}
             >
               {s.kind === 'skill' ? (
-                <SkillIcon />
+                <SkillIcon frontmatter={s.frontmatter} />
               ) : (
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]">
                   <Icon size={17} strokeWidth={1.75} />

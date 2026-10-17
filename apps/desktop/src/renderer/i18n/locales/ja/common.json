@@ -13935,6 +13935,8 @@
       "summaryNote": "バイナリ、大きなファイル、または全文を取得できないため、ファイルサイズのみ表示します。"
     },
     "home": {
+      "sortDownloads": "ダウンロード数順",
+      "sortUpdated": "更新日時順",
       "title": "スキル",
       "description": "ローカルスキルを管理し、Skill Hub から新しいスキルを見つけてインストールできます。",
       "descriptionLocalOnly": "このデバイスにインストールされたローカルスキルを管理します。",

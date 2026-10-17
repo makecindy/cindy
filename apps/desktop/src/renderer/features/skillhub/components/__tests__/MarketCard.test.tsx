@@ -89,7 +89,7 @@ describe('MarketCard Skill icon', () => {
     expect(container.querySelector('.lucide-package')).not.toBeNull();
   });
 
-  it('shows the first tag beside the title and collapses remaining tags', () => {
+  it('keeps two tags on their own row and collapses remaining tags', () => {
     const { container } = render(
       <MarketCard
         skill={{
@@ -97,6 +97,7 @@ describe('MarketCard Skill icon', () => {
           tags: [
             { slug: 'automation', name: 'Automation' },
             { slug: 'productivity', name: 'Productivity' },
+            { slug: 'office', name: 'Office' },
           ],
         }}
         primaryAction="none"
@@ -105,7 +106,8 @@ describe('MarketCard Skill icon', () => {
     );
 
     const title = container.querySelector('h3');
-    expect(title?.parentElement?.textContent).toContain('Demo SkillAutomation+1');
-    expect(container.textContent).not.toContain('Productivity');
+    expect(title?.parentElement?.textContent).toBe('Demo Skill');
+    expect(container.querySelector('[role=list]')?.textContent).toBe('AutomationProductivity+1');
+    expect(container.textContent).not.toContain('Office');
   });
 });

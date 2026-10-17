@@ -13935,6 +13935,8 @@
       "summaryNote": "檔案為二進位、過大或無法完整預覽，僅顯示檔案大小。"
     },
     "home": {
+      "sortDownloads": "依下載量排序",
+      "sortUpdated": "依更新時間排序",
       "title": "技能",
       "description": "管理本地技能，或從 Skill Hub 發現並安裝更多技能。",
       "descriptionLocalOnly": "管理本機安裝的本地技能。",

@@ -39,7 +39,7 @@ export function SkillTagList({ tags, maxVisible = 3, className }: SkillTagListPr
           key={`${tag.slug}:${tag.name}`}
           role="listitem"
           title={tag.name}
-          className="inline-flex h-[18px] max-w-20 shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 text-10 font-normal leading-none text-[var(--text-tertiary)]"
+          className="inline-flex h-6 max-w-24 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-2.5 text-11 font-medium leading-none text-[var(--text-primary)]"
         >
           <span className="truncate">{tag.name}</span>
         </span>
@@ -49,7 +49,7 @@ export function SkillTagList({ tags, maxVisible = 3, className }: SkillTagListPr
           role="listitem"
           title={hiddenTags.map((tag) => tag.name).join(', ')}
           aria-label={hiddenTags.map((tag) => tag.name).join(', ')}
-          className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 text-10 font-normal leading-none text-[var(--text-tertiary)]"
+          className="inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-2 text-11 font-medium leading-none text-[var(--text-primary)]"
         >
           +{hiddenTags.length}
         </span>

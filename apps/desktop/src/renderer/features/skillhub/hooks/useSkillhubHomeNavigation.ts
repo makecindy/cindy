@@ -8,6 +8,8 @@ import { buildLocalSkillRoute } from '../lib/localRoutes';
 interface HomeViewState {
   catalogTab: HomeCatalogTab;
   query: string;
+  sort?: 'downloads' | 'updated_at';
+  category?: string;
 }
 
 interface SkillhubNavigationState {
@@ -29,13 +31,17 @@ export function useSkillhubHomeNavigation(navigationLocation?: Location) {
     : 'public';
   const query = typeof navState?.skillhubHome?.query === 'string' ? navState.skillhubHome.query : search.get('q') ?? '';
 
+  const savedSort = navState?.skillhubHome?.sort ?? search.get('sort');
+  const sort: 'downloads' | 'updated_at' = savedSort === 'updated_at' ? 'updated_at' : 'downloads';
+  const category = navState?.skillhubHome?.category ?? search.get('category') ?? 'all';
+
   const updateHomeState = useCallback((patch: Partial<HomeViewState>) => {
     // Replace the current entry: typing or changing tabs must not add Back steps.
     navigate(`${location.pathname}${location.search}${location.hash}`, {
       replace: true,
-      state: { ...location.state, skillhubHome: { catalogTab, query, ...patch } },
+      state: { ...location.state, skillhubHome: { catalogTab, query, sort, category, ...patch } },
     });
-  }, [catalogTab, location, navigate, query]);
+  }, [catalogTab, location, navigate, query, sort, category]);
 
   const setCatalogTab = useCallback((tab: HomeCatalogTab) => {
     updateHomeState({ catalogTab: tab });
@@ -44,12 +50,19 @@ export function useSkillhubHomeNavigation(navigationLocation?: Location) {
     updateHomeState({ query: value });
   }, [updateHomeState]);
 
+  const setSort = useCallback((value: 'downloads' | 'updated_at') => {
+    updateHomeState({ sort: value });
+  }, [updateHomeState]);
+  const setCategory = useCallback((value: string) => {
+    updateHomeState({ category: value });
+  }, [updateHomeState]);
+
   const openLocalSkill = (skill: Parameters<typeof buildLocalSkillRoute>[0]) => {
     navigate(withSkillDetailReturn(buildLocalSkillRoute(skill), `${location.pathname}${location.search}`), {
       state: {
         from: '/skillhub/local',
         resetHistory: true,
-        skillhubHome: { catalogTab, query },
+        skillhubHome: { catalogTab, query, sort, category },
       } satisfies SkillhubNavigationState,
     });
   };
@@ -64,5 +77,5 @@ export function useSkillhubHomeNavigation(navigationLocation?: Location) {
     navigate(skillDetailReturnRoute(search, target), { state: { skillhubHome: navState?.skillhubHome } });
   };
 
-  return { catalogTab, query, setCatalogTab, setQuery, openLocalSkill, replaceLocalSkill, backToCatalog };
+  return { sort, category, setSort, setCategory, catalogTab, query, setCatalogTab, setQuery, openLocalSkill, replaceLocalSkill, backToCatalog };
 }
