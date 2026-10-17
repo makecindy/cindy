@@ -87,6 +87,11 @@ const RESIZE_GRABBER_HIT_HEIGHT = Platform.OS === 'ios' ? COMPOSER_CARD_PADDING_
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
+/** Events added by our expo-paste-input native patch before upstream typings catch up. */
+type CindyPasteEventPayload = PasteEventPayload
+  | { type: 'images-loading'; count: number }
+  | { type: 'images-load-failed' };
+
 export interface MobileComposerInputRowProps {
   entryTransitionId?: string;
   onEntryTransitionComplete?(): void;
@@ -290,7 +295,7 @@ export function MobileComposerInputRow({
   // images:原生侧已阻止默认粘贴,上抛进附件链路(占位在此兑现);
   // images-load-failed:后台读取失败,撤占位;
   // text:默认插入已发生;unsupported:无可处理内容——都忽略。
-  const handleNativePaste = useCallback((payload: PasteEventPayload) => {
+  const handleNativePaste = useCallback((payload: CindyPasteEventPayload) => {
     if (payload.type === 'images' && payload.uris.length > 0) {
       onPasteImages?.(payload.uris);
     } else if (payload.type === 'images-loading' && payload.count > 0) {
