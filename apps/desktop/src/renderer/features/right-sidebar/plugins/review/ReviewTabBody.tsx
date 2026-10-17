@@ -702,6 +702,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       sessionId,
       t,
       trimPreviewDiff,
+      currentBranchDiffData?.mergeBaseOid,
     ],
   );
   const unavailableHistoricalPreview = useCallback(

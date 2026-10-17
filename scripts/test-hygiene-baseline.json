@@ -641,9 +641,6 @@
       "resetModules": 1,
       "sourceReads": 1
     },
-    "apps/desktop/src/renderer/__tests__/markdownCjkStrongDelimiter.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/renderer/__tests__/markdownFencedCodeInline.test.ts": {
       "sourceReads": 1
     },
@@ -651,9 +648,6 @@
       "sourceReads": 1
     },
     "apps/desktop/src/renderer/__tests__/markdownMathRendering.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/renderer/__tests__/markdownStrikethrough.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/renderer/__tests__/memorySettingsStore.test.ts": {

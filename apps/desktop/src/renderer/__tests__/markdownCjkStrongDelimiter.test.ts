@@ -22,8 +22,6 @@
 import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -92,21 +90,5 @@ describe('CJK 加粗定界(remarkCjkFriendly)', () => {
   it('公式里的星号不参与加粗判定', () => {
     const html = renderMarkdown('公式 $a**b$ 结束');
     expect(html).not.toContain('<strong>');
-  });
-});
-
-describe('MarkdownRenderer — remarkCjkFriendly source contract', () => {
-  const source = readFileSync(
-    resolve(__dirname, '..', 'components', 'chat', 'MarkdownRenderer.tsx'),
-    'utf8',
-  );
-
-  it('两条 remark 插件链都在 remarkGfm 之后注册 remarkCjkFriendly', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    const privilegedArrays = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    for (const plugins of [pluginArrays, privilegedArrays]) {
-      expect(plugins).toContain('remarkCjkFriendly');
-      expect(plugins.indexOf('remarkGfm')).toBeLessThan(plugins.indexOf('remarkCjkFriendly'));
-    }
   });
 });

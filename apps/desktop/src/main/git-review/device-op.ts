@@ -25,6 +25,7 @@ import { gzip as gzipCb } from 'node:zlib';
 import { promisify } from 'node:util';
 import { ipcMain } from 'electron';
 import { GIT_REVIEW_REMOTE_OP_CHANNEL } from '@cindy/device-link';
+import { GIT_REVIEW_MAX_JSON_BYTES } from '../../shared/gitReviewWire.js';
 
 import { createLogger } from '../logger.js';
 import {
@@ -58,11 +59,10 @@ const log = createLogger('git-review/device-op');
 const gzipAsync = promisify(gzipCb);
 
 /**
- * 响应的 device-link 上帧预算。量纲对齐 file-browser/device-op 的
- * DEVICE_READ_MAX_JSON_BYTES:relay 单帧 MAX_FRAME_BYTES=2MiB 按 UTF-8 字节判,
- * 用 JSON.stringify 后的字节数覆盖转义膨胀,再给 envelope 留余量。
+ * 响应的 device-link 上帧预算。正本在 shared/gitReviewWire.ts（读侧丢基线也用它）；
+ * 这里重导出保持原引用与单测入口不变。
  */
-const GIT_REVIEW_MAX_JSON_BYTES = 1_800_000;
+export { GIT_REVIEW_MAX_JSON_BYTES } from '../../shared/gitReviewWire.js';
 
 export interface GitReviewRemoteOpArgs {
   op: string;

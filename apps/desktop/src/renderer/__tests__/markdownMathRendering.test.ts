@@ -122,28 +122,6 @@ describe('MarkdownRenderer — math 接线 source contract', () => {
     'utf8',
   );
 
-  it('remarkMath 注册进两条 remark 插件链', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    const privilegedArrays = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    expect(pluginArrays).toContain('remarkMath');
-    expect(privilegedArrays).toContain('remarkMath');
-  });
-
-  it('remarkStrictInlineMath 注册且排在 remarkMath 之后(松散配对降级)', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    expect(pluginArrays.indexOf('remarkStrictInlineMath')).toBeGreaterThan(pluginArrays.indexOf('remarkMath'));
-    const privileged = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    expect(privileged).toContain('remarkStrictInlineMath');
-  });
-
-  it('rehypeKatex 注册且排在 rehypeHighlight 之前', () => {
-    const rehypeArray = source.match(/const REHYPE_PLUGINS[\s\S]*?\];/)?.[0] ?? '';
-    const katexIdx = rehypeArray.indexOf('rehypeKatex');
-    const highlightIdx = rehypeArray.indexOf('rehypeHighlight');
-    expect(katexIdx).toBeGreaterThan(-1);
-    expect(highlightIdx).toBeGreaterThan(katexIdx);
-  });
-
   it('normalizeMathDelimiters 在渲染前调用且 emitSourceLines 走保行数模式', () => {
     // 输入是流式修复层的输出(repairStreamingMarkdown,跟随 streamFade 总开关:
     // 关闭动效 / reduced-motion / 非流式时 repairedContent === throttledContent

@@ -19,8 +19,6 @@
 import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -50,19 +48,5 @@ describe('GFM strikethrough(singleTilde:false)', () => {
     expect(html).toContain('<del>这段删掉</del>');
     expect(html).toContain('4~6');
     expect(html).toContain('7~9');
-  });
-});
-
-describe('MarkdownRenderer — singleTilde source contract', () => {
-  const source = readFileSync(
-    resolve(__dirname, '..', 'components', 'chat', 'MarkdownRenderer.tsx'),
-    'utf8',
-  );
-
-  it('两条 remark 插件链都以 singleTilde:false 注册 remarkGfm', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    const privilegedArrays = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    expect(pluginArrays).toContain('[remarkGfm, { singleTilde: false }]');
-    expect(privilegedArrays).toContain('[remarkGfm, { singleTilde: false }]');
   });
 });

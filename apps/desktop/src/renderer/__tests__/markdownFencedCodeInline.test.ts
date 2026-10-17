@@ -168,15 +168,3 @@ describe('marker 插件只标记 pre 的直接 code 子节点', () => {
     expect(html).not.toContain(INLINE_BG_CLASS);
   });
 });
-
-describe('source contract — 插件注册位置', () => {
-  it('rehypeFencedCodeMarker 注册在 rehype 链里,且排在 rehypeHighlight 之后', () => {
-    const match = rendererSrc.match(/const REHYPE_PLUGINS: PluggableList = \[([\s\S]*?)\];/);
-    expect(match, 'REHYPE_PLUGINS 未找到').toBeTruthy();
-    const chain = match![1];
-    const highlightAt = chain.indexOf('rehypeHighlight');
-    const markerAt = chain.indexOf('rehypeFencedCodeMarker');
-    expect(highlightAt).toBeGreaterThanOrEqual(0);
-    expect(markerAt).toBeGreaterThan(highlightAt);
-  });
-});
