@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { isCindyOfficialTrustInfo } from './GhostManager.js';
+import { buildJsonFileUpload, prepareJsonFileUpload, JSON_FILE_UPLOAD_LIMITS } from './jsonFileUpload.js';
 
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
@@ -133,7 +134,7 @@ export interface NetworkSlotDeps {
    * 文件字节经 read() 闭包按需读盘,networkSlot 保持零 fs 依赖。
    */
   takeDirDeposit(instanceKey: string, token: string): {
-    files: Array<{ relPath: string; size: number; read(): Promise<Uint8Array> }>;
+    files: Array<{ relPath: string; size: number; read(maxBytes?: number): Promise<Uint8Array> }>;
     totalBytes: number;
   } | null;
   /**
@@ -783,6 +784,8 @@ export class GhostNetworkSlot {
       body?: unknown;
       upload?: unknown;
       uploadDir?: unknown;
+      uploadJson?: unknown;
+      op?: unknown;
       timeoutMs?: unknown;
       as?: unknown;
       label?: unknown;
@@ -790,6 +793,14 @@ export class GhostNetworkSlot {
       callId?: unknown;
     };
 
+    if (p?.op !== undefined) {
+      if (p.op !== 'capabilities' || Object.keys(p).some(k => !['type', 'op'].includes(k))) {
+        return { ok: false, message: '不支持的网络操作，请检查插件版本。' };
+      }
+      const ghost = this.deps.getGhost(instanceKey);
+      if (!ghost?.enabled) return { ok: false, message: '插件不在可用状态。' };
+      return { ok: true, capabilities: { version: 1, uploadJson: { ...JSON_FILE_UPLOAD_LIMITS } } };
+    }
     // ── 载荷形状校验(不占在途名额)──────────────────────────────────
     if (typeof p?.url !== 'string' || p.url.length === 0 || p.url.length > 2048) {
       return { ok: false, message: 'url 必须是 1–2048 字符的字符串' };
@@ -818,6 +829,11 @@ export class GhostNetworkSlot {
         return { ok: false, message: `body 过大(上限 ${GHOST_FETCH_BODY_MAX_BYTES} 字节)` };
       }
       body = p.body;
+    }
+    const uploadJson = p.uploadJson === undefined ? undefined : prepareJsonFileUpload(p.uploadJson);
+    if (p.uploadJson !== undefined && (!uploadJson || method !== 'POST' || p.body !== undefined ||
+        p.upload !== undefined || p.uploadDir !== undefined || (p.as !== undefined && p.as !== 'text'))) {
+      return { ok: false, executionStatus: 'not_executed', message: 'uploadJson 参数无效；仅支持 POST 文本响应，不能混用其他请求体。' };
     }
     // ── 响应模式:text(缺省)/ media(字节落总仓)/ file(字节落 save
     // 票据目录)——后两种字节都不进沙箱。
@@ -1000,7 +1016,7 @@ export class GhostNetworkSlot {
     }
 
     // 超时分档:媒体/文件下载与上传天然更久,缺省/上限用 MEDIA_* 档;下限共用。
-    const isHeavy = asMode === 'media' || asMode === 'file' || upload !== undefined || uploadDir !== undefined;
+    const isHeavy = asMode === 'media' || asMode === 'file' || upload !== undefined || uploadDir !== undefined || !!uploadJson;
     const timeoutDefault = isHeavy ? GHOST_FETCH_MEDIA_TIMEOUT_DEFAULT_MS : GHOST_FETCH_TIMEOUT_DEFAULT_MS;
     const timeoutMax = isHeavy ? GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS : GHOST_FETCH_TIMEOUT_MAX_MS;
     let timeoutMs = timeoutDefault;
@@ -1056,6 +1072,7 @@ export class GhostNetworkSlot {
         && callInfo.remoteHostId === null;
     };
     const agentMediated = hasLiveAgentAuthorization();
+    if (uploadJson && !agentMediated) return { ok: false, executionStatus: 'not_executed', message: '文件上传需要当前仍在执行的本地 Agent 调用。' };
     // 静态 hosts 与动态连接地址(network.connections,用户在设置页添加、
     // 逐条过主机受信确认)至少有其一,才算"声明过白名单"。
     const connectionDecls = net?.connections ?? [];
@@ -1113,6 +1130,7 @@ export class GhostNetworkSlot {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     let holdingMediaGate = false;
+    let jsonDispatched = false;
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
       const assertStillValid = this.deps.captureRequestGuard?.(instanceKey) ?? (() => {});
@@ -1159,6 +1177,21 @@ export class GhostNetworkSlot {
         body = built.body;
         deleteHeaderVariants(requestHeaders, 'Content-Type');
         requestHeaders['Content-Type'] = `multipart/form-data; boundary=${built.boundary}`;
+      }
+
+      if (uploadJson) {
+        if (this.mediaReadsInflight >= MEDIA_READ_GLOBAL_LIMIT) return { ok: false, executionStatus: 'not_executed', message: '文件上传通道正忙，请稍后重试。' };
+        this.mediaReadsInflight += 1;
+        holdingMediaGate = true;
+        const assertUploadCurrent = () => {
+          assertStillValid();
+          if (controller.signal.aborted || !hasLiveAgentAuthorization()) throw new Error('文件上传已取消，请重新发起。');
+        };
+        assertUploadCurrent();
+        body = await buildJsonFileUpload(uploadJson, this.deps.takeDirDeposit(instanceKey, uploadJson.token), assertUploadCurrent);
+        assertUploadCurrent();
+        deleteHeaderVariants(requestHeaders, 'Content-Type');
+        requestHeaders['Content-Type'] = 'application/json';
       }
 
       // ── 执行(重定向逐跳手动跟,每跳重验白名单 + 重算凭证注入)────────
@@ -1256,6 +1289,9 @@ export class GhostNetworkSlot {
               };
             }
           }
+          if (uploadJson && (!hasLiveAgentAuthorization() || controller.signal.aborted)) {
+            return { ok: false, executionStatus: 'not_executed', message: '文件上传调用已结束，请重新发起。' };
+          }
           const fetchInit = {
             method: currentMethod,
             headers: hopHeaders,
@@ -1269,6 +1305,7 @@ export class GhostNetworkSlot {
           if (!hopHostDeclared && !hopAgentMediated) {
             return { ok: false, message: '当前 Agent 调用已结束，未声明目标不再允许访问' };
           }
+          if (uploadJson) jsonDispatched = true;
           if (hopAgentMediated) {
             const guarded = await this.deps.fetchPublicImpl(
               currentUrl.toString(),
@@ -1288,7 +1325,7 @@ export class GhostNetworkSlot {
           assertStillValid();
           responseConnectionInjected = currentConnectionInjected;
           responseMethod = currentMethod;
-          if (![301, 302, 303, 307, 308].includes(response.status)) break;
+          if (uploadJson || ![301, 302, 303, 307, 308].includes(response.status)) break;
           const location = response.headers.get('location');
           if (!location) break; // 3xx 无 Location:按普通响应回给意识
           if (hop === MAX_REDIRECTS) {
@@ -1315,7 +1352,7 @@ export class GhostNetworkSlot {
           }
           currentUrl = nextUrl;
         }
-        if (!response) break;
+        if (!response || uploadJson) break;
         if (
           response.status === 401
           && responseConnectionInjected.size > 0
@@ -1539,6 +1576,9 @@ export class GhostNetworkSlot {
         ...(truncated ? { truncated } : {}),
       };
     } catch (err) {
+      if (uploadJson) return { ok: false, executionStatus: jsonDispatched ? 'unknown' : 'not_executed',
+        message: jsonDispatched ? '上传结果未知，请先核对远端状态，不要直接重试。' : '附件未上传；请检查文件大小、交接票据和账号状态后重新交付。' };
+
       const aborted = controller.signal.aborted;
       const message = aborted
         ? `请求超时(${timeoutMs}ms)`

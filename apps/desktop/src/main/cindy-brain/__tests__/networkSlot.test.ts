@@ -639,7 +639,7 @@ describe('networkSlot · 响应收敛', () => {
     });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
     expect(r.ok).toBe(true);
-    if (r.ok) {
+    if (r.ok && 'status' in r) {
       expect(r.status).toBe(429);
       expect(r.headers['retry-after']).toBe('5');
       expect(r.headers['set-cookie']).toBeUndefined();

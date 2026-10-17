@@ -3427,6 +3427,37 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
 tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
 
+
+#### JSON 文件上传（uploadJson v1，新增能力）
+
+先调用 \`cindy.fetch({op:'capabilities'})\`，确认
+\`result.ok && result.capabilities?.uploadJson?.version === 1\`。
+旧宿主会拒绝该探测；不要回退成不带附件发送。
+沿用 \`ghost_call dir\` 交付票据和本地 Agent 当前调用的 \`callId\`：
+
+\`\`\`js
+const result = await cindy.fetch({
+  url: 'https://api.example.test/send', method: 'POST', callId: msg.callId,
+  authAccount: selectedAccount, as: 'text',
+  uploadJson: {
+    token: msg.args.dir_deposit.token,
+    json: JSON.stringify({attachments: [{name:'report.pdf', contentBytes:null}]}),
+    files: [{path:'report.pdf', target:['attachments', 0, 'contentBytes']}],
+  },
+});
+\`\`\`
+
+Host 从票据选取文件，把 base64 填入 JSON 中既有的 null 占位，再直接发送；
+文件字节不进入 Agent 工具参数或结果。target 使用对象键与数值数组下标，
+拒绝原型键、重复目标/文件、路径穿越。仅能选择该票据中的文件。
+上限：10 个文件、原始合计 2 MiB、JSON 模板 256 KiB、最终请求 4 MiB。
+读取有界且重验文件身份/大小；取票后即消费，失败也需重新交付。
+仅 POST + text 响应，不能混用 body/upload/uploadDir；须本地会话仍在途，
+远程会话与自主后台不开放。现有网络授权、账号选择和凭证注入继续生效。
+Content-Type 由 Host 设置为 application/json，不跟随跳转，也不自动重试 401。
+发出后连接中断返回 executionStatus:unknown，先核对远端状态，勿盲目重发；
+组装前失败返回 not_executed。其它宿主错误可能无此字段，写操作应保守处理。
+
 ## 4.8 设置自绘(settingsHtml)+ 自定义参数存取(/kv)
 
 需要用户配置**凭证之外**的自定义参数(开关、选项、默认风格、服务地址选择等)时,

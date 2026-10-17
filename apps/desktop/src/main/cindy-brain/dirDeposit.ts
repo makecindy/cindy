@@ -57,7 +57,7 @@ export interface DirDepositReceipt {
 
 /** take() 的返回:文件读取经闭包,networkSlot 保持零 fs 依赖。 */
 export interface TakenDirDeposit {
-  files: Array<{ relPath: string; size: number; read(): Promise<Uint8Array> }>;
+  files: Array<{ relPath: string; size: number; read(maxBytes?: number): Promise<Uint8Array> }>;
   totalBytes: number;
 }
 
@@ -161,6 +161,7 @@ interface VaultEntry {
 async function readDepositedFile(
   rootRealPath: string,
   file: CollectedDirFile,
+  maxBytes?: number,
 ): Promise<Uint8Array> {
   const rootBefore = fs.realpathSync.native(rootRealPath);
   const fileBefore = fs.realpathSync.native(file.absPath);
@@ -191,6 +192,23 @@ async function readDepositedFile(
       throw new Error('目录过户路径在出票后发生变化');
     }
 
+    if (maxBytes !== undefined) {
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || openedStat.size > maxBytes) {
+        throw new Error('文件超过本次读取限额');
+      }
+      // One sentinel byte detects growth without ever reading an unbounded file.
+      const bounded = Buffer.alloc(Math.min(openedStat.size, maxBytes) + 1);
+      let length = 0;
+      while (length < bounded.length) {
+        const part = await handle.read(bounded, length, bounded.length - length, null);
+        if (!part.bytesRead) break;
+        length += part.bytesRead;
+      }
+      if (length !== openedStat.size || (await handle.stat()).size !== openedStat.size) {
+        throw new Error('文件在读取时变化');
+      }
+      return new Uint8Array(bounded.subarray(0, length));
+    }
     const bytes = await handle.readFile();
     return new Uint8Array(bytes);
   } finally {
@@ -314,7 +332,7 @@ export class DirDepositVault {
       files: entry.files.map((f) => ({
         relPath: f.relPath,
         size: f.size,
-        read: () => readDepositedFile(entry.rootRealPath, f),
+        read: (maxBytes) => readDepositedFile(entry.rootRealPath, f, maxBytes),
       })),
     };
   }

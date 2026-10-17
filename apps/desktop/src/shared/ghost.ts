@@ -8590,7 +8590,16 @@ export interface GhostLibraryOverview {
 }
 
 /** 上行:主机代理 fetch 请求。 */
-export interface GhostPipeFetchRequest {
+/** File bytes are inserted only by Host into existing JSON null placeholders. */
+export interface GhostJsonFileUpload {
+  token: string;
+  json: string;
+  files: Array<{ path: string; target: Array<string | number> }>;
+}
+export type GhostPipeFetchRequest = GhostPipeFetchHttpRequest | {
+  type: 'fetch-request'; op: 'capabilities';
+};
+export interface GhostPipeFetchHttpRequest {
   type: 'fetch-request';
   /**
    * 目标地址:仅 https、默认端口。自主调用的 host 必须命中 network.hosts；
@@ -8633,6 +8642,11 @@ export interface GhostPipeFetchRequest {
     fileFieldPrefix?: string;
     fileField?: string;
   };
+  /** Host-only base64 assembly from an authorized one-use directory ticket.
+   * POST + text response only; requires a live local Agent call. Probe with
+   * {op:'capabilities'} first. No redirects or automatic HTTP retries.
+   */
+  uploadJson?: GhostJsonFileUpload;
   /** 超时毫秒(clamp 到 [MIN, MAX];媒体模式与上传用 MEDIA_* 档;缺省各自 DEFAULT)。 */
   timeoutMs?: number;
   /**
@@ -8665,6 +8679,9 @@ export interface GhostPipeFetchRequest {
 
 /** 代理 fetch 的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeFetchResult =
+  | { ok: true; capabilities: { version: 1; uploadJson: {
+      version: number; maxFiles: number; maxTotalBytes: number; maxRequestBytes: number;
+    } } }
   | {
       ok: true;
       /** HTTP 状态码(4xx/5xx 也走 ok:true——那是"代发成功,对方说不行")。 */
@@ -8697,7 +8714,7 @@ export type GhostPipeFetchResult =
        */
       file: { file_name: string; bytes: number; mime_type: string };
     }
-  | { ok: false; message: string };
+  | { ok: false; message: string; executionStatus?: 'not_executed' | 'unknown' };
 
 /** 工具调用的结构化失败分类(与 cindy-tools 的 CindyGhostCallErrorCode 同构)。 */
 export type GhostToolCallErrorCode =
