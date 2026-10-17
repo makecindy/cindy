@@ -21,5 +21,15 @@ public final class CindyIncomingShareModule: Module {
         try IncomingShareSlot.clear(Data(expected.utf8), from: defaults)
       }
     }
+    Function("readDiagnostic") { () throws -> String? in
+      try IncomingShareSlot.withDefaults(group: self.group) { defaults in
+        IncomingShareSlot.readDiagnostic(from: defaults).flatMap { String(data: $0, encoding: .utf8) }
+      }
+    }
+    Function("clearDiagnostic") { (expected: String) throws -> Bool in
+      try IncomingShareSlot.withDefaults(group: self.group) { defaults in
+        try IncomingShareSlot.clearDiagnostic(Data(expected.utf8), from: defaults)
+      }
+    }
   }
 }

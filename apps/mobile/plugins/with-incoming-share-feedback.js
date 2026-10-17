@@ -25,19 +25,22 @@ function patchShareFeedback(source) {
   );
   replace(
     "      self.extensionContext?.completeRequest(returningItems: nil)",
-    "      showShareFeedback(received: false)",
+    "      showShareFeedback(.failed)",
   );
   replace(
     "      if !payload.isEmpty {",
     "      guard !shareClosed else { return }\n      if !payload.isEmpty {",
   );
+  // The item arrived but its App Group write failed: that is a different
+  // failure from "nothing was received", and the user cannot act on the same
+  // advice, so it keeps its own feedback. See incoming-share-strings.json.
   replace(
     "          self.close()\n          return",
-    "          showShareFeedback(received: false)\n          return",
+    "          showShareFeedback(.saveFailed)\n          return",
   );
   replace(
     "        self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)",
-    "        showShareFeedback(received: false)",
+    "        showShareFeedback(shareFailureFeedback)",
   );
   replace(
     "    openURL(url)\n    self.close()",

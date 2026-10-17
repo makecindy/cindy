@@ -57,6 +57,19 @@ module.exports = {
         filePath: "plugins/communication-notifications",
         reasons: ["notification service extension native source"],
       },
+      // The share extension's native sources and copy are read by the config
+      // plugin at prebuild, so Expo does not see them as plugin inputs: without
+      // this list a change here would keep the same runtime fingerprint and ship
+      // as an OTA that never reaches the installed extension.
+      ...[
+        "plugins/incoming-share-feedback.swift",
+        "plugins/incoming-share-loader.swift",
+        "plugins/incoming-share-strings.json",
+      ].map((filePath) => ({
+        type: "file",
+        filePath,
+        reasons: ["incoming share extension native source"],
+      })),
       ...[
         "../desktop/src/renderer/assets/bot-presets/cindy.png",
         "../desktop/resources/legacy-teammate-avatars/dash.png",

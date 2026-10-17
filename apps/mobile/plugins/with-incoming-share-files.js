@@ -6,6 +6,14 @@ const { patchShareFeedback } = require("./with-incoming-share-feedback");
 // expo-sharing 57 copies files to AppGroup/<basename>, overwriting same-name
 // files even within one share. Keep each input in its own directory, retaining
 // the basename for display. Do not modify the installed dependency/template.
+//
+// Upstream also enters the file branch only for `file-url`/PDF providers and
+// copies with `loadItem` + `copyItem`, which keeps the vending app's container in
+// the read path: providers that only vend `public.data` or a document UTI are
+// dropped, and a source URL the extension may not read fails the copy. Both end
+// in the same "no payload" feedback. The file branch therefore accepts any
+// `public.data` item, loads it with `loadFileRepresentation` first (see
+// incoming-share-loader.swift) and records why an attempt failed.
 function patchShareExtension(source) {
   const replace = (from, to, count) => {
     if (source.split(from).length - 1 !== count) {
@@ -17,7 +25,67 @@ function patchShareExtension(source) {
   };
   replace(
     "  private func handleShare() {",
-    "  private var shareStarted = false\n\n  private func handleShare() {\n    guard !shareStarted else { return }\n    shareStarted = true",
+    "  private var shareStarted = false\n  private var shareFailure: IncomingShareFailure?\n\n  private func handleShare() {\n    guard !shareStarted else { return }\n    shareStarted = true",
+    1,
+  );
+  // Upstream ends the chain at file URLs and PDFs, so anything else a host vends
+  // (document UTIs, plain `public.data`) was dropped before it could be read.
+  // The fallback sits after the text branch on purpose: `public.text` also
+  // conforms to `public.data`, and a shared snippet must stay text. A provider
+  // nothing matches records what it advertised before giving up.
+  replace(
+    "    if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {\n      return await handleText(provider)\n    }\n\n    return nil",
+    '    if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {\n      return await handleText(provider)\n    }\n\n    if provider.hasItemConformingToTypeIdentifier(UTType.data.identifier) {\n      return await handleFile(provider, type: .file, utType: .data)\n    }\n\n    recordShareFailure(step: "no-matching-type", types: provider.registeredTypeIdentifiers)\n    return nil',
+    1,
+  );
+  // Upstream loads the item and copies it itself. Hand that to the loader, which
+  // asks the system for a file representation inside the extension's container
+  // first and only falls back to `loadItem`.
+  replace(
+    `  private func handleFile(_ provider: NSItemProvider, type: ShareType, utType: UTType) async -> SharePayload? {
+    return await withCheckedContinuation { continuation in
+      let identifier = provider.registeredTypeIdentifiers.first { providerIdentifier in
+        UTType(providerIdentifier)?.conforms(to: utType) ?? false
+      } ?? utType.identifier
+
+      provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, _ in
+        if let url = item as? URL {
+          let result = self.copyAndProcessFile(url: url, type: type)
+          continuation.resume(returning: result)
+          return
+        }
+
+        if let data = item as? Data {
+          let fileName = UUID().randomFilename(forTypeIdentifier: identifier)
+          let result = self.saveDataToAppGroup(
+            data: data,
+            fileName: fileName,
+            type: type,
+            mimeType: UTType(identifier)?.preferredMIMEType
+          )
+          continuation.resume(returning: result)
+          return
+        }
+
+        if type == .image, let image = item as? UIImage, let data = image.pngData() {
+          let fileName = UUID().uuidString + ".png"
+          let result = self.saveDataToAppGroup(data: data, fileName: fileName, type: .image, mimeType: "image/png")
+          continuation.resume(returning: result)
+          return
+        }
+
+        continuation.resume(returning: nil)
+      }
+    }
+  }
+`,
+    `  private func handleFile(_ provider: NSItemProvider, type: ShareType, utType: UTType) async -> SharePayload? {
+    let identifier = provider.registeredTypeIdentifiers.first { providerIdentifier in
+      UTType(providerIdentifier)?.conforms(to: utType) ?? false
+    } ?? provider.registeredTypeIdentifiers.first ?? utType.identifier
+    return await loadFilePayload(provider, identifier: identifier, type: type)
+  }
+`,
     1,
   );
   replace(
@@ -37,12 +105,24 @@ function patchShareExtension(source) {
   );
   replace(
     "      userDefaults.set(encoded, forKey: SHARE_INTO_DEFAULTS_KEY)\n      userDefaults.synchronize()",
-    '      do {\n        try IncomingShareSlot.write(encoded, group: appGroupId)\n        return true\n      } catch {\n        print("Error: incoming share could not be saved")\n        return false\n      }',
+    '      do {\n        try IncomingShareSlot.write(encoded, group: appGroupId)\n        return true\n      } catch {\n        print("Error: incoming share could not be saved")\n        recordShareFailure(step: "save-slot", error: error)\n        return false\n      }',
     1,
   );
   replace(
     "        saveToUserDefaults(payload)",
     "        guard saveToUserDefaults(payload) else {\n          self.close()\n          return\n        }",
+    1,
+  );
+  // The system copy handed back by loadFileRepresentation carries a generic name
+  // ("Zip archive.zip"); keep the name the sharing app asked for instead.
+  replace(
+    "  private func copyAndProcessFile(url: URL, type: ShareType) -> SharePayload? {",
+    "  private func copyAndProcessFile(url: URL, type: ShareType, preferredName: String? = nil) -> SharePayload? {",
+    1,
+  );
+  replace(
+    "    let fileName = url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent",
+    "    let fileName = preferredName ?? (url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent)",
     1,
   );
   replace(
@@ -60,16 +140,14 @@ function patchShareExtension(source) {
     '      print("Error: Expo-sharing has failed to serialize shared data to JSON")\n      return false',
     1,
   );
+  const appended = (relativePath) =>
+    fs.readFileSync(path.join(__dirname, relativePath), "utf8");
   return (
     patchShareFeedback(source) +
     "\n" +
-    fs.readFileSync(
-      path.join(
-        __dirname,
-        "../modules/cindy-incoming-share/ios/IncomingShareSlot.swift",
-      ),
-      "utf8",
-    )
+    appended("incoming-share-loader.swift") +
+    "\n" +
+    appended("../modules/cindy-incoming-share/ios/IncomingShareSlot.swift")
   );
 }
 

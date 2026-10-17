@@ -95,19 +95,22 @@ class Context {
   var completions = 0
   func completeRequest(returningItems: [String]?, completionHandler: (() -> Void)?) { completions += 1 }
 }
+enum ShareFeedback: String { case received, failed, saveFailed }
 class ShareIntoViewController: UIResponder {
   let hostAppScheme = "cindy"
   var shareClosed = false
   var openResultHandled = false
+  var diagnostics = 0
   var extensionContext: Context? = Context()
   var alerts: [UIAlertController] = []
   func present(_ alert: UIAlertController, animated: Bool) { alerts.append(alert) }
   func shareString(_ key: String) -> String { key }
+  func writeShareDiagnostic() { diagnostics += 1 }
   ${method("func openParentApp()")}
   ${method("private func openURL(")}
   ${method("private func close()")}
   ${method("func finishOpening(")}
-  ${method("func showShareFeedback(")}
+  ${method("func showShareFeedback(_ outcome: ShareFeedback)")}
   ${method("override func didSelectCancel(")}
 }
 func check(_ condition: @autoclosure () -> Bool) { precondition(condition()) }
@@ -135,6 +138,7 @@ do {
   app.reply!(true); DispatchQueue.main.flush(); DispatchQueue.main.expire()
   check(controller.extensionContext!.completions == 0)
   check(controller.alerts.count == 1 && controller.alerts[0].title == "receivedTitle")
+  check(controller.diagnostics == 0)
   let action = controller.alerts[0].actions[0]; action.handler(action)
   check(controller.extensionContext!.completions == 1)
 }
@@ -152,15 +156,33 @@ do {
   app.reply!(false); DispatchQueue.main.flush(); DispatchQueue.main.expire()
   check(controller.alerts.isEmpty && controller.extensionContext!.completions == 1)
 }
-// Reception failure uses its own message, and does not close until Done.
+// Reception failure uses its own message, records a diagnostic and stays open until Done.
 do {
-  let controller = ShareIntoViewController(); controller.showShareFeedback(received: false)
+  let controller = ShareIntoViewController(); controller.showShareFeedback(.failed)
   check(controller.alerts[0].title == "failedTitle")
+  check(controller.diagnostics == 1)
   check(controller.extensionContext!.completions == 0)
   let action = controller.alerts[0].actions[0]; action.handler(action)
   check(controller.extensionContext!.completions == 1)
 }
-print("PASS: generated Swift share feedback (success, failure, timeout, missing responder, duplicate/late reply, cancel, Done)")
+// A failed App Group write is a different outcome from "nothing was received".
+do {
+  let controller = ShareIntoViewController(); controller.showShareFeedback(.saveFailed)
+  check(controller.alerts[0].title == "saveFailedTitle")
+  check(controller.diagnostics == 1)
+  check(controller.extensionContext!.completions == 0)
+  let action = controller.alerts[0].actions[0]; action.handler(action)
+  check(controller.extensionContext!.completions == 1)
+}
+// Done is terminal: a late second outcome cannot present another alert.
+do {
+  let controller = ShareIntoViewController(); controller.showShareFeedback(.failed)
+  let action = controller.alerts[0].actions[0]; action.handler(action)
+  controller.showShareFeedback(.saveFailed)
+  check(controller.alerts.count == 1 && controller.diagnostics == 1)
+  check(controller.extensionContext!.completions == 1)
+}
+print("PASS: generated Swift share feedback (success, failure, store failure, timeout, missing responder, duplicate/late reply, cancel, Done)")
 `;
 const dir = mkdtempSync(join(tmpdir(), "cindy-share-feedback-test-"));
 try {
