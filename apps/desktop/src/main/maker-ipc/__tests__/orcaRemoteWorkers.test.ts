@@ -408,6 +408,28 @@ describe('wrapTeamDeps', () => {
     } finally { workers.stop(); }
   });
 
+  it('rejects image attachments for cross-device workers instead of silently dropping them', async () => {
+    // 图片是 Lead 本机文件, 运行设备上的 Agent 读不到; 必须显式拒错, 不能只发文本返回 ok。
+    const { workers, remoteInvoke } = setup();
+    const base = baseDeps();
+    const wrapped = workers.wrapTeamDeps(base);
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([restoredRow] as never);
+    try {
+      await workers.start();
+      const result = await wrapped.dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', message: 'look at this', workerId: 'w-1',
+        imagePaths: ['C:/tmp/a.png'],
+        dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+      } as never);
+      expect(result.ok).toBe(false);
+      expect(result.dispatchOutcome).toMatchObject({
+        code: 'SEND_FAILED', accepted: false,
+        message: expect.stringContaining('image attachments'),
+      });
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+    } finally { workers.stop(); }
+  });
+
   it('does not fall back locally when restoring routes fails', async () => {
     store.listActiveRemoteWorkers.mockRejectedValueOnce(new Error('database unavailable'));
     const { workers } = setup();

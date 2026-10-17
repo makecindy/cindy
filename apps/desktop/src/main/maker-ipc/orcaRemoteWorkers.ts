@@ -664,6 +664,20 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       },
       dispatchWorkerMessage: async (params) => {
         if (!(await isRemoteWorker(params.targetSessionId))) return base.dispatchWorkerMessage(params);
+        // 图片是 Lead 本机文件, 运行设备上的 Agent 读不到; 跨设备通道只传文本, 必须显式拒绝而不是静默丢图。
+        if (params.imagePaths?.length) {
+          return {
+            ok: false,
+            dispatchOutcome: {
+              ...createHostSendFailure(
+                'SEND_FAILED',
+                'image attachments are only supported for local sessions; cross-device workers cannot read files stored on the Lead machine',
+              ),
+              source: params.dispatchMeta.source,
+              context: params.dispatchMeta.context,
+            },
+          };
+        }
         // 与本机派发复用同一会话锁，保持 enqueue 与 accepted/commit 身份的顺序一致。
         return base.withSessionSendLock(params.targetSessionId, async () => {
           const clientId = createId();

@@ -78,6 +78,60 @@ describe('create_worker tool', () => {
     expect(createWorker).not.toHaveBeenCalled();
   });
 
+  it('forwards initial_task images to the host and omits them when absent', async () => {
+    const { registry, createWorker } = setup();
+    await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review the screenshots', images: ['/tmp/a.png'],
+    });
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTask: 'review the screenshots',
+      initialTaskImages: ['/tmp/a.png'],
+    }));
+
+    await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker2', initial_task: 'text only',
+    });
+    expect(vi.mocked(createWorker).mock.calls[1]?.[0]).not.toHaveProperty('initialTaskImages');
+  });
+
+  it('flattens a one-level-nested images array instead of failing schema validation', async () => {
+    // 模型常见误传是多套一层([[/a.png],[/b.png]]); 接口要自愈而不是报参数错。
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review', images: [['/tmp/a.png'], ['/tmp/b.png']],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTaskImages: ['/tmp/a.png', '/tmp/b.png'],
+    }));
+  });
+
+  it('unwraps the XML-style {item:[...]} wrapper instead of failing schema validation', async () => {
+    // 实测形态: 模型/兼容层把数组参数输出成 {item:[...]}(TapTap 会话 5 连败的元凶)。
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review',
+      images: { item: ['cindy-media://blobs/a.png', 'cindy-media://blobs/b.png'] },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTaskImages: ['cindy-media://blobs/a.png', 'cindy-media://blobs/b.png'],
+    }));
+  });
+
+  it('still rejects non-string image entries after flattening', async () => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review', images: [{ uri: '/tmp/a.png' }],
+    });
+    expect(result.isError).toBe(true);
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
   it('describes the subagent distinction before creating a worker', () => {
     const { registry } = setup();
 
