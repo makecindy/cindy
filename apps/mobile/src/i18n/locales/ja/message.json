@@ -9,6 +9,7 @@
     }
   },
   "renderer": {
+    "failedSamplingAttempt": "この返信は完了しませんでした。内容は参考情報としてご覧ください。",
     "moreActions": "その他のメッセージ操作",
     "reply": "返信",
     "newMessagesToBottom": "新着メッセージあり、最下部へ移動",

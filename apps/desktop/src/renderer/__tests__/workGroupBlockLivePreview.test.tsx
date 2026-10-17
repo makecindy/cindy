@@ -69,10 +69,12 @@ import {
 } from '@/components/chat/WorkGroupBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { groupWorkRuns, type RenderItem, type WorkGroupChildItem } from '@/components/chat/messageWorkGroups';
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 beforeEach(() => expandMemory.reset());
 
@@ -131,6 +133,110 @@ function clickGroup(label: string) {
   if (!button) throw new Error(`Missing work-group button: ${label}`);
   fireEvent.click(button);
 }
+
+// #6351: production grouping feeds the real disclosure/Collapse/state store.
+// Body callbacks are plain text here; Markdown formatting is not this contract.
+// Unlike a boolean projection assertion, an old grouper leaves failed welcomes
+// mounted in the DOM, and a broken disclosure makes the original text unreadable.
+function samplingTimeline(input: RenderItem[], streaming: boolean) {
+  const blockChild = (item: WorkGroupChildItem): WorkGroupChild => {
+    if (item.type === 'work_group') return { kind: 'group', key: item.key,
+      blockId: `work:${item.key.slice('work-'.length)}`, durationMs: item.durationMs, isStreaming: item.isStreaming,
+      childItems: item.children.map(blockChild) };
+    if (item.type === 'tool_segment') return tools(item.key, item.toolCalls, item.resultMap, item.settledIds);
+    if (item.type === 'message') return item.message.role === 'thinking'
+      ? thinking(item.message) : rendered(item.key, item.message.content);
+    throw new Error('Unexpected sampling fixture child');
+  };
+  return createElement('div', null, ...groupWorkRuns(input, streaming).map(item => {
+    if (item.type === 'work_group') return createElement('section', { key: item.key, 'data-testid': item.key },
+      createElement(WorkGroupBlock, { blockId: `work:${item.key.slice('work-'.length)}`, isStreaming: item.isStreaming,
+        durationMs: item.durationMs, childItems: item.children.map(blockChild) }));
+    if (item.type === 'message') return createElement('p', { key: item.key, 'data-testid': item.key }, item.message.content);
+    throw new Error('Unexpected sampling fixture item');
+  }));
+}
+
+describe('failed sampling work-group disclosure (#6351)', () => {
+  const message = (id: string, role: ChatMessage['role'], content: string,
+    extra: Partial<ChatMessage> = {}): RenderItem => ({ type: 'message', key: id,
+    message: { clientId: id, role, content, ...extra } });
+  it.each(['same-turn success', 'stopped then manual recovery'] as const)(
+    'keeps failed welcomes auditable without stacking replies through %s', (ending) => {
+      // Exercise the real reduced-motion Collapse path without real timer waits.
+      vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+      const failed = [message('u1', 'user', 'Start'),
+        message('f1', 'assistant', 'First failed welcome', { failedSamplingAttempt: true }),
+        message('f2', 'assistant', 'Second failed welcome', { failedSamplingAttempt: true })];
+      const view = render(samplingTimeline(failed, true));
+      expect(screen.queryByText('First failed welcome')).toBeNull();
+      expect(screen.queryByText('Second failed welcome')).toBeNull();
+      const header = screen.getByTestId('work-f1').querySelector('button')!;
+      expect(header.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(header);
+      expect(screen.getByText('First failed welcome')).toBeTruthy();
+      expect(screen.getByText('Second failed welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        fireEvent.click(header);
+        view.rerender(samplingTimeline([...failed, message('failure', 'error', 'Reply stopped')], false));
+        expect(screen.queryByText('First failed welcome')).toBeNull();
+        expect(screen.queryByText('Second failed welcome')).toBeNull();
+        expect(screen.getByText('Reply stopped')).toBeTruthy();
+        fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      }
+      const completed = [...failed,
+        ...(ending === 'same-turn success' ? [] : [message('failure', 'error', 'Reply stopped'),
+          message('u2', 'user', 'Continue')]),
+        message('commentary', 'assistant', 'Accepted commentary', { assistantPhase: 'commentary' }),
+        message('intro', 'assistant', 'Accepted introduction'),
+        message('final', 'assistant', 'Successful welcome', { turnCompleted: true })];
+      view.rerender(samplingTimeline(completed, false));
+      // The same failed group retains its explicit audit expansion. Accepted
+      // multi-message prose is outside it and remains visible when it closes.
+      expect(screen.getByTestId('work-f1').textContent).toContain('First failed welcome');
+      expect(screen.getByTestId('work-f1').textContent).not.toContain('Successful welcome');
+      fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      expect(screen.queryByText('First failed welcome')).toBeNull();
+      expect(screen.queryByText('Second failed welcome')).toBeNull();
+      expect(screen.getByText('Accepted commentary')).toBeTruthy();
+      expect(screen.getByText('Accepted introduction')).toBeTruthy();
+      expect(screen.getByText('Successful welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        expect(screen.getByText('Reply stopped')).toBeTruthy();
+        expect(screen.getByText('Continue')).toBeTruthy();
+      }
+      fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      expect(screen.getByText('First failed welcome')).toBeTruthy();
+      expect(screen.getByText('Second failed welcome')).toBeTruthy();
+      expect(screen.getByText('Successful welcome')).toBeTruthy();
+    });
+
+  it('keeps equal failed prose on each side of steering independently auditable', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    render(samplingTimeline([message('u1', 'user', 'Start'),
+      message('f1', 'assistant', 'Repeated failed welcome', { failedSamplingAttempt: true }),
+      message('steer', 'user', 'Include the new direction', { delivery: 'steer' }),
+      message('f2', 'assistant', 'Repeated failed welcome', { failedSamplingAttempt: true }),
+      message('commentary', 'assistant', 'Accepted commentary', { assistantPhase: 'commentary' }),
+      message('final', 'assistant', 'Successful steered welcome', { turnCompleted: true }),
+    ], false));
+    expect(screen.queryAllByText('Repeated failed welcome')).toHaveLength(0);
+    expect(screen.getByText('Include the new direction')).toBeTruthy();
+    expect(screen.getByText('Accepted commentary')).toBeTruthy();
+    expect(screen.getByText('Successful steered welcome')).toBeTruthy();
+    const first = screen.getByTestId('work-f1');
+    const second = screen.getByTestId('work-f2');
+    fireEvent.click(first.querySelector('button')!);
+    expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
+    expect(first.textContent).toContain('Repeated failed welcome');
+    expect(second.textContent).not.toContain('Repeated failed welcome');
+    fireEvent.click(second.querySelector('button')!);
+    expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(2);
+    fireEvent.click(first.querySelector('button')!);
+    expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
+    expect(screen.getByText('Successful steered welcome')).toBeTruthy();
+  });
+});
 
 describe('WorkGroupBlock — running latest-five preview', () => {
   it('keeps teammate execution collapsed while streaming and preserves explicit expansion at completion', async () => {

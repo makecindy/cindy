@@ -9,6 +9,7 @@
     }
   },
   "renderer": {
+    "failedSamplingAttempt": "This reply did not complete. Its content is for reference only.",
     "moreActions": "More message actions",
     "reply": "Reply",
     "newMessagesToBottom": "New messages, jump to bottom",

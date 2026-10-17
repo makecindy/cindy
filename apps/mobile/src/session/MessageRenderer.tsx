@@ -3924,6 +3924,11 @@ function MessageBubble({
         />
       ) : null}
       {attachmentStripNode}
+      {item.message.failedSamplingAttempt ? (
+        <Text style={styles.failedSamplingAttemptText}>
+          {t('message.renderer.failedSamplingAttempt')}
+        </Text>
+      ) : null}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
         <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
@@ -8796,6 +8801,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: 4,
     maxWidth: '86%',
+  },
+  failedSamplingAttemptText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: '400',
   },
   modelMismatchText: {
     color: colors.textTertiary,

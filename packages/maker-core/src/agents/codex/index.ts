@@ -175,6 +175,7 @@ import {
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
+  finishCodexSamplingTurn,
   pauseCodexGeneration,
   resetCodexGenerationTiming,
   resumeCodexGeneration,
@@ -6283,6 +6284,7 @@ assertRouteCurrent();
       if (closed) return;
       closed = true;
       cancelInteractionContinuation(reason);
+      translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
@@ -8603,6 +8605,7 @@ assertRouteCurrent();
 
       resetCodexGenerationTiming(translatorRt);
       turnDiffSnapshots.clear();
+      translatorRt.samplingSegments.clear();
       proposedPlanText = null;
       translatorRt.lastAuthErrorKey = null;
       translatorRt.networkRetryNotice = null;
@@ -11152,6 +11155,9 @@ assertRouteCurrent();
       // 到这里 = 这个 turn 的终态**要出 UI**, 逻辑 send 就此收口。墓碑压掉的那条路在上面
       // 已经 return, 所以退避中的正常重投(死 turn 恒有墓碑)不会被误撤。
       revokeOverloadRetryOnTerminalSettle(`turn_${turn.status}`);
+      const assistantAttemptFailure = finishCodexSamplingTurn(
+        translatorRt, params.threadId, turn.id, turn.status, turn.error,
+      );
 
       if (turn.status === 'failed' || turn.status === 'interrupted') {
         // 失败 / 中断的 plan turn 不发审批 — 半截计划没有审批意义, 循环就此结束。
@@ -11164,6 +11170,7 @@ assertRouteCurrent();
             type: 'error',
             data: {
               ...classified.data,
+              ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}),
               isTerminal: true,
             },
             source: 'codex',
@@ -11180,6 +11187,7 @@ assertRouteCurrent();
               message: '任务执行失败（模型未返回错误详情）。',
               isTerminal: true,
               reason: 'turn-failed',
+              ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}),
             },
             source: 'codex',
           });
@@ -11189,6 +11197,7 @@ assertRouteCurrent();
           data: {
             type: 'codex/event/task_complete',
             cancelled: turn.status === 'interrupted',
+            ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}),
             usage: codexDoneUsage,
             raw: turn,
           },
@@ -12967,6 +12976,7 @@ assertRouteCurrent();
         translateErrorNotification(effectiveParams, eventQueue, {
           rt: translatorRt,
           log,
+          onSamplingAttemptFailed: () => assistantReplyByTurn.delete(effectiveParams.turnId),
           tryTakeOverOverload: () => {
             // 只接管 app-server 本来就不重试的容量拒绝(原始 willRetry !== true)。
             // TurnRetryTracker 把持续 retry 升级成终态的那条路径不接管：那说明
@@ -13067,6 +13077,7 @@ assertRouteCurrent();
       if (closed) return;
       closed = true;
       cancelInteractionContinuation('session_closed', true);
+      translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
       clearReconnectStall();
       resetUpstreamIdleForTurnEnd();

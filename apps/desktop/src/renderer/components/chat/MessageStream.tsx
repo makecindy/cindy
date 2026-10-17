@@ -6948,6 +6948,7 @@ const MessageItem = memo(function MessageItem({
             turnUsageDetails={message.turnUsageDetails}
             userTurnUsageDetails={userTurnUsageDetails}
             modelMismatch={message.modelMismatch}
+            failedSamplingAttempt={message.failedSamplingAttempt}
             ghostReplyPending={message.ghostReplyPending}
             simplifiedBotConversation={simplifiedBotConversation}
             botLearning={message.botLearning}

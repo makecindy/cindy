@@ -24,7 +24,9 @@ import {
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
+  finishCodexSamplingTurn,
   pauseCodexGeneration,
+  resetCodexGenerationTiming,
   resumeCodexGeneration,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
@@ -81,6 +83,65 @@ async function collect(queue: AsyncQueue<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 describe('Codex assistant text streaming contract', () => {
+  it.each(['completed', 'failed', 'interrupted'])('isolates failed sampling items when the retry turn is %s', async (status) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    const delta = (turnId: string, itemId: string) => translateAgentMessageDelta({
+      threadId: 't1', turnId, itemId, delta: 'Opening',
+    }, q, ctx);
+    delta('turn-a', 'first');
+    delta('turn-b', 'other-turn');
+    translateErrorNotification(makeParams({ willRetry: true, message: 'stream disconnected',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    delta('turn-a', 'retry');
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', status)).toEqual(status === 'completed'
+      ? undefined : { threadId: 't1', turnId: 'turn-a', attempt: 2, agentMessageIds: ['retry'] });
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', status)).toBeUndefined();
+    translateErrorNotification(makeParams({ turnId: 'turn-b', willRetry: false, message: 'stream disconnected' }), q, ctx);
+    const failures = (await collect(q)).filter(event => event.type === 'error').map(event =>
+      (event.data as { assistantAttemptFailure?: { agentMessageIds: string[] } }).assistantAttemptFailure?.agentMessageIds);
+    expect(failures).toEqual([['first'], ['other-turn']]);
+    resetCodexGenerationTiming(rt);
+  });
+  // #6351: item/completed is not response completion. Existing text-delta tests
+  // never inject a stream failure after an assistant item has already completed.
+  it('attributes a failed sampling segment without discarding earlier tool progress or final retry output', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    const complete = (id: string, text: string, phase: 'commentary' | 'final_answer') =>
+      translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+        item: { type: 'agentMessage', id, text, phase } }, q, ctx);
+    complete('progress', 'Checking the workspace', 'commentary');
+    translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'commandExecution', id: 'tool', command: 'pwd', cwd: '/repo',
+        status: 'completed', aggregatedOutput: '/repo', exitCode: 0 } }, q, ctx);
+    complete('failed-commentary', 'Preparing the answer', 'commentary');
+    complete('failed-answer', 'Hello from attempt one', 'final_answer');
+    translateErrorNotification(makeParams({ willRetry: true,
+      message: 'stream disconnected - retrying sampling request (1/5 in 212ms)...',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    complete('successful-commentary', 'Preparing the accepted answer', 'commentary');
+    complete('successful-intro', 'Hello from attempt two', 'final_answer');
+    complete('successful-answer', 'The accepted answer continues', 'final_answer');
+    expect(finishCodexSamplingTurn(rt, 't1', 'turn-a', 'completed')).toBeUndefined();
+    const events = await collect(q);
+    expect(events.filter(event => event.type === 'text').map(event =>
+      (event.data as { agentMessageId?: string }).agentMessageId)).toEqual([
+      'progress', 'failed-commentary', 'failed-answer',
+      'successful-commentary', 'successful-intro', 'successful-answer',
+    ]);
+    expect(events.find(event => event.type === 'error')).toMatchObject({
+      data: { isTerminal: false, willRetry: true, assistantAttemptFailure: {
+        threadId: 't1', turnId: 'turn-a', attempt: 1,
+        agentMessageIds: ['failed-commentary', 'failed-answer'],
+      } },
+    });
+    expect(events.some(event => event.type === 'done')).toBe(false);
+    resetCodexGenerationTiming(rt);
+  });
+
   it('uses dedicated deltas for live text, dedupes item snapshots, and keeps completed as final calibration', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();

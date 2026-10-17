@@ -206,6 +206,47 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+/** Exact provider item → durable row links, scoped to the current product turn. */
+const assistantItemPersistIds = new Map<string, Map<string, string>>();
+
+/** Mark an SDK-proven failed sampling attempt without changing or deleting its prose. */
+export function onAssistantAttemptFailure(sessionId: string, data: unknown): void {
+  if (!data || typeof data !== 'object') return;
+  const failure = (data as { assistantAttemptFailure?: unknown }).assistantAttemptFailure;
+  if (!failure || typeof failure !== 'object') return;
+  const { threadId, turnId, attempt, agentMessageIds } = failure as Record<string, unknown>;
+  if (typeof threadId !== 'string' || typeof turnId !== 'string' ||
+    !Number.isSafeInteger(attempt) || typeof attempt !== 'number' || attempt < 1 ||
+    !Array.isArray(agentMessageIds)) return;
+  const links = assistantItemPersistIds.get(sessionId);
+  if (!links) return;
+  for (const itemId of agentMessageIds) {
+    if (typeof itemId !== 'string') continue;
+    const persistId = links.get(itemId);
+    if (!persistId) continue;
+    const message = (data as { message?: unknown }).message;
+    const marker = { threadId, turnId, attempt, itemId,
+      ...(typeof message === 'string' ? { error: redactSensitiveText(message) } : {}),
+    };
+    links.delete(itemId);
+    const block = assistantBlocks.get(sessionId);
+    if (block?.persistId === persistId) {
+      block.agentMeta = { ...block.agentMeta, failedSamplingAttempt: marker, turnCompleted: false };
+      flushAssistantBlock(sessionId);
+    } else {
+      enqueueWrite(`assistant_attempt_failed:${sessionId}:${persistId}`, async (ownerScope) => {
+        const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, {
+          failedSamplingAttempt: marker,
+          turnCompleted: false,
+        });
+        if (patched) await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+      });
+    }
+    if (lastTopLevelAssistantPersistIdBySession.get(sessionId) === persistId) {
+      lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+    }
+  }
+}
 
 /**
  * 本轮 prompt 之前到达的非 final text（运行时就绪 / 重连期间的提示文本）会先建一个 block，
@@ -337,6 +378,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   if (!Number.isFinite(parsed)) return;
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
+    assistantItemPersistIds.delete(sessionId);
     clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
@@ -2040,6 +2082,7 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
  * + knownToolUseIds + lastAgentMeta。必须在 flushOrphanToolResults 之后调用。
  */
 export function resetTurnPersistState(sessionId: string): void {
+  assistantItemPersistIds.delete(sessionId);
   // Event-stream completion is not a persistence barrier. Thinking snapshots
   // survive until their write succeeds or an explicit history/owner cleanup.
   toolResultIdByToolUseId.delete(sessionId);
@@ -2103,6 +2146,24 @@ export function onStandaloneTextEvent(
  * 返回 undefined 表示这条 text 不对应任何持久化消息(空 isFinal),renderer 走原逻辑。
  */
 export function onAssistantTextEvent(
+  sessionId: string,
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown; phase?: string; runtimeRecovery?: boolean },
+  agentMeta: AgentMeta | null,
+  turnScope?: 'turn' | 'background',
+): string | undefined {
+  const persistId = assembleAssistantTextEvent(sessionId, data, agentMeta, turnScope);
+  if (persistId && typeof data.agentMessageId === 'string' && turnScope !== 'background') {
+    let links = assistantItemPersistIds.get(sessionId);
+    if (!links) {
+      links = new Map();
+      assistantItemPersistIds.set(sessionId, links);
+    }
+    links.set(data.agentMessageId, persistId);
+  }
+  return persistId;
+}
+
+function assembleAssistantTextEvent(
   sessionId: string,
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown; phase?: string; runtimeRecovery?: boolean },
   agentMeta: AgentMeta | null,
@@ -2849,6 +2910,7 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 }
 
 export function clearSessionPersistState(sessionId: string): void {
+  assistantItemPersistIds.delete(sessionId);
   clearSessionThinkingSnapshots(sessionId);
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);

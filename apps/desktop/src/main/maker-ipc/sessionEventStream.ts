@@ -11,6 +11,7 @@ import {
   enqueueDurableWrite,
   flushAssistantBlock,
   onAssistantTextEvent,
+  onAssistantAttemptFailure,
   onAgentTaskUpdateEvent,
   onThinkingEvent,
   onToolResultEvent,
@@ -32,6 +33,10 @@ export function persistSessionStreamEvent(
   const { event, eventAgentMeta } = prepared;
   let persistId: string | undefined;
   let resolvedContent: string | undefined;
+  if (event.source === 'codex' && event.turnScope !== 'background' &&
+    (event.type === 'error' || event.type === 'done')) {
+    onAssistantAttemptFailure(session.id, event.data);
+  }
   if (event.type === 'text') {
     const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
     // A Host runtime-recovery notice (#4349) is not the worker's reply: it is

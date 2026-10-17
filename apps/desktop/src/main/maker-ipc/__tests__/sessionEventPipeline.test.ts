@@ -123,6 +123,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   enqueueDurableWrite: effects.fn('enqueueDurableWrite'),
   flushAssistantBlock: effects.fn('flushAssistantBlock'),
   onAssistantTextEvent: effects.fn('onAssistantTextEvent'),
+  onAssistantAttemptFailure: effects.fn('onAssistantAttemptFailure'),
   onStandaloneTextEvent: effects.fn('onStandaloneTextEvent'),
   onAgentTaskUpdateEvent: effects.fn('onAgentTaskUpdateEvent'),
   onThinkingEvent: effects.fn('onThinkingEvent'),

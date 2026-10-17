@@ -9,6 +9,7 @@
     }
   },
   "renderer": {
+    "failedSamplingAttempt": "완료되지 않은 답변입니다. 내용은 참고용으로만 확인해 주세요.",
     "moreActions": "추가 메시지 작업",
     "reply": "답장",
     "newMessagesToBottom": "새 메시지, 맨 아래로 이동",

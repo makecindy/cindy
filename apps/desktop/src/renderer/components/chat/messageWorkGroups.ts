@@ -159,6 +159,7 @@ export type RenderItem =
   | WorkGroupRenderItem;
 
 export function isCompletedAssistantMessage(message: ChatMessage): boolean {
+  if (message.failedSamplingAttempt) return false;
   return (
     message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
@@ -170,8 +171,8 @@ export function isCompletedAssistantMessage(message: ChatMessage): boolean {
 }
 
 /** 完成态 work_group 可合并的子项:tool_segment / agent_task / thinking /
- *  assistant 工作文字。运行态只通过 isWorkActivityItem 收动作,所以不会提前
- *  折叠正在输出的 assistant 文字。 */
+ *  assistant 工作文字。正常流式正文不会提前折叠;已证实失败的采样输出
+ *  复用活动折叠,无需等待成功答复出现。 */
 function isWorkChild(it: RenderItem): it is WorkChildItem {
   return (
     it.type === 'tool_segment' ||
@@ -211,8 +212,8 @@ function isWorkflowTaskItem(it: RenderItem): boolean {
   );
 }
 
-/** preview 中计为一条真实活动的 render item。assistant 进度文字
- *  始终留在主消息流,不占最近 5 条活动窗口。 */
+/** Normal assistant progress stays in the main stream. SDK-proven failed
+ * sampling output uses the existing work fold even before a retry succeeds. */
 function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
   return (
     !isRunningAgentTask(it) &&
@@ -220,7 +221,8 @@ function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
     !isWorkflowTaskItem(it) &&
     (it.type === 'tool_segment' ||
       it.type === 'agent_task' ||
-      (it.type === 'message' && it.message.role === 'thinking'))
+      (it.type === 'message' && (it.message.role === 'thinking' ||
+        (it.message.role === 'assistant' && it.message.failedSamplingAttempt === true))))
   );
 }
 
@@ -240,6 +242,7 @@ function isDeliveryProseItem(it: RenderItem): boolean {
   return (
     it.type === 'message' &&
     it.message.role === 'assistant' &&
+    !it.message.failedSamplingAttempt &&
     !it.message.systemCardType &&
     (Boolean(it.message.images?.length || it.message.files?.length) ||
       isDeliveryProseText(it.message.content))
@@ -251,6 +254,7 @@ function isAssistantAnswerCandidate(it: RenderItem): it is MessageRenderItem {
   return (
     it.type === 'message' &&
     it.message.role === 'assistant' &&
+    !it.message.failedSamplingAttempt &&
     !it.message.systemCardType &&
     it.message.content.trim().length > 0
   );
@@ -488,7 +492,7 @@ function createCompletedWorkGroup(
   prevBoundaryTs: number | null = null,
 ): WorkGroupRenderItem {
   const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.role === 'assistant',
+    (item) => item.type === 'message' && item.message.role === 'assistant' && !item.message.failedSamplingAttempt,
   );
   if (!hasAssistantText) return createWorkGroup(run, nextItem, false, prevBoundaryTs);
 

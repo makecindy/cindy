@@ -22,6 +22,28 @@ const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
 describe('teammate final-result presentation', () => {
+  // #6351: provider final_answer only closes a message, not a successful sample.
+  // Failed output remains in the expandable work history rather than being lifted
+  // beside the real answer; normal commentary is governed by the existing rules.
+  it.each(['retrying', 'completed', 'exhausted', 'stopped'] as const)(
+    'retains failed sampling output in work history when the retry is %s', (ending) => {
+      const result = project([
+        message('u', 'user'),
+        message('failed', 'assistant', 'Opening from failed attempt', {
+          assistantPhase: 'final_answer', failedSamplingAttempt: true, turnCostUsd: 0.1,
+        }),
+        message('failed-commentary', 'assistant', 'Preparing another opening', {
+          assistantPhase: 'commentary', failedSamplingAttempt: true,
+        }),
+        ...(ending === 'completed'
+          ? [message('intro', 'assistant', 'Accepted intro'),
+            message('success', 'assistant', 'Successful opening', { assistantPhase: 'final_answer', turnCompleted: true })]
+          : ending === 'retrying' ? [] : [message('error', 'error', 'Reply interrupted')]),
+      ], ending === 'retrying');
+      expect(proseIds(result)).toEqual(ending === 'completed' ? ['intro', 'success'] : []);
+      expect(allKeys(result)).toContain('msg-failed');
+      expect(allKeys(result)).toContain('msg-failed-commentary');
+    });
   it('keeps coordination input hidden while process, explicit inputs, results and errors remain visible', () => {
     const rows = [message('coordination', 'user', '[UI_ACTION_TRIGGER]File agreement', { isSyntheticTrigger: true }),
       tool('audit'), message('visible-input', 'user', 'Requested status'),

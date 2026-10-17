@@ -7341,6 +7341,31 @@ describe('makerChatStore text delta batching', () => {
     expect(sentTexts).toEqual(['wait for preflight']);
   });
 
+  // #6351: the row update must change the live reply and survive history reload;
+  // translator/persistence tests cannot observe this renderer projection.
+  it('projects failed sampling metadata into live text and reloaded history', async () => {
+    emitTextDelta('Opening from a failed attempt');
+    vi.advanceTimersByTime(32);
+    const persisted = serverMessage({
+      id: 'failed-row', clientId: 'assistant-1', sessionId: SESSION_ID, role: 'assistant',
+      content: 'Opening from a failed attempt', createdAt: new Date().toISOString(),
+      agentMeta: { failedSamplingAttempt: { threadId: 'thread', turnId: 'turn', attempt: 1, itemId: 'item' },
+        turnCompleted: false, turnCostUsd: 0.1 },
+    });
+    emitDbMessageCreated(persisted);
+    const assertFailure = () => {
+      const replies = makerChatStore.getSnapshot(SESSION_ID).messages.filter(message => message.role === 'assistant');
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({ content: persisted.content, failedSamplingAttempt: true, turnCompleted: false });
+    };
+    assertFailure();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce([persisted]);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertFailure();
+  });
+
   it('hydrates existing runtime messages with authoritative DB-created timestamps', () => {
     vi.setSystemTime(new Date('2026-06-15T00:00:30.000Z'));
     emitTextDelta('draft');

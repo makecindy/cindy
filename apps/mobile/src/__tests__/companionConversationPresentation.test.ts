@@ -11,6 +11,30 @@ const bodies = (messages: RemoteMessage[], running: boolean) => companionConvers
 const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
   row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
   row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+// #6351: this consumer expands work groups and infers contiguous sealed runs,
+// so grouping alone cannot prevent a failed sample becoming another reply.
+it.each(['retrying', 'completed', 'exhausted'] as const)(
+  'does not promote failed sampling prose in a %s companion turn', (ending) => {
+    const failed = row('a1', 'assistant', '# Failed opening\n' + 'Details '.repeat(100), {
+      turnCompleted: true, turnCostUsd: 0.1, failedSamplingAttempt: {
+        threadId: 'thread', turnId: 'turn', attempt: 1, itemId: 'failed',
+      },
+    });
+    const source = [row('u0', 'user', 'Help'), failed,
+      ...(ending === 'completed' ? [row('a2', 'assistant', 'Accepted intro'),
+        row('a3', 'assistant', 'Accepted answer', { turnCompleted: true })]
+        : ending === 'exhausted' ? [row('e2', 'error', 'Model failed')] : []),
+    ];
+    const visible = bodies(source, ending === 'retrying')
+      .filter(item => item.type === 'message').map(item => item.message);
+    expect(visible.filter(item => item.kind === 'assistant').map(item => item.body))
+      .toEqual(ending === 'completed' ? ['Accepted intro', 'Accepted answer'] : []);
+    expect(visible.some(item => item.source.id === 'u0')).toBe(true);
+    expect(visible.some(item => item.source.role === 'error')).toBe(ending === 'exhausted');
+    expect(source[1]).toBe(failed);
+    expect(source[1].content).toContain('# Failed opening');
+    expect(source[1].agentMeta?.failedSamplingAttempt).toBeDefined();
+  });
 it('has no process entry or commentary during generation, and retains the completed answer', () => {
   const active = bodies(base, true);
   expect(active.map(item => item.type)).toEqual(['message']);

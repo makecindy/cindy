@@ -122,6 +122,7 @@ export interface NormalizedRemoteMessage {
   isStreaming?: boolean;
   /** Host 在 SDK done 边界写入；后台自动续跑时同一 turn 可有多次 seal，最后一次是最终答复。 */
   turnCompleted?: boolean;
+  failedSamplingAttempt?: boolean;
   turnMoney?: RemoteMoney;
   /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
@@ -604,6 +605,7 @@ export function normalizeRemoteMessages(
         : {}),
       ...turnCost,
       ...readModelMismatch(message),
+      ...(message.role === 'assistant' && message.agentMeta?.failedSamplingAttempt ? { failedSamplingAttempt: true } : {}),
       ...(message.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(message.agentMeta) } : {}),
       ...(message.role === 'assistant' && message.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
@@ -1037,6 +1039,7 @@ export function remoteMessageCompletesTurn(
   message: RemoteMessage,
   turnCost = readTurnCost(message),
 ): boolean {
+  if (message.agentMeta?.failedSamplingAttempt) return false;
   return message.role === 'assistant' && (
     message.agentMeta?.turnCompleted === true
     || (turnCost.turnMoney?.amount ?? 0) > 0

@@ -16,6 +16,55 @@ import { readTaskResultsForReply } from '../botTaskReplyResults.js';
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// #6351: a completed text item can still belong to a failed sampling request.
+// The observable contract is durable metadata plus the existing row broadcast;
+// original text, successful retries and other turns/sessions must stay intact.
+it('marks exact failed assistant items, including a live block, without rewriting prose', async () => {
+  const sessionId = 'sampling-failure';
+  const otherSession = 'sampling-other-session';
+  clearSessionPersistState(sessionId);
+  clearSessionPersistState(otherSession);
+  const first = onAssistantTextEvent(sessionId, { agentMessageId: 'failed-1',
+    text: 'First opening', isFinal: true, isFullText: true }, null);
+  const second = onAssistantTextEvent(sessionId, { agentMessageId: 'failed-2',
+    text: 'Partial opening', isFinal: false }, null);
+  onAssistantTextEvent(otherSession, { agentMessageId: 'failed-1',
+    text: 'Other session', isFinal: true }, null);
+  onAssistantAttemptFailure(sessionId, { assistantAttemptFailure: {
+    threadId: 'native-thread', turnId: 'native-turn', attempt: 1,
+    agentMessageIds: ['failed-1', 'failed-2', 'unknown-item'],
+  } });
+  // A textless completion after this failure must not seal the failed reply.
+  expect(consumeLastTopLevelAssistantPersistId(sessionId)).toBeUndefined();
+  onAssistantTextEvent(sessionId, { agentMessageId: 'success',
+    text: 'Successful opening', isFinal: true, isFullText: true }, null);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, first, {
+    failedSamplingAttempt: { threadId: 'native-thread', turnId: 'native-turn', attempt: 1, itemId: 'failed-1' },
+    turnCompleted: false,
+  });
+  expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+    clientId: second, content: 'Partial opening', agentMeta: expect.objectContaining({
+      failedSamplingAttempt: { threadId: 'native-thread', turnId: 'native-turn', attempt: 1, itemId: 'failed-2' },
+    }),
+  }), expect.anything());
+  expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+    content: 'Successful opening', agentMeta: null,
+  }), expect.anything());
+  expect(updateMessageContent).not.toHaveBeenCalled();
+  expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(sessionId, first, expect.anything());
+  expect(vi.mocked(patchMessageAgentMetaWithResult).mock.calls.every(([id]) => id === sessionId)).toBe(true);
+  resetTurnPersistState(sessionId);
+  vi.mocked(patchMessageAgentMetaWithResult).mockClear();
+  onAssistantAttemptFailure(sessionId, { assistantAttemptFailure: {
+    threadId: 'native-thread', turnId: 'native-turn', attempt: 1, agentMessageIds: ['failed-1'],
+  } });
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+  clearSessionPersistState(sessionId);
+  clearSessionPersistState(otherSession);
+});
+
 vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
   broadcastMessageRow: vi.fn(),
@@ -84,6 +133,7 @@ import {
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
+  onAssistantAttemptFailure,
   drainPersistQueue,
   onStandaloneTextEvent,
   getSessionTextSnapshot,

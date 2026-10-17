@@ -4,7 +4,7 @@ import { collectMobileMarkdownImages } from './messageMarkdown';
 import type { MobileMessageRenderItem } from './messageRenderModel';
 
 const isDelivery = (item: MobileMessageRenderItem) => item.type === 'tool_media' && item.tools.some(tool => !!tool.media?.length || !!tool.files?.length)
-  || item.type === 'message' && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
+  || item.type === 'message' && !item.message.failedSamplingAttempt && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
     || !!item.message.attachments?.length || !!item.message.media?.length
     || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
 
@@ -19,7 +19,7 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
   for (const item of expandWorkGroups(items).reverse()) {
-    if (item.type !== 'message' || item.message.kind !== 'assistant' || !item.message.body.trim() || item.message.systemCardType) {
+    if (item.type !== 'message' || item.message.kind !== 'assistant' || item.message.failedSamplingAttempt || !item.message.body.trim() || item.message.systemCardType) {
       sealedRun = false;
       nextAssistantAt = null;
     } else {
@@ -53,7 +53,7 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     else if (delivery) deliveredAfter.add(item.key);
   }
   const attached = new Set(flattened.flatMap(item => item.type === 'message'
-    && item.message.kind === 'assistant' && item.message.turnCompleted === true && item.message.body.trim()
+    && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt && item.message.turnCompleted === true && item.message.body.trim()
     ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(botTaskResultKey) : []));
   return flattened.filter(item => {
     if (item.type === 'message' && item.message.companion?.kind === 'task'
@@ -63,6 +63,9 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
       || item.type === 'subagent_group' || item.type === 'todo') return false;
     if (item.type !== 'message') return true;
     const message = item.message;
+    // Companion chats omit process prose; the original failed rows remain in
+    // persisted history and the ordinary task's expandable work group.
+    if (message.kind === 'assistant' && message.failedSamplingAttempt) return false;
     // Desktop drops persisted synthetic resume separators from teammate chats; only the live
     // reconnect card (still in progress) remains. The composer status carries recovery copy.
     if (message.isSyntheticTrigger && message.systemCardType === 'auto-resume') {

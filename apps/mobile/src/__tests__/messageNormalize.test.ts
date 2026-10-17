@@ -27,6 +27,20 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  // #6351: historical failure metadata must survive remote normalization even
+  // when usage accounting is later attached to the same failed text row.
+  it('keeps failed sampling prose readable without inferring a completed reply from its cost', () => {
+    const output = normalizeRemoteMessages([
+      message({ id: 'failed', role: 'assistant', content: 'Opening from a failed attempt',
+        agentMeta: { failedSamplingAttempt: { threadId: 't', turnId: 'turn', attempt: 1, itemId: 'failed' },
+          turnCompleted: false, turnCostUsd: 0.1 } }),
+      message({ id: 'success', role: 'assistant', content: 'Successful reply', agentMeta: { turnCompleted: true } }),
+    ]);
+    expect(output[0]).toMatchObject({ body: 'Opening from a failed attempt', failedSamplingAttempt: true });
+    expect(output[0].turnCompleted).not.toBe(true);
+    expect(output[1]).toMatchObject({ body: 'Successful reply', turnCompleted: true });
+    expect(output[1].failedSamplingAttempt).toBeUndefined();
+  });
   beforeAll(async () => {
     await i18n.changeLanguage('zh-CN');
   });

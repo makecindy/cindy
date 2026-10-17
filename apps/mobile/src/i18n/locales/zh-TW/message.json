@@ -9,6 +9,7 @@
     }
   },
   "renderer": {
+    "failedSamplingAttempt": "此回覆未完成，內容僅供參考。",
     "moreActions": "更多訊息操作",
     "reply": "回覆",
     "newMessagesToBottom": "有新訊息，跳到底部",

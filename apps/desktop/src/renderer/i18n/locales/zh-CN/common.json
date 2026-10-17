@@ -10986,6 +10986,7 @@
     "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
   },
   "chat": {
+    "failedSamplingAttempt": "此回复未完成，内容仅供参考。",
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
