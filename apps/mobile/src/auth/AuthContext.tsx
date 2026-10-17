@@ -48,6 +48,7 @@ import {
 // 运行时另有 __DEV__ guard 双保险。
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
+import { AskCardAuthContext, type AskCardAuth } from '@/session/askCardAuth';
 import {
   apiFetchRaw,
   ApiError,
@@ -383,7 +384,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       apiFetch: visualMockApiFetch,
     };
     return (
-      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+      <AuthContext.Provider value={value}>
+        <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+      </AuthContext.Provider>
     );
   }
 
@@ -3415,7 +3418,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {
