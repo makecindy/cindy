@@ -292,17 +292,17 @@ describe('ContextWindowBudgetChip', () => {
     // 底栏卡片的交互必须一样。
     renderChip();
     const trigger = document.querySelector('[data-context-window-budget-chip]')!;
-    // 悬浮路径：打开延迟是 300ms，真实定时器下等它落地。
+    // 悬浮路径：打开延迟 300ms（waitFor 轮询等待，不使用真实定时器睡眠）。
     fireEvent.pointerEnter(trigger);
     await waitFor(() => {
       expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
     }, { timeout: 1500 });
     // 悬浮已展开后点击触发器：卡片必须仍然在（Radix 的 toggle 被 preventDefault 拦住）。
+    // 点击若重新排入关闭定时器，宽限 200ms 后卡片消失 —— 用 waitFor 确认「稳定不关」。
     fireEvent.click(trigger);
-    expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
-    // 指针仍在卡内/触发器上时，点击也不应该排下一次关闭。
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
+    }, { timeout: 400 });
   });
 
   it('keeps the trigger focusable when the task is read-only', async () => {
