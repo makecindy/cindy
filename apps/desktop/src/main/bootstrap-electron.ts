@@ -1022,7 +1022,11 @@ import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
   applyLinuxMainWindowCloseBehavior,
   createCloseBehaviorPromptFallbackController,
+  hideToTrayWithFallback,
+  isWaylandSession,
+  minimizeRequestMapsToTray,
   requestMainWindowCloseBehavior,
+  resolveLinuxKeepRunningSurface,
 } from './mainWindowCloseBehavior.js';
 import {
   isLinuxCloseBehavior,
@@ -3247,7 +3251,7 @@ function openWindowsTrayMenu(): void {
       windowsTrayLog.warn('tray menu requested without a live tray icon', { reason });
     },
     onError: (error) => {
-      windowsTrayLog.error('failed to open Windows tray menu', {
+      windowsTrayLog.error('failed to open tray menu', {
         error: error instanceof Error ? error.message : String(error),
       });
     },
@@ -3330,7 +3334,7 @@ function ensureWindowsTray(): boolean {
     } catch {
       /* 已经没了,忽略 */
     }
-    windowsTrayLog.error('failed to create Windows tray icon', {
+    windowsTrayLog.error('failed to create tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
     windowsTray = null;
@@ -3339,15 +3343,30 @@ function ensureWindowsTray(): boolean {
   }
 }
 
-function hideMainWindowToWindowsTray(mainWindow: BrowserWindow): void {
-  if (ensureWindowsTray()) {
-    hideWindowToWindowsTray(mainWindow);
-    return;
-  }
-  dialog.showMessageBoxSync(mainWindow, {
+function reportTrayHideError(window: BrowserWindow): void {
+  dialog.showMessageBoxSync(window, {
     type: 'error',
     title: t('settings.windowBehavior.trayError.title'),
     message: t('settings.windowBehavior.trayError.message'),
+  });
+}
+
+function hideMainWindowToWindowsTray(mainWindow: BrowserWindow): void {
+  // 托盘图标不存在时只报错、不隐藏,窗口保持可触达(决策在 mainWindowCloseBehavior)。
+  hideToTrayWithFallback<BrowserWindow>(mainWindow, {
+    ensureTray: ensureWindowsTray,
+    hideToTray: hideWindowToWindowsTray,
+    reportTrayError: reportTrayHideError,
+  });
+}
+
+function hideMainWindowToLinuxTray(mainWindow: BrowserWindow): void {
+  // Linux 的托盘统一由 linuxTray 的 SNI 控制器持有,这里只做"确保存在→隐藏";
+  // 隐藏动作复用 Windows 同款全屏退场处理(该 helper 本身是平台无关的)。
+  hideToTrayWithFallback<BrowserWindow>(mainWindow, {
+    ensureTray: () => linuxTray.ensure(),
+    hideToTray: hideWindowToWindowsTray,
+    reportTrayError: reportTrayHideError,
   });
 }
 
@@ -3433,6 +3452,22 @@ const windowsClosePromptFallback = createCloseBehaviorPromptFallbackController(
   CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS,
 );
 
+// Wayland 合成器普遍不响应 toplevel 最小化请求(如 Hyprland),win.minimize() 是空操作;
+// Linux Wayland 上"最小化/保持运行"的语义改为隐藏主窗口并保留托盘图标(与 Windows 一致)。
+const isLinuxWaylandSession = (): boolean =>
+  process.platform === 'linux' && isWaylandSession(process.env);
+
+const linuxCloseBehaviorActions = {
+  quit: () => app.quit(),
+  keepRunning: (window: BrowserWindow) => {
+    if (resolveLinuxKeepRunningSurface(isLinuxWaylandSession()) === 'tray') {
+      hideMainWindowToLinuxTray(window);
+    } else {
+      window.minimize();
+    }
+  },
+};
+
 const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
   {
     readBehavior: () => readWindowBehaviorSettings().linuxCloseBehavior,
@@ -3449,7 +3484,7 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
     applyBehavior: (behavior) => {
       const mainWindow = mainWindowRef;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, linuxCloseBehaviorActions);
       } else {
         app.quit();
       }
@@ -3968,7 +4003,8 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // The keep-running action follows each platform: tray on Windows, minimize on Linux.
+    // The keep-running action follows each platform: tray on Windows, minimize on
+    // Linux X11, hide-to-tray on Linux Wayland (compositors ignore minimize).
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
@@ -3985,7 +4021,7 @@ const createWindow = () => {
         linuxClosePromptFallback.request();
         return;
       }
-      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, linuxCloseBehaviorActions);
       return;
     }
     app.quit();
@@ -5359,7 +5395,15 @@ const registerIpcHandlers = () => {
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
   ipcMain.on('window-minimize', (event) => {
-    (BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef)?.minimize();
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
+    if (!win) return;
+    // 主窗的最小化意向在 Linux Wayland 上映射为隐藏到托盘: 合成器不响应最小化,
+    // 副窗口维持原行为(out of scope)。这也覆盖 renderer 内选"最小化"关闭行为的路径。
+    if (minimizeRequestMapsToTray(isLinuxWaylandSession(), win === mainWindowRef)) {
+      hideMainWindowToLinuxTray(win);
+      return;
+    }
+    win.minimize();
   });
   ipcMain.on('window-maximize', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
