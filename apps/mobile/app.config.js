@@ -422,5 +422,10 @@ module.exports = (context = {}) => {
     }
   }
 
+  next = {
+    ...next,
+    plugins: [...next.plugins, './plugins/with-harmony-choreographer-recovery'],
+  };
+
   return next;
 };
