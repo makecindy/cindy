@@ -36,6 +36,9 @@ describe('remote agent channel', () => {
     const caps = { version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048 };
     expect(parseRemoteAgentCaps({ ...caps, guestRelay: true }).guestRelay).toBe(true);
     expect(parseRemoteAgentCaps({ ...caps, guestRelay: 'yes' })).not.toHaveProperty('guestRelay');
+    expect(parseRemoteAgentCaps({ ...caps, guestRelay: true, reshareConsent: true, reshareBatch: true, requireExistingSession: true }))
+      .toMatchObject({ guestRelay: true, reshareConsent: true, reshareBatch: true, requireExistingSession: true });
+    expect(parseRemoteAgentCaps({ ...caps, requireExistingSession: 'yes' })).not.toHaveProperty('requireExistingSession');
   });
 
   // 转分享(provider-sharing.md §4.3)：组所在电脑把它分享的人报给分享来的组内电脑，由那台的主人逐人同意。

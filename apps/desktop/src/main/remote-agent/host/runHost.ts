@@ -1515,6 +1515,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           || (current.sameAccount ? caps.guestRelay !== true : caps.reshareConsent !== true)) {
           throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] the computer in the provider group cannot take shared tasks yet');
         }
+        if (payload.options.vendorOptions?.requireExistingSession === true && caps.requireExistingSession !== true) {
+          throw new Error('[REMOTE_AGENT_UNSUPPORTED] The computer in the provider group must be updated before restoring history for rewind.');
+        }
         // 等 caps 期间任务已经结束(撤权、受邀者关闭)：不再打开(收尾已经放掉了这次尝试的负载)。
         if (run.closing) return;
         // 发打开之前先记下这台：它在启动 Agent 之前就会建受邀者目录与会话记录，启动失败、还没有原生会话 id
@@ -2054,6 +2057,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // 转分享的同意只对受邀者(把这里分享的供应商放进自己组的人)有意义。
           ...(guest && deps.reshare ? { reshareConsent: true } : {}),
           ...(guest && deps.reshare ? { reshareBatch: true } : {}),
+          requireExistingSession: true,
         };
         return caps;
       }

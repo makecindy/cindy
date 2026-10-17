@@ -238,6 +238,8 @@ export interface RemoteAgentCaps {
   reshareConsent?: boolean;
   /** 是否支持带 batch 的转分享请求；未声明时只能使用单片旧协议。 */
   reshareBatch?: boolean;
+  /** History operations can require native resume without a fresh-session fallback. */
+  requireExistingSession?: boolean;
 }
 
 export interface RemoteAgentReadResult {
@@ -511,6 +513,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.reshareConsent === true ? { reshareConsent: true } : {}),
     ...(v.reshareBatch === true ? { reshareBatch: true } : {}),
+    ...(v.requireExistingSession === true ? { requireExistingSession: true } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;
