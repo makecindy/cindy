@@ -1,3 +1,4 @@
+import { nodeRuntimeArtifact } from '../managed-tools/nodeArtifact.js';
 import type { ToolArtifact } from '../managed-tools/types.js';
 import type { MakeToolId } from '../../shared/cindyMakeDoctor.js';
 import { isSupportedMakeHost } from './doctor.js';
@@ -9,14 +10,6 @@ import { isSupportedMakeHost } from './doctor.js';
 export interface MakeToolArtifact extends ToolArtifact {
   id: MakeToolId;
 }
-
-const nodeHashes: Record<string, string> = {
-  'win32-x64': '1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97',
-  'darwin-arm64': '61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6',
-  'darwin-x64': '58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026',
-  'linux-arm64': '013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30',
-  'linux-x64': 'b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a',
-};
 const pnpmHashes: Record<string, string> = {
   'win32-x64': '3d1af71e9da7081efd58f95942e1f7e2107bf8fcdae03eb2331c0b6cea59510b',
   'darwin-arm64': 'a99a4d5d0e6bd3728949c24ff74a2f2f2d07f73bc48fd308e4eea75d8e72acdc',
@@ -56,24 +49,16 @@ const pythonAssets: Record<string, [string, string]> = {
 
 export function makeToolCatalog(platform: string, arch: string): MakeToolArtifact[] {
   if (!isSupportedMakeHost(platform, arch)) return [];
+  const node = nodeRuntimeArtifact(platform, arch);
+  if (!node) return [];
   const host = `${platform}-${arch}`;
   const windows = platform === 'win32';
-  const nodeDir = `node-v22.23.2-${windows ? 'win' : platform}-${arch}`;
-  const nodeFormat = windows ? 'zip' : 'tar.gz';
   const pnpmPlatform = windows ? 'win' : platform === 'darwin' ? 'macos' : 'linux';
   const lfsPlatform = windows ? 'windows' : platform;
   const lfsFormat = platform === 'linux' ? 'tar.gz' : 'zip';
   const [pythonTriple, pythonHash] = pythonAssets[host];
   const artifacts: MakeToolArtifact[] = [
-    {
-      id: 'node',
-      version: '22.23.2',
-      host,
-      sha256: nodeHashes[host],
-      format: nodeFormat,
-      url: `https://nodejs.org/dist/v22.23.2/${nodeDir}.${nodeFormat}`,
-      executable: `${nodeDir}/${windows ? 'node.exe' : 'bin/node'}`,
-    },
+    { ...node, id: 'node' },
     {
       id: 'pnpm',
       version: '10.33.2',

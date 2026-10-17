@@ -65,6 +65,7 @@
   （`SCHEDULER_CATEGORY_DESCRIPTIONS`）、`xdt-helper/capabilities.ts` 的 `self-management`。
 - 跨电脑定时任务：`packages/lizi-mcps/src/scheduler/_devices.ts`、
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
+- 本机前置检查脚本安装工具仍与 UI 共用宿主安装、自测入口；`xdt-node` 的正文完成协议及旧脚本迁移见 [运行器说明](../pre-run-node-runtime.md)，不增加工具权限或跨电脑安装能力。
 - 跨电脑发消息：`apps/desktop/src/main/mcp-integrations/sessionHandoffRemote.ts`、
   `apps/desktop/src/main/maker-ipc/sessionHandoffIpc.ts`。
 - 协议与兼容见 [`../dev-rules/protocol-compatibility.md`](../dev-rules/protocol-compatibility.md)

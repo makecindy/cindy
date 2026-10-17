@@ -3,13 +3,13 @@
  *
  * 用途:AI 生成前置检查脚本时决定命令形态——
  *   - 系统 node 可用 → `node <script>`(透明、可在任何终端复现)
- *   - 不可用 → `xdt-node <script>`(执行器解析为 app 自带 Electron 运行时,
- *     见 pre-run-hook.resolveHookCommand;裸机用户也能跑)
+ *   - 不可用 → `xdt-node <script>`(执行器解析为 app 随包原生 Node 运行器,
+ *     见 pre-run-hook.resolveHookCommand;无法启动 Node 时明确失败并阻止本轮)
  *
  * 结果按进程生命周期 + TTL 缓存:探测是 spawn 子进程的开销,而 node 的
  * 有无在一次 app 运行期间几乎不变;TTL 让"用户刚装完 node"无需重启也能
  * 在几分钟后被感知。探测失败(超时/异常)一律按"不可用"处理——方向安全,
- * 兜底路径(xdt-node)永远可用。
+ * xdt-node 执行器要求 gate 正文 entered/completed 与真实 Node/shell 退出一致；缺少资产或协议时明确失败，不放行。
  */
 
 import { spawn } from 'node:child_process';

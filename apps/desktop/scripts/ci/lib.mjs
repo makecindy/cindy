@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { execSync, spawnSync } from 'node:child_process';
+import { log } from 'node:console';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import path from 'node:path';
 import { createGunzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { signPreRunNode } from './pre-run-node-signing.mjs';
 import { resolveReleaseCdnBaseUrl } from '../../../../scripts/shared/release-env.mjs';
 // OSS/CDN 原语(sha256 / gzip / ali-oss client / upload)已抽到仓库根 scripts/shared/oss.mjs,
 // 供 desktop 与 mobile 共用;这里 re-export 保持既有 import 面(CDN_BASE / createOSSClient 等)不变。
@@ -778,6 +780,9 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
+  const signedNode = signPreRunNode(resourceToolsDir, arch);
+  log('==> Standalone Node signature verified; native smoke executed: ' + signedNode.executed);
+
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
   exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
@@ -823,6 +828,9 @@ export function signMacAppWithIdentity(
     console.log('    Signing bundled resource app bundles...');
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
+
+  const signedNode = signPreRunNode(resourceToolsDir, arch, { identity: identity.signIdentity, timestamp: true });
+  log('    Standalone Node signature verified; native smoke executed: ' + signedNode.executed);
 
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)
   console.log('    Signing all Mach-O binaries...');

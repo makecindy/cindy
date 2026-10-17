@@ -5,9 +5,9 @@
  *
  * 设计要点(规则 9:确定性逻辑全在代码里,LLM 只产脚本正文):
  *   - 统一生成 **Node ESM (.mjs)** 脚本:跨平台唯一可行的公共载体
- *     (bash Windows 没有、cmd/PowerShell macOS 没有;Cindy 用户机器上
- *     node 由开发环境保证,生成的命令显式写 `node`,与 hook 执行器的
- *     Windows shebang 限制天然兼容)。
+ *     (bash Windows 没有、cmd/PowerShell macOS 没有;系统 Node 可用时
+ *     使用 node，否则使用随包原生 Node 的 xdt-node，并显式报告正文完成；
+ *     与 hook 执行器的 Windows shebang 限制兼容)。
  *   - 代码负责:prompt 组装、代码块提取、文件名/路径解析、落盘、命令拼装;
  *     模型只负责脚本正文。提取失败 → 明确报错,绝不落半成品。
  *   - 落盘位置:项目任务 → `<workingDir>/scripts/schedule-checks/<name>.mjs`
@@ -70,7 +70,7 @@ export interface HookScriptGeneratorDeps {
   ) => Promise<UtilityTextResult>;
   /**
    * 测试注入;缺省走 hook-runtimes.hasSystemNode(探测系统 node)。
-   * false → 生成的命令用 `xdt-node` 前缀(app 自带 Electron 运行时兜底,
+   * false → 生成的命令用 `xdt-node` 前缀(app 随包原生 Node 运行器兜底,
    * 见 pre-run-hook.resolveHookCommand),裸机用户也能跑。
    */
   hasSystemNode?: () => Promise<boolean>;
@@ -128,11 +128,14 @@ export function buildHookScriptPrompt(input: {
     '',
     'Hard protocol (must follow exactly):',
     '- The script is executed with Node.js (>= 18) as an ES module (.mjs file).',
-    '- Exit code 0 = let the task run this round. Exit code 2 = skip this round. Any other exit code, crash, or timeout blocks the task (fail-closed), so prefer explicit process.exit(0) / process.exit(2).',
+    '- Exit code 0 = let the task run this round. Exit code 2 = skip this round. Any other exit code, crash, or timeout blocks the task (fail-closed), use an explicit final 0 or 2.',
+    '- For xdt-node, the script BODY must explicitly attest entry and completion. Do not use a preload to attest. At the start of the body: const gate = process.env.CINDY_PRE_RUN_GATE_CLIENT ? (await import(process.env.CINDY_PRE_RUN_GATE_CLIENT)).default : null; if (gate) await gate.enter();',
+    '- At every successful final decision: if (gate) await gate.complete(code); process.exit(code); where code is 0 or 2. Never complete on exceptions or incomplete checks. Under ordinary node, gate is null and the same script keeps the exit-code contract.',
+    '- The Cindy-provided gate client is the only allowed non-builtin module. Do not replace, bypass or imitate it. User preload callbacks can exit before the body: that must block, never report completion from a wrapper.',
     '- After a complete, successful check, print CINDY_PRECHECK_OK as a standalone stdout line before exit 0 or 2 (including normal no-work skips). This clears past precheck warnings only, never task execution failures. Never emit it for rate-limit/backoff skips or incomplete/degraded checks; exit 2 alone is not proof of recovery.',
     '- The working directory is the task project directory (if any). stdin receives a JSON payload ({ scheduleId, scheduleName, firedAt, workingDir, lastFinishedAt }) — reading it is optional.',
     '- CAUTION: lastFinishedAt is also refreshed by rounds this very script skips (exit 2). Never build "run only if enough time passed since the last real run" on top of it — the script would lock itself out forever. Persist your own timestamp file if you need that.',
-    '- Use only Node.js built-in modules (node:fs, node:child_process, node:https, ...). No npm dependencies.',
+    '- Use only Node.js built-in modules (node:fs, node:child_process, node:https, ...). No npm dependencies; the optional Cindy gate client above is provided by the runner.',
     '- External CLI tools (git, gh, curl ...) may be invoked via child_process. Unexpected failures must exit non-zero so the scheduler blocks the task instead of silently bypassing the gate.',
     '- Keep it short (usually < 80 lines), with brief comments in Chinese explaining the check.',
     `- Target platform: ${input.platform === 'win32' ? 'Windows' : input.platform === 'darwin' ? 'macOS' : 'Linux'}. Avoid platform-specific shell syntax; do everything inside Node.`,

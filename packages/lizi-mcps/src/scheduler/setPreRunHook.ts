@@ -37,9 +37,10 @@ export function registerScheduleSetPreRunHookTool(
     category: 'scheduler',
     description:
       '创建/修改一条 schedule 的前置检查脚本(preRunHook)的**唯一通道**——不要自己写脚本文件再手填 preRunHook.command,本工具由宿主代码统一保证:脚本协议(exit 0 放行 / exit 2 跳过 / 其它异常 fail-closed 阻止本轮)、落盘路径规范(项目任务进 scripts/schedule-checks/,无目录任务进应用数据目录)、落盘后**立即自测**并返回完整结果。' +
+      'xdt-node 使用原生 Node 运行器，脚本正文须显式回报开始和完成：const gate = process.env.CINDY_PRE_RUN_GATE_CLIENT ? (await import(process.env.CINDY_PRE_RUN_GATE_CLIENT)).default : null; if (gate) await gate.enter(); 检查结束后 if (gate) await gate.complete(code); process.exit(code); code 仅为 0 或 2。缺少回报会阻止本轮，不能在 preload 里回报，也不要自动改写旧脚本；普通 node 命令沿用退出码协议。' +
       '检查完整成功后(包括正常无事可做),在 exit 0/2 前向 stdout 单独输出一行 CINDY_PRECHECK_OK,仅恢复此前的检查告警,不恢复执行失败；限流退避或检查不完整时不得输出,exit 2 本身不代表恢复。' +
       '用法:(1) 传 scheduleId → 自动继承该任务的目录/名称/现有脚本(修改流覆写同一文件),安装成功后直接挂载到任务;不传则只落盘返回 command,由你随后在 schedule_create 里带上。' +
-      '(2) script 与 description 至少给一个:你有项目上下文时**优先自己写好 script**(Node ESM,只用 node 内置模块,外部 CLI 用 child_process；意外失败必须非零退出以阻止本轮);只有需求很通用时才用 description 让宿主生成。' +
+      '(2) script 与 description 至少给一个:你有项目上下文时**优先自己写好 script**(Node ESM,除宿主 gate 客户端外只用 node 内置模块,外部 CLI 用 child_process；意外失败必须非零退出以阻止本轮);只有需求很通用时才用 description 让宿主生成。' +
       '(3) 返回的 test 字段是刚跑完的自测结果——决策不符合预期(比如该放行却 skip)就修了再来,不要把没自测通过的脚本留给任务。',
     inputShape: {
       scheduleId: z
@@ -49,7 +50,7 @@ export function registerScheduleSetPreRunHookTool(
       script: z
         .string()
         .optional()
-        .describe('你写好的脚本内容(Node ESM)。协议:exit 0 放行 / exit 2 跳过 / 其它异常阻止本轮;完整成功检查后在 exit 0/2 前向 stdout 单独输出 CINDY_PRECHECK_OK,限流退避或检查不完整时不得输出;只用 node 内置模块;外部 CLI 意外失败必须非零退出'),
+        .describe('你写好的脚本内容(Node ESM)。协议:exit 0 放行 / exit 2 跳过 / 其它异常阻止本轮;完整成功检查后在 exit 0/2 前向 stdout 单独输出 CINDY_PRECHECK_OK,限流退避或检查不完整时不得输出;除宿主 gate 客户端外只用 node 内置模块;运行器正文需 gate.enter()/gate.complete(0|2)，详见工具说明;外部 CLI 意外失败必须非零退出'),
       description: z
         .string()
         .optional()
