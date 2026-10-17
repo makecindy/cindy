@@ -299,6 +299,25 @@ describe('portable plugin results', () => {
       expect(files(source + '\nFile: ' + literal)).toEqual([{ url, title: 'fixture.pdf' }]);
     }
   });
+  it.each(["'", '"', String.fromCharCode(96)])('delivers prose labels whose line merely contains a question mark (%s)', (quote) => {
+    // 回归:条件冒号守卫曾只排除 ? 与 : 之间的 ";" 和换行, 同一行更早出现的
+    // 疑问号 prose("Where is it? File:") 会被当成三元条件, 引用文件被误判为
+    // 源码字面量而丢投递。真实的 ? : 三元在 ? 之前必有源码运算符
+    // (= / return / || / && ...), 以此锚定。
+    const url = 'xdt-file:///tmp/question.pdf';
+    const literal = quote + url + quote;
+    for (const source of [
+      'Where is it? File: ' + literal,
+      'Done, ok? Label: ' + literal,
+      'Search "key (value)"? Path: ' + literal,
+      'Status = ready? File: ' + literal,
+    ]) {
+      expect(files(source)).toEqual([{ url, title: 'question.pdf' }]);
+      expect(files(JSON.stringify({ note: source }))).toEqual([{ url, title: 'question.pdf' }]);
+    }
+    // 同行 ? 的真三元仍按源码处理(丢投递)。
+    expect(files('const path = ready ? ' + literal + ' : undefined')).toEqual([]);
+  });
   it('retains adjacent prose references for every quote style without reviving source arrays', () => {
     const a = 'xdt-file:///tmp/first.pdf';
     const b = 'xdt-file:///tmp/second.pdf';
