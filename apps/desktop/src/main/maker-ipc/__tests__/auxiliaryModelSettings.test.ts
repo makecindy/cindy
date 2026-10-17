@@ -150,6 +150,66 @@ describe('auxiliary model settings IPC helpers', () => {
     ]);
   });
 
+  it('routes pi-runtime options through toWireOption without throwing', () => {
+    const piCatalog = {
+      providers: [
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          source: 'user',
+          agents: ['pi'],
+          auth: { method: 'apiKey' },
+          routing: {
+            pi: {
+              upstream: 'https://opencode.example/zen/go/v1',
+              authStrategy: 'api-key-header',
+              wireProtocol: 'openai-chat',
+            },
+          },
+          models: {
+            pi: [
+              {
+                id: 'step-5-preview-free',
+                name: 'Step 5 preview free',
+                contextWindow: 200_000,
+                group: 'custom:opencode-go',
+              },
+            ],
+          },
+        },
+      ],
+    } as never;
+    const pin = 'cat:opencode-go:pi:step-5-preview-free';
+    // 用户尚未选中 pi 档(空自定义链)时,设置读取同样要能活着列出可用 pi 选项。
+    const unselected = buildAuxiliaryModelOptions({
+      settings: { models: [] },
+      catalog: piCatalog,
+      overrides: { disabledModels: {}, disabledProviders: {} },
+      hasCredential: () => true,
+    });
+    expect(unselected.map((o) => [o.id, o.available, o.agentSuffix])).toEqual([
+      [pin, true, 'Pi'],
+    ]);
+
+    const options = buildAuxiliaryModelOptions({
+      settings: { models: [pin] },
+      catalog: piCatalog,
+      overrides: { disabledModels: {}, disabledProviders: {} },
+      hasCredential: () => true,
+    });
+
+    expect(options).toEqual([
+      expect.objectContaining({
+        id: pin,
+        providerId: 'opencode-go',
+        agentKind: 'pi',
+        modelId: 'step-5-preview-free',
+        agentSuffix: 'Pi',
+        available: true,
+      }),
+    ]);
+  });
+
   it('marks a migrated utility profile available when its direct route is usable', () => {
     const options = buildAuxiliaryModelOptions({
       settings: { models: [PROFILE] },

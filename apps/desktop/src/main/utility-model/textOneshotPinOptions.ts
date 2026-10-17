@@ -33,8 +33,12 @@ import {
   encodeCatalogModelPin,
 } from '../../shared/catalogModelPin.js';
 
-/** oneshot 可路由的 agent(Pi 的 oneShot 未实现,不进钉档清单)。 */
-const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code'] as const;
+/**
+ * oneshot 可路由的 agent。pi 档的含义是「借用 pi runtime 的路由声明(baseUrl/
+ * wireProtocol/key)由宿主直连」,不 spawn pi 会话;未声明 wireProtocol 的自定义
+ * 供应商与 codex 同待遇(走 responses wire),claude-code 仍恒 anthropic-messages。
+ */
+const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code', 'pi'] as const;
 
 /**
  * 执行侧(requestBuiltinProviderText)可执行的内置供应商。清单侧必须按同一集合过滤——
@@ -56,7 +60,7 @@ export type OneshotRoute = {
 
 /** 目录钉编码:cat:<providerId>:<agentKind>:<modelId>(modelId 可含 '/' 与 ':')。 */
 export function encodeCatalogPin(providerId: string, agentKind: AgentKind, model: string): string {
-  if (agentKind !== 'codex' && agentKind !== 'claude-code') {
+  if (agentKind !== 'codex' && agentKind !== 'claude-code' && agentKind !== 'pi') {
     throw new Error(`unsupported catalog pin agent: ${agentKind}`);
   }
   return encodeCatalogModelPin({ providerId, agentKind, model });
@@ -74,9 +78,10 @@ export function decodeCatalogPin(
  * requestUtilityText 显式路径的静态闸:内置供应商只收执行侧硬编码认的
  * 四家(见 ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS);自定义供应商要求 routing
  * 未禁用 + 鉴权策略受支持 + 有上游地址 + 声明的 wire 与执行侧该 agent 的
- * 实际出线一致(claude-code 恒发 anthropic-messages;codex 发不出
- * anthropic-messages,会被静默当 responses——配置错线的组合钉上恒失败,
- * 不进清单)。
+ * 实际出线一致(claude-code 恒发 anthropic-messages;pi 的出线跟随 runtime
+ * 声明,声明什么发什么;codex 发不出 anthropic-messages,会被静默当
+ * responses;google-generative-ai 两条执行路都拒绝——配置错线的组合钉上
+ * 恒失败,不进清单)。
  */
 function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean {
   if (!provider.agents.includes(agentKind)) return false;
@@ -87,7 +92,13 @@ function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean
   if (provider.source === 'builtin') return ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS.has(provider.id);
   if (agentKind === 'claude-code') {
     if (routing.wireProtocol !== undefined && routing.wireProtocol !== 'anthropic-messages') return false;
-  } else if (routing.wireProtocol === 'anthropic-messages') return false;
+  } else if (
+    // codex 发不出 anthropic-messages;pi 的出线跟随声明,声明的协议都发得出。
+    (routing.wireProtocol === 'anthropic-messages' && agentKind === 'codex')
+    // 执行侧(requestExplicitProviderText)对 google wire 直接 no_candidate,
+    // 清单侧同步排除(含存量 codex 档的同一缺口)。
+    || routing.wireProtocol === 'google-generative-ai'
+  ) return false;
   return (
     (routing.authStrategy === 'api-key-header'
       || routing.authStrategy === 'oauth-token'
@@ -108,6 +119,7 @@ function isChatModel(model: CatalogModel, provider: Provider): boolean {
 const AGENT_LABEL: Record<(typeof ONESHOT_ROUTE_AGENTS)[number], string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
+  pi: 'Pi',
 };
 
 /**
@@ -148,7 +160,7 @@ export interface TextOneshotPinOption {
   subscription: boolean;
   /** 供应商路由描述(渲染层厂牌图标判定用,ProviderLogoMark)。 */
   routing?: Provider['routing'];
-  /** 该精确路由使用的 Agent('Codex' / 'Claude Code')。 */
+  /** 该精确路由使用的 Agent('Codex' / 'Claude Code' / 'Pi')。 */
   agentSuffix: string;
 }
 
@@ -238,7 +250,8 @@ export function buildTextOneshotPinOptions(
 /**
  * 插件声明的偏好模型 id → 可路由的目录条目。供应商序同钉档清单(用户显式
  * 排序优先,缺省 xd 在首),agent 序 codex 先于 claude-code(与
- * inferProviderAgent 同偏好);停用/不可路由/非对话模型跳过。
+ * inferProviderAgent 同偏好),pi 在末(pi 档是路由别名,让位给主 agent);
+ * 停用/不可路由/非对话模型跳过。
  * 找不到返回 null = 按未声明处理(回落系统默认链)。
  */
 export function resolveOneshotCatalogModel(
