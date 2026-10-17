@@ -257,16 +257,16 @@ export function SettingsView() {
       aria-label={t('settings.title')}
     >
       {/* Outer container — page itself does not scroll; columns own their scroll behavior.
-          左侧保留原来的页头位置；右侧不再为页头预留 56px，贴着 46px 标题栏起排。 */}
+          左侧标题和搜索固定，只有菜单列表滚动；右侧不再为页头预留 56px，贴着 46px 标题栏起排。 */}
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
+          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-hidden pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
         >
           {/* Back navigation — gap 10, pb 18, aligned with menu items via px-3 */}
-          <div className="flex items-center gap-2.5 px-3 pb-[18px]">
+          <div className="flex shrink-0 items-center gap-2.5 px-3 pb-[18px]">
             <Tip text={t('settings.back')} side="bottom">
               <button
                 type="button"

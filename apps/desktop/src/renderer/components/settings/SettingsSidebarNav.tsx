@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils';
 import { TAB_LABEL_KEY, type SettingsTab, type VisibleSettingsTab } from '@/lib/tabLabels';
 import { SettingsSearchBox } from './SettingsSearchBox';
 
-const NAV_ITEM_CLASS = 'flex h-9 items-center gap-2.5 rounded-full px-3 text-sm transition-colors';
+const NAV_ITEM_CLASS = 'flex h-9 shrink-0 items-center gap-2.5 rounded-full px-3 text-sm transition-colors';
 const NAV_ITEM_IDLE_CLASS =
   'border border-transparent text-[var(--settings-menu-text)] hover:bg-sidebar-item-hover';
 const NAV_ITEM_ACTIVE_CLASS =
@@ -101,9 +101,16 @@ export function SettingsSidebarNav({
   const { t } = useTranslation();
 
   return (
-    <>
-      <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} onSelect={onSelectSearchResult} />
-      <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* 标题在侧栏外固定。搜索最高占剩余高度一半，结果在框内滚动；菜单单独滚动。 */}
+      <div className="flex max-h-[50%] min-h-0 shrink-0 flex-col overflow-hidden">
+        <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} onSelect={onSelectSearchResult} />
+      </div>
+      <nav
+        role="tablist"
+        aria-label={t('settings.title')}
+        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain"
+      >
         {tabIds.map((tabId) => {
           const selected = activeTab === tabId;
           const Icon = TAB_ICON[tabId];
@@ -134,6 +141,6 @@ export function SettingsSidebarNav({
           );
         })}
       </nav>
-    </>
+    </div>
   );
 }

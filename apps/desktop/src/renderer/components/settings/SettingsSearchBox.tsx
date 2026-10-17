@@ -67,8 +67,8 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
   };
 
   return (
-    <div className="mb-3 px-1">
-      <div className="relative">
+    <div className="flex min-h-0 max-h-full flex-col px-1 pb-5">
+      <div className="relative shrink-0">
         <Search
           aria-hidden="true"
           size={15}
@@ -137,7 +137,7 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
           aria-label={t('settings.search.resultsLabel')}
           ref={resultsRef}
           {...menuPanelAttrs}
-          className="relative mt-1 max-h-[min(55vh,420px)] overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+          className="relative mt-1 min-h-0 max-h-[min(55vh,420px)] overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
         >
           <MenuHighlightLayer />
           {results.length > 0 ? (
