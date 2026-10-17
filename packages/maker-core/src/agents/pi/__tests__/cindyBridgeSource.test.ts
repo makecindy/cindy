@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -1623,8 +1624,12 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Inspect this tool before execution');
+    // 披露按 schema 指纹持有 + 自愈放行（2026-10-13 pi 升级后整片失效、模型反复
+    // 撞墙后放弃的真机事故）；权限/采集分类只认“解析成功”，不再按披露状态。
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private schemaFingerprint(');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('markSchemaDisclosed(call: ResolvedMcpGatewayCall)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('gateway tool auto-disclosed on first call');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('const gatewayCall = resolvedGatewayCall;');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
@@ -2463,6 +2468,8 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    // PR #6002 的 schemaFingerprint 走 sha256；切片从 import 之后开始，故需注入。
+    createHash,
   };
   runInNewContext(compiled, context);
   const requests: Array<{ method: string; params: any }> = [];
