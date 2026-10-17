@@ -122,6 +122,8 @@ export function ContextWindowBudgetChip({
   // 才在关闭时阻止焦点归还；Tab/Enter 打开时保持原行为。
   // （写在组件顶部：它有早退 return，hook 不能落在 return 之后。）
   const openedByPointerRef = useRef(false);
+  // P2：过期刷新经 ref 中转（refreshIfStale 声明在后，useCallback 依赖里直接引用会 TDZ）。
+  const refreshIfStaleRef = useRef<(() => void) | null>(null);
   const cardPointerInsideRef = useRef(false);
   // 悬浮打开时不要把焦点抢进卡片（键盘打开才需要）。指针是否在卡片区域内决定"要不要抢焦点"。
   const cardOpenSourceRef = useRef<'hover' | 'focus'>('hover');
@@ -144,6 +146,9 @@ export function ContextWindowBudgetChip({
   const openCard = useCallback((source: 'hover' | 'focus') => {
     clearCardTimers();
     cardOpenSourceRef.current = source;
+    // 过期缓存刷新：悬浮与点击都走这里（键盘路径在 onOpenChange 里已有）。
+    // 刷新函数声明在本组件后部（hook 返回值），经 ref 中转避免 TDZ。
+    refreshIfStaleRef.current?.();
     // 两卡互斥：自己展开时，用量卡立刻收起（用户要求"该窗体为唯一窗体"）；
     // 分屏下同种类的另一张 chip 也在这条路径上被关掉。
     cardHandleRef.current?.request();
@@ -762,6 +767,11 @@ function cacheKey(
 }
 
 /** 仅供测试：清掉跨用例的缓存（生产里键包含设备/会话，不会这样复用）。 */
+/** 仅供测试：清空跨实例共享缓存（预算/缓存口径变更时避免用例间串味）。 */
+export function __clearAllBoundsCachesForTest(): void {
+  boundsCache.clear();
+}
+
 export function resetRemoteContextWindowBoundsCache(): void {
   boundsCache.clear();
 }
@@ -775,6 +785,20 @@ export function resetRemoteContextWindowBoundsCache(): void {
  *
  * 拿不到时返回 null：调用方必须退回「只允许收紧」，不能拿本机目录的值冒充被控端。
  */
+/**
+ * 预算提交后的跨实例通知：`refresh` 删缓存 + 重拉只作用于提交的那一个 hook 实例，
+ * 分屏 / 双窗口里的其它卡片实例读的是自己的 boundsState —— 不通知就永远停在旧档位，
+ * 甚至被 `next === storedBudget` 提前跳过、无法真正清除预算（Greptile P2，2026-10-17）。
+ * 提交实例自己跳过（它已经重拉过）。
+ */
+const boundsReloadListeners = new Set<{ id: number; key: string; fire: () => void }>();
+let boundsReloadListenerSeq = 0;
+function notifyBoundsReload(exceptId: number, key: string): void {
+  for (const listener of boundsReloadListeners) {
+    if (listener.id !== exceptId && listener.key === key) listener.fire();
+  }
+}
+
 export function useSessionContextWindowBounds(
   deviceId: string | undefined,
   sessionId: string,
@@ -809,6 +833,19 @@ export function useSessionContextWindowBounds(
   // 渲染期只读，写入放在 effect 里（并发渲染/StrictMode 重放时渲染期写 ref 是反模式）。
   const activeKeyRef = useRef(key);
   const [reloadToken, setReloadToken] = useState(0);
+  // 本 hook 实例的 id：提交实例自己已经重拉，跨实例通知时跳过它。
+  const instanceIdRef = useRef(++boundsReloadListenerSeq);
+  useEffect(() => {
+    const listener = {
+      id: instanceIdRef.current,
+      key,
+      fire: () => setReloadToken((token) => token + 1),
+    };
+    boundsReloadListeners.add(listener);
+    return () => {
+      boundsReloadListeners.delete(listener);
+    };
+  }, [key]);
 
   useEffect(() => {
     activeKeyRef.current = key;
@@ -831,6 +868,10 @@ export function useSessionContextWindowBounds(
               deviceId, 'maker:get-context-window-bounds', [sessionId, route],
             )
           : await window.electronAPI.maker.getSessionContextWindowBounds(sessionId, route);
+        // 已取消的请求不得写共享缓存：否则保存预算触发的**新**查询之后，迟到的旧响应
+        // 会把旧预算写回缓存并盖上新 fetchedAt，后挂载的卡片把旧数据当新数据用
+        // （Greptile P2，2026-10-17）。取消的响应什么都不写。
+        if (cancelled) return;
         const resolved = normalizeSessionContextWindowBounds(view);
         const fetchedAt = Date.now();
         boundsCache.set(key, { value: resolved, fetchedAt });
@@ -838,6 +879,7 @@ export function useSessionContextWindowBounds(
       } catch {
         // 老被控端 → CHANNEL_NOT_ALLOWED，或隧道/主进程瞬时失败：缓存 null（TTL 内不重试），
         // UI 退回「只允许收紧」，由菜单里的说明如实告知。
+        if (cancelled) return;
         const fetchedAt = Date.now();
         boundsCache.set(key, { value: null, fetchedAt });
         if (!cancelled && activeKeyRef.current === key) setBoundsState({ key, value: null, fetchedAt });
@@ -851,6 +893,8 @@ export function useSessionContextWindowBounds(
   const refresh = useCallback(() => {
     boundsCache.delete(key);
     setReloadToken((token) => token + 1);
+    // 其它实例（同会话同路由的分屏 / 双窗口卡片）也要重读权威值。
+    notifyBoundsReload(instanceIdRef.current, key);
   }, [key]);
   // 开菜单时只在「没缓存 / TTL 过期」才重拉：否则每次开合菜单都是一次隧道 invoke（弱网可感知）。
   const refreshIfStale = useCallback(() => {

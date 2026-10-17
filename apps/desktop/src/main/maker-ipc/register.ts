@@ -21780,7 +21780,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 // 与「当前路由的收敛值」做比较基准；三者都不可知时按 fail-closed 处理（无法证明
                 // 「当前窗口 == 目标窗口」就重建）—— 否则第 1 轮的洞（CC env 停在过大窗口、
                 // 压缩线越过目标窗口）会在这条窄路径上复发；误重建的代价只是一次冷重建。
-                (sessionContextWindowBudget !== null &&
+                // **Pi 例外**（Greptile P1，2026-10-17）：Pi 的预算生效方式不同 —— 走
+                // compaction.reserveTokens（热切时 set_compaction_reserve_tokens 实时改 + 切后
+                // 重载 fail-closed），引擎自己的 requiresModelSwitchRebuild（window 比较）已会把
+                // 需要的重建标出来；宿主再强制重建会撞上下面 Pi 分支无条件拒绝的
+                // assertSessionCloseSupported —— 「既要重建又禁止重建」，带预算的 Pi 任务切模
+                // 永远无法生效。预算变化时 Pi 的重建需求由引擎分支自己报。
+                (runtimeAgentKind !== 'pi' &&
+                  sessionContextWindowBudget !== null &&
                   targetContextWindow !== undefined &&
                   targetContextWindow !== budgetCompareWindow),
               // 任务级预算：路由变了且已有显式预算时，把按**目标路由**重新收敛后的
