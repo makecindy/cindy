@@ -28,6 +28,7 @@ import {
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
+import { canOfferSessionProjectMove } from './sessionProjectDrop';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import {
   TaskMoveSubmenu,
@@ -283,7 +284,7 @@ function ActiveSessionTaskMenu({
           ))}
         {!guest && (
           <>
-            {!archived && !empty && !session.remoteHostId && (
+            {canOfferSessionProjectMove(session) && (
               <TaskMoveSubmenu
                 session={session}
                 disabled={ownerActionsBlocked}

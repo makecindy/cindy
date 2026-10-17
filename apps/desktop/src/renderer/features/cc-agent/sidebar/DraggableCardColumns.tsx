@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import Sortable from 'sortablejs';
+import { isSortableDropClaimed } from '@/lib/sortableDropClaim';
 
 export interface DraggableCardColumnsProps<T> {
   items: T[];
@@ -137,6 +138,7 @@ export function DraggableCardColumns<T>({
   // the sidebar. Only persist a reorder when the final drop lands in one of
   // this component's columns; external drops must restore the transient DOM.
   const nativeDropDispositionRef = useRef<'internal' | 'external' | null>(null);
+  const nativeDropEventRef = useRef<Event | null>(null);
 
   itemsRef.current = items;
   getIdRef.current = getId;
@@ -157,6 +159,7 @@ export function DraggableCardColumns<T>({
 
     const onStart = () => {
       nativeDropDispositionRef.current = null;
+      nativeDropEventRef.current = null;
       document.body.classList.add(SORTING_BODY_CLASS);
       originalBucketsRef.current = readColumnIds(columnRefs.current, columnsRef.current);
     };
@@ -168,6 +171,8 @@ export function DraggableCardColumns<T>({
       abortNextEndRef.current = false;
       const dropDisposition = nativeDropDispositionRef.current;
       nativeDropDispositionRef.current = null;
+      const claimedDrop = isSortableDropClaimed(nativeDropEventRef.current);
+      nativeDropEventRef.current = null;
 
       const movedId = evt.item.getAttribute('data-card-id');
       const toColumn = readColumnIndex(evt.to);
@@ -181,7 +186,7 @@ export function DraggableCardColumns<T>({
         restoreColumnDomOrder(columnRefs.current, originalBuckets);
       }
 
-      if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
+      if (aborted || claimedDrop || (!forceFallback && dropDisposition !== 'internal')) return;
 
       if (current.length === newOrder.length && current.every((id, i) => id === newOrder[i])) {
         return;
@@ -223,6 +228,7 @@ export function DraggableCardColumns<T>({
     const markDropDisposition = (event: Event) => {
       const active = Sortable.active;
       if (!active || !instances.includes(active)) return;
+      nativeDropEventRef.current = event;
       const target = event.target;
       nativeDropDispositionRef.current =
         target instanceof Node && cols.some((col) => col.contains(target))

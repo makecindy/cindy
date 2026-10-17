@@ -8,6 +8,11 @@
 远程任务的同机项目切换仍发送到任务所属电脑，复用已有 `moveSession` 宿主业务路径，
 不开放远程原始 DB patch。同机移动不会传输文件，其既有绑定及运行状态校验保持不变。
 
+`cindy-make` 与 `cindy-make-merge` 来源的任务必须保留 Cindy Make 管理的工作目录，不能移到
+普通项目或对话组；继续、完成与回收都依赖这项绑定。侧栏拖放不提供此操作，
+[宿主校验](../../apps/desktop/src/main/mcp-integrations/moveSession.ts)也在写入前拒绝，
+避免其它入口或旧控制端绕过界面限制。
+
 ## 复制内容与流程
 
 1. 复制普通 Desktop、共享来源或飞书来源的任务，以及从主任务发起的整组 Orca 任务。

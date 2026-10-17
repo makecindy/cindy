@@ -4661,7 +4661,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutProviderGroupChanged,
   },
   deviceLink: {
-    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
+    taskMigration: <Request extends import('@cindy/device-link').TaskMigrationRequest>(
+      deviceId: string | null,
+      request: Request,
+    ): Promise<import('../shared/taskMigrationIpc').TaskMigrationIpcResult<Request>> =>
       ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
     getState: (): Promise<{
       remoteControlEnabled: boolean;
