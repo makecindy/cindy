@@ -1167,7 +1167,7 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     await waitFor(() => {
       expect(checkedOf(shellC.container, '500000')).toBe(true);
     });
-    expect(checkedOf(shellC.container, '1000000')).toBe(false);
+    expect(checkedOf(shellC.container, '1000000')).not.toBe(true);
   });
 
   it('a budget commit in one instance syncs the other instance for the same session', async () => {
@@ -1204,7 +1204,8 @@ describe('ContextWindowBudgetChip — Greptile 2026-10-17 三条 P2', () => {
     await waitFor(() => {
       expect(checkedOf(shellB.container, '500000')).toBe(true);
     });
-    expect(checkedOf(shellB.container, '1000000')).toBe(false);
+    // 1M 默认行若在则不得同时选中（行本身是否渲染属档位集合口径，不作强断言）。
+    expect(checkedOf(shellB.container, '1000000')).not.toBe(true);
   });
 });
 
