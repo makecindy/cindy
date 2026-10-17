@@ -197,7 +197,19 @@ export async function reconcileCommittedComposerDraft(
     const raw = await AsyncStorage.getItem(documentKey);
     const text = await AsyncStorage.getItem(textKey);
     guard();
-    const stored = raw ? parseStoredComposerDocument(JSON.parse(raw)) : null;
+    // 损坏的 JSON 与"可解析但形状不对"同权:统一走 COMPOSER_DRAFT_INVALID,
+    // 让发送门保持闭合(草稿交接仍待处理)。裸 SyntaxError 会被调用方
+    // (#5306 的分类器)当成"存储层失败"而解锁输入框,outbox 记录里的
+    // draftHandoff 从此永久卡住、每次挂载重跑重败 —— 与
+    // readComposerDocumentDraft 对损坏行的容错口径也不一致。
+    let stored: ComposerDocument | null = null;
+    if (raw) {
+      try {
+        stored = parseStoredComposerDocument(JSON.parse(raw));
+      } catch {
+        stored = null;
+      }
+    }
     if (raw && !stored) throw new Error('COMPOSER_DRAFT_INVALID');
     const memory = documentDrafts.get(id);
     const next = memory && !composerDocumentsEqual(memory, handoff.before)
