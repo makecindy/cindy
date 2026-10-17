@@ -107,6 +107,8 @@ export interface BrowserControlRequest {
   profile?: string;
   targetUrl?: string;
   url?: string;
+  /** Host-only override for user-initiated pages. Agent opens default to background. */
+  background?: boolean;
   targetId?: string;
   label?: string;
   limit?: number;

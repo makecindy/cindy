@@ -91,7 +91,7 @@ describe('ghost panel preload contract', () => {
     expect(source).toContain("return ipcRenderer.invoke('maker:ghost-panel-window:open', ghostId);");
     expect(source).toContain("return ipcRenderer.invoke('maker:ghost-panel-window:set-detached', ghostId, detached);");
     expect(source).toContain("ipcRenderer.invoke('ghosts:reload', id)");
-    expect(source).toContain("ipcRenderer.invoke('ghosts:set-enabled', id, enabled)");
+    expect(source).toContain("ipcRenderer.invoke('ghosts:set-enabled', id, enabled, expectedInstalledApproval)");
     expect(source).toContain("return ipcRenderer.invoke('ghosts:clear-unread', id, seenAt);");
   });
 

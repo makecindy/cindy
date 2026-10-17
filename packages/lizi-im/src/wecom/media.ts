@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
+import type { IMHostFileStaging } from "../types.js";
+
+export const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const WINDOWS_RESERVED_FILENAME_STEMS = new Set([
   "CON",
@@ -119,31 +120,42 @@ export function safeWecomFilename(
     : base;
 }
 
-export async function persistWecomDownload(args: {
-  mediaDir: string;
+/**
+ * 入站文件交 host 暂存(路由到任务后由 host 移入任务附件目录)。不写 legacy
+ * `cc-agent/wecom-media` 目录 —— 它是冻结的历史兼容层, 只读。
+ */
+export async function stageWecomDownload(args: {
+  files: IMHostFileStaging;
   buffer: Buffer;
   filename?: string;
   fallbackExtension?: string;
   shouldKeep?: () => boolean;
-}): Promise<{ absPath: string; originalName: string; mimeType: string }> {
+}): Promise<{
+  absPath: string;
+  originalName: string;
+  mimeType: string;
+  discard: () => Promise<void>;
+}> {
   if (args.buffer.length === 0) throw new Error("WECOM_MEDIA_EMPTY");
   if (args.buffer.length > MAX_MEDIA_BYTES)
     throw new Error("WECOM_MEDIA_TOO_LARGE");
 
   const originalName = safeWecomFilename(args.filename, args.fallbackExtension);
-  const storageName = `${randomUUID()}-${originalName}`;
   if (args.shouldKeep?.() === false) throw new Error("WECOM_MEDIA_STALE");
-  await fs.mkdir(args.mediaDir, { recursive: true });
-  const absPath = path.join(args.mediaDir, storageName);
-  await fs.writeFile(absPath, args.buffer, { flag: "wx" });
+  const staged = await args.files.stage({
+    integration: "wecom",
+    buffer: args.buffer,
+    fileName: originalName,
+  });
   if (args.shouldKeep?.() === false) {
-    await fs.rm(absPath, { force: true });
+    await staged.discard().catch(() => undefined);
     throw new Error("WECOM_MEDIA_STALE");
   }
   return {
-    absPath,
+    absPath: staged.absPath,
     originalName,
     mimeType: mimeTypeForFilename(originalName),
+    discard: staged.discard,
   };
 }
 

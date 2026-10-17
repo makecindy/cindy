@@ -260,6 +260,17 @@ it('settles interrupted paste placeholders and drops late clipboard results', as
   expect(bridge.inject).not.toHaveBeenCalled();
 });
 
+it.each(['text', 'empty', 'failure'])('settles a native clipboard fallback with %s', async (result) => {
+  const { send, page } = mount();
+  const commit = vi.fn();
+  Object.assign(page, { commitPaste: commit });
+  send({ type: 'ready' });
+  if (result === 'failure') bridge.clipboard.mockRejectedValueOnce(new Error('clipboard unavailable'));
+  else bridge.clipboard.mockResolvedValueOnce(result === 'text' ? 'pasted text' : '');
+  await act(async () => send({ type: 'paste-text-request', requestId: 'clipboard' }));
+  expect(commit).toHaveBeenCalledExactlyOnceWith('clipboard', result === 'text' ? [{ type: 'text', text: 'pasted text' }] : []);
+});
+
 it('retains structural endpoints when only a zero-width quote is selected', () => {
   const { ref, page, send } = mount();
   send({ type: 'ready' });
@@ -279,6 +290,17 @@ it('keeps pending caret intent on first ready but does not replay it on reload',
   expect(page.applyDocument.mock.lastCall?.slice(1, 3)).toEqual([true, { nodeIndex: 0, offset: 8 }]);
   send({ type: 'ready' });
   expect(page.applyDocument.mock.lastCall?.slice(1, 3)).toEqual([false, null]);
+});
+
+it('applies the final dictation document without focusing and keeps the remembered caret', () => {
+  const { ref, page, send } = mount();
+  send({ type: 'ready' });
+  act(() => ref.current?.rememberSelection('voice suffix', { start: 5, end: 5 }));
+  act(() => ref.current?.applyDocumentAndSetSelection(textComposerDocument('voice suffix'), 5));
+  expect(page.document).toEqual(textComposerDocument('voice suffix'));
+  expect(page.applyDocument.mock.lastCall?.slice(1, 3)).toEqual([false, { nodeIndex: 0, offset: 5 }]);
+  expect(page.focus).not.toHaveBeenCalled();
+  expect(ref.current?.getSelection('voice suffix')).toEqual({ start: 5, end: 5 });
 });
 
 it('restores a hidden dictation draft without focusing or losing its saved insertion end', () => {

@@ -19,14 +19,17 @@ import {
   type DeviceProvidersPayload,
 } from './deviceProvidersCache';
 
-/** 一个别人分享给被控电脑的供应商(只含展示用字段,身份只有昵称)。 */
+/**
+ * 一个别人分享给被控电脑的供应商(只含展示用字段,身份只有昵称)。不带分享者的电脑名:
+ * 受邀者看不到它(provider-sharing.md §6)。
+ */
 export interface ProviderShareCatalogEntry {
   /** 任务记录里「Agent 在哪台电脑」的值:`share:<shareId>`。 */
   agentDeviceId: string;
   shareId: string;
   providerId: string;
-  /** 分享者电脑的名字。 */
-  deviceName: string;
+  /** 分享的供应商名称(已去掉登录身份)。 */
+  providerLabel: string;
   /** 分享者昵称。 */
   ownerName: string;
   status: 'active' | 'paused';
@@ -140,7 +143,7 @@ export function parseProviderShareCatalogs(value: unknown): ProviderShareCatalog
     agentDeviceId: share.agentDeviceId,
     shareId: share.shareId,
     providerId: share.providerId,
-    deviceName: share.deviceName,
+    providerLabel: share.providerLabel,
     ownerName: share.owner.displayName,
     status: share.status,
     hostOnline: share.hostOnline,

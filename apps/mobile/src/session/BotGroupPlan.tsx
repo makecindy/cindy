@@ -146,7 +146,7 @@ export function BotGroupPlanCard({
     : plan.status === 'dismissed' ? 'groupChat.plan.dismissed'
       : plan.status === 'stopped' ? 'groupChat.plan.stopped' : null;
   const busy = pending !== null;
-  const candidates = members.filter(isActiveBotGroupMember);
+  const candidates = members.filter(member => isActiveBotGroupMember(member) && (!member.actorKind || member.actorKind === 'bot'));
   const steps = plan.steps.length;
   const done = plan.steps.filter((step) => step.status === 'done').length;
   const progress = plan.status === 'proposed' ? t('groupChat.plan.awaitingStart')

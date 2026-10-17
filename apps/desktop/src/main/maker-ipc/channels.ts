@@ -793,6 +793,11 @@ export const MAKER_INVOKE = {
   BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
   /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
+  /**
+   * 主人在伙伴聊天的任务卡上「补一句」后，给伙伴聊天留一条「已告诉后台任务：「…」」。
+   * 消息本身由渲染端以主人身份发进子任务；只本机可用，不进 device-link 白名单。
+   */
+  BOT_DELEGATION_NOTE_TRACE: 'maker:bot-delegation:note-trace',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
@@ -802,8 +807,11 @@ export const MAKER_INVOKE = {
   CHAT_SERVER_STATUS: 'maker:chat-server:status',
   CHAT_SERVER_THREAD: 'maker:chat-server:thread',
   CHAT_SERVER_REPLY: 'maker:chat-server:reply',
+  CHAT_SERVER_SHARETOMAIN: 'maker:chat-server:shareToMain',
   CHAT_SERVER_REACT: 'maker:chat-server:react',
+  CHAT_SERVER_REACTORS: 'maker:chat-server:reactors',
   CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
+  CHAT_SERVER_REVOKEINVITE: 'maker:chat-server:revokeInvite',
   CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
   CHAT_SERVER_ACCEPTINVITE: 'maker:chat-server:acceptInvite',
   BOT_GROUP_LIST: 'maker:bot-group:list',
@@ -821,6 +829,24 @@ export const MAKER_INVOKE = {
   BOT_GROUP_PLAN_RETRY: 'maker:bot-group:plan-retry',
   BOT_GROUP_PLAN_EDIT: 'maker:bot-group:plan-edit',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
+  /** Where each companion runs (cloud-companions.md §3); read-only snapshot. */
+  COMPANION_CLOUD_STATE: 'maker:companion-cloud:state',
+  /** Make this computer the companion's home (cloud-companions.md §3.1). */
+  COMPANION_CLOUD_TAKE_OVER: 'maker:companion-cloud:take-over',
+  /** Move the companion to another computer from any computer (hand over, ask its home, or take over). */
+  COMPANION_CLOUD_SWITCH_HOME: 'maker:companion-cloud:switch-home',
+  /** Read the companion's 1:1 room (works while its home is offline). */
+  COMPANION_CLOUD_TRANSCRIPT: 'maker:companion-cloud:transcript',
+  /** Where a companion can move, seen from this computer. */
+  COMPANION_CLOUD_HOME_CHOICES: 'maker:companion-cloud:home-choices',
+  /** The copies of Cindy in the cloud, when there are several to merge. */
+  COMPANION_CLOUD_CINDY_COPIES: 'maker:companion-cloud:cindy-copies',
+  /** Merge the other copies of Cindy into the kept one (on its home). */
+  COMPANION_CLOUD_MERGE_CINDY: 'maker:companion-cloud:merge-cindy',
+  /** A file of the companion's room, brought to this computer (works while its home is offline). */
+  COMPANION_CLOUD_ATTACHMENT: 'maker:companion-cloud:attachment',
+  /** Local copy of an avatar from another computer or the cloud (looked up first, optionally fetched). */
+  COMPANION_AVATAR_RESOLVE: 'maker:companion-avatar:resolve',
 } as const;
 
 /**
@@ -974,6 +1000,8 @@ export const MAKER_PUSH = {
   BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
+  /** Companion homes changed; payload is the full CompanionCloudSnapshot. */
+  COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
   /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */

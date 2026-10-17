@@ -2295,23 +2295,88 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
   it('retries durable Subagent approval delivery without asking the user twice', async () => {
     const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
-    mockRunDiscovery().mockResolvedValue([run]);
+    // Detached supervisors from earlier cases may still poll their own roots.
+    // Offer this request only to this handle, after its resolver is attached.
+    const discovery = deferSubagentDiscovery(run);
+    const ownRunRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1');
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns')
       .mockRejectedValueOnce(new Error('mailbox unavailable'))
       .mockResolvedValue(1);
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
     const handle = await new PiAgent(buildDeps()).startSession(opts());
     handle.setInteractionResolver(resolver);
+    discovery.publish();
 
-    await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2), { timeout: 2_500 });
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(control).toHaveBeenLastCalledWith(
-      expect.any(String),
-      run.taskId,
-      'approval',
-      expect.objectContaining({ confirmed: true }),
-    );
-    await handle.close();
+    try {
+      await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2), { timeout: 2_500 });
+      expect(resolver).toHaveBeenCalledOnce();
+      for (const attempt of [1, 2]) {
+        expect(control).toHaveBeenNthCalledWith(
+          attempt,
+          ownRunRoot,
+          run.taskId,
+          'approval',
+          expect.objectContaining({ confirmed: true }),
+        );
+      }
+    } finally {
+      discovery.clear();
+      await handle.close();
+    }
+  });
+
+  it('routes model resume through the same retained-session helper and returns its generation id', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const resumedId = '123e4567-e89b-42d3-a456-426614174098';
+    const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun').mockResolvedValue(resumedId);
+    try {
+      knobs.onEvent?.({ type: 'extension_ui_request', id: 'resume-from-model', method: 'input',
+        title: 'cindy:pi-subagent-runner', placeholder: JSON.stringify({
+          action: 'resume', runId: '123e4567-e89b-42d3-a456-426614174097', childId: 'one-child', message: 'check again',
+        }) });
+      await vi.waitFor(() => expect(knobs.sent).toContainEqual(expect.objectContaining({
+        id: 'resume-from-model', value: JSON.stringify({ ok: true, runId: resumedId }),
+      })));
+      expect(resumeSpy).toHaveBeenCalledWith(expect.any(String), '123e4567-e89b-42d3-a456-426614174097',
+        'check again', expect.objectContaining({ runtimeOwnerId: expect.any(String), launchRunner: expect.any(Function) }), 'one-child');
+    } finally { await handle.close(); }
+  });
+
+  it('revokes the pre-settlement delivery gate when the user stops the parent', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const query = (id: string) => knobs.onEvent?.({ type: 'extension_ui_request', id, method: 'input',
+      title: 'cindy:pi-subagent-runner', placeholder: JSON.stringify({ action: 'delivery', runId: '123e4567-e89b-42d3-a456-426614174097' }) });
+    try {
+      knobs.onEvent?.({ type: 'agent_start' });
+      query('before-stop');
+      await vi.waitFor(() => expect(knobs.sent).toContainEqual(expect.objectContaining({ id: 'before-stop', value: JSON.stringify({ ok: true, confirmed: true }) })));
+      await handle.abort();
+      query('after-stop');
+      await vi.waitFor(() => expect(knobs.sent).toContainEqual(expect.objectContaining({ id: 'after-stop', value: JSON.stringify({ ok: false, unconfirmed: true }) })));
+    } finally { await handle.close(); }
+  });
+
+  it('retains every resume lease when a newer concurrent resume fails first', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    let release!: (runId: string) => void;
+    const pending = new Promise<string>(resolve => { release = resolve; });
+    const spy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun')
+      .mockImplementationOnce(async () => pending)
+      .mockRejectedValueOnce(new Error('second resume rejected'));
+    const first = handle.resumeBackgroundTask!('first', 'continue');
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    await expect(handle.resumeBackgroundTask!('second', 'continue')).rejects.toThrow('second resume rejected');
+    let closed = false;
+    const closing = handle.close().then(() => { closed = true; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(closed).toBe(false);
+      expect(proxyDisposed).toBe(0);
+    } finally {
+      release('123e4567-e89b-42d3-a456-426614174098');
+      await first;
+      await closing;
+    }
   });
 
   it('waits for an in-flight Subagent resume before transferring the proxy lease', async () => {

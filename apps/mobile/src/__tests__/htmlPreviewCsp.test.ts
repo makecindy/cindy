@@ -281,7 +281,8 @@ describe('资源取件的安全接线(源码级守卫)', () => {
 
   it('checks exact manifest size before and after download and bounds upload on the controlled device', () => {
     expect(snapshotSource).toContain('if (media.size !== file.size)');
-    expect(snapshotSource.indexOf('if (media.size !== file.size)')).toBeLessThan(snapshotSource.indexOf('createDownloadResumable(media.url'));
+    const legacySnapshot = snapshotSource.slice(snapshotSource.indexOf('export async function prepareMobileHtmlPreview'), snapshotSource.indexOf('async function prepareOnDemand'));
+    expect(legacySnapshot.indexOf('if (media.size !== file.size)')).toBeLessThan(legacySnapshot.indexOf('createDownloadResumable(media.url'));
     expect(snapshotSource).toContain('destination.size !== file.size');
     expect(snapshotSource).toContain('baseDir: root, maxBytes: Math.max(1, file.size)');
     const gallery = readFileSync(resolve(process.cwd(), 'src/session/fileBrowserGallery.ts'), 'utf8');
@@ -295,7 +296,10 @@ describe('资源取件的安全接线(源码级守卫)', () => {
     expect(snapshotSource).toContain('finally { for (const key of uploaded) deps.deleteOssObject(key); }');
     expect(pageSource).toContain("method: 'DELETE'");
     const media = readFileSync(resolve(process.cwd(), 'src/session/remoteMedia.ts'), 'utf8');
-    expect(media.indexOf('opts?.onOssKey?.(fetched.ossKey);')).toBeLessThan(media.indexOf('const signed = await deps.presignGet('));
+    const collected = media.indexOf('opts?.onOssKey?.(fetched.ossKey);');
+    const presigned = media.indexOf('deps.presignGet(fetched.ossKey)');
+    expect(collected).toBeGreaterThanOrEqual(0);
+    expect(presigned).toBeGreaterThan(collected);
   });
 
   it('SSH 会话的资源取件必须带会话上下文', () => {

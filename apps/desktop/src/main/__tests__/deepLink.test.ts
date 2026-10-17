@@ -84,9 +84,24 @@ describe('chat invitation handoff', () => {
   it('recognizes the existing generated link and rejects ambiguous targets', () => {
     expect(parseDeepLink(link)).toEqual({ type: 'chat-invite', token });
     expect(parseDeepLink(link.replace('cindy:', 'xdt-maker:'))).toEqual({ type: 'chat-invite', token });
-    for (const value of [link + '/extra', link + '?token=other', link + '#secret', link + 'a', link.slice(0, -1)]) {
-      expect(parseDeepLink(value)).toBeNull();
+    // A damaged invitation never yields a token, but the click is reported instead of ignored.
+    for (const value of [link + '/extra', link + '?token=other', link + '#secret', link + 'a', link.slice(0, -1), 'cindy://chat-invite/']) {
+      expect(parseDeepLink(value)).toEqual({ type: 'chat-invite-malformed' });
     }
+    expect(parseDeepLink('cindy://chat-invite')).toBeNull();
+  });
+  it('queues one malformed-link notice behind valid invitations without logging the link', () => {
+    setDeepLinkMainWindow(null);
+    const damaged = link.slice(0, -3);
+    handleIncomingDeepLink(damaged, 'open-url');
+    handleIncomingDeepLink(link, 'open-url');
+    handleIncomingDeepLink(damaged + 'x', 'second-instance');
+    handleIncomingDeepLink('cindy://session/ordinary-task', 'open-url');
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite-malformed' });
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'ordinary-task' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(damaged.slice('cindy://chat-invite/'.length));
   });
   it.each(['open-url', 'cold-start-argv', 'second-instance'])('retains %s through login focus and unrelated navigation', source => {
     setDeepLinkMainWindow(null);
@@ -201,6 +216,14 @@ describe('internal main-window navigation', () => {
 describe('parseDeepLink', () => {
   it('parses session payload', () => {
     expect(parseDeepLink('xdt-maker://session/abc-123')).toEqual({
+      type: 'session',
+      id: 'abc-123',
+    });
+  });
+
+  // islandEntryId 只由主进程的灵动岛点击写入;外部链接不能冒充一次点击去处置提醒。
+  it('never derives an Agent Island click id from an external link', () => {
+    expect(parseDeepLink('cindy://session/abc-123?islandEntryId=1')).toEqual({
       type: 'session',
       id: 'abc-123',
     });

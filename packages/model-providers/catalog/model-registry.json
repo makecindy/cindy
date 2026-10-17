@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-10-09T06:00:00.000Z",
+  "updatedAt": "2026-10-14T00:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -116,6 +116,36 @@
       ],
       "nativeApi": "anthropic-messages",
       "modelRef": "anthropic/claude-opus-5-5"
+    },
+    {
+      "id": "anthropic/claude-sonnet-5-5",
+      "name": "Sonnet 5.5",
+      "status": "active",
+      "sortOrder": 6,
+      "routes": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-sonnet-5-5",
+          "agents": ["claude-code", "codex"]
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-5-5"
+    },
+    {
+      "id": "anthropic/claude-haiku-5-5",
+      "name": "Haiku 5.5",
+      "status": "active",
+      "sortOrder": 9,
+      "routes": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-haiku-5-5",
+          "agents": ["claude-code", "codex"]
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-haiku-5-5"
     },
     {
       "id": "openai/gpt-5.6-sol",
@@ -2214,6 +2244,20 @@
       "modelRef": "meta/muse-spark-1.2"
     },
     {
+      "id": "xd/meta-muse-wonder-1.0",
+      "name": "Muse Wonder",
+      "nativeApi": "openai-responses",
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "meta/muse-wonder-1.0",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "modelRef": "meta/muse-wonder-1.0"
+    },
+    {
       "id": "xd/moonshotai-kimi-k3",
       "name": "Kimi K3",
       "routes": [
@@ -2542,6 +2586,11 @@
     {
       "providerId": "xd",
       "modelIdPrefix": "meta/muse-spark-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "meta/muse-wonder-",
       "nativeApi": "openai-responses"
     },
     {
@@ -3324,6 +3373,33 @@
           ]
         }
       ]
+    },
+    {
+      "id": "anthropic/claude-sonnet-5-5",
+      "aliases": ["claude-sonnet-5-5"],
+      "defaults": {
+        "name": "Sonnet 5.5",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      }
+    },
+    {
+      "id": "anthropic/claude-haiku-5-5",
+      "aliases": ["claude-haiku-5-5"],
+      "defaults": {
+        "name": "Haiku 5.5",
+        "description": "Fastest for quick answers",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      }
     },
     {
       "id": "openai/gpt-5.6-sol",
@@ -5009,6 +5085,71 @@
       ]
     },
     {
+      "id": "google/gemini-4-argon",
+      "aliases": [
+        "gemini-4-argon"
+      ],
+      "defaults": {
+        "name": "Gemini 4 Argon",
+        "description": "Google Gemini 4 Argon — flagship reasoning model with a unified 1M context window",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-4-argon"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-10-13",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-10-14"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-10-14"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "google/gemini-3.7-flash",
       "aliases": ["gemini-3.7-flash"],
       "defaults": {
@@ -6529,6 +6670,7 @@
       "defaults": {
         "name": "GPT-4o mini TTS",
         "mode": "audio_speech",
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts",
         "modalities": {
           "input": ["text"],
           "output": ["audio"]
@@ -6766,6 +6908,43 @@
       ]
     },
     {
+      "id": "meta/muse-wonder-1.0",
+      "aliases": ["muse-wonder-1.0"],
+      "defaults": {
+        "name": "Muse Wonder",
+        "efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "contextWindow": 1048576,
+        "mode": "chat",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "officialDocs": "https://dev.meta.ai/docs/models"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "effectiveFrom": "2026-10-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://dev.meta.ai/docs/pricing-rate-limits",
+                "verifiedAt": "2026-10-13"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "google/gemini-3.8-flash",
       "aliases": ["gemini-3.8-flash"],
       "defaults": {
@@ -6811,6 +6990,396 @@
       "aliases": [],
       "defaults": {
         "name": "Laguna S 2.1 118B A8B"
+      }
+    },
+    {
+      "id": "openai/tts-1",
+      "aliases": ["tts-1"],
+      "defaults": {
+        "name": "TTS-1",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/tts-1"
+      }
+    },
+    {
+      "id": "openai/tts-1-hd",
+      "aliases": ["tts-1-hd"],
+      "defaults": {
+        "name": "TTS-1 HD",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/tts-1-hd"
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-tts-2025-03-20",
+      "aliases": ["gpt-4o-mini-tts-2025-03-20"],
+      "defaults": {
+        "name": "GPT-4o mini TTS (2025-03-20)",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts"
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-tts-2025-12-15",
+      "aliases": ["gpt-4o-mini-tts-2025-12-15"],
+      "defaults": {
+        "name": "GPT-4o mini TTS (2025-12-15)",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_v4",
+      "aliases": ["eleven_v4"],
+      "defaults": {
+        "name": "Eleven v4",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_v4_turbo",
+      "aliases": ["eleven_v4_turbo"],
+      "defaults": {
+        "name": "Eleven v4 Turbo",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_v3",
+      "aliases": ["eleven_v3"],
+      "defaults": {
+        "name": "Eleven v3",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_v3_conversational",
+      "aliases": ["eleven_v3_conversational"],
+      "defaults": {
+        "name": "Eleven v3 Conversational",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_multilingual_v2",
+      "aliases": ["eleven_multilingual_v2"],
+      "defaults": {
+        "name": "Eleven Multilingual v2",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_flash_v2_5",
+      "aliases": ["eleven_flash_v2_5"],
+      "defaults": {
+        "name": "Eleven Flash v2.5",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_flash_v2",
+      "aliases": ["eleven_flash_v2"],
+      "defaults": {
+        "name": "Eleven Flash v2",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_turbo_v2_5",
+      "aliases": ["eleven_turbo_v2_5"],
+      "defaults": {
+        "name": "Eleven Turbo v2.5",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "elevenlabs/eleven_turbo_v2",
+      "aliases": ["eleven_turbo_v2"],
+      "defaults": {
+        "name": "Eleven Turbo v2",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://elevenlabs.io/docs/overview/models"
+      }
+    },
+    {
+      "id": "minimax/speech-2.8-hd",
+      "aliases": ["speech-2.8-hd"],
+      "defaults": {
+        "name": "MiniMax Speech 2.8 HD",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-2.8-turbo",
+      "aliases": ["speech-2.8-turbo"],
+      "defaults": {
+        "name": "MiniMax Speech 2.8 Turbo",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-2.6-hd",
+      "aliases": ["speech-2.6-hd"],
+      "defaults": {
+        "name": "MiniMax Speech 2.6 HD",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-2.6-turbo",
+      "aliases": ["speech-2.6-turbo"],
+      "defaults": {
+        "name": "MiniMax Speech 2.6 Turbo",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-02-hd",
+      "aliases": ["speech-02-hd"],
+      "defaults": {
+        "name": "MiniMax Speech 02 HD",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-02-turbo",
+      "aliases": ["speech-02-turbo"],
+      "defaults": {
+        "name": "MiniMax Speech 02 Turbo",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-01-hd",
+      "aliases": ["speech-01-hd"],
+      "defaults": {
+        "name": "MiniMax Speech 01 HD",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "minimax/speech-01-turbo",
+      "aliases": ["speech-01-turbo"],
+      "defaults": {
+        "name": "MiniMax Speech 01 Turbo",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://platform.minimax.io/docs/api-reference/speech-t2a-http"
+      }
+    },
+    {
+      "id": "qwen/qwen3-tts-flash",
+      "aliases": ["qwen3-tts-flash"],
+      "defaults": {
+        "name": "Qwen3 TTS Flash",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/qwen-tts-api"
+      }
+    },
+    {
+      "id": "qwen/qwen3-tts-flash-realtime",
+      "aliases": ["qwen3-tts-flash-realtime"],
+      "defaults": {
+        "name": "Qwen3 TTS Flash Realtime",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/realtime-tts-user-guide"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-tts-plus",
+      "aliases": ["qwen-audio-3.0-tts-plus"],
+      "defaults": {
+        "name": "Qwen Audio 3.0 TTS Plus",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-tts-flash",
+      "aliases": ["qwen-audio-3.0-tts-flash"],
+      "defaults": {
+        "name": "Qwen Audio 3.0 TTS Flash",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
+      }
+    },
+    {
+      "id": "alibaba/cosyvoice-v3.5-plus",
+      "aliases": ["cosyvoice-v3.5-plus"],
+      "defaults": {
+        "name": "CosyVoice v3.5 Plus",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
+      }
+    },
+    {
+      "id": "alibaba/cosyvoice-v3.5-flash",
+      "aliases": ["cosyvoice-v3.5-flash"],
+      "defaults": {
+        "name": "CosyVoice v3.5 Flash",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
+      }
+    },
+    {
+      "id": "alibaba/cosyvoice-v3-plus",
+      "aliases": ["cosyvoice-v3-plus"],
+      "defaults": {
+        "name": "CosyVoice v3 Plus",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
+      }
+    },
+    {
+      "id": "alibaba/cosyvoice-v3-flash",
+      "aliases": ["cosyvoice-v3-flash"],
+      "defaults": {
+        "name": "CosyVoice v3 Flash",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
+      }
+    },
+    {
+      "id": "alibaba/cosyvoice-v2",
+      "aliases": ["cosyvoice-v2"],
+      "defaults": {
+        "name": "CosyVoice v2",
+        "mode": "audio_speech",
+        "modalities": {
+          "input": ["text"],
+          "output": ["audio"]
+        },
+        "officialDocs": "https://www.alibabacloud.com/help/en/model-studio/tts-model"
       }
     }
   ]

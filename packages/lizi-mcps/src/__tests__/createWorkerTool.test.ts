@@ -59,6 +59,16 @@ describe('create_worker tool', () => {
     expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/tmp/candidate with spaces ' }));
   });
 
+  it('forwards the Worker Agent location ("local" = the task computer, omitted = same as the Lead)', async () => {
+    const { registry, createWorker } = setup();
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'remote', agent_device_id: 'share:s1' });
+    expect(createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: 'share:s1' }));
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'local', agent_device_id: 'local' });
+    expect(createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null }));
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'lead' });
+    expect((createWorker.mock.calls.at(-1) as unknown[])[0]).not.toHaveProperty('agentDeviceId');
+  });
+
   it('rejects an empty explicit directory instead of silently inheriting', async () => {
     const { registry, createWorker } = setup();
     const result = await registry.call('create_worker', {

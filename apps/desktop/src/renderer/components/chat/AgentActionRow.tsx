@@ -80,7 +80,14 @@ import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
 import { toLocalFileUrl, resolveToolFilePath } from '@/lib/localPathResolver';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
-import { isGhostCallToolName } from '../../../shared/ghost';
+import { isGhostCallToolName, isValidGhostId } from '../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
+  findInstalledGhostByInstanceId,
+  resolveInstalledGhost,
+} from '../../../shared/pluginIdentity';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
@@ -96,6 +103,7 @@ import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
@@ -733,6 +741,13 @@ export interface AgentActionRowProps {
    * isSessionStreaming 计算后传入;缺省按已完成渲染(历史消息路径)。
    */
   status?: 'running' | 'done';
+  /**
+   * Host-resolved descriptor of a remote single-line activity. Its input is not on this
+   * device, so the row never re-describes a partial input.
+   */
+  descriptorOverride?: ToolUseDescriptor;
+  /** Replaces the row's own details: a remote line opens its whole work group instead. */
+  onActivateOverride?: () => void;
 }
 
 type LightboxState =
@@ -769,6 +784,8 @@ export function AgentActionRow({
   showRawCommand = false,
   intentOverride,
   status = 'done',
+  descriptorOverride,
+  onActivateOverride,
 }: AgentActionRowProps) {
   const { t } = useTranslation();
   const compactedToolResult = parseToolResultCompactionMarker(toolResult);
@@ -789,7 +806,22 @@ export function AgentActionRow({
   const ghostInfo = useMemo(() => {
     if (!isGhostCallToolName(toolName) || !inp) return null;
     const gid = typeof inp.ghost_id === 'string' ? inp.ghost_id : '';
-    const hit = installedGhosts.find((g) => g.manifest.id === gid);
+    const namespace = inp.namespace;
+    const identity = isValidGhostId(gid) &&
+      (namespace === null || (typeof namespace === 'string' && isValidPluginNamespace(namespace)))
+      ? createPluginLogicalIdentity(namespace, gid)
+      : null;
+    // 裸 ID 与 main 侧一样按唯一逻辑身份解析；实例键才按物理键精确查找。
+    const bareIdResult = namespace === undefined && isValidGhostId(gid)
+      ? resolveInstalledGhost(installedGhosts, gid)
+      : null;
+    const hit = identity
+      ? findInstalledGhostByIdentity(installedGhosts, identity)
+      : bareIdResult?.status === 'unique'
+        ? bareIdResult.ghost
+        : namespace === undefined && !isValidGhostId(gid)
+          ? findInstalledGhostByInstanceId(installedGhosts, gid)
+          : undefined;
     return {
       name: hit?.manifest.name ?? (gid || 'ghost'),
       tool: typeof inp.tool === 'string' ? inp.tool : '',
@@ -797,10 +829,11 @@ export function AgentActionRow({
   }, [toolName, inp, installedGhosts]);
 
   const descriptor = useMemo(() => {
+    if (descriptorOverride) return descriptorOverride;
     const resolved = describeToolUse(toolName, inp);
     if (!intentOverride || resolved.kind !== 'command' || resolved.description) return resolved;
     return { ...resolved, intent: intentOverride };
-  }, [toolName, inp, intentOverride]);
+  }, [toolName, inp, intentOverride, descriptorOverride]);
   const isFileChange = descriptor.kind === 'fileChange';
   // command 类带模型 description 时,description 自含动词语义("查看工作区
   // 状态"),再渲染英文动词 label 会变成"Ran 查看工作区状态"的中英混排 —
@@ -921,6 +954,10 @@ export function AgentActionRow({
    *   - Read → 文稿/图片 lightbox
    */
   const onActivate = async (anchor: HTMLElement) => {
+    if (onActivateOverride) {
+      onActivateOverride();
+      return;
+    }
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
@@ -973,6 +1010,7 @@ export function AgentActionRow({
   // Claude 取 file_path，Codex 单文件 change 取目标路径 —— 模型可能给相对
   // 路径(见 onActivate 注释),菜单动作统一经 resolveToolFilePath 补成绝对路径。
   const fileChipMenu = useFileChipContextMenu({
+    fileName: chipFilePath,
     getAbsPath: () => resolveToolFilePath(chipFilePath, fileCtx.workingDir),
     canOpenInBrowser: isBrowserOpenablePath(chipFilePath),
   });
@@ -1042,23 +1080,36 @@ export function AgentActionRow({
 
   const onRowKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (!chipFilePath) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      activateInlineLinkFromKeyboard(e);
+      return;
+    }
     if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
     e.preventDefault();
     e.stopPropagation();
     const chipRect = fileChipRef.current?.getBoundingClientRect();
     const rowRect = e.currentTarget.getBoundingClientRect();
     const rect = chipRect ?? rowRect;
-    fileChipMenu.openAt(rect.left, rect.bottom + 2);
+    fileChipMenu.openAt(rect.left, rect.bottom + 2, e.currentTarget);
   };
 
   return (
     <div className="flex flex-col" data-message-client-id={message.clientId}>
       <button
         type="button"
-        onClick={(e) => void onActivate(e.currentTarget)}
+        onClick={(e) => {
+          const anchor = e.currentTarget;
+          if (chipFilePath) fileChipMenu.onActivate(e, () => onActivate(anchor));
+          else void onActivate(anchor);
+        }}
+        onAuxClick={(e) => {
+          if (e.button !== 1 || !chipFilePath) return;
+          const anchor = e.currentTarget;
+          fileChipMenu.onActivate(e, () => onActivate(anchor));
+        }}
         onContextMenu={onRowContextMenu}
         onKeyDown={onRowKeyDown}
-        aria-expanded={isInlineExpand ? expanded : undefined}
+        aria-expanded={isInlineExpand && !onActivateOverride ? expanded : undefined}
         aria-label={
           ghostInfo
             ? `${rowVerbLabel} ${ghostInfo.name} ${ghostInfo.tool}`

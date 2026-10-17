@@ -156,6 +156,17 @@ describe('settings remote Codex creation', () => {
     });
   });
 
+  it('persists an explicit empty effort for SSH models without effort levels', async () => {
+    publish([sshModel('plain', { efforts: [], defaultEffort: null })]);
+    start();
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({
+      model: 'plain',
+      providerId: 'openai',
+      effort: '',
+    });
+  });
+
   it('uses remote defaults even when the local native preference is available remotely', async () => {
     publish([sshModel('first', { supportsFastMode: true }), sshModel('chosen', { supportsFastMode: true })]);
     mocks.prefs.mockReturnValue({ model: 'chosen', providerId: 'openai', effort: 'low' });

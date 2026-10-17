@@ -476,6 +476,8 @@ export function buildUserProvider(
       rt.piCatalogProviderId,
       rt.supportsImageGeneration,
     );
+    if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
+    if (rt.videoApi === "xai-videos") routing[agent]!.videoApi = rt.videoApi;
     const followsPreset =
       presetRuntime &&
       withoutTrailingSlashes(resolvedBaseUrl) ===
@@ -612,9 +614,9 @@ export function buildUserProvider(
       const registry = options.modelRegistry ?? undefined;
       const resolveDeclaration = (source: ModelRegistry | undefined) => {
         const baseModel = findBaseModel(source, m.id);
-        const routeNativeApi = resolveModelNativeApi(source, config.id, m.id);
+        const routeNativeApi = resolveModelNativeApi(source, config.id, m.id, projected.mode);
         return routeNativeApi !== undefined ? routeNativeApi
-          : resolveCatalogModelNativeApi(source, baseModel?.id ?? m.id);
+          : resolveCatalogModelNativeApi(source, baseModel?.id ?? m.id, projected.mode);
       };
       const projected = toCatalogModel(
         m,
@@ -631,9 +633,10 @@ export function buildUserProvider(
       const declaration = currentDeclaration !== undefined ? currentDeclaration
         : projected.nativeApi !== undefined ? projected.nativeApi
         : resolveDeclaration(BUNDLED_CATALOG.modelRegistry);
-      const nativeApi = declaration === null || declaration === 'anthropic-messages'
-        || declaration === 'openai-responses' || declaration === 'openai-completions'
-        || declaration === 'google-generative-ai' ? declaration : undefined;
+      // Only an explicit user value may override the current media declaration.
+      // projected also contains discovery metadata, including stale protocol claims.
+      const nativeApi = providerMediaField(projected.mode) && storedModel.nativeApi !== undefined
+        ? storedModel.nativeApi : declaration;
       return {
         ...(imported?.cost ? { cost: imported.cost } : {}),
         ...projected,
@@ -708,12 +711,23 @@ export function buildUserProvider(
       "imageModels" | "videoModels" | "audioModels" | "embeddingModels"
     >
   > = {};
+  const imageAgents = agents.filter((agent) => routing[agent]?.imageApi === "openai-images");
+  const videoAgents = agents.filter((agent) => routing[agent]?.videoApi === "xai-videos");
   for (const [agent, list] of Object.entries(models)) {
     for (const model of list ?? []) {
       const field = providerMediaField(model.mode);
       if (!field) continue;
+      // Explicit Images membership owns media routing, independent of chat harness order.
+      // Keep the old projection for connections that have never opted into Images.
+      const owners = field === "imageModels" ? imageAgents : field === "videoModels" ? videoAgents : [];
+      if (owners.length && !owners.includes(agent as AgentKind)) continue;
       const items = (mediaLists[field] ??= []);
-      if (!items.some((item) => item.id === model.id))
+      const existing = items.find((item) => item.id === model.id);
+      if (existing && owners.length) {
+        // A legacy/manual config with two owners is ambiguous. Never pick a key by order.
+        delete existing.sourceAgent;
+      }
+      if (!existing)
         items.push({
           ...pickModelMetadata(model),
           id: model.id,

@@ -147,6 +147,14 @@ export interface ReviewRunMeta {
   reviewerSessionId?: string;
   status: ReviewRunStatus;
   targetKind: ReviewTargetKind;
+  /** Exact host-selected read scope, never the source task's stale label. */
+  workspace?: {
+    workingDir: string;
+    baseRef?: string;
+    hasUncommittedChanges: boolean;
+    /** Other repositories/worktrees the task changed, reviewed with the primary one. */
+    additionalWorkingDirs?: string[];
+  };
   startedAt: number;
   /**
    * Present on runs created by owner-aware clients. Optional only so cards

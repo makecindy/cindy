@@ -160,5 +160,8 @@
   "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
   "hostMute": "Mute remote computer",
   "hostMuteHint": "Mute the remote computer while connected",
-  "hostMuteFailed": "Couldn't change the remote computer's mute setting"
+  "hostMuteFailed": "Couldn't change the remote computer's mute setting",
+  "handoffEnded": "This input handoff has already finished, so there is no window to show.",
+  "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
+  "handoffWindow": "Input handoff · {{app}}"
 }

@@ -70,6 +70,8 @@ export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): strin
 
 /** Unknown provider messages stay in diagnostic details, never in the localized summary. */
 export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: unknown): string {
+  const limitReason = /\[REMOTE_AGENT_BUSY\] \[(DEVICE_LIMIT|TOTAL_LIMIT)\]/.exec(message)?.[1];
+  if (limitReason) return `session.remoteError.REMOTE_AGENT_${limitReason}`;
   const parsed = parseAgentErrorCode(message);
   const code = parsed?.code === 'AUTO_REVIEW_UNAVAILABLE'
     ? autoReviewUnavailableGuidanceCode(sessionSource)

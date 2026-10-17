@@ -60,6 +60,16 @@ describe('history-view changed files cards', () => {
     ]);
     expect(render(rows.slice(0, 2)).filter(item => item.type === 'turn_changes')).toHaveLength(1);
   });
+  it('keeps the review card after the reviewed turn and its changed-files card', () => {
+    const rows: ChatMessage[] = [
+      { clientId: 'user-1', role: 'user', content: 'Edit five files' },
+      { clientId: 'answer-1', role: 'assistant', content: 'Done' },
+      { clientId: 'review:run-1', role: 'assistant', content: 'P1 finding', systemCardType: 'review' },
+    ];
+    expect(render(rows).map(item => item.key)).toEqual([
+      'msg-user-1', 'msg-answer-1', 'turnchanges-changes-1', 'msg-review:run-1',
+    ]);
+  });
   it('does not pull a changed-files card from a turn outside the loaded history', () => {
     expect(render([{ clientId: 'user-2', role: 'user', content: 'Another page' }])
       .filter(item => item.type === 'turn_changes')).toEqual([]);

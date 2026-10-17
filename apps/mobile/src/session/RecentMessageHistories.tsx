@@ -3,9 +3,11 @@ import { StyleSheet, View } from 'react-native';
 import { useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
+import { useTheme } from '@/theme';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { NativeHistoryHost, NativeHistorySlot, needsResidentHistoryUpgrade } from './NativeResidentHistory';
 import { useResidentHomeListContextBridge } from './ResidentHomeList';
+import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 
 import { MessageHistoryActive, MessageHistoryPositioning } from './messageHistoryActivity';
 export { useMessageHistoryActive, useMessageHistoryPositioning } from './messageHistoryActivity';
@@ -24,6 +26,7 @@ const Context = createContext<{
  * React children remain mounted until LRU eviction or sign-out. On iOS, a plain
  * native content container docks into the route without moving React ownership. */
 export function RecentMessageHistoriesProvider({ children }: { children: ReactNode }) {
+  const { colors } = useTheme();
   const host = useRef<View>(null);
   const namespace = useId();
   const [overlays, setOverlays] = useState<Map<string, ReactNode>>(() => new Map());
@@ -80,25 +83,30 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
       {children}
       {[...entries].filter(([key]) => allowed.has(key)).map(([key, entry]) => {
         const active = onTaskRoute && entry.focused;
-        if (NativeHistoryHost) return <NativeHistoryHost key={key} surfaceId={namespace + key}
-          pointerEvents="none" style={{ position: 'absolute', width: entry.frame.width, height: entry.frame.height }}>
+        // Retained histories outlive their route, so no route-level gate covers
+        // them. Pause their store subscriptions while hidden; otherwise every
+        // task-list change re-renders all retained message trees.
+        const content = <RemoteSessionStoreSubscriptionGate enabled={active}>
           <MessageHistoryPositioning.Provider value={active && entry.ready}>
             <MessageHistoryActive.Provider value={active && entry.ready}>{entry.children}</MessageHistoryActive.Provider>
           </MessageHistoryPositioning.Provider>
+        </RemoteSessionStoreSubscriptionGate>;
+        if (NativeHistoryHost) return <NativeHistoryHost key={key} surfaceId={namespace + key}
+          pointerEvents="none" style={{ position: 'absolute', width: entry.frame.width, height: entry.frame.height }}>
+          {content}
         </NativeHistoryHost>;
         // Keep the original list viewport/offset, but restrict this root layer's
         // drawing and hit area to the message body. Native chrome/composer stay in
         // their route and must remain above/outside the resident scroll surface.
         const top = Math.min(entry.frame.height, Math.max(0, entry.topInset));
         const bottom = Math.min(entry.frame.height - top, Math.max(0, entry.bottomInset));
-        return <View key={key} pointerEvents={active && entry.interactive ? 'auto' : 'none'}
+        return <View key={key} collapsable={false} pointerEvents={active && entry.interactive ? 'auto' : 'none'}
           accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
           style={[styles.clip, { left: entry.frame.left, top: entry.frame.top + top,
-            width: entry.frame.width, height: entry.frame.height - top - bottom, opacity: active ? 1 : 0 }]}>
-          <View style={{ position: 'absolute', top: -top, width: entry.frame.width, height: entry.frame.height }}>
-            <MessageHistoryPositioning.Provider value={active && entry.ready}>
-              <MessageHistoryActive.Provider value={active && entry.ready}>{entry.children}</MessageHistoryActive.Provider>
-            </MessageHistoryPositioning.Provider>
+            width: entry.frame.width, height: entry.frame.height - top - bottom,
+            backgroundColor: colors.surface, opacity: active ? 1 : 0 }]}>
+          <View collapsable={false} style={{ position: 'absolute', top: -top, width: entry.frame.width, height: entry.frame.height }}>
+            {content}
           </View>
         </View>;
       })}
@@ -150,20 +158,26 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
   return <View ref={anchor} collapsable={false} pointerEvents={NativeHistorySlot ? 'auto' : 'none'} onLayout={measure} style={styles.container}>
     {/* Dock retained content immediately. `ready` gates new props and positioning,
         not visibility: a new route starts with unmeasured chrome even on a cache hit. */}
-    {NativeHistorySlot ? <NativeHistorySlot surfaceId={context.namespace + activeKey} selected={focused}
+    {/* A mounted route keeps its docking slot eligible even while covered.
+        UIKit restores it during interactive back, before JS focus changes.
+        The stack's getId keeps one route per task; focus still gates activity. */}
+    {NativeHistorySlot ? <NativeHistorySlot surfaceId={context.namespace + activeKey} selected
       pointerEvents={interactive && ready ? 'auto' : 'none'} style={StyleSheet.absoluteFill} /> : null}
   </View>;
 }
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  clip: { position: 'absolute', overflow: 'hidden' },
+  // Keep the detail surface above the resident task ScrollView while Android
+  // promotes that native view during a drag. The explicit native boundary is
+  // also required for overflow clipping on flattened view trees.
+  clip: { position: 'absolute', overflow: 'hidden', zIndex: 1 },
   // Android confines a child's zIndex to its parent stacking context. Route
   // drawers therefore need their root host above resident histories/chrome too.
   overlay: { ...StyleSheet.absoluteFill, zIndex: 40 },
 });
 
 /** Route-owned drawers must be above the root-owned histories, not beneath them. */
-export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
+export function MessageHistoryOverlay({ children, enabled = true }: { children: ReactNode; enabled?: boolean }) {
   const context = useContext(Context);
   const residentChildren = useResidentHomeListContextBridge(children);
   if (!context) throw new Error('RecentMessageHistoriesProvider is missing');
@@ -174,10 +188,10 @@ export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
   const route = useContext(NavigationRouteContext);
   useLayoutEffect(() => {
     if (NativeHistorySlot || needsResidentHistoryUpgrade) return;
-    setOverlay(owner, focused ? <NavigationContext.Provider value={navigation}>
+    setOverlay(owner, enabled && focused ? <NavigationContext.Provider value={navigation}>
       <NavigationRouteContext.Provider value={route}>{residentChildren}</NavigationRouteContext.Provider>
     </NavigationContext.Provider> : null);
-  }, [setOverlay, owner, focused, navigation, route, residentChildren]);
+  }, [setOverlay, owner, enabled, focused, navigation, route, residentChildren]);
   useLayoutEffect(() => () => setOverlay(owner, null), [setOverlay, owner]);
-  return NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
+  return !enabled || NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
 }

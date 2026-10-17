@@ -12,12 +12,19 @@ export function resolveRetainedRuntimeEffort(input: {
   liveEffort: Effort | null;
   previousEffort: Effort | null | undefined;
 }): Effort | null {
-  // Catalog capability is the request contract. A close failure leaves the old
-  // handle in Session status=error, and the next send rebuilds it instead of
-  // reusing its stale mutable effort, so never project that stale value onto a
-  // fixed-effort model.
-  if (input.targetModelHasFixedEffort || input.requestedEffort === null) return null;
+  // An explicit null carrier means a fixed-effort target was selected on
+  // purpose; nothing is representable.
+  if (input.requestedEffort === null) return null;
+  // The retained process is still running with its own effort, so the
+  // projection must describe that observed state. A capability lookup can
+  // transiently misreport a variable-effort model as fixed-effort (e.g. right
+  // after a remote catalog reload), and letting that guess override the live
+  // effort writes a sticky null that renders as a fake level while the process
+  // keeps running at its real one.
   if (input.liveEffort !== null) return input.liveEffort;
+  // No observable live effort: a fixed-effort target has no representable
+  // value, so clear instead of carrying the previous model's level over.
+  if (input.targetModelHasFixedEffort) return null;
   return input.previousEffort ?? null;
 }
 

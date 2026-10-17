@@ -276,7 +276,7 @@ describe('codexHttpBridge', () => {
     const categories = await readRpcResponse(await request('tools/call', { name: 'list_tools', arguments: {} })) as {
       result: { content: Array<{ text: string }> };
     };
-    expect(JSON.parse(categories.result.content[0]!.text).categories).toEqual([{ name: 'cindy', tool_count: 2 }]);
+    expect(JSON.parse(categories.result.content[0]!.text).categories).toEqual([{ name: 'cindy', tool_count: 2, description: expect.any(String) }]);
     const introspection = await readRpcResponse(await request('tools/call', {
       name: 'call_tool', arguments: { name: 'get_current_session_id', args: {} },
     }));

@@ -26,12 +26,30 @@ export function findRemoteHistoryView(deviceId: string, sessionId: string) {
   return views.get(keyFor(deviceId, sessionId))?.view;
 }
 
+/** Read-ahead never races a mounted page: that page reads and persists its own view. */
+export function isRemoteHistoryViewMounted(deviceId: string, sessionId: string): boolean {
+  return (views.get(keyFor(deviceId, sessionId))?.consumers ?? 0) > 0;
+}
+
+/** A retained, unmounted view's snapshot; it is newer than disk until it is dropped. */
+export function detachedRemoteHistorySnapshot(deviceId: string, sessionId: string) {
+  const entry = views.get(keyFor(deviceId, sessionId));
+  return entry && !entry.consumers && entry.view.getSnapshot().ready ? entry.view.getSnapshot() : null;
+}
+
+/** After a read ahead reaches disk, the next mount restores it instead of the older retained view. */
+export function dropDetachedRemoteHistoryView(deviceId: string, sessionId: string): void {
+  const key = keyFor(deviceId, sessionId);
+  if (!views.get(key)?.consumers) views.delete(key);
+}
+
 export function getRemoteHistoryView(deviceId: string, sessionId: string, reader: Reader): Entry {
   const key = keyFor(deviceId, sessionId);
   const existing = views.get(key);
   if (existing) return existing;
   const entry: Entry = { deviceId, sessionId, reader, consumers: 0,
     view: new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
       page: (before) => entry.reader.readHistoryView(sessionId, before),
       details: (ref, after) => entry.reader.readWorkDetails(sessionId, ref, after),
       expanded: (refs) => entry.reader.setHistoryExpanded(sessionId, refs),

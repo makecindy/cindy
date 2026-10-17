@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, FolderOpen, Upload } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -24,7 +24,7 @@ import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
-import { extractIpcError } from '@/utils/ipcError';
+import { OpenLogsRow, UploadLogsRow } from '@/components/log-support/LogSupportActions';
 import { PiKernelVersionRow } from './PiKernelVersionRow';
 import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
@@ -344,11 +344,15 @@ export function AboutSection() {
         <AgentVersionsRows />
         <DebugLogToggleRow />
         <Divider />
-        <OpenLogsRow />
+        <div id="settings-search-settings-about-logsDirLabel">
+          <OpenLogsRow />
+        </div>
         <Divider />
         <CrashAutoUploadToggleRow />
         <Divider />
-        <UploadLogsRow />
+        <div id="settings-search-settings-about-logUpload-uploadLabel">
+          <UploadLogsRow />
+        </div>
         <Divider />
         <LegalLinksRows />
       </div>
@@ -701,37 +705,6 @@ function DebugLogToggleRow() {
   );
 }
 
-function OpenLogsRow() {
-  const { t } = useTranslation();
-  const handleOpen = async () => {
-    try {
-      const res = await window.electronAPI.openLogsDir();
-      if (!res.success) toast.error(res.error || t('settings.about.openLogsDirError'));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.about.openLogsDirError'));
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span id="settings-search-settings-about-logsDirLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-        {t('settings.about.logsDirLabel')}
-      </span>
-      <Button
-        variant="secondary"
-        size="sm"
-        type="button"
-        onClick={handleOpen}
-        className="-mr-1 px-2.5"
-        title={t('settings.about.openLogsDirTooltip')}
-      >
-        <FolderOpen size={13} />
-        {t('settings.about.openLogsDir')}
-      </Button>
-    </div>
-  );
-}
-
 /**
  * 「崩溃时自动上传日志」开关。**默认关闭**。
  *
@@ -805,96 +778,6 @@ function CrashAutoUploadToggleRow() {
             aria-label={t('settings.about.logUpload.crashAutoLabel')}
           />
         </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * 「上传日志」按钮。
- *
- * 成功后必须给出上传编号(用户报障时口述给我们),所以 toast 里带编号并把它复制到剪贴板。
- * 四种失败按 IPC 错误码给可区分的文案:未配置目标 / 未同意隐私政策 / 采到 0 条 / 上传失败。
- */
-function UploadLogsRow() {
-  const { t } = useTranslation();
-  const { state } = useLogUploadSettings();
-  const [uploading, setUploading] = useState(false);
-
-  const handleUpload = async () => {
-    setUploading(true);
-    try {
-      const result = await window.electronAPI.uploadLogsNow();
-      toast.success(t('settings.about.logUpload.successToast', { code: result.uploadCode }));
-      // 编号是这次上报唯一的可报凭据,顺手放进剪贴板,省得用户从 toast 里抄。
-      try {
-        await navigator.clipboard.writeText(result.uploadCode);
-      } catch {
-        // 剪贴板不可用不影响主流程 —— 编号已经显示在 toast 里了。
-      }
-    } catch (err) {
-      const code = extractIpcError(err)?.code;
-      switch (code) {
-        case 'LOG_UPLOAD_UNAVAILABLE':
-          toast.error(t('settings.about.logUpload.errorUnavailable'));
-          break;
-        case 'PRIVACY_CONSENT_REQUIRED':
-          toast.error(t('settings.about.logUpload.errorConsentRequired'));
-          break;
-        case 'LOG_UPLOAD_EMPTY':
-          toast.error(t('settings.about.logUpload.errorEmpty'));
-          break;
-        case 'LOG_UPLOAD_BUSY':
-          toast.error(t('settings.about.logUpload.errorBusy'));
-          break;
-        default:
-          toast.error(t('settings.about.logUpload.errorFailed'));
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const unavailableReason = !state.targetConfigured
-    ? t('settings.about.logUpload.unavailableNotConfigured')
-    : !state.privacyConsentAccepted
-      ? t('settings.about.logUpload.unavailableNoConsent')
-      : null;
-
-  return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      {/* items-start:本行的说明有三段(用途 / 上传内容边界 / 不可用原因),按钮若垂直居中会浮在
-          文字块中间;与标签对齐才和同页其它「标签 + 按钮」行(日志目录 / 服务条款)读起来一致。 */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-logUpload-uploadLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.logUpload.uploadLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.logUpload.uploadDescription')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.logUpload.scopeDescription')}
-          </p>
-          {unavailableReason !== null && (
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-              {unavailableReason}
-            </p>
-          )}
-        </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          type="button"
-          onClick={() => void handleUpload()}
-          disabled={!state.manualUploadAvailable || uploading || state.loading}
-          loading={uploading}
-          className="-mr-1 px-2.5"
-          title={t('settings.about.logUpload.uploadTooltip')}
-        >
-          <Upload size={13} />
-          {t('settings.about.logUpload.uploadButton')}
-        </Button>
       </div>
     </div>
   );

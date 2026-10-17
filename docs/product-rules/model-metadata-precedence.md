@@ -124,6 +124,13 @@ Pi 显式列表提供公共成员（包括空数组与退役条目）；缺字�
 服务器声明的新模型不要求先出现在 Pi SDK 名单中；有明确原生协议
 即可构造 models.json。OpenAI 订阅仍使用专用 Codex Responses 认证传输。
 
+独立 OpenAI 账号恢复后，Pi 与 Codex 根使用同一份账号成员快照：优先当前发现结果，
+尚无结果时复用该账号已保存的 Codex 清单。这里只补成员和可移植资料，不把 Codex
+运行时的用户配置当成 Pi 覆盖；思考档位按 Pi 支持的档位及公共资料解析，Pi 专属
+用户覆盖仍走原有路径。原生 SDK 清单只提供同 API 的序列化细节，新型号不因缺少
+SDK 条目被隐藏；普通 API-key／自定义连接继续按自己的模型 API 和路由适配，
+不借用订阅认证。回归见 `openAiAccountCatalogParity.test.ts`、`piNativeProviders.test.ts`。
+
 旧顶层 Pi 条目的静态资料是旧格式兜底，不能标为账号 discovery；
 Registry 的公共定义／显式条目／路由／perAgent 继续覆盖旧默认，账号实报与用户覆盖另行优先。
 已解析的名称、窗口、输出上限、档位、输入能力和价格必须进入实际运行配置。

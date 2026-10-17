@@ -10,11 +10,13 @@
   },
   "renderer": {
     "moreActions": "More message actions",
+    "reply": "Reply",
     "newMessagesToBottom": "New messages, jump to bottom",
     "jumpToBottom": "Jump to bottom",
     "openForkOrigin": "Open fork source message",
     "viewForkOrigin": "View fork source",
     "emptyMessages": "No messages yet",
+    "historyNotCached": "No history cached on this phone. Connect to the computer to sync.",
     "syncing": "Syncing",
     "copyLinkHint": "Tap to copy message link",
     "sentTime": "Sent at {{time}}",
@@ -104,7 +106,8 @@
     "handoffContentDesc": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
     "handoffContentDescEnglishSource": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
     "openDiagramDetail": "Open diagram detail",
-    "sessionChipFallback": "Session {{id}}",
+    "sessionChipFallback": "A session",
+    "messageChipFallback": "Quoted message",
     "imageFallbackTitle": "Image",
     "mermaidExportFailedTitle": "Export failed",
     "mermaidRenderIncompleteBody": "The diagram isn't fully rendered yet or the export failed. Try again later.",
@@ -260,12 +263,25 @@
       "usageReset": "Usage reset, continued automatically",
       "pending": "Reconnecting…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
+      "groupSwitchPending": "Switching to another computer…",
       "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session",
       "detail": {
         "reason": "Interruption reason",
         "attempt": "Attempt {{attempt}}/{{total}}",
         "sessionTotal": "{{count}} reconnects in this session"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} hit its usage limit; continued on {{to}}",
+        "auth": "{{from}} is signed out; continued on {{to}}",
+        "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
+        "overload": "{{from}} was overloaded; continued on {{to}}",
+        "failed": "{{from}} ran into a problem; continued on {{to}}"
+      },
+      "agentReconnect": {
+        "named": "Reconnected to {{computer}}; continued there",
+        "unnamed": "Reconnected to the original computer; continued there"
+      },
+      "groupSwitch": "Continued on another computer automatically"
     },
     "modelLabel": "Model",
     "sessionLabel": "Session",

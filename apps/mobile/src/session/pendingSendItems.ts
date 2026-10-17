@@ -35,7 +35,7 @@ import {
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
-import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
+import { sentImageGalleryKey, type GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   automationOriginLabel,
@@ -324,7 +324,7 @@ function queuedAttachmentThumbs(
 ): { thumbs: MobileOutboxThumb[]; fileCount: number } {
   const thumbs: MobileOutboxThumb[] = [];
   let fileCount = 0;
-  (item.files ?? []).forEach((file, index) => {
+  (item.files ?? []).forEach((file) => {
     if (file.category !== 'image') {
       fileCount += 1;
       return;
@@ -332,7 +332,8 @@ function queuedAttachmentThumbs(
     const ossRef = file.url ?? file.path;
     const preview = getImagePreview?.(item.clientId, thumbs.length, file.name, file.id);
     thumbs.push({
-      key: `${item.clientId}-slot-${index}`,
+      // URLs may settle for one attachment; editing the slot to another must reset its viewer state.
+      key: preview?.galleryImageKey ?? sentImageGalleryKey(item.clientId, file.id),
       // 发送时刻抓下的本地预览优先:sentAttachmentThumbStore 那条兜底链要等「上传落定 →
       // 拷进自有目录 → AsyncStorage hydrate」全部完成才查得到,期间 getSentAttachmentThumbUri
       // 一律返回 null,排队气泡只能画空占位格(实测:兜底文件已生成,气泡仍是空方块)。

@@ -34,6 +34,7 @@ import type {
 } from '../localDb/client/tx/types.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace.js';
 import { createLogger } from '../logger.js';
+import { resolveNewTaskDefaultModelRoute } from '../maker-host/model-route-guard-live.js';
 import {
   importSharedCodexThread,
   removeSharedCodexThread,
@@ -975,6 +976,18 @@ export async function commitShareImport(
       }));
     const dbMessages = toDbMessages(messages, manifest.agentKind);
     const draftPrefs = opts.draftPrefs ?? null;
+    // 只为真正拿不到草稿模型的会话解析默认(解析要读实时供应商目录)。
+    const hasDraftModel = (prefs: ShareImportDraftPrefs | null | undefined, apply: boolean) =>
+      apply && typeof prefs?.model === 'string' && prefs.model.length > 0;
+    const fallbackRoutes = await resolveImportFallbackRoutes([
+      ...(hasDraftModel(draftPrefs, true) ? [] : [manifest.agentKind]),
+      ...workerPlans
+        .filter((plan) => !hasDraftModel(
+          runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
+          !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+        ))
+        .map((plan) => plan.manifest.agentKind),
+    ]);
     const teamId = randomUUID();
     // 恶意/损坏包可能带多个 focused=true(源库有 partial unique 保证唯一);
     // 归一为只保留第一个,避免整包因索引冲突白白失败。
@@ -1021,9 +1034,10 @@ export async function commitShareImport(
                 snapshot: plan.snapshot,
                 draftPrefs:
                   runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
-                // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用内置兜底模型。
+                // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用新建任务默认模型。
                 applyDraftPrefs:
                   !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+                fallbackRoute: fallbackRoutes.get(plan.manifest.agentKind) ?? null,
                 // 普通分享沿用 auto；迁移不继承源机器的权限授权。
                 permissionModeOverride: runtimeScope.migration
                   ? plan.manifest.agentKind === 'cc'
@@ -1064,6 +1078,7 @@ export async function commitShareImport(
             snapshot: sessionSnapshot,
             draftPrefs,
             applyDraftPrefs: true,
+            fallbackRoute: fallbackRoutes.get(manifest.agentKind) ?? null,
             workingDir,
             worktreePath,
             activeSdkSessionId,
@@ -1444,22 +1459,34 @@ const PERMISSION_MODES = new Set([
   'bypassPermissions',
 ]);
 
-/** draftPrefs 缺省(旧调用方 / 测试)时按 agentKind 兜底的模型。 */
-const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
-  cc: 'claude-sonnet-4-6',
-  codex: 'gpt-5.4',
-  pi: 'gpt-5.4',
-};
+type ImportFallbackRoute = { model: string; providerId: string } | null;
+
+/**
+ * 没有可用草稿偏好(旧调用方、跨 vendor 的 Worker)时的模型:按新建任务口径实时解析,
+ * 不写死型号;解析不到则留空,由用户在任务里选。
+ */
+async function resolveImportFallbackRoutes(
+  agentKinds: Iterable<'cc' | 'codex' | 'pi'>,
+): Promise<Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>> {
+  const routes = new Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>();
+  for (const kind of new Set(agentKinds)) {
+    routes.set(
+      kind,
+      await resolveNewTaskDefaultModelRoute(kind === 'cc' ? 'claude-code' : kind).catch(() => null),
+    );
+  }
+  return routes;
+}
 
 /**
  * 组装 tx session.importShare 的 session 行(lead 与协同 Worker 共用)。
  *
  * 字段来源分两类(导入语义 = 用本地草稿默认值新建会话,只有 agent 跟随分享包):
  * - 会话配置(model/effort/permissionMode/planMode/fastMode/providerId)→ 导入端
- *   draftPrefs(白名单校验,非法/缺省落内置兜底),**不读** snapshot——导出方的
+ *   draftPrefs(白名单校验,非法/缺省落兜底;模型兜底按新建任务口径解析),**不读** snapshot——导出方的
  *   模型/供应商在导入端不一定存在,照搬会产出本机不可用的脏 model(选择器显示
  *   不出、发消息才暴露)。draftPrefs 按包顶层 vendor 采集,跨 vendor 的 Worker
- *   经 applyDraftPrefs=false 落内置兜底;Worker 的 permissionMode 固定 auto
+ *   经 applyDraftPrefs=false 落兜底;Worker 的 permissionMode 固定 auto
  *   (与 OrcaWorkerCreationService 同口径)。
  * - 历史事实(token 统计 / contextTokens / clearedAt / 时间戳等)→ snapshot 照搬。
  *   contextWindow 也照搬:仅是展示缓存,renderer 按 session.model 重新计算。
@@ -1473,6 +1500,7 @@ function buildSessionRow(params: {
   snapshot: Record<string, unknown>;
   draftPrefs: ShareImportDraftPrefs | null;
   applyDraftPrefs: boolean;
+  fallbackRoute: ImportFallbackRoute;
   permissionModeOverride?: string;
   status?: 'active' | 'archived';
   workingDir: string;
@@ -1504,13 +1532,15 @@ function buildSessionRow(params: {
     workingDir,
     workspaceKind,
     worktreePath,
-    model: str(draftPrefs?.model, FALLBACK_MODEL_BY_AGENT[agentKind]),
+    model: str(draftPrefs?.model, params.fallbackRoute?.model ?? ''),
     effort: EFFORTS.has(effort) ? effort : 'high',
     permissionMode: PERMISSION_MODES.has(permissionMode) ? permissionMode : 'auto',
     providerId:
       typeof draftPrefs?.providerId === 'string' && draftPrefs.providerId.length > 0
         ? draftPrefs.providerId
-        : null,
+        : typeof draftPrefs?.model === 'string' && draftPrefs.model
+          ? null
+          : (params.fallbackRoute?.providerId ?? null),
     status: params.status ?? 'active',
     sdkSessionId: activeSdkSessionId,
     totalTokenUsage: num(snapshot.totalTokenUsage, 0),

@@ -33,12 +33,14 @@ export async function readRemoteBotSessionAccessBatch(
       const rows = await db.select({
         id: sessions.id,
         source: sessions.source,
+        hiddenAt: sessions.hiddenAt,
         visible: sql<number>`${sql.raw(remoteVisibleSessionSql('sessions'))}`,
       }).from(sessions)
         .where(inArray(sessions.id, chunk));
       if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
       for (const row of rows) {
-        access.set(row.id, row.source !== 'bot' ? 'ordinary'
+        // 插件后台隐藏任务:列表类结果不返回,单任务读取/操作仍允许(插件页深链打开)。
+        access.set(row.id, row.source !== 'bot' ? (row.hiddenAt != null ? 'background' : 'ordinary')
           : row.visible ? 'visible' : 'hidden');
       }
     }

@@ -77,8 +77,9 @@ describe('safe attachment routing', () => {
     );
     // 右键分流:降级附件只弹「另存为…」单项菜单,普通附件走共享文件 chip 菜单。
     // 受控 .bin 副本路径不得经复制路径 / 打开所在目录外泄。
+    // 菜单位置由共享 helper 同时处理鼠标坐标和键盘触发元素的位置。
     expect(source).toMatch(
-      /onContextMenu=\{\(e\) => \{[\s\S]+?if \(downloadOnly\) \{[\s\S]+?setSaveMenuPos\(\{ x: e\.clientX, y: e\.clientY \}\);[\s\S]+?ctxMenu\.onContextMenu\(e\);/,
+      /onContextMenu=\{\(e\) => \{\s*if \(downloadOnly\) \{[^}]+setSaveMenuPos\(linkMenuPosition\(e\)\);\s*return;\s*\}\s*ctxMenu\.onContextMenu\(e\);/,
     );
     expect(source).toContain("t('chat.media.saveAs')");
   });

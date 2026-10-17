@@ -2,16 +2,20 @@
 import { act, createElement as el, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 
 const h = vi.hoisted(() => ({
   chat: null as any,
+  management: null as any,
   alert: vi.fn(),
   confirm: vi.fn(),
   leave: vi.fn(),
+  focused: true,
+  closeSettings: null as null | (() => void),
   row: null as any,
   inputs: {} as Record<string, any>,
   teammates: { rows: [] as any[], loading: false, failed: false },
+  teammateQuery: '',
   uuid: 0,
   scroll: null as any,
   scrollToEnd: vi.fn(),
@@ -21,13 +25,14 @@ const h = vi.hoisted(() => ({
   discarded: [] as any[],
   deleted: [] as string[],
   keyboardAvoidingView: null as any,
-  platform: { OS: 'ios' },
+  platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
 }));
 
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', () => {
-  const box = (tag: string) => ({ children, testID, accessibilityLabel }: any) =>
-    el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
+  const box = (tag: string) => ({ children, testID, accessibilityLabel, style }: any) =>
+    el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
+      style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity } }, children);
   return {
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
@@ -40,7 +45,7 @@ vi.mock('react-native', () => {
     Pressable: ({ children, onPress, disabled, testID, accessibilityLabel }: any) => el('button',
       { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
       typeof children === 'function' ? children({ pressed: false }) : children),
-    ActivityIndicator: () => el('i', { 'data-testid': 'spinner' }),
+    ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
     Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
@@ -53,12 +58,13 @@ vi.mock('react-native', () => {
   };
 });
 vi.mock('expo-router', () => ({
-  useIsFocused: () => true,
+  useIsFocused: () => h.focused,
   Stack: { Screen: () => null },
   useRouter: () => ({ back: vi.fn(), replace: vi.fn() }),
   useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
 }));
-vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children) }));
+vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
+vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlur: ({ height, fadeInside }: any) => { h.headerBlur.push(height); h.headerFade.push(fadeInside); return null; } }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
@@ -71,11 +77,11 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Layers', 'ListChecks', 'Ellipsis', 'ChevronRight', 'ChevronDown']
+    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => ({
-  ...await import('@/theme/tokens'), useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
+  ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
@@ -113,7 +119,8 @@ vi.mock('@/session/HomeHeaderGlassButton', () => ({
   HomeHeaderGlassButton: ({ onPress, testID, disabled, children }: any) => el('button', { 'data-testid': testID, disabled, onClick: onPress }, children),
 }));
 vi.mock('@/session/CompanionSheet', () => ({
-  CompanionSheet: ({ visible, children, onClosed, testID }: any) => {
+  CompanionSheet: ({ visible, children, onClose, onClosed, testID }: any) => {
+    if (testID === 'botGroup.settings') h.closeSettings = onClose;
     const was = useRef(visible);
     useEffect(() => { if (was.current && !visible) onClosed?.(); was.current = visible; }, [visible]);
     return visible ? el('div', { 'data-testid': testID }, children) : null;
@@ -179,22 +186,31 @@ vi.mock('@/session/ImageLightbox', () => ({
   ImageLightbox: ({ images, initialUrl }: any) => el('div', { 'data-testid': 'lightbox', 'data-url': initialUrl, 'data-count': String(images.length) }),
 }));
 vi.mock('@/session/MessageRenderer', () => ({
-  AttachmentStrip: ({ attachments, onOpen, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
+  AttachmentStrip: ({ attachments, onOpen, onOpenFile, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
     attachments.map((item: any, index: number) => el('button', {
       key: index, 'data-testid': `attachment.${item.kind}`, 'data-uri': item.uri ?? '',
-      onClick: () => onOpen(item.kind === 'image'
+      onClick: () => item.kind === 'file' && onOpenFile
+        ? onOpenFile(attachments.slice(0, index).filter((attachment: any) => attachment.kind === 'file').length)
+        : onOpen(item.kind === 'image'
         ? { kind: 'media', media: { kind: 'image', url: item.uri, previewable: false } }
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
 }));
 vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async () => { throw new Error('offline'); } }));
-vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammates }));
+vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: () => h.chat }));
+vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
+  selected: undefined, managers: [], loading: false, reason: 'noHost', act: vi.fn(), select: vi.fn(), refresh: vi.fn(),
+}) }));
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
 vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
+// The live card of my own teammate's task reads the computer over device-link; only which computer is under test.
+const taskCardDevices = vi.hoisted(() => [] as string[]);
+vi.mock('@/session/CompanionMessageCard', () => ({ CompanionTaskCard: ({ deviceId }: { deviceId: string }) => { taskCardDevices.push(deviceId); return null; } }));
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
+import { parseBotGroupChatData } from '@/session/botGroupRemote';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -257,9 +273,10 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
+  h.management = null;
   vi.clearAllMocks();
-  h.uuid = 0; h.inputs = {}; h.teammates = { rows: [], loading: false, failed: false };
-  h.platform.OS = 'ios'; h.keyboardAvoidingView = null;
+  h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
+  h.platform.OS = 'ios'; h.focused = true; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = [];
   h.chat = { reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = [];
   h.local = {
@@ -274,10 +291,105 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  it('shows a 引用回复 block from the loaded original, and only the author once it is deleted', async () => {
+    // Server message ids are UUIDs; the parser rejects a quote that points at anything else.
+    const originalId = '11111111-1111-4111-8111-111111111111';
+    const quote = { messageId: originalId, authorName: '咪咪', authorKind: 'bot' as const, excerpt: 'old snapshot', attachmentCount: 0, attachmentName: null, sequence: 2 };
+    // Through the same parser the phone uses for the computer's projection.
+    const data = group();
+    data.messages.push(message(originalId, 9, { authorBotId: 'mimi', authorName: '咪咪', content: '**好的**，我看看' }),
+      message('q1', 10, { authorKind: 'user', content: '就按这个来', quote }));
+    await render(parseBotGroupChatData(data)!);
+    const block = byId('botGroup.quote')!;
+    expect(block.textContent).toContain('咪咪');
+    expect(block.textContent).toContain('**好的**，我看看');
+    expect(block.textContent).not.toContain('old snapshot');
+    const deleted = group();
+    deleted.messages = [message(originalId, 9, { authorBotId: 'mimi', authorName: '咪咪', deleted: true, content: '（消息已删除）' }),
+      message('q1', 10, { authorKind: 'user', content: '就按这个来', quote: { ...quote, excerpt: '私密的原文' } })];
+    await render(parseBotGroupChatData(deleted)!);
+    expect(byId('botGroup.quote')!.textContent).toContain('groupChat.quote.deleted');
+    expect(node.textContent).not.toContain('私密的原文');
+  });
+
+  it('shows a task another owner\'s teammate started from the group as its posted title and state', async () => {
+    const meta = { v: 1 as const, role: 'delegation-request' as const, delegationId: 'task-1', fromBotId: 'abu', fromBotName: '阿布', toBotId: null,
+      toBotName: 'Cindy', parentSessionId: 'group-lane', childSessionId: 'child-1', objective: '写官网首页' };
+    const data = group({ serverBacked: true, members: [
+      { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true },
+      { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active', isOwned: false },
+    ] });
+    data.messages.push(message('t1', 20, { authorBotId: 'abu', authorName: '阿布', content: '我开了个任务',
+      task: { meta, state: 'waiting', title: '官网首页', summary: '首页要放几个案例？' } }));
+    await render(parseBotGroupChatData(data)!);
+    const card = byId('botGroup.task')!;
+    expect(card.textContent).toContain('官网首页');
+    expect(card.textContent).toContain('groupChat.task.state.waiting');
+    expect(card.textContent).toContain('首页要放几个案例？');
+    expect(byId('botGroup.task.live')).toBeNull();
+  });
+
+  it('opens my own teammate\'s task live in a group entered straight from the Chat Server, via the companion\'s home computer', async () => {
+    const meta = { v: 1 as const, role: 'delegation-request' as const, delegationId: 'task-3', fromBotId: 'mimi', fromBotName: '咪咪', toBotId: null,
+      toBotName: 'Cindy', parentSessionId: 'group-lane', childSessionId: 'child-3', objective: '写官网首页' };
+    const data = group({ serverBacked: true, members: [
+      { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true, homeDeviceId: 'pc' },
+      { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active', isOwned: true, homeDeviceId: null },
+    ] });
+    data.messages.push(message('t3', 22, { authorBotId: 'mimi', authorName: '咪咪', content: '我开了个任务', task: { meta, state: 'started', title: '官网首页' } }),
+      message('t4', 23, { authorBotId: 'abu', authorName: '阿布', content: '我也开了', task: { meta: { ...meta, delegationId: 'task-4', fromBotId: 'abu' }, state: 'started', title: '整理行程' } }));
+    h.chat = { ...h.chat, server: true, state: { kind: 'ready', group: data } };
+    // No computer on the route: the direct Chat Server entry.
+    await act(async () => root.render(el(BotGroupChatScreen, { deviceId: '', deviceName: '', groupId: 'g1' })));
+    expect(all('botGroup.task.live')).toHaveLength(1);
+    // A companion whose computer the account does not know stays a snapshot.
+    expect(byId('botGroup.task')!.textContent).toContain('整理行程');
+  });
+
+  it('reads my own teammate\'s live task on its home computer when the group is opened through another computer', async () => {
+    const meta = { v: 1 as const, role: 'delegation-request' as const, delegationId: 'task-5', fromBotId: 'mimi', fromBotName: '咪咪', toBotId: null,
+      toBotName: 'Cindy', parentSessionId: 'group-lane', childSessionId: 'child-5', objective: '写官网首页' };
+    const data = group({ serverBacked: true, members: [
+      { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true, homeDeviceId: 'pc' },
+      { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active', isOwned: true, homeDeviceId: null },
+    ] });
+    data.messages.push(message('t5', 24, { authorBotId: 'mimi', authorName: '咪咪', content: '我开了个任务', task: { meta, state: 'started', title: '官网首页' } }),
+      message('t6', 25, { authorBotId: 'abu', authorName: '阿布', content: '我也开了', task: { meta: { ...meta, delegationId: 'task-6', fromBotId: 'abu' }, state: 'started', title: '整理行程' } }));
+    taskCardDevices.length = 0;
+    // Opened through 'mac', which is not 咪咪's home; 阿布's home is unknown, so it stays on 'mac'.
+    await render(parseBotGroupChatData(data)!);
+    expect(all('botGroup.task.live')).toHaveLength(2);
+    expect([...new Set(taskCardDevices)].sort()).toEqual(['mac', 'pc']);
+  });
+
+  it('shows a task from an author who has left the group as a snapshot, never a lookup on this phone\'s computer', async () => {
+    const meta = { v: 1 as const, role: 'delegation-request' as const, delegationId: 'task-2', fromBotId: 'gone', fromBotName: '离开的伙伴', toBotId: null,
+      toBotName: 'Cindy', parentSessionId: 'group-lane', childSessionId: 'child-2', objective: '整理行程' };
+    const data = group({ serverBacked: true, members: [
+      { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true },
+    ] });
+    data.messages.push(message('t2', 21, { authorBotId: 'gone', authorName: '离开的伙伴', content: '我也开了',
+      task: { meta, state: 'started', title: '整理行程' } }));
+    await render(parseBotGroupChatData(data)!);
+    const card = byId('botGroup.task')!;
+    expect(card.textContent).toContain('整理行程');
+    expect(card.textContent).toContain('groupChat.task.state.started');
+    expect(byId('botGroup.task.live')).toBeNull();
+  });
+
   it('uses the shared Android keyboard avoidance behavior for the group composer', async () => {
     h.platform.OS = 'android';
     await render();
     expect(h.keyboardAvoidingView).toMatchObject({ enabled: true, behavior: 'height' });
+    expect(h.headerBlur).toEqual([]);
+  });
+
+  it('floats the iOS header on the task header blur instead of an opaque band', async () => {
+    await render();
+    // Before the header is measured the blur still covers the status bar plus one bar row.
+    expect(h.headerBlur.at(-1)).toBe(59 + 44);
+    // The two-line identity stays over solid blur; the feather starts at the header's lower edge.
+    expect(h.headerFade.at(-1)).toBe(0);
   });
 
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
@@ -333,6 +445,15 @@ describe('group timeline', () => {
     expect(all('botGroup.message.bot')).toHaveLength(0);
   });
 
+  it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('renders the runtime reason and recovery advice on mobile: %s', async runtimeFailureCode => {
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-failed', runtimeFailureCode })] }));
+    const text = all('botGroup.notice')[0]?.textContent;
+    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}(name=Bot)`);
+    expect(text).toContain('groupChat.notice.runtimeFailureSetupHint');
+    expect(text).not.toContain('groupChat.notice.memberFailed');
+  });
+
   it('renders messages, notices, round ends and plan ends like the desktop timeline', async () => {
     await render();
     expect(byId('botGroup.message.user')?.textContent).toBe('@咪咪 帮我做官网');
@@ -374,6 +495,39 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'reassign', botId: 'xiaoman' });
     await click('botGroup.plan.stepMenu.0.action.remove');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
+  });
+
+  it.each([undefined, true, false])('renders human-signed plans as organizer cards with working actions and read-only old plans (isSelf=%s)', async (isSelf) => {
+    const data = group();
+    data.messages = data.messages.map(message => message.kind === 'plan'
+      ? { ...message, authorKind: 'user', authorBotId: null, authorName: 'Human creator', isSelf } : message);
+    await render(data);
+    expect(byId('botGroup.message.plan')?.textContent).toContain('咪咪');
+    expect(byId('botGroup.message.plan')?.textContent).not.toContain('Human creator');
+    await click('botGroup.plan.start');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-start', { planId: 'p1' });
+    await click('botGroup.plan.dismiss');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-dismiss', { planId: 'p1' });
+    data.plans[0]!.status = 'superseded';
+    data.openPlan = null;
+    await render(data);
+    expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
+    expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  it('removes a server human by actor identity without offering them as organizer', async () => {
+    const data = group({ serverBacked: true, supportsMemberRemoval: true });
+    data.members.push({ botId: 'person', actorId: 'actor-person', actorKind: 'human', name: 'Person', avatar: '', avatarColor: '', status: 'active' });
+    await render(data);
+    expect(byId('botGroup.plan.stepMenu.0.action.member:person')).toBeNull();
+    await click('botGroup.settingsButton');
+    expect(byId('botGroup.settings.memberMenu.person.action.organizer:person')).toBeNull();
+    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    expect(h.chat.act).toHaveBeenLastCalledWith('remove-member', { actorId: 'actor-person' });
+    h.chat.act.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
+    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    expect(node.textContent).toContain('groupChat.errors.permissionDenied');
+    expect(byId('botGroup.settings.member.person')).not.toBeNull();
   });
 
   it('keeps at least one step and names the host’s reason when an action is refused', async () => {
@@ -456,6 +610,21 @@ describe('group composer', () => {
     });
   }
 
+  it.each([true, false])('locks an existing draft when dissolved without being archived (direct server %s)', async server => {
+    h.chat.server = server;
+    const live = group({ openPlan: null, archived: false });
+    await render(live);
+    await type('Unsent draft');
+    expect(h.row.editable).toBe(true);
+    expect(byId('botGroup.composer.send')?.disabled).toBe(false);
+    await render({ ...live, dissolvedAt: '2026-10-15T00:00:00.000Z' });
+    expect(h.row.editable).toBe(false);
+    expect(byId('botGroup.composer.send')?.disabled).toBe(true);
+    await click('botGroup.composer.send');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(node.textContent).toContain('好的，我看看');
+  });
+
   it('offers 所有人 first, inserts a picked teammate and sends the resolved mentions', async () => {
     await render(group({ openPlan: null }));
     await type('请 @');
@@ -471,6 +640,44 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    h.chat.act.mockRejectedValue(new Error(message));
+    for (let retry = 0; retry < 2; retry++) {
+      await click('botGroup.composer.send');
+      expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['mimi'] } }));
+      expect(h.row.value).toBe('@Ann ');
+    }
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.mentionUnavailable');
+    const originalClientId = h.chat.act.mock.calls[0][1].clientId;
+    expect(h.chat.act.mock.calls[1][1].clientId).toBe(originalClientId);
+    await type('@');
+    await click('botGroup.mention.abu');
+    h.chat.act.mockResolvedValue({ effects: [] });
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act.mock.calls.at(-1)[1].clientId).not.toBe(originalClientId);
+    expect(h.row.value).toBe('');
+  });
+
+  it('drops a deleted selected mention before a namesake is manually mentioned again', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    await type('hello');
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });
@@ -482,6 +689,22 @@ describe('group composer', () => {
     await type('@Me @阿布 hello');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
+  it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
+    const data = group({ openPlan: null });
+    const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('  @');
+    await click('botGroup.mention.mimi');
+    await type('  @Ann @Ann');
+    await render(group({ openPlan: null, members: namesakes.slice(1) }));
+    await act(async () => h.row.onSelectionChange({ nativeEvent: { selection: {
+      start: removed === 'picked' ? 2 : 6, end: removed === 'picked' ? 7 : 11,
+    } } }));
+    await type('  @Ann');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [removed === 'picked' ? 'abu' : 'mimi'] } }));
   });
 
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
@@ -683,7 +906,11 @@ describe('group attachments', () => {
     await act(async () => { image.click(); });
     expect(byId('lightbox')?.getAttribute('data-url')).toBe('cindy-media://blobs/abc.png');
     expect(byId('lightbox')?.getAttribute('data-count')).toBe('1');
-    const file = strip.querySelector('[data-testid="attachment.file"]') as HTMLButtonElement;
+    // Sent order: the picture's strip, then the file's own strip (a strip draws pictures first).
+    const strips = [...users[0]!.querySelectorAll('[data-testid="attachmentStrip"]')];
+    expect(strips).toHaveLength(2);
+    expect(strips[0]).toBe(strip);
+    const file = strips[1]!.querySelector('[data-testid="attachment.file"]') as HTMLButtonElement;
     expect(file.textContent).toBe('brief.pdf');
     await act(async () => { file.click(); });
     expect(h.alert).toHaveBeenCalledWith('brief.pdf', 'groupChat.files.onComputer');
@@ -696,6 +923,170 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  it.each([true, false])('leaves after confirmed personal hide even when settings unmounts before the reply (direct=%s)', async direct => {
+    h.chat.server = direct;
+    let finish!: () => void;
+    h.chat.act.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ effects: [] }); }));
+    await openSettings(group({ serverBacked: true, supportsListRemoval: true }));
+    await click('botGroup.settings.hide');
+    expect(h.chat.act).toHaveBeenLastCalledWith('hide', undefined);
+    await render(null, 'missing');
+    expect(byId('botGroup.settings')).toBeNull();
+    expect(h.leave).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it('navigates only once when a personal hide completes before the list rerenders', async () => {
+    await openSettings(group({ serverBacked: true, supportsListRemoval: true }));
+    await click('botGroup.settings.hide');
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])('leaves once for authoritative hide without a local action (direct=%s)', async direct => {
+    h.chat.server = direct;
+    await render(group({ serverBacked: true }));
+    h.chat.listHidden = true;
+    await render(null, 'missing');
+    expect(h.leave).toHaveBeenCalledOnce();
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await render(null, 'missing');
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it('does not navigate twice when the authoritative event precedes the local hide receipt', async () => {
+    let finish!: () => void;
+    h.chat.act.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ effects: [] }); }));
+    await openSettings(group({ serverBacked: true, supportsListRemoval: true }));
+    await click('botGroup.settings.hide');
+    h.chat.listHidden = true;
+    await render(null, 'missing');
+    expect(h.leave).toHaveBeenCalledOnce();
+    await act(async () => { finish(); });
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a hidden background page from navigating another route and leaves when focused again', async () => {
+    await render(group({ serverBacked: true }));
+    h.focused = false; h.chat.listHidden = true;
+    await render(null, 'missing');
+    expect(h.leave).not.toHaveBeenCalled();
+    h.focused = true;
+    await render(null, 'missing');
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it('resets lifecycle busy on reopen and keeps an old reply out of a new request', async () => {
+    const data = group({ serverBacked: true, supportsDissolve: true, revision: 1,
+      members: [{ botId: 'mimi', actorId: 'mimi', name: 'Mimi', avatar: '', avatarColor: '', status: 'active', isOwned: true, role: 'owner' }] });
+    let finishOld!: () => void, finishNew!: () => void;
+    h.chat.act.mockImplementationOnce(() => new Promise(resolve => { finishOld = () => resolve({ effects: [] }); }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNew = () => resolve({ effects: [] }); }));
+    await openSettings(data);
+    await click('botGroup.settings.dissolve');
+    expect(byId('botGroup.settings.dissolve')?.disabled).toBe(true);
+    await act(async () => h.closeSettings!());
+    await click('botGroup.settingsButton');
+    expect(byId('botGroup.settings.dissolve')?.disabled).toBe(false);
+    await click('botGroup.settings.dissolve');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
+    await act(async () => { finishOld(); });
+    expect(byId('botGroup.settings.dissolve')?.disabled).toBe(true);
+    await act(async () => { finishNew(); });
+    expect(byId('botGroup.settings.dissolve')?.disabled).toBe(false);
+  });
+
+  it('does not navigate from an old hide acknowledgement after leaving the screen', async () => {
+    let finish!: () => void;
+    h.chat.act.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ effects: [] }); }));
+    await openSettings(group({ serverBacked: true, supportsListRemoval: true }));
+    await click('botGroup.settings.hide');
+    await act(async () => root.render(el('div')));
+    await act(async () => { finish(); });
+    expect(h.leave).not.toHaveBeenCalled();
+  });
+
+  it('follows a remote rename on blur without saving an untouched name', async () => {
+    await openSettings();
+    await act(async () => { h.inputs['botGroup.settings.name'].onFocus(); });
+    await render(group({ name: '电脑端的新名称' }));
+    expect(h.inputs['botGroup.settings.name'].value).toBe('官网介绍页');
+    await act(async () => { h.inputs['botGroup.settings.name'].onBlur(); });
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(h.inputs['botGroup.settings.name'].value).toBe('电脑端的新名称');
+  });
+
+  it('keeps a failed name draft and lets the user retry it', async () => {
+    await openSettings(); h.chat.act.mockRejectedValueOnce(new Error('PRECONDITION_FAILED'));
+    await act(async () => { h.inputs['botGroup.settings.name'].onChangeText('保留草稿'); });
+    await act(async () => { await h.inputs['botGroup.settings.name'].onSubmitEditing(); });
+    expect(h.inputs['botGroup.settings.name'].value).toBe('保留草稿');
+    expect(byId('botGroup.settings')?.textContent).toContain('groupChat.settings.conflict');
+    await act(async () => { await h.inputs['botGroup.settings.name'].onSubmitEditing(); });
+    expect(h.chat.act).toHaveBeenLastCalledWith('update', { name: '保留草稿' });
+  });
+
+  it('edits a direct server group through the management host while chat stays direct', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsMemberRemoval: true, revision: 5 });
+    data.members[0] = { ...data.members[0], isOwned: true, role: 'owner' };
+    h.chat.server = true;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    h.management = { displayHost: { deviceId: 'pc', deviceName: 'PC' }, selected: { host: { deviceId: 'pc', deviceName: 'PC' }, group: data }, managers: [], loading: false, reason: null,
+      act: manage, refresh: vi.fn(), select: vi.fn() };
+    h.teammates = { rows: [{ key: 'new', host: { deviceId: 'pc', deviceName: 'PC' }, item: {
+      ref: { collectionId: 'teammates', kind: 'bot', id: 'new-bot' }, revision: '1', display: { title: 'New bot' }, links: [],
+    } }], loading: false, failed: false };
+    await openSettings(data);
+    expect(h.inputs['botGroup.settings.name'].editable).toBe(true);
+    expect(byId('botGroup.settings.managementStatus')?.textContent).toBe('groupChat.settings.managementStatus.ready');
+    expect(byId('botGroup.settings.connectedDot')).not.toBeNull();
+    expect(byId('botGroup.settings.retry')).toBeNull();
+    expect(byId('botGroup.settings.body')?.style.opacity).toBe('');
+    await act(async () => { h.inputs['botGroup.settings.name'].onChangeText('Managed'); });
+    await act(async () => { await h.inputs['botGroup.settings.name'].onSubmitEditing(); });
+    expect(manage).toHaveBeenCalledWith('update', { name: 'Managed', expectedRevision: 5 });
+    expect(h.chat.act).not.toHaveBeenCalled(); expect(h.chat.reload).toHaveBeenCalled();
+    await click('botGroup.settings.add'); await click('botGroup.settings.addable.new-bot');
+    expect(manage).toHaveBeenLastCalledWith('add-member', { botId: 'new-bot', expectedRevision: 5 });
+  });
+
+  it('explains unavailable management and offers retry without enabling edits', async () => {
+    const refresh = vi.fn();
+    h.management = { displayHost: { deviceId: 'pc', deviceName: 'PC' }, selected: undefined, managers: [], loading: false, reason: 'noHost', act: vi.fn(), select: vi.fn(), refresh };
+    h.chat.server = true; await openSettings(group({ serverBacked: true }));
+    expect(h.inputs['botGroup.settings.name'].editable).toBe(false);
+    expect(byId('botGroup.settings.body')?.style.opacity).toBe('0.6');
+    expect(byId('botGroup.settings.managementStatus')?.textContent).toBe('groupChat.settings.managementStatus.noHost');
+    expect(byId('botGroup.settings.computerName')?.textContent).toBe('PC');
+    expect(byId('botGroup.settings.retry')?.textContent).toBe('groupChat.settings.reconnect');
+    expect((byId('botGroup.settings.member.mimi') as HTMLButtonElement)?.disabled).toBe(true);
+    await click('botGroup.settings.add');
+    expect(byId('botGroup.settings.addable')).toBeNull();
+    await click('botGroup.settings.retry'); expect(refresh).toHaveBeenCalledOnce();
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(byId('botGroup.settings.delete')).toBeNull();
+    expect(byId('botGroup.settings.hide')?.disabled).toBe(true);
+    expect(byId('botGroup.settings')?.textContent).toContain('groupChat.lifecycle.unavailable');
+    expect(byId('botGroup.settings')?.textContent).not.toContain('groupChat.settings.deleteNote');
+  });
+
+  it.each(['upgrade', 'permission', 'unavailable', 'loading'])('keeps the %s reason explicit in the compact status row', async reason => {
+    const refresh = vi.fn();
+    h.chat.server = true;
+    h.management = { selected: undefined, managers: [], loading: reason === 'loading', reason: reason === 'loading' ? null : reason,
+      act: vi.fn(), select: vi.fn(), refresh };
+    await openSettings(group({ serverBacked: true }));
+    expect(byId('botGroup.settings.managementStatus')?.textContent).toBe(`groupChat.settings.managementStatus.${reason}`);
+    expect(h.inputs['botGroup.settings.name'].editable).toBe(false);
+    if (reason === 'loading') {
+      expect(byId('botGroup.settings.connecting')).not.toBeNull();
+      expect(byId('botGroup.settings.retry')).toBeNull();
+    } else {
+      expect(byId('botGroup.settings.connecting')).toBeNull();
+      await click('botGroup.settings.retry'); expect(refresh).toHaveBeenCalledOnce();
+    }
+  });
 
   it('renames, changes the organizer and edits members on this computer', async () => {
     h.teammates = { rows: [{ key: 'k', host: { deviceId: 'mac', deviceName: 'Mac' }, item: {
@@ -739,6 +1130,58 @@ describe('group settings', () => {
     data.members = data.members.slice(0, 2);
     await openSettings(data);
     expect(byId('botGroup.settings.memberMenu.abu.action.remove:abu')?.disabled).toBe(true);
+  });
+
+  it.each(['member', 'admin'] as const)('uses explicit leave for a server %s without granting archive or compatibility delete', async (role) => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsGroupLeave: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role };
+    await openSettings(data);
+    expect(h.inputs['botGroup.settings.name'].editable).toBe(role === 'admin');
+    expect(byId('botGroup.settings.add')?.disabled).toBe(role !== 'admin');
+    expect(byId('botGroup.settings.delete')).toBeNull();
+    expect(byId('botGroup.settings.leave')?.disabled).toBe(false);
+    await click('botGroup.settings.leave');
+    expect(h.chat.act).toHaveBeenCalledWith('leave', undefined);
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it('keeps explicit leave disabled when the computer is offline', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsGroupLeave: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role: 'member' };
+    h.chat.online = false;
+    await openSettings(data);
+    expect(byId('botGroup.settings.delete')).toBeNull();
+    expect(byId('botGroup.settings.leave')?.disabled).toBe(true);
+    await click('botGroup.settings.leave');
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  it('keeps direct server settings archive owner-only', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
+    data.members[0] = { ...data.members[0], isOwned: true, role: 'admin' };
+    h.chat.server = true;
+    h.management = { selected: { host: { deviceId: 'pc', deviceName: 'PC' }, group: data }, managers: [], loading: false, reason: null,
+      act: vi.fn(), refresh: vi.fn(), select: vi.fn() };
+    await openSettings(data);
+    expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
+    await click('botGroup.settings.delete');
+    expect(h.management.act).not.toHaveBeenCalled();
+  });
+
+  it('searches the host roster when adding a server group member', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
+    data.members[0] = { ...data.members[0], isOwned: true, role: 'owner' };
+    await openSettings(data);
+    await click('botGroup.settings.add');
+    expect(h.inputs['botGroup.settings.memberSearch']).toBeDefined();
+    await act(async () => { h.inputs['botGroup.settings.memberSearch'].onChangeText('Beyond first page'); });
+    expect(h.teammateQuery).toBe('Beyond first page');
+    h.teammates.rows = [{ key: 'beyond', host: { deviceId: 'pc', deviceName: 'PC' }, item: {
+      ref: { collectionId: 'teammates', kind: 'bot', id: 'bot-201' }, revision: '1', display: { title: 'Beyond first page' }, links: [],
+    } }];
+    await render(data);
+    await click('botGroup.settings.addable.bot-201');
+    expect(h.chat.act).toHaveBeenLastCalledWith('add-member', { botId: 'bot-201', expectedRevision: 5 });
   });
 
   it('deletes after the system confirmation, then leaves once the sheet has closed', async () => {

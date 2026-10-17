@@ -97,6 +97,8 @@ import {
   flushOrphanToolResults,
   isSuccessfulCodexDoneEventData,
   onTurnErrorEvent,
+  captureDeferredTurnError,
+  persistDeferredTurnError,
   reserveTurnErrorPersistId,
   releaseReservedTurnErrorPersistId,
   whenTurnErrorPersisted,
@@ -3442,6 +3444,72 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  describe('延后补落(供应商组换电脑期间先暂存的 error 行)', () => {
+    it('按出错的时刻排序，不排到之后的消息后面', async () => {
+      // 结算时才写：用户在这期间发的新消息必须仍排在它后面。
+      const occurredAt = Date.parse('2026-10-11T08:00:00.000Z');
+      const nowSpy = vi.spyOn(Date, 'now');
+      nowSpy.mockReturnValue(occurredAt);
+      const row = captureDeferredTurnError(SESSION, { message: '换电脑没成', reason: 'usage_limit' }, { uuid: 'failed-turn' });
+      nowSpy.mockReturnValue(occurredAt + 60_000);
+      try {
+        persistDeferredTurnError(SESSION, row!);
+        await flushWrites();
+      } finally {
+        nowSpy.mockRestore();
+      }
+      expect(createMessage).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({
+          role: 'error',
+          content: { message: '换电脑没成', reason: 'usage_limit' },
+          agentMeta: { uuid: 'failed-turn' },
+          createdAt: occurredAt + 1,
+        }),
+        expect.objectContaining({ shouldBroadcast: expect.any(Function) }),
+      );
+    });
+
+    it('不碰补落时正在进行的那一轮：不 flush 在飞正文，那一轮同样的错误照常落库', async () => {
+      // 失败那一轮：暂存。
+      noteTurnStarted(SESSION);
+      const row = captureDeferredTurnError(SESSION, { message: 'Remote computer is offline' }, null);
+      resetTurnPersistState(SESSION);
+      // 用户中途接手：新的一轮正在输出。
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'half a reply', isFinal: false }, null);
+      // 换电脑那一趟结束，补落旧的那条 error 行。
+      persistDeferredTurnError(SESSION, row!);
+      await flushWrites();
+      // 只写了那条 error 行：新一轮输出到一半的正文没有被提前落库(否则重载后会拆成两行)。
+      expect(vi.mocked(createMessage).mock.calls.map(([, body]) => (body as { role: string }).role)).toEqual(['error']);
+      // 新的一轮随后同样连不上：它自己的 error 行不被当成重复，在飞正文这时才随它落库。
+      expect(onTurnErrorEvent(SESSION, { message: 'Remote computer is offline' })).toBeTruthy();
+      await flushWrites();
+      const roles = vi.mocked(createMessage).mock.calls.map(([, body]) => (body as { role: string }).role);
+      expect(roles).toEqual(['error', 'assistant', 'error']);
+    });
+
+    it('旧会话关闭清掉按会话的状态之后照样能补落', async () => {
+      noteTurnStarted(SESSION);
+      const row = captureDeferredTurnError(SESSION, { message: 'agent stopped' }, null);
+      // 交接会关闭旧会话。
+      clearSessionPersistState(SESSION);
+      persistDeferredTurnError(SESSION, row!);
+      await flushWrites();
+      expect(createMessage).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ role: 'error', content: { message: 'agent stopped' } }),
+        expect.anything(),
+      );
+    });
+
+    it('没有错误文案时不取行', () => {
+      expect(captureDeferredTurnError(SESSION, { reason: 'turn-failed' })).toBeNull();
+      expect(captureDeferredTurnError(SESSION, null)).toBeNull();
+    });
   });
 
   it('/clear 在 error 事件之前发生时，createdAt 被 cap 在 clear 边界之下（不出现在清空后的会话中）', async () => {

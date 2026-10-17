@@ -98,6 +98,8 @@ export interface GhostCardRow {
 export interface GhostCardPush {
   callId: string;
   ghostId: string;
+  /** 物理键与逻辑身份不同时，供进行中调用按 namespace 精确配对。 */
+  logicalGhostId?: string;
   /** agent 侧 tool_use id(claude 路径有,codex 为 null → renderer 走启发式锚定)。 */
   toolUseId: string | null;
   /** 静态版(settle 后 / 历史回放用;与落库内容一致)。 */
@@ -151,6 +153,7 @@ const SWEEP_MIN_INTERVAL_MS = 30_000;
 
 interface CallEntry {
   ghostId: string;
+  logicalGhostId?: string;
   toolUseId: string | null;
   sessionId: string | null;
   sessionInstanceId?: string;
@@ -200,6 +203,7 @@ interface CallEntry {
 /** 卡片供片服务(单例装配见 cindy-brain/index.ts)。 */
 export class GhostCardService {
   private readonly calls = new Map<string, CallEntry>();
+  private readonly pendingWrites = new Map<Promise<void>, string>();
   private lastSweepAt = 0;
 
   constructor(private readonly deps: GhostCardServiceDeps) {}
@@ -237,6 +241,7 @@ export class GhostCardService {
     callId: string,
     info: {
       ghostId: string;
+      logicalGhostId?: string;
       toolUseId: string | null;
       sessionId: string | null;
       sessionInstanceId?: string;
@@ -253,6 +258,7 @@ export class GhostCardService {
     this.sweep();
     this.calls.set(callId, {
       ghostId: info.ghostId,
+      ...(info.logicalGhostId !== undefined ? { logicalGhostId: info.logicalGhostId } : {}),
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
       sessionInstanceId: info.sessionInstanceId,
@@ -290,6 +296,17 @@ export class GhostCardService {
    * 兜底(cardStoreDb.getGhostCard)。 */
   ownerOf(callId: string): string | null {
     return this.calls.get(callId)?.ghostId ?? null;
+  }
+
+  async relocateGhost(fromPart: string, toPart: string): Promise<void> {
+    for (const entry of this.calls.values()) {
+      if (entry.ghostId === fromPart) entry.ghostId = toPart;
+    }
+    await Promise.all(
+      [...this.pendingWrites]
+        .filter(([, ghostId]) => ghostId === fromPart)
+        .map(([pending]) => pending),
+    );
   }
 
   /**
@@ -442,15 +459,17 @@ export class GhostCardService {
       updatedAt: now,
     };
     // 落库失败不阻断推送:活卡先见,历史回放缺卡由 renderer missing 降级兜底。
-    void this.deps.persist(row).catch((err) => {
+    const pending = this.deps.persist(row).catch((err) => {
       this.deps.log?.warn('ghost card persist failed', {
         callId: p.callId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
+    }).finally(() => this.pendingWrites.delete(pending));
+    this.pendingWrites.set(pending, senderGhostId);
     this.deps.broadcast({
       callId: p.callId,
       ghostId: senderGhostId,
+      ...(entry.logicalGhostId !== undefined ? { logicalGhostId: entry.logicalGhostId } : {}),
       toolUseId: entry.toolUseId,
       html: sanitized.html,
       animatedHtml: sanitized.animatedHtml ?? null,

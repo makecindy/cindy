@@ -38,13 +38,19 @@ it('isolates excess additions and duplicate tags without discarding valid local 
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
+  isAgentSelectableModel,
+  mergeDiscoveredRuntimeModels,
+  parseModelsListResponse,
   type Catalog,
+  type CustomProviderConfig,
   type ModelRegistry,
 } from '@cindy/model-providers';
+import { validateCustomProviderConfig } from '../custom-provider-store.js';
 import {
   getActiveCatalog,
   getActiveLocalModelCatalog,
   setActiveCatalog,
+  setCustomProviderConfigs,
   setCustomProviders,
   setLocalCatalogOverrides,
   setXdGatewayModels,
@@ -108,6 +114,64 @@ afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
 });
 describe('metadata layers through the active catalog', () => {
+  it.each([undefined, null, 'openai-audio-speech'] as const)(
+    'refreshes media protocol declarations without changing explicit user override %s', (nativeApi) => {
+      const config: CustomProviderConfig = { id: 'speech-refresh', name: 'Speech', runtimes: {
+        codex: { baseUrl: 'https://speech.example.test/v1', wireProtocol: 'openai-chat', models: [{
+          id: 'new-server-voice', name: 'Voice',
+          discoveredMetadata: { mode: 'audio_speech', nativeApi: 'openai-audio-speech' },
+          ...(nativeApi !== undefined ? { nativeApi } : {}),
+        }] },
+      } };
+      const original = structuredClone(config);
+      const publish = (declaration: 'openai-audio-speech' | null) => setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: { schemaVersion: 5, updatedAt: declaration ? '2026-10-12T06:00:00.000Z' : '2026-10-12T07:00:00.000Z',
+          baseModels: [{ id: 'new-server-voice', aliases: [], defaults: { mode: 'audio_speech' } }],
+          models: [{ id: 'new-server-voice', name: 'Voice', modelRef: 'new-server-voice', nativeApi: declaration,
+            routes: [{ providerId: 'xd', modelId: 'new-server-voice', agents: [] }] }],
+        },
+      });
+      publish('openai-audio-speech');
+      setCustomProviderConfigs([config]);
+      const activeProvider = () => getActiveCatalog().providers.find(p => p.id === config.id)!;
+      expect(activeProvider().audioModels?.[0].nativeApi).toBe(nativeApi === null ? null : 'openai-audio-speech');
+      publish(null);
+      expect(activeProvider().models.codex![0].nativeApi).toBe(nativeApi === undefined ? null : nativeApi);
+      expect(activeProvider().audioModels?.[0].nativeApi).toBe(nativeApi === undefined ? null : nativeApi);
+      expect(activeProvider().models.codex![0].userModelConfig).toEqual(original.runtimes.codex!.models[0]);
+      expect(config).toEqual(original);
+    });
+
+  it('keeps BYOK speech metadata through config validation, JSON persistence and active catalog refresh', () => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'gpt-private-voice',
+      mode: 'audio_speech', native_api: 'openai-audio-speech' }] })!;
+    const config: CustomProviderConfig = { id: 'speech-one', name: 'Speech', runtimes: {
+      codex: { baseUrl: 'https://speech.example.test/v1', wireProtocol: 'openai-chat',
+        models: mergeDiscoveredRuntimeModels([], discovered) },
+    } };
+    expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+    const restored = JSON.parse(JSON.stringify(config)) as CustomProviderConfig;
+    const other: CustomProviderConfig = { ...restored, id: 'speech-two', runtimes: {
+      codex: { ...restored.runtimes.codex!, models: [{ id: 'gpt-private-voice', name: 'Chat', mode: 'chat' }] },
+    } };
+    const publish = () => setCustomProviders([restored, other].map(c =>
+      buildUserProvider(c, { modelRegistry: BUNDLED_CATALOG.modelRegistry })));
+    setActiveCatalog(BUNDLED_CATALOG);
+    publish();
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const active = getActiveCatalog();
+      const speech = active.providers.find(p => p.id === restored.id)!;
+      expect(speech.audioModels?.[0]).toMatchObject({ id: 'gpt-private-voice', mode: 'audio_speech',
+        nativeApi: 'openai-audio-speech', sourceAgent: 'codex' });
+      expect(isAgentSelectableModel(speech.models.codex![0], { userProvider: true })).toBe(false);
+      expect(active.providers.find(p => p.id === other.id)?.audioModels).toBeUndefined();
+      restored.runtimes.codex!.models = mergeDiscoveredRuntimeModels(restored.runtimes.codex!.models,
+        [{ id: 'gpt-private-voice', name: 'Sparse refresh' }]);
+      publish();
+    }
+  });
+
   it.each(['absent', 'legacy', 'empty'] as const)(
     'applies local overrides after %s registry fallback',
     (kind) => {
@@ -519,4 +583,21 @@ describe('metadata layers through the active catalog', () => {
       catalog.modelRegistry!.localModels!.models[0].variants,
     );
   });
+});
+
+
+it('keeps complex quotes with their provider snapshot and clears them on successful replacement', () => {
+  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'] };
+  const video = { id: 'example-video', name: 'Video', mode: 'video_generation', agents: [] as const,
+    currency: 'USD' as const, costDiscount: 0.2, displayPricing,
+    modalities: { input: ['text'], output: ['video'] } };
+  setActiveCatalog({ ...BUNDLED_CATALOG });
+  setXdGatewayModels([{ ...video, agents: [] }], { authoritative: true });
+  const provider = () => getActiveCatalog().providers.find((p) => p.id === 'xd')!;
+  expect(provider().videoModels?.[0]).toMatchObject({ displayPricing, currency: 'USD', costDiscount: 0.2 });
+  expect(Object.values(provider().models).flat().some((m) => m?.id === video.id)).toBe(false);
+  setXdGatewayModels([{ ...video, displayPricing: undefined, agents: [] }], { authoritative: true });
+  expect(provider().videoModels?.[0]).not.toHaveProperty('displayPricing');
+  setXdGatewayModels([], { authoritative: true });
+  expect(provider().videoModels).toEqual([]);
 });

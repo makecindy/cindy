@@ -125,13 +125,17 @@ describe('历史窗口空洞 — 跨空洞不合并工作组', () => {
     expect(groupContains(beforeGap[0], 't2')).toBe(false);
   });
 
-  it.each([false, true])('伙伴投影保留空洞前答复并隐藏两侧过程，active=%s', (streaming) => {
+  it.each([false, true])('伙伴投影保留空洞前答复，两侧过程各自留在普通工作组里，active=%s', (streaming) => {
     const { items } = buildRenderItems(gapMessages());
     const projected = simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
     const prose = projected.flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
       ? [item.message.clientId] : []);
     expect(prose).toEqual(streaming ? ['a1'] : ['a1', 'a2']);
-    expect(workGroups(projected)).toHaveLength(0);
+    const groups = workGroups(projected);
+    expect(groups.some((group) => groupContains(group, 't1'))).toBe(true);
+    expect(groups.some((group) => groupContains(group, 't2'))).toBe(true);
+    // 与普通任务一样：同一个组不能同时装着空洞两侧的动作。
+    expect(groups.some((group) => groupContains(group, 't1') && groupContains(group, 't2'))).toBe(false);
     expect(projected.some(item => item.type === 'tool_segment')).toBe(false);
   });
 
@@ -229,7 +233,8 @@ describe('历史窗口空洞 — 长任务不被误判', () => {
     const projected = simplifyBotRenderItems(grouped, false);
     expect(projected.flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
       ? [item.message.clientId] : [])).toEqual(['a1']);
-    expect(workGroups(projected)).toHaveLength(0);
+    // 伙伴与普通任务同一个「已工作」组，进度文字留在组内。
+    expect(workGroups(projected)).toEqual(groups);
   });
 });
 

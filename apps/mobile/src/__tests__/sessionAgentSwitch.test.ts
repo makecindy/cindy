@@ -62,7 +62,7 @@ describe('mobile session Agent switch contract', () => {
     })).toEqual({ targetAgentKind: 'pi', model: 'gpt-5.5', providerId: 'openai' });
   });
 
-  it('requires host capability and excludes SSH / Orca sessions', () => {
+  it('requires host capability, allows Orca, and excludes SSH sessions', () => {
     const supported: MobileAgentCapabilities = {
       availableModels: [],
       effortLevels: [],
@@ -73,7 +73,8 @@ describe('mobile session Agent switch contract', () => {
     };
     expect(supportsMobileSessionAgentSwitch({ remoteHostId: null, orcaRole: null }, supported)).toBe(true);
     expect(supportsMobileSessionAgentSwitch({ remoteHostId: 'ssh-1', orcaRole: null }, supported)).toBe(false);
-    expect(supportsMobileSessionAgentSwitch({ remoteHostId: null, orcaRole: 'lead' }, supported)).toBe(false);
+    expect(supportsMobileSessionAgentSwitch({ remoteHostId: null, orcaRole: 'lead' }, supported)).toBe(true);
+    expect(supportsMobileSessionAgentSwitch({ remoteHostId: null, orcaRole: 'worker' }, supported)).toBe(true);
     expect(supportsMobileSessionAgentSwitch(
       { remoteHostId: null, orcaRole: null },
       { ...supported, supportsSessionAgentSwitch: false },

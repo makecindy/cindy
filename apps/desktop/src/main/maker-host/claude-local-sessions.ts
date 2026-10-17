@@ -1039,7 +1039,9 @@ function normalizeClaudeModel(raw: string): string {
   if (model.includes('opus-4-7')) return 'claude-opus-4-7';
   if (model.includes('opus-4-6')) return 'claude-opus-4-6';
   if (model.includes('fable-5')) return 'claude-fable-5';
+  if (model.includes('haiku-5-5')) return 'claude-haiku-5-5';
   if (model.includes('haiku-4-5')) return 'claude-haiku-4-5';
+  if (model.includes('sonnet-5-5')) return 'claude-sonnet-5-5';
   if (model.includes('sonnet-5')) return 'claude-sonnet-5';
   if (model.includes('sonnet-4-6')) return 'claude-sonnet-4-6';
   // 历史会话里的裸 'sonnet' 别名(修复前 toSdkModelString 的产物)实际命中的是 4.6。

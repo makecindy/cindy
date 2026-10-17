@@ -1,4 +1,5 @@
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
+import { summarizeMessageBubblePresentation } from "@cindy/maker-shared/message-presentation";
 
 import { i18n } from "@/i18n";
 import {
@@ -7,18 +8,24 @@ import {
   type ShareSvgRect,
 } from "@/session/conversationShareRichSvg";
 import {
+  mobileMarkdownInlineHasMark,
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
 } from "@/session/messageMarkdown";
-import type {
-  ConversationShareMessage,
-  ConversationShareImage,
-  ConversationShareWebViewColors,
+import {
+  CONVERSATION_SHARE_PADDING_X,
+  CONVERSATION_SHARE_PADDING_Y,
+  type ConversationShareMessage,
+  type ConversationShareImage,
+  type ConversationShareWebViewColors,
 } from "@/session/conversationShareWebViewHtml";
+import { buildMessageContentLayout } from "@/session/messageContentLayout";
+import { spacing } from "@/theme/tokens";
 
-const PADDING = 28;
-const MESSAGE_GAP = 16;
+const PADDING_X = CONVERSATION_SHARE_PADDING_X;
+const PADDING_Y = CONVERSATION_SHARE_PADDING_Y;
+const MESSAGE_GAP = spacing.lg;
 const TEXT_FONT_SIZE = 15;
 const TEXT_LINE_HEIGHT = 22;
 const META_FONT_SIZE = 12;
@@ -101,13 +108,14 @@ export function buildConversationShareSvgLayout({
   width: number;
 }): ConversationShareSvgLayout {
   const canvasWidth = Math.max(280, Math.round(width));
-  const contentWidth = canvasWidth - PADDING * 2;
+  const contentWidth = canvasWidth - PADDING_X * 2;
+  const contentLayout = buildMessageContentLayout({ screenWidth: canvasWidth });
   const bubbles: ConversationShareSvgBubble[] = [];
   const images: ConversationShareSvgLayout["images"] = [];
   const gaps: Array<{ color: string; y: number }> = [];
   const messageIndex = new Map(allShareableIds.map((id, index) => [id, index]));
   let previousIndex: number | null = null;
-  let cursorY = PADDING;
+  let cursorY = PADDING_Y;
 
   for (const message of messages) {
     const currentIndex = messageIndex.get(message.clientId) ?? null;
@@ -121,8 +129,23 @@ export function buildConversationShareSvgLayout({
     }
     const user = message.kind === "user";
     const bubbleWidth = user ? Math.round(contentWidth * 0.86) : contentWidth;
-    const bubbleX = user ? canvasWidth - PADDING - bubbleWidth : PADDING;
-    const horizontalPadding = user ? 12 : 0;
+    const bubbleX = user ? canvasWidth - PADDING_X - bubbleWidth : PADDING_X;
+    const horizontalPadding = user ? spacing.md : 0;
+    // 与聊天气泡一致:短消息上下 8,其余 12;助手回复无框,上下 4。
+    const compact =
+      summarizeMessageBubblePresentation({
+        attachmentCount: message.attachments?.length ?? 0,
+        body: message.body,
+        kind: message.kind,
+        secondaryBody: message.secondaryBody,
+      }).density === "compact";
+    const paddingY = user ? (compact ? spacing.sm : spacing.md) : spacing.xs;
+    const minBubbleHeight = user ? 20 + paddingY * 2 : 30;
+    const ownBubble = user && message.ownUserBubble ? colors.ownUserBubble : null;
+    const bubbleFill = user
+      ? (ownBubble?.background ?? colors.surfaceElevated)
+      : undefined;
+    const bubbleStroke = user ? (ownBubble?.border ?? colors.border) : undefined;
     const textWidth = bubbleWidth - horizontalPadding * 2;
     const appendMetadata = (text: string, color: string, gap: number) => {
       const lines = wrapSvgText(
@@ -153,14 +176,18 @@ export function buildConversationShareSvgLayout({
     // their own occurrence rather than moving into the bubble. Share images
     // carry no message-source labels (automation / device / plugin / author).
     const appendImage = (image: ConversationShareImage) => {
-      const scale = Math.min(1, bubbleWidth / image.width, 320 / image.height);
+      const scale = Math.min(
+        1,
+        contentLayout.attachmentImageMaxWidth / image.width,
+        contentLayout.attachmentImageMaxHeight / image.height,
+      );
       const imageWidth = image.width * scale;
       const imageHeight = image.height * scale;
       images.push({
         uri: image.uri,
         width: imageWidth,
         height: imageHeight,
-        x: user ? canvasWidth - PADDING - imageWidth : PADDING,
+        x: user ? canvasWidth - PADDING_X - imageWidth : PADDING_X,
         y: cursorY,
       });
       cursorY += imageHeight + MESSAGE_GAP;
@@ -187,7 +214,6 @@ export function buildConversationShareSvgLayout({
     // Preserve the existing whole-message redaction path for secrets spanning
     // formatting, paragraphs or images. Never redact isolated styled runs.
     if (!needsRedaction && bodyParts.length > 0) {
-      const paddingY = user ? 12 : 4;
       const body = layoutConversationShareRichBody(
         message,
         colors,
@@ -195,14 +221,14 @@ export function buildConversationShareSvgLayout({
         cursorY + paddingY,
         textWidth,
       );
-      const height = Math.max(user ? 44 : 30, body.height + paddingY * 2);
+      const height = Math.max(minBubbleHeight, body.height + paddingY * 2);
       bubbles.push({
         x: bubbleX,
         y: cursorY,
         width: bubbleWidth,
         height,
-        fill: user ? colors.surfaceElevated : undefined,
-        stroke: user ? colors.textSecondary : undefined,
+        fill: bubbleFill,
+        stroke: bubbleStroke,
         textBlocks: body.textBlocks,
         rectangles: body.rectangles,
       });
@@ -233,7 +259,7 @@ export function buildConversationShareSvgLayout({
     }
 
     const textBlocks: ConversationShareSvgTextBlock[] = [];
-    let innerY = user ? 12 : 4;
+    let innerY = paddingY;
     for (const block of blocks) {
       if ("image" in block) {
         const scale = Math.min(
@@ -264,12 +290,12 @@ export function buildConversationShareSvgLayout({
       innerY += lines.length * block.lineHeight + 5;
     }
     if (blocks.length > 0) innerY -= 5;
-    const bubbleHeight = Math.max(user ? 44 : 30, innerY + (user ? 12 : 4));
+    const bubbleHeight = Math.max(minBubbleHeight, innerY + paddingY);
     if (blocks.length > 0)
       bubbles.push({
-        fill: user ? colors.surfaceElevated : undefined,
+        fill: bubbleFill,
         height: bubbleHeight,
-        stroke: user ? colors.textSecondary : undefined,
+        stroke: bubbleStroke,
         textBlocks,
         width: bubbleWidth,
         x: bubbleX,
@@ -285,7 +311,7 @@ export function buildConversationShareSvgLayout({
     images,
     footerY,
     gaps,
-    height: footerY + 22 + PADDING,
+    height: footerY + 22 + PADDING_Y,
     width: canvasWidth,
   };
 }
@@ -412,27 +438,32 @@ function markdownInlineParts(
   images: ConversationShareMessage["images"],
 ): ShareBodyPart[] {
   const parts: ShareBodyPart[] = [];
+  const appendText = (text: string) => {
+    const last = parts[parts.length - 1];
+    if (last && "text" in last) last.text += text;
+    else parts.push({ text });
+  };
+  // 删除线里的链接等会把一段删除线拆成多个 inline:`~~` 只加在连续删除线范围的两端,
+  // 不给每个片段各包一层(否则边界处出现 `~~~~`)。
+  let struck = false;
   for (const inline of inlines) {
     const image = inline.type === "image" ? images?.get(inline.url) : undefined;
+    const nextStruck = !image && mobileMarkdownInlineHasMark(inline, "strikethrough");
+    if (struck !== nextStruck) {
+      appendText("~~");
+      struck = nextStruck;
+    }
     if (image) {
       parts.push({ image });
       continue;
     }
-    const text = (() => {
-      if (inline.type === "image") {
-        return (
-          inline.alt.trim() || i18n.t("message.renderer.imageFallbackTitle")
-        );
-      }
-      if (inline.type === "strikethrough") {
-        return `~~${inline.text}~~`;
-      }
-      return inline.text;
-    })();
-    const last = parts[parts.length - 1];
-    if (last && "text" in last) last.text += text;
-    else parts.push({ text });
+    appendText(
+      inline.type === "image"
+        ? inline.alt.trim() || i18n.t("message.renderer.imageFallbackTitle")
+        : inline.text,
+    );
   }
+  if (struck) appendText("~~");
   return parts;
 }
 

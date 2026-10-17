@@ -1,6 +1,7 @@
 import type { OrcaRole, Session } from '@/lib/ccAgent.types';
-import * as sessionService from '@/lib/sessionService';
-import { orcaWorkflowsFor } from '@/lib/makerTransport';
+import { getSessionFor, orcaWorkflowsFor } from '@/lib/makerTransport';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { botRouteForOwnedSession, readLoadedBotProfiles } from '@/features/bots/botSessionOwners';
 
 export function isOrcaLeadSession(session: { orcaRole?: OrcaRole | null }): boolean {
   return session.orcaRole === 'lead';
@@ -32,6 +33,19 @@ export function getSessionRouteOwnerId(route: string): string | null {
 }
 
 /**
+ * The Bot page for a Bot's own chat (main task, history, channel chat), read from
+ * the in-memory profile projection only: no IPC and no module load on a click. A
+ * background task stays on its ordinary `/cc-agent/:id` route; an unloaded projection
+ * falls back to the ordinary route too (the notification entry reloads it first).
+ */
+function loadedBotChatRoute(sessionId: string): string | null {
+  const profiles = readLoadedBotProfiles();
+  if (!profiles) return null;
+  const route = botRouteForOwnedSession(profiles, sessionId)?.route;
+  return route && !route.startsWith('/cc-agent/') ? route : null;
+}
+
+/**
  * Resolve the canonical chat route for a session before navigating from generic
  * entry points such as notifications, deep links, and sidebar clicks. Orca lead
  * sessions now use the plain Lead route; worker sessions route to their Lead
@@ -39,9 +53,10 @@ export function getSessionRouteOwnerId(route: string): string | null {
  */
 export async function resolveSessionRoute(
   sessionId: string,
-  session?: Pick<Session, 'orcaRole'> | null,
+  session?: Pick<Session, 'orcaRole'> & Partial<Pick<Session, 'source'>> | null,
 ): Promise<string> {
-  const targetSession = session ?? (await sessionService.get(sessionId).catch(() => null));
+  const targetSession = session ?? (await getSessionFor(sessionId).catch(() => null));
+  if (!CINDY_MAKE_ENABLED && isCindyMakeSource(targetSession?.source)) return '/cc-agent';
 
   if (targetSession && isOrcaLeadSession(targetSession)) {
     return `/cc-agent/${sessionId}`;
@@ -53,6 +68,10 @@ export async function resolveSessionRoute(
       .catch(() => null);
     return workflow ? `/cc-agent/${workflow.leadSessionId}?worker=${sessionId}` : '/cc-agent';
   }
+
+  // Notifications, task cards and the main sidebar agree on one page per task.
+  const botRoute = loadedBotChatRoute(sessionId);
+  if (botRoute) return botRoute;
 
   return `/cc-agent/${sessionId}`;
 }

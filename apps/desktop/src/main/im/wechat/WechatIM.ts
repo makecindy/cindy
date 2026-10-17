@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import {
   BaseIM,
+  buildInboundMessageFacts,
   type IMCardActionEvent,
   type IMHost,
   type IMMessageEvent,
@@ -28,6 +29,8 @@ import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
 
 import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+import { buildImReplyContextBlock } from '../shared/replyContext';
+import { captureImContext } from '../../../shared/imMessageSource';
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
@@ -90,6 +93,8 @@ interface StoredWechatCredentials {
 
 interface WechatTaskPayload {
   text: string;
+  /** Optional for queued messages saved by older clients. */
+  replyContext?: string;
   attachments: WechatTaskAttachment[];
   unsupportedMedia: string[];
 }
@@ -636,6 +641,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const active = this.#activeTasks.get(output.userId);
     if (!active) throw new Error('WECHAT_NO_ACTIVE_TASK');
     const chunks = chunkWechatText(normalizeFinalOutputText(output.text));
+    // 持久终态需要一个 outbox 项；发送器跳过空 text，仍投递附件并确认任务完成。
+    if (chunks.length === 0) chunks.push('');
     const kind =
       output.terminal === 'done'
         ? ('final' as const)
@@ -1046,14 +1053,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       await this.#processCommand(task, command);
       return;
     }
-    const prompt =
-      payload.unsupportedMedia.length > 0
-        ? `${payload.text}\n\n（微信消息还包含当前版本暂不支持的媒体，本轮仅处理文字。）`
-        : payload.text;
-    if (!hasWechatTaskContent(prompt, payload.attachments)) {
+    if (!hasWechatTaskContent(payload.text, payload.attachments) && !payload.replyContext) {
       await this.#commitSimpleReply(task, '当前版本暂不支持处理这类微信媒体。');
       return;
     }
+    const turnInput = prepareWechatTaskTurn(payload);
 
     const active: ActiveTask = { task, terminalCommitted: false };
     this.#activeTasks.set(task.peerId, active);
@@ -1064,9 +1068,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         botContextId: this.#epoch?.credentials.ilinkBotId ?? '',
         userId: task.peerId,
         userMessageId: task.id,
-        // 个人微信只有私聊; 渠道说明只进模型正文, 落库仍是 prompt。
+        // 个人微信只有私聊；渠道说明、引用与投递事实只进模型，落库保留原文。
         channelNoteSource: { chatKind: 'direct', chatId: task.peerId },
-        text: prompt,
+        ...turnInput,
         attachments: payload.attachments,
         queueMode: 'external',
         beforeProviderStart: async () => {
@@ -1568,7 +1572,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         sessionId: session.id,
         conversationEpoch: epoch,
         payloadJson: JSON.stringify({
-          text: quote ? `${quote}\n${message.text}`.trim() : message.text,
+          text: message.text,
+          ...(quote ? { replyContext: quote } : {}),
           attachments: staged.attachments,
           unsupportedMedia: staged.unsupportedMedia,
         } satisfies WechatTaskPayload),
@@ -1697,6 +1702,7 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
   const attachments = value.attachments ?? [];
   if (
     typeof value.text !== 'string' ||
+    (value.replyContext !== undefined && typeof value.replyContext !== 'string') ||
     !Array.isArray(attachments) ||
     !attachments.every(isWechatTaskAttachment) ||
     !Array.isArray(value.unsupportedMedia) ||
@@ -1706,8 +1712,25 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
   }
   return {
     text: value.text,
+    ...(value.replyContext !== undefined ? { replyContext: value.replyContext } : {}),
     attachments,
     unsupportedMedia: value.unsupportedMedia,
+  };
+}
+
+function prepareWechatTaskTurn(payload: WechatTaskPayload) {
+  const replyPrefix = payload.replyContext
+    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext })
+    : '';
+  return {
+    text: payload.text,
+    agentText: buildInboundMessageFacts({
+      text: payload.text,
+      hasReply: !!payload.replyContext,
+      attachmentCount: payload.attachments.length,
+      unavailable: payload.unsupportedMedia,
+    }) + replyPrefix + payload.text,
+    ...(replyPrefix ? { contextSnapshot: captureImContext({ replyPrefix, replyMessageCount: 1 }) } : {}),
   };
 }
 
@@ -1730,7 +1753,7 @@ function formatWechatQuote(message: WechatInboundMessage): string {
   const details = [quote.title?.trim(), quote.text?.trim()].filter((item): item is string =>
     Boolean(item),
   );
-  if (quote.media.length > 0) details.push(`附件 ${quote.media.length} 个`);
+  if (quote.media.length > 0) details.push(`原消息记录含 ${quote.media.length} 个附件`);
   return details.length > 0 ? `[引用：${details.join('｜')}]` : '';
 }
 
@@ -1941,7 +1964,7 @@ export function wechatPreDispatchFailureText(reason: string): string {
 }
 
 function normalizeFinalOutputText(text: string): string {
-  return filterWechatMarkdown(text) || '✅ (本轮无文本输出)';
+  return filterWechatMarkdown(text).trim();
 }
 
 function hasWechatTaskContent(text: string, attachments: readonly WechatTaskAttachment[]): boolean {
@@ -2033,6 +2056,9 @@ function machineErrorCode(error: unknown): string {
 }
 
 export const __testing = {
+  parseTaskPayload,
+  prepareWechatTaskTurn,
+  formatWechatQuote,
   activePeerIdForSession,
   acceptedPollTaskIds,
   authorizationCancelPhase,

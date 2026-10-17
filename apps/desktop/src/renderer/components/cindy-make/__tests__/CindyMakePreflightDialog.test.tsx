@@ -148,6 +148,14 @@ describe('Make preflight confirmation boundary', () => {
     },
   );
 
+  it('lets the user continue when the official lookup failed, and says so', async () => {
+    open();
+    await finishChecks();
+    act(() => h.publish!({ ...ready, upstream: { status: 'failed', items: [] } }));
+    expect(screen.getByText('cindyMake.upstream.failedContinue')).toBeTruthy();
+    expect((continueButton() as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it.each(['found', 'notFound'] as const)(
     'keeps Continue in the footer and confirms closing after a %s upstream result',
     async (status) => {
@@ -208,7 +216,8 @@ describe('Make preflight confirmation boundary', () => {
     { stage: 'ready', report: { ...ready, upstream: { status: 'found', items: [] } } },
     { stage: 'incomplete', report: { ...ready, status: 'failed' } },
     { stage: 'incomplete', report: { ...ready, status: 'cancelled' } },
-    { stage: 'incomplete', report: { ...ready, upstream: { status: 'failed', items: [] } } },
+    // A failed official lookup does not block making the change.
+    { stage: 'ready', report: { ...ready, upstream: { status: 'failed', items: [] } } },
     {
       stage: 'incomplete',
       report: { ...ready, source: undefined, upstream: { status: 'pending', items: [] } },

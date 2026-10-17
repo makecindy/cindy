@@ -718,3 +718,43 @@ describe('computer snapshot guard', () => {
     },
   );
 });
+
+describe('password fields', () => {
+  it('refuses agent typing into a password field and points at 代输入', async () => {
+    const dispatch = vi.fn(async (name: string) => name === 'get_window_state'
+      ? {
+          elements: [
+            { element_index: 0, element_token: 'w:0', role: 'AXTextField', frame: { x: 10, y: 20, w: 100, h: 20 } },
+            // cua-driver reports password fields as plain AXTextField; only the OS knows.
+            { element_index: 1, element_token: 'w:1', role: 'AXTextField', frame: { x: 10, y: 60, w: 100, h: 20 } },
+          ],
+        }
+      : { effect: 'confirmed' });
+    let focusedSecure = false;
+    const isSecureTarget = vi.fn(async ({ point }: { pid: number; point?: { x: number; y: number } }) =>
+      point ? point.y === 70 : focusedSecure);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch, isSecureTarget }, { sessionId: 'secure' });
+    try {
+      const state = await h.call('get_window_state', { pid: 1, window_id: 2 });
+      for (const [tool, extra] of [['type_text', { text: 'synthetic' }], ['set_value', { value: 'synthetic' }]] as const) {
+        expect(await h.call(tool, { pid: 1, window_id: 2, element_token: 'w:1', ...extra })).toMatchObject({
+          ok: false,
+          errorCode: 'SECURE_FIELD',
+          data: { hint: expect.stringContaining('request_input_handoff') },
+        });
+        expect(await h.call(tool, { pid: 1, window_id: 2, element_index: 1, snapshot_id: state.snapshot_id, ...extra }))
+          .toMatchObject({ errorCode: 'SECURE_FIELD' });
+      }
+      expect(isSecureTarget).toHaveBeenCalledWith({ pid: 1, point: { x: 60, y: 70 } });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(await h.call('type_text', { pid: 1, window_id: 2, element_token: 'w:0', text: 'someone@example.test' }))
+        .toMatchObject({ ok: true });
+      // Plain typing lands in the focused element.
+      focusedSecure = true;
+      expect(await h.call('type_text', { pid: 1, text: 'synthetic' })).toMatchObject({ errorCode: 'SECURE_FIELD' });
+      expect(isSecureTarget).toHaveBeenLastCalledWith({ pid: 1 });
+    } finally {
+      await h.cleanup();
+    }
+  });
+});

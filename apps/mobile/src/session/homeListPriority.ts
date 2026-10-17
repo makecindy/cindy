@@ -4,7 +4,8 @@ import {
 } from '@cindy/maker-shared/live-task-priority';
 import type { RemoteSessionListItem } from './sessionList';
 
-export type HomeListSortBy = 'recency' | 'priority';
+/** 与桌面任务排序同三档:创建时间不随消息 / 状态更新改序。 */
+export type HomeListSortBy = 'recency' | 'priority' | 'created';
 export type HomeStatusFilter = 'active' | 'archived' | 'all';
 
 export interface HomeListPriorityContext {

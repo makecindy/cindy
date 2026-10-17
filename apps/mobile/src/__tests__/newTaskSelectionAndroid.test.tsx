@@ -183,3 +183,29 @@ it("keeps workspace choices and blocks them while busy", () => {
   click("workspaceBrowseOption");
   expect(props.onBrowse).toHaveBeenCalledOnce();
 });
+
+it("selects an equivalent remote Windows path and sends the original workspace path", () => {
+  render({ page: "workspace", workingDir: "d:\\PROJECT\\" });
+  const row = container.querySelector('[data-testid="newSession.workspaceProjectOption"]')!;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  click("workspaceProjectOption");
+  expect(props.onProject).toHaveBeenCalledExactlyOnceWith("D:/project");
+  render({ workspaceKind: "dialogue" });
+  expect(row.getAttribute("aria-pressed")).toBe("false");
+  render({ workspaceKind: "project", workingDir: "D:/different" });
+  expect(row.getAttribute("aria-pressed")).toBe("false");
+});
+
+it.each([
+  ["/repo", "/repo/.cindy-worktrees/branch"],
+  ["D:/repo", "d:\\repo\\.cindy-worktrees\\branch"],
+])("does not mark %s selected when the draft uses a worktree", (base, worktree) => {
+  render({ page: "workspace", workingDir: worktree, workspaces: [{ title: "repo", workingDir: base }] });
+  const row = container.querySelector('[data-testid="newSession.workspaceProjectOption"]')!;
+  expect(row.getAttribute("aria-pressed")).toBe("false");
+  expect(props.workingDir).toBe(worktree);
+  click("workspaceProjectOption");
+  expect(props.onProject).toHaveBeenCalledExactlyOnceWith(base);
+  render({ workingDir: base });
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+});

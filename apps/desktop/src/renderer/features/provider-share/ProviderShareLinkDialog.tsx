@@ -8,7 +8,6 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import {
   ProviderShareDialog,
@@ -16,6 +15,7 @@ import {
   ProviderShareDialogTitle,
 } from './ProviderShareDialog';
 import { formatShareCountdown, shareLinkRemainingMs } from './providerShareFormat';
+import { providerManagementErrorKey, providerShareManagementCommand } from '../provider-group/providerManagement';
 
 type LinkState =
   | { status: 'creating' }
@@ -41,10 +41,12 @@ export function useShareLinkCountdown(expiresAt: string | null): number {
 export function ProviderShareLinkDialog({
   providerId,
   providerLabel,
+  deviceId,
   onClose,
 }: {
   providerId: string;
   providerLabel: string;
+  deviceId?: string;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -62,16 +64,16 @@ export function ProviderShareLinkDialog({
       setState({ status: 'creating' });
       setCopied(false);
       try {
-        const created = await window.electronAPI.providerShare.command({ action: 'create-link', providerId });
+        const created = await providerShareManagementCommand({ action: 'create-link', providerId }, deviceId);
         if (seq !== requestSeq.current) return;
         setState({ status: 'ready', link: created.link, expiresAt: created.expiresAt });
         if (announce) toast.success(tRef.current('providerShare.link.regenerated'));
       } catch (error) {
         if (seq !== requestSeq.current) return;
-        setState({ status: 'error', message: tRef.current(mapIpcErrorToI18nKey(error)) });
+        setState({ status: 'error', message: tRef.current(providerManagementErrorKey(error, Boolean(deviceId))) });
       }
     },
-    [providerId],
+    [providerId, deviceId],
   );
 
   useEffect(() => {
@@ -88,7 +90,9 @@ export function ProviderShareLinkDialog({
   const copy = useCallback(async () => {
     if (state.status !== 'ready' || expired) return;
     try {
-      await navigator.clipboard.writeText(state.link);
+      // Main verifies the write; on Linux/Wayland navigator.clipboard can
+      // resolve while the system clipboard stays empty.
+      await window.electronAPI.copyTextToClipboard({ text: state.link });
       setCopied(true);
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1600);

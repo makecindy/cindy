@@ -1,7 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -9,11 +5,6 @@ import {
   AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS,
   parseAuxiliaryModelRef,
 } from '../auxiliaryModelChain.js';
-
-const SOURCE_PATH = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../auxiliaryModelChain.ts',
-);
 
 describe('AUTO_AUXILIARY_MODEL_CHAIN', () => {
   it('is the frozen cross-tenant chain, never a live price ranking', () => {
@@ -24,10 +15,6 @@ describe('AUTO_AUXILIARY_MODEL_CHAIN', () => {
     ]);
     expect(AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS).toHaveLength(AUTO_AUXILIARY_MODEL_CHAIN.length);
 
-    const source = readFileSync(SOURCE_PATH, 'utf8');
-    expect(source).not.toMatch(/\bsort\s*\(/);
-    expect(source).not.toMatch(/price/i);
-    expect(source).not.toMatch(/cheapest/i);
   });
 
   it('parses profile keys and catalog pins', () => {

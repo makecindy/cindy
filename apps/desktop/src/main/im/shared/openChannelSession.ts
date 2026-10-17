@@ -22,6 +22,7 @@ import { openSession, type SessionOpenBody } from '../../localDb/sessionOpening'
 
 /** 渠道为新任务选定的路由(准入前)。 */
 export interface ChannelSessionRoute {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   providerId: string | null;
@@ -68,6 +69,7 @@ export async function openChannelSession<T>(
     agentKind: normalizeDbAgentKind(route.agentKind) as SessionOpenBody['agentKind'],
     model: route.model,
     providerId: route.providerId,
+    ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
     ...(route.effort !== undefined ? { effort: route.effort } : {}),
     ...(route.fastMode !== undefined ? { fastMode: route.fastMode } : {}),
     permissionMode: route.permissionMode,

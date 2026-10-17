@@ -341,7 +341,7 @@ async function finishRestoredWorktree(
     overwriteExisting: false,
   }).catch((err) => {
     log.warn(
-      `[restore] apply .xdtworktreeinclude failed for ${worktreePath}:`,
+      `[restore] apply worktree include files failed for ${worktreePath}:`,
       err instanceof Error ? err.message : String(err),
     );
   });
@@ -498,7 +498,7 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
     await ensureLocalBranchForRestore(parsed.baseRepo, branch);
     await addRestoredWorktree(parsed.baseRepo, status.worktreePath, branch);
     // 快照必须先于本地配置恢复：未跟踪文件可能同时命中 .claude/.sivi 或
-    // .xdtworktreeinclude，提前拷贝会让 git stash apply 因目标已存在而失败。
+    // .xdtworktreeinclude / .worktreeinclude，提前拷贝会让 git stash apply 因目标已存在而失败。
     snapshotApplied = await applyPendingSnapshot(
       parsed.baseRepo,
       status.worktreePath,

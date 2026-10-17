@@ -204,12 +204,14 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'reasoner')).toMatchObject({
       efforts: ['low', 'high'],
       defaultEffort: 'high',
+      effortsUnknown: false,
     });
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'explicit-reasoning', 'reasoner'),
     ).toMatchObject({
       efforts: ['low', 'high'],
       defaultEffort: 'high',
+      effortsUnknown: false,
     });
   });
 
@@ -247,6 +249,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(flat[0]).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
+      effortsUnknown: false,
     });
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'grok-4.3'),
@@ -281,6 +284,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
+      effortsUnknown: false,
     });
     expect(
       resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'grok-4.5'),
@@ -400,7 +404,29 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(codex.find((m) => m.id === 'xai/grok-code-fast')).toMatchObject({
       efforts: [],
       defaultEffort: null,
+      effortsUnknown: false,
     });
+  });
+
+  it('explicitly distinguishes declared effort capabilities from unknown placeholders', () => {
+    const catalog = injectedCatalog();
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.codex = [
+      model('known-empty'),
+      model('known-efforts', { efforts: ['low', 'high'], defaultEffort: 'high' }),
+      model('known-explicit', { effortsUnknown: false }),
+      model('unknown-placeholder', { effortsUnknown: true }),
+    ];
+
+    const descriptors = deriveAvailableModels(catalog, 'codex');
+    for (const declaration of openai.models.codex) {
+      expect(descriptors.find((descriptor) => descriptor.id === declaration.id)).toMatchObject({
+        efforts: declaration.efforts,
+        defaultEffort: declaration.defaultEffort,
+        effortsUnknown: declaration.effortsUnknown === true,
+      });
+    }
+    expect(openai.models.codex[0]).not.toHaveProperty('effortsUnknown');
   });
 
   // availableModels 是跨 provider 去重后的扁平表 —— provenance 刻意**不**进这份 descriptor:

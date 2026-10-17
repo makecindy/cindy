@@ -31,7 +31,8 @@ vi.mock('../ownerGuard.js', () => ({
   check: vi.fn(() => true),
 }));
 
-vi.mock('../moduleScope.js', () => ({
+vi.mock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getLog: () => ({
     debug: vi.fn(),
     info: vi.fn(),
@@ -308,7 +309,7 @@ describe('Feishu parent-chat file reuse', () => {
       await fs.readFile(new URL('../outbound.ts', import.meta.url), 'utf8')
     ).replace(/\r\n/g, '\n');
     const helperStart = source.indexOf('const DARWIN_HANDLE_CONTAINMENT_SCRIPT');
-    const helperEnd = source.indexOf('let client:', helperStart);
+    const helperEnd = source.indexOf('const out_SLOT', helperStart);
     const helper = source.slice(helperStart, helperEnd);
     const launcherStart = source.indexOf('async function darwinHandleContainment');
     const launcherEnd = source.indexOf('/**\n * Object-chain containment proof', launcherStart);

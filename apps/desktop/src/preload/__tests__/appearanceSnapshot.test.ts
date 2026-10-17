@@ -1,15 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings } from '../../shared/appearanceSettings';
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  type AppearanceSettings,
+  type WallpaperDownloadProgress,
+  WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
+} from '../../shared/appearanceSettings';
 
 const mocks = vi.hoisted(() => ({
   listeners: new Map<string, Set<(event: unknown, payload: unknown) => void>>(),
   expose: vi.fn(),
   sendSync: vi.fn(),
+  invoke: vi.fn(),
 }));
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: mocks.expose },
   ipcRenderer: {
     sendSync: mocks.sendSync,
+    invoke: mocks.invoke,
     on: (channel: string, listener: (event: unknown, payload: unknown) => void) => {
       if (!mocks.listeners.has(channel)) mocks.listeners.set(channel, new Set());
       mocks.listeners.get(channel)!.add(listener);
@@ -29,11 +36,17 @@ describe.each(['sidebar', 'resource', 'ghost-panel'])('%s appearance startup', (
   let bridge: {
     getSync(): AppearanceSettings | null;
     onChanged(callback: (settings: AppearanceSettings) => void): () => void;
+    ensureWallpaperImage?: (id: string) => Promise<string | null>;
+    ensureWallpaperVideo?: (id: string) => Promise<string | null>;
+    onWallpaperDownloadProgress: (
+      callback: (progress: WallpaperDownloadProgress) => void,
+    ) => () => void;
   };
   beforeEach(async () => {
     vi.resetModules();
     mocks.listeners.clear();
     mocks.expose.mockClear();
+    mocks.invoke.mockReset().mockResolvedValue('cached-media-url');
     mocks.sendSync.mockImplementation((channel) =>
       channel === 'appearance-settings:get-sync' ? DEFAULT_APPEARANCE_SETTINGS : null,
     );
@@ -50,14 +63,32 @@ describe.each(['sidebar', 'resource', 'ghost-panel'])('%s appearance startup', (
     emit({ ...latest, wallpaperId: 'cindy-window' });
     emit(latest);
     expect(bridge.getSync()).toEqual(latest);
-    // Detached hosts remain read-only, without a new invoke capability.
-    expect(Object.keys(bridge).sort()).toEqual(['getSync', 'onChanged']);
+    // Settings remain read-only; only app-content hosts can request official media.
+    expect(Object.keys(bridge).sort()).toEqual([
+      'ensureWallpaperImage',
+      'ensureWallpaperVideo',
+      'getSync',
+      'onChanged',
+      'onWallpaperDownloadProgress',
+    ]);
+  });
+
+  it('exposes only fixed official-media requests to wallpaper-capable hosts', async () => {
+    await expect(bridge.ensureWallpaperImage!('cindy-window')).resolves.toBe('cached-media-url');
+    await expect(bridge.ensureWallpaperVideo!('cindy-dream')).resolves.toBe('cached-media-url');
+    expect(mocks.invoke.mock.calls).toEqual([
+      ['appearance-settings:ensure-wallpaper-image', 'cindy-window'],
+      ['appearance-settings:ensure-wallpaper-video', 'cindy-dream'],
+    ]);
   });
 
   it('replays updates between the initial render read and effect subscription', () => {
     bridge.getSync();
-    const latest = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom' as const,
-      customWallpaperUrl: `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp` };
+    const latest = {
+      ...DEFAULT_APPEARANCE_SETTINGS,
+      wallpaperId: 'custom' as const,
+      customWallpaperUrl: `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`,
+    };
     emit(latest);
     const callback = vi.fn();
     const off = bridge.onChanged(callback);
@@ -65,6 +96,23 @@ describe.each(['sidebar', 'resource', 'ghost-panel'])('%s appearance startup', (
     emit(DEFAULT_APPEARANCE_SETTINGS);
     expect(callback.mock.calls).toEqual([[latest], [DEFAULT_APPEARANCE_SETTINGS]]);
     off();
+  });
+
+  it('forwards only progress data and removes the listener when unsubscribed', () => {
+    const callback = vi.fn();
+    const unsubscribe = bridge.onWallpaperDownloadProgress(callback);
+    const progress = { wallpaperId: 'cindy-window', kind: 'image', loaded: 123, total: 456 };
+    const emitProgress = () => {
+      for (const listener of mocks.listeners.get(WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL) ?? []) {
+        listener({ sender: 'must not cross the bridge' }, progress);
+      }
+    };
+    emitProgress();
+    expect(callback.mock.calls).toEqual([[progress]]);
+    unsubscribe();
+    emitProgress();
+    expect(callback).toHaveBeenCalledOnce();
+    expect(mocks.listeners.get(WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL)?.size).toBe(0);
   });
 
   it('keeps the cache current after unsubscribe and replays removal on remount', () => {
@@ -78,4 +126,9 @@ describe.each(['sidebar', 'resource', 'ghost-panel'])('%s appearance startup', (
     bridge.onChanged(remount)();
     expect(remount.mock.calls).toEqual([[DEFAULT_APPEARANCE_SETTINGS]]);
   });
+});
+
+it('keeps the default appearance snapshot free of download or mutation capabilities', async () => {
+  const { createAppearanceSnapshotBridge } = await import('../appearanceSnapshot');
+  expect(Object.keys(createAppearanceSnapshotBridge()).sort()).toEqual(['getSync', 'onChanged']);
 });

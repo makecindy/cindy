@@ -63,3 +63,116 @@ export function syntheticTriggerKind(text: string): 'continue' | 'generic' | nul
     ? 'continue'
     : 'generic';
 }
+
+/** Raw history and desktop projections identify the same recovery boundary. */
+export function isContinuationMessage(message: {
+  role?: string | null;
+  content?: unknown;
+  agentMeta?: object | null;
+  systemCardType?: string;
+  isContinuationTrigger?: boolean;
+}): boolean {
+  if (message.role !== 'user') return false;
+  if (message.isContinuationTrigger === true
+    || (message.agentMeta as { autoResume?: unknown } | null)?.autoResume === true
+    || message.systemCardType === 'auto-resume') return true;
+  // Mobile persists user text as a JSON envelope; live/desktop rows may already
+  // contain the decoded object or plain text. Only unwrap the outer envelope.
+  let content = message.content;
+  if (typeof content === 'string' && content.trimStart().startsWith('{')) {
+    try { content = JSON.parse(content) as unknown; }
+    catch { return false; }
+  }
+  const text = typeof content === 'string' ? content
+    : (content as { text?: unknown } | null)?.text;
+  return typeof text === 'string' && syntheticTriggerKind(text) === 'continue';
+}
+
+/**
+ * 代输入结束时给 Agent 的隐藏续接(桌面 input-handoff/service.ts 产出)。它只有
+ * 事实没有主人输入的值;两端从同一行派生任务记录里那条可见留痕
+ * 「主人在 iPhone 完成了 3 步输入 · <域名> · 时间」。
+ */
+export const INPUT_HANDOFF_ENDED_PREFIX = '[Input handoff ended]';
+
+export interface InputHandoffEndRecord {
+  status: 'succeeded' | 'cancelled' | 'failed' | 'expired';
+  /** The screen had nothing for the owner to type; the agent carried on by itself. */
+  nothingToFill: boolean;
+  steps: number;
+  origin?: string;
+  app?: string;
+  /** Answering device: a display name, or this computer / an unnamed phone or device. */
+  answeredOn?: { kind: 'this_computer' | 'phone' | 'another_device' } | { kind: 'named'; name: string };
+}
+
+const END_STATUSES = new Set(['succeeded', 'cancelled', 'failed', 'expired']);
+const QUOTED = '"(?:[^"\\\\]|\\\\.)*"';
+
+function readQuoted(text: string, key: string): string | undefined {
+  const match = new RegExp(`(?:^| )${key}=(${QUOTED})`).exec(text);
+  if (!match) return undefined;
+  try {
+    const value = JSON.parse(match[1]) as unknown;
+    return typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse the persisted continuation row (with or without the UI trigger prefix). */
+export function parseInputHandoffEndRecord(content: string): InputHandoffEndRecord | null {
+  const text = content.startsWith(UI_ACTION_TRIGGER_PREFIX) ? content.slice(UI_ACTION_TRIGGER_PREFIX.length) : content;
+  if (!text.startsWith(INPUT_HANDOFF_ENDED_PREFIX)) return null;
+  const facts = text.slice(INPUT_HANDOFF_ENDED_PREFIX.length);
+  const status = / status=(\w+)/.exec(facts)?.[1];
+  const steps = Number(/ steps=(\d+)/.exec(facts)?.[1]);
+  if (!status || !END_STATUSES.has(status) || !Number.isSafeInteger(steps)) return null;
+  // The facts end with ". " before the instruction sentence; drop that period.
+  const origin = / origin=([^\s"]+)/.exec(facts)?.[1]?.replace(/\.$/, '');
+  const app = readQuoted(facts, 'app');
+  const answered = / answered_on=(this_computer|phone|another_device)\b/.exec(facts)?.[1];
+  const answeredName = answered ? undefined : readQuoted(facts, 'answered_on');
+  return {
+    status: status as InputHandoffEndRecord['status'],
+    nothingToFill: / failure=nothing_to_fill\b/.test(facts),
+    steps,
+    ...(origin ? { origin: origin.slice(0, 300) } : {}),
+    ...(app ? { app } : {}),
+    ...(answered
+      ? { answeredOn: { kind: answered as 'this_computer' | 'phone' | 'another_device' } }
+      : answeredName
+        ? { answeredOn: { kind: 'named' as const, name: answeredName } }
+        : {}),
+  };
+}
+
+export type InputHandoffRecordKey =
+  | 'nothingToFill' | 'cancelled' | 'expired' | 'failed' | 'done'
+  | 'doneOn' | 'doneHost' | 'donePhone' | 'doneElsewhere';
+
+/** Locale key + params for the record line; both clients translate under their own `…record.<key>`. */
+export function inputHandoffRecordMessage(record: InputHandoffEndRecord): {
+  key: InputHandoffRecordKey;
+  params?: { count: number; device?: string };
+} {
+  if (record.nothingToFill) return { key: 'nothingToFill' };
+  if (record.status !== 'succeeded') return { key: record.status };
+  const count = record.steps;
+  const on = record.answeredOn;
+  if (count < 1 || !on) return { key: 'done' };
+  if (on.kind === 'named') return { key: 'doneOn', params: { count, device: on.name } };
+  if (on.kind === 'this_computer') return { key: 'doneHost', params: { count } };
+  if (on.kind === 'phone') return { key: 'donePhone', params: { count } };
+  return { key: 'doneElsewhere', params: { count } };
+}
+
+/** Host part of the final origin for display; never the path or query. */
+export function inputHandoffRecordHost(origin?: string): string | undefined {
+  if (!origin) return undefined;
+  try {
+    return new URL(origin).host || undefined;
+  } catch {
+    return undefined;
+  }
+}

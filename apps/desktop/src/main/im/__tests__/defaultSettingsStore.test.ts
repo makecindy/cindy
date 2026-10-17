@@ -47,6 +47,14 @@ const settingsFile = () =>
   path.join(settingsDir, 'owners', scopeMocks.owner, 'im-default-settings.json');
 
 describe('im default settings store', () => {
+  it('persists the shared location per channel and can switch back to local', () => {
+    const route = { ...IM_DEFAULT_SETTINGS.agents.codex, providerId: 'openai', agentDeviceId: 'share:alice' };
+    writeImDefaultSettingsPatch({ agentKind: 'codex', agents: { codex: route } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex).toEqual(route);
+    expect(readImDefaultSettings('telegram').agents.codex.agentDeviceId).toBeUndefined();
+    writeImDefaultSettingsPatch({ agents: { codex: { ...route, agentDeviceId: null } } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex.agentDeviceId).toBeUndefined();
+  });
   beforeEach(() => {
     scopeMocks.join = path.join;
     scopeMocks.owner = 'cloud-a';

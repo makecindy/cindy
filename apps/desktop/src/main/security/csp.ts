@@ -92,7 +92,7 @@ export function parseOrigin(url: string | null | undefined): string | null {
  * media (avatars, markdown / web-search images) and cannot execute code — a
  * blocked image is a worse UX regression than the marginal risk. The real
  * hardening lives in `script-src` (no inline in prod; unsafe-eval kept for
- * vendored drawio) plus `object-src 'none'` and `frame-src 'none'`.
+ * vendored drawio) plus `object-src 'none'` and the isolated MCP Apps frame scheme.
  */
 export function buildContentSecurityPolicy(ctx: CspContext): string {
   const { isDev, devServerOrigin } = ctx;
@@ -169,9 +169,9 @@ export function buildContentSecurityPolicy(ctx: CspContext): string {
     // covers bundler-emitted blob workers.
     'worker-src': ["'self'", 'blob:'],
     'object-src': ["'none'"],
-    // No <iframe> in the app renderer; the RSB <webview> is not governed by
-    // frame-src. 'none' blocks an XSS-injected iframe.
-    'frame-src': ["'none'"],
+    // MCP Apps frames use only the isolated custom scheme; other frame sources
+    // remain blocked. The RSB <webview> is not governed by frame-src.
+    'frame-src': ['cindy-mcp-app:'],
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],

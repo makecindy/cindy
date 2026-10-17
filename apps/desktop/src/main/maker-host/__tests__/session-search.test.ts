@@ -15,6 +15,8 @@ vi.mock('../../logger.js', () => ({
     warn: vi.fn(),
   }),
 }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
+vi.mock('electron', () => ({ app: {}, BrowserWindow: class {} }));
 
 import { searchSessionsFn } from '../session-search';
 
@@ -58,6 +60,7 @@ describe('searchSessionsFn', () => {
       {
         messageId: 'm1',
         sessionId: 's1',
+        sessionUrl: 'cindy://session/s1?device=host-device',
         role: 'user',
         ts: 1,
         snippet: '<mark>登录</mark> 报错了',

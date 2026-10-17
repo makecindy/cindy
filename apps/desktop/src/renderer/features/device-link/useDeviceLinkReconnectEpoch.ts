@@ -26,12 +26,25 @@ export function useDeviceLinkReconnectEpoch(deviceId: string | undefined): numbe
     const offStatus = window.electronAPI.deviceLink.onStatusChanged(({ status }) => {
       const previous = relayStatusRef.current;
       relayStatusRef.current = status;
+      // Presence from a previous relay connection cannot establish that the
+      // target is already online in this generation. It may recover later.
+      if (status !== 'online') targetOnlineRef.current = null;
       if (status === 'online' && previous !== 'online') bump();
+    });
+
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.((event) => {
+      if (event.deviceId === deviceId) bump();
+    });
+
+    const offReopened = window.electronAPI.deviceLink.onPeerLinkReopened?.((event) => {
+      if (event.deviceId === deviceId) bump();
     });
 
     return () => {
       offPresence();
       offStatus();
+      offPeerReset?.();
+      offReopened?.();
     };
   }, [deviceId]);
 

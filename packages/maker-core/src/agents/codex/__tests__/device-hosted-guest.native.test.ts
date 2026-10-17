@@ -1,5 +1,6 @@
 /**
- * 真 Codex app-server：受邀者(另一个账号)的托管会话使用受邀者目录作为 CODEX_HOME。
+ * 真 Codex app-server：受邀者(另一个账号)的托管会话使用受邀者目录作为 CODEX_HOME，线程里只开
+ * 白名单内的 Codex 功能(按线程向 app-server 查询核对)。
  * 本机用户 CODEX_HOME 里的全局 AGENTS.md 不进入请求，会话历史只写在受邀者目录里，本机用户的
  * 历史与凭证文件不被触碰；命令经 exec-server 环境在「任务所在电脑」执行(这里用一个独立的
  * `codex exec-server` 进程模拟)。同账号托管会话仍使用本机用户的 CODEX_HOME。
@@ -18,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { DeviceHostedSession } from '../../base-agent.js';
+import { CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES, listCodexFeatures } from '../device-hosted-guest.js';
 import { CodexAgent } from '../index.js';
 
 const binaryPath = process.env.CINDY_CODEX_TEST_BINARY;
@@ -165,6 +167,21 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
       })();
       await handle.send({ type: 'user', content: 'hello' }, { throwOnStartFailure: true });
       await done;
+      // 按这个线程向 Codex 查功能状态：受邀者线程里白名单之外的功能都是关着的；同账号线程里有开着的。
+      const hosts = (agent as unknown as { hosts: Map<string, { request: (method: string, params: unknown) => Promise<unknown> }> }).hosts;
+      const threadHost = [...hosts].find(([key]) => key.startsWith('local-guest:') === guest)?.[1];
+      if (!threadHost) throw new Error('expected the session app-server');
+      const threadFeatures = await listCodexFeatures((cursor) => threadHost.request(
+        'experimentalFeature/list', { threadId: handle.id, limit: 200, ...(cursor ? { cursor } : {}) },
+      ));
+      const enabledOutsideAllowlist = threadFeatures
+        .filter((feature) => feature.enabled && feature.stage !== 'removed' && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name))
+        .map((feature) => feature.name);
+      if (guest) expect(enabledOutsideAllowlist).toEqual([]);
+      else expect(enabledOutsideAllowlist.length).toBeGreaterThan(0);
+      // 两种会话里干活要用的功能都开着(命令、shell 快照、看图、子代理)。
+      const enabled = new Set(threadFeatures.filter((feature) => feature.enabled).map((feature) => feature.name));
+      expect(['shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'multi_agent'].filter((name) => !enabled.has(name))).toEqual([]);
       await handle.close();
 
       expect(bodies.length).toBeGreaterThan(0);

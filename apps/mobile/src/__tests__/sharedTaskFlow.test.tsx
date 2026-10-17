@@ -6,18 +6,18 @@ import { parseSharedTaskInvitation, sharedTaskHostPeer } from '@cindy/device-lin
 import { writeClipboardText } from '@/session/messageActions';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { ApiError } from '@/api/client';
+import { setMobileDebugSink } from '@/debug/mobileDebugLog';
 import { Platform } from 'react-native';
 import { clearSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import SharedSessionScreen from '../../app/shared-session';
-import { ClipboardSharedTaskPrompt } from '@/session/ClipboardSharedTaskPrompt';
 
 const h = vi.hoisted(() => ({
   params: {} as { sessionId?: string; deviceId?: string; sharedTaskId?: string; expectedOwnedSharedTaskId?: string; mode?: string }, generation: 1,
   router: { replace: vi.fn(), push: vi.fn() }, alert: vi.fn(), revoked: vi.fn(),
   link: { sharedTaskAvailable: true, invoke: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), readDeviceList: vi.fn() },
   api: { list: vi.fn(), get: vi.fn(), join: vi.fn(), leave: vi.fn(), close: vi.fn() },
-  store: { getSessions: () => [], removeDevice: vi.fn(), setDeviceSessions: vi.fn(), upsertDeviceSession: vi.fn() },
-  t: (key: string, options?: { title?: string; link?: string }) => key === 'sharedTask.invitationMessage' ? `Join “${options?.title}”\n${options?.link}\nOpen the link, or copy it and open Cindy on mobile.` : options?.title ? key + ':' + options.title : key,
+  store: { getSessions: vi.fn(), removeDevice: vi.fn(), setDeviceSessions: vi.fn(), upsertDeviceSession: vi.fn() },
+  t: (key: string, options?: { title?: string; link?: string }) => key === 'sharedTask.invitationMessage' ? `Join “${options?.title}”\n${options?.link}\nOpen the link, or paste it into Join Shared Task in Cindy.` : options?.title ? key + ':' + options.title : key,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t }) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined) } }));
@@ -70,7 +70,7 @@ vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: (
 let element: HTMLDivElement;
 let root: Root;
 const detail = { sharedTaskId: 'shared', sessionId: 'task', hostDeviceId: 'desktop', status: 'active', title: 'Design review', memberLabels: [{ memberId: 'member', displayName: 'Guest' }] };
-const owned = (id: string) => ({ sharedTaskId: id, sessionId: 'task', title: id, ownerAccountId: 'owner', hostDeviceId: 'host' });
+const owned = (id: string) => ({ sharedTaskId: id.replaceAll(' ', '-'), sessionId: 'task', title: id, ownerAccountId: 'owner', hostDeviceId: 'host' });
 async function render() { await act(async () => root.render(createElement(SharedSessionScreen))); }
 async function click(label: string) {
   // The account page has a Join tab and a Join submit action; use the latter.
@@ -89,14 +89,126 @@ beforeEach(() => {
   Platform.OS = 'android';
   setMobileAuthOwner('owner'); h.link.sharedTaskAvailable = true;
   h.api.list.mockResolvedValue([]); h.api.get.mockResolvedValue(detail);
+  h.store.getSessions.mockReturnValue(['host', 'desktop', sharedTaskHostPeer('shared', 'desktop'), sharedTaskHostPeer('guest-task', 'host'), sharedTaskHostPeer('Already-joined', 'host')]
+    .map(deviceLinkDeviceId => ({ id: 'task', source: 'desktop', deviceLinkDeviceId })));
   h.api.join.mockResolvedValue({ sharedTaskId: 'shared' });
   h.link.invoke.mockResolvedValue({ available: true, detail: null });
   h.link.readDeviceList.mockResolvedValue({ devices: [{ deviceId: 'host', name: 'Test computer' }] });
   element = document.createElement('div'); root = createRoot(element);
 });
-afterEach(async () => { await act(async () => root.unmount()); clearSharedTaskInvitationIntent(); vi.useRealTimers(); });
+afterEach(async () => { await act(async () => root.unmount()); clearSharedTaskInvitationIntent(); setMobileDebugSink(undefined); vi.useRealTimers(); });
+it.each(['cindy-make', 'cindy-make-merge'])('hides cold %s shares from both account management lists', async source => {
+  h.params = { mode: 'manage' };
+  let shares = [owned('Legacy owned'), { ...owned('Legacy joined'), ownerAccountId: 'other' }];
+  h.api.list.mockImplementation(async () => shares);
+  h.api.leave.mockImplementation(async sharedTaskId => { shares = shares.filter(task => task.sharedTaskId !== sharedTaskId); });
+  h.store.getSessions.mockReturnValue([]);
+  h.link.invoke.mockImplementation(async (_peer, _channel, [sessionId]) => ({ id: sessionId, source }));
+  await render();
+  expect(element.textContent).not.toContain('Legacy owned');
+  expect(element.textContent).not.toContain('Legacy joined');
+  expect(element.textContent).toContain('sharedTask.ownedEmptyTitle');
+  await click('sharedTask.joinedTab');
+  expect(element.textContent).toContain('sharedTask.joinedEmptyTitle');
+  expect(h.link.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:get', ['task']);
+  expect(h.link.invoke).toHaveBeenCalledWith(sharedTaskHostPeer('Legacy-joined', 'host'), 'local-db:sessions:get', ['task']);
+  expect(h.api.leave).toHaveBeenCalledExactlyOnceWith('Legacy-joined');
+  expect(h.api.close).not.toHaveBeenCalled();
+});
+it.each(['cindy-make', 'cindy-make-merge'])('publishes ordinary management rows when %s cleanup fails and retries on the next poll', async source => {
+  h.params = { mode: 'manage' };
+  const ordinaryOwned = owned('Ordinary owned');
+  const ordinaryJoined = { ...owned('Ordinary joined'), ownerAccountId: 'other' };
+  const hidden = { ...owned('Hidden Make share'), ownerAccountId: 'other' };
+  let shares = [ordinaryOwned, ordinaryJoined, hidden];
+  h.api.list.mockImplementation(async () => shares);
+  const peer = sharedTaskHostPeer(hidden.sharedTaskId, hidden.hostDeviceId);
+  h.store.getSessions.mockReturnValue([]);
+  h.link.invoke.mockImplementation(async (deviceId, _channel, [sessionId]) => ({ id: sessionId, source: deviceId === peer ? source : 'desktop' }));
+  let failing = true;
+  h.api.leave.mockImplementation(async sharedTaskId => {
+    if (failing) throw new Error('offline');
+    shares = shares.filter(item => item.sharedTaskId !== sharedTaskId);
+  });
+  const diagnostics = vi.fn();
+  setMobileDebugSink(diagnostics);
+  await render();
+  expect(element.textContent).toContain(ordinaryOwned.title);
+  await click('sharedTask.joinedTab');
+  expect(element.textContent).toContain(ordinaryJoined.title);
+  expect(element.textContent).not.toContain(hidden.title);
+  expect(element.textContent).not.toContain('sharedTask.retry');
+  expect(h.store.removeDevice).not.toHaveBeenCalled();
+  expect(diagnostics).toHaveBeenCalledWith('warn', 'device-link', ['Hidden shared task membership cleanup failed; will retry on refresh']);
+  const attempts = h.api.leave.mock.calls.length;
+  failing = false;
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  expect(h.api.leave).toHaveBeenCalledTimes(attempts + 1);
+  expect(h.api.leave.mock.calls.every(([sharedTaskId]) => sharedTaskId === hidden.sharedTaskId)).toBe(true);
+  expect(h.link.closeLink).toHaveBeenCalledExactlyOnceWith(peer);
+  expect(h.store.removeDevice).toHaveBeenCalledExactlyOnceWith(peer);
+  expect(h.api.close).not.toHaveBeenCalled();
+  expect(element.textContent).toContain(ordinaryJoined.title);
+  expect(element.textContent).not.toContain(hidden.title);
+});
+
+it('does not show unknown offline shares and restores a confirmed ordinary share on the next poll', async () => {
+  h.params = { mode: 'manage' }; h.api.list.mockResolvedValue([owned('Recovered normal task')]);
+  h.store.getSessions.mockReturnValue([]); h.link.invoke.mockRejectedValue(new Error('offline'));
+  await render();
+  expect(element.textContent).not.toContain('Recovered normal task');
+  h.link.invoke.mockResolvedValue({ id: 'task', source: 'desktop' });
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  expect(element.textContent).toContain('Recovered normal task');
+  expect(h.link.openLink).not.toHaveBeenCalled();
+});
 const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
 const invitationIntent = 'cindy://shared-session?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
+it.each([
+  ['cindy-make', false], ['cindy-make-merge', false],
+  ['cindy-make', true], ['cindy-make-merge', true],
+] as const)('undoes a legacy %s invitation before publishing success or navigating (link=%s)', async (source, automatic) => {
+  h.store.getSessions.mockReturnValue([]);
+  h.link.invoke.mockResolvedValue({ id: 'task', source });
+  if (automatic) receiveSharedTaskInvitationIntent(invitationIntent);
+  await render();
+  if (!automatic) { await fill('sharedTask.invitation', invitationLink); await click('sharedTask.join'); }
+  const peer = sharedTaskHostPeer('shared', 'desktop');
+  expect(h.api.leave).toHaveBeenCalledExactlyOnceWith('shared');
+  expect(h.revoked).toHaveBeenCalledExactlyOnceWith(peer);
+  expect(h.link.closeLink).toHaveBeenCalledExactlyOnceWith(peer);
+  expect(h.store.removeDevice).toHaveBeenCalledExactlyOnceWith(peer);
+  expect(h.api.close).not.toHaveBeenCalled();
+  expect(h.store.setDeviceSessions).not.toHaveBeenCalled();
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(element.textContent).toContain('sharedTask.invitationUnavailable');
+  expect(element.textContent).not.toContain('Design review');
+  expect(element.querySelector('[aria-label="sharedTask.invitation"]')).not.toBeNull();
+});
+it('does not revoke membership after an account change while confirming an invitation', async () => {
+  h.store.getSessions.mockReturnValue([]);
+  let finish!: (session: unknown) => void;
+  h.link.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await render(); await fill('sharedTask.invitation', invitationLink); await click('sharedTask.join');
+  expect(finish).toBeTypeOf('function');
+  setMobileAuthOwner('other'); h.generation++;
+  await render(); await act(async () => finish({ id: 'task', source: 'cindy-make' }));
+  expect(h.api.leave).not.toHaveBeenCalled();
+  expect(h.link.closeLink).not.toHaveBeenCalled();
+  expect(h.router.replace).not.toHaveBeenCalled();
+});
+it('retries failed Make membership rollback without exposing the task', async () => {
+  h.store.getSessions.mockReturnValue([]); h.link.invoke.mockResolvedValue({ id: 'task', source: 'cindy-make' });
+  h.api.leave.mockRejectedValueOnce(new Error('offline'));
+  await render(); await fill('sharedTask.invitation', invitationLink); await click('sharedTask.join');
+  expect(element.textContent).toContain('sharedTask.invitationUnavailable');
+  expect(element.textContent).not.toContain('Design review');
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(h.store.removeDevice).not.toHaveBeenCalled();
+  await click('sharedTask.join');
+  expect(h.api.leave).toHaveBeenCalledTimes(2);
+  expect(element.textContent).toContain('sharedTask.invitationUnavailable');
+});
 it('copies a shareable invitation message with a link accepted by automatic and manual admission', async () => {
   h.params = { sessionId: 'task', deviceId: 'desktop' };
   h.link.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'invite' ? { invitation: 'A'.repeat(43) } : { available: true, detail });
@@ -104,41 +216,8 @@ it('copies a shareable invitation message with a link accepted by automatic and 
   const content = vi.mocked(writeClipboardText).mock.lastCall![0];
   expect(content).toContain('Design review');
   expect(content).toContain(invitationLink);
-  expect(content).toContain('copy it and open Cindy on mobile');
+  expect(content).toContain('paste it into Join Shared Task in Cindy');
   expect(parseSharedTaskInvitation(content, 'https://relay.example.test')).toEqual({ ok: true, invitation: 'A'.repeat(43) });
-});
-it('uses an automatically detected clipboard invitation without a paste or nickname control', async () => {
-  receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
-  h.link.invoke.mockResolvedValue({ id: 'task' });
-  await act(async () => root.render(createElement('div', null, 'Current task', createElement(ClipboardSharedTaskPrompt, { accountName: 'Account Guest' }))));
-  expect(element.querySelector('textarea')).toBeNull();
-  expect(element.textContent).toContain('Current task');
-  expect(element.textContent).toContain('sharedTask.invitationDetected');
-  expect(element.textContent).not.toContain('sharedTask.pasteInvitation');
-  expect(h.api.join).not.toHaveBeenCalled();
-  expect(h.router.replace).not.toHaveBeenCalled();
-  await click('sharedTask.join');
-  expect(getPendingSharedTaskInvitationIntent()?.source).toBe('link');
-  await render();
-  expect(h.api.join).toHaveBeenCalledExactlyOnceWith('A'.repeat(43), 'Account Guest');
-  expect(h.router.replace).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'task', deviceId: sharedTaskHostPeer('shared', 'desktop'), deviceName: 'Design review' } });
-  expect(element.querySelector('[aria-label="sharedTask.joinNickname"]')).toBeNull();
-});
-it('dismisses clipboard confirmation without navigating away from the current page', async () => {
-  receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
-  await act(async () => root.render(createElement('div', null, 'Current settings', createElement(ClipboardSharedTaskPrompt, { accountName: 'Account Guest' }))));
-  await click('sharedTask.notNow');
-  expect(element.textContent).toBe('Current settings');
-  expect(getPendingSharedTaskInvitationIntent()).toBeNull();
-  expect(h.router.replace).not.toHaveBeenCalled();
-  expect(h.api.join).not.toHaveBeenCalled();
-});
-it('does not let a mounted management screen consume an unconfirmed clipboard invitation', async () => {
-  h.params = { mode: 'manage' };
-  receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
-  await render();
-  expect(getPendingSharedTaskInvitationIntent()?.source).toBe('clipboard');
-  expect(h.api.join).not.toHaveBeenCalled();
 });
 it('rejects an invitation from another service without joining', async () => {
   await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'other.example.test'));
@@ -476,7 +555,7 @@ it('opens owner management through the physical host and preserves the settings 
   h.params = { mode: 'manage' }; h.api.list.mockResolvedValue([owned('My task')]);
   await render(); await click('sharedTask.manage');
   expect(h.link.openLink).toHaveBeenCalledWith('host');
-  expect(h.router.push).toHaveBeenCalledWith({ pathname: '/shared-session', params: { sessionId: 'task', deviceId: 'host', expectedOwnedSharedTaskId: 'My task', mode: 'detail' } });
+  expect(h.router.push).toHaveBeenCalledWith({ pathname: '/shared-session', params: { sessionId: 'task', deviceId: 'host', expectedOwnedSharedTaskId: 'My-task', mode: 'detail' } });
   expect(h.router.replace).not.toHaveBeenCalled();
 });
 

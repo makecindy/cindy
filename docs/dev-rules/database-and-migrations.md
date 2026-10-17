@@ -16,16 +16,23 @@
 
 ## 事实来源
 
-| 内容 | 权威来源 |
-|---|---|
-| 当前 schema | `apps/desktop/src/main/localDb/schema.ts` |
-| Drizzle 生成配置 | `apps/desktop/drizzle.config.ts` |
-| SQL、snapshot、journal 与 companion | `apps/desktop/drizzle/` |
-| 静态完整性与历史冻结 | `apps/desktop/scripts/validate-migrations.mjs` |
-| 实际执行顺序与事务语义 | `apps/desktop/src/main/localDb/migrationRunner.ts` |
-| 空库与历史库升级验证 | `apps/desktop/src/main/localDb/__tests__/migrationReplay.test.ts` |
+| 内容                                | 权威来源                                                          |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| 当前 schema                         | `apps/desktop/src/main/localDb/schema.ts`                         |
+| Drizzle 生成配置                    | `apps/desktop/drizzle.config.ts`                                  |
+| SQL、snapshot、journal 与 companion | `apps/desktop/drizzle/`                                           |
+| 静态完整性与历史冻结                | `apps/desktop/scripts/validate-migrations.mjs`                    |
+| 实际执行顺序与事务语义              | `apps/desktop/src/main/localDb/migrationRunner.ts`                |
+| 空库与历史库升级验证                | `apps/desktop/src/main/localDb/__tests__/migrationReplay.test.ts` |
 
 文档与实现冲突时先停下核对，不根据旧手册猜测命令或迁移语义。
+
+发行包保留 SQL、companion、journal 与其余迁移资源；仅在 extraResource 复制完成后，
+从打包副本移除 `meta/NNNN_snapshot.json`（Drizzle 开发生成输入）。源码中的 snapshot
+保持完整，生成与静态校验照常使用。运行期 `listMigrations` 和 migration runtime manifest
+只依赖 SQL 与 companion；打包回归检查裁剪前后运行期指纹相同、其余文件字节不变。
+实现见 `apps/desktop/forge-prune-runtime.ts`，回归见
+`apps/desktop/scripts/runtime-deps-packaging.test.mjs`。
 
 ## Append-only 不变量
 

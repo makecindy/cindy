@@ -9,6 +9,7 @@ import {
   formatRemoteError,
   humanizeRemoteError,
   isAutoRecoveringRemoteError,
+  isSessionRunningRemoteError,
   relayStatusHint,
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
@@ -55,6 +56,20 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  it('recognizes a host refusal because the task is still running', () => {
+    // 被控端 handler 抛 `[SESSION_RUNNING] ...`,经隧道到手机时外层 code 是 IPC_ERROR。
+    expect(isSessionRunningRemoteError(
+      new DeviceLinkError('IPC_ERROR' as never, '[SESSION_RUNNING] Session s1 is running a turn'),
+    )).toBe(true);
+    expect(isSessionRunningRemoteError(
+      Object.assign(new Error('Session s1 has background activity'), { code: 'SESSION_RUNNING' }),
+    )).toBe(true);
+    expect(isSessionRunningRemoteError(
+      new DeviceLinkError('IPC_ERROR' as never, '[NOT_FOUND] Message 不存在或不可删除'),
+    )).toBe(false);
+    expect(isSessionRunningRemoteError(new DeviceLinkError('NOT_CONNECTED', 'offline'))).toBe(false);
   });
 
   it('keeps the composer writable for automatic recovery, but blocks deterministic failures', () => {
@@ -115,6 +130,8 @@ describe('remoteStatus', () => {
       expect(connectionIssueTitle('too-many-connections')).toBe('Too many connections');
       expect(connectionIssueHint('version-mismatch')).toContain('Update to the latest version');
       expect(connectionIssueTitle('unstable')).toBe('Connection keeps dropping');
+      expect(connectionIssueTitle('device-removed')).toBe('Device removed');
+      expect(connectionIssueHint('device-removed')).toContain('Sign out');
     } finally {
       await i18n.changeLanguage(previousLanguage);
     }

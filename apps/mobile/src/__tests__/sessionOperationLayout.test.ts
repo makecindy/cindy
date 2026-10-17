@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import ts from 'typescript';
 import { beforeAll, describe, expect, it } from "vitest";
 import { i18n } from "@/i18n";
 import {
@@ -167,10 +168,22 @@ describe("session operation layout", () => {
       resolve(process.cwd(), "app/sessions/[sessionId].tsx"),
       "utf8",
     );
-    expect(sessionScreenSource).toContain("composerDisabledReasonI18nKey(");
-    expect(sessionScreenSource).not.toContain(
-      "sessionOperationLayout.composerDisabledReason}",
-    );
+    const tree = ts.createSourceFile('session.tsx', sessionScreenSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const expressions = new Map<string, ts.Expression>();
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.initializer) expressions.set(node.name.getText(tree), node.initializer);
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    const key = expressions.get('composerDisabledReasonKey');
+    const reason = expressions.get('composerDisabledReason');
+    if (!key || !reason) throw new Error('Missing production composer disabled reason');
+    const renderReason = new Function('sessionOperationLayout', 'composerDisabledReasonI18nKey', 'companionEntry', 'sessionResourceCards', 't',
+      `const composerDisabledReasonKey = ${key.getText(tree)}; return (${reason.getText(tree)});`);
+    for (const source of ['session-syncing', 'pending-interaction'] as const) {
+      expect(renderReason({ composerDisabledReasonSource: source, composerDisabledReason: 'untranslated' }, composerDisabledReasonI18nKey, { canCompose: true }, { blocked: false }, (key: string) => 'translated:' + key))
+        .toBe('translated:' + composerDisabledReasonI18nKey(source));
+    }
   });
 
   it("shows queue and composer for normal writable sessions", () => {

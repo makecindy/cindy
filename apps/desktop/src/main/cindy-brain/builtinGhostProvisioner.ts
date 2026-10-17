@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 
+import { authorDeclaredNamespaceReason } from '@cindy/plugin-protocol';
 import {
   GHOST_MANIFEST_FILE,
   ghostIconMimeType,
@@ -940,6 +941,11 @@ function readSeedManifest(
       seedDir,
       error: err instanceof Error ? err.message : String(err),
     });
+    return null;
+  }
+  const reservedNamespace = authorDeclaredNamespaceReason(raw);
+  if (reservedNamespace) {
+    log?.warn('builtin seed skipped: invalid manifest', { seedDir, reason: reservedNamespace });
     return null;
   }
   const v = validateGhostManifest(raw);

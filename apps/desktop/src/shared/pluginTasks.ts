@@ -25,6 +25,23 @@ export interface PluginTaskView {
   permissionMode?: string;
   /** Independent Plan Mode; the stored permission remains available after it ends. */
   planModeEnabled?: boolean;
+  /**
+   * Background task: omitted from the task list, search, notifications and Agent Island.
+   * Only plugins declaring `agent.hiddenTasks` can set it; the user can still open or
+   * reveal it from the plugin detail page. The task service always returns a boolean;
+   * the field is optional only for Host-internal readers that predate it.
+   */
+  hidden?: boolean;
+}
+/** Plugin detail page「后台任务」row (Desktop-only IPC; never sent to the plugin sandbox). */
+export interface PluginBackgroundTask {
+  taskId: string;
+  title: string;
+  status: 'active' | 'archived';
+  /** Last activity, unix ms. */
+  updatedAt: number;
+  /** A turn is running in this Desktop process. */
+  running: boolean;
 }
 export interface PluginTaskRun {
   runId: string;
@@ -58,7 +75,7 @@ export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
 }
 export type PluginTaskRequest = (
   | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
-  | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute }
+  | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
   | {
       type: 'tasks-request';
       kind: 'create';
@@ -68,7 +85,10 @@ export type PluginTaskRequest = (
       title: string;
       route?: PluginTaskRoute;
       isolatedWorkspace?: boolean;
+      /** Requires `agent.hiddenTasks`; creates the task as a background task. */
+      hidden?: boolean;
     }
+  | { type: 'tasks-request'; kind: 'setHidden'; taskId: string; hidden: boolean }
   | { type: 'tasks-request'; kind: 'list'; after?: string; limit?: number }
   | { type: 'tasks-request'; kind: 'get'; taskId: string }
   | { type: 'tasks-request'; kind: 'startTeam' | 'getTeam'; taskId: string }

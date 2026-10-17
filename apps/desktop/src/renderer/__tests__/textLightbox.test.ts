@@ -6,8 +6,7 @@ import '../themes/colors';
  * Regression tests for: text-lightbox (2026-04-19)
  *
  * The component lives at components/chat/TextLightbox.tsx. Static-source
- * scanning matches the project convention (see imageLightboxCloseAnywhere.test.ts
- * and userInfoSectionHover.test.ts) — keeps tests in the Node vitest env
+ * scanning matches the project convention for small source contracts — keeps tests in the Node vitest env
  * and avoids dragging in jsdom + react-dom for these contract checks.
  *
  * Contracts asserted:

@@ -12,6 +12,8 @@ export type ImDefaultSettingsChannel =
   'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
 
 export interface ImDefaultAgentSettings {
+  /** Agent 所在电脑；share:<id> 表示分享供应商，缺省为本机。 */
+  agentDeviceId?: string | null;
   providerId: string | null;
   model: string;
   effort: ImDefaultEffort;

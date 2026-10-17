@@ -97,6 +97,11 @@ import {
   makerChatStore,
   type ChatMessage,
 } from '@/lib/makerChatStore';
+import {
+  __resetComposerTypingActivityForTest,
+  isComposerTypingRecently,
+  markComposerTypingActivity,
+} from '@/lib/composerTypingActivity';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import * as sessionsBus from '@/lib/sessionsBus';
@@ -585,6 +590,7 @@ describe('makerChatStore text delta batching', () => {
   });
 
   afterEach(() => {
+    __resetComposerTypingActivityForTest();
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
     makerChatStore.__resetRemoteTerminalTombstonesForTest();
@@ -699,6 +705,22 @@ describe('makerChatStore text delta batching', () => {
     assertRows();
   });
 
+  it('keeps runtime recovery commentary hidden even when the provider marks it final', () => {
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'recovery-note', event: { type: 'text', source: 'codex',
+      data: { text: 'Internal recovery', isFinal: false, phase: 'final_answer', runtimeRecovery: true } } });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({ assistantPhase: 'commentary' });
+  });
+
+  it('preserves provider final phase through text batching before a turn completes', () => {
+    for (const text of ['First ', 'words']) onEvent?.({ sessionId: SESSION_ID, persistId: 'phase-answer',
+      event: { type: 'text', source: 'codex', data: { text, isFinal: false, phase: 'final_answer' } } });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toContainEqual(expect.objectContaining({
+      content: 'First words', assistantPhase: 'final_answer', isStreaming: true,
+    }));
+  });
+
   it('coalesces consecutive text deltas into one store notification', () => {
     let notifyCount = 0;
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
@@ -723,6 +745,162 @@ describe('makerChatStore text delta batching', () => {
         isStreaming: true,
       }),
     ]);
+
+    unsubscribe();
+  });
+
+  it('stretches the delta notification cadence while the composer is being typed in, then restores it', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    expect(isComposerTypingRecently()).toBe(true);
+    emitTextDelta('a');
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(0);
+
+    vi.advanceTimersByTime(218);
+    expect(notifyCount).toBe(1);
+
+    emitTextDelta('b');
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
+    vi.advanceTimersByTime(218);
+    expect(notifyCount).toBe(2);
+
+    // 打字信号过期后恢复 32ms 节奏。
+    vi.advanceTimersByTime(1_000);
+    expect(isComposerTypingRecently()).toBe(false);
+    emitTextDelta('c');
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(3);
+
+    unsubscribe();
+  });
+
+  it('stretches the deferred high-frequency (non-text) notification cadence while the composer is being typed in', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'claude-code',
+        data: { toolUseId: 'tool-typing-1', toolName: 'Read', input: { file_path: 'a.ts' } },
+      },
+      persistId: 'tool-typing-1',
+    });
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(0);
+    vi.advanceTimersByTime(218);
+    expect(notifyCount).toBe(1);
+
+    unsubscribe();
+  });
+
+  it('notifies permission interaction requests synchronously even inside the typing window', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    emitTextDelta('need approval');
+    emitInteractionRequest({
+      kind: 'permission',
+      requestId: 'perm-typing-1',
+      toolName: 'Read',
+      input: { file_path: 'a.ts' },
+    });
+
+    expect(notifyCount).toBeGreaterThanOrEqual(1);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.requestId).toBe('perm-typing-1');
+
+    unsubscribe();
+  });
+
+  it('keeps turn start and done status frames immediate inside the typing window', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    emitStatus({ status: 'Generating...', isRunning: true });
+    expect(notifyCount).toBe(1);
+    emitStatus({ status: 'Done', isRunning: false });
+    expect(notifyCount).toBe(2);
+
+    unsubscribe();
+  });
+
+  it('defers pure running status refresh frames through the deferred queue', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    emitStatus({ status: 'Generating...', isRunning: true });
+    expect(notifyCount).toBe(1);
+
+    emitStatus({ status: 'Generating...', isRunning: true, tokenUsage: 5 });
+    expect(notifyCount).toBe(1);
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(2);
+
+    unsubscribe();
+  });
+
+  it('carries queued text into the deferred queue when a running status refresh frame arrives while typing', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    emitStatus({ status: 'Generating...', isRunning: true });
+    expect(notifyCount).toBe(1);
+
+    markComposerTypingActivity();
+    emitTextDelta('queued ');
+    emitStatus({ status: 'Generating...', isRunning: true, tokenUsage: 3 });
+    expect(notifyCount).toBe(1);
+
+    vi.advanceTimersByTime(250);
+    expect(notifyCount).toBe(2);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.map((m) => m.role)).toContain('assistant');
+
+    unsubscribe();
+  });
+
+  it('defers running status refresh frames that carry a turnOrigin (scheduled-task turns)', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    const turnOrigin = { kind: 'scheduled', surface: 'im' };
+    onEvent?.({
+      sessionId: SESSION_ID,
+      turnOrigin,
+      event: { type: 'status', source: 'claude-code', data: { status: 'Generating...', isRunning: true } },
+    });
+    expect(notifyCount).toBe(1);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      turnOrigin,
+      event: { type: 'status', source: 'claude-code', data: { status: 'Generating...', isRunning: true, tokenUsage: 7 } },
+    });
+    expect(notifyCount).toBe(1);
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(2);
 
     unsubscribe();
   });

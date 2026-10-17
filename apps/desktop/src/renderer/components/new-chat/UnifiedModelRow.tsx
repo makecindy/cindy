@@ -48,13 +48,17 @@ export function UnifiedModelRow({
   onRevealForKeyboard,
   priceDisplay,
   configurationEnabled = true,
+  customizable = true,
   paymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   sourceLabel,
 }: {
-  /** Supplied only in the combined All / Favorites views. */
+  /**
+   * Supplied only in the combined All / Favorites views; omitted = the local description.
+   * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
+   */
   sourceLabel?: string;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -75,6 +79,11 @@ export function UnifiedModelRow({
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
   priceDisplay?: UnifiedRowPriceDisplay;
   configurationEnabled?: boolean;
+  /**
+   * false = 这一行不出配置浮层(不画自定义按钮、不响应右键 / ←),行内仍按 configurationEnabled
+   * 显示深度与 Fast。用于收藏区里另一台电脑的收藏:它的配置要在那台电脑的目录里调。
+   */
+  customizable?: boolean;
   /** 付费锁定行保留在原位置，可聚焦但不能选中、收藏或打开配置。 */
   paymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -88,7 +97,7 @@ export function UnifiedModelRow({
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
   const openConfig = (element: HTMLElement, toggle = false) => {
-    if (!paymentRequired) onReveal(anchor, element, toggle);
+    if (!paymentRequired && customizable) onReveal(anchor, element, toggle);
   };
   const tripleTitle = `${engineOption.label}${
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
@@ -108,7 +117,7 @@ export function UnifiedModelRow({
     'aria-disabled': interactionDisabled ? true : undefined,
     'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
-    'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
+    'aria-keyshortcuts': paymentRequired || !customizable ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     // Shared menu row: the panel's glide highlight; the chosen row keeps its static fill (below).
@@ -135,6 +144,7 @@ export function UnifiedModelRow({
         return;
       }
       if (event.key === 'ArrowLeft') {
+        if (!customizable) return;
         event.preventDefault();
         onRevealForKeyboard(anchor, event.currentTarget);
         return;
@@ -269,7 +279,7 @@ export function UnifiedModelRow({
           />
         )}
         {starButton}
-        {configurationEnabled && customizeButton}
+        {configurationEnabled && customizable && customizeButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
@@ -299,7 +309,7 @@ export function UnifiedModelRow({
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
             「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
-      {sourceLabel && entry.providerId !== 'xd' ? (
+      {sourceLabel ? (
         <ModelSourceDetails
           providerId={entry.providerId}
           label={providerAccountLabel(

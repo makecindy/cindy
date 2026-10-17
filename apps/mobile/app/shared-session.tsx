@@ -12,6 +12,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
+import { filterVisibleSharedTasks } from '@/device-link/sharedTaskVisibility';
 import { sharedTaskErrorKey } from '@/device-link/sharedTaskCompatibility';
 import { isSharedTaskGone } from '@/device-link/sharedTaskAccessWatch';
 import { markDeviceAccessRevoked } from '@/device-link/accessRevoked';
@@ -83,7 +84,7 @@ export default function SharedSessionScreen() {
     const current = () => visible() && mounted.current && captured === epoch.current && isMobileAuthOwnerCurrent(owner);
     if (!isAuthenticated || link.sharedTaskAvailable !== true || ended) return;
     if (!guestId && (management || tab === 'owned')) {
-      const value = await api.list();
+      const value = await filterVisibleSharedTasks(await api.list(), owner.accountId, link, current, api.leave);
       if (!current()) return;
       const mine = value.filter((task) => task.ownerAccountId === owner.accountId);
       setOwned(mine);
@@ -115,7 +116,7 @@ export default function SharedSessionScreen() {
         if (guestId && value.detail?.status === 'closed') endAccess();
         else setState(value);
         if (hostContext) {
-          const all = await api.list().catch(() => null);
+          const all = await api.list().then(items => filterVisibleSharedTasks(items, owner.accountId, link, current, api.leave)).catch(() => null);
           if (current() && all) setOwned(all.filter((task) => task.ownerAccountId === owner.accountId));
         }
       } catch (error) {
@@ -123,12 +124,12 @@ export default function SharedSessionScreen() {
         else throw error;
       }
     } else {
-      const value = await api.list();
+      const value = await filterVisibleSharedTasks(await api.list(), owner.accountId, link, current, api.leave);
       if (current()) {
         setOwned(value.filter((task) => task.ownerAccountId === owner.accountId));
       }
     }
-  }, [api, ended, endAccess, expectedOwnedSharedTaskId, guestId, host, hostContext, isAuthenticated, link.readDeviceList, link.sharedTaskAvailable, sessionId, tab, management]);
+  }, [api, ended, endAccess, expectedOwnedSharedTaskId, guestId, host, hostContext, isAuthenticated, link.invoke, link.openLink, link.readDeviceList, link.sharedTaskAvailable, sessionId, tab, management]);
   useEffect(() => {
     mounted.current = true;
     epoch.current++; pending.current = false; setBusy(false);
@@ -230,12 +231,17 @@ export default function SharedSessionScreen() {
     if (!parsed.ok) { setNotice(t(parsed.reason === 'different-server' ? 'sharedTask.invitationDifferentServer' : 'sharedTask.invalid')); return; }
     const joined = await api.join(parsed.invitation, sharedTaskAccountName(user?.name));
     if (!current()) return;
+    const detail = await api.get(joined.sharedTaskId);
+    if (!current()) return;
+    const visible = await filterVisibleSharedTasks([detail], getMobileAuthOwner().accountId, link, current, api.leave);
+    if (!current()) return;
+    if (!visible.length) { setNotice(t('sharedTask.invitationUnavailable')); return; }
     Keyboard.dismiss(); setInvitation(''); setJoinedId(joined.sharedTaskId);
     setManualOpen(false);
     if (enter) await openTask(joined.sharedTaskId, current);
   }, false, 'join');
   useEffect(() => {
-    if (incomingInvitation?.source !== 'link' || !isAuthenticated || sessionId || deviceId || sharedTaskId) return;
+    if (!incomingInvitation || !isAuthenticated || sessionId || deviceId || sharedTaskId) return;
     const input = buildSharedTaskInvitationLink(incomingInvitation.invitation, incomingInvitation.server);
     // Claim before waiting for relay capability. Leaving this screen discards the invitation.
     epoch.current++; pending.current = false; setBusy(false);

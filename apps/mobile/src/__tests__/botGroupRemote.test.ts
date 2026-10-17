@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
+import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -10,6 +11,7 @@ import {
   nextBotGroupSendAttempt,
   orderedBotGroups,
   parseBotGroupChatData,
+  canManageBotGroup,
 } from '@/session/botGroupRemote';
 
 function chatData(overrides: Record<string, unknown> = {}) {
@@ -45,6 +47,68 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it('retains validated management roles, revisions and capability without granting them to old hosts', () => {
+    const parsed = parseBotGroupChatData(chatData({ revision: 3, supportsSettingsManagement: true,
+      members: [{ botId: 'mimi', name: 'Mimi', role: 'admin', isOwned: true }] }));
+    expect(parsed).toMatchObject({ revision: 3, supportsSettingsManagement: true, members: [{ role: 'admin', isOwned: true }] });
+    expect(parseBotGroupChatData(chatData({ revision: -1 }))?.revision).toBeUndefined();
+    expect(parseBotGroupChatData(chatData())?.supportsSettingsManagement).toBe(false);
+  });
+  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('preserves only allowlisted runtime failure codes from the computer: %s', runtimeFailureCode => {
+    const data = chatData({ messages: [{ id: 'failure', sequence: 1, kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', content: '', createdAt: 1, noticeCode: 'member-failed', runtimeFailureCode }] });
+    const parsed = parseBotGroupChatData(data)!;
+    expect(parsed.messages[0].runtimeFailureCode).toBe(runtimeFailureCode === 'AUTH_REQUIRED' ? runtimeFailureCode : undefined);
+    expect(JSON.stringify(parsed.messages)).not.toContain('private diagnostic');
+  });
+  it('preserves server member identities and removal capability', () => {
+    const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,
+      members: [{ botId: 'human', actorId: 'actor', actorKind: 'human', isOwned: false, name: 'Person', status: 'active' }] }));
+    expect(parsed).toMatchObject({ serverBacked: true, supportsMemberRemoval: true,
+      members: [expect.objectContaining({ actorId: 'actor', actorKind: 'human', isOwned: false })] });
+  });
+
+  it('keeps a validated 引用回复 and the tombstone it degrades to', () => {
+    const quote = { messageId: '11111111-1111-4111-8111-111111111111', authorName: '咪咪', authorKind: 'bot',
+      excerpt: '好的，我看看', attachmentCount: 0, attachmentName: null, sequence: 2 };
+    const reply = (id: string, value: unknown) => ({ id, sequence: 5, kind: 'message', authorKind: 'user', authorBotId: null,
+      authorName: '', content: '就这样', noticeCode: null, planId: null, files: [], createdAt: 50, quote: value });
+    const parsed = parseBotGroupChatData(chatData({ messages: [
+      { id: 'gone', sequence: 3, kind: 'message', authorKind: 'bot', authorBotId: 'mimi', authorName: '咪咪', content: '（消息已删除）', deleted: true, createdAt: 30 },
+      reply('q1', quote),
+      reply('q2', { ...quote, messageId: '../other-group' }),
+      reply('q3', { ...quote, authorKind: 'system' }),
+      reply('q4', { ...quote, originalDeleted: true }),
+    ] }))!;
+    const byId = new Map(parsed.messages.map(message => [message.id, message]));
+    expect(byId.get('gone')?.deleted).toBe(true);
+    expect(byId.get('q1')?.quote).toEqual(quote);
+    expect(byId.get('q2')?.quote).toBeUndefined();
+    expect(byId.get('q3')?.quote).toBeUndefined();
+    expect(byId.get('q4')?.quote).toEqual({ ...quote, originalDeleted: true });
+    // Older computers send neither field.
+    expect(parseBotGroupChatData(chatData())!.messages.every(message => !message.quote && !message.deleted)).toBe(true);
+  });
+
+  it('keeps a validated task card only on a teammate message (bot-group-chat.md §10)', () => {
+    const meta = { v: 1, role: 'delegation-request', delegationId: 'task-1', fromBotId: 'mimi', fromBotName: '咪咪', toBotId: null,
+      toBotName: 'Cindy', parentSessionId: 'group-lane', childSessionId: 'child-1', objective: '写官网首页' };
+    const task = { meta, state: 'started', title: '官网首页' };
+    const posted = (id: string, authorKind: 'bot' | 'user', value: unknown) => ({ id, sequence: 7, kind: 'message', authorKind,
+      authorBotId: authorKind === 'bot' ? 'mimi' : null, authorName: '', content: '', noticeCode: null, planId: null, files: [], createdAt: 70, task: value });
+    const parsed = parseBotGroupChatData(chatData({ messages: [
+      posted('t1', 'bot', task),
+      posted('t2', 'bot', { ...task, state: 'paused' }),
+      posted('t3', 'bot', { ...task, meta: { ...meta, role: 'delegation-result' } }),
+      posted('t4', 'user', task),
+    ] }))!;
+    const byId = new Map(parsed.messages.map(message => [message.id, message]));
+    expect(byId.get('t1')?.task).toEqual(task);
+    expect(byId.get('t2')?.task).toBeUndefined();
+    expect(byId.get('t3')?.task).toBeUndefined();
+    expect(byId.get('t4')?.task).toBeUndefined();
+  });
+
   it('preserves a server join notice through the phone projection', () => {
     const joined = { id: 'joined', sequence: 20, kind: 'notice', authorKind: 'system', authorBotId: null,
       authorName: 'Taylor', content: 'Taylor joined the group', noticeCode: 'member-joined',
@@ -77,6 +141,9 @@ describe('parseBotGroupChatData', () => {
       { id: 'x1', name: 'shot.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/abc.png', path: '/Users/me/shot.png' },
       { id: 'x2', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 30, url: null, path: null, annotated: 'yes' },
       { id: 'x3', name: 'odd.bin', category: 'future', mimeType: 7, size: -1, url: 'https://elsewhere.example/x.png' },
+      { id: 'x4', name: 'late.png', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'loading' },
+      { id: 'x5', name: 'gone.md', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'unavailable' },
+      { id: 'x6', name: 'odd-state.txt', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'future' },
       { id: '', name: 'no-id.png' },
       'garbage',
     ];
@@ -86,6 +153,10 @@ describe('parseBotGroupChatData', () => {
       { id: 'x1', name: 'shot.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/abc.png', path: null },
       { id: 'x2', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 30, url: null, path: null },
       { id: 'x3', name: 'odd.bin', category: 'file', mimeType: '', size: 0, url: null, path: null },
+      // The computer's loading / unavailable state survives; an unknown state is dropped.
+      { id: 'x4', name: 'late.png', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'loading' },
+      { id: 'x5', name: 'gone.md', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'unavailable' },
+      { id: 'x6', name: 'odd-state.txt', category: 'file', mimeType: '', size: 0, url: null, path: null },
     ]);
     // Older computers: no attachments, no flag.
     const old = parseBotGroupChatData(chatData())!;
@@ -144,11 +215,26 @@ describe('group rows', () => {
 });
 
 describe('actions', () => {
+  it('preserves leave and owner authority through the remote projection without granting management to ordinary members', () => {
+    const members = [
+      { botId: 'me', actorId: 'me', name: 'Me', isSelf: true, isOwned: true, role: 'member' },
+      { botId: 'bot', actorId: 'bot', name: 'Bot', isOwned: true, role: 'owner' },
+    ];
+    const ownGroup = parseBotGroupChatData(chatData({ serverBacked: true, supportsSettingsManagement: true, revision: 1, members }))!;
+    expect(chatGroupMembership(ownGroup)).toMatchObject({ owner: true, manager: true, canLeave: false });
+    expect(canManageBotGroup(ownGroup)).toBe(true);
+    const memberGroup = parseBotGroupChatData(chatData({ serverBacked: true, supportsSettingsManagement: true, revision: 1,
+      members: [members[0], { ...members[1], isOwned: false }] }))!;
+    expect(chatGroupMembership(memberGroup)).toMatchObject({ owner: false, manager: false, canLeave: true });
+    expect(canManageBotGroup(memberGroup)).toBe(false);
+  });
+
   it.each([
     [Object.assign(new Error('PLAN_OPEN'), { code: 'INVALID_PARAMS' }), 'PLAN_OPEN'],
     ['[INVALID_PARAMS] MEMBER_LIMIT', 'MEMBER_LIMIT'],
     [new Error('[NOT_FOUND] NOT_FOUND'), 'NOT_FOUND'],
     [new Error('[INVALID_PARAMS] MEMBER_UNAVAILABLE'), 'MEMBER_UNAVAILABLE'],
+    [new Error('[INVALID_PARAMS] MENTION_UNAVAILABLE'), 'MENTION_UNAVAILABLE'],
     [new Error('[NOT_CONNECTED] not online within 1500ms'), null],
     [new Error('XPLAN_OPEN'), null],
   ])('reads the group error code of %s', (error, code) => {
@@ -188,5 +274,15 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(first, '', false, next, ['a1']).clientId).toBe('c2');
     expect(nextBotGroupSendAttempt(first, '', false, next, ['a2', 'a1']).clientId).toBe('c3');
     expect(nextBotGroupSendAttempt(first, '', false, next).clientId).toBe('c4');
+  });
+
+  it('reuses an unchanged target intent but gives changed IDs, order or Everyone a new key', () => {
+    let serial = 0;
+    const next = () => `c${++serial}`;
+    const first = nextBotGroupSendAttempt(null, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] });
+    expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { botIds: ['picked', 'other'], all: false })).toBe(first);
+    expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['new'] }).clientId).toBe('c2');
+    expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['other', 'picked'] }).clientId).toBe('c3');
+    expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: true, botIds: ['picked', 'other'] }).clientId).toBe('c4');
   });
 });

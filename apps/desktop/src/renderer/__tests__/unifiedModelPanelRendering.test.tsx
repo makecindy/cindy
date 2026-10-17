@@ -182,6 +182,8 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  getCachedDeviceProviders: () => ({ providers: remoteProvidersRef.providers }),
+  subscribeDeviceProviders: () => () => {},
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
   useDeviceProviders: () => ({
@@ -217,7 +219,11 @@ import {
   addModelFavorite,
   listModelFavorites,
   updateModelFavorite,
+  setModelFavoritesOwner,
 } from '@/state/modelFavorites';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { providerShareFavoriteSource, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
+import { toast } from '@/lib/toast';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 
 const onProviderChange = vi.fn();
@@ -263,6 +269,63 @@ beforeEach(() => {
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
+});
+
+describe('分享模型收藏', () => {
+  const received = {
+    shareId: 's1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic',
+    hostDeviceId: 'host', deviceName: 'Host', status: 'active' as const, hostOnline: true, hostCapable: true,
+    owner: { displayName: 'Owner', avatarUrl: null, region: 'global' as const },
+  };
+  beforeEach(() => {
+    setDataOwnerGeneration('recipient', 1);
+    setModelFavoritesOwner('recipient');
+    reconcileProviderShareFavorites({ ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 }, confirmedRegions: ['global'], received: [received] });
+    remoteProvidersRef.providers = providersRef.providers.map((provider) => ({ ...provider as object, remoteInvocationEnabled: true }));
+  });
+  afterEach(() => {
+    remoteProvidersRef.providers = [];
+    setDataOwnerGeneration(null, 0);
+    vi.restoreAllMocks();
+  });
+
+  it('点击收藏后可见、可重新选择，完整配置保存在受邀者账号', async () => {
+    const onUnifiedSelect = vi.fn();
+    renderPanel({ deviceId: 'share:s1', onUnifiedSelect });
+    await act(async () => fireEvent.click(within(rowFor('Opus 5')).getByRole('button', { name: '存为收藏' })));
+    expect(listModelFavorites()).toEqual([expect.objectContaining({
+      providerId: providerShareFavoriteSource(received), modelId: 'claude-opus-5', agent: 'cc', effort: 'medium',
+    })]);
+    fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+    expect(within(screen.getByRole('listbox')).getAllByText('Opus 5')).toHaveLength(1);
+    await act(async () => fireEvent.click(rowFor('Opus 5')));
+    expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'anthropic', modelId: 'claude-opus-5', engine: 'cc', effort: 'medium', fast: false }));
+  });
+
+  it('存储写失败显示提示，收藏区不会出现未保存的条目', async () => {
+    const failed = vi.spyOn(toast, 'error').mockImplementation(() => 'test');
+    renderPanel({ deviceId: 'share:s1' });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    await act(async () => fireEvent.click(within(rowFor('Opus 5')).getByRole('button', { name: '存为收藏' })));
+    expect(failed).toHaveBeenCalledWith('newChat.modelSelector.unified.favoritesSaveFailed');
+    expect(listModelFavorites()).toEqual([]);
+  });
+
+  it('从分享供应商切到收藏侧栏仍保留分享来源，选择回传完整路由', async () => {
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      remoteAgent: { devices: [{ deviceId: 'share:s1', name: '来自 Owner 的分享' }], selectedDeviceId: 'share:s1' },
+      onUnifiedSelect,
+    });
+    await act(async () => fireEvent.click(within(rowFor('Opus 5')).getByRole('button', { name: '存为收藏' })));
+    fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+    expect(within(screen.getByRole('listbox')).getAllByText('Opus 5')).toHaveLength(1);
+    await act(async () => fireEvent.click(rowFor('Opus 5')));
+    expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic', modelId: 'claude-opus-5', engine: 'cc', effort: 'medium', fast: false,
+      agentDevice: expect.objectContaining({ deviceId: 'share:s1' }),
+    }));
+  });
 });
 
 describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {

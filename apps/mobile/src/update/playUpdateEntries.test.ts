@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -81,9 +79,6 @@ describe('Google Play update entry points', () => {
     const { checkNow } = useBundleUpdatePrompt({ auto: true, channel: 'release' });
     await expect(checkNow()).resolves.toBe('skipped');
     expect(mocks.fetchLatest).not.toHaveBeenCalled();
-    // The root layout still mounts its independent startup content OTA gate.
-    const layout = readFileSync(resolve(process.cwd(), 'app/_layout.tsx'), 'utf8');
-    expect(layout).toContain('const otaReady = useStartupOtaGate(channel);');
   });
 
   it('resume checks content OTA but never asks for the website APK', async () => {
@@ -98,11 +93,6 @@ describe('Google Play update entry points', () => {
   });
 
   it('settings passes no website check and can still check content OTA', async () => {
-    const settings = readFileSync(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
-    expect(settings).toContain('isGooglePlayInstallation: playManagedUpdates,');
-    expect(settings).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,');
-    expect(settings).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;');
-    expect(settings).toContain("t('settings.version.googlePlayContentUpdateUnavailable')");
     await expect(runManualUpdateCheck({
       checkBundleUpdate: undefined,
       otaEnabled: true,

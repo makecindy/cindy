@@ -13,6 +13,7 @@ import type {
   VoiceInputTerminalOutcome,
 } from './types';
 import { VoiceTimelineLogger } from './VoiceTimelineLogger';
+import type { AudioGate } from './SpeakerGate';
 import { hasAdditionalSentence } from './pauseRefinement';
 
 type DictationRefiner = {
@@ -45,6 +46,12 @@ type VoiceInputControllerOptions = {
   pauseRefinementEnabled?: boolean;
   /** Host opt-in for known recovery failures; undefined keeps the generic error. */
   recoveryErrorMessage?: (error: unknown) => string | undefined;
+  /**
+   * Optional filter in front of the ASR (e.g. the speaker gate). Activity and
+   * stall accounting see the filtered audio, so a run where only bystanders
+   * spoke ends as "no speech" instead of an empty-transcript failure.
+   */
+  audioGate?: AudioGate;
 };
 
 type CryptoWithUuid = {
@@ -94,6 +101,7 @@ export class VoiceInputController {
   private readonly stableWaitMs: number;
   private readonly pauseRefinementEnabled: boolean;
   private readonly recoveryErrorMessage?: (error: unknown) => string | undefined;
+  private readonly audioGate?: AudioGate;
   private lastSoundAt = 0;
   private lastTranscriptChangeAt = 0;
   private pauseRefinement?: PendingRefinement;
@@ -160,6 +168,7 @@ export class VoiceInputController {
     this.stableWaitMs = options.stableWaitMs ?? 500;
     this.pauseRefinementEnabled = options.pauseRefinementEnabled ?? false;
     this.recoveryErrorMessage = options.recoveryErrorMessage;
+    this.audioGate = options.audioGate;
 
     this.asr.onEvent((event) => this.handleAsrEvent(event));
   }
@@ -198,6 +207,8 @@ export class VoiceInputController {
     this.lastTranscriptChangeAt = performance.now();
     this.pauseRefinement = undefined;
     this.liveRefinementPreview = undefined;
+    const gateRunId = this.runId;
+    this.audioGate?.begin((chunk, trace) => this.forwardAudio(gateRunId, chunk, trace));
     this.startStallWatchdog();
     this.setState('listening');
     this.logger.record({ type: 'start_clicked', runId: this.runId, at: Date.now() });
@@ -213,6 +224,20 @@ export class VoiceInputController {
 
   appendAudio(chunk: ArrayBuffer, trace?: AudioTrace): void {
     if (this.state !== 'listening') return;
+    if (this.audioGate) {
+      this.audioGate.push(chunk, trace);
+      return;
+    }
+    this.forwardAudio(this.runId, chunk, trace);
+  }
+
+  /**
+   * Hands audio that passed the optional gate to the ASR. The gate releases
+   * held audio while stop() flushes it, so 'submitting' is still accepted.
+   */
+  private forwardAudio(runId: string, chunk: ArrayBuffer, trace?: AudioTrace): void {
+    if (runId !== this.runId) return;
+    if (this.state !== 'listening' && this.state !== 'submitting') return;
     if (!this.firstAudioChunkSeen) {
       this.firstAudioChunkSeen = true;
       this.logger.record({
@@ -242,6 +267,12 @@ export class VoiceInputController {
     this.stopStallWatchdog();
     this.setState('submitting');
     this.logger.record({ type: 'stop_clicked', runId, at: Date.now() });
+    // Release audio still held by the gate before the provider flushes. The
+    // gate fails open and bounds its own time, so this never rejects or hangs.
+    // Without a gate, stop() must not gain an extra await: the optimistic
+    // refinement below relies on starting in the same tick.
+    if (this.audioGate) await this.audioGate.finish().catch(() => undefined);
+    if (runId !== this.runId || this.leftSubmittingState()) return;
     const optimisticRefinement = this.startOptimisticRefinement(runId);
 
     try {
@@ -350,6 +381,7 @@ export class VoiceInputController {
     if (!this.runId) return;
     const runId = this.runId;
     this.currentRunCancelled = true;
+    this.audioGate?.abort();
     this.stopStallWatchdog();
     this.pendingStableResolvers.splice(0).forEach((resolve) => resolve(undefined));
     this.logger.record({ type: 'cancelled', runId, at: Date.now() });
@@ -714,6 +746,7 @@ export class VoiceInputController {
     // recovery_failed). Without this guard the renderer toasts both, which
     // shows the user a confusing second error after they already saw the first.
     if (this.state === 'error' || this.state === 'done') return;
+    this.audioGate?.abort();
     if (this.runId) {
       this.logger.record({ type: 'error', runId: this.runId, at: Date.now(), message });
     }

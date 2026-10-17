@@ -8,10 +8,12 @@ export function isResidentBrowserGhost(manifest: GhostManifest): boolean {
 /** Shared startup/enable/recovery path; runtime spawn retains its own authorization checks. */
 export function spawnResidentGhost(ghost: InstalledGhost, deps: {
   isAvailable: (id: string) => boolean;
+  allowPendingLegacy?: boolean;
   startNode: (ghost: InstalledGhost) => Promise<unknown>;
   spawnBrowser: (ghost: InstalledGhost) => Promise<{ ok: boolean; reason?: string }>;
   warn: (message: string, fields: Record<string, unknown>) => void;
 }): void {
+  // Pending confirmation keeps the old install running.
   if (!ghost.enabled || !deps.isAvailable(ghost.manifest.id)) return;
   // Node residency remains an independent declaration; routine events do not expand it.
   if (ghost.manifest.node?.lifecycle === 'resident') {

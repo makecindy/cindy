@@ -94,11 +94,11 @@ const bindingsNames = [
 const compiled = ts.transpileModule(`function usePageWorktree(bindings) {
   const { ${bindingsNames.join(', ')} } = bindings;
   ${hooks.map((node) => node.getText(source)).join('\n')}
-  ${entryGuards('create')}
+  ${entryGuards('createMessageSession')}
   ${entryGuards('createGoalSession')}
   return { worktreeEnabled, worktreeCreateBlocked, worktreeToggleDisabled,
     worktreePreferenceSaving, worktreePreferenceAuthorityUnknown,
-    toggleWorktree, create, createGoalSession, isWorktreeCreateIntentCurrent };
+    toggleWorktree, create: createMessageSession, createGoalSession, isWorktreeCreateIntentCurrent };
 }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 interface Intent { enabled: boolean; sourceBranch: string; target: { deviceId: string } }
 interface State {

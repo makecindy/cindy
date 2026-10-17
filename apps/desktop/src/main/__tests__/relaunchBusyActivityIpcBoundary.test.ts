@@ -51,6 +51,7 @@ vi.mock('../security/trustedAppRenderer', () => ({
 
 import {
   RELAUNCH_BLOCKING_ACTIVITY_CHANNEL,
+  readRelaunchBackgroundActivity,
   registerRelaunchBusyActivityIpc,
 } from '../relaunchBusyActivityIpc.js';
 
@@ -132,5 +133,28 @@ describe('registerRelaunchBusyActivityIpc', () => {
     await expect(handler(fakeEvent)).rejects.toThrow('PERMISSION_DENIED');
     // 断言在读取之前 —— 拒绝路径下不该碰到任何全局跟踪器。
     expect(h.reads).toBe(0);
+  });
+});
+
+describe('readRelaunchBackgroundActivity', () => {
+  it('ignores model turns but still reads every background source, scheduler included', async () => {
+    let schedulerRead = false;
+    registerRelaunchBusyActivityIpc(() => ({
+      ...countingSources(true)(),
+      anySchedulerRunRunning: async () => { schedulerRead = true; return false; },
+    }));
+    await expect(readRelaunchBackgroundActivity()).resolves.toMatchObject({ busy: false });
+    expect(schedulerRead).toBe(true);
+  });
+
+  it('reports background work a restart would stop', async () => {
+    registerRelaunchBusyActivityIpc(() => ({
+      ...countingSources(false)(),
+      anyBackgroundBashRunning: () => true,
+    }));
+    await expect(readRelaunchBackgroundActivity()).resolves.toMatchObject({
+      busy: true,
+      reasons: ['background-bash'],
+    });
   });
 });

@@ -21,15 +21,25 @@ const target = { version: '1.2.3', runtimeVersion: 'new', installUrl: 'https://u
 beforeEach(() => { vi.clearAllMocks(); mocks.platform.OS = 'android'; mocks.start.mockReturnValue(true); mocks.playInstall.mockReturnValue(false); });
 
 describe('shared bundle install routing', () => {
-  it('ordinary update confirmation starts the same native path as the forced gate', () => {
+  it('ordinary updates open the in-app card directly and wait there for the user to confirm', () => {
+    promptBundleUpdate({ needsUpdate: true, forced: false, target: { ...target, releaseNotes: '  Faster sync\n' } });
+    expect(mocks.alert).not.toHaveBeenCalled();
+    expect(mocks.start).toHaveBeenCalledWith(
+      { version: target.version, installUrl: target.installUrl, releaseNotes: 'Faster sync' },
+      { confirm: true },
+    );
+    expect(mocks.openURL).not.toHaveBeenCalled();
+  });
+  it('the forced gate button is itself the confirmation', () => {
+    openBundleInstall(target);
+    expect(mocks.start).toHaveBeenCalledWith({ version: target.version, installUrl: target.installUrl }, { confirm: false });
+  });
+  it('older Android binaries keep the system prompt and its browser download', () => {
+    mocks.start.mockReturnValue(false);
     promptBundleUpdate({ needsUpdate: true, forced: false, target });
-    expect(mocks.start).not.toHaveBeenCalled();
     const buttons = mocks.alert.mock.calls[0][2];
     buttons[1].onPress();
-    expect(mocks.start).toHaveBeenCalledWith({ version: target.version, installUrl: target.installUrl });
-    expect(mocks.openURL).not.toHaveBeenCalled();
-    openBundleInstall(target);
-    expect(mocks.start).toHaveBeenCalledTimes(2);
+    expect(mocks.openURL).toHaveBeenCalledWith(target.installUrl);
   });
   it('strong updates retain the blocking gate and never begin installation without a click', () => {
     promptBundleUpdate({ needsUpdate: true, forced: true, target });

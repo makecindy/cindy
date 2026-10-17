@@ -4,7 +4,9 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerSheet } from '@/session/UnifiedModelPickerSheet';
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-uuid' }));
-const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[] }));
+const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
+  // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
+  entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
 vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0})}));
 vi.mock('@/session/mobileModelPreferences', async () => {
@@ -15,15 +17,15 @@ vi.mock('@/session/mobileModelPreferences', async () => {
       save:async (value:typeof test.prefs)=>{await test.save(value);refresh();}};
   }};
 });
-vi.mock('@/session/providerModelSections', () => ({buildMobileModelSections:()=>({activeSourceId:'account'})}));
+vi.mock('@/session/providerModelSections', () => ({buildMobileModelSections:(input:any)=>({activeSourceId:test.activeSource?test.activeSource(input):'account'})}));
 vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
 vi.mock('@/session/modelPickerRows',()=>({budgetRowDisabled:()=>false,presentPickerPrice:()=>null}));
-vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:()=>test.entries}));
+vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:(providers:any[])=>test.entriesFor?test.entriesFor(providers):test.entries}));
 vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string)=>key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
-beforeEach(()=>{test.favoritesReady=true;test.syncError=null;test.quotas={};test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
+beforeEach(()=>{test.favoritesReady=true;test.syncError=null;test.quotas={};test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
   providerId:'account',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',
   capabilities:{codex:{wireModelId:'codex/model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000},
   'claude-code':{wireModelId:'model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:false,contextWindow:200000}},
@@ -546,14 +548,14 @@ const studioCatalog = {
   providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic'}],
 };
 const remoteId = 'remote:["device-studio-mac","account"]';
-async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true)) {
+async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true),catalog:any=studioCatalog) {
   const onClose=vi.fn();
   await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
     visible:true,onClose,providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
     activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'medium',selectedFastMode:false,
     existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
     unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
-      remote:{catalogs:[studioCatalog],selectedDeviceId}},
+      remote:{catalogs:[catalog],selectedDeviceId}},
   } as any)));
   return {onSelect,onClose};
 }
@@ -593,7 +595,8 @@ it('opens on the Agent\'s computer and marks the current model there',async()=>{
 it('keeps settings of another computer\'s rows out of this phone\'s preferences',async()=>{
   const {onSelect}=await mountRemote(null);
   await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
-  expect(test.view.options.favoritesDisabled).toBe(true);
+  // 收藏照样可用(存到被控电脑,位置编进来源),参数调整仍不写进手机的偏好。
+  expect(test.view.options.favoritesDisabled).toBe(false);
   expect(test.view.options.canReset).toBe(false);
   await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
   expect(test.save).not.toHaveBeenCalled();
@@ -604,4 +607,163 @@ it('keeps settings of another computer\'s rows out of this phone\'s preferences'
   await act(async()=>test.view.onBack());
   await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({effort:'high'}),{deviceId:'device-studio-mac'});
+});
+
+// 收藏另一台电脑上的模型:收藏存在被控电脑,来源里编进电脑;和本机收藏排在一起,点开就在那台运行。
+const studioSource = 'agent-device-favorite:["device-studio-mac","account"]';
+it('favorites another computer\'s model with its location and lists it beside local favorites',async()=>{
+  const {onSelect,onClose}=await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.save).toHaveBeenCalledWith(expect.objectContaining({favorites:[
+    {uid:expect.any(String),providerId:studioSource,modelId:'model',agent:'codex',effort:'medium',fast:false},
+  ]}));
+  expect(test.view.options.isFavorite).toBe(true);
+  expect(test.view.options.notice).toBe('models.unified.favoriteSaved');
+  await act(async()=>test.view.onBack());
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual(['favorites','recommended',remoteId]);
+  const favorite=test.view.groups[0].rows[0];
+  expect(favorite.remoteDevice).toEqual({deviceId:'device-studio-mac',name:'Studio Mac'});
+  expect(favorite.subtitle).toContain('Studio Mac');
+  expect(favorite.providerMark).toMatchObject({name:'Studio Provider'});
+  expect(favorite.selected).toBe(false);
+  // 选中时按那台电脑上的供应商 id 发出,并带上电脑。
+  await act(async()=>test.view.onSelect(favorite));
+  expect(onSelect).toHaveBeenCalledWith({providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false},{deviceId:'device-studio-mac'});
+  expect(onClose).toHaveBeenCalledOnce();
+});
+it('keeps a local favorite and another computer\'s favorite of the same model apart',async()=>{
+  test.prefs.favorites=[{uid:'local',providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups.find((g:any)=>g.key===remoteId).rows[0]));
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async()=>test.view.onBack());
+  test.prefs.favorites=[{uid:'remote',providerId:studioSource,modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups.find((g:any)=>g.key==='recommended').rows[0]));
+  expect(test.view.options.isFavorite).toBe(false);
+});
+it('removes and edits another computer\'s favorite without losing its location',async()=>{
+  test.prefs.favorites=[{uid:'remote',providerId:studioSource,modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.save).toHaveBeenLastCalledWith(expect.objectContaining({favorites:[
+    {uid:'remote',providerId:studioSource,modelId:'model',agent:'codex',effort:'high',fast:false},
+  ]}));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.save).toHaveBeenLastCalledWith(expect.objectContaining({favorites:[]}));
+});
+it('adjusts parameters from another computer\'s favorite details without changing the copy',async()=>{
+  test.prefs.favorites=[{uid:'remote',providerId:studioSource,modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  const {onSelect}=await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  // 详情跟着调整走,原收藏不变、星标回到空心,并提示原收藏保留。
+  expect(test.view.options.row.config.effort).toBe('high');
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.view.options.notice).toBe('models.unified.originalFavoriteKept');
+  expect(test.view.options.canReset).toBe(true);
+  expect(test.save).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+  await act(async()=>test.view.options.onReset());
+  expect(test.view.options.row.config.effort).toBe('medium');
+  expect(test.view.options.isFavorite).toBe(true);
+});
+it('hides favorites of a computer that is only listed because the Agent was there and it went offline',async()=>{
+  test.prefs.favorites=[{uid:'remote',providerId:studioSource,modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mountRemote(null,undefined,{...studioCatalog,offline:true});
+  expect(test.view.groups.some((g:any)=>g.key==='favorites')).toBe(false);
+  expect(test.save).not.toHaveBeenCalled();
+});
+it('hides a favorite whose computer is not in the list without deleting it',async()=>{
+  test.prefs.favorites=[{uid:'away',providerId:'agent-device-favorite:["device-offline","account"]',modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mountRemote(null);
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual(['recommended',remoteId]);
+  expect(test.save).not.toHaveBeenCalled();
+});
+it('does not offer favorites for providers shared by another account',async()=>{
+  const onSelect=vi.fn(async()=>true);
+  await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
+    visible:true,onClose:vi.fn(),providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
+    activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'medium',selectedFastMode:false,
+    existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
+    unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
+      remote:{catalogs:[{...studioCatalog,deviceId:'share:abc',name:'Shared'}],selectedDeviceId:null}},
+  } as any)));
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.favoritesDisabled).toBe(true);
+});
+
+// 供应商组(provider-groups.md §10,与桌面同口径):Mac Mini 把 Anthropic 建成了组(Mac Mini 自己 + grok-bot-vm),
+// 任务被组分到 grok-bot-vm 上运行。手机同样把 grok-bot-vm 的 Anthropic 收进组那一项;归组的任务在组那一项里
+// 选模型 = 留在 grok-bot-vm 只换模型,不当成换电脑。
+const groupProvider = (id:string,name:string,extra:Record<string,unknown>={}) =>
+  ({id,name,models:{},connected:true,remoteInvocationEnabled:true,...extra});
+const groupSummary = (owner:string,members:{agentDeviceId:string,providerId:string}[]) => ({group:{strategy:'least',autoSwitch:true,members:[
+  {key:'local',kind:'local',agentDeviceId:null,providerId:owner,paused:false},
+  ...members.map(m=>({key:`device:${m.agentDeviceId}:${m.providerId}`,kind:'device',...m,paused:false})),
+]}});
+const miniCatalog = {deviceId:'mini',name:'Mac Mini',status:'ready',
+  providers:[groupProvider('anthropic','Anthropic',groupSummary('anthropic',[{agentDeviceId:'vm',providerId:'anthropic-9z'}]))]};
+const vmCatalog = {deviceId:'vm',name:'grok-bot-vm',status:'ready',
+  providers:[groupProvider('anthropic-9z','Anthropic'),groupProvider('fp','FP')]};
+const miniGroupId = 'remote:["mini","anthropic"]';
+const vmMemberId = 'remote:["vm","anthropic-9z"]';
+async function mountGroup(options:{bound?:{deviceId:string|null,providerId:string}|null,host?:any[],catalogs?:any[]},onSelect=vi.fn(async()=>true)) {
+  test.entriesFor = providers => providers.map((provider:any)=>({...test.entries[0],providerId:provider.id}));
+  test.activeSource = input => input.providers.some((provider:any)=>provider.id===input.selectedProviderId) ? input.selectedProviderId : null;
+  await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
+    visible:true,onClose:vi.fn(),providers:options.host??[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
+    activeModelId:'codex/model',selectedProviderId:'anthropic-9z',selectedEffort:'medium',selectedFastMode:false,
+    existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
+    unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
+      remote:{catalogs:options.catalogs??[miniCatalog,vmCatalog],selectedDeviceId:'vm',hostDeviceId:'host',
+        providerGroup:{bound:options.bound??null,running:{deviceId:'vm',providerId:'anthropic-9z'}}}},
+  } as any)));
+  return {onSelect};
+}
+it('folds a group member into the group entry and opens there without marking it as in use',async()=>{
+  const {onSelect}=await mountGroup({bound:null});
+  // 组里的那台不单独出现,那台组外的供应商照常列出;组那一项标题带台数。
+  expect(test.view.filters.map((f:any)=>f.id)).not.toContain(vmMemberId);
+  expect(test.view.filters.map((f:any)=>f.id)).toContain('remote:["vm","fp"]');
+  expect(test.view.filters.find((f:any)=>f.id===miniGroupId).remote.providerLabel).toBe('models.unified.providerGroup');
+  // 任务正跑在组员上:打开停在组那一项,但没归组,不显示为正在用。
+  expect(test.view.filter).toBe(miniGroupId);
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual([miniGroupId]);
+  expect(test.view.groups[0].title).toBe('models.unified.remoteProviderGroup');
+  expect(test.view.groups[0].rows[0].selected).toBe(false);
+  // 选它照旧是把 Agent 挪到组所在电脑(由调用方确认换电脑)。
+  await act(async()=>test.view.onSelect(test.view.groups[0].rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'anthropic'}),{deviceId:'mini'});
+});
+it('keeps a task that belongs to the group on the computer it runs on',async()=>{
+  const {onSelect}=await mountGroup({bound:{deviceId:'mini',providerId:'anthropic'}});
+  expect(test.view.filter).toBe(miniGroupId);
+  expect(test.view.groups[0].rows[0].selected).toBe(true);
+  await act(async()=>test.view.onSelect(test.view.groups[0].rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'anthropic-9z',modelId:'codex/model'}),{deviceId:'vm'});
+});
+it('shows the group entry of the controlled computer itself and stays put inside it',async()=>{
+  const host=[groupProvider('account','Provider',groupSummary('account',[{agentDeviceId:'vm',providerId:'anthropic-9z'}]))];
+  const {onSelect}=await mountGroup({bound:{deviceId:null,providerId:'account'},host,catalogs:[vmCatalog]});
+  expect(test.view.filters.map((f:any)=>f.id)).not.toContain(vmMemberId);
+  expect(test.view.filter).toBe('account');
+  const group=test.view.groups.find((g:any)=>g.key==='account');
+  expect(group.title).toBe('models.unified.providerGroup');
+  expect(group.rows[0].selected).toBe(true);
+  await act(async()=>test.view.onSelect(group.rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'anthropic-9z'}),{deviceId:'vm'});
+});
+it('lists the member again when the group owner is not in the list',async()=>{
+  await mountGroup({bound:{deviceId:'mini',providerId:'anthropic'},catalogs:[vmCatalog]});
+  expect(test.view.filter).toBe(vmMemberId);
+  expect(test.view.groups[0].rows[0].selected).toBe(true);
 });

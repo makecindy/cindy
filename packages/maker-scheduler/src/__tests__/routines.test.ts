@@ -768,4 +768,28 @@ describe('routine check configuration', () => {
       expect(f.engine.history(routine.id)[0]).toMatchObject({ resultText: 'No changes' });
     } finally { await f.engine.stop(); }
   });
+  it('drops a live plugin source on archive instead of retargeting it', async () => {
+    const f = await fixture();
+    f.engine.registerSource({
+      id: 'plugin:helper',
+      name: 'Helper',
+      status: 'listening',
+      events: [{ type: 'mail', name: 'Mail', fields: [] }],
+    });
+    await f.engine.createOnce('bot', {
+      name: 'watch',
+      prompt: 'read mail',
+      enabled: true,
+      triggers: [{ id: 't1', kind: 'event', sourceId: 'plugin:helper', eventType: 'mail', filters: [] }],
+    }, 'a'.repeat(16));
+    const archive = 'arch_' + 'a'.repeat(32);
+    await f.engine.relocatePluginSource('helper', archive);
+    const ids = f.engine.listSources().map((source) => source.id);
+    expect(ids).not.toContain('plugin:helper');
+    expect(ids).not.toContain('plugin:' + archive);
+    expect(f.engine.list('bot')[0]?.triggers).toEqual([
+      expect.objectContaining({ sourceId: 'plugin:' + archive }),
+    ]);
+    await f.engine.stop();
+  });
 });

@@ -1,0 +1,39 @@
+appId: ${APP_ID}
+---
+# Native regression: a pending Pan on the message list used to block iOS pop,
+# even with the composer collapsed. Keep the existing scroll/resize integration.
+- runFlow: login_mock_no_clear.yaml
+- extendedWaitUntil:
+    visible:
+      id: "home.sessionRowTitle.mock-session-1"
+    timeout: 15000
+- tapOn:
+    id: "home.sessionRowTitle.mock-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session.messageList"
+    timeout: 15000
+- swipe:
+    start: "1%, 50%"
+    end: "85%, 50%"
+    duration: 600
+- extendedWaitUntil:
+    visible:
+      id: "devices.list"
+    timeout: 5000
+- tapOn:
+    id: "home.sessionRowTitle.mock-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session.messageList"
+    timeout: 15000
+- tapOn:
+    id: "session.composerInputRow.collapsedOpen"
+- swipe:
+    start: "1%, 35%"
+    end: "85%, 35%"
+    duration: 600
+- extendedWaitUntil:
+    visible:
+      id: "devices.list"
+    timeout: 5000

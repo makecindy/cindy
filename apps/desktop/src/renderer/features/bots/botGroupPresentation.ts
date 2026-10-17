@@ -27,6 +27,7 @@ export {
   isBotGroupDivisionBlocked,
   isRunningBotGroupSidebarPreview,
   mergeBotGroupMessages,
+  projectBotGroupExecutionFailures,
   mergeBotGroupPlans,
   openBotGroupPlan,
   sortBotGroups,

@@ -173,8 +173,8 @@ export function newSessionDefaultModelId(
  * 逐字节一致**(非破坏性)。这里刻意不写死 id。
  *
  * 注意它只是**种子**：真正落点由 `calibrateDraftModel` 在供应商清单到位后决定(「可用的里面
- * 选,供应商优先订阅」,见 draftModelCalibration)。自动化任务(scheduler)默认故意不同,走
- * useScheduleForm.ts getScheduleDefaultModel,不要把这里的默认接到 scheduler 上。
+ * 选,供应商优先订阅」,见 draftModelCalibration)。自动化任务(scheduler)与其它无人值守
+ * 入口复用校准后的结果(resolveNewTaskDefaultRoute),不直接读这里的种子。
  */
 export function getDefaultModelForVendor(
   vendorKey: 'cc' | 'codex' | 'pi',

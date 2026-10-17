@@ -22,7 +22,7 @@ vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifact
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: (p: any) => { h.view = p; return p.models; } }));
-vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: (p: any) => { h.create = p; return null; } }));
+vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: (p: any) => { h.create = p; return p.models ?? null; } }));
 vi.mock('@/session/CompanionImportSheet', async () => {
   const { useEffect, useState } = await import('react');
   return { CompanionImportSheet: (p: any) => {
@@ -298,3 +298,41 @@ it('blocks a duplicate name before submitting and keeps the form after a failed 
   expect(h.create.panel).toBeDefined(); expect(h.create.values.name).toBe('Nova');
   cache.writeRemoteCollectionCache(':1', 'teammates', []);
 });
+
+it('preserves creation drafts across the model picker and sends only an explicit route', async () => {
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, creationModelChain: '[]' }] });
+  await renderCreate();
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+  const portrait = h.create.values.avatarImageBase64;
+  expect(h.create.modelMissing).toBe(true);
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke).not.toHaveBeenCalled();
+  await act(async () => h.model.onPick(0));
+  expect(h.create.visible).toBe(false); expect(h.picker.visible).toBe(false);
+  await act(async () => h.create.onClosed()); expect(h.picker.visible).toBe(true);
+  const route = { harness: 'pi', model: 'available', providerId: 'provider', effort: '', fastMode: false };
+  await act(async () => h.picker.onSelect(route));
+  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
+  expect(h.create.values).toMatchObject({ name: 'Nova', avatarImageBase64: portrait });
+  expect(h.create.modelMissing).toBe(false);
+  h.invoke.mockRejectedValueOnce(new Error('timeout'));
+  await act(async () => h.create.onSubmit());
+  const sent = h.invoke.mock.calls[0][2].input;
+  expect(sent.modelChain).toBe(JSON.stringify([route]));
+  expect(h.create.locked).toBe(true);
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke.mock.calls[1][2].input).toEqual(sent);
+});
+
+
+it.each([undefined, JSON.stringify([{ harness: 'pi', model: 'default', providerId: 'provider' }])])(
+  'preserves default creation for host model metadata %s', async creationModelChain => {
+    h.read.mockResolvedValue({ resource, panels: [{ ...panel, creationModelChain }] });
+    await renderCreate();
+    await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+    expect(h.create.modelMissing).toBe(false);
+    await act(async () => h.create.onSubmit());
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    expect(h.invoke.mock.calls[0][2].input).not.toHaveProperty('modelChain');
+  },
+);

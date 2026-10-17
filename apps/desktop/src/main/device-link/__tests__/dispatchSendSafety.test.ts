@@ -18,7 +18,9 @@ import {
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   type InvokeResultPayload,
+  SessionMessageReuse,
 } from '@cindy/device-link';
+import { versionMessageBody } from '../sessionMessageReuse';
 
 vi.mock('electron', () => ({
   app: {
@@ -50,6 +52,7 @@ import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
 import { getDeviceLinkInvokeContext } from '../invoke-context';
 import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import * as subscriptions from '../subscriptions';
+import { setHistoryWorkPageReader } from '../historyViewPush';
 
 /** 最小 mock client:只实现被测路径用到的两个发送方法。 */
 function mkClient(
@@ -271,6 +274,62 @@ describe('history detail interest', () => {
       vi.useRealTimers();
     }
   });
+  it('replaces the notice with a work patch only for a same-account work-line controller whose page shape held', async () => {
+    vi.useFakeTimers();
+    const shape = (revision: string, keys = ['c0', 'work-c1']) => ({
+      keys, fingerprints: keys.map((key) => key === 'work-c1' ? 'running:m1' : `fp-${key}`), running: new Map([['work-c1', revision]]),
+    });
+    const summary = { key: 'work-c1', firstMessageId: 'm1', lastMessageId: 'm9', startedAtMs: 1, endedAtMs: 2,
+      isStreaming: true, messageCount: 3, toolCount: 2, revision: 'r2', lines: [] };
+    let next = shape('r2');
+    setHistoryWorkPageReader(async (_sid, onShape) => {
+      onShape(next);
+      return { version: 1, hasMore: false, nextCursor: null, items: [
+        { type: 'messages', key: 'c0', messages: [] },
+        { type: 'work', key: 'work-c1', summary: { ...summary, revision: next.running.get('work-c1')! } },
+      ] };
+    });
+    try {
+      const client = mkClient();
+      __testing.setActiveClient(client as never);
+      for (const peer of ['lines', 'plain']) subscriptions.subscribe(peer, ['session:s1']);
+      subscriptions.prepareHistoryView('lines', 's1')!.update(['work-c1'], { workLines: true, shape: shape('r1') });
+      subscriptions.prepareHistoryView('plain', 's1')!.update(['work-c1']);
+      const toolUse = { sessionId: 's1', event: { type: 'tool_use', data: { toolUseId: 't9', toolName: 'Read', input: { file_path: '/a' } } } };
+      __testing.forwardPush('maker:event', toolUse);
+      await vi.advanceTimersByTimeAsync(500);
+      const sent = () => client.sendPush.mock.calls.filter(([, channel]) => channel !== 'maker:event');
+      expect(sent()).toEqual(expect.arrayContaining([
+        ['plain', 'maker:history-view-changed', { sessionId: 's1' }],
+        ['lines', 'maker:history-work-patch', { version: 1, sessionId: 's1', baseRevision: 'r1',
+          item: { type: 'work', key: 'work-c1', summary: { ...summary, revision: 'r2' } } }],
+      ]));
+      expect(sent()).toHaveLength(2);
+
+      // A new top-level item means the page itself moved: the controller re-reads as before.
+      client.sendPush.mockClear();
+      next = shape('r3', ['c0', 'c5', 'work-c1']);
+      __testing.forwardPush('maker:event', toolUse);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(sent()).toEqual(expect.arrayContaining([['lines', 'maker:history-view-changed', { sessionId: 's1' }]]));
+
+      // Folded thinking deltas reach a work-line controller only while its single line can change.
+      client.sendPush.mockClear();
+      subscriptions.prepareHistoryView('lines', 's1')!.update(['work-c1'], { workLines: true, shape: shape('r3') });
+      next = shape('r4');
+      const delta = (text: string) => ({ sessionId: 's1', event: { type: 'thinking', data: { stage: 'delta', blockId: 'b7', text } } });
+      __testing.forwardPush('maker:event', delta('x'.repeat(200)));
+      await vi.advanceTimersByTimeAsync(500);
+      __testing.forwardPush('maker:event', delta('more'));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(sent().filter(([peer]) => peer === 'lines')).toHaveLength(1);
+      expect(sent().filter(([peer]) => peer === 'plain')).toHaveLength(0);
+    } finally {
+      setHistoryWorkPageReader(null);
+      __testing.reset();
+      vi.useRealTimers();
+    }
+  });
   it.each(['first', 'second'])('sends full thinking to peers with %s streaming group expanded and coalesces folded summaries', async (expandedKey) => {
     vi.useFakeTimers();
     try {
@@ -299,6 +358,26 @@ describe('history detail interest', () => {
 });
 
 describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
+  it.each(['local-db:messages:list', 'local-db:messages:view'])('keeps cached prose exact when %s needs oversized tool fallback', (channel) => {
+    const cache = new SessionMessageReuse();
+    const prose = { id: 'prose', clientId: 'prose', role: 'assistant', content: '完整正文'.repeat(2000) };
+    cache.receive('host', 'local-db:messages:created', { sessionId: 's1', message: versionMessageBody(prose) });
+    const request = cache.prepare('host', { channel, args: ['s1'] });
+    const rows = [prose, { id: 'tool', role: 'tool_result', content: 'x'.repeat(MAX_FRAME_BYTES) }];
+    const value = channel.endsWith(':list') ? rows : { items: [{ type: 'messages', key: 'rows', messages: rows }], hasMore: false };
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => { throw tooLarge(); });
+    __testing.sendInvokeResultSafe(mkClient({ sendInvokeResult }) as never, 'host', 'reuse-large',
+      { ok: true, result: value }, channel, request.payload.args);
+    const sent = sendInvokeResult.mock.calls.at(-1)![2] as InvokeResultPayload;
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) throw new Error('Expected compact success');
+    const decoded = request.decode(sent.result) as typeof rows | { items: { messages: typeof rows }[] };
+    const restored = Array.isArray(decoded) ? decoded : decoded.items[0].messages;
+    expect(restored[0].content).toBe(prose.content);
+    expect(restored[1].content.length).toBeLessThan(MAX_FRAME_BYTES);
+    expect(JSON.stringify(sent)).not.toContain(prose.content);
+  });
+
   it('消息页首发抛 PAYLOAD_TOO_LARGE → 先压缩超大消息内容并重发 ok:true,不冒泡', () => {
     const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
       throw tooLarge();

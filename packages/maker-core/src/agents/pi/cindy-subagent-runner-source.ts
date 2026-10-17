@@ -37,6 +37,12 @@ const runnerScriptPath = typeof process.argv[1] === 'string' ? process.argv[1] :
 const CONTROL_VERSION = 1;
 const MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
 const MAX_RESULT_BYTES = 256 * 1024;
+// Spawn command line budget, same values the Host enforces for its own Pi
+// launch (PI_WINDOWS_SPAWN_ARGV_BUDGET / PI_POSIX_SPAWN_ARGV_BUDGET). The
+// child's profile prompt is a hardcoded short string today; this only exists so
+// a future custom profile fails as a readable status instead of an opaque
+// spawn error.
+const SPAWN_ARGV_BUDGET = process.platform === 'win32' ? 30000 : 128000;
 const CONTROL_POLL_MS = 200;
 const STATUS_FLUSH_MS = 50;
 const HEARTBEAT_MS = 2000;
@@ -276,6 +282,7 @@ function main() {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       usageSegments: [],
       output: '',
+      resultReady: false,
       outputTruncated: false,
       error: undefined,
       // Approval requests this child is still waiting on, oldest first. The
@@ -368,12 +375,12 @@ function main() {
           toolUses: task.toolUses,
           usage: task.usage,
           usageSegments: task.usageSegments,
-          // message_end is already a complete generation result even if Pi
-          // keeps the RPC process alive for follow-up. Publish it immediately
-          // so the host can hide late Steer before writing a doomed control.
+          // Intermediate commentary is useful progress, not a final result.
+          // Publish its readiness separately so controls never infer it from text.
           output: task.output || (
             task.status === 'running' || task.status === 'queued' ? undefined : ''
           ),
+          resultReady: task.resultReady,
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           // Only the oldest unanswered request is published so the status
@@ -595,10 +602,9 @@ function main() {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
-        // A message_end is the immutable result of that completed generation.
-        // Sending steer after it exists makes Pi emit a short acknowledgement
-        // that can replace the real result. Continue via follow_up instead.
-        if (control.action === 'steer' && typeof task.output === 'string' && task.output.trim()) {
+        // Only a final assistant response closes the steering window. A text
+        // preamble followed by tools is still an active, steerable generation.
+        if (control.action === 'steer' && task.resultReady) {
           continue;
         }
         const command = {
@@ -824,6 +830,24 @@ function main() {
       const childArgs = Array.isArray(config.binaryPrefixArgs)
         ? config.binaryPrefixArgs.concat(args)
         : args;
+      // 两种口径不一样，不能统一：Windows CreateProcess 的命令行上限是 32767 个
+      // UTF-16 字符（按 UTF-8 字节算会把中文路径放大三倍、误拒）；POSIX 的
+      // ARG_MAX 按字节算（用字符数会漏检中文长提示词）。
+      const argvUnits = childArgs.reduce((total, arg) => {
+        const value = String(arg);
+        return total
+          + (process.platform === 'win32' ? value.length : Buffer.byteLength(value, 'utf8'))
+          + 3;
+      }, 0);
+      if (argvUnits > SPAWN_ARGV_BUDGET) {
+        task.status = 'failed';
+        task.error = 'Subagent command line exceeds the platform spawn budget ('
+          + argvUnits + ' > ' + SPAWN_ARGV_BUDGET + ').';
+        task.endedAt = Date.now();
+        scheduleStatus();
+        resolve();
+        return;
+      }
       const child = spawn(config.binary, childArgs, {
         cwd: task.cwd,
         env: childEnv,
@@ -908,6 +932,11 @@ function main() {
           scheduleStatus();
           return;
         }
+        if (event.type === 'agent_start') {
+          task.resultReady = false;
+          scheduleStatus();
+          return;
+        }
         if (event.type === 'tool_execution_start') {
           task.toolUses += 1;
           scheduleStatus();
@@ -915,6 +944,10 @@ function main() {
         }
         if (event.type === 'message_end' && event.message && event.message.role === 'assistant') {
           const text = textOf(event.message);
+          task.resultReady = event.message.stopReason !== 'toolUse'
+            && !(Array.isArray(event.message.content) && event.message.content.some(function (block) {
+              return block && block.type === 'toolCall';
+            }));
           if (event.message.stopReason === 'error') {
             terminalError = typeof event.message.errorMessage === 'string' && event.message.errorMessage.trim()
               ? event.message.errorMessage.trim().slice(0, 4000)
@@ -949,6 +982,10 @@ function main() {
         }
         if (event.type === 'auto_retry_start') {
           terminalError = '';
+          // A failed attempt is not the generation's final answer. Pi keeps
+          // stdin open during retry backoff so corrections must stay eligible.
+          task.resultReady = false;
+          scheduleStatus();
           return;
         }
         if (event.type === 'agent_end') {
@@ -1179,6 +1216,7 @@ function main() {
           agent: task.agent,
           status: task.status,
           output: task.output,
+          resultReady: task.resultReady,
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           usage: task.usage,

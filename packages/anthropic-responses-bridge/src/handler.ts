@@ -182,6 +182,11 @@ function parseSsePayloads(body: string): unknown[] {
   return payloads;
 }
 
+/** 缺少 Content-Type 时仅识别 SSE 起始字段；正文已受非流式 16 MiB 上限保护。 */
+function looksLikeSse(body: string): boolean {
+  return /^(?:(?:event|data|id|retry):|:)/.test(body.trimStart());
+}
+
 /** image block 的粗估 token 占位(Anthropic 图像典型 ~1100-1600 tok;粗估用中值,免 stringify 整段 base64)。 */
 const IMAGE_BLOCK_ESTIMATE_CHARS = 1400 * 4;
 
@@ -493,7 +498,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       try {
         const body = await readBodyWithLimit(upstream, MAX_NON_STREAM_BODY_BYTES);
         if (!body.trim()) throw new Error('provider returned an empty response body');
-        if (upstreamIsSse) {
+        if (upstreamIsSse || (!upstreamContentType && looksLikeSse(body))) {
           for (const event of parseSsePayloads(body)) {
             diagnostics?.recordUpstreamEvent(event);
             for (const output of translator.push(event)) collect(output);

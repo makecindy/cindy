@@ -6,10 +6,10 @@
  * 协议 TaskAttachment[] 与"引用已剥离/替换"的正文。
  *
  * 引用语义与 IM 渠道收口(@cindy/im slack/streamingText.doFinalize)一致:
- *   - 图片引用 `![alt](xdt-image://...)` → 附件, 正文替换成"已作为附件发送"提示
+ *   - 图片引用 `![alt](xdt-image://...)` → 附件, 正文只保留图片说明（不提前声称送达）
  *   - 文件引用 `[name](xdt-file:///abs/path)` → 附件, 正文整体剥离
- * 引用解析与正文变换直接消费 @cindy/im/xdtRefs 的前向解析器(单一实现,
- * #1855 收敛;旧版此处维护正则副本, 语义靠注释两处同步)。xdt-file 的
+ * 图片引用按共享 Markdown AST 解析，跳过代码示例；文件引用继续使用
+ * @cindy/im/xdtRefs。xdt-file 的
  * URL→路径转换是唯一的本地保留项: hook 会拿它自动读盘, 必须 fail-closed
  * (非法编码 / 相对路径 / null byte 一律拒绝), 严格版见 xdtFileUrlToAbsPath。
  *
@@ -23,11 +23,11 @@
 
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
+import { localTaskImagePath, taskImageReferences, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 
 import type { TaskAttachment } from '@cindy/slack-hook-protocol';
 import {
   collectXdtFileRefs,
-  collectXdtImageRefs,
   normalizeXdtAbsPath,
   transformXdtRefs,
 } from '@cindy/im';
@@ -58,9 +58,10 @@ export function buildHookPromptNote(im: string | undefined): string {
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
     `本会话来自 ${platform}。要把文件发给用户:在最终回复文本里写 ` +
-    '`[文件名](xdt-file:///绝对路径)`;图片直接引用其地址 ' +
-    '`![说明](cindy-media://… 或 xdt-image://…)`,无需复制文件。' +
-    `系统会在回复结束后自动把它们作为 ${platform} 附件发回,无需调用任何工具;` +
+    '`[文件名](xdt-file:///绝对路径)`;图片写 ' +
+    '`![说明](工具返回的媒体地址或当前任务图片的绝对路径)`。' +
+    '不要给本地路径拼接 xdt-image:// 或 cindy-media://。' +
+    `Cindy 会保存可读取的任务图片,并在回复结束后作为 ${platform} 附件发回,无需另调导入工具;` +
     'xdt-file 文件必须位于当前工作目录内;无法读取、超限或目录外的附件不会发送,' +
     '最终回复会明确显示附件发送不完整。' +
     '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
@@ -176,12 +177,19 @@ export interface OutboundResult {
   skipped: number;
 }
 
+// Remote output may use another OS's path syntax. Recognize it for redaction
+// only; this does not grant the local importer access to that path.
+function isLocalImage(url: string): boolean {
+  return Boolean(localTaskImagePath(url)) || path.win32.isAbsolute(url);
+}
+
 /** 文本里是否存在任何托管媒体出站引用(快速前置判断, 避免无谓的收集开销)。 */
 export function hasOutboundRefs(text: string): boolean {
   // 双协议:老 xdt-image + 媒体总仓 cindy-media(与 @cindy/im 解析器同口径)——
   // 漏了 cindy-media 会让只含总仓图的回帖跳过附件收集,图静默丢失。
   return (
     text.includes('xdt-image://') || text.includes('cindy-media://') || text.includes('xdt-file://')
+    || taskImageReferences(text).some((ref) => isLocalImage(ref.url))
   );
 }
 
@@ -197,9 +205,7 @@ export async function collectOutboundAttachments(
   const readFile = deps.readFile ?? ((p: string) => fsp.readFile(p));
   const realpath = deps.realpath ?? ((p: string) => fsp.realpath(p));
   const attachments: TaskAttachment[] = [];
-  const sentImageAbsPaths = new Set<string>();
   const sentFileAbsPaths = new Set<string>();
-  const imageAbsPathByUrl = new Map<string, string>();
   const fileAbsPathByUrl = new Map<string, string | null>();
   let totalBytes = 0;
   let skipped = 0;
@@ -275,10 +281,16 @@ export async function collectOutboundAttachments(
   // 1. 图片: 文本引用 + tool_result 旁路, 按 absPath 去重(模型常重复引用)
   const imageAbsPaths: string[] = [];
   const seenImage = new Set<string>();
-  for (const ref of collectXdtImageRefs(refScanText)) {
+  const imageRefs = taskImageReferences(refScanText).filter((ref) => isLocalImage(ref.url)
+    || ref.url.startsWith('xdt-image://') || ref.url.startsWith('cindy-media://'));
+  const visitedImageUrls = new Set<string>();
+  for (const ref of imageRefs) {
+    if (visitedImageUrls.has(ref.url)) continue;
+    visitedImageUrls.add(ref.url);
+    // Local images must already have been imported by the task-scoped adapter.
+    if (isLocalImage(ref.url)) { skipped += 1; continue; }
     try {
       const { absPath } = deps.resolveImageUrl(ref.url);
-      imageAbsPathByUrl.set(ref.url, absPath);
       if (!seenImage.has(absPath)) {
         seenImage.add(absPath);
         imageAbsPaths.push(absPath);
@@ -297,7 +309,7 @@ export async function collectOutboundAttachments(
     }
   }
   for (const absPath of imageAbsPaths) {
-    if (await push(absPath, MAX_OUT_IMAGE_BYTES)) sentImageAbsPaths.add(absPath);
+    await push(absPath, MAX_OUT_IMAGE_BYTES);
   }
 
   // 2. 文件引用(去重同上)
@@ -324,16 +336,12 @@ export async function collectOutboundAttachments(
     if (await push(absPath, MAX_OUT_FILE_BYTES)) sentFileAbsPaths.add(absPath);
   }
 
-  // 3. 正文变换: 只有确实收集成功的引用才声称已发送。失败项保留可读标签，
-  // 并在末尾附加显式警告，避免“正文剥掉了、附件也没到”的静默丢失。
-  const transformed = transformXdtRefs(finalText, {
-    image: ({ alt, url }) => {
-      const absPath = imageAbsPathByUrl.get(url);
-      if (absPath !== undefined && sentImageAbsPaths.has(absPath)) {
-        return alt ? `🖼️ _${alt}(已作为附件发送)_` : '';
-      }
-      return alt ? `🖼️ _${alt}_` : '';
-    },
+  // Collection is not a delivery receipt. Keep captions without claiming the channel sent them.
+  const imageUrls = new Map([...visitedImageUrls].map((url) => [url, url]));
+  const captionText = rewriteTaskImageReferences(finalText, imageUrls, (ref) =>
+    ref.alt ? `🖼️ _${ref.alt.replace(/[*_\[\]\\]/g, '\\$&')}_` : '',
+  );
+  const transformed = transformXdtRefs(captionText, {
     file: ({ alt, url }) => {
       const absPath = fileAbsPathByUrl.get(url);
       return absPath !== null && absPath !== undefined && sentFileAbsPaths.has(absPath) ? '' : alt;

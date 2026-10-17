@@ -11,7 +11,9 @@ import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import {
   createdNote,
+  parseQualifiedSessionId,
   registerSendToSessionTool,
+  type SendToRemoteSessionCallback,
   type SendToSessionCallback,
 } from '../xdt-helper/send_to_session.js';
 
@@ -457,5 +459,92 @@ describe('send_to_session · working_dir (#811)', () => {
       working_dir: '/nope',
     });
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+});
+
+
+it('reports a failed responsibility write without hiding successful task creation', async () => {
+  const { registry, sendToSession } = setup({ result: { ok: true, targetSessionId: 'new-task', agentKind: 'claude-code', wakeKind: 'created', responsibilityRecorded: false, targetTitle: null, targetLastUserSendAt: null } });
+  expect(parse(await registry.call('send_to_session', { message: 'Work' }))).toMatchObject({ ok: true, target_session_id: 'new-task', responsibility_recorded: false });
+  expect(sendToSession).toHaveBeenCalledOnce();
+});
+
+describe('send_to_session → 另一台电脑上的任务', () => {
+  const remoteId = 'mbp::sess-9';
+  function remoteSetup(opts: {
+    result?: Awaited<ReturnType<SendToRemoteSessionCallback>>;
+    sessionId?: string;
+    remote?: boolean;
+  } = {}) {
+    const sendToSession = vi.fn<SendToSessionCallback>();
+    const sendToRemoteSession = vi.fn<SendToRemoteSessionCallback>(async () => opts.result ?? {
+      ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: 'remote task', targetLastUserSendAt: null,
+    });
+    const registry = new XdtHelperToolRegistry();
+    registerSendToSessionTool(registry, {
+      getSessionContext: () => ({
+        sessionId: 'sessionId' in opts ? opts.sessionId : 'disp-1', agentKind: 'claude-code', workingDir: '/tmp/wd',
+      }),
+      sendToSession,
+      ...(opts.remote === false ? {} : { sendToRemoteSession }),
+    });
+    return { registry, sendToSession, sendToRemoteSession };
+  }
+
+  it('deviceId::sessionId 交给跨电脑通路, 不走本机投递也不新建', async () => {
+    const s = remoteSetup();
+    const sent = parse(await s.registry.call('send_to_session', {
+      target_session_id: remoteId, message: 'hi', use_worktree: true, title: 'ignored',
+    }));
+    expect(s.sendToRemoteSession).toHaveBeenCalledWith({
+      deviceId: 'mbp', sessionId: 'sess-9', message: 'hi', dispatcherSessionId: 'disp-1',
+    });
+    expect(s.sendToSession).not.toHaveBeenCalled();
+    expect(sent).toEqual({
+      ok: true, target_session_id: remoteId, target_device_id: 'mbp', agent_kind: 'codex',
+      wake_kind: 'queued', target_title: 'remote task', target_last_user_send_at: null,
+    });
+  });
+
+  it('投递错误如实透传, 区分没有发出与结果未知', async () => {
+    for (const errorCode of ['REMOTE_UNSUPPORTED', 'REMOTE_DEVICE_OFFLINE', 'DELIVERY_UNKNOWN', 'ARCHIVED']) {
+      const s = remoteSetup({ result: { ok: false, errorCode, message: errorCode } });
+      const result = await s.registry.call('send_to_session', { target_session_id: remoteId, message: 'hi' });
+      expect(result.isError).toBe(true);
+      expect(parse(result)).toMatchObject({ ok: false, errorCode });
+    }
+  });
+
+  it('宿主不支持、内部协调用途、无来源任务时明确拒绝, 不发出', async () => {
+    const cases = [
+      [remoteSetup({ remote: false }), {}, 'REMOTE_UNSUPPORTED'],
+      [remoteSetup(), { message_purpose: 'coordination' }, 'INVALID_ARGS'],
+      [remoteSetup({ sessionId: undefined }), {}, 'LEAD_NOT_SUPPORTED'],
+    ] as const;
+    for (const [s, extra, errorCode] of cases) {
+      const result = await s.registry.call('send_to_session', { target_session_id: remoteId, message: 'hi', ...extra });
+      expect(parse(result)).toMatchObject({ ok: false, errorCode });
+      expect(s.sendToRemoteSession).not.toHaveBeenCalled();
+      expect(s.sendToSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it('local::<id> 是本机任务; 残缺前缀按本机 id 原样处理', async () => {
+    const s = remoteSetup();
+    s.sendToSession.mockResolvedValue({
+      ok: true, targetSessionId: 'sess-1', agentKind: 'claude-code', wakeKind: 'resumed',
+      targetTitle: null, targetLastUserSendAt: null,
+    });
+    await s.registry.call('send_to_session', { target_session_id: 'local::sess-1', message: 'hi' });
+    await s.registry.call('send_to_session', { target_session_id: 'mbp::', message: 'hi' });
+    expect(s.sendToSession.mock.calls.map(([params]) => params.targetSessionId)).toEqual(['sess-1', 'mbp::']);
+    expect(s.sendToRemoteSession).not.toHaveBeenCalled();
+    expect(parseQualifiedSessionId('mbp::a::b')).toEqual({ deviceId: 'mbp', sessionId: 'a::b' });
+  });
+
+  it('工具说明写明跨电脑寻址与结果未知时的处理', () => {
+    const description = remoteSetup().registry.list('handoff')[0]!.description;
+    expect(description).toContain('deviceId::sessionId');
+    expect(description).toContain('DELIVERY_UNKNOWN');
   });
 });

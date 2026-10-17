@@ -17,7 +17,7 @@ import type {
 /**
  * 目标状态机:
  *  - active        续跑中
- *  - paused        用户打断 / 用户暂停 / rewind / 连续空轮触顶 —— 用户可恢复
+ *  - paused        用户暂停 / rewind / 连续空轮触顶 —— 用户可恢复
  *  - blocked       需人工(审批 / 模型自报 blocked / turn 出错)—— 用户处理后可恢复
  *  - complete      达成(终态)
  *  - budgetLimited 撞 token 预算或轮数上限(**仅当该目标设了对应上限时才可能**;终态)
@@ -187,6 +187,9 @@ export interface GoalControllerDeps {
   acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
   /** ← maker-ipc/register.isSessionInTurn(main 侧 turn 活跃跟踪)。 */
   isSessionInTurn(sessionId: string): boolean;
+  /** Restore the existing input queue, then yield to its FIFO/locks/recovery. */
+  ensureInputReady?: (sessionId: string) => Promise<boolean>;
+  isInputBlocked?: (sessionId: string) => boolean;
   /**
    * 清除目标时中断由 GoalController 发起的当前 turn。生产环境接到 input coordinator
    * 的 Stop 边界，以便 vendor abort、输入队列和迟到终态事件一起收口。

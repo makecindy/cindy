@@ -3,7 +3,7 @@ import { act, createElement, useImperativeHandle, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0 }));
+const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0, expanded: false }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
@@ -57,10 +57,11 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 })
 vi.mock('@/session/usePluginResultCard', () => ({ usePluginResultCard: () => ({}), useSessionPluginResource: () => ({ title: 'Art' }) }));
 vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ downloadRemoteMediaShareTemp: vi.fn() }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
-vi.mock('@/session/expandedBlockMemory', () => ({ useFoldableExpandedState: () => [false, vi.fn()] }));
+vi.mock('@/session/expandedBlockMemory', () => ({ useFoldableExpandedState: () => [viewportHarness.expanded, vi.fn()] }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, showActionMenu: vi.fn(), usesNativePullDownMenu: () => false, usesSystemActionMenu: () => false }));
 vi.mock('@/session/MobileComposerInputRow', () => ({ MobileComposerInputRow: () => null, MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT: 0, MOBILE_COMPOSER_CONTROL_SIZE: 44 }));
 vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('@/session/mermaidWebView', () => ({ MermaidDiagram: () => null }));
 vi.mock('@/session/mathWebView', () => ({ MathFormulaWebView: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
@@ -120,6 +121,38 @@ describe('partner work feedback', () => {
     const completed = renderToStaticMarkup(<MessageRenderer items={done} companion companionWorkingLabel="Saving memory…" />);
     expect(completed).not.toContain('Saving memory…');
     expect(completed).toContain('message.workGroupToggle');
+  });
+});
+
+describe('running work group expansion', () => {
+  const render = (awaitingDetails: boolean) => {
+    const messages = [msg('u', 'user', 'Fix it'), msg('c', 'tool_use', {
+      toolName: 'Bash', toolUseId: 'c', input: { command: 'pnpm test' },
+    }, { toolUseId: 'c' })];
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: true })
+      .filter((item) => item.type === 'work_group')
+      .map((item) => ({ ...item, deferred: {
+        owner: {}, key: 'work-c', expanded: false, loading: awaitingDetails, failed: false, awaitingDetails,
+        lines: [{ kind: 'thinking' as const, key: 'line', text: 'Checking the failing case' }],
+        setVisible: vi.fn(), toggle: vi.fn(), retry: vi.fn(),
+      } }));
+    expect(items).toHaveLength(1);
+    viewportHarness.expanded = true;
+    try {
+      return renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming />);
+    } finally {
+      viewportHarness.expanded = false;
+    }
+  };
+
+  it('keeps the Host lines visible after expanding until detail rows arrive', () => {
+    const waiting = render(true);
+    expect(waiting).toContain('message.workLine');
+    expect(waiting).toContain('Collapse ');
+    expect(waiting).not.toContain('pnpm test');
+    const loaded = render(false);
+    expect(loaded).not.toContain('message.workLine');
+    expect(loaded).toContain('pnpm test');
   });
 });
 

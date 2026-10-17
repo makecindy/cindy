@@ -12,8 +12,16 @@
   "resync": "Resync",
   "resyncing": "Resyncing",
   "syncShort": "Sync",
-  "deviceUnresponsiveTitle": "Computer not responding",
-  "deviceUnresponsiveHint": "Your computer isn't answering right now. Retrying automatically.",
+  "deviceUnresponsiveTitle": "No response yet",
+  "deviceUnresponsiveHint": "No reply received yet. Retrying automatically.",
+  "localNetwork": {
+    "title": "Phone network unavailable",
+    "hint": "Check your phone’s network. Reconnection is automatic when it recovers."
+  },
+  "serviceConnection": {
+    "title": "Cannot reach the service",
+    "hint": "Your phone cannot reach the service right now. Reconnecting automatically."
+  },
   "connectStep1": "Install and open {{appName}} on your computer",
   "connectStep2": "Sign in with the same account as your phone",
   "connectStep3": "Under Settings → Remote Access, turn on \"Allow same-account devices to control this computer\"",
@@ -26,6 +34,8 @@
   "sectionAccessRevoked": "Approve Access Again",
   "retryAccess": "Retry Access",
   "recheck": "Check Again",
+  "deviceRemovedTitle": "Device removed",
+  "deviceRemovedHint": "Sign out and sign in again to rejoin the device list.",
   "authFailedTitle": "Sign-in expired",
   "authFailedHint": "Your sign-in has expired. Sign out and sign in again.",
   "replacedTitle": "Connection replaced",
@@ -35,7 +45,7 @@
   "versionMismatchTitle": "Version mismatch",
   "versionMismatchHint": "This app version is incompatible with the service. Update to the latest version and try again.",
   "unstableTitle": "Connection keeps dropping",
-  "unstableHint": "Connection keeps dropping and reconnecting — check the network, or restart the app if it persists.",
+  "unstableHint": "Connection is unstable. Check your network and wait for the connection to recover.",
   "relay": {
     "label": {
       "online": "Relay connected",
@@ -61,7 +71,7 @@
     "remoteDisabled": "The remote computer has disabled remote control.",
     "channelNotAllowed": "The current desktop version doesn't support this remote capability.",
     "accessRevoked": "This computer has revoked mobile access.",
-    "deviceUnresponsive": "The computer isn't responding. Automatic retry is in progress; try again shortly.",
+    "deviceUnresponsive": "No reply received yet. Retrying automatically.",
     "versionMismatch": "The service protocol version doesn't match. Update the app and try again.",
     "payloadTooLarge": "This transfer is too large. Split it into smaller parts and try again.",
     "mediaFetchFailed": "The file couldn't be fetched from the computer. Try again later.",

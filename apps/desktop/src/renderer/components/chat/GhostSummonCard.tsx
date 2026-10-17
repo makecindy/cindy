@@ -35,6 +35,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Ghost } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
 import { Collapse } from '@/components/ui/collapse';
 import {
   commandDirectiveSegments,
@@ -47,6 +48,15 @@ import {
   type HostCapabilityDirectiveDisplay,
 } from '@/cindy-brain/hostCapabilityInvocation';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { isValidGhostId } from '../../../shared/ghost';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
+import {
+  findInstalledGhostByIdentity,
+  findInstalledGhostByInstanceId,
+  installedGhostLogicalIdentity,
+  parsePluginInstanceId,
+  pluginStoragePart,
+} from '../../../shared/pluginIdentity';
 
 /**
  * 「提及 → 兑现」关联(方案 2):Map<userMessageClientId, Set<被召唤 ghostId>>。
@@ -248,6 +258,7 @@ export function GhostSummonCard({
   directive,
   running,
   messageClientId,
+  commandNamespace,
   className,
 }: {
   directive: GhostSummonDisplay;
@@ -255,6 +266,7 @@ export function GhostSummonCard({
   running?: boolean;
   /** 本条用户消息的 clientId(查"提及 → 兑现"关联;状态文字与软提示升级用)。 */
   messageClientId?: string;
+  commandNamespace?: string;
   /** 外层附加样式:UserMessage 在气泡内嵌时用它加分隔线与间距。 */
   className?: string;
 }) {
@@ -263,11 +275,41 @@ export function GhostSummonCard({
   // 头像按 ghostId 实时查已装清单:消息文本里只固化 id/名字,头像跟随当前
   // 安装状态(意识被卸下后自然回退幽灵图标,不缓存失效数据)。
   const installedGhosts = useInstalledGhosts();
+  const ghostByInstanceId = (ghostId: string) => {
+    if (isValidGhostId(ghostId)) return undefined;
+    const physical = findInstalledGhostByInstanceId(installedGhosts, ghostId);
+    if (physical) return physical;
+    const identity = parsePluginInstanceId(ghostId);
+    return identity ? findInstalledGhostByIdentity(installedGhosts, identity) : undefined;
+  };
+  const commandIdentity = directive.kind === 'command' &&
+    typeof commandNamespace === 'string' &&
+    (commandNamespace === '@root' || isValidPluginNamespace(commandNamespace)) &&
+    isValidGhostId(directive.ghostId)
+    ? { namespace: commandNamespace === '@root' ? null : commandNamespace, ghostId: directive.ghostId }
+    : null;
+  const commandInstanceId = commandIdentity ? pluginStoragePart(commandIdentity) : null;
+  const ghostForDirective = (ghostId: string) => commandIdentity && ghostId === commandIdentity.ghostId
+    ? findInstalledGhostByIdentity(installedGhosts, commandIdentity)
+    : ghostByInstanceId(ghostId);
   const iconByGhostId = (ghostId: string): string | null =>
-    installedGhosts.find((g) => g.manifest.id === ghostId)?.iconDataUrl ?? null;
+    ghostByInstanceId(ghostId)?.iconDataUrl ?? null;
   // 「提及 → 兑现」:本条消息触发的那一轮,AI 真召唤了哪些意识。
   const fulfillment = useContext(GhostFulfillmentContext);
   const fulfilledIds = messageClientId ? fulfillment.get(messageClientId) : undefined;
+  const isFulfilled = (ghostId: string) => {
+    if (!fulfilledIds) return false;
+    if (commandIdentity && commandInstanceId) {
+      if (fulfilledIds.has(commandInstanceId)) return true;
+      const matches = installedGhosts.filter((ghost) => ghost.manifest.id === commandIdentity.ghostId);
+      const match = matches.length === 1 ? matches[0] : undefined;
+      return Boolean(match && fulfilledIds.has(commandIdentity.ghostId) &&
+        installedGhostLogicalIdentity(match).namespace === commandIdentity.namespace);
+    }
+    if (fulfilledIds.has(ghostId)) return true;
+    const ghost = ghostForDirective(ghostId);
+    return ghost ? fulfilledIds.has(pluginStoragePart(installedGhostLogicalIdentity(ghost))) : false;
+  };
   // 软提示的兑现子集(方案 2):AI 真调了才算,只提及没调的不升级(不撒谎)。
   const fulfilled =
     directive.kind === 'mention' && fulfilledIds
@@ -279,7 +321,7 @@ export function GhostSummonCard({
       directive.ghosts.length === 1 ? iconByGhostId(directive.ghosts[0].ghostId) : null;
     const names = directive.ghosts.map((g) => g.name).join(t('chat.ghostSummon.listSeparator'));
     return (
-      <div className="flex max-w-full flex-col items-end gap-1.5">
+      <div {...{ [SHARE_SOURCE_ATTR]: '' }} className="flex max-w-full flex-col items-end gap-1.5">
         <button
           type="button"
           aria-expanded={expanded}
@@ -341,9 +383,9 @@ export function GhostSummonCard({
       : directive.kind === 'mention'
         ? fulfilled
         : directive.ghostIds.map((id) => {
-            const g = installedGhosts.find((x) => x.manifest.id === id);
+            const g = ghostByInstanceId(id);
             return {
-              name: g?.manifest.name ?? id,
+              name: g?.manifest.name ?? parsePluginInstanceId(id)?.ghostId ?? id,
               ghostId: id,
               ...(g?.manifest.command ? { command: g.manifest.command } : {}),
             };
@@ -352,7 +394,7 @@ export function GhostSummonCard({
   if (cardGhosts.length === 0) return null;
   // 命中已装意识时取实时安装态(头像/版本号);已卸下则都不显示,
   // 与消息文本里固化的 id/名字解耦(不缓存失效数据)。
-  const installedGhost = installedGhosts.find((g) => g.manifest.id === cardGhosts[0].ghostId);
+  const installedGhost = ghostForDirective(cardGhosts[0].ghostId);
   // 版本号统一 v 前缀展示(身份卡 version 是自由字符串,作者已带 v 时不重复);
   // 多意识并列时不展示(版本归属不明)。
   const versionLabel =
@@ -376,7 +418,7 @@ export function GhostSummonCard({
   // 查兑现关联,AI 最终没调的只说「已完成」,不替 AI 撒谎。
   const anyFulfilled = isHostCapability
     ? false
-    : !isCommand || cardGhosts.some((g) => Boolean(fulfilledIds?.has(g.ghostId)));
+    : !isCommand || cardGhosts.some((g) => isFulfilled(g.ghostId));
   // Host capability selection is not a ghost_call fulfillment event. Until
   // Host MCP fulfillment is tracked separately, report only the fact we know:
   // the user selected this route. Do not show a success tick or "已调用".
@@ -388,8 +430,9 @@ export function GhostSummonCard({
         ? t('chat.ghostSummon.status.called')
         : t('chat.ghostSummon.status.done');
 
+  // 分享图不带插件标注(同来源标签):整行连同分隔线一起移除,气泡与普通消息一致。
   return (
-    <div className={cn('max-w-full', className)}>
+    <div {...{ [SHARE_SOURCE_ATTR]: '' }} className={cn('max-w-full', className)}>
       <button
         type="button"
         aria-expanded={expanded}

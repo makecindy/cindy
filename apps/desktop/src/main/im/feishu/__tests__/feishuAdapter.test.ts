@@ -58,7 +58,7 @@ import type {
   IMStatus,
 } from '@cindy/im';
 import { getResolvedMainLocale, setMainLocale } from '../../../i18n';
-import { buildFeishuAdapter } from '../adapter';
+import { buildFeishuAdapter, feishuToolsHint } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
 
 const getService = vi.fn<() => 'feishu' | 'lark'>(() => 'feishu');
@@ -339,6 +339,31 @@ describe('feishu group lane adapter hooks', () => {
     expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', policy!)).toBe(true);
     expect(adapter.turnPolicyOptionalForMode?.('auto', policy!)).toBe(false);
     expect(adapter.turnPolicyOptionalForMode?.('acceptEdits', policy!)).toBe(false);
+  });
+
+  it('伙伴自有 bot: 主人轮次不挂策略, 成员轮次只对破坏性动作强确认, 完全访问取缔策略', () => {
+    const teammate = buildFeishuAdapter(fakeIm, CONFIG, { companionBotId: 'bot-mimi' });
+    const ownerPolicy = teammate.turnPermissionPolicyFor?.(
+      groupEvent({ speaker: { id: 'ou_owner', name: 'Owner', isOwner: true } }),
+    );
+    const guestPolicy = teammate.turnPermissionPolicyFor?.(
+      groupEvent({ messageId: 'om_guest', speaker: { id: 'ou_guest', name: 'Guest', isOwner: false } }),
+    );
+
+    expect(ownerPolicy).toBeUndefined();
+    expect(guestPolicy).toMatchObject({
+      origin: { kind: 'im', channel: 'feishu', taskId: 'om_guest' },
+      autoReviewContext: { requesterAuthority: 'guest', source: 'group' },
+      confirmationSurface: 'channel',
+    });
+    // 与 Telegram 同一份破坏性词表: rm 要确认, 普通 Write 交给伙伴自己的权限档。
+    expect(guestPolicy!.forceConfirmToolCall('Bash', { command: 'rm -rf dist' })).toBe(true);
+    expect(guestPolicy!.forceConfirmToolCall('Write', { file_path: 'a.md', content: 'x' })).toBe(false);
+    // 个人 bot 的飞书群策略仍是「非只读即确认」, 不受影响。
+    const personal = adapter.turnPermissionPolicyFor?.(groupEvent());
+    expect(personal!.forceConfirmToolCall('Write', { file_path: 'a.md', content: 'x' })).toBe(true);
+    expect(teammate.turnPolicyOptionalForMode?.('bypassPermissions', guestPolicy!)).toBe(true);
+    expect(teammate.turnPolicyOptionalForMode?.('auto', guestPolicy!)).toBe(false);
   });
 
   it('prepareAgentTurnText: 群 lane 拉历史拼上下文前缀(带时间标注), 剔除触发消息', async () => {
@@ -622,12 +647,15 @@ describe('feishu group lane adapter hooks', () => {
     );
   });
 
-  it('channelNoteSourceFor: 私聊给 chat_id; 群 lane 给群 id、群名与发言人 open_id', async () => {
+  it('channelNoteSourceFor: 私聊给 chat_id; 群 lane 给群 id、群名与发言人 open_id; 都点名本轮可用的渠道工具', async () => {
+    const toolsHint = feishuToolsHint('feishu');
+    expect(toolsHint).toContain('cindy_feishu_bot');
+    expect(feishuToolsHint('lark')).toContain('Lark Open API');
     expect(
       await adapter.channelNoteSourceFor?.(
         groupEvent({ senderId: 'ou_owner', chatId: 'oc_p2p', speaker: undefined }),
       ),
-    ).toEqual({ chatKind: 'direct', chatId: 'oc_p2p' });
+    ).toEqual({ chatKind: 'direct', chatId: 'oc_p2p', toolsHint });
     // 群名只用缓存、绝不等待网络: 首条只写 chat_id 并后台预取, 之后的消息带上群名。
     getChatName.mockResolvedValueOnce('产品群');
     const note1 = groupEvent({ senderId: 'g/oc_note1/omt_t1', chatId: 'oc_note1' });
@@ -635,6 +663,7 @@ describe('feishu group lane adapter hooks', () => {
       chatKind: 'group',
       chatId: 'oc_note1',
       senderId: 'ou_owner',
+      toolsHint,
     });
     await vi.waitFor(() => expect(getChatName).toHaveBeenCalledWith('oc_note1'));
     await Promise.resolve();
@@ -643,12 +672,46 @@ describe('feishu group lane adapter hooks', () => {
       chatId: 'oc_note1',
       chatName: '产品群',
       senderId: 'ou_owner',
+      toolsHint,
     });
     // 预取失败不影响本条, 也不抛错。
     getChatName.mockRejectedValueOnce(new Error('no permission'));
     expect(
       await adapter.channelNoteSourceFor?.(groupEvent({ senderId: 'g/oc_note2', chatId: 'oc_note2' })),
-    ).toEqual({ chatKind: 'group', chatId: 'oc_note2', senderId: 'ou_owner' });
+    ).toEqual({ chatKind: 'group', chatId: 'oc_note2', senderId: 'ou_owner', toolsHint });
+  });
+
+  it('channelToolScopeFor: 作用域钉在触发消息所在的 chat / 话题, 主人身份只认 Main 校验过的 speaker / owner', () => {
+    // 群话题 lane: 主人发言。
+    expect(
+      adapter.channelToolScopeFor?.(groupEvent({ senderId: 'g/oc_g1/omt_t1', chatId: 'oc_g1', messageId: 'om_t1' })),
+    ).toEqual({
+      channel: 'feishu',
+      im: fakeIm,
+      botId: 'cli_abc',
+      laneUserId: 'g/oc_g1/omt_t1',
+      chatId: 'oc_g1',
+      threadId: 'omt_t1',
+      chatKind: 'group',
+      requesterIsOwner: true,
+      triggerMessageId: 'om_t1',
+      companion: false,
+    });
+    // 群 lane 成员发言: 不是主人。
+    expect(
+      adapter.channelToolScopeFor?.(
+        groupEvent({ senderId: 'g/oc_g1', speaker: { id: 'ou_alice', name: 'Alice', isOwner: false } }),
+      ),
+    ).toMatchObject({ chatKind: 'group', threadId: '', requesterIsOwner: false });
+    // 私聊: 没有 speaker 时按 TOFU owner open_id 判定; 外部用户私聊(speaker 非 owner)不是主人。
+    expect(
+      adapter.channelToolScopeFor?.(groupEvent({ senderId: 'ou_owner', chatId: 'oc_p2p', speaker: undefined })),
+    ).toMatchObject({ chatKind: 'direct', chatId: 'oc_p2p', laneUserId: 'ou_owner', requesterIsOwner: true });
+    expect(
+      adapter.channelToolScopeFor?.(
+        groupEvent({ senderId: 'ou_guest', chatId: 'oc_p2p_guest', speaker: { id: 'ou_guest', name: '', isOwner: false } }),
+      ),
+    ).toMatchObject({ chatKind: 'direct', chatId: 'oc_p2p_guest', requesterIsOwner: false });
   });
 
   it('prepareAgentTurnText: 首页即判定无关时返回 null(无上下文, turn 照跑)', async () => {

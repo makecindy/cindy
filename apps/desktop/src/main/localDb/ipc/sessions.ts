@@ -28,6 +28,7 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import { clearSessionAttention } from '../../appBadgeService';
 import {
   selectSessionListRows,
   selectSessionWithCount,
@@ -64,10 +65,11 @@ import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
-import { removeWechatSessionAttachmentDir } from '../../im/wechat/mediaStaging';
+import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
+  DESKTOP_TASK_LIST_SESSION_SOURCES,
   DESKTOP_VISIBLE_SESSION_SOURCES,
   isRetainableProjectSession,
 } from '../../../shared/sessionSource.js';
@@ -89,6 +91,7 @@ import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
+import { ensureHiddenSessionRegistryLoaded } from '../hiddenSessionRegistry.js';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
   ackSessionTurnEndedDurable,
@@ -901,6 +904,8 @@ export interface SessionRowSnapshot {
   agentDeviceId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
+  /** 协同远端 Worker 标记(raw JSON);非空时不能再开启协同。 */
+  orcaRemoteLead?: string | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
   /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
@@ -929,6 +934,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       remoteHostId: sessions.remoteHostId,
       agentDeviceId: sessions.agentDeviceId,
       orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
       agentKind: sessions.agentKind,
       source: sessions.source,
       model: sessions.model,
@@ -1321,9 +1327,39 @@ export function registerSessionIpc(
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
+      // 首次 list 即账号库就绪:预热插件后台任务索引,灵动岛/通知的同步判定从此可用。
+      void ensureHiddenSessionRegistryLoaded();
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);
+      const rawBefore = options && typeof options === 'object' ? (options as { before?: unknown }).before : undefined;
+      let before: { updatedAt: number; id: string } | undefined;
+      if (rawBefore !== undefined) {
+        // Pagination is local renderer-only until remote capability negotiation exists.
+        assertTrustedAppRendererEvent(event);
+        const value = requireObject(rawBefore, 'before');
+        if (typeof value.updatedAt !== 'number' || !Number.isSafeInteger(value.updatedAt) || value.updatedAt < 0
+          || typeof value.id !== 'string' || !value.id || value.id.length > 200 || usageHistory || includePinned) {
+          throwIpcError('INVALID_PARAMS', 'Invalid session list cursor');
+        }
+        before = { updatedAt: value.updatedAt, id: value.id };
+      }
+
+      const rawIds = options && typeof options === 'object' ? (options as { ids?: unknown }).ids : undefined;
+      let ids: string[] | undefined;
+      if (rawIds !== undefined) {
+        // Exact-subset pagination remains local-only, like the continuation cursor.
+        assertTrustedAppRendererEvent(event);
+        if (!Array.isArray(rawIds) || rawIds.length > 10_000 || usageHistory || includePinned) {
+          throwIpcError('INVALID_PARAMS', 'Invalid session list IDs');
+        }
+        ids = [...new Set(rawIds.map((id, index) => {
+          const value = requireString(id, `ids[${index}]`);
+          if (value.length > 256) throwIpcError('INVALID_PARAMS', 'Session list ID too long');
+          return value;
+        }))];
+      }
+
       // 支持 Sidebar Filter 的 Active/Archived/All status 过滤。
       //   - 'active' / 'archived' → WHERE status = ?
       //   - 'all' / undefined / 其它非法值 → WHERE status != 'deleted'
@@ -1332,13 +1368,20 @@ export function registerSessionIpc(
       const statusFilter: 'active' | 'archived' | null =
         status === 'active' || status === 'archived' ? status : null;
       const loadRows = async () => {
+        if (ids?.length === 0) return [];
         // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
         // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
-        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。
-        const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
+        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。/review 审查任务
+        // 只从来源任务的审查卡片打开,不进普通任务列表(用量历史仍包含)。
+        // 插件后台隐藏任务(hidden_at 非空)同样不进任务列表,只在插件详情页「后台任务」
+        // 查看与接手;手机/远控经 device-link 调同一 handler,口径一致。
+        const sourceFilter = and(
+          inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+          isNull(sessions.hiddenAt),
+        );
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
+        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere(), ids ? inArray(sessions.id, ids) : undefined), cap, before);
 
         let mergedRows = rows;
         if (includePinned) {
@@ -1371,7 +1414,7 @@ export function registerSessionIpc(
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
       const result = usageHistory
         ? await loadUsageHistoryRows()
-        : userId && !fresh
+        : userId && !fresh && !before && !ids
           ? await runSessionListSingleFlight(
               buildSessionListFlightKey({
                 userId,
@@ -2098,6 +2141,9 @@ export async function updateSessionInDb(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
+    if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
+      clearSessionAttention(sid, 'explicit');
+    }
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -2218,6 +2264,26 @@ export async function updateSessionInDb(
   });
 }
 
+/** Sending continues an ordinary archived task. Serialize with archive/delete and
+ * use the normal status writer so native projection and all clients see active. */
+export async function restoreArchivedSessionForSend(sessionId: string): Promise<void> {
+  const ownerScope = captureOwnerScope();
+  const db = getDbClient().drizzle;
+  await withSessionRouteLock(sessionId, async () => {
+    const [row] = await db.select({
+      status: sessions.status, source: sessions.source, orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Task owner changed');
+    if (row?.status === 'deleted') throwIpcError('NOT_FOUND', 'Session does not exist');
+    if (row?.status !== 'archived') return;
+    if (row.source === 'bot' || row.orcaRole === 'worker' || row.orcaRemoteLead) {
+      throwIpcError('PRECONDITION_FAILED', 'Restore the managed task before continuing');
+    }
+    await patchSessionMetaInDb(sessionId, { status: 'active' });
+  });
+}
+
 export async function patchSessionMetaInDb(
   sessionId: string,
   patch: {
@@ -2283,6 +2349,9 @@ export async function patchSessionMetaInDb(
     }
     return sessionToCamel(row);
   });
+  if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
+    clearSessionAttention(sessionId, 'explicit');
+  }
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,
@@ -2292,12 +2361,6 @@ export async function patchSessionMetaInDb(
   if (patch.status === 'deleted') {
     void imageCacheStore.removeSession(sessionId).catch((err) => {
       log.warn('remote session image cleanup failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    });
-    void removeWechatSessionAttachmentDir(sessionId).catch((err) => {
-      log.warn('WeChat session attachment cleanup failed', {
         sessionId,
         err: err instanceof Error ? err.message : String(err),
       });
@@ -2595,6 +2658,9 @@ export async function deleteBotProfileAndDetachSessionsInDb(
   }
 
   for (const id of committedSessionIds) {
+    if (status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
+      clearSessionAttention(id, 'explicit');
+    }
     notifyAgentIslandSessionPatch(id, { status });
     broadcastSessionPatched(id, { status, source: 'desktop' }, ownerScope);
     notifyGhostSessionStatusChange(id, status, null);
@@ -2603,7 +2669,7 @@ export async function deleteBotProfileAndDetachSessionsInDb(
       void imageCacheStore.removeSession(id).catch((error) => {
         log.warn('Bot task image cleanup failed', { sessionId: id, error: String(error) });
       });
-      void removeWechatSessionAttachmentDir(id).catch((error) => {
+      void removeImAttachmentsIfStillDeleted(id).catch((error) => {
         log.warn('Bot task attachment cleanup failed', { sessionId: id, error: String(error) });
       });
       void removeDeletedSessionMediaRefs(id, db).catch((error) => {
@@ -2826,6 +2892,33 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
  * delete additionally stops and removes detached PI Subagents owned by the
  * parent task. All status writers must pass through this helper.
  */
+/**
+ * 个人 IM 附件目录的删除清理是异步的, 两类后到事件都不能让它删错:
+ *   - 同账号内, 确定性 IM 任务删除后再来消息会把同一 session id 原地复活并往同一目录
+ *     领养新附件 —— 在路由锁内复查任务仍是 deleted(行不存在也算)再删, 复活就保留;
+ *     读库失败按保留处理(宁可多留不可误删);
+ *   - 删除后切换账号, 另一账号可能有同 id 的任务 —— 目录根与账号作用域都在发起删除时
+ *     同步捕获: 只删发起账号自己的目录; 账号已切走时发起账号的任务不可能再被复活,
+ *     不再读(新账号的)库, 直接按捕获的根目录清理。
+ * 本函数须在发起删除的同步上下文里调用(捕获发生在第一个 await 之前)。
+ */
+function removeImAttachmentsIfStillDeleted(sessionId: string): Promise<void> {
+  const ownerScope = captureOwnerScope();
+  const root = imAttachmentsRoot();
+  return withSessionRouteLock(sessionId, async () => {
+    if (isOwnerScopeCurrent(ownerScope)) {
+      let row: SessionRowSnapshot | null;
+      try {
+        row = await getSessionRowSnapshotStrict(sessionId);
+      } catch {
+        return;
+      }
+      if (row && row.status !== 'deleted') return;
+    }
+    await removeImSessionAttachmentDirs(sessionId, root);
+  });
+}
+
 function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   if (status === 'deleted') {
@@ -2836,6 +2929,13 @@ function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): vo
       });
     });
     scheduleDeletedPiSubagentCleanup(sessionId);
+    // 个人 IM 渠道(含微信)入站文件随任务删除清理 —— 归档保留, 与微信既有口径一致。
+    void removeImAttachmentsIfStillDeleted(sessionId).catch((err) => {
+      log.warn('IM session attachment cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
   const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
   const attachDir = path.join(attachRoot, sessionId);

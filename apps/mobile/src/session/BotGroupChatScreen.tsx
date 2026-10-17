@@ -19,14 +19,18 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
+import { showConfirm } from '@/platform/chrome';
 import { Stack, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
+  isBotGroupRuntimeFailureCode,
+  resolveBotGroupQuote,
   type BotGroupAttachment,
   type BotGroupMemberView,
+  type BotGroupQuoteDisplay,
   type BotGroupMessageView,
   type BotGroupPlanAction,
   type BotGroupPlanStepView,
@@ -51,7 +55,8 @@ import { MainWindowActionButton, MainWindowEmptyState } from '@/components/Mobil
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
+import { fontWeight, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
   BOT_GROUP_MESSAGE_AVATAR_SIZE,
@@ -59,11 +64,14 @@ import {
   BotGroupDuoAvatar,
   useBotGroupIdentities,
 } from './BotGroupAvatars';
-import { ChatIdentityHeader } from './ChatIdentityHeader';
+import { CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
+import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
+import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
+import { BotGroupQuote } from './BotGroupQuote';
 import {
   BOT_GROUP_COMPACT_HIT_SLOP,
   BotGroupDivider,
@@ -116,6 +124,10 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
   const planPendingRef = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
+  // iOS: the header floats on the task header's feathered blur and the timeline scrolls beneath it.
+  const floatingHeader = Platform.OS === 'ios';
+  const insets = useSafeAreaInsets();
+  const [headerHeight, setHeaderHeight] = useState(0);
   const stickToBottom = useRef(true);
   const group = chat.state.kind === 'ready' ? chat.state.group : null;
   const focused = useIsFocused();
@@ -181,6 +193,42 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const report = useCallback((error: unknown, fallbackKey: string) => {
     Alert.alert(chat.online ? botGroupActionErrorText(t, error, fallbackKey) : t(offlineKey));
   }, [chat.online, offlineKey, t]);
+
+  const hidePending = useRef(false);
+  const hideScope = useRef('');
+  const currentHideScope = `${groupId}:${deviceId}:${accountGeneration}`;
+  hideScope.current = currentHideScope;
+  useEffect(() => () => { hideScope.current = ''; }, []);
+  const leftScope = useRef('');
+  const focusedRef = useRef(focused); focusedRef.current = focused;
+  const leaveCurrentChat = useCallback((captured: string) => {
+    if (!focusedRef.current || hideScope.current !== captured || leftScope.current === captured) return;
+    leftScope.current = captured;
+    leave();
+  }, [leave]);
+  useEffect(() => {
+    if (focused && chat.listHidden) leaveCurrentChat(currentHideScope);
+  }, [focused, chat.listHidden, currentHideScope, leaveCurrentChat]);
+  const actFromSettings: typeof chat.act = async (action, input) => {
+    const captured = currentHideScope;
+    const receipt = await chat.act(action, input);
+    // The list listener may already have unmounted settings; the screen still
+    // owns this route and can complete navigation after the acknowledgement.
+    if (action === 'hide' || action === 'leave') leaveCurrentChat(captured);
+    return receipt;
+  };
+  const removeFromList = async () => {
+    if (hidePending.current) return;
+    hidePending.current = true;
+    const captured = currentHideScope;
+    try {
+      if (!await showConfirm({ title: t('groupChat.lifecycle.hide'), message: t('groupChat.lifecycle.hideNote'),
+        cancelLabel: t('devices.common.cancel'), confirmLabel: t('groupChat.lifecycle.hide'), destructive: true }) || hideScope.current !== captured) return;
+      await chat.act('hide');
+      leaveCurrentChat(captured);
+    } catch (error) { if (hideScope.current === captured) Alert.alert(botGroupActionErrorText(t, error, 'groupChat.lifecycle.failed')); }
+    finally { hidePending.current = false; }
+  };
 
   const continueRound = async () => {
     if (continuing) return;
@@ -260,6 +308,8 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     onOpenSettings={() => setSettings(true)}
     settingsLabel={t('groupChat.settings.open')} />;
 
+  const offlineNote = group && !chat.online
+    ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t(offlineKey)}</Text> : null;
   let body;
   if (chat.state.kind === 'loading' && !chat.online) {
     // Nothing to show until the computer is reachable again; the screen re-reads on reconnect.
@@ -283,6 +333,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
         copy={t(errorCopyKey)}>
         <View style={styles.emptyActions}>
           <MainWindowActionButton action={{ label: t('shared.back'), onPress: leave, testID: 'botGroup.leave' }} />
+          {!failed ? <MainWindowActionButton action={{ label: t('groupChat.lifecycle.hide'), onPress: () => void removeFromList(), testID: 'botGroup.hide' }} /> : null}
           {failed ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), tone: 'primary', onPress: chat.reload, testID: 'botGroup.retry' }} /> : null}
         </View>
       </MainWindowEmptyState>
@@ -295,8 +346,10 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
         Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
       )}
     >
-      {!chat.online ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t(offlineKey)}</Text> : null}
-      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={styles.timeline} keyboardShouldPersistTaps="handled"
+      {floatingHeader ? null : offlineNote}
+      {group.dissolvedAt ? <Text style={styles.offline}>{t('groupChat.lifecycle.dissolved')}</Text> : null}
+      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, floatingHeader && { paddingTop: headerHeight + spacing.md }]}
+        scrollIndicatorInsets={floatingHeader ? { top: headerHeight } : undefined} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
         maintainVisibleContentPosition={chat.server ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
         onScroll={onScroll} scrollEventThrottle={64}
@@ -317,18 +370,28 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
           onInteractionError={(message) => { if (message) Alert.alert(message); }} />
       </ScrollView>
-      <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={chat.online && !group.archived}
+      <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={chat.online && !group.archived && !group.dissolvedAt}
         running={group.round.status === 'running'} planState={botGroupComposerPlanState(openBotGroupPlan(group))}
         divisionSupported={!chat.server} attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
     </KeyboardAvoidingView>;
   }
 
-  return <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']} testID="botGroup.screen">
+  return <SafeAreaView style={styles.screen} edges={floatingHeader ? ['left', 'right', 'bottom'] : ['top', 'left', 'right', 'bottom']} testID="botGroup.screen">
     <Stack.Screen options={{ headerShown: false }} />
-    {header}
-    {body}
+    {floatingHeader ? <>
+      <View style={[styles.flex, group ? null : { paddingTop: headerHeight }]}>{body}</View>
+      <SessionHeaderNativeBlur height={Math.max(headerHeight, insets.top + navigationChrome.target)} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} />
+      <View style={[styles.floatingHeader, { paddingTop: insets.top }]} onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}>
+        {header}
+        {offlineNote}
+      </View>
+    </> : <>
+      {header}
+      {body}
+    </>}
     {group ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
-      act={chat.act} onClose={() => setSettings(false)}
+      act={actFromSettings} onClose={() => setSettings(false)}
+      onRefresh={chat.reload}
       onClosed={() => { if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
       onDeleted={onGroupDeleted} /> : null}
   </SafeAreaView>;
@@ -391,6 +454,7 @@ export function BotGroupTimeline({
         {groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
         <CompanionEntering id={message.id} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
         <BotGroupTimelineItem message={message} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
+          quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
           resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
@@ -421,12 +485,14 @@ export function BotGroupTimeline({
 }
 
 function BotGroupTimelineItem({
-  message, continued = false, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
+  message, continued = false, quoteDisplay, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
   plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep,
 }: {
   message: BotGroupMessageView;
   /** Same teammate as the message just above: no second avatar or name. */
   continued?: boolean;
+  /** 引用回复: how the quoted message reads now. */
+  quoteDisplay?: BotGroupQuoteDisplay;
   member: BotGroupMemberView | undefined;
   members: readonly BotGroupMemberView[];
   deviceId: string;
@@ -448,6 +514,7 @@ function BotGroupTimelineItem({
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const { colors: userBubbleColors } = useUserBubbleAppearance();
   if (message.kind === 'round-end') {
     return <BotGroupDivider testID="botGroup.roundEnd">
       <Text style={styles.dividerText}>{t('groupChat.timeline.roundEnded')}</Text>
@@ -458,10 +525,15 @@ function BotGroupTimelineItem({
   if (message.kind === 'plan-end') return <BotGroupPlanEndDivider stepCount={plan ? plan.steps.length : null} />;
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || member?.name || '';
+    if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
+      return <Text style={styles.runtimeFailureNotice} testID="botGroup.notice">{
+        `${t(`groupChat.notice.runtimeFailure.${message.runtimeFailureCode}`, { name })}\n${t('groupChat.notice.runtimeFailureSetupHint')}`
+      }</Text>;
+    }
     const variant = botGroupNoticeVariant(message.noticeCode, message.planId !== null);
     return <Text style={styles.notice} testID="botGroup.notice">{variant ? t(`groupChat.notice.${variant}`, { name }) : message.content}</Text>;
   }
-  if (message.authorKind === 'user' && message.isSelf !== false) {
+  if (message.kind === 'message' && message.authorKind === 'user' && message.isSelf !== false) {
     // Older computers send no attachments; a message with only attachments has no bubble.
     const attachments = message.attachments ?? [];
     const bubble = message.content.trim().length > 0 || attachments.length === 0;
@@ -469,18 +541,27 @@ function BotGroupTimelineItem({
     const compact = message.content.length <= COMPACT_BUBBLE_MAX_CHARS && !message.content.includes('\n');
     return <View style={styles.userRow} testID="botGroup.message.user">
       <View style={styles.userColumn}>
+        {quoteDisplay ? <BotGroupQuote display={quoteDisplay} align="right" /> : null}
         {attachments.length > 0
           ? <BotGroupMessageAttachments messageId={message.id} attachments={attachments} align="right" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
           : null}
-        {bubble ? <View style={[styles.userBubble, compact && styles.userBubbleCompact]} testID="botGroup.message.userBubble">
+        {bubble ? <View style={[
+          styles.userBubble,
+          compact && styles.userBubbleCompact,
+          userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
+        ]} testID="botGroup.message.userBubble">
           <BotGroupUserText content={message.content} mentionLabels={mentionLabels} />
         </View> : null}
       </View>
     </View>;
   }
-  // Name snapshot from when it was said; the avatar follows the live profile.
-  const author = identityFor(message.authorBotId ?? '', message.authorName || member?.name || '');
+  // Server plans retain the human creator as author, but the card belongs to its organizer.
   const isPlanCard = message.kind === 'plan';
+  const organizer = isPlanCard ? members.find(candidate => candidate.botId === plan?.organizerBotId) : undefined;
+  const author = isPlanCard
+    ? identityFor(plan?.organizerBotId ?? '', organizer?.name || plan?.organizerName || '')
+    : identityFor(message.authorBotId ?? '', message.authorName || member?.name || '');
+  if (isPlanCard) continued = false;
   return <View style={[styles.botRow, continued && styles.botRowContinued]} testID={isPlanCard ? 'botGroup.message.plan' : 'botGroup.message.bot'}>
     {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>
       <BotGroupAvatar deviceId={deviceId} identity={author} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />
@@ -495,6 +576,15 @@ function BotGroupTimelineItem({
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
           onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
         : <>
+          {quoteDisplay ? <BotGroupQuote display={quoteDisplay} /> : null}
+          {/* A task this teammate started from the group; mine is live, another owner's is a snapshot.
+              An author no longer in the group is unknown: its task may run on another computer, so it
+              stays a snapshot rather than a lookup on this one (same rule as the desktop timeline).
+              The live card reads the owned companion's home computer when it is known (the group may
+              be opened through another computer, or straight from the Chat Server with none); else
+              the computer the group was opened through. */}
+          {message.task ? <BotGroupTaskCard task={message.task} owned={member !== undefined && member.isOwned !== false}
+            deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
           {message.attachments?.length ? <BotGroupMessageAttachments messageId={message.id} attachments={message.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
           {message.content.trim() ? <BotGroupMarkdownText content={message.content} /> : null}
           <BotGroupHandoffFiles files={message.files} />
@@ -506,6 +596,7 @@ function BotGroupTimelineItem({
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
+  floatingHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   emptyActions: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.lg },
   timeline: { flexGrow: 1, justifyContent: 'flex-end', gap: spacing.lg, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
@@ -517,11 +608,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   olderNote: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   time: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center' },
   notice: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
+  runtimeFailureNotice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular, textAlign: 'center' },
   dividerText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   // Full width so the bubble keeps its 86% cap and attachments their own size limits.
   userColumn: { flex: 1, minWidth: 0, alignItems: 'flex-end', gap: spacing.xs },
-  // The 1:1 user bubble (MessageRenderer userBubble + companion border): 86% wide, padding 12, compact 8/12.
+  // The 1:1 user bubble (MessageRenderer userBubble): 86% wide, padding 12, compact 8/12.
   userBubble: { maxWidth: '86%', backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, padding: spacing.md },
   userBubbleCompact: { paddingVertical: spacing.sm },

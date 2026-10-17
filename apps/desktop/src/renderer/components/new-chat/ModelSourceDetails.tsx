@@ -18,6 +18,7 @@ import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
 import {
   providerWeeklyQuotaSource,
   useProviderUsageSnapshots,
+  type ProviderGroupUsage,
   type ProviderUsageScope,
   type ProviderUsageSnapshots,
 } from './useProviderWeeklyQuota';
@@ -25,16 +26,20 @@ import {
 type SourceUsage = ProviderUsageSnapshots & {
   source: NonNullable<ProviderUsageSnapshots['source']>;
 };
-const UsageContext = createContext<ReadonlyMap<string, SourceUsage>>(new Map());
+const NO_USAGE: ReadonlyMap<string, SourceUsage> = new Map();
+const UsageContext = createContext<ReadonlyMap<string, SourceUsage>>(NO_USAGE);
 const ClockContext = createContext(0);
 
 /** One reader per connection, shared by all model/favorite/sizing rows. Existing
  * account-scoped hooks own fetching and invalidation; this context only composes views. */
 function SourceUsageProvider({
+  usageKey,
   provider,
   scope,
   children,
 }: {
+  /** 目录里这一行的供应商 id;供应商组读实际运行那台的账号时与 provider.id 不同。 */
+  usageKey: string;
   provider: ProviderView;
   scope: ProviderUsageScope;
   children: ReactNode;
@@ -44,20 +49,29 @@ function SourceUsageProvider({
   const value = useMemo(() => {
     if (!source) return parent;
     const next = new Map(parent);
-    next.set(provider.id, { source, codex, claude, xai });
+    next.set(usageKey, { source, codex, claude, xai });
     return next;
-  }, [parent, provider.id, source, codex, claude, xai]);
+  }, [parent, usageKey, source, codex, claude, xai]);
   return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
 export function ModelSourceUsageProvider({
   providers,
   scope,
+  groupUsageOf,
+  isolated = false,
   children,
 }: {
   providers: readonly ProviderView[];
   /** null: this directory may not show any account's usage. */
   scope: ProviderUsageScope | null;
+  /** 目录里的供应商组读谁的账号(provider-groups.md §10);缺省 = 都按目录归属读。 */
+  groupUsageOf?: (providerId: string) => ProviderGroupUsage | null;
+  /**
+   * 不继承外层目录的用量:嵌在另一份目录里的行(收藏区里另一台电脑的收藏)与外层可能有同 id 的
+   * 供应商,继承会把外层账号的余量显示在这一行上。
+   */
+  isolated?: boolean;
   children: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(Date.now);
@@ -71,22 +85,37 @@ export function ModelSourceUsageProvider({
   // Readers follow the directory's owner: remote directories read the device's mirrors,
   // never this desktop's accounts, even for matching IDs.
   const content = enabled
-    ? providers.reduce<ReactNode>((content, provider) => {
+    ? providers.reduce<ReactNode>((content, row) => {
+        // 供应商组：任务正经组在某台运行时读那台的账号，还没分到电脑时不显示某一台的配额。
+        const group = groupUsageOf?.(row.id);
+        if (group && (group.kind !== 'running' || !group.usage)) return content;
+        const provider = group?.kind === 'running' && group.usage ? group.usage.provider : row;
+        const readerDeviceId =
+          group?.kind === 'running' && group.usage ? group.usage.scope.deviceId : deviceId;
         if (provider.auth?.method !== 'oauth') return content;
         const source = providerWeeklyQuotaSource(provider);
         if (!source || provider.subscriptionAccount?.reconnectRequired) return content;
         return (
           <SourceUsageProvider
-            key={`${deviceId ?? ''}:${provider.id}`}
+            key={`${readerDeviceId ?? ''}:${provider.id}:${row.id}`}
+            usageKey={row.id}
             provider={provider}
-            scope={{ deviceId }}
+            scope={{ deviceId: readerDeviceId }}
           >
             {content}
           </SourceUsageProvider>
         );
       }, children)
     : children;
-  return <ClockContext.Provider value={nowMs}>{content}</ClockContext.Provider>;
+  return (
+    <ClockContext.Provider value={nowMs}>
+      {isolated ? (
+        <UsageContext.Provider value={NO_USAGE}>{content}</UsageContext.Provider>
+      ) : (
+        content
+      )}
+    </ClockContext.Provider>
+  );
 }
 
 interface QuotaWindow {

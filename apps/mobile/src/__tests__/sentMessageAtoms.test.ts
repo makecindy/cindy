@@ -1,6 +1,60 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import ts from 'typescript';
+import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
+import { InlineQuoteChip } from '@/session/InlineQuoteChip';
+import { InlineReferenceChip } from '@/session/InlineReferenceChip';
+
+vi.mock('react-native', () => ({ View: 'View', StyleSheet: { create: (styles: unknown) => styles } }));
+vi.mock('@/components/AppText', () => ({ Text: 'Text' }));
+vi.mock('lucide-react-native', () => ({ FileText: 'FileText' }));
+vi.mock('@/session/InlineQuoteChip', () => ({ InlineQuoteChip: 'QuoteChip' }));
+vi.mock('@/session/InlineReferenceChip', () => ({ InlineReferenceChip: 'ReferenceChip' }));
+vi.mock('@/theme', () => ({
+  useTheme: () => ({ colors: { textSecondary: '#333' } }), useThemedStyles: () => ({}),
+  lineHeight: { bodyLarge: 20 }, spacing: { xs: 4 }, iconSize: { sm: 16 }, iconStroke: { regular: 2 },
+}));
+
+describe('production sent atom body', () => {
+  it('routes text through its caller renderer and keeps atom payloads behind their chips', () => {
+    const renderText = vi.fn((text: string) => React.createElement('markdown', null, text));
+    const open = vi.fn();
+    const tree = SentInlineAtomBody({ tokens: [
+      { kind: 'text', text: '**bold**' }, { kind: 'quote', quote: { text: 'Quote' } },
+      { kind: 'pasted', text: 'Private payload', display: 'Pasted text' }, { kind: 'slash', text: '/help' },
+    ], renderText, onOpenPayload: open });
+    const children = tree.props.children as React.ReactElement<any>[];
+    expect(renderText).toHaveBeenCalledWith('**bold**', 0);
+    expect(children[0].type).toBe('markdown');
+    expect(children[1].type).toBe(InlineQuoteChip);
+    expect(children[2].type).toBe(InlineReferenceChip);
+    expect(children[2].props.label).toBe('Pasted text');
+    children[2].props.onPress();
+    expect(open).toHaveBeenCalledWith({ kind: 'text', title: 'Pasted text', body: 'Private payload' });
+    expect(children[3].props.label).toBe('/help');
+  });
+
+  it('clamps structured long content as a whole without allowing hidden payload interaction', () => {
+    const tree = SentInlineAtomBody({ tokens: [{ kind: 'pasted', text: 'Hidden payload', display: 'Pasted text' }],
+      interactiveAtoms: false, maxVisibleLines: 3, onOpenPayload: vi.fn() });
+    expect(tree.props.style).toContainEqual({ maxHeight: 68, overflow: 'hidden' });
+    expect(tree.props.children[0].props.onPress).toBeUndefined();
+    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+    const ast = ts.createSourceFile('renderer.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let initializer: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'collapseMeasureEnabled') initializer = node.initializer;
+      ts.forEachChild(node, visit);
+    }
+    visit(ast);
+    if (!initializer) throw new Error('Missing production long-message measurement gate');
+    const measure = new Function('isUser', 'hookSource', 'item', 'displayBubbleBody', 'collapseThreshold', 'mayExceedVisualLineThreshold', 'rendersSentInlineBody', 'return (' + initializer.getText(ast) + ');');
+    expect(measure(true, undefined, { message: { kind: 'user' } }, 'Pasted text\n'.repeat(20), 3, () => true, true)).toBe(true);
+    expect(measure(true, undefined, { message: { kind: 'user', systemCardType: 'notice' } }, 'Pasted text\n'.repeat(20), 3, () => true, true)).toBe(false);
+  });
+});
 import { formatQuoteForSend, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
 import {
   buildSentInlineTokens,
@@ -9,35 +63,6 @@ import {
 } from '@/session/sentMessageAtoms';
 
 describe('sent message atoms', () => {
-  it('keeps atom chips while rendering ordinary chunks with full Markdown semantics', () => {
-    const atomSource = readFileSync(resolve(process.cwd(), 'src/session/SentInlineAtomBody.tsx'), 'utf8');
-    const rendererSource = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-
-    expect(atomSource).toContain('<InlineQuoteChip');
-    expect(atomSource).toContain('<InlineReferenceChip');
-    expect(atomSource).toContain('renderText(token.text, index)');
-    expect(atomSource).toContain('selectable={selectable}');
-    expect(rendererSource).toContain('<MarkdownBody');
-    expect(rendererSource).toContain('text={text}');
-    expect(atomSource).not.toContain('splitAnchoredSessionMessageLinks');
-    expect(atomSource).not.toContain('<SentMessageAnchorChip');
-    expect(atomSource).not.toContain('parseMobileMarkdownInlines(part.text)');
-  });
-
-  it('keeps atomized long messages structured while collapsed', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const collapseStart = source.indexOf('const collapseMeasureEnabled =');
-    const collapseEnd = source.indexOf(';', collapseStart);
-
-    expect(collapseStart).toBeGreaterThan(-1);
-    expect(collapseEnd).toBeGreaterThan(collapseStart);
-    expect(source.slice(collapseStart, collapseEnd)).not.toContain('!rendersSentInlineBody');
-    expect(source).toContain('maxVisibleLines={collapsedLineCount}');
-    expect(source).toContain('testID="message.collapsedSentInlineAtoms"');
-    expect(source).toContain('selectable={canSelectVisibleText}');
-    expect(source).toContain('interactiveAtoms={false}');
-  });
-
   it('splits exact pasted-text and slash ranges without guessing', () => {
     const text = '/compact before first\nsecond after';
     expect(buildSentInlineTokens(

@@ -72,7 +72,9 @@ export function parseModelsListResponse(
                 ? (item as { key: string }).key
                 : typeof (item as { model_name?: unknown }).model_name === 'string'
                   ? (item as { model_name: string }).model_name
-                  : google ? google.name.slice('models/'.length) : null
+                  : typeof (item as { model_id?: unknown }).model_id === 'string'
+                    ? (item as { model_id: string }).model_id
+                    : google ? google.name.slice('models/'.length) : null
           : null;
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -156,6 +158,12 @@ export function parseModelsListResponse(
     // Vercel marks image/video/etc. as type, but Cindy chat import only executes language models.
     // Keep them out of the picker instead of saving a mode that later disappears from every list.
     if (isVercel && record.type !== undefined && record.type !== 'language') continue;
+    // ElevenLabs /v1/models (and compatible relays) declares TTS with a boolean,
+    // not mode. Match the response contract, never a model-name prefix or a transport API.
+    // Explicit false must replace an earlier TTS snapshot without inventing a chat/STT capability.
+    const elevenLabsMode = record.model_id === id && typeof record.can_do_text_to_speech === 'boolean'
+      ? record.can_do_text_to_speech ? 'audio_speech' : 'other'
+      : undefined;
     const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
@@ -163,7 +171,8 @@ export function parseModelsListResponse(
       )
         ? { name }
         : {}),
-      mode: record.mode ?? info.mode ?? (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
+      mode: record.mode ?? info.mode ?? elevenLabsMode ??
+        (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
       modalities,
       officialDocs: record.officialDocs,
       description: record.description,

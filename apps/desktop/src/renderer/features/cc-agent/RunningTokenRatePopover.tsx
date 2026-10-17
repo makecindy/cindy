@@ -8,9 +8,11 @@ import {
   emptyRateHistory,
   loadCachedRateHistory,
   recordRunningTokenRate,
+  recordTokenSpeed,
   saveCachedRateHistory,
   RATE_SAMPLE_FRESH_MS,
   type RateHistory,
+  type TokenSpeedSnapshot,
 } from './lib/runningTokenRateHistory';
 
 export function useRunningTokenRateHistory(input: {
@@ -20,8 +22,10 @@ export function useRunningTokenRateHistory(input: {
   outputTokens: number;
   generationDurationMs: number;
   generationReliable: boolean;
+  /** Host-measured speed (Pi extension algorithm); old hosts omit it. */
+  tokenSpeed?: TokenSpeedSnapshot;
 }) {
-  const { sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable } = input;
+  const { sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, tokenSpeed } = input;
   // 挂载时从按会话的进程内缓存播种：RunningStatusBar 以 sessionId 为 key，
   // 切走再切回是全新挂载，历史从缓存恢复而不是从零开始。
   const [history, setHistory] = useState<RateHistory>(() => {
@@ -33,14 +37,16 @@ export function useRunningTokenRateHistory(input: {
   });
   useEffect(() => {
     setHistory((previous) =>
-      recordRunningTokenRate(previous, {
-        startedAt,
-        outputTokens,
-        generationDurationMs,
-        generationReliable,
-      }),
+      tokenSpeed && generationReliable
+        ? recordTokenSpeed(previous, { startedAt, speed: tokenSpeed })
+        : recordRunningTokenRate(previous, {
+            startedAt,
+            outputTokens,
+            generationDurationMs,
+            generationReliable,
+          }),
     );
-  }, [startedAt, outputTokens, generationDurationMs, generationReliable]);
+  }, [startedAt, outputTokens, generationDurationMs, generationReliable, tokenSpeed]);
   useEffect(() => {
     if (sessionKey) saveCachedRateHistory(sessionKey, history);
   }, [sessionKey, history]);

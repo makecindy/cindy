@@ -57,6 +57,19 @@ Catalog (version)
 Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）。媒体 route 使用 `agents: []`。
 `contextWindowMax` 是客户端容量投影，不能填进 Registry；容量与工作预算见 [运行时细则](model-catalog-runtime.md)。
 
+### Gateway 复杂价目展示
+
+Model Access V5 通过 `X-Cindy-Model-Capabilities: display_pricing` 协商可选 `displayPricing`。
+聊天和媒体目录都保留该字段与同一连接快照的 `currency`、`costDiscount`；不进入公共
+Registry/defaults、ModelPriceQuote 或 token 成本估算，不跨供应商补价。
+成功刷新缺字段或价目不可解析时清除旧价目，模型仍正常更新；新增属性忽略，未知单位保留。
+展示字段变化不构成整份目录失败；网络或核心模型协议失败仍沿用既有目录恢复语义。
+
+Desktop 模型详情优先展示结构化价目，缺字段沿用原有价格。`price` 为每 `quantity` 个
+`unit` 的折扣前报价，只在展示时应用一次折扣，保留币种与“约/起价”语义；label、tier、
+notes 仅按纯文本呈现，未知单位不猜换算。列表不新增价格入口，统一从既有模型详情查看，也不从混合单位挑最低价。
+共享目录可传递这些可选展示字段，旧端缺字段仍合法；首期 UI 仅覆盖 Desktop 现有详情入口。
+
 ### 覆盖顺序
 
 这里是**模型资料字段**的优先级，右边覆盖左边；成员、权限、实际计费、显示开关不套用此链：
@@ -72,6 +85,19 @@ Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）
 `defaultEffort` 的已配置默认优先于供应商实报的推荐档，再适配实际支持能力，force / 用户覆盖仍优先。
 详细字段及成员空值规则以 [模型资料优先级](../product-rules/model-metadata-precedence.md) 为唯一正本。
 
+### 远程推理档位快照兼容
+
+Desktop 主机向能力清单和 `maker:provider:list` 的模型条目显式投影既有的
+`effortsUnknown` 布尔值：`false` 表示能力已知，`true` 表示未声明。控制端收到旧主机
+缺少该字段的空档位表时保留已有选择，只有显式 `false` 的空表才清空；非空表照常校准。
+草稿播种与最终提交使用同一兼容口径，不在控制端给缺失字段补 `false`。
+无档位选择落库使用既有空串哨兵，任务后续发送也保留“未指定”，不提交输入框显示兜底档位。
+Codex 在实际 `turn/start` 请求中省略该档位字段，计划模式的 `reasoning_effort` 使用协议允许的
+`null`；运行时切换与恢复重试同样不发送空串，服务端默认档位快照不覆盖明确的无档位选择。
+回归见 `packages/maker-core/src/agents/codex/index.test.ts` 的 no-effort 用例。
+实现与回归见 `catalog-to-descriptors.ts`、`providerHandlers.ts`、
+`deviceLinkDraftDefaults.test.ts`、`deviceLinkCreateArgs.test.ts` 与 `chatInputModelLoading.test.tsx`。
+
 <a id="ordering"></a>
 ## 模型排序与成员：以账号为准
 
@@ -80,8 +106,9 @@ OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root **成员只来�
 返回顺序为准：Codex 取 `models_cache.json` 的 `priority` 或 app-server `model/list` 的返回位置，
 Claude 取 SDK `supportedModels()` 的返回位置。用户本地 addition 按 Registry / 本地 `sortOrder`
 接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
-bridge 共用这一顺序；OpenAI 订阅的 Pi 清单成员与能力仍来自 Pi 目录，但同样按账号顺序排列，
-并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。
+bridge 共用这一顺序；OpenAI 订阅的 Pi 以公共 Pi 目录为基础，按同一账号的当前发现／恢复
+清单补入新型号并排序，能力按 Pi 协议适配，沿用 Registry 条目的 `defaultEnabled: false`；
+用户本地 `sortOrder` patch 仍最高。
 
 Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
 捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
@@ -98,11 +125,19 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 来源内的默认推荐可由服务端按区域下发的 `newSessionDefault` 指定；公共 Registry 的
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
 
-未手动选择模型时，客户端出厂来源顺序为 Claude 订阅 Opus 5.5（Claude Code）、
-Codex 订阅 Astra（Codex）、Cindy 推荐模型（Pi），最后保留 xAI 回退。
+未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.1 Sol（Codex）、
+Claude 订阅 Opus 5.5（Claude Code）、Cindy AI 下发的 Auto（Pi），最后保留 xAI 回退。
+订阅按认证身份识别独立账号，始终保留实际账号 ID；Auto 必须存在于 Cindy AI 的可用 Pi
+目录，不依赖旧 GLM 默认标记，也不在客户端将其替换成固定型号。草稿发送校准与无人值守
+默认解析复用同一策略，避免初始化选中 Auto 后又被旧标记改回 GLM。
+同一订阅策略先在全部匹配账号中寻找推荐型号，再取该来源按目录排序可见的其他型号；
+无人值守入口没有本地显示开关时按 `defaultEnabled` 判断，不能因缺少推荐型号提前换到下一供应商。
 策略在 `apps/desktop/src/shared/newMakerDefaultTuple.ts`；连接、型号和对应引擎必须实际可用，
-不能为了满足推荐而把 Opus / Astra 放入另一个引擎。用户手动选择及型号开关始终优先，
+不能为了满足推荐而把 Sol / Opus 放入另一个引擎。用户手动选择及型号开关始终优先，
 不修改已有任务的运行配置；伙伴默认复用应用选择，不另造一套来源优先级。
+定时任务、`/learn`、IM 新建任务与分享导入等不由用户当场选模型的入口，
+没指定模型时同样按新建任务口径解析（`apps/desktop/src/shared/draftModelCalibration.ts`
+的 `resolveNewTaskDefaultRoute`），不在代码里写死型号；一个可用来源都没有时明确失败或留空让用户选。
 
 设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
 按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。

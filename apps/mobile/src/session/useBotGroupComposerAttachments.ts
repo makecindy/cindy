@@ -188,6 +188,7 @@ export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
     removePendingUpload: local.removePendingUpload,
     retryPendingUpload: local.retryPendingUpload,
     waitForPendingUploads: local.waitForPendingUploads,
+    getUploadedAttachmentId: local.getUploadedAttachmentId,
     clearSent,
     holdForSend,
     armMediaTap,

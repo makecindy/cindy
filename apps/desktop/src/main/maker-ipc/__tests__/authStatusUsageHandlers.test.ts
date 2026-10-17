@@ -1310,6 +1310,17 @@ describe('maker usage IPC handlers', () => {
     expect(triggerClaudeAccountUsageRefresh).toHaveBeenCalledWith(true);
   });
 
+  it('only returns authoritative quota clear to opted-in readers', async () => {
+    const harness = new IpcHarness();
+    registerMakerUsageHandlers(harness, makeUsageDeps({
+      readClaudeAccountUsageSnapshot: vi.fn(() => null),
+      readClaudeAccountQuotaClear: vi.fn(() => ({ quotaState: 'unlimited' as const })),
+      triggerClaudeAccountUsageRefresh: vi.fn().mockResolvedValue(undefined),
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_ACCOUNT, 'claude-code')).resolves.toBeNull();
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_ACCOUNT, 'claude-code', 'cindy-quota-state-v1')).resolves.toEqual({ quotaState: 'unlimited' });
+  });
+
   it('refreshes a cached Gateway quota through the throttled fetcher and returns the updated value', async () => {
     const harness = new IpcHarness();
     const previous = {

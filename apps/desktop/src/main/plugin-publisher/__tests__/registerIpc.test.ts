@@ -9,6 +9,7 @@ const {
   snapshotForOwnerMock,
   cancelForOwnerMock,
   trustedRendererMock,
+  publisherApiMock,
 } = vi.hoisted(() => ({
   handlers: new Map<string, Handler>(),
   boundaryPendingMock: vi.fn(() => false),
@@ -20,6 +21,7 @@ const {
   snapshotForOwnerMock: vi.fn(() => ({ transferId: 'transfer-1', stage: 'confirming' })),
   cancelForOwnerMock: vi.fn(() => ({ cancelled: true })),
   trustedRendererMock: vi.fn(),
+  publisherApiMock: vi.fn(() => ({ listMine: async () => ({ releases: [], nextCursor: null }) })),
 }));
 
 vi.mock('electron', () => ({
@@ -35,6 +37,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: trustedRendererMock,
 }));
 vi.mock('../host.js', () => ({
+  createPluginPublisherApi: publisherApiMock,
   currentPublisherIdentity: vi.fn(() => ({
     membershipId: 'member-1',
     orgSlug: 'acme',
@@ -45,18 +48,10 @@ vi.mock('../host.js', () => ({
     snapshotForOwner: snapshotForOwnerMock,
     cancelForOwner: cancelForOwnerMock,
   })),
-  publisherAudience: vi.fn((orgSlug: string) => `${orgSlug}:publisher`),
   trackPublisherConfirmRequester: vi.fn(),
 }));
 vi.mock('../api.js', () => ({
-  PluginPublisherApi: class {},
   PluginPublisherApiError: class extends Error {},
-}));
-vi.mock('../../cindy-brain/index.js', () => ({
-  getConnectionTokenProvider: vi.fn(() => ({
-    getToken: vi.fn(),
-    invalidate: vi.fn(),
-  })),
 }));
 
 const { registerPluginPublisherIpc } = await import('../registerIpc.js');
@@ -78,9 +73,15 @@ beforeEach(() => {
   snapshotForOwnerMock.mockClear();
   cancelForOwnerMock.mockClear();
   trustedRendererMock.mockClear();
+  publisherApiMock.mockClear();
 });
 
 describe('plugin-publisher IPC owner boundary', () => {
+  it('uses the shared Host HTTP client for publication-history requests', async () => {
+    await expect(handler('plugin-publisher:list-mine')(event, null)).resolves.toEqual({ releases: [], nextCursor: null });
+    expect(publisherApiMock).toHaveBeenCalledOnce();
+  });
+
   it('fails closed when an untrusted Renderer submits a publish file path', async () => {
     let caught: unknown;
     try {

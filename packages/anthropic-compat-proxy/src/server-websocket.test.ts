@@ -59,6 +59,7 @@ function openUpgrade(
     const socket = connect(Number(endpoint.port), endpoint.hostname);
     sockets.add(socket);
     const chunks: Buffer[] = [];
+    // real-wait: bound the websocket handshake if the proxy never replies.
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error('timed out waiting for upgrade response'));
@@ -97,6 +98,7 @@ async function readUpgradeFailure(
   const { socket, head, rest } = await openUpgrade(proxyUrl, path, Buffer.alloc(0), extraHeaders);
   const chunks = [rest];
   await new Promise<void>((resolve, reject) => {
+    // real-wait: bound the failed-upgrade close wait if the peer hangs.
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error('timed out waiting for failed upgrade to close'));
@@ -123,6 +125,7 @@ function waitForSocketText(socket: Socket, initial: Buffer, expected: string): P
       resolve(collected);
       return;
     }
+    // real-wait: bound waiting for the expected socket response text.
     const timeout = setTimeout(() => {
       reject(new Error(`timed out waiting for socket text ${expected}`));
     }, 2_000);
@@ -539,6 +542,7 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
       await new Promise<void>((resolve, reject) => {
         const socket = connect(Number(endpoint.port), endpoint.hostname);
         sockets.add(socket);
+        // real-wait: bound the simulated failed-upgrade socket close wait.
         const timeout = setTimeout(() => {
           socket.destroy();
           reject(new Error('timed out waiting for failed upgrade socket to close'));

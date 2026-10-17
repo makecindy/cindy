@@ -122,7 +122,8 @@ vi.doMock('../storage.js', () => ({
   readOwnerOpenId: mocks.readOwnerOpenId,
 }));
 
-vi.doMock('../moduleScope.js', () => ({
+vi.doMock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getLog: () => mocks.log,
 }));
 
@@ -346,7 +347,7 @@ describe('feishu group thread routing', () => {
     expect(pendingTopicLeaseCountForTest()).toBe(0);
   });
 
-  it('纯 @bot(无正文)的话题消息仍召唤一轮, 文本回退为 @bot 显示名', async () => {
+  it('纯 @bot 的话题消息仍召唤一轮，正文与召唤事实分开', async () => {
     const events = collectMessages();
     await connect();
     const bare = groupTopicMessage('@_user_1', 'omt_existing') as {
@@ -359,7 +360,7 @@ describe('feishu group thread routing', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0].senderId).toBe('g/oc_chat1/omt_existing');
-    expect(events[0].text).toBe('@bot');
+    expect(events[0]).toMatchObject({ text: '', invoked: true });
     expect(mocks.openThread).not.toHaveBeenCalled();
     expect(pendingTopicLeaseCountForTest()).toBe(0);
   });
@@ -376,7 +377,7 @@ describe('feishu group thread routing', () => {
     );
 
     expect(events).toHaveLength(2);
-    expect(events[0].text).toBe('@bot');
+    expect(events[0]).toMatchObject({ text: '', invoked: true });
     expect(events[1].text).toBe('重新想一想');
     expect(mocks.openThread).toHaveBeenCalledWith('om_bare_main');
   });

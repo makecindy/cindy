@@ -246,8 +246,11 @@ describe('mobile schedule form model', () => {
 
   it('keeps codex fast mode explicit and clears it when switching back to Claude', () => {
     const draft = updateDraftAgentKind(createMobileScheduleDraft(null), 'codex');
-    expect(buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true }))
-      .toMatchObject({ agentKind: 'codex', model: 'gpt-5.5', fastMode: true });
+    // 不写死默认模型:留空交给运行电脑按新建任务口径解析,序列化时省略。
+    expect(draft.model).toBe('');
+    const input = buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true });
+    expect(input).toMatchObject({ agentKind: 'codex', fastMode: true });
+    expect(input).not.toHaveProperty('model');
 
     const claude = updateDraftAgentKind({ ...draft, fastMode: true }, 'claude-code');
     expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' })).not.toHaveProperty('fastMode');
@@ -516,11 +519,14 @@ describe('mobile explicit Harness round-trip', () => {
       targetSessionId, providerId: 'old-source', effort: 'high', fastMode: true }));
     const selected = updateDraftAgentKind(draft, 'codex');
     expect(selected.modelAgentKind).toBe('codex');
+    // 换 Harness 不写死模型,由用户在选择器里挑。
+    expect(selected.model).toBe('');
     // Complete the pending picker before simulating the device-link JSON boundary.
-    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, targetSessionId: 'bound' })));
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, model: 'gpt-6-astra',
+      targetSessionId: 'bound' })));
     expect(input).toMatchObject({ targetSessionId: 'bound',
       agentKind: targetSessionId === 'bound' ? 'claude-code' : 'codex', modelAgentKind: 'codex',
-      model: 'gpt-5.5', providerId: '', effort: '', fastMode: false });
+      model: 'gpt-6-astra', providerId: '', effort: '', fastMode: false });
     expect(draft.modelAgentKind).toBeUndefined();
     expect(updateDraftAgentKind(draft, 'claude-code')).toBe(draft);
   });
@@ -575,8 +581,9 @@ describe('mobile explicit Harness round-trip', () => {
     const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
       model: 'pi-model', providerId: 'pi-only', fastMode: true, targetSessionId: 'bound' }));
     const selected = updateDraftAgentKind(draft, 'codex');
-    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput(selected)));
-    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.5',
+    expect(selected).toMatchObject({ model: '', providerId: '', effort: '', fastMode: false });
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, model: 'gpt-6-astra' })));
+    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-6-astra',
       providerId: '', effort: '', fastMode: false });
   });
   it('keeps older schedules without an override in follow mode', () => {

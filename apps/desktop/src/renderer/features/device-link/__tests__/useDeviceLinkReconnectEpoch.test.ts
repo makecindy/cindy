@@ -61,6 +61,22 @@ describe('useDeviceLinkReconnectEpoch', () => {
     expect(result.current).toBe(3);
   });
 
+  it('observes target recovery after the relay reconnects without an offline presence event', () => {
+    const { result } = renderHook(() => useDeviceLinkReconnectEpoch('device-1'));
+    act(() => statusListener?.({ status: 'online' }));
+    act(() => presenceListener?.(presence('device-1', true)));
+    const previous = result.current;
+    act(() => statusListener?.({ status: 'connecting' }));
+    act(() => statusListener?.({ status: 'online' }));
+    expect(result.current).toBe(previous + 1);
+    act(() => presenceListener?.(presence('device-2', true)));
+    expect(result.current).toBe(previous + 1);
+    act(() => presenceListener?.(presence('device-1', true)));
+    expect(result.current).toBe(previous + 2);
+    act(() => presenceListener?.(presence('device-1', true)));
+    expect(result.current).toBe(previous + 2);
+  });
+
   it('does not subscribe without a target and cleans up listeners', () => {
     const api = window.electronAPI.deviceLink;
     const initialProps: { deviceId: string | undefined } = {

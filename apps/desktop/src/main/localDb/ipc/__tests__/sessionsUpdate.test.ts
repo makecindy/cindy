@@ -17,6 +17,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import type { InvokeResultPayload } from '@cindy/device-link';
 
 import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
@@ -34,6 +35,7 @@ const h = vi.hoisted(() => ({
   client: null as { drizzle: ReturnType<typeof drizzle> } | null,
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  setBadgeCount: vi.fn(),
   relocate: vi.fn(async (): Promise<{ persistedSdkSessionId: string | null }> => ({
     persistedSdkSessionId: null,
   })),
@@ -98,7 +100,7 @@ vi.mock('electron', () => ({
   // app.getPath('userData') 并对真实文件系统做 fire-and-forget fs.rm。这里返回每次
   // 测试用 mkdtemp 生成的独立目录，避免并发 worktree 共享同一字面量路径互相删 fixture，
   // 也避免 Windows 把 POSIX 字面量解析成盘符根相对路径。
-  app: { getPath: () => h.userDataDir },
+  app: { getPath: () => h.userDataDir, setBadgeCount: h.setBadgeCount },
 }));
 vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   piSubagentRunRoot: (agentHome: string, sessionId: string) =>
@@ -106,6 +108,10 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   stopAndRemovePiSubagentRuns: h.stopAndRemovePiSubagentRuns,
   writePiSubagentDeletedTombstone: h.writePiSubagentDeletedTombstone,
   clearPiSubagentDeletedTombstone: h.clearPiSubagentDeletedTombstone,
+}));
+vi.mock('../../../appSessionState', () => ({
+  getActiveAppSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(h.userDataDir!, ...parts),
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -175,6 +181,7 @@ import {
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
+  restoreArchivedSessionForSend,
   persistSessionFields,
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
@@ -183,9 +190,16 @@ import {
   updateSessionInDb,
   touchUserSendInDb,
 } from '../sessions';
+import {
+  clearAllSessionAttention,
+  getAttentionCount,
+  markSessionNeedsAttention,
+} from '../../../appBadgeService';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
+import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
+import * as sessionQueries from '../../sessionQueries';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -225,6 +239,7 @@ function createDb(): void {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
@@ -243,6 +258,7 @@ function createDb(): void {
       orca_role TEXT,
       remote_host_id TEXT,
       agent_device_id TEXT,
+      orca_remote_lead TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
@@ -324,8 +340,10 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 }
 
 beforeEach(() => {
+  clearAllSessionAttention();
   setSessionOpeningModelAdmission(async body => body);
   vi.clearAllMocks();
+  h.commitBotProfileDeletion.mockReset();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
   h.commitBotProfileDeletion.mockResolvedValue({ status: 'archived', sessionIds: [] });
   h.closeSession.mockClear();
@@ -371,6 +389,80 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it.each([invokeUpdate, invokePatchMeta])(
+    'clears only the deleted task from event-backed app attention (%#)',
+    async (update) => {
+      // These tasks have not entered a renderer catalog projection yet.
+      markSessionNeedsAttention('cc-local');
+      markSessionNeedsAttention('codex-local');
+      expect(getAttentionCount()).toBe(2);
+
+      await update('cc-local', { status: 'deleted' });
+      expect(getAttentionCount()).toBe(1);
+      await update('codex-local', { status: 'deleted' });
+      expect(getAttentionCount()).toBe(0);
+      if (process.platform !== 'win32') expect(h.setBadgeCount).toHaveBeenLastCalledWith(0);
+    },
+  );
+
+  it.each([invokeUpdate, invokePatchMeta])(
+    'retains attention when deletion fails or the task is missing (%#)',
+    async (update) => {
+      markSessionNeedsAttention('cc-local');
+      markSessionNeedsAttention('missing');
+      h.sqlite!.exec(`CREATE TRIGGER reject_delete BEFORE UPDATE OF status ON sessions
+        WHEN NEW.status = 'deleted' BEGIN SELECT RAISE(ABORT, 'write failed'); END`);
+      await expect(update('cc-local', { status: 'deleted' })).rejects.toThrow('PRECONDITION_FAILED');
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('cc-local'))
+        .toEqual({ status: 'active' });
+      await expect(update('missing', { status: 'deleted' })).rejects.toThrow('NOT_FOUND');
+      expect(getAttentionCount()).toBe(2);
+    },
+  );
+
+  it.each([invokeUpdate, invokePatchMeta])(
+    "does not clear a new owner's attention after an in-flight deletion (%#)",
+    async (update) => {
+      markSessionNeedsAttention('cc-local');
+      h.captureOwnerScope = true;
+      h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+        const result = await task();
+        h.ownerCurrent = false;
+        return result;
+      });
+      await update('cc-local', { status: 'deleted' });
+      expect(getAttentionCount()).toBe(1);
+    },
+  );
+
+  it('clears deleted Bot task attention only after its transaction succeeds', async () => {
+    markSessionNeedsAttention('bot-task');
+    markSessionNeedsAttention('other-task');
+    h.commitBotProfileDeletion.mockRejectedValueOnce(new Error('write failed'));
+    await expect(deleteBotProfileAndDetachSessionsInDb('bot', ['bot-task'], false))
+      .rejects.toThrow('write failed');
+    expect(getAttentionCount()).toBe(2);
+
+    h.commitBotProfileDeletion.mockResolvedValueOnce({ sessionIds: ['bot-task'], status: 'deleted' });
+    await deleteBotProfileAndDetachSessionsInDb('bot', ['bot-task'], false);
+    expect(getAttentionCount()).toBe(1);
+  });
+
+  it('preserves attention when Bot history is retained or the owner changes', async () => {
+    markSessionNeedsAttention('bot-task');
+    h.commitBotProfileDeletion.mockResolvedValueOnce({ sessionIds: ['bot-task'], status: 'archived' });
+    await deleteBotProfileAndDetachSessionsInDb('bot', ['bot-task'], true);
+    expect(getAttentionCount()).toBe(1);
+
+    h.captureOwnerScope = true;
+    h.commitBotProfileDeletion.mockImplementationOnce(async () => {
+      h.ownerCurrent = false;
+      return { sessionIds: ['bot-task'], status: 'deleted' };
+    });
+    await deleteBotProfileAndDetachSessionsInDb('bot', ['bot-task'], false);
+    expect(getAttentionCount()).toBe(1);
+  });
+
   it('rechecks window trust for both movement broadcasts after navigation', async () => {
     const trusted = {
       trusted: true,
@@ -676,6 +768,51 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
   });
 
+  it('restores an archived task for send through the normal locked status writer and broadcast', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    await restoreArchivedSessionForSend('codex-local');
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+    expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'codex-local', patch: { status: 'active' },
+    }));
+  });
+
+  it.each(['deleted', 'bot', 'worker', 'remote-worker'] as const)('does not restore %s tasks through ordinary send', async kind => {
+    h.sqlite!.prepare('UPDATE sessions SET status = ?, source = ?, orca_role = ?, orca_remote_lead = ? WHERE id = ?')
+      .run(kind === 'deleted' ? 'deleted' : 'archived', kind === 'bot' ? 'bot' : 'desktop',
+        kind === 'worker' ? 'worker' : null, kind === 'remote-worker' ? '{}' : null, 'codex-local');
+    await expect(restoreArchivedSessionForSend('codex-local')).rejects.toThrow(
+      kind === 'deleted' ? '[NOT_FOUND]' : '[PRECONDITION_FAILED]',
+    );
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ status: kind === 'deleted' ? 'deleted' : 'archived' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not write or broadcast for an already active task', async () => {
+    await restoreArchivedSessionForSend('codex-local');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('rechecks task status after acquiring the route lock', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    h.routeLock.mockImplementationOnce(async (_id, task) => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+      return task();
+    });
+    await expect(restoreArchivedSessionForSend('codex-local')).rejects.toThrow('[NOT_FOUND]');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not restore after the task owner changes', async () => {
+    h.captureOwnerScope = true;
+    h.ownerCurrent = false;
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    await expect(restoreArchivedSessionForSend('codex-local')).rejects.toThrow('Task owner changed');
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'archived' });
+  });
+
   it('keeps the last legal sessions.effort when a fixed-effort model switch patches null', async () => {
     await persistSessionFields('pi-local', {
       model: 'x-ai-grok/grok-4.6',
@@ -928,6 +1065,60 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(order).toEqual(['sharing-prepared', 'runtime-cleanup', 'sharing-closed', 'lock-released']);
     expect(h.runtimeCleanup).toHaveBeenCalledOnce();
     expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
+  });
+
+  it('restores an archived task through the remote adapter and existing patch-meta handler', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      expect(channel).toBe('local-db:sessions:patch-meta');
+      return { ok: true as const, result: await invokePatchMeta(args[0] as string, args[1] as Record<string, unknown>) };
+    });
+    const restore = createRemoteSessionsStatusSetter({ captureAccess: () => () => {}, invoke });
+    expect(await restore({ deviceId: 'studio', sessionIds: ['codex-local'], status: 'active' })).toMatchObject({
+      ok: true, changed: [{ sessionId: 'codex-local', status: 'active' }],
+    });
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(h.closeSharedTask).not.toHaveBeenCalled();
+  });
+
+  it('reports an unknown remote result when the receipt query overloads after the status write', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    const receiptQuery = vi.spyOn(sessionQueries, 'selectSessionWithCount')
+      .mockRejectedValueOnce(new Error('db worker RPC queue overloaded'));
+    try {
+      let handlerError: unknown;
+      const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+        try {
+          return { ok: true as const, result: await invokePatchMeta(args[0] as string, args[1] as Record<string, unknown>) };
+        } catch (error) {
+          handlerError = error;
+          // Preserve the handler error as dispatch does: newer hosts may wrap it first.
+          const message = error instanceof Error ? error.message : String(error);
+          const code = message.includes('db worker RPC queue overloaded') ? 'BACKPRESSURE' : 'IPC_ERROR';
+          return { ok: false as const, error: { code, message } };
+        }
+      });
+      const restore = createRemoteSessionsStatusSetter({ captureAccess: () => () => {}, invoke });
+      expect(await restore({ deviceId: 'studio', sessionIds: ['codex-local', 'unattempted'], status: 'active' })).toMatchObject({
+        ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN', changed: [],
+        message: expect.stringContaining('请先查询目标任务状态'),
+        failedSessionId: 'codex-local', remainingSessionIds: ['unattempted'],
+      });
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+      expect(handlerError).toBeInstanceOf(Error);
+      expect((handlerError as Error).message).toBe('[PRECONDITION_FAILED] Worktree is busy or its recovery record could not be saved');
+      expect(receiptQuery).toHaveBeenCalledOnce();
+      expect(invoke).toHaveBeenCalledOnce();
+    } finally {
+      receiptQuery.mockRestore();
+    }
+  });
+
+  it.each(['active', 'archived'] as const)('remote patch-meta cannot change a deleted task to %s', async (status) => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    await expect(invokePatchMeta('codex-local', { status })).rejects.toThrow('已删除的任务不能恢复或归档');
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'deleted' });
   });
 
   it('cleans runtime state before releasing the remote terminal status lock', async () => {

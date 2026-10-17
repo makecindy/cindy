@@ -1,6 +1,6 @@
 import { normalizeTaskTags } from '@cindy/maker-shared';
 /** Shared database reads for local IPC, remote IPC and internal callers. */
-import { desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
 import { sessions } from './schema';
 import { LIST_PREVIEW_EXTRACT_SQL, LATEST_VISIBLE_PREVIEW_FILTER_SQL } from './sessionListProjection';
@@ -147,14 +147,17 @@ export function selectSessionListRows(
   db: DbClient['drizzle'],
   where: SQL | undefined,
   cap: number | null,
+  before?: { updatedAt: number; id: string },
 ): Promise<SessionListRow[]> {
+  if (before) where = and(where, sql`(${sessions.updatedAt} < ${before.updatedAt}
+    OR (${sessions.updatedAt} = ${before.updatedAt} AND ${sessions.id} < ${before.id}))`);
   const pickedBase = db.select({ id: sessions.id }).from(sessions).where(where);
   const picked = db
     .$with('picked')
     .as(
       cap === null
-        ? pickedBase.orderBy(desc(sessions.updatedAt))
-        : pickedBase.orderBy(desc(sessions.updatedAt)).limit(cap),
+        ? pickedBase.orderBy(desc(sessions.updatedAt), desc(sessions.id))
+        : pickedBase.orderBy(desc(sessions.updatedAt), desc(sessions.id)).limit(cap),
     );
   return db
     .with(picked)
@@ -162,5 +165,5 @@ export function selectSessionListRows(
     .from(sessions)
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)
-    .orderBy(desc(sessions.updatedAt));
+    .orderBy(desc(sessions.updatedAt), desc(sessions.id));
 }

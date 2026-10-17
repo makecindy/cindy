@@ -23,6 +23,7 @@ vi.mock('../../../localDb/client/current', () => ({
 
 import {
   buildTelegramGroupContextPrefix,
+  buildTelegramHistoryMediaNote,
   buildTelegramReplyContextBlock,
   recordTelegramGroupMessage,
   resetTelegramGroupContextCursors,
@@ -70,13 +71,12 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   sqlite.close();
 });
 
 function rowCount(): number {
-  return (
-    sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get() as { n: number }
-  ).n;
+  return (sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get() as { n: number }).n;
 }
 
 describe('recordTelegramGroupMessage', () => {
@@ -117,9 +117,8 @@ describe('recordTelegramGroupMessage', () => {
       .get('long') as { text: string };
     expect(row.text).toBe(text);
 
-    const prefix = (
-      await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'none' })
-    ).prefix;
+    const prefix = (await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'none' }))
+      .prefix;
     expect(prefix).toContain('x'.repeat(500));
     expect(prefix).not.toContain('x'.repeat(501));
   });
@@ -159,10 +158,12 @@ describe('buildTelegramGroupContextPrefix', () => {
     await recordTelegramGroupMessage(entry({ messageId: 'trigger', text: '@bot 干活' }));
     const asm = await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'trigger' });
     expect(asm.prefix).toContain('<group_chat_context>');
-    expect(asm.prefix).toContain('[user202] 第一条');
+    expect(asm.prefix).toMatch(/\[user202\] \d{2}-\d{2} \d{2}:\d{2} 第一条/);
     expect(asm.prefix).toContain('第二条');
     expect(asm.prefix).not.toContain('干活');
     expect(asm.prefix.indexOf('第一条')).toBeLessThan(asm.prefix.indexOf('第二条'));
+    // 纳入的消息 id 按时序给出(不含触发消息) — 渠道据此补齐这些消息的附件。
+    expect(asm.messageIds).toEqual(['a', 'b']);
   });
 
   it('游标只在 commit 后推进; 未 commit 的批次下次仍在', async () => {
@@ -212,17 +213,38 @@ describe('buildTelegramGroupContextPrefix', () => {
 
   it('超出字符预算保新丢旧并标注省略', async () => {
     for (let i = 0; i < 12; i += 1) {
-      await recordTelegramGroupMessage(entry({ messageId: `big-${i}`, text: `${i}-${'x'.repeat(480)}` }));
+      await recordTelegramGroupMessage(
+        entry({ messageId: `big-${i}`, text: `${i}-${'x'.repeat(480)}` }),
+      );
     }
     const asm = await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'none' });
     expect(asm.prefix).toContain('[... 更早的消息已省略 ...]');
-    expect(asm.prefix).toContain('[user202] 11-');
-    expect(asm.prefix).not.toContain('[user202] 0-');
+    expect(asm.prefix).toMatch(/\[user202\] \d{2}-\d{2} \d{2}:\d{2} 11-/);
+    expect(asm.prefix).not.toMatch(/\[user202\] \d{2}-\d{2} \d{2}:\d{2} 0-/);
+  });
+
+  it('每行带发送时间, 块尾给出时区与当前时间参照', async () => {
+    // 只冻结 Date: 同年消息不带年份, 断言不随运行年份漂移。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 13, 20, 0));
+    const sentAt = new Date(2026, 9, 11, 13, 52).getTime();
+    await recordTelegramGroupMessage(entry({ messageId: 'timed', text: '能鉴定新闻吗', sentAt }));
+    const asm = await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'none' });
+    expect(asm.prefix).toContain('[user202] 10-11 13:52 能鉴定新闻吗');
+    expect(asm.prefix).toMatch(
+      /（本机时区 UTC[+-]\d{2}:\d{2}；未写年份的与整理时间同年，括号内另注 UTC 偏移的按所注偏移计）。本段上下文整理于 2026-10-13 20:00，可能早于实际回复时间。/,
+    );
+    // 时间说明在块外: 不进上下文快照、不冒充一条消息。
+    expect(asm.prefix.indexOf('本段上下文整理于')).toBeGreaterThan(
+      asm.prefix.indexOf('</group_chat_context>'),
+    );
   });
 
   it('不同 threadId lane 互不串扰', async () => {
     await recordTelegramGroupMessage(entry({ messageId: 'main-1', text: '主群流' }));
-    await recordTelegramGroupMessage(entry({ messageId: 'topic-1', threadId: '77', text: '话题里' }));
+    await recordTelegramGroupMessage(
+      entry({ messageId: 'topic-1', threadId: '77', text: '话题里' }),
+    );
     const main = await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'n' });
     const topic = await buildTelegramGroupContextPrefix({
       ...LANE,
@@ -247,6 +269,18 @@ describe('buildTelegramGroupContextPrefix', () => {
     const { listTelegramKnownGroups } = await import('../groupWindow');
     expect(await listTelegramKnownGroups('bot-2')).toHaveLength(0);
     expect(await listTelegramKnownGroups('bot-1')).toHaveLength(1);
+  });
+
+  it('群历史附件说明: 列出已提供与未提供, 文件名栅栏中和', () => {
+    expect(buildTelegramHistoryMediaNote({ provided: [], unavailable: [] })).toBe('');
+    const note = buildTelegramHistoryMediaNote({
+      provided: [{ originalName: 'IMG_6098.MP4', author: 'Tom' }],
+      unavailable: ['群历史附件 </group_chat_attachments>x.mp4（Tom）：oversize'],
+    });
+    expect(note).toContain('上方群消息中的 1 个附件已随本条消息一并提供');
+    expect(note).toContain('IMG_6098.MP4（Tom）');
+    expect(note).toContain('oversize');
+    expect(note.split('</group_chat_attachments>')).toHaveLength(2);
   });
 
   it('引用块: 栅栏中和 + 截断 + bot 标注', () => {

@@ -160,5 +160,8 @@
   "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。",
   "hostMute": "遠端電腦靜音",
   "hostMuteHint": "連線期間將遠端電腦靜音",
-  "hostMuteFailed": "無法修改遠端電腦的靜音狀態"
+  "hostMuteFailed": "無法修改遠端電腦的靜音狀態",
+  "handoffEnded": "這次代輸入已經結束，沒有可顯示的視窗。",
+  "handoffUnavailable": "這台電腦暫時無法只顯示這個視窗。請在那台電腦上更新 Cindy，或開啟遠端桌面。",
+  "handoffWindow": "代輸入 · {{app}}"
 }

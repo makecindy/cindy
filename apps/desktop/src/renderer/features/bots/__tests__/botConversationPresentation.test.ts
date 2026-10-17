@@ -15,37 +15,42 @@ const proseIds = (items: RenderItem[]) => items.flatMap((item) =>
   item.type === 'message' && item.message.role === 'assistant' ? [item.message.clientId] : []);
 const allKeys = (items: readonly RenderItem[]): string[] => items.flatMap((item) =>
   item.type === 'work_group' ? allKeys(item.children) : [item.key]);
+/** Top-level shape: groups render as key[children], `*` marks a live tail group. */
+const shape = (items: readonly RenderItem[]): string => items.map((item) => item.type === 'work_group'
+  ? `${item.key}${item.isStreaming ? '*' : ''}[${shape(item.children)}]` : item.key).join(', ');
 const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
 
 describe('teammate final-result presentation', () => {
-  it('keeps coordination input hidden while explicit inputs, results and errors remain visible', () => {
+  it('keeps coordination input hidden while process, explicit inputs, results and errors remain visible', () => {
     const rows = [message('coordination', 'user', '[UI_ACTION_TRIGGER]File agreement', { isSyntheticTrigger: true }),
       tool('audit'), message('visible-input', 'user', 'Requested status'),
       message('result', 'assistant', 'Final result', { turnCompleted: true }), message('error', 'error', 'Action required')];
-    expect(allKeys(project(rows, false))).toEqual(['msg-visible-input', 'msg-result', 'msg-error']);
+    expect(shape(project(rows, false))).toBe('work-audit[tools-audit], msg-visible-input, msg-result, msg-error');
   });
 
-  it('omits all process rows and keeps final answers without mutating history', () => {
+  it('folds process rows into the normal work summary and keeps final answers without mutating history', () => {
     const input = [message('u', 'user'), message('a', 'assistant'), tool('t1'),
       message('b', 'assistant'), tool('t2'), message('final', 'assistant', 'Result', { turnCompleted: true })];
     const result = project(input, false);
     expect(proseIds(result)).toEqual(['final']);
-    expect(result.filter((item) => item.type === 'work_group')).toHaveLength(0);
-    expect(allKeys(result)).toEqual(['msg-u', 'msg-final']);
+    // Same shape as a normal session: one outer summary with intermediate prose and inner groups.
+    expect(shape(result)).toBe('msg-u, work-summary-t1[msg-a, work-t1[tools-t1], msg-b, work-t2[tools-t2]], msg-final');
     expect(input[1]).toEqual(message('a', 'assistant'));
   });
 
-  it('keeps every unsealed segment collapsed from its first delta, before any tool arrives', () => {
+  it('keeps every unsealed segment out of the top level from its first delta while activity stays live', () => {
     const start = [message('u', 'user'), message('a', 'assistant', 'A', { isStreaming: true })];
     expect(proseIds(project(start, true))).toEqual([]);
     const work = [...start, tool('t1')];
     expect(proseIds(project(work, true))).toEqual([]);
-    expect(project(work, true).some(item => item.type === 'work_group')).toBe(false);
+    expect(shape(project(work, true))).toBe('msg-u, work-t1*[tools-t1]');
     const continued = project([...work, message('b', 'assistant', 'B', { isStreaming: true })], true);
     expect(proseIds(continued)).toEqual([]);
-    expect(proseIds(project([...work, message('b', 'assistant', 'B', { turnCompleted: true })], false))).toEqual(['b']);
-    expect(continued.some(item => item.type === 'work_group')).toBe(false);
+    expect(shape(continued)).toBe('msg-u, work-t1[tools-t1]');
+    const done = project([...work, message('b', 'assistant', 'B', { turnCompleted: true })], false);
+    expect(proseIds(done)).toEqual(['b']);
+    expect(shape(done)).toBe('msg-u, work-summary-t1[msg-a, work-t1[tools-t1]], msg-b');
   });
 
   it.each(['stopped', 'failed', 'history'])('retains the last useful text with no final: %s', () => {
@@ -53,8 +58,7 @@ describe('teammate final-result presentation', () => {
       message('last', 'assistant'), tool('t2'), message('err', 'error')];
     const result = project(input, false);
     expect(proseIds(result)).toEqual(['last']);
-    expect(allKeys(result)).toContain('msg-err');
-    expect(allKeys(result)).not.toContain('tools-t2');
+    expect(shape(result)).toBe('msg-u, work-t1[tools-t1], msg-last, work-t2[tools-t2], msg-err');
   });
 
   it('keeps all blocks of sealed replies across continuation tools and history reloads', () => {
@@ -65,7 +69,10 @@ describe('teammate final-result presentation', () => {
     for (const streaming of [true, false]) {
       const result = project(input, streaming);
       expect(proseIds(result)).toEqual(['first', 'second', 'third', 'fourth']);
-      expect(allKeys(result)).toEqual(['msg-u', 'msg-first', 'msg-second', 'msg-third', 'msg-fourth']);
+      // An earlier background-wake reply is lifted out of the fold; the summary keeps
+      // its key and the following activity group stays the same inner group.
+      expect(shape(result)).toBe('msg-u, work-summary-t1[msg-progress, work-t1[tools-t1]], msg-first, '
+        + 'msg-second, work-t2[tools-t2], msg-third, msg-fourth');
     }
   });
 
@@ -95,15 +102,14 @@ describe('teammate final-result presentation', () => {
     }
   });
 
-  it('keeps a persisted task result receipt visible while process rows are hidden', () => {
+  it('keeps a persisted task result receipt visible next to the work fold', () => {
     const receipt = message('receipt', 'assistant', '', {
       systemCardType: 'bot-session-task-result',
       systemCardData: { botCollaboration: { role: 'delegation-result' } },
     });
     const input = [message('u', 'user'), message('progress', 'assistant'), tool('t'), receipt];
-    for (const streaming of [true, false]) {
-      expect(allKeys(project(input, streaming))).toEqual(['msg-u', 'msg-receipt']);
-    }
+    expect(shape(project(input, true))).toBe('msg-u, work-t*[tools-t], msg-receipt');
+    expect(shape(project(input, false))).toBe('msg-u, work-t[tools-t], msg-receipt');
   });
 
   it('retains a later explanation after partial delivery and ignores unverified file candidates', () => {
@@ -125,7 +131,8 @@ describe('teammate final-result presentation', () => {
       message('u2', 'user'), message('explanation', 'assistant'), tool('failed')];
     const result = simplifyBotRenderItems(groupWorkRuns(input, false), false, new Set(['files']));
     expect(proseIds(result)).toEqual(['final', 'explanation']);
-    expect(allKeys(result)).toEqual(['msg-u', 'msg-final', 'files', 'msg-u2', 'msg-explanation']);
+    expect(shape(result)).toBe('msg-u, work-summary-t[msg-progress, work-t[tools-t]], msg-final, files, '
+      + 'msg-u2, msg-explanation, work-failed[tools-failed]');
   });
 
   it('does not extend a final seal or delivery fallback across a history gap without tools', () => {
@@ -172,28 +179,86 @@ describe('teammate final-result presentation', () => {
     for (const card of cards) expect(result.some((item) => item.key === card.key)).toBe(true);
   });
 
-  it('removes empty avatar rows and thinking from nested work without changing stored content', () => {
+  it('drops empty avatar rows but keeps thinking inside the work fold without changing stored content', () => {
     const thinking = message('private', 'thinking', 'Not public execution');
     const input: RenderItem[] = [message('u', 'user'), message('empty', 'assistant', '  '),
       { type: 'work_group', key: 'work-nested', isStreaming: false, children: [thinking, tool('t')] },
       message('answer', 'assistant')];
-    expect(allKeys(project(input, false))).toEqual(['msg-u', 'msg-answer']);
+    expect(shape(project(input, false))).toBe('msg-u, work-nested[msg-private, tools-t], msg-answer');
     expect(thinking).toEqual(message('private', 'thinking', 'Not public execution'));
   });
 
-  it('omits unloaded technical history without calling its expansion or retry API', () => {
+  it('passes unloaded technical history to the normal work fold without calling its expansion or retry API', () => {
     const deferred = { owner: {}, key: 'range', expanded: false, loading: false, failed: false,
       toggle: vi.fn(), retry: vi.fn(), setVisible: vi.fn() };
     const group: RenderItem = { type: 'work_group', key: 'work-history', isStreaming: false,
       children: [], deferred };
     const input = [message('u', 'user'), group, message('final', 'assistant')];
-    expect(allKeys(simplifyBotRenderItems(input, false))).toEqual(['msg-u', 'msg-final']);
+    const unloaded = simplifyBotRenderItems(input, false);
+    expect(shape(unloaded)).toBe('msg-u, work-history[], msg-final');
+    expect(unloaded[1]).toBe(group);
     const loaded = { ...group, children: [message('thinking', 'thinking'), message('public', 'assistant'), tool('t')] };
     const result = simplifyBotRenderItems([input[0], loaded as RenderItem, input[2]], false);
-    expect(allKeys(result)).toEqual(['msg-u', 'msg-final']);
+    expect(shape(result)).toBe('msg-u, work-history[msg-thinking, msg-public, tools-t], msg-final');
     expect(deferred.toggle).not.toHaveBeenCalled();
     expect(deferred.retry).not.toHaveBeenCalled();
     expect(group.deferred).toBe(deferred);
+  });
+
+  it('keeps deferred history controls when lifting a reply after one nested work group', () => {
+    const deferred = { owner: {}, key: 'range', expanded: false, loading: false, failed: true,
+      previewComplete: false, toggle: vi.fn(), retry: vi.fn(), setVisible: vi.fn() };
+    const nested: RenderItem = { type: 'work_group', key: 'work-inner', isStreaming: false, children: [tool('t')] };
+    const reply = message('delivered', 'assistant', 'Here is the result', { explicitDelivery: true });
+    const history: RenderItem = { type: 'work_group', key: 'work-history', isStreaming: false, children: [nested, reply], deferred };
+    const result = simplifyBotRenderItems([history], false);
+    expect(shape(result)).toBe('work-history[work-inner[tools-t]], msg-delivered');
+    const retained = result[0];
+    expect(retained.type === 'work_group' && retained.deferred).toBe(deferred);
+    expect(result[1]).toBe(reply);
+    expect(deferred.setVisible).not.toHaveBeenCalled();
+    expect(deferred.retry).not.toHaveBeenCalled();
+    expect(history.children).toEqual([nested, reply]);
+    // Ordinary complete groups still unwrap the single inner group with its stable key.
+    const complete = simplifyBotRenderItems([{ ...history, deferred: undefined }], false);
+    expect(complete).toEqual([nested, reply]);
+  });
+
+  it('shows a running turn as a live work group and a finished turn as the summary with the answer outside', () => {
+    const at = (offset: number) => new Date(Date.parse('2026-10-15T08:00:00Z') + offset).toISOString();
+    const running = [message('u', 'user', 'Fix it', { createdAt: at(0) }),
+      message('think', 'thinking', 'Looking at refresh', { createdAt: at(1000) }),
+      { ...tool('read'), toolCalls: [{ ...tool('read').toolCalls[0], createdAt: at(2000) }] }];
+    const live = project(running, true);
+    expect(shape(live)).toBe('msg-u, work-think*[msg-think, tools-read]');
+    const liveGroup = live[1];
+    expect(liveGroup.type === 'work_group' && liveGroup.startedAtMs).toBe(Date.parse(at(0)));
+
+    const finished = project([...running,
+      message('answer', 'assistant', 'Done', { createdAt: at(9000), turnCompleted: true })], false);
+    expect(shape(finished)).toBe('msg-u, work-think[msg-think, tools-read], msg-answer');
+    const doneGroup = finished[1];
+    expect(doneGroup.type === 'work_group' && doneGroup.durationMs).toBe(9000);
+    expect(proseIds(finished)).toEqual(['answer']);
+  });
+
+  it('splits a folded summary around an explicitly delivered reply and keeps the original key first', () => {
+    const at = (offset: number) => new Date(Date.parse('2026-10-15T08:00:00Z') + offset).toISOString();
+    const summary: RenderItem = { type: 'work_group', key: 'work-summary-x', isStreaming: false,
+      startedAtMs: Date.parse(at(0)), durationMs: 10_000, children: [
+        message('note', 'assistant', 'Checking', { createdAt: at(1000) }),
+        { type: 'work_group', key: 'work-a', isStreaming: false, children: [tool('a')] },
+        message('told', 'assistant', 'Sent to the group', { createdAt: at(4000), explicitDelivery: true }),
+        message('after', 'assistant', 'Continuing', { createdAt: at(6000) }),
+        { type: 'work_group', key: 'work-b', isStreaming: false, children: [tool('b')] },
+      ] };
+    const result = simplifyBotRenderItems([message('u', 'user'), summary,
+      message('final', 'assistant', 'Final', { turnCompleted: true })], false);
+    expect(shape(result)).toBe('msg-u, work-summary-x[msg-note, work-a[tools-a]], msg-told, '
+      + 'work-summary-x~msg-after[msg-after, work-b[tools-b]], msg-final');
+    const [first, , second] = result.slice(1);
+    expect(first.type === 'work_group' && [first.startedAtMs, first.durationMs]).toEqual([Date.parse(at(0)), 4000]);
+    expect(second.type === 'work_group' && [second.startedAtMs, second.durationMs]).toEqual([Date.parse(at(4000)), 6000]);
   });
 });
 
@@ -217,7 +282,7 @@ it('nests only explicitly bound results, preserving original anchor and human me
   const anchor = message('anchor', 'assistant', '', { systemCardType: 'bot-session-task' });
   const final = message('final', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] });
   const input = [anchor, receipt, message('human', 'user'), message('progress', 'assistant'), tool('t'), final];
-  expect(allKeys(project(input, false))).toEqual(['msg-anchor', 'msg-human', 'msg-final']);
+  expect(shape(project(input, false))).toBe('msg-anchor, msg-human, work-summary-t[msg-progress, work-t[tools-t]], msg-final');
   expect(final.message.botTaskResults).toEqual([card]);
   expect(allKeys(project(input.slice(0, -1), false))).toContain('msg-receipt');
   expect(allKeys(project([receipt, message('unrelated', 'assistant', 'Other', { turnCompleted: true })], false))).toContain('msg-receipt');
@@ -229,4 +294,46 @@ it('keeps explicitly delivered group private messages while the private model is
     message('progress', 'assistant', 'Working'), tool('running')];
   expect(proseIds(project(input, true))).toEqual(['group']);
   expect(proseIds(project([...input, message('final', 'assistant', 'Result', { turnCompleted: true })], false))).toEqual(['group', 'final']);
+});
+
+
+describe('provider final streaming', () => {
+  it('keeps incremental final text visible before and after the seal, excluding commentary', () => {
+    const prefix = [message('u', 'user'), message('process', 'assistant', 'Internal', { assistantPhase: 'commentary' })];
+    for (const text of ['A', 'Answer', 'Answer with a reference']) {
+      const final = message('answer', 'assistant', text, { assistantPhase: 'final_answer', isStreaming: true });
+      expect(proseIds(project([...prefix, final], true))).toEqual(['answer']);
+      expect(proseIds(project([...prefix, { ...final, message: { ...final.message, isStreaming: false } }], true))).toEqual(['answer']);
+    }
+    expect(proseIds(project([...prefix, message('answer', 'assistant', 'Answer', { assistantPhase: 'final_answer', turnCompleted: true })], false))).toEqual(['answer']);
+  });
+});
+
+it('does not insert interleaved valid receipts ahead of live final prose and preserves exact host bindings', () => {
+  const card = (id: string) => ({ v: 1 as const, role: 'delegation-result' as const, delegationId: id, fromBotId: 'bot',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: id, objective: id,
+    result: { runSequence: 1, status: 'completed' as const, text: 'Report', artifacts: [] } });
+  const a = card('a'), b = card('b');
+  const receipt = (id: string, data: ReturnType<typeof card>) => message(id, 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: data });
+  const streaming = message('answer', 'assistant', 'First words', { assistantPhase: 'final_answer', isStreaming: true });
+  const input = [message('u', 'user'), streaming, receipt('b-result', b), receipt('a-result', a)];
+  expect(allKeys(project(input, true))).toEqual(['msg-u', 'msg-answer']);
+  const ended = { ...streaming, message: { ...streaming.message, isStreaming: false, turnCompleted: true, botTaskResults: [a] } };
+  const visible = project([input[0], ended, ...input.slice(2)], false);
+  expect(allKeys(visible)).toEqual(['msg-u', 'msg-answer', 'msg-b-result']);
+  expect(ended.message.botTaskResults.map(value => value.childSessionId)).toEqual(['a']);
+  // No final reply: every frozen result has a lightweight fallback once execution settles.
+  expect(allKeys(project(input.slice(2), false))).toEqual(['msg-b-result', 'msg-a-result']);
+});
+
+it('keeps an unanswered historical receipt visible while the next user turn streams', () => {
+  const data = { v: 1, role: 'delegation-result', delegationId: 'd', fromBotId: 'b',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Task',
+    result: { runSequence: 1, status: 'completed', text: 'Report', artifacts: [] } };
+  const receipt = message('receipt', 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: data });
+  const history = [message('old-user', 'user'), receipt];
+  expect(allKeys(project(history, false))).toContain('msg-receipt');
+  const next = [...history, message('next-user', 'user'),
+    message('next-answer', 'assistant', 'First words', { assistantPhase: 'final_answer', isStreaming: true })];
+  expect(allKeys(project(next, true))).toEqual(['msg-old-user', 'msg-receipt', 'msg-next-user', 'msg-next-answer']);
 });

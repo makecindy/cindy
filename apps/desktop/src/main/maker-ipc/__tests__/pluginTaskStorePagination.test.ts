@@ -45,7 +45,7 @@ it('durably revokes only create ownership while retaining plans, run results and
     const unused=async():Promise<never>=>{throw Error('unexpected dispatch/control');};
     const service=createPluginTaskService({store,assertCurrent(){},assertAuthorized(){},
       readSession:async taskId=>({taskId,title:'kept',revision:1,status:'active',resolvedConfig:route,permissionMode:'plan'}),
-      readPermissionMode:()=> 'plan',resolveRoute:unused,createSession:unused,dispatch:unused,inspect:unused,cancel:unused,
+      readModelPreference:()=>route,readPermissionMode:()=> 'plan',readLiveSession:()=>undefined,resolveRoute:unused,createSession:unused,dispatch:unused,inspect:unused,cancel:unused,
     });
     expect((await service.list('p')).items.map(row=>row.taskId)).toEqual(['task']);
     await store.revokePlugin('p');

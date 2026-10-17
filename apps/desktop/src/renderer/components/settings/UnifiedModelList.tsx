@@ -227,6 +227,9 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     disabled?: boolean;
     availability?: CatalogModel['availability'];
     group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime';
+    displayPricing?: CatalogModel['displayPricing'];
+    currency?: CatalogModel['currency'];
+    costDiscount?: number;
     mode?: string;
     modalities?: CatalogModel['modalities'];
     defaultEnabled?: boolean;
@@ -248,6 +251,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
   for (const m of media) {
     if (realIds.has(m.id) || byKey.has(m.id)) continue;
     const entry: CatalogModel = {
+      ...(m.displayPricing && m.currency ? { displayPricing: m.displayPricing, currency: m.currency, costDiscount: m.costDiscount } : {}),
       id: m.id,
       name: m.name,
       contextWindow: 0,
@@ -985,6 +989,8 @@ export function UnifiedModelList({
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
         {(() => {
+          // Mixed-unit quotes are shown in the existing model details only.
+          if (rep.displayPricing && rep.currency) return null;
           const display = rowPriceDisplay(row);
           if (!display) return null;
           if (display.kind === 'free') {

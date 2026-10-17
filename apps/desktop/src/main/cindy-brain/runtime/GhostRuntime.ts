@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 
 /**
  * GhostRuntime — 意识运行时状态机(docs/dev-rules/plugin-security-and-authoring.md)。
@@ -45,6 +46,8 @@ interface GhostRuntimeOptions {
   onStateChanged?: (id: string, state: GhostRuntimeState) => void;
   /** 时钟注入(测试用假时钟)。 */
   now?: () => number;
+  /** 宿主要求这个实例暂不启动时返回原因(如换库后缓存没清掉、需要重启应用)。 */
+  startBlockedReason?: (id: string) => string | null;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -83,11 +86,13 @@ export class GhostRuntime {
    * 即用户重新唤醒);stopping 拒绝(等熄灯完成)。
    */
   async spawn(ghost: InstalledGhost): Promise<{ ok: true; state: GhostRuntimeState } | { ok: false; reason: string }> {
-    const id = ghost.manifest.id;
+    const id = installedGhostStoragePart(ghost);
     const entry = this.getEntry(id);
     if (entry.state === 'starting' || entry.state === 'running') return { ok: true, state: entry.state };
     if (entry.state === 'fused') return { ok: false, reason: '已熔断(反复崩溃),重新唤醒后可再试' };
     if (entry.state === 'stopping') return { ok: false, reason: '正在熄灯,稍后再试' };
+    const blocked = this.options.startBlockedReason?.(id) ?? null;
+    if (blocked !== null) return { ok: false, reason: blocked };
 
     this.setState(id, entry, 'starting');
     // 沙箱创建本身也可能同步 throw(如 app 未 ready、窗口创建失败):同样按

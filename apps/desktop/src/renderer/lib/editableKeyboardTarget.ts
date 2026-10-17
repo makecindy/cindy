@@ -5,7 +5,7 @@
  * ShareSelectionBar(⌘A / Esc)共用同一判据,同一语义只留一个实现;也让
  * 依赖它的小组件不必为了一个工具函数 import 整个 MessageStream。
  */
-export function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+export function isEditableKeyboardTarget(target: EventTarget | null): target is HTMLElement {
   if (!(target instanceof HTMLElement)) return false;
   const tagName = target.tagName;
   return (

@@ -26,6 +26,19 @@ export interface SessionReviewRow {
 }
 
 const sessionRowSnapshot = new AsyncLocalStorage<SessionReviewRow>();
+const selectedReviewWorkspace = new AsyncLocalStorage<{ sessionId: string; workingDir: string }>();
+
+/** Pin one Review invocation to its host-resolved/user-selected directory.
+ * Evidence, freshness checks and the Reviewer must all address this same tree.
+ * This does not change the source task's persisted directory or other callers.
+ */
+export function withSessionReviewWorkspace<T>(
+  sessionId: string,
+  workingDir: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  return selectedReviewWorkspace.run({ sessionId, workingDir }, task);
+}
 
 export function withSessionReviewRowSnapshot<T>(
   row: SessionReviewRow,
@@ -216,11 +229,20 @@ export async function resolveReviewScope(
 
   const managedWorktreePath = deps.getManagedWorktreePath(sessionId);
   const fallbackWorktreePath = managedWorktreePath ?? row.worktreePath;
-  const resolved = await deps.resolveSessionDir({
-    sessionId,
-    fallbackWorktreePath,
-    fallbackWorkingDir: row.workingDir,
-  });
+  const selected = selectedReviewWorkspace.getStore();
+  const pinnedDir = selected?.sessionId === sessionId ? selected.workingDir : null;
+  const pinnedHead = pinnedDir ? await readRemoteHeadState(pinnedDir, deps.git) : null;
+  const resolved = pinnedDir && pinnedHead
+    ? {
+        workdir: pinnedDir,
+        head: { kind: pinnedHead.isDetached ? 'detached' : 'branch', branch: pinnedHead.branch },
+        source: 'workingDir' as const,
+      }
+    : await deps.resolveSessionDir({
+        sessionId,
+        fallbackWorktreePath,
+        fallbackWorkingDir: row.workingDir,
+      });
   // A remote row is handled above through the request-scoped SSH Git backend.
   // A remote result here would lack the authoritative host id, so fail closed.
   if (resolved.source === 'remote') {
@@ -242,7 +264,7 @@ export async function resolveReviewScope(
   const resolutionChain = [
     { source: 'telemetry', path: resolved.source === 'telemetry' ? resolved.workdir : null, ok: resolved.source === 'telemetry' },
     { source: 'worktree', path: fallbackWorktreePath, ok: resolved.source === 'worktree' },
-    { source: 'workingDir', path: row.workingDir, ok: resolved.source === 'workingDir' },
+    { source: 'workingDir', path: pinnedDir ?? row.workingDir, ok: resolved.source === 'workingDir' },
   ];
 
   if (!resolved.workdir) {

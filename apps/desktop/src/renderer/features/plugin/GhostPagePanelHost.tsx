@@ -14,6 +14,7 @@ import { GhostChipPanelBody, GhostPanelError } from '@/cindy-brain/ghostPanelBod
 import { useGhostRuntimeState } from '@/cindy-brain/runtimeStates';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import type { InstalledGhost } from '../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 
 /**
  * 面板收束(设计定稿):插件小侧边只从插件页进入,同一时刻至多一个,
@@ -30,7 +31,7 @@ export function GhostPagePanelHost({
 }) {
   const { t } = useTranslation();
   const { manifest } = ghost;
-  const runtimeState = useGhostRuntimeState(manifest.id);
+  const runtimeState = useGhostRuntimeState(installedGhostStoragePart(ghost));
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
   const width = Math.max(manifest.panel?.minWidth ?? 320, 320);
   return (
@@ -58,9 +59,9 @@ export function GhostPagePanelHost({
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {broken ? (
-          <GhostPanelError manifest={manifest} state={runtimeState} />
+          <GhostPanelError ghost={ghost} state={runtimeState} />
         ) : (
-          <GhostChipPanelBody manifest={manifest} />
+          <GhostChipPanelBody ghost={ghost} />
         )}
       </div>
     </aside>

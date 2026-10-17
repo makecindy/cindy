@@ -13,6 +13,7 @@ import { resolveSettingsSearchEntry } from './settingsSearchCatalog';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
 import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
+import { useSettingsEscape } from './useSettingsEscape';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
 import { AppearanceSection } from './AppearanceSection';
@@ -52,7 +53,6 @@ import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
-import { CindyMakeSection } from './CindyMakeSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
@@ -60,8 +60,6 @@ import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
 import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
-import { canAccessCindyMakeSettings } from './cindyMakeVisibility';
-import { useCindyVersions } from '@/lib/useCindyVersions';
 import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 
@@ -95,13 +93,6 @@ export function SettingsView() {
   // 用量历史对所有**已登录**身份开放 (local / cloud personal / cloud org),
   // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
   const canAccessUsage = canAccessUsageSettings({ mode });
-  const versions = useCindyVersions(!import.meta.env.DEV);
-  const canAccessCindyMake = canAccessCindyMakeSettings(
-    import.meta.env.DEV,
-    versions.state,
-    /-beta(?:\.|$)/i.test(window.electronAPI.appVersion ?? ''),
-    user,
-  );
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -113,10 +104,9 @@ export function SettingsView() {
     if (raw === 'tina') return 'im-bot';
     if (raw === 'billing' && !canAccessBilling) return 'general';
     if (raw === 'usage' && !canAccessUsage) return 'general';
-    if (raw === 'cindy-make' && !canAccessCindyMake) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
     return isSettingsTab(raw) ? raw : 'general';
-  }, [canAccessBilling, canAccessCindyMake, canAccessUsage, isMac, rawTab]);
+  }, [canAccessBilling, canAccessUsage, isMac, rawTab]);
   const piExtensionsPanelOpen =
     activeTab === 'general' &&
     (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
@@ -130,6 +120,13 @@ export function SettingsView() {
     next.delete('intent');
     setSearchParams(next, { replace: true });
   }, [canAccessBilling, rawTab, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (rawTab !== 'cindy-make') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('tab');
+    setSearchParams(next, { replace: true });
+  }, [rawTab, searchParams, setSearchParams]);
 
   // 「IM 机器人」官方/个人已纵向同页展示；?imGroup=cindy|personal 只负责把
   // 深链滚动到对应分区。旧「飞书机器人」深链继续定位到「个人」。
@@ -201,6 +198,17 @@ export function SettingsView() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  // 设置是主窗口里的路由，Esc 与左上角返回按钮走同一出口，不关窗。
+  const exitSettings = useCallback(() => navigate('/'), [navigate]);
+  const settingsRootRef = useRef<HTMLDivElement | null>(null);
+
+  // Esc 逐层返回：PI 扩展子页先回到「通用」，其余退出设置；帮助面板开着时归它。
+  const handleSettingsEscape = useCallback(() => {
+    if (piExtensionsPanelOpen) handleClosePiExtensions();
+    else exitSettings();
+  }, [exitSettings, handleClosePiExtensions, piExtensionsPanelOpen]);
+  useSettingsEscape(settingsRootRef, !helpAssistantOpen, handleSettingsEscape);
+
   useEffect(() => {
     if (activeTab !== 'help') {
       setHelpAssistantOpen(false);
@@ -219,10 +227,9 @@ export function SettingsView() {
         (tabId) =>
           (isMac || tabId !== 'agent-island') &&
           (canAccessBilling || tabId !== 'billing') &&
-          (canAccessUsage || tabId !== 'usage') &&
-          (canAccessCindyMake || tabId !== 'cindy-make'),
+          (canAccessUsage || tabId !== 'usage'),
       ),
-    [canAccessBilling, canAccessCindyMake, canAccessUsage, isMac],
+    [canAccessBilling, canAccessUsage, isMac],
   );
   const searchContext = useMemo<SettingsSearchContext>(() => ({
     region: CURRENT_CINDY_REGION,
@@ -244,6 +251,7 @@ export function SettingsView() {
   return (
     <SettingsSearchNavigationContext.Provider value={searchNavigation}>
     <div
+      ref={settingsRootRef}
       className="h-full w-full overflow-hidden bg-[var(--settings-bg)]"
       role="main"
       aria-label={t('settings.title')}
@@ -262,7 +270,7 @@ export function SettingsView() {
             <Tip text={t('settings.back')} side="bottom">
               <button
                 type="button"
-                onClick={() => navigate('/')}
+                onClick={exitSettings}
                 aria-label={t('settings.back')}
                 className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-[color,background-color,transform] duration-150 hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)] active:scale-[0.98]"
               >
@@ -656,16 +664,6 @@ export function SettingsView() {
                 <section aria-label={t('settings.sections.imBot')}>
                   <ImBotSection targetGroup={imBotTargetGroup} />
                 </section>
-              </div>
-            )}
-
-            {canAccessCindyMake && activeTab === 'cindy-make' && (
-              <div
-                role="tabpanel"
-                id="settings-panel-cindy-make"
-                aria-labelledby="settings-tab-cindy-make"
-              >
-                <CindyMakeSection key={`cindy-make:${mode}:${dataOwnerId ?? 'none'}`} />
               </div>
             )}
 

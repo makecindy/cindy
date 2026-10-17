@@ -228,7 +228,9 @@ async function makeFixture(options: {
   approvalMethod?: 'confirm' | 'input';
   modelError?: boolean;
   retryThenSucceed?: boolean;
+  retryThenHang?: boolean;
   outputThenHang?: boolean;
+  commentaryThenHang?: boolean;
   hangOnMessage?: string;
   holdExitAfterInputEnd?: boolean;
   runtimeOwnerId?: string;
@@ -263,6 +265,8 @@ async function makeFixture(options: {
    * permissions or mocking fs.
    */
   poisonResultPath?: boolean;
+  /** Override the per-task profile prompt, e.g. to blow the spawn argv budget. */
+  profilePrompt?: string;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -326,7 +330,9 @@ setTimeout(() => process.exit(0), 60000).unref();
   const fixtureOutput = JSON.stringify(options.outputText ?? 'fixture result');
   const approvalMethod = options.approvalMethod ?? 'confirm';
   const approvalIds = options.approvalIds ?? (options.approval ? ['approval-1'] : []);
-  const fixtureLifecycle = options.outputThenHang
+  const fixtureLifecycle = options.commentaryThenHang
+    ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', stopReason: 'toolUse', content: [{ type: 'text', text: 'Inspecting the files now' }, { type: 'toolCall', id: 'inspect', name: 'read', arguments: { path: 'a.txt' } }] } }) + '\\n');`
+    : options.outputThenHang
     ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');`
     : options.hang
       ? ''
@@ -334,13 +340,13 @@ setTimeout(() => process.exit(0), 60000).unref();
       ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'socket closed before response', usage: { input: 0, output: 0 } } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');`
-      : options.retryThenSucceed
+      : options.retryThenSucceed || options.retryThenHang
         ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'temporary socket failure', usage: { input: 1, output: 0 } } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 0, errorMessage: 'temporary socket failure' }) + '\\n');
-      process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
+      ${options.retryThenHang ? '' : `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
-      process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');`
+      process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');`}`
         : `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');`;
@@ -491,7 +497,7 @@ process.stdin.on('end', () => {
       title: `scout ${index + 1}`,
       task: `task ${index + 1}`,
       tools: 'read,grep,find,ls',
-      profilePrompt: 'fixture prompt',
+      profilePrompt: options.profilePrompt ?? 'fixture prompt',
       provider: 'fixture',
       model: 'fixture-model',
       thinking: 'high',
@@ -594,6 +600,49 @@ describe('Cindy durable PI Subagent runner', () => {
     });
   });
 
+  // A profile prompt long enough to blow the platform spawn command line budget
+  // must fail closed as a readable task error. Without the guard the spawn
+  // itself throws (ENAMETOOLONG / EINVAL on Windows) and the run ends with an
+  // opaque error instead of saying which argument was too long.
+  it('fails a task closed when its profile prompt exceeds the spawn argv budget', async () => {
+    // Over the budget on both platforms: 30k on Windows, 128k on POSIX.
+    const fixture = await makeFixture({
+      profilePrompt: 'profile prompt. '.repeat(process.platform === 'win32' ? 3000 : 9000),
+    });
+    const failed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'failed' ? run : null;
+    });
+    expect(failed.tasks[0]?.status).toBe('failed');
+    expect(failed.tasks[0]?.error).toMatch(/spawn budget/i);
+    expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+  });
+
+  // 两种口径：Windows CreateProcess 上限是 32767 个 UTF-16 字符（按字节算会把中文
+  // 放大三倍、误拒），POSIX 的 ARG_MAX 按字节算（按字符算会漏检中文长提示词）。
+  it('measures argv in characters on Windows and in UTF-8 bytes on POSIX', async () => {
+    // ~4.5 万字符 ≈ 13.5 万 UTF-8 字节：字符数超 Windows 的 30k、字节数超 POSIX
+    // 的 128k，两边都该被拒。
+    const oversized = await makeFixture({
+      profilePrompt: '中文提示词'.repeat(9000),
+    });
+    const failed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(oversized.root);
+      return run?.state === 'failed' ? run : null;
+    });
+    expect(failed.tasks[0]?.error).toMatch(/spawn budget/i);
+    expect(await readCommandsIfPresent(oversized.commandsFile)).toBeNull();
+
+    // ~1.8 万字符 ≈ 5.4 万 UTF-8 字节：两边都没超，必须照常跑完 —— 这条在
+    // Windows 上按字节估时会被误拒。
+    const fits = await makeFixture({ profilePrompt: '中文'.repeat(9000) });
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fits.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.status).toBe('completed');
+  });
+
   it('uses unique exact child session ids and persists terminal output/usage', async () => {
     const fixture = await makeFixture({ tasks: 2 });
     const completed = await waitFor(async () => {
@@ -672,6 +721,30 @@ describe('Cindy durable PI Subagent runner', () => {
     });
     expect(completed.totalTokens).toBe(6);
     await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('accepts steering while a child is backing off for automatic retry', async () => {
+    const fixture = await makeFixture({ retryThenHang: true });
+    try {
+      const retrying = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        if (run?.totalTokens !== 1 || run.state !== 'running') return null;
+        const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
+        return transcript.includes('auto_retry_start') ? run : null;
+      });
+      expect(retrying.tasks[0]?.resultReady).toBe(false);
+      await expect(controlPiSubagentRuns(fixture.root, retrying.runId, 'steer', {
+        childId: retrying.tasks[0]?.childId, message: 'Use the corrected request after retry',
+      })).resolves.toBe(1);
+      await waitFor(async () => {
+        const commands = await readCommandsIfPresent(fixture.commandsFile);
+        return commands?.some(command => command.type === 'steer'
+          && command.message === 'Use the corrected request after retry') ? true : null;
+      });
+    } finally {
+      await controlPiSubagentRuns(fixture.root, fixture.runId, 'stop');
+      await waitForClose(fixture.child, fixture.stderr);
+    }
   });
 
   it('rejects controls after the child RPC input has closed but before process exit', async () => {
@@ -871,9 +944,14 @@ describe('Cindy durable PI Subagent runner', () => {
       const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
       await writeFile(claimPath, '', { mode: 0o600 });
 
-      const attempt = resumePiSubagentRun(
-        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
-      );
+      const attempt = Promise.allSettled([
+        resumePiSubagentRun(
+          fixture.root,
+          first.runId,
+          "continue",
+          resumeLaunch(fixture),
+        ),
+      ]);
       // The racer completes its write inside the re-read budget. Late enough
       // that a single-read implementation has certainly already given up on it,
       // early enough to land before the budget expires.
@@ -885,7 +963,13 @@ describe('Cindy durable PI Subagent runner', () => {
         { mode: 0o600 },
       );
 
-      await expect(attempt).rejects.toThrow(/already resuming this Subagent generation/i);
+      const [outcome] = await attempt;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(() => {
+          throw outcome.reason;
+        }).toThrow(/already resuming this Subagent generation/i);
+      }
       // The decisive part: no second generation was launched over that session.
       const runs = await listPiSubagentRuns(fixture.root);
       expect(runs.filter((run) => run.taskId === first.taskId)).toHaveLength(1);
@@ -1492,6 +1576,27 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitForClose(fixture.child, fixture.stderr);
   });
 
+  it('accepts a correction after commentary while the child is still executing tools', async () => {
+    const fixture = await makeFixture({ commentaryThenHang: true });
+    const running = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.output === 'Inspecting the files now' ? run : null;
+    });
+    try {
+      expect(running.tasks[0]?.resultReady).toBe(false);
+      await expect(controlPiSubagentRuns(fixture.root, running.runId, 'steer', {
+        childId: running.tasks[0]?.childId, message: 'Inspect billing only',
+      })).resolves.toBe(1);
+      await waitFor(async () => {
+        const commands = await readCommandsIfPresent(fixture.commandsFile);
+        return commands?.some(command => command.type === 'steer' && command.message === 'Inspect billing only') ? true : null;
+      });
+    } finally {
+      await controlPiSubagentRuns(fixture.root, running.runId, 'stop');
+      await waitForClose(fixture.child, fixture.stderr);
+    }
+  });
+
   it('keeps completed output immutable and requires follow-up instead of late steer', async () => {
     const fixture = await makeFixture({ outputThenHang: true });
     // The precondition under test is the *durable status* carrying the child's
@@ -1564,7 +1669,7 @@ describe('Cindy durable PI Subagent runner', () => {
    * exercises it in full.
    */
   it.skipIf(process.platform === 'win32')('bounds control dedupe and abandoned receipts without replaying the legacy mailbox', async () => {
-    const fixture = await makeFixture({ hang: true });
+    const fixture = await makeFixture({ hang: true, timeoutMs: CONTROL_BACKLOG_TEST_TIMEOUT_MS });
     const running = await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.state === 'running' ? run : null;

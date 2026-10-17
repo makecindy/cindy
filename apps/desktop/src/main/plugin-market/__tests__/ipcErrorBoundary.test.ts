@@ -36,6 +36,8 @@ describe('Plugin Market IPC error boundary', () => {
     const body = registerSource.slice(start, end);
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
+    expect(body).toContain('isPluginMarketPassthroughErrorCode(error.code)');
+    expect(body).toContain("throwIpcError(error.code, 'Plugin market operation failed');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
     expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(12);
   });
@@ -163,9 +165,10 @@ describe('Plugin Market IPC error boundary', () => {
       ownerTaskBody.indexOf('syncDefaultMarketPlugins()'),
     );
     expect(ownerTaskBody).not.toContain("builtinOutcome === 'failed') return builtinOutcome");
-    expect(ownerTaskBody).toContain("builtinOutcome === 'retry-pending'");
+    expect(ownerTaskBody).toContain("outcome === 'retry-pending' ? 'failed' : outcome");
     expect(ownerTaskBody).toContain("builtinOutcome === 'failed'");
-    expect(ownerTaskBody).toContain('const marketOutcome = await syncDefaultMarketPlugins()');
+    expect(ownerTaskBody).toContain('const marketOutcome = await marketPostCommitStep.run(');
+    expect(ownerTaskBody).toContain('return syncDefaultMarketPlugins();');
     expect(ownerTaskBody).toContain("marketOutcome === 'failed'");
     expect(ownerTaskBody).toContain("marketOutcome === 'deferred'");
     expect(ownerTaskBody).toContain('await reconcileGhostOauthAccountsForActiveOwner()');
@@ -173,7 +176,7 @@ describe('Plugin Market IPC error boundary', () => {
       "return needsRetry ? 'failed' : deferred ? 'deferred' : 'completed';",
     );
     expect(bootstrapSource).toContain(
-      "await authManager.ensureStableOwnerPostCommitTasks('auth-initialize');",
+      "authManager.requestStableOwnerPostCommit('auth-initialize');",
     );
     expect(authManagerSource).toContain("requestStableOwnerPostCommit('owner-commit');");
     expect(authManagerSource).not.toContain("await ensureStableOwnerPostCommit('owner-commit');");
@@ -189,9 +192,43 @@ describe('Plugin Market IPC error boundary', () => {
       'if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;',
     );
     expect(ownerSyncBody).toContain('if (scope === pluginMarketSyncInFlightScope) return;');
-    expect(ownerSyncBody).toContain('void syncDefaultMarketPlugins().finally(() => {');
+    expect(ownerSyncBody).toContain('void marketPostCommitStep.run(scope,');
     expect(ownerSyncBody).toContain('pluginMarketSyncInFlightScope = null;');
     expect(bootstrapSource).toContain('PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000');
     expect(bootstrapSource).toContain('syncPluginMarketForActiveOwner(30_000);');
+  });
+});
+
+// All production cache deletions must pass the lease boundary. Keep this
+// cross-file contract in guard; cacheLease runtime behavior remains in unit.
+describe('缓存删除收口(结构门禁)', () => {
+  const sourcesDir = resolve(
+    __dirname,
+    '..',
+    'sources',
+  );
+  // 容忍链式换行(fs.promises\n.rm(…)):否则漏数 cacheLease/git 的真实删除点。
+  const countRawDeletions = (file: string): number =>
+    [
+      ...readFileSync(resolve(sourcesDir, file), 'utf8')
+        .matchAll(/fs\s*\.\s*(?:promises\s*\.\s*)?rm(?:Sync|dir)?\s*\(/g),
+    ].length;
+
+  // 门禁扩到整个 sources/,而不只 index.ts:任一 lease 管理的文件新增直接删除点
+  // 就是又一个绕过租约守卫的口子——这正是此前每一轮返工的形态。
+  it.each(['index.ts', 'store.ts', 'discover.ts', 'parse.ts', 'preflight.ts'])(
+    'sources/%s never deletes filesystem paths directly',
+    (file) => {
+      expect(countRawDeletions(file)).toBe(0);
+    },
+  );
+
+  it('git.ts only deletes its own private clone staging, nothing else', () => {
+    // git.ts 的唯一直接删除是它自己 clone 出的 `<dest>.staging-<uuid>` 私有目录
+    // (UUID 私有、同函数内建同函数内删、从不被租约持有),是经过审阅的例外。
+    // 断言"只删 stagingPath":出现任何删别的路径的调用都要重新确认边界。
+    const git = readFileSync(resolve(sourcesDir, 'git.ts'), 'utf8');
+    const deletions = [...git.matchAll(/\.\s*rm(?:Sync|dir)?\s*\(\s*([A-Za-z]+)/g)].map((m) => m[1]);
+    expect(deletions).toEqual(['stagingPath']);
   });
 });

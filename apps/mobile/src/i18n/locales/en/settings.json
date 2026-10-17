@@ -31,7 +31,31 @@
       "light": "Light",
       "dark": "Dark"
     },
-    "saveFailed": "Failed to save appearance mode. The previous setting will return after restart."
+    "saveFailed": "Failed to save appearance mode. The previous setting will return after restart.",
+    "userBubble": {
+      "title": "My message bubble color",
+      "presets": "Color",
+      "default": "Default",
+      "peach": "First Draft",
+      "yellow": "Daybreak",
+      "sage": "Spark",
+      "blue": "Dreamscape",
+      "lavender": "Night Cat",
+      "red": "Red Collar",
+      "custom": "Custom color",
+      "hue": "Hue",
+      "preview": "Message preview",
+      "sampleUser": "Help me organize today’s ideas.",
+      "sampleAssistant": "Sure, let’s work through your ideas together.",
+      "hint": "Colors adjust to light and dark mode so text stays easy to read. Saved on this device only.",
+      "customHint": "Drag along the color strip to choose a hue. Colors adjust to light and dark mode so text stays easy to read. Saved on this device only.",
+      "saveFailed": "The color is applied for now but could not be saved.",
+      "retry": "Retry",
+      "cancel": "Cancel",
+      "reset": "Reset to default",
+      "apply": "Apply",
+      "hex": "Color value"
+    }
   },
   "language": {
     "title": "Language",
@@ -191,6 +215,95 @@
     "readOnlyHint": "View on your phone; add or remove entries on a computer.",
     "offlineHint": "Your computers are offline. Showing the last synced dictionary.",
     "noDesktops": "Sign in to the same account on a computer to sync your dictionary."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "The change could not be saved. Please try again.",
+    "title": "Recognize my voice",
+    "sectionTitle": "Voiceprint filter",
+    "label": "Recognize my voice",
+    "entryHint": "Mutes other people during voice input. Your voiceprint stays on this phone.",
+    "openAccessibility": "Open recognize my voice settings",
+    "on": "On",
+    "off": "Off",
+    "hint": "Mutes other people during voice input so only what you say is transcribed. Requires a recorded voiceprint; speech that overlaps yours cannot be fully removed.",
+    "unsupported": "This version of the app does not support voiceprints. Update to the latest version.",
+    "privacy": "Your voiceprint stays on this phone, encrypted. It is never uploaded or synced to other devices.",
+    "model": {
+      "title": "Recognition model",
+      "needed": "The first use downloads a recognition model of about {{size}}. Wi-Fi is recommended.",
+      "download": "Download recognition model",
+      "downloading": "Downloading ({{done}} / {{total}})",
+      "cancel": "Cancel download",
+      "retry": "Download again",
+      "failed": {
+        "network": "The recognition model failed to download. Check your network and try again.",
+        "disk": "The recognition model could not be saved. Check your phone's free storage and try again.",
+        "checksum": "The downloaded recognition model failed verification. Try again.",
+        "unavailable": "The recognition model is unavailable right now. Try again later."
+      }
+    },
+    "profile": {
+      "title": "Voiceprint",
+      "missing": "No voiceprint yet",
+      "missingHint": "Record your voiceprint to enable filtering.",
+      "enrolled": "Voiceprint recorded",
+      "enrolledAt": "Recorded {{date}}",
+      "enroll": "Record voiceprint",
+      "reenroll": "Record again",
+      "delete": "Delete voiceprint",
+      "deleteConfirm": {
+        "title": "Delete voiceprint?",
+        "description": "Voice input will stop filtering out other people until you record your voiceprint again.",
+        "confirm": "Delete",
+        "cancel": "Cancel"
+      }
+    },
+    "strictness": {
+      "label": "Strictness",
+      "hint": "Stricter lets fewer other voices through, but in noisy places it may also cut off more of your own words.",
+      "restoreDefault": "Restore default",
+      "options": {
+        "relaxed": "Relaxed",
+        "standard": "Standard",
+        "strict": "Strict"
+      }
+    },
+    "enroll": {
+      "description": "Read the {{clips}} passages below in your normal voice. Each recording lasts up to {{seconds}} seconds; stop recording when you finish reading. Record where you usually use voice input, with no one else talking.",
+      "step": "Passage {{current}} of {{total}}",
+      "record": "Start reading",
+      "stop": "Stop Recording",
+      "rerecord": "Record this one again",
+      "recording": "Recording… {{seconds}} seconds left",
+      "saving": "Creating voiceprint…",
+      "submit": "Finish",
+      "cancel": "Cancel",
+      "passages": {
+        "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
+        "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
+        "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+      },
+      "errors": {
+        "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
+        "no_embedding": "No voiceprint could be read from passage {{index}}. Record it again.",
+        "inconsistent": "Passage {{index}} does not sound like the same person as the others; another voice or noise may have been picked up. Record it again.",
+        "models_missing": "The recognition model has not finished downloading. Try again shortly.",
+        "storage_unavailable": "The system keychain is unavailable, so the voiceprint cannot be stored encrypted. Try again later.",
+        "failed": "The voiceprint could not be created. Try again.",
+        "microphone": "The microphone cannot be used. Check microphone permission and try again.",
+        "noAudio": "No sound came from the microphone. Check it and try again."
+      },
+      "stepChoice": "Passage {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Not recorded",
+        "recorded": "Recorded",
+        "retry": "Record again",
+        "recording": "Recording"
+      },
+      "rerecordStep": "Record Passage {{index}} Again",
+      "readHint": "Start when you are ready. Stop recording when you finish reading.",
+      "otherClipsKept": "Your other recordings have been kept."
+    }
   },
   "deviceNameEditor": {
     "screenTitle": "Device Name",

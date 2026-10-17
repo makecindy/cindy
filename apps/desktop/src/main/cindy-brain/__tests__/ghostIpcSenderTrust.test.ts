@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { isValidGhostId } from '../../../shared/ghost.js';
+import { isPluginInstanceKey } from '../../../shared/pluginIdentity.js';
 
 /**
  * 源码契约测试:所有会改写插件世界(装/卸/更/启停/导出/恢复内置)或发放
@@ -84,4 +86,12 @@ describe('高权限 ghost IPC 的来源闸(源码契约)', () => {
     expect(update).toContain('replaceGhostRecommendations(id,');
     expect(update).not.toMatch(/payload\.(?:id|ghostId)/);
   });
+  it('accepts an organization instance key when acknowledging a retirement', () => {
+    const block = handlerBlock(source, 'ghosts:acknowledge-retirement');
+    expect(block).toContain('isPluginInstanceKey(id)');
+    expect(block).not.toContain('isValidGhostId(id)');
+    expect(isPluginInstanceKey('_ns__acme__x')).toBe(true);
+    expect(isValidGhostId('_ns__acme__x')).toBe(false);
+  });
+
 });

@@ -1,7 +1,7 @@
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveTaskModelSelection } from '../appDefaultModelControl';
+import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
@@ -54,6 +54,18 @@ describe('Bot control of the real Cindy default', () => {
     host.connected = false;
     expect(await validateTaskModel(route)).toBe(false);
     expect((await inspectAppDefaultModel()).current).toEqual(route);
+  });
+  it('resolves an implicit legacy source without changing the saved route or accepting a stale explicit source', async () => {
+    const legacy = { ...route, providerId: null };
+    mirror(legacy);
+    expect(await resolveAvailableTaskModels([legacy])).toEqual([route]);
+    expect(await validateTaskModel(legacy)).toBe(true);
+    expect((await inspectAppDefaultModel()).current).toEqual(legacy);
+    expect(await validateTaskModel({ ...legacy, providerId: 'deleted' })).toBe(false);
+    host.enabled = false;
+    expect(await validateTaskModel(legacy)).toBe(false);
+    host.enabled = true; host.connected = false;
+    expect(await validateTaskModel(legacy)).toBe(false);
   });
   it('resolves a one-task selection without changing application preferences', async () => {
     const dispatch = vi.fn(); configureAppDefaultModelSelection(dispatch);

@@ -159,6 +159,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     recurring: true,
     manual: false,
     agentKind: 'claude-code',
+    // 留空模型要靠默认解析(本 harness 未接),这里显式给模型。
+    model: 'claude-opus-5-5',
     workspaceKind: 'project',
     workingDir: '/repo/project',
     useWorktree: false,

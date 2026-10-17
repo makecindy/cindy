@@ -1,4 +1,12 @@
 {
+  "logSupport": {
+    "title": "ログとフィードバック",
+    "localFiles": "問題が発生した日のログを選択してください。未マスキングのため、共有前に内容を確認してください。",
+    "uploaded": "ログをアップロードしました。アップロード番号：{{code}}。問題の報告時にこの番号を添えてください。",
+    "close": "閉じる",
+    "uploadDescription": "問題の報告時にアップロード番号を添えてください。",
+    "uploadDetails": "アップロード内容を確認"
+  },
   "taskMove": {
     "upgradeComputer": "このコンピューターの Cindy はタスクの移動に対応していません。「{{name}}」の Cindy を更新してください。",
     "sourceProjects": "タスクのコンピューターのプロジェクト",
@@ -153,8 +161,8 @@
     "runsOnThisDevice": "このパソコンで実行中",
     "inviteNotice": "招待リンクを持つユーザーはログイン後に参加でき、所有者と同じ Agent 権限を持ちます。",
     "offlineAutoClose": "ホストのパソコンがオフラインのままだと、共有は自動的に終了します。",
-    "inviteBoxHint": "リンクを送ると、相手はクリックして参加できます。モバイルではリンクをコピーして Cindy を開くこともできます。",
-    "invitationMessage": "「{{title}}」への招待です\n{{link}}\nリンクを開いて参加してください。モバイルではリンクをコピーして Cindy を開き、参加を確認することもできます。",
+    "inviteBoxHint": "リンクを送ると、相手はクリックして参加できます。Cindy の「共有セッションに参加」にリンクを貼り付けて参加することもできます。",
+    "invitationMessage": "「{{title}}」への招待です\n{{link}}\nリンクを開いて参加してください。Cindy が開かない場合は、Cindy の「共有セッションに参加」からこのリンクを貼り付けてください。",
     "membersWithLimit": "メンバー · {{count}} 人（ゲストは最大 2 人）",
     "me": "自分",
     "thisDevice": "このパソコン",
@@ -189,25 +197,18 @@
     "invitationDifferentServer": "この招待は別の Cindy サービスのものです。対応するアプリでリンクを開いてください。",
     "managementIntro": "開始した共有と参加した共有を管理します。",
     "returnToTasks": "タスク一覧に戻る",
-    "invitationDetected": "共有タスクへの招待が見つかりました",
-    "notNow": "今は参加しない",
     "closeAllLabel": "すべての共有を停止",
     "closeAllDescription": "すべてのゲストがアクセスできなくなります。タスクの履歴は保持されます。"
   },
   "providerShare": {
     "entry": {
-      "manage": "共有を管理",
-      "manageWithPending_other": "共有を管理 · 未処理の申請 {{count}} 件",
-      "disabledInvocation": "共有するには、先に「リモート利用を許可」をオンにしてください",
-      "disabledRemoteControl": "共有するには、先に「リモート接続」でこのパソコンの操作を許可してください",
+      "label": "リモートと共有",
+      "pending_other": "未処理の共有申請 {{count}} 件",
       "remoteControlOff": "このパソコンはまだリモート操作を許可していないため、プロバイダーをリモートで利用したり共有したりできません。",
       "openRemoteControl": "「リモート接続」設定を開く",
       "descriptionOff": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。オフの間、既存の共有は一時的に使えなくなりますが、削除はされません。"
     },
     "manage": {
-      "title": "{{provider}} を共有",
-      "description": "共有すると、相手は自分のセッションで {{provider}} のモデルを選べます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。相手のファイルとコマンドは引き続き相手のパソコンで実行されます。",
-      "descriptionWithDevice": "共有すると、相手は自分のセッションで {{provider}} のモデルを選べます。Agent はこのパソコン（{{device}}）で実行され、使用量はあなたの {{provider}} に計上されます。相手のファイルとコマンドは引き続き相手のパソコンで実行されます。",
       "createLink": "共有リンクを作成",
       "loading": "共有を読み込み中…",
       "notReady": "共有は現在利用できません。サインインしてネットワークに接続していることを確認してください。自動的に再試行します。",
@@ -244,19 +245,37 @@
         "collapseAria": "{{name}} のモデル別使用量を折りたたむ",
         "empty": "まだ誰とも共有していません。共有リンクを作成して相手に送ってください。相手が申請し、あなたが承認するとここに表示されます。",
         "table": {
-          "model": "モデル",
           "turns": "メッセージ",
           "input": "入力",
           "output": "出力",
           "amount": "推定金額"
         },
-        "noUsage": "この期間の使用量はありません",
-        "estimateNote": "金額はローカルの単価に基づく推定で、プロバイダーの実際の請求額ではありません。"
+        "estimateNote": "金額はローカルの単価に基づく推定で、プロバイダーの実際の請求額ではありません。",
+        "moreAria": "{{name}} の他の操作"
       },
       "removeConfirm": {
         "title": "{{name}} との共有を削除しますか？",
         "description": "{{name}} はすぐに {{provider}} を使えなくなり、実行中のセッションは停止します。再び共有するには新しいリンクが必要です。使用量の記録は残ります。",
         "confirm": "共有を削除"
+      },
+      "reshare": {
+        "applying": "{{owner}} のプロバイダーグループ経由での利用を希望しています",
+        "requestedAt": "{{time}}にリクエスト",
+        "usageHint": "同意すると、{{name}} のセッションをこのパソコンで実行でき、使用量は {{owner}} の分として記録されます",
+        "approve": "同意",
+        "reject": "拒否",
+        "summaryUsing_other": "{{count}} 人が {{owner}} のプロバイダーグループ経由で利用",
+        "summaryOwner": "{{owner}} のプロバイダーグループ経由",
+        "summaryDeclined_other": "{{count}} 人は未同意",
+        "stateApproved": "同意済み",
+        "stateRejected": "未同意",
+        "revoke": "同意を取り消す",
+        "revokeAria": "{{name}} への同意を取り消す",
+        "approveAria": "{{name}} の利用に同意する",
+        "toastApproved": "{{name}} が {{owner}} のプロバイダーグループ経由で {{provider}} を使えるようにしました",
+        "toastRejected": "{{name}} のリクエストを拒否しました",
+        "toastRevoked": "{{name}} への同意を取り消しました。実行中のセッションは停止しました",
+        "listTitle": "{{owner}} のプロバイダーグループ経由で利用"
       }
     },
     "toast": {
@@ -268,7 +287,7 @@
     },
     "link": {
       "title": "{{provider}} の共有リンクを作成しました",
-      "description": "共有したい相手にリンクを送ってください。相手は説明を確認してから申請を送ります。このパソコンであなたが承認すると共有が有効になります。",
+      "description": "相手にリンクを送り、届いた申請を承認すると共有が有効になります。",
       "fieldLabel": "共有リンク",
       "copy": "リンクをコピー",
       "copied": "コピーしました",
@@ -290,7 +309,10 @@
       "title": "{{name}} があなたの共有した {{provider}} の利用を申請しています",
       "requestedAt": "共有リンクから申請: {{time}}",
       "pairingHint": "承認する前に、リンクを送ったのと同じ方法で「表示されているペアリングコードは？」と相手に確認できます。一致したら承認してください。",
-      "callout": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} を共有」からいつでも停止または削除できます。",
+      "callout": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
+      "calloutGroup": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
+      "calloutRemote": "承認すると、{{name}} は自分のセッションで {{provider}} のモデルを使えます。Agent はこのプロバイダーを提供するパソコンで実行され、使用量はあなたの {{provider}} に計上されます。「{{provider}} · リモートと共有」からいつでも停止または削除できます。",
+      "calloutClaudeEmail": "{{name}} が使用している間、Agent はあなたが Claude へのログインに使っているメールアドレスを確認できます。",
       "calloutUnknown": "申請者に心当たりがない場合は拒否してください。拒否するとこのリンクは無効になります。",
       "approve": "共有を承認",
       "reject": "申請を拒否",
@@ -299,13 +321,12 @@
     "apply": {
       "loading": "共有リンクを読み込み中…",
       "askTitle": "{{name}} が {{provider}} をあなたに共有しようとしています",
-      "providerOnDevice": "{{provider}} · {{device}}",
-      "factRuns": "Agent は {{name}} のパソコン上で {{provider}} を使って実行されます",
+      "factRuns": "Agent は {{name}} のパソコン、または {{name}} が手配した別のパソコンで {{provider}} を使って実行されます",
       "factRunsDetail": "使用量は {{name}} の {{provider}} に計上され、{{name}} はあなたの使用量を確認できます",
       "factFiles": "プロジェクトのファイルとコマンドは引き続きあなたのパソコンで実行されます",
       "factFilesDetail": "あなたのセッションの権限が適用されます",
-      "factPrivacy": "チャットの内容と Agent が読み取ったファイルの内容は {{name}} のパソコンを経由し、保存されます",
-      "factPrivacyDetail": "{{name}} に表示されるのはあなたのニックネームとアバターだけです",
+      "factPrivacy": "チャットの内容と Agent が読み取ったファイルの内容は {{name}} のパソコンを経由し、実際にセッションを実行するパソコンに保存されます",
+      "factPrivacyDetail": "{{name}} と、同意が必要なほかのパソコンの持ち主に表示されるのは、あなたのニックネームとアバターだけです",
       "factApproval": "申請を送った後、{{name}} が承認すると有効になります",
       "factApprovalDetail": "{{name}} はこの共有をいつでも停止または削除できます",
       "send": "申請を送信",
@@ -373,21 +394,51 @@
         "open": "リンクを開く",
         "cancel": "キャンセル"
       },
-      "detailNote": "Agent は {{name}} のパソコンで動き、相手のログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。",
+      "detailNote": "Agent は {{name}} のパソコン、または {{name}} が手配した別のパソコンで動き、相手のログインとクォータを使います。チャットの内容と Agent が読み取ったファイルの内容は {{name}} のパソコンを経由し、実際にセッションを実行するパソコンに保存されます。タスクを新規作成するときにモデル一覧で選ぶと使えます。",
+      "credentialConsent": {
+        "label": "{{name}} を信頼",
+        "description": "オンにすると、この共有を使うタスクが鍵などの機密情報を読み取るときに確認しなくなり、自分のプロバイダーと同じように使えます。このパソコンでのみ有効です。",
+        "ariaLabel": "{{name}} を信頼（{{provider}}）",
+        "writeFailed": "信頼の設定を保存できませんでした"
+      },
       "modelsTitle": "利用できるモデル",
       "modelsLoading": "相手が公開しているモデルを読み込んでいます…",
       "modelsRefused": "相手のパソコンが今この共有の読み込みを許可していません。リモート操作を許可していないか、このプロバイダーの「リモート利用を許可」がオフになっているか、相手の Cindy が起動したばかりでまだ準備できていない可能性があります。しばらくしてから再試行するか、相手にこの 2 つの設定を確認してもらってください。",
       "modelsFailedWithCode": "相手が公開しているモデルを読み込めませんでした。しばらくしてから再試行してください。（エラーコード：{{code}}）",
       "retryModels": "モデルを再読み込み",
+      "groupStatus": {
+        "title": "グループ内のコンピューターの状態",
+        "shareActive": "共有中",
+        "refresh": "状態を更新",
+        "computer": "コンピューター {{number}}",
+        "summary": "{{total}} 台中 {{ready}} 台がタスクを受け付け可能",
+        "loading": "コンピューターの状態を取得中…",
+        "unsupported": "共有元の Cindy から状態が提供されていません。共有元に確認や更新を依頼してください。",
+        "failed": "コンピューターの状態を取得できませんでした。更新して再試行してください。",
+        "unconfirmed": "一部のコンピューターの状態が未確認です。しばらくしてから更新してください。",
+        "noneReady": "現在タスクを受け付けられるコンピューターはありません。共有元に確認を依頼してください。",
+        "note": "匿名の状態のみを表示し、コンピューター名や使用量は表示しません。利用可否は選択したモデルにも依存します。",
+        "updateNote": "共有されたタスクを受け付けるには、共有元が該当するコンピューターの Cindy を更新する必要があります。",
+        "state": {
+          "available": "利用可能",
+          "busy": "使用中・タスク受付可能",
+          "cooling": "クールダウン中・新規タスク受付停止",
+          "offline": "オフラインまたは接続不可",
+          "paused": "割り当て停止中",
+          "unavailable": "一時的に利用不可",
+          "needs-update": "更新が必要",
+          "unknown": "状態不明"
+        }
+      },
       "modelsEmpty": "相手はまだ利用できるモデルを公開していません。",
       "pausedNote": "相手がこの共有を一時停止しています。再開されると使えるようになります。",
       "offlineNote": "相手のパソコンがオフラインです。オンラインに戻ると使えるようになります。",
       "needsUpdateNote": "相手の Cindy が更新されると、この共有を使えるようになります。"
     },
     "picker": {
-      "deviceName": "{{device}} · {{owner}} からの共有",
       "unavailable": "利用できなくなった共有",
-      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。"
+      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。",
+      "numbered": "{{name}} ({{index}})"
     },
     "notification": {
       "requestTitle": "新しい共有の申請",
@@ -395,7 +446,220 @@
       "approvedTitle": "共有の申請が承認されました",
       "approvedBody": "{{name}} が {{provider}} の共有を承認しました",
       "rejectedTitle": "共有の申請は承認されませんでした",
-      "rejectedBody": "{{name}} は {{provider}} の共有を承認しませんでした"
+      "rejectedBody": "{{name}} は {{provider}} の共有を承認しませんでした",
+      "reshareTitle": "新しい利用リクエスト",
+      "reshareBody": "{{name}} が {{owner}} のプロバイダーグループ経由で、あなたの共有した {{provider}} を使いたいと希望しています"
+    },
+    "runLimits": {
+      "title": "リモートセッション数",
+      "description": "自分の他のパソコンと共有先のデバイスを含め、このパソコンのすべてのプロバイダーに適用されます。応答済みでも解放されていないセッションは含まれます。このパソコンで直接実行するセッションは含まれません。",
+      "perDevice": "接続デバイスごとの最大セッション数",
+      "total": "全接続デバイスの合計最大セッション数",
+      "invalid": "1～{{max}} の整数を入力してください。デバイスごとの上限は合計上限以下にしてください。",
+      "usage": "使用中 {{used}} / {{total}}、{{devices}} 台から接続。1 台あたりの最多使用数は {{largest}} です。",
+      "applyHint": "保存後すぐに適用されます。上限を下げても既存のセッションは中断せず、新規作成のみ制限します。グループ経由の接続は直接接続しているデバイスに集計されます。",
+      "save": "保存",
+      "reset": "既定値に戻す",
+      "saved": "リモートセッション数を保存しました",
+      "retry": "再読み込み",
+      "loading": "読み込み中…"
+    }
+  },
+  "providerGroup": {
+    "management": {
+      "note": "{{device}} のプロバイダーグループを管理しています。変更はそのパソコンに保存されます。オンラインの状態にしておいてください。",
+      "unsupported": "グループを作成したパソコンの Cindy は、まだリモート管理に対応していません。先にそのパソコンの Cindy を更新してください。"
+    },
+    "page": {
+      "title": "{{provider}} · リモートと共有"
+    },
+    "usage": {
+      "title": "使用量",
+      "description": "{{provider}} の使用量を人ごとに表示します。あなた自身の分は、今回のアップデートから記録します。",
+      "shareSource": "共有相手",
+      "unknownDevice": "別のパソコン",
+      "descriptionGroup": "{{provider}} の使用量を人ごとに表示します。展開すると、グループ内のパソコンごとに分けて表示します。あなた自身の分は、今回のアップデートから記録します。",
+      "summary": {
+        "total": "合計使用量",
+        "amount": "推定金額",
+        "people": "利用者",
+        "models": "モデル",
+        "computers": "使ったパソコン"
+      },
+      "selfTag": "あなた",
+      "relayName": "{{device}} 経由",
+      "computerCount_other": "{{count}} 台のパソコン",
+      "lastUsedOn": "{{lastUsed}} · {{computers}}で利用",
+      "unattributed": "以前の記録",
+      "unattributedSource": "パソコンを区別せずに記録",
+      "removedMember": "グループから外したパソコン",
+      "expandAria": "{{name}} の使用量の内訳を表示",
+      "collapseAria": "{{name}} の使用量の内訳を閉じる",
+      "table": {
+        "member": "パソコン / モデル"
+      },
+      "filter": {
+        "partyAria": "利用者で絞り込む",
+        "allParties": "全員",
+        "selfDetail": "このパソコンとほかのパソコンの合計",
+        "relayDetail": "個々の利用者は見えません",
+        "computerAria": "グループ内のパソコンで絞り込む",
+        "allComputers": "グループ内のすべてのパソコン"
+      },
+      "focus": {
+        "clear": "すべて表示",
+        "only": "{{name}} だけ表示"
+      },
+      "byParty": {
+        "title": "人別",
+        "col": {
+          "party": "利用者",
+          "computers": "使ったパソコン",
+          "actions": "操作"
+        }
+      },
+      "byComputer": {
+        "title": "パソコン別",
+        "col": {
+          "computer": "グループ内のパソコン",
+          "parties": "利用者"
+        }
+      },
+      "stack": {
+        "aria": "棒の色分け",
+        "party": "人",
+        "computer": "パソコン",
+        "model": "モデル"
+      },
+      "loadFailed": "使用量を読み込めませんでした。しばらくすると自動で再試行します。",
+      "legacyNote": "{{device}} の Cindy のアップデートが必要です。今は全期間の合計だけを表示しています。",
+      "coverage": "日別の集計は {{date}} から",
+      "emptyRange": "この期間の使用量はありません"
+    },
+    "section": {
+      "title": "プロバイダーグループ",
+      "addComputer": "パソコンを追加",
+      "delete": "グループを削除",
+      "empty": "ほかのパソコンの {{provider}} を追加すると、セッションが自動でいずれかを選んで実行します",
+      "loading": "プロバイダーグループを読み込み中…",
+      "loadFailed": "プロバイダーグループを読み込めませんでした",
+      "note": "このパソコンのセッションと共有相手のセッションは、グループが選んだパソコンで Agent が実行されます"
+    },
+    "strategy": {
+      "label": "グループの割り当て方式",
+      "least": "空き優先",
+      "round": "順番に",
+      "order": "並び順",
+      "weight": "重み付け",
+      "quotaFirst": "Claude サブスクリプションの使用量を取得できる場合、クォータのリセットが近いパソコンを優先し、次に使用量の少ないものを選びます。同程度ならグループの割り当て方式で選びます",
+      "description": {
+        "least": "空いているパソコンへ",
+        "round": "順番に割り当て",
+        "order": "上のパソコンを優先",
+        "weight": "重みの比率で"
+      }
+    },
+    "autoSwitch": {
+      "label": "パソコンを自動で切り替え",
+      "description": "上限・接続不可・ログイン切れのときに切り替えます"
+    },
+    "member": {
+      "local": "このパソコン",
+      "version": {
+        "current": "Cindy {{version}}",
+        "updateRequired": "更新が必要",
+        "unknown": "バージョン不明",
+        "needsUpdate": "共有されたタスクを受け取るには更新が必要",
+        "supportUnknown": "共有タスクへの対応状況は不明"
+      },
+      "sourceDevice": "自分のほかのパソコン",
+      "sourceShare": "{{name}} からの共有",
+      "shareComputer": "{{name}} のパソコン",
+      "shareComputerUnknown": "共有されたパソコン",
+      "accountCount_other": "{{count}} 個のアカウント",
+      "accountFallback": "アカウント {{index}}",
+      "quota": {
+        "loading": "クォータを読み込み中…",
+        "unavailable": "このパソコンのクォータを今は読み取れません",
+        "none": "このプロバイダーにはクォータの情報がありません",
+        "offline": "このパソコンはオフラインのため、クォータを読み取れません",
+        "share": "ほかの人から共有されたパソコンのクォータは表示されません"
+      },
+      "runningCount_other": "{{count}} 件実行中",
+      "limitAria": "{{name}} の同時実行数の上限",
+      "limitOption_other": "上限 {{count}}",
+      "weightAria": "{{name}} の重み",
+      "weightOption": "重み {{weight}}",
+      "assignAria": "{{name}} に割り当てる",
+      "assignLocalAria": "{{name}} で他のパソコンからの新しいタスクを受け付ける",
+      "moreAria": "{{name}} の他の操作",
+      "remove": "グループから外す",
+      "status": {
+        "checking": "確認中…",
+        "idle": "待機中",
+        "full": "上限に到達",
+        "paused": "割り当て停止中",
+        "pausedLocal": "他のパソコンからの新しいタスクは受付停止中",
+        "cooling": "クールダウン中",
+        "coolingUntil": "クールダウン中 · {{time}} ごろ回復",
+        "offline": "オフライン",
+        "unreachableHere": "このパソコンから接続できません",
+        "unavailable": {
+          "provider-off": "そのパソコンでこのプロバイダーの「リモート利用を許可」がオフです",
+          "disconnected": "プロバイダーが未接続か無効です",
+          "share-paused": "共有が停止されています",
+          "share-removed": "共有が削除されています"
+        }
+      },
+      "removeConfirm": {
+        "title": "{{name}} をプロバイダーグループから外しますか？",
+        "description": "新しいセッションは割り当てられなくなります。すでにそこで実行中のセッションはそのパソコンに残ります。",
+        "lastDescription": "グループ内の最後のパソコンです。外すと {{provider}} のプロバイダーグループは削除されます。",
+        "confirm": "グループから外す"
+      },
+      "sourceGroupOwner": "グループを作成したパソコン",
+      "reshare": {
+        "allApproved": "共有相手も利用できます",
+        "waiting_other": "共有相手 {{count}} 人が {{owner}} の同意を待っています",
+        "rejected_other": "{{owner}} は共有相手 {{count}} 人に同意しませんでした",
+        "needsUpdate": "{{owner}} が Cindy を更新すると、共有相手への同意ができるようになります",
+        "unknown": "{{owner}} が共有相手に同意しているかはまだわかりません",
+        "title": "共有相手がこのパソコンを使えるか",
+        "description": "{{owner}} が 1 人ずつ同意します。同意されていない人のセッションはこのパソコンに割り当てられません。",
+        "state": {
+          "approved": "同意済み",
+          "pending": "同意待ち",
+          "rejected": "未同意",
+          "unknown": "未確認"
+        }
+      }
+    },
+    "deleteConfirm": {
+      "title": "{{provider}} のプロバイダーグループを削除しますか？",
+      "description": "このパソコンの新しいセッションはこのパソコンで実行されます。ほかのパソコンに割り当て済みのセッションはそのまま残ります。",
+      "confirm": "グループを削除"
+    },
+    "add": {
+      "title": "{{provider}} のプロバイダーグループにパソコンを追加",
+      "sourceAria": "パソコンの追加元",
+      "tabAvailable": "すでに使えるもの",
+      "tabLink": "共有リンク",
+      "availableDescription": "自分のほかのパソコンと共有されたものです。選ぶだけで追加でき、申請は不要です。",
+      "loading": "追加できるパソコンを探しています…",
+      "loadFailed": "追加できるパソコンを読み込めませんでした",
+      "empty": "追加できるパソコンがありません。ほかのパソコンで {{provider}} の「リモート利用を許可」をオンにするか、共有リンクで申請してください。",
+      "alreadyMember": "グループに追加済み",
+      "confirm": "グループに追加",
+      "cancel": "キャンセル",
+      "linkDescription": "ほかの人から共有された {{provider}} のリンクを貼り付けます。相手が承認したら、「すでに使えるもの」に戻って選択してください。",
+      "remoteLinkDescription": "グループがあるパソコンのプロバイダー設定で共有リンクを入力してください。相手が承認したら、「すでに使えるもの」に戻って選択してください。",
+      "pasteLink": "共有リンクを貼り付け"
+    },
+    "toast": {
+      "added_other": "{{count}} 台のパソコンを {{provider}} のプロバイダーグループに追加しました",
+      "addedAccounts_other": "{{count}} 個のアカウントを {{provider}} のプロバイダーグループに追加しました",
+      "removed": "{{name}} をプロバイダーグループから外しました",
+      "deleted": "{{provider}} のプロバイダーグループを削除しました"
     }
   },
   "privacyExit": {
@@ -560,8 +824,10 @@
     "clipboardSync": "クリップボード同期",
     "clipboardSyncConflict": "両方のクリップボードが変更されました。それぞれの内容は保持されています。どちらかのデバイスでもう一度コピーすると同期されます。",
     "clipboardSyncFailed": "同期に一時的に失敗しました。自動で再試行します。設定はオンのままです。",
-    "clipboardSyncSkipped": "この内容は同期できないためスキップしました。ペーストの許可を確認するか、テキストや画像をコピーして再試行してください。",
-    "clipboardSyncPermission": "同期を一時停止しました。ペーストを許可してから再試行してください。設定はオンのままです。",
+    "clipboardSyncSkipped": "この形式はクリップボード同期に対応していないためスキップしました。",
+    "clipboardSyncTooLarge": "クリップボード同期のサイズ上限を超えたためスキップしました。",
+    "clipboardSyncPermission": "クリップボード同期にはペーストの許可が必要です。許可後、このウィンドウに戻ると再開します。",
+    "clipboardSyncWaiting": "リモートのパソコンのクリップボードに現在アクセスできません（ロック中の可能性があります）。自動で同期を再開します。",
     "lockingOnExit": "コンピューターをロック中…",
     "lockOnExit": "終了時にパソコンをロック",
     "lockOnExitHint": "リモートデスクトップを終了するとロックします。再接続やアプリ切り替えではロックしません。",
@@ -586,12 +852,16 @@
     "copy": "このパソコンにコピー",
     "paste": "リモートパソコンに貼り付け",
     "clipboardSyncHint": "このウィンドウが最前面にある間、テキスト、画像、リッチテキストを双方向に同期します。",
-    "credentialRequired": "Mac のパスワードを確認してください。確認できない場合は両方のパソコンで Cindy を更新してください。"
+    "credentialRequired": "Mac のパスワードを確認してください。確認できない場合は両方のパソコンで Cindy を更新してください。",
+    "handoffEnded": "この代理入力はすでに終了しているため、表示するウィンドウがありません。",
+    "handoffUnavailable": "このコンピュータではこのウィンドウだけを表示できません。そのコンピュータで Cindy を更新するか、リモートデスクトップをオンにしてください。",
+    "handoffWindow": "代理入力 · {{app}}"
   },
   "ipcError": {
     "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
     "PRECONDITION_FAILED": "現在の状態ではこの操作を実行できません。しばらくしてから再試行してください。",
+    "PROVIDER_GROUP_CHANGED": "プロバイダーグループが別の場所で変更されたため、この操作は適用されませんでした。最新の設定を確認してから、もう一度操作してください。",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "モデルは切り替わっていません。現在のタスクで使用中のコンテキスト量を確認できません。現在のモデルを維持するか、新しいタスクを作成してください。",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "モデルは切り替わっていません。現在のモデルのコンテキストウィンドウを確認できません。カスタムモデルのウィンドウ設定を確認してください。変更できない場合は、現在のモデルを維持するか、新しいタスクを作成してください。",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "モデルは切り替わっていません。対象モデルのコンテキストウィンドウを確認できません。カスタムモデルのウィンドウ設定を確認してください。変更できない場合は、別のモデルを選ぶか、新しいタスクを作成してください。",
@@ -633,7 +903,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "リージョンをまたぐ共有にはまだ対応していません。このリンクは別のリージョンの Cindy サービスのものです。",
     "REMOTE_AGENT_SHARE_PAUSED": "モデルは切り替わっていません：共有した人があなたへの共有を一時停止しました。別のモデルを選んでください。",
     "REMOTE_AGENT_SHARE_REMOVED": "モデルは切り替わっていません：この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルを選んでください。",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "モデルは切り替わっていません：共有されたプロバイダーは一時的に利用できません（共有した人のパソコンがオフラインか、共有が一時的にオフになっています）。後でもう一度試すか、別のモデルを選んでください。"
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "モデルは切り替わっていません：共有されたプロバイダーは一時的に利用できません（共有した人のパソコンがオフラインか、共有が一時的にオフになっています）。後でもう一度試すか、別のモデルを選んでください。",
+    "SSH_HOST_KEY_MISMATCH": "SSH ホスト鍵が変更されました"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -705,6 +976,273 @@
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
       "deny": "拒否"
+    }
+  },
+  "menubar": {
+    "balance": {
+      "name": "Cindy 残高",
+      "quotaName": "Cindy の今期クォータ",
+      "short": "Cindy"
+    },
+    "time": {
+      "today": "今日 {{time}}",
+      "tomorrow": "明日 {{time}}",
+      "weekday": "{{day}} {{time}}",
+      "date": "{{date}} {{time}}",
+      "minutesAgo_other": "{{n}} 分前",
+      "hoursAgo_other": "{{n}} 時間前",
+      "daysAgo_other": "{{n}} 日前"
+    },
+    "duration": {
+      "daysHours": "{{d}} 日 {{h}} 時間",
+      "days_other": "{{d}} 日",
+      "hoursMinutes": "{{h}} 時間 {{m}} 分",
+      "hours_other": "{{h}} 時間",
+      "minutes_other": "{{m}} 分"
+    },
+    "durationShort": {
+      "daysHours": "{{d}}日{{h}}時間",
+      "days": "{{d}}日",
+      "hoursMinutes": "{{h}}時間{{m}}分",
+      "hours": "{{h}}時間",
+      "minutes": "{{m}}分"
+    },
+    "window": {
+      "session": "{{hours}} 時間",
+      "week": "今週",
+      "scoped": "{{model}} 今週"
+    },
+    "headline": {
+      "recommend": "{{name}} がいちばん余裕があります。",
+      "balance": "Cindy 残高はまだ使えます。",
+      "quota": "Cindy の今期クォータはまだ使えます。",
+      "none": "すべて使い切りました。",
+      "unread": "残りをまだ取得できていません。",
+      "empty": "残りを表示できるアカウントがまだありません。",
+      "emptyHint": "Cindy でサブスクリプションを接続すると、ここに残りが表示されます。",
+      "restore": "{{name}} は{{duration}}後にリセット",
+      "soon": "{{name}} はまもなく上限",
+      "subscriptionsUsed": "サブスクリプションはすべて使い切り",
+      "waitReset": "サブスクリプションのリセット待ち",
+      "sentence": "{{text}}。",
+      "joiner": "、"
+    },
+    "cell": {
+      "payg": "従量",
+      "plan": "プラン",
+      "noBalance": "残高なし",
+      "unknown": "不明",
+      "noData": "残りをまだ取得できていません",
+      "lastsDays": "約{{n}}日",
+      "lastsDaysShort": "{{n}}日",
+      "resetsIn": "{{duration}}後にリセット",
+      "credits": "credits"
+    },
+    "a11y": {
+      "payg": "{{name}}、従量課金、残高は取得できません",
+      "plan": "{{name}}、サブスクリプション、残りは取得できません",
+      "balance": "Cindy 残高 {{amount}}",
+      "balanceDays": "Cindy 残高 {{amount}}、約 {{n}} 日分",
+      "quota": "Cindy クォータ残り {{amount}}",
+      "noData": "{{name}}、データなし",
+      "reserve": "{{name}}、使い切り、credits は使用可能",
+      "remaining": "{{name}} 残り {{n}}%"
+    },
+    "detail": {
+      "balanceCaption": "残高",
+      "quotaCaption": "今期のクォータ残り",
+      "apiKey": "API Key",
+      "subscription": "サブスクリプション",
+      "noBalance": "残高を取得できません",
+      "unknownRemaining": "残りを取得できません",
+      "noData": "データなし",
+      "windowLeft": "{{window}}の残り"
+    },
+    "say": {
+      "balance": "残高は自動では回復しません。",
+      "quota": "クォータは期間ごとに付与され、ここではチャージしません。",
+      "quotaResets": "クォータは{{at}}に満額へリセットされます。",
+      "balanceLasts_other": "直近 7 日のペースで約 {{n}} 日分です。",
+      "balanceEstimating": "利用記録を集めています。数日で残り日数を見積もれます。",
+      "payg": "{{name}} は従量課金です。",
+      "paygSub": "API が残高を返さないため、ここには表示できません。使った分は Cindy の使用量に通常どおり含まれます。",
+      "plan": "{{name}} はサブスクリプション接続です。",
+      "planSub": "Cindy はまだ残りを読み取れません。使った分は Cindy の使用量に通常どおり含まれます。",
+      "noData": "まだ読み取れていません。",
+      "noDataSub": "更新するか、これでタスクを一度実行すると表示されます。",
+      "usedUp": "{{window}}の上限に達しました。",
+      "usedUpWithCredits": "{{at}}に回復します。それまでは Codex が {{credits}} credits を使って作業を続けます。",
+      "creditsOnly": "Codex が {{credits}} credits を使って作業を続けます。",
+      "resetsAt": "{{at}}に回復します。",
+      "emptyIn": "今のペースだと約 {{duration}}で上限に達します。",
+      "beforeReset": "リセットより {{duration}}早いです。",
+      "full": "満タンです。",
+      "relaxed": "ペースに余裕があります。",
+      "onPace": "ペースは標準です。",
+      "windowRefresh": "{{window}}の枠は{{at}}に更新",
+      "usedUpWithResets_other": "リセットがあと {{n}} 回使えます。使うとすぐ満タンに戻ります。"
+    },
+    "fact": {
+      "balance": "残高",
+      "quotaLeft": "今期のクォータ残り",
+      "quotaTotal": "今期のクォータ",
+      "updatedAgo": "{{ago}}に更新",
+      "dailyUse": "1 日の平均消費",
+      "about": "約 {{value}}",
+      "estimating": "見積もり中",
+      "estimatingSub": "データが不足",
+      "last7Days": "直近 7 日",
+      "runsOut": "使い切る目安",
+      "aroundDate": "{{date}}ごろ",
+      "atThisPace": "今のペースで",
+      "usedFor": "用途",
+      "cindyModels": "Cindy が提供するモデル",
+      "chargedPerUse": "使用量に応じて請求",
+      "billing": "課金",
+      "perUse": "従量",
+      "subscription": "サブスクリプション",
+      "connected": "接続済み",
+      "notProvided": "API が返さない",
+      "notReadable": "まだ読み取れない",
+      "inMenu": "メニュー",
+      "hidden": "非表示",
+      "shown": "表示",
+      "editHint": "「編集」で変更できます",
+      "usage": "使用量",
+      "counted": "通常どおり集計",
+      "countedSub": "Cindy の使用量に含む",
+      "resetsFull": "回復",
+      "windowResets": "{{window}}のリセット",
+      "timeLeft": "あと {{duration}}",
+      "remainingPercent": "残り {{n}}%",
+      "perModel": "モデルごとに計算",
+      "pace": "ペース",
+      "paceNormal": "標準",
+      "paceAhead": "{{n}}% 先行",
+      "paceReserve": "{{n}}% 余裕",
+      "paceSub": "均等に使えば残り {{n}}%",
+      "paceUsedUp": "使い切り",
+      "paceWaiting": "回復待ち",
+      "extraCredits": "追加 credits",
+      "unlimited": "無制限",
+      "creditsUsedAfter": "上限後に Codex が使用",
+      "noCredits": "予備の credits なし",
+      "prepaid": "前払い残高",
+      "xaiAccount": "xAI アカウント",
+      "account": "アカウント",
+      "todaySpent": "今日の使用額",
+      "dailySuggested": "1 日 {{value}} 以内が目安",
+      "poolPlan": "プラン残高",
+      "poolPlanSub": "プランで付与",
+      "poolPurchased": "チャージ残高",
+      "poolPurchasedSub": "自分でチャージ",
+      "poolPromo": "特典残高",
+      "poolPromoSub": "キャンペーン特典",
+      "promoExpires": "{{value}} は{{date}}に期限切れ",
+      "promoExpiresAll": "{{date}}に期限切れ",
+      "resetCredits": "利用上限のリセット",
+      "resetCount_other": "{{n}} 回",
+      "resetExpires": "{{date}}まで有効",
+      "resetAtLimit": "上限に達すると使用可能",
+      "device": "コンピュータ",
+      "deviceSub": "自分の別のコンピュータ"
+    },
+    "action": {
+      "newTask": "{{name}} で新しいタスクを開始",
+      "topUp": "Cindy でチャージ",
+      "manage": "Cindy の設定で管理",
+      "openApp": "Cindy を開く",
+      "useReset": "Cindy の設定でリセットを使う"
+    },
+    "tasks": {
+      "today_other": "今日 {{n}} 件",
+      "withRunning_other": "{{base}} · {{n}} 件実行中",
+      "context": "コンテキスト {{n}}%",
+      "private": "{{harness}} のタスク"
+    },
+    "harness": {
+      "claude-code": "Claude Code",
+      "codex": "Codex",
+      "pi": "Pi"
+    },
+    "usage": {
+      "estimateNote": "サブスク換算 = サブスクで使った分を API の参考価格で換算した額で、請求額ではありません。",
+      "deviceSelf": "この {{name}}（リアルタイム）",
+      "deviceSynced": "{{name}}（{{date}} まで同期）",
+      "deviceNotSynced": "{{name}}（未同期）",
+      "deviceJoiner": " + ",
+      "allDevices": "すべてのデバイス = {{list}}。"
+    },
+    "manage": {
+      "balance": "残高 · 自動では回復しない",
+      "quota": "クォータ · 期間ごとにリセット",
+      "payg": "API Key · 従量、残高なし",
+      "plan": "サブスクリプション · 残りを取得できない",
+      "subscription": "サブスクリプション · {{plan}} · {{windows}}",
+      "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "notify": {
+      "lowTitle": "残りわずかです",
+      "lowBody": "余裕のあるソースがどれも上限に近づいています。メニューバーの Cindy アイコンで回復時刻を確認できます。"
+    },
+    "ui": {
+      "updatedJustNow": "たった今更新",
+      "updatedMinutes_other": "{{n}} 分前に更新",
+      "updatedHours_other": "{{n}} 時間前に更新",
+      "updatedDays_other": "{{n}} 日前に更新",
+      "tasks": "タスク",
+      "tokenUnit": "token",
+      "noTasksToday": "今日のタスクはまだありません",
+      "moreTasks_other": "ほか {{n}} 件のタスク",
+      "running": "実行中",
+      "openApp": "Cindy を開く",
+      "gateTitle": "ログインすると残りを確認できます",
+      "gateBody": "Cindy にログインするか、ログインをスキップすると、ここにサブスクリプションの残りと今日の使用量が表示されます。",
+      "settings": "管理",
+      "refresh": "更新",
+      "monthScopeLocal": "直近 30 日 · このコンピュータ",
+      "monthScopeAll": "直近 30 日 · すべてのデバイス",
+      "expand": "展開",
+      "expandUsage": "使用量を展開",
+      "back": "戻る",
+      "usageTitle": "使用量",
+      "wideCaptionMoney_other": "直近 {{n}} 日 · サブスク換算",
+      "scopeLocal": "このコンピュータ",
+      "scopeAll": "すべてのデバイス",
+      "noUsage": "使用量なし",
+      "harness": {
+        "claude-code": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "dailyAverage": "1 日平均",
+      "paid": "支払額",
+      "range7": "7 日",
+      "range30": "30 日",
+      "range90": "90 日",
+      "listModels_other": "直近 {{n}} 日のモデル",
+      "listTasks": "今日のタスク",
+      "today": "今日",
+      "manageTitle": "管理",
+      "done": "完了",
+      "sources": "ソース",
+      "sourcesShown": "{{b}} 件中 {{a}} 件を表示",
+      "statusIcon": "メニューバーのアイコン",
+      "statusIconMode": {
+        "icon": "アイコンのみ",
+        "lowest": "最小の残り",
+        "today": "今日の使用量",
+        "task": "実行中のタスク"
+      },
+      "other": "その他",
+      "lowAlert": "残りわずかで通知",
+      "privacy": "個人情報を隠す",
+      "usageScope": "使用量の集計範囲",
+      "manageFoot": "プロバイダーを管理",
+      "showSource": "{{name}} をメニューに表示",
+      "reorderHint": "ドラッグするか、アクションメニューで並べ替えます",
+      "moveUp": "上へ移動",
+      "moveDown": "下へ移動"
     }
   },
   "settings": {
@@ -992,7 +1530,7 @@
         "noCompatibleModel": "SSH で利用できるモデルがありません。モデル設定で対応するプロバイダーに接続してください",
         "errorWorkdirIsFile": "{{path}} は既に存在しますがディレクトリではありません、別のパスを選んでください",
         "confirmCreateTitle": "ディレクトリが存在しません、作成しますか?",
-        "confirmCreateDescription": "{{path}} は {{hostId}} に存在しません。確認するとリモートで mkdir -p を実行してからセッションに入ります。",
+        "confirmCreateDescription": "{{path}} は {{hostId}} に存在しません。確認するとリモートに作成し、セッションを開きます。",
         "confirmCreateOk": "作成して続行"
       },
       "codexSync": {
@@ -1038,6 +1576,15 @@
         "preparingRuntime": "リモート {{hostId}} のランタイムを準備中…",
         "installingAgent": "リモート {{hostId}} に {{agent}} をインストール中…",
         "failed": "{{hostId}} への {{agent}} インストールに失敗: {{message}}。設定 → リモートマシン → {{hostId}} を展開して完全なログを確認してください。"
+      },
+      "hostKey": {
+        "title": "SSH ホスト鍵が変更されました",
+        "review": "ホスト鍵を確認",
+        "explanation": "{{host}} のホスト鍵が Cindy に保存された鍵と一致しません。信頼する鍵を更新する前に、サーバー管理者に新しいフィンガープリントを確認してください。",
+        "details": "保存済み：{{trusted}}\n新しいフィンガープリント：{{presented}}\n\nサーバーの再インストールや接続先のなりすましが原因の可能性があります。サーバーのコンソールなど、信頼できる経路で新しいフィンガープリントを確認してください。\n\nCindy の信頼記録：{{file}}\nCindy は ~/.ssh/known_hosts を読み取りません。ログイン鍵の変更やホストの削除・再追加では解決しません。\n\n更新すると、このホストのフィンガープリントだけを置き換えて再接続します。他のホストには影響しません。",
+        "cancel": "元の鍵を保持",
+        "trust": "新しい鍵を信頼して再接続",
+        "updateFailed": "ホストの信頼記録を更新できませんでした。接続情報や保存済みの鍵が変更されたか、記録ファイルに書き込めない可能性があります。再接続してフィンガープリントを再取得し、ファイルの権限を確認してください。"
       }
     },
     "appearance": {
@@ -1147,6 +1694,32 @@
           "cindy-window": "Cindy · 窓辺のひととき",
           "cindy-studio": "Cindy · 未来のアトリエ",
           "cindy-dream": "Cindy · 夢の旅",
+          "cindy-whisper": "Cindy · ささやき",
+          "cindy-crimson": "Cindy · 深紅の世界",
+          "cindy-night-glance": "Cindy · 夜の振り返り",
+          "cindy-scarlet-stroll": "Cindy · 赤い夜の散歩",
+          "cindy-neon": "Cindy · ネオンの横顔",
+          "cindy-prism": "Cindy · プリズムのかけら",
+          "wheatfield-watch": "麦畑の見守り",
+          "teacup-cat": "カップの黒猫",
+          "cloud-roaming": "雲の下の旅",
+          "night-launch": "夜空への飛翔",
+          "stardust-vortex": "星屑の渦",
+          "silent-orbits": "静かな軌道",
+          "dune-dawn": "砂丘の夜明け",
+          "planet-dawn": "惑星の夜明け",
+          "neon-valley": "ネオンの谷",
+          "silent-circuit": "静かな回路",
+          "indigo-folds": "藍色の重なり",
+          "moon-solitude": "月を望む孤影",
+          "dune-sphere": "砂丘の球体",
+          "ocean-clouds": "海と流れる雲",
+          "blush-leaves": "淡紅の葉影",
+          "white-wilderness": "白原のひとり旅",
+          "rose-quartz": "ローズクォーツ",
+          "silver-veins": "黒岩の銀脈",
+          "dawn-arc": "夜明けの弧",
+          "tidal-lines": "潮の流線",
           "custom": "カスタム壁紙"
         },
         "visibilityLabel": "壁紙の表示濃度",
@@ -1164,7 +1737,10 @@
         "customPlaybackFailed": "この動画を再生できません。H.264 でエンコードされた MP4 動画を選択してください。",
         "customHint": "PNG・JPEG・WebP 画像は最大 20 MB、MP4 動画は最大 100 MB。この端末にのみ保存します。動画モードでは無音で繰り返し再生します。",
         "customInvalid": "有効な PNG・JPEG・WebP 画像（最大 20 MB・4000 万画素）、または最大 100 MB の MP4 動画を選択してください。",
-        "customFailed": "壁紙を保存できませんでした。もう一度お試しください。"
+        "customFailed": "壁紙を保存できませんでした。もう一度お試しください。",
+        "downloading": "壁紙をダウンロード中…",
+        "downloadFailed": "一部の壁紙素材を取得できません。利用可能な背景を表示しています。",
+        "retryDownload": "再ダウンロード"
       },
       "layout": {
         "label": "パネルレイアウト",
@@ -1195,6 +1771,7 @@
         "done": "完了しました ✓",
         "error": "実行に失敗しました",
         "needsReply": "返信が必要です",
+        "inputHandoff": "代理入力が必要です",
         "externalDone": "Cindy · セッション「{{title}}」が完了しました ✓",
         "externalError": "Cindy · セッション「{{title}}」の実行に失敗しました",
         "externalNeedsReply": "Cindy · セッション「{{title}}」への返信が必要です",
@@ -1218,6 +1795,10 @@
       "wecomGroupClearFailed": "Webhook を削除できませんでした"
     },
     "windowBehavior": {
+      "menubar": {
+        "label": "メニューバーに残りを表示",
+        "hint": "macOS のメニューバーに Cindy アイコンを置きます。クリックすると、サブスクリプションの残り、Cindy 残高、今日の使用量を確認できます。"
+      },
       "loginItem": {
         "label": "ログイン時に起動",
         "hint": "パソコンにログインすると Cindy を開きます。初期設定はオフです。",
@@ -1387,11 +1968,23 @@
         "nameHint": "空欄にすると現在の名前を維持します",
         "changeAvatar": "アバターを変更",
         "resetAvatar": "デフォルトのアバターに戻す",
+        "adjustAvatar": "アバターを調整",
         "save": "プロフィールを保存",
         "cancel": "キャンセル",
         "syncHint": "名前とアバターはアカウントに保存され、すべてのデバイスに同期されます。",
-        "avatarInvalid": "5MB 以下の PNG / JPG / WebP 画像を選択してください",
-        "saveFailed": "保存に失敗しました。もう一度お試しください"
+        "avatarInvalid": "20MB 以下の PNG / JPG / WebP 画像を選択してください",
+        "saveFailed": "保存に失敗しました。もう一度お試しください",
+        "crop": {
+          "title": "アバターを調整",
+          "description": "ドラッグで位置を調整し、スクロールまたはピンチで拡大・縮小します",
+          "done": "アバターの調整を完了",
+          "stageLabel": "アバターの表示範囲。矢印キーで移動し、プラスまたはマイナスキーで拡大・縮小します",
+          "zoomLabel": "ズーム",
+          "zoomValue": "{{percent}}%",
+          "zoomIn": "拡大",
+          "zoomOut": "縮小",
+          "exportFailed": "調整したアバターを書き出せませんでした"
+        }
       }
     },
     "help": {
@@ -1561,6 +2154,11 @@
         "statsFailed": "統計を一時的に利用できません",
         "refreshStatsButton": "ストレージ使用量を更新",
         "legacyUsage": "旧バージョンのデータ(読み取り専用、クリーンアップ対象外): {{size}}",
+        "remoteMediaLabel": "リモート画像キャッシュ",
+        "remoteMediaDescription": "ダウンロードした画像をこのコンピューターに保存し、Cindy の再起動後も再利用します。",
+        "remoteMediaClearButton": "リモートキャッシュを削除",
+        "remoteMediaClearTitle": "リモート画像キャッシュを削除しますか？",
+        "remoteMediaClearDescription": "このコンピューターの {{size}} を解放します。次に開くと再ダウンロードします。元のファイルと保存済みの添付ファイルは保持されます。",
         "legacyImagesLabel": "画像キャッシュディレクトリ",
         "legacyImagesDescription": "Cindy はこのディレクトリを自動でスキャンまたはクリーンアップしません。ファイルを削除するとメッセージ履歴の画像が表示できなくなる場合があるため、内容を確認してから操作してください。",
         "legacyImagesOpenButton": "ディレクトリを開く",
@@ -1699,7 +2297,8 @@
         "basics": "基本",
         "refinement": "整え方",
         "preferences": "設定",
-        "usageData": "使用量"
+        "usageData": "使用量",
+        "speakerFilter": "声紋フィルター"
       },
       "serviceSource": {
         "label": "音声サービス",
@@ -1996,6 +2595,81 @@
           "copied": "コピーしました",
           "copyFailed": "コピーに失敗しました"
         }
+      },
+      "speakerFilter": {
+        "label": "自分の声を認識",
+        "hint": "音声入力中は周りの人の声をミュートし、あなたの話した内容だけを認識に送ります。事前に声紋の登録が必要です。あなたと同時に話された声は完全には取り除けません。",
+        "ariaLabel": "「自分の声を認識」を切り替え",
+        "unsupported": "このパソコンでは声紋認識を利用できません。",
+        "privacy": "声紋はこのパソコンにだけ暗号化して保存され、アップロードや他のデバイスへの同期は行われません。",
+        "actionFailed": "操作に失敗しました。しばらくしてからもう一度お試しください。",
+        "model": {
+          "needed": "初回は約 {{size}} の認識モデルをダウンロードします。",
+          "download": "ダウンロード",
+          "downloading": "認識モデルをダウンロード中（{{done}} / {{total}}）",
+          "cancel": "キャンセル",
+          "retry": "再試行",
+          "failed": {
+            "network": "認識モデルのダウンロードに失敗しました。ネットワークを確認してもう一度お試しください。",
+            "disk": "認識モデルを保存できませんでした。ディスクの空き容量を確認してもう一度お試しください。",
+            "checksum": "ダウンロードした認識モデルの検証に失敗しました。もう一度お試しください。",
+            "unavailable": "現在、認識モデルを取得できません。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "profile": {
+          "missing": "声紋が未登録です",
+          "missingHint": "声紋を登録すると有効になります。",
+          "enrolled": "声紋を登録済み",
+          "enrolledAt": "{{date}} に登録",
+          "enroll": "声紋を登録",
+          "reenroll": "登録し直す",
+          "delete": "声紋を削除",
+          "deleted": "声紋を削除しました",
+          "deleteConfirm": {
+            "title": "声紋を削除しますか？",
+            "description": "削除すると、もう一度登録するまで音声入力で周りの人の声を除外しなくなります。",
+            "confirm": "削除",
+            "cancel": "キャンセル"
+          }
+        },
+        "strictness": {
+          "label": "厳しさ",
+          "hint": "厳しくするほど周りの人の声が入りにくくなりますが、騒がしい場所では自分の言葉も途切れやすくなります。",
+          "options": {
+            "relaxed": "ゆるめ",
+            "standard": "標準",
+            "strict": "厳しめ"
+          }
+        },
+        "enroll": {
+          "title": "声紋を登録",
+          "description": "以下の {{clips}} つの文章を普段の声で読み上げてください。各録音は最大 {{seconds}} 秒です。読み終えたら録音を終了してください。普段音声入力を使う場所で、ほかの人が同時に話さないように録音してください。",
+          "stepsAriaLabel": "読み上げる文章",
+          "step": "{{current}} / {{total}}",
+          "record": "読み上げを開始",
+          "stop": "録音を終了",
+          "rerecord": "この文章を録り直す",
+          "recording": "録音中、残り {{seconds}} 秒",
+          "recorded": "録音済み",
+          "cancel": "キャンセル",
+          "submit": "完了",
+          "done": "声紋を登録しました",
+          "passages": {
+            "p1": "今日の午前中は今週の作業予定を整理して、午後には話し合いたい課題をまとめて、みんなに先に送っておきます。",
+            "p2": "明日天気が良ければ少し早めに出発して、途中で果物やお菓子を買い、お昼は公園で食べましょう。",
+            "p3": "この文章をもう少し簡潔にして、重要な数字と結論は残したうえで、要点を三つから五つの文でまとめてください。"
+          },
+          "errors": {
+            "too_short": "{{index}} つ目の録音で検出された音声が短すぎます。録り直してください。",
+            "no_embedding": "{{index}} つ目の録音から声紋を読み取れませんでした。録り直してください。",
+            "inconsistent": "{{index}} つ目の録音が他と同じ人の声に聞こえません。他の人の声や雑音が入った可能性があります。録り直してください。",
+            "models_missing": "認識モデルのダウンロードがまだ完了していません。しばらくしてからお試しください。",
+            "storage_unavailable": "システムのキーチェーンを利用できないため、声紋を暗号化して保存できません。しばらくしてからお試しください。",
+            "failed": "声紋を作成できませんでした。もう一度お試しください。",
+            "microphone": "マイクを使用できません。マイクの許可とデバイスを確認してください。",
+            "noAudio": "マイクから音が届いていません。デバイスを確認してもう一度お試しください。"
+          }
+        }
       }
     },
     "sessionImport": {
@@ -2265,7 +2939,7 @@
         },
         "useLocalAccount": "ローカル Codex アカウントを使う",
         "addIndependentAccount": "別のアカウントでログイン",
-        "accountSourcesDescription": "既存のローカル Codex 接続を使うか、別のアカウントにログインします。どちらも同じ機能を利用できます。",
+        "accountSourcesDescription": "ローカルの Codex 接続を使うか、アカウントを個別に追加してログインします。",
         "independentAccountDescription": "別途保存する ChatGPT アカウントにログインするか、API キーで接続します。",
         "localUnavailable": "再利用できるローカル接続がありません。既存の接続のアカウントは変更されません。"
       },
@@ -2369,6 +3043,10 @@
           "modelSupportsImageInput": "画像入力に対応",
           "modelSupportsImageInputHelp": "モデルが実際に画像入力へ対応している場合のみ有効にしてください。保存後、新しい Pi タスクで反映されます。",
           "runtimeAdvanced": "詳細設定",
+          "openaiImages": "OpenAI Images API を使用",
+          "openaiImagesHint": "この接続のアドレスと API Key で /images/generations と /images/edits を呼び出します。有効にすると、プロバイダーの画像接続はこの接続のみになります。不足するモデル ID は手動で追加し、モデル詳細で画像機能を指定してください。",
+          "xaiVideos": "xAI 互換の動画 API を使用",
+          "xaiVideosHint": "この接続のアドレスと API キーで動画タスクを送信・確認します。有効にすると、この接続がプロバイダーの唯一の動画接続になります。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
           "runtimeSupportsImageGeneration": "画像の生成と編集に対応",
           "runtimeSupportsImageGenerationHelpLabel": "画像の生成と編集への対応について",
           "runtimeSupportsImageGenerationConditionTitle": "適用条件",
@@ -2617,6 +3295,20 @@
           "tokensApprox": "tokens（約 {{approx}}）",
           "catalogMissing": "カタログに情報なし",
           "capability": "機能",
+          "videoCapability": {
+            "label": "動画機能",
+            "default": "モデルカタログに従う",
+            "generate": "テキストから動画",
+            "edit": "テキスト・画像から動画",
+            "hint": "{{agent}} の動画接続に適用します。API が対応する機能のみ設定してください。保存後、Art の詳細を開き直してください。"
+          },
+          "imageCapability": {
+            "label": "画像機能",
+            "default": "モデルカタログに従う",
+            "generate": "画像生成",
+            "edit": "画像生成と編集",
+            "hint": "{{agent}} の画像接続に適用します。API が実際に対応する機能のみを指定してください。保存後に Art の詳細を開き直してください。"
+          },
           "capabilityHint": "このプロバイダーが宣言した機能を優先します。画像対応が未宣言の場合はモデル名から推定します。",
           "imageInput": "画像入力",
           "supported": "対応",
@@ -2718,7 +3410,12 @@
         "statusReady": "利用可能",
         "detailNote": "Agent は {{device}} で動き、そのパソコンのログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。このプロバイダーを変更するには、そのパソコンの「設定 → モデルプロバイダー」を開いてください。",
         "modelsTitle": "利用できるモデル",
-        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。"
+        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。",
+        "rowLabelGroup": "{{provider}} · {{device}} · プロバイダーグループ",
+        "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
+        "groupNote": "{{device}} はこのプロバイダーをプロバイダーグループにしています。モデル一覧で選んでタスクを新規作成すると、{{device}} がグループの割り当て方式に従って下のいずれかのパソコンにタスクを割り当て、そのパソコンで問題が起きたら別のパソコンに切り替えて続けます。{{device}} がオンラインなら、ここから「リモートと共有」を開いてグループと共有を管理できます。",
+        "groupMembersTitle": "グループ内のパソコン",
+        "groupMembersFailed": "グループ内のパソコンの状態を今は取得できません。"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
@@ -2766,6 +3463,7 @@
         "remoteAccess": {
           "label": "リモート利用を許可",
           "description": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はこのパソコン上で、このパソコンのサインインとクォータを使って実行されます。",
+          "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行されます。",
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
         },
@@ -2833,7 +3531,7 @@
         "manualModelPlaceholder": "例: local-model",
         "addManualModel": "モデルを追加",
         "recommended": "推奨",
-        "modelsHint": "チェックしたモデルはチャットのモデル選択に表示され、利用可能なすべての CLI に同時に適用されます。プロバイダー詳細からいつでも調整できます。",
+        "modelsHint": "選んだモデルはチャットのモデル選択に表示され、対応する CLI にも適用されます。",
         "noModelSelected": "モデルを 1 つ以上選択してください",
         "createdToast": "「{{name}}」を追加しました",
         "createFailed": "追加に失敗しました。もう一度お試しください",
@@ -3017,7 +3715,10 @@
       "connection": {
         "modelCount": "{{count}} 個のモデルを設定済み",
         "modelsAutomatic": "モデル情報は自動取得されます。個別の設定はモデル一覧から変更できます。",
-        "manualModel": "モデル ID（自動取得できない場合）"
+        "manualModel": "モデル ID（自動取得できない場合）",
+        "modelTypeAutomatic": "自動判別",
+        "manualModelTypeHint": "同じ ID で種類を更新できます。自動判別を選ぶと、カタログの種類に戻ります。",
+        "mediaOnlyTestHint": "この接続にはチャット以外のモデルのみが含まれています。モデル一覧の取得でカタログへのアクセスを確認できます。ここではモデルの実行はテストしません。"
       },
       "byok": {
         "managed": "組織が接続とモデルを管理",
@@ -3292,7 +3993,7 @@
         },
         "step4": {
           "title": "ユーザー ID をコピー",
-          "body": "Discord のユーザー設定で Developer Mode を有効にし、自分のアバターを右クリックして Copy User ID を選択します。"
+          "body": "Discord のユーザー設定で Developer Mode を有効にしてから、自分のアバターを右クリックし、Copy User ID を選択します。"
         }
       }
     },
@@ -3314,7 +4015,7 @@
       "secretPlaceholder": "WeCom 管理画面の Secret",
       "showSecret": "Secret を表示",
       "hideSecret": "Secret を隠す",
-      "setupHint": "WeCom 管理画面でインテリジェントボットを作成し、長時間接続を有効にしてから Bot ID と Secret を入力します。",
+      "setupHint": "インテリジェントボットを作成し、長時間接続を有効にして Bot ID と Secret を入力します。",
       "ownerHint": "接続後、最初にボットへ DM を送ったメンバーがこのコンピューターの owner になります。そのメンバーだけが Agent を起動できます。",
       "connect": "保存して接続",
       "reconnect": "再接続",
@@ -3671,7 +4372,7 @@
         "ariaLabel": "2 番目の予備補助モデルを選択"
       },
       "emptySlot": "未選択",
-      "customHint": "カスタム後は選んだ順にだけ試します。どれも使えない場合、別のモデルへは切り替えません。",
+      "customHint": "選んだ順に試し、内蔵モデルが使えない場合は自動レビューにも使います。選択したプロバイダーに送るレビュー情報には、メッセージと引用内容、タスク・操作の詳細（ブロック済みの操作を含む）、依頼者の識別・権限情報、ファイルパス、OS が含まれます。",
       "signInHint": "Cindy にログインすると自動おすすめを使えます。未ログイン時は「カスタム」で設定済みの他のプロバイダーのモデルを選択してください。",
       "chooseAgent": "Agent を選択",
       "backToAgents": "Agent の選択に戻る",
@@ -3885,10 +4586,10 @@
       "backToGeneral": "一般に戻る",
       "description": "拡張機能はこのデバイスの Cindy にインストールされます。このデバイス上の通常 Pi で実行されるタスクなら、端末本体、スマートフォン、ほかの接続済みクライアントのどこから開始しても利用できます。Review では読み込みません。",
       "installSectionTitle": "拡張機能をインストール",
-      "installSectionDescription": "pi.dev ページのインストール元を貼り付けるか、npm パッケージ名、Git URL、ローカルの絶対パスを入力します。",
+      "installSectionDescription": "インストール元、npm パッケージ名、Git URL、ローカルの絶対パスを入力します。",
       "installedSectionTitle": "インストール済み",
       "sourcePlaceholder": "npm パッケージ、Git URL、ローカルの絶対パス",
-      "inspectionHint": "パッケージのインストールと読み込みは Pi のネイティブパッケージシステムが行います。Cindy の互換性詳細は参考情報であり、未知・未対応・解析失敗でもインストールや有効化を妨げません。",
+      "inspectionHint": "互換性の詳細は参考情報で、インストールや有効化を妨げません。",
       "install": "インストール",
       "update": "更新",
       "remove": "アンインストール",
@@ -4005,7 +4706,7 @@
         "title": "自動操作ブラウザ",
         "description": "エージェント専用の独立したブラウザ。普段の Chrome とは分離されています",
         "toggleAria": "ブラウザ自動操作を切り替える",
-        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
+        "toggleHint": "新しく開始する Agent セッションにのみ適用されます。",
         "noProjectHint": "プロジェクトのセッションから「設定」を開くと、そのプロジェクトのブラウザ自動操作を切り替えられます。",
         "detected": "{{browser}} を検出しました",
         "notDetected": "ローカルブラウザが見つかりません。Chrome をインストールするとブラウザ自動操作を利用できます。",
@@ -4083,7 +4784,7 @@
         "description": "エージェントが ADB 経由で接続済み Android デバイスを確認し、操作できます",
         "toggleAria": "Android 自動操作を切り替える",
         "refresh": "再確認",
-        "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
+        "toggleHint": "このパソコン全体に適用され、新しく開始する Agent セッションでのみ有効です。",
         "status": {
           "checking": "ADB の状態を確認しています…",
           "disabled": "Android 自動操作はオフです。オンにすると ADB とデバイスを検出します。",
@@ -4598,7 +5299,7 @@
             "usageLabel": "使い方",
             "usageBody": "X で @askmycindy をメンションしてポストすると、タスクがこの端末に届いてここで実行され、結果が返信として戻ります。",
             "riskLabel": "返信は公開されます",
-            "riskPublicBody": "Cindy の返信は公開ポストで、誰でも閲覧できます。公開の場で答えを探したり問題を解決するのに向いていますが、プライベートな用件には向きません —— プライバシーが露出するおそれがあります。",
+            "riskPublicBody": "返信は誰でも見られる公開ポストです。公開の質問や問題解決向けで、プライバシーに関わる私的な用件には不向きです。",
             "riskWorkdirBody": "X のタスクはすべて X 連携設定で指定した既定の作業ディレクトリで実行されます。Agent はその中のファイルを読み書きでき、結論は公開で返信されます —— 非公開リポジトリを指している場合、ファイルの内容も公開される可能性があります。",
             "withdrawLabel": "返信を取り消す",
             "withdrawBody": "質問した本人が削除したい回答に「@askmycindy /delete」と返信してください。本文に @askmycindy を入力する必要があります。公開された返信だけが削除され、ローカルのタスク記録は残ります。",
@@ -4679,6 +5380,7 @@
         "online": "接続済み"
       },
       "connectionIssue": {
+        "device-removed": "このデバイスはアカウントから削除されました。このデバイスでログアウトして再度ログインしてください。",
         "auth-failed": "ログインが無効になりました。再ログインしてください",
         "replaced": "同じデバイスの別の接続に置き換えられました",
         "too-many-connections": "このアカウントの同時接続数が上限に達しました",
@@ -4701,7 +5403,9 @@
       "renameConfirm": "確定",
       "renameCancel": "キャンセル",
       "delete": "削除",
-      "deleteOnlineHint": "オンラインのデバイスは削除できません",
+      "deleteTitle": "「{{name}}」を削除しますか？",
+      "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。再度ログインすると追加できます。",
+      "deleteOnlineHint": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
       "error": {
         "unavailable": "デバイス連携サービスは現在利用できません(サーバー未対応またはネットワークエラー)",
         "listFailed": "デバイス一覧の取得に失敗しました"
@@ -4718,7 +5422,7 @@
         "keepAwakeToggleFailed": "スリープ防止の切り替えに失敗しました",
         "renameFailed": "名前の変更に失敗しました",
         "deleted": "デバイスを削除しました",
-        "deleteOnline": "デバイスがオンラインのため削除できません",
+        "deleteOnline": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
         "deleteFailed": "削除に失敗しました",
         "disconnected": "すべてのリモート接続を切断しました",
         "disconnectFailed": "リモート接続の切断に失敗しました",
@@ -4749,8 +5453,8 @@
           "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときにこの Agent とモデルに切り替わります。権限モードは既存のチャットに /new を送信すると適用されます。"
         },
         "agentLabel": "Agent",
-        "agentUnsupportedOnChannelHint": "{{agent}} Agent はこのチャンネルでメッセージごとの権限確認に対応していないため、メッセージを処理できません。Claude Code または Codex に切り替えてください。",
-        "agentUnsupportedOnChannelModeHint": "Agent を切り替えて /new を送信した後、新しい Agent でも権限モードの問題が表示される場合は、/permission を送信して権限モードを調整してください。",
+        "agentUnsupportedOnChannelHint": "{{agent}} はこのチャンネルでメッセージごとの権限確認と処理に対応していません。Claude Code または Codex を使ってください。",
+        "agentUnsupportedOnChannelModeHint": "Agent を切り替えたら /new を送信し、権限の問題が続く場合は /permission を送信してください。",
         "permissionModeUnsupportedOnChannelHint": "現在の Agent はこの権限モードではこのチャンネルを利用できないため、メッセージを処理できません。/permission を送信して対応する権限モードに変更してください。",
         "modelLabel": "モデル設定",
         "loading": "新規会話設定を読み込み中…",
@@ -4786,8 +5490,9 @@
           "descriptions": {
             "unsupported": "この保護機能は macOS でのみ利用できます。",
             "disabled": "Cindy の実行中、Codex が Work Louder キーボード に接続するのを防ぎます。Cindy 自体は制限されません。",
-            "recovery-required": "保護は停止しましたが、NODE_OPTIONS は安全に復元されていません。再度有効にする前に復元を再試行してください。",
-            "error": "Codex の保護を更新できませんでした。以前の NODE_OPTIONS は保持されているか、復元待ちです。"
+            "paused": "他のアプリに影響するため、この保護機能は一時停止しています。問題が続く場合は、旧バージョンの Cindy を終了し、影響を受けたアプリを完全に終了してから開き直してください。",
+            "recovery-required": "保護機能は一時停止していますが、以前の起動設定が残っています。「環境を復元」を選択し、完了後に影響を受けたアプリを完全に終了してから開き直してください。",
+            "error": "以前の保護設定を読み取るか削除することができませんでした。保護機能は一時停止したままです。"
           },
           "restartRequired": "適用するには Codex を完全に終了して再起動"
         },
@@ -5578,7 +6283,6 @@
         "manageAction": "管理",
         "manageAria": "{{name}} を管理",
         "agentInvoked": "Agent が自動で呼び出し",
-        "upToDate": "最新です",
         "oauthAuthorizationExpired": "認証期限切れ・再接続が必要",
         "installAria": "{{name}} をインストール"
       },
@@ -5600,7 +6304,7 @@
         "installed": "インストール済み",
         "replace": "置き換え",
         "replaceAria": "{{name}} をこのマーケット版で置き換える",
-        "replaceDescription": "同じ ID のプラグインがすでにインストールされています。続行するとこのマーケット版で置き換え、プラグインのデータは保持されます。",
+        "replaceDescription": "同じ ID のプラグインがすでにインストールされています。続行すると提供元が切り替わります。元のデータは別に保持されますが、アカウントやシークレットは引き継がれず、再接続が必要です。",
         "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
         "customSourcesUnavailable": "次のカスタムマーケットは一時的に利用できません：{{names}}。他のマーケットには影響しません。",
         "authenticationRequired": "プラグインマーケットを表示するには Cindy にログインしてください。",
@@ -5621,7 +6325,12 @@
           "invalidPackage": "プラグインパッケージに問題があるため、インストールできません。発行元にお問い合わせください。",
           "downloadTimeout": "プラグインのダウンロードがタイムアウトしました。しばらくしてからもう一度お試しください。",
           "downloadFailed": "プラグインのダウンロードに失敗しました。接続を確認して、もう一度お試しください。",
-          "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がないため、プラグインマーケットからインストールできません。発行元にこのフィールドを追加して新しいバージョンを公開するよう連絡してください。"
+          "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がないため、プラグインマーケットからインストールできません。発行元にこのフィールドを追加して新しいバージョンを公開するよう連絡してください。",
+          "namespaceClientRequired": "このバージョンでは組織プラグインを表示できません。Cindy を更新してください。インストール済みの組織プラグインは引き続き使えます。",
+          "organizationContextUnavailable": "組織の識別を一時的に確認できません。しばらくしてからもう一度お試しください。インストール済みの組織プラグインは引き続き使えます。",
+          "namespaceConfigRequired": "組織プラグインは一時的に利用できません。インストール済みの組織プラグインは引き続き使えます。",
+          "listChanged": "組織プラグインの一覧が変わりました。もう一度お試しください。",
+          "organizationUnavailable": "組織プラグインは一時的に利用できません。インストール済みの組織プラグインは引き続き使えます。"
         },
         "securityTitle": "インストールと権限",
         "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。インストール前にプラグインの権限を確認していただき、インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持され、新しいバージョンで権限が増える場合は先に確認します。",
@@ -5672,7 +6381,7 @@
             "title": "カスタムプラグインマーケットガイド",
             "intro": "プラグインマーケットとは、マニフェストファイルを持つ Git リポジトリまたはローカルフォルダーで、Cindy プラグインのセットを配布するためのものです。",
             "structureTitle": "ディレクトリ構造",
-            "structureBody": "マーケットには 1 つのマニフェストファイルと、プラグインごとのディレクトリが必要です。各プラグインディレクトリには有効な ghost.json（プラグインの身分証）が必要です。",
+            "structureBody": "マニフェストと、有効な ghost.json を含む各プラグインのディレクトリが必要です。",
             "structureLabelManifest": "マニフェスト",
             "structureLabelGhostCard": "プラグインカード",
             "structureLabelEntry": "プラグインのエントリー",
@@ -5850,6 +6559,8 @@
         "agentTasksRequest": "セッション権限を確認",
         "agentTasks": "このプラグインの Cindy セッションを作成・管理できます",
         "agentTasksDetail": "メッセージの送信、結果の読み取り、自身の実行の停止ができます。セッションはユーザーに表示されます。プラグインの AI 設定を使用し、モデル料金が発生する場合があります。他のセッションへのアクセスは許可されません。",
+        "agentHiddenTasks": "セッションリストに表示されないバックグラウンドセッションを作成できます",
+        "agentHiddenTasksDetail": "このプラグインが作成したセッションを、セッションリスト・検索・通知に表示しないようにできます。プラグイン詳細の「バックグラウンドセッション」からいつでも確認したり開いたり、セッションリストに表示したりできます。プラグインをアンインストールすると再び表示されます。",
         "agentErrand": "タスクを作成し、作業を実行して結果を取得できます",
         "agentErrandDetail": "作成したタスクは Cindy のタスク一覧に表示され、進行状況を確認して会話を続けられます。",
         "agentSchedule": "自動化の新規作成をあなたに依頼できます",
@@ -5970,28 +6681,12 @@
         "infoVersion": "バージョン",
         "updateTitle": "バージョン更新",
         "updateDesc": "新しい .cindy ファイルを選んでその場で置き換えます。有効状態とパネル位置は保持されます。",
-        "cindyPrefs": {
-          "title": "Cindy 能力",
-          "desc": "このプラグインが申請した Cindy 代行能力ごとに使用モデルを指定できます。既定ではシステム(内蔵プロキシ)に従います。",
-          "cap": {
-            "image.generate": "画像生成",
-            "image.edit": "画像編集",
-            "video.generate": "動画生成",
-            "video.edit": "画像から動画",
-            "text.oneshot": "クイック回答(テキスト)",
-            "embed.text": "テキストのベクトル化"
-          },
-          "defaultOption": "{{model}}(既定)",
-          "defaultOptionDeclared": "{{model}}(プラグイン宣言)",
-          "searchPlaceholder": "モデルやプロバイダを検索",
-          "budgetBadge": "割引",
-          "noModels": "利用可能なモデルなし"
-        },
         "errandPrefs": {
-          "title": "タスク設定",
-          "desc": "このプラグインが作成するタスクの設定です。新規タスクは呼び出し元のモデルを使い、パネルから作成する場合は現在の新規タスクの選択を使います。既存タスクのモデルは維持されます。権限は別途設定し、通常のタスクの既定権限を使います。フルアクセスは継承しません。",
-          "legacyDesc": "このプラグインが作成するタスクの設定です。新規タスクは呼び出し元のモデルを使い、パネルから作成する場合は現在の新規タスクの選択を使います。既存タスクのモデルは維持されます。旧 API は元の権限を維持します。権限を選ぶと、その設定を使用します。",
+          "title": "モデルとタスク",
+          "desc": "このプラグインのクイック回答と、プラグインが作成するタスクに使うモデルです。既定ではシステムの補助モデルに従い、新規タスクは呼び出し元タスクのモデルを使います。",
+          "descModelOnly": "このプラグインのクイック回答に使うモデルです。既定ではシステムの補助モデルに従います。",
           "legacyPermission": "元の権限を維持",
+          "legacyPermissionHint": "旧 API は元の権限を維持します。権限を選ぶと、その設定を使用します。",
           "agent": "Agent",
           "model": "モデル",
           "permission": "書き込み権限",
@@ -6000,8 +6695,8 @@
           "workdirDefault": "プラグイン専用フォルダー(既定)",
           "workdirPick": "選択…",
           "workdirClear": "既定のフォルダーに戻す",
-          "sourceDefault": "呼び出し元に従う（下はパネル作成時のモデル）",
-          "sourceCustom": "このプラグイン用に選択したモデル",
+          "followAuxiliary": "システムの補助モデルに従う · {{model}}",
+          "followAuxiliaryUnset": "システムの補助モデルに従う",
           "restoreModel": "モデルをリセット"
         },
         "toolsTitle": "Tools",
@@ -6054,6 +6749,25 @@
         "slotWorkspace": "ワークスペースセッション"
       },
       "commandPaletteTag": "プラグインコマンド",
+      "commandPaletteSource": {
+        "team": "チーム共有"
+      },
+      "backgroundTasks": {
+        "title": "バックグラウンドセッション",
+        "description": "このプラグインがバックグラウンドで実行している、セッションリストに表示されないセッションです。開いて確認するか、セッションリストに表示して通常どおり使用できます。",
+        "refresh": "バックグラウンドセッションを更新",
+        "loading": "バックグラウンドセッションを読み込み中…",
+        "loadFailed": "バックグラウンドセッションを読み込めませんでした",
+        "empty": "バックグラウンドセッションはありません",
+        "statusRunning": "実行中",
+        "statusIdle": "待機中",
+        "statusArchived": "アーカイブ済み",
+        "lastActive": "最終アクティビティ {{time}}",
+        "open": "セッションを開く",
+        "reveal": "セッションリストに表示",
+        "revealed": "セッションをセッションリストに表示しました",
+        "revealFailed": "セッションをセッションリストに表示できませんでした"
+      },
       "library": {
         "title": "永続ライブラリ",
         "loading": "ライブラリ情報を読み込み中…",
@@ -6100,7 +6814,23 @@
         "installLocationPickedPrefix": "選択済み:",
         "installLocationChange": "変更…",
         "bindAfterInstallFailed": "カスタム保存場所の設定に失敗したため、既定の場所に戻しました",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "reattachTitle": "このプラグインの以前の作品データを引き継ぎますか?",
+        "reattachDescription": "このコンピューターには、このプラグインを以前インストールしたときの作品データが残っています。以前ローカルから読み込み、その後アンインストールしたバージョンのものかもしれません。引き継ぐと、以前のキャンバスや画像を今回インストールしたプラグインで引き続き使えます。引き継がない場合は空の状態から始まり、以前のデータはこのコンピューターに残ります。",
+        "reattachConfirm": "引き継ぐ",
+        "reattachSkip": "引き継がない",
+        "legacyFoundBanner": "このコンピューターには、このプラグインが以前残した作品データ({{size}} · {{count}} ファイル)があり、現在のインストールでは使われていません。",
+        "legacyReattach": "以前の作品データを引き継ぐ",
+        "legacyReattachBusy": "引き継ぎ中…",
+        "legacyReattachConfirmTitle": "以前の作品データを引き継ぎますか?",
+        "legacyReattachConfirmDescription": "プラグインは以前の作品データを使うようになります。現在の作品データはごみ箱に移動され 30 日間保持された後、完全に消去されます。",
+        "legacyReattachConfirmText": "引き継ぐ",
+        "legacyReattachDone": "以前の作品データを引き継ぎました",
+        "legacyReattachFailed": "引き継ぎに失敗しました",
+        "legacyReattachNeedsRestart": "このプラグインのキャッシュを消去できませんでした。Cindy を再起動してからプラグインを使ってください。",
+        "legacyInUseBanner": "このコンピューター上の別のインストール(ローカル版など)が、このプラグインの以前の作品データをまだ使っています。そのインストールをアンインストールすると、ここで引き継げます。",
+        "legacyFoundUnknownBanner": "このコンピューターには、このプラグインが以前残した可能性のある作品データ({{size}} · {{count}} ファイル)があります。出所の記録がなく、現在のインストールでは使われていません。",
+        "legacyReattachUnknownSource": "この作品データには出所の記録がありません。手動またはスクリプトでコピーされた可能性があります。このプラグインのものか確認してください。"
       },
       "updateConfirm": {
         "title": "プラグイン「{{name}}」を更新しますか?",
@@ -6211,6 +6941,25 @@
           "requirements": "Apple Silicon Mac、macOS 15 以降、フルバージョンの Xcode が必要です。",
           "dataNotice": "元のシミュレーターのデバイスや App データは削除されません。Baguette をインストールしても、デバイス、App、ログイン状態は自動移行されません。"
         }
+      },
+      "usage": {
+        "title": "自分の呼び出し",
+        "explanationLabel": "集計方法",
+        "explanation": "この端末の現在のアカウントで送信されたツール呼び出しを集計します。失敗・タイムアウト・キャンセルも含みます。過去 7 日は直近 168 時間です。パネル、Skill、デバッグは含みません。記録は消去するまで保持されます。",
+        "clear": "記録を消去",
+        "loading": "記録を読み込み中…",
+        "unavailable": "個人の記録を取得できません",
+        "retry": "再試行",
+        "lastUsed": "最終呼び出し",
+        "last7Days": "過去7日間の呼び出し",
+        "never": "呼び出しはまだありません",
+        "clearTitle": "このプラグインの使用記録を消去しますか？",
+        "clearDescription": "この端末の現在のアカウントの呼び出し記録とセッションへの関連を消去します。以降の呼び出しから記録を再開します。サーバーが受信済みの共有累計は取り消されません。",
+        "downloadExplanation": "ダウンロード URL の累計リクエスト数です。パッケージ URL の発行成功ごとに 1 回と数え、更新、再インストール、新しい URL を取得する再試行も含みます。インストール成功数ではありません。",
+        "clearAction": "消去",
+        "downloadsValue": "{{value}} ダウンロード",
+        "usesValue": "{{value}} 利用",
+        "usesExplanation": "許可された共有範囲の全バージョンにおける累計ツール呼び出し数です。下の個人の呼び出しは、この端末の現在のアカウントのみを集計します。"
       }
     },
     "mcp": {
@@ -6453,7 +7202,7 @@
       "create": {
         "title": "個人版を作成",
         "cancel": "キャンセル",
-        "description": "Cindy をどのように変えたいか教えてください。制作タスクを開き、共通のフローで環境の確認、ソースコードの準備を行ってから制作を進めます。",
+        "description": "Cindy をどのように変えたいか教えてください。",
         "requestLabel": "どのように変えたいですか？",
         "requestHint": "最大 {{max}} 文字。送信後はタスクで進捗を確認できます。設定を離れても準備は止まりません。",
         "placeholder": "例：タスクリストに未完了のタスクだけを表示するフィルターボタンを追加したい。",
@@ -7338,7 +8087,7 @@
       "screenshotFailed": "スクリーンショットに失敗しました",
       "comment": "ページにコメント",
       "exitCommentMode": "コメントモードを終了",
-      "commentModeHint": "要素をクリック / Shift ドラッグで範囲選択 · Cmd/Ctrl+クリックで即追加 · Esc で終了",
+      "commentModeHint": "要素をクリック · Shift ドラッグで範囲選択 · Cmd/Ctrl+クリックで即追加 · Esc で終了",
       "commentPlaceholder": "ここをどう変えたいか記述してください…",
       "commentSubmit": "コメントを追加",
       "commentCancel": "キャンセル",
@@ -7922,6 +8671,39 @@
       "message": "{{appName}} を「アプリケーション」フォルダに移動すると、自動更新を含むより良い体験が得られます。",
       "move": "移動（推奨）",
       "later": "あとで"
+    },
+    "agentInstall": {
+      "title": "{{appName}} を {{version}} に更新しますか？",
+      "versions": "{{from}} から {{to}} に更新します。確認後、{{appName}} は内蔵アップデーターでダウンロードとインストールを行い、自動的に再起動します。",
+      "otherTasks": "ほかに {{count}} 件のタスクが実行中で、再起動により中断されます。再起動後、各タスクで「続行」を押すと再開できます。",
+      "backgroundWork": "バックグラウンドの作業（バックグラウンドコマンド、メディア生成、サブエージェント、自動化の実行など）も進行中で、再起動すると中断されます。",
+      "noOtherTasks": "ほかに実行中のタスクはありません。",
+      "thisTask": "このタスクは現在の返信が終わった後、{{appName}} とともに再起動します。",
+      "remote": "再起動中はスマートフォンなどのリモート接続が一時的に切断されます。再接続後、このタスクで結果を確認できます。",
+      "linuxAuth": "インストールにはこのコンピューターでのシステムパスワード入力が必要です。",
+      "succeeded": "{{appName}} を {{version}} に更新しました（以前は {{from}}）。",
+      "failed": "{{appName}} の更新は完了しませんでした。現在も {{version}} です。",
+      "retryHint": "後でもう一度依頼するか、「設定 → 情報」で更新を確認してください。",
+      "reasons": {
+        "downloadFailed": "更新のダウンロードに失敗しました。後でもう一度お試しください。",
+        "manifestFailed": "現在のチャンネルの更新情報を読み取れませんでした。",
+        "manualDownload": "このインストールでは新しいバージョンを手動でダウンロードする必要があります。",
+        "noUpdate": "現在のチャンネルにはこのデバイスにインストールできる更新がありません。",
+        "versionChanged": "チャンネルの新しいバージョンが確認した {{confirmed}} ではなく {{version}} になったため、インストールしませんでした。",
+        "notRestarted": "更新はダウンロードされましたが、再起動しませんでした（途中でサインアウトやアカウント切り替えがあった場合など）。",
+        "notReady": "ダウンロード済みの更新は利用できなくなりました。",
+        "updaterNotStarted": "アップデーターが起動しなかったため、{{appName}} は再起動していません。",
+        "unsupported": "このインストール環境はアプリ内更新に対応していません。",
+        "generic": "インストール中にエラーが発生しました。",
+        "relaunchInProgress": "{{appName}} は設定画面またはアイドル時の自動インストールで既に再起動中のため、このリクエストでは別途インストールしませんでした。"
+      }
+    },
+    "agentAutoUpdate": {
+      "enableTitle": "アイドル時に更新をインストールしますか？",
+      "disableTitle": "アイドル時の更新インストールをオフにしますか？",
+      "enableDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず実行中のタスクがない場合、{{appName}} は自動的に再起動してインストールします。",
+      "disableDescription": "ダウンロード済みの更新は、手動で再起動するまでインストールされません。",
+      "settingsHint": "「設定 → 情報」でいつでも変更できます。"
     }
   },
   "sidebar": {
@@ -8074,11 +8856,22 @@
         "ref": "参考",
         "noRef": "参考リンクはありません。",
         "openPr": "GitHub で PR #{{number}} を開く",
-        "refBlocked": "このパスは任せたプロジェクトの外にあるため開きませんでした。"
+        "refBlocked": "このパスは任せたプロジェクトの外にあるため開きませんでした。",
+        "stopLabel": "停止",
+        "doing": "実行中の作業",
+        "outputs": "これまでの成果物",
+        "recent": "最近の内容"
       },
       "openTask": "「{{title}}」を開く（{{state}}）",
       "outputs": "成果物",
       "outputsEmpty": "{{name}} が作ったファイルはここに表示されます。",
+      "outputsAll": "すべて",
+      "outputsLess": "折りたたむ",
+      "summary": {
+        "waiting_other": "返信待ち {{count}} 件",
+        "running_other": "実行中 {{count}} 件",
+        "todo_other": "やること {{count}} 件"
+      },
       "state": {
         "running": "実行中",
         "waiting": "返信待ち",
@@ -8098,7 +8891,7 @@
         "message": "「{{title}}」を進めて",
         "aria": "「{{title}}」を進める"
       },
-      "followingMark": "このプロジェクトの担当: {{names}}",
+      "followingMark": "このセッションの担当: {{names}}",
       "olderCount_other": "さらに前の {{count}} 件",
       "kind": {
         "existing": "既存のセッション",
@@ -8118,13 +8911,19 @@
       },
       "line": {
         "waiting": "あなたの返信を待っています",
+        "waitingPermission": "あなたの承認を待っています",
+        "waitingQuestion": "あなたの回答を待っています",
+        "waitingPlan": "プランの確認を待っています",
+        "waitingAction": "あなたの操作を待っています",
+        "waitingFor": "{{label}}：{{text}}",
         "queued": "待機中",
         "interrupted": "前回は最後まで実行されませんでした",
         "errored": "前回エラーが発生しました",
         "failed": "完了しませんでした",
         "paused": "一時停止中",
         "disabled": "オフ"
-      }
+      },
+      "dirElsewhere": "「{{device}}」上"
     },
     "remoteSettings": {
       "empty": "まだ項目がありません。",
@@ -8174,7 +8973,9 @@
     "list": {
       "createMenu": "新規作成",
       "createTeammate": "パートナーを作成",
+      "joinWithLink": "招待リンクを入力…",
       "startChat": "会話を始める",
+      "selectChat": "パートナーやグループチャットを選んで、会話を始めましょう",
       "typing": "入力中…",
       "unread": "{{count}} 件の未読メッセージ",
       "search": "パートナーやグループチャットを検索",
@@ -8189,7 +8990,10 @@
       "pinned": "固定済み",
       "needsAttention": "対応が必要",
       "duplicate": "仲間を複製",
-      "moreActions": "{{name}} のその他の操作"
+      "moreActions": "{{name}} のその他の操作",
+      "sectionExpand": "仲間を展開",
+      "sectionCollapse": "仲間を折りたたむ",
+      "noResults": "一致するパートナーやグループはありません"
     },
     "cancel": "キャンセル",
     "save": "保存",
@@ -8334,6 +9138,10 @@
       "description": "パートナー全体に共通する設定です。個々のパートナーの設定は、その子のページにあります。",
       "rosterNote": "あらかじめ用意された顔ぶれは、バージョンごとに増えていきます。"
     },
+    "session": {
+      "ownedByBot": "{{name}} のバックグラウンドタスク",
+      "backToBot": "{{name}} に戻る"
+    },
     "collab": {
       "backgroundTask": "バックグラウンドタスク",
       "trackedTask": "独立して実行し、結果を自動で返します",
@@ -8367,7 +9175,21 @@
         "daysHoursMinutes": "{{d}}日{{h}}時間{{m}}分"
       },
       "viewResult": "結果を見る",
-      "noWrittenResult": "テキストの結果はありません。"
+      "noWrittenResult": "テキストの結果はありません。",
+      "addNote": "ひとこと追加",
+      "addNotePlaceholder": "バックグラウンドタスクに伝える内容（Enter で送信）",
+      "addNoteSent": "バックグラウンドタスクに送信しました",
+      "stop": "停止",
+      "lookAt": "確認する",
+      "awaitingConfirm": "あなたの確認待ち：{{summary}}",
+      "awaitingConfirmGeneric": "あなたの確認待ち",
+      "elapsed": "経過 {{duration}}",
+      "tookTime": "所要 {{duration}}",
+      "expandResult": "結果を表示",
+      "collapseResult": "結果を閉じる",
+      "expandDetails": "詳細を表示",
+      "collapseDetails": "詳細を閉じる",
+      "messageSentWithText": "バックグラウンドタスクに伝えました：「{{text}}」"
     },
     "directMessage": {
       "sentTo": "{{name}} にメッセージを送信",
@@ -8378,11 +9200,40 @@
       "close": "会話を閉じる",
       "unavailable": "この仲間同士の会話は利用できません。",
       "empty": "表示できるメッセージはまだありません。",
-      "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました"
+      "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました",
+      "sentHeader": "{{name}} へ送信",
+      "receivedHeader": "{{name}} から",
+      "expandThread": "やり取りを表示",
+      "exchangeCountShort": "{{count}} 件のやり取り",
+      "exchangeCountShort_one": "{{count}} 件のやり取り",
+      "exchangeCountShort_other": "{{count}} 件のやり取り",
+      "expand": "表示",
+      "collapse": "閉じる",
+      "fullThread": "会話全体",
+      "threadClosed": "今回の仲間同士の会話は終了しました · 閲覧のみ"
     },
     "groupChat": {
       "migrationPending": "過去の履歴の一部をアップロード中です。自動的に再試行します。このチャットは引き続き利用できます。",
       "memberSeparator": "、",
+      "ownerOf": "{{name}} のオーナー",
+      "elapsed": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分",
+        "hours": "{{hours}} 時間 {{minutes}} 分"
+      },
+      "progress": {
+        "step": "ステップ {{step}}/{{total}}",
+        "speaking": "{{name}} が返信中…",
+        "elapsed": "経過 {{time}}",
+        "viewProcess": "経過を見る",
+        "hideProcess": "経過を閉じる",
+        "stop": "停止"
+      },
+      "header": {
+        "stepRunning": "{{name}} がステップ {{step}} を作業中",
+        "speaking": "{{name}} が返信中…",
+        "planning": "{{name}} が役割分担を考え中…"
+      },
       "memberCount_one": "仲間 {{count}} 人",
       "memberCount_other": "仲間 {{count}} 人",
       "nameLabel": "グループ名",
@@ -8396,6 +9247,8 @@
         "empty": "メッセージはまだありません",
         "preview": "{{name}}: {{text}}",
         "previewYou": "あなた: {{text}}",
+        "sharedReplyYou": "スレッドの返信を共有しました",
+        "sharedReply": "{{name}} がスレッドの返信を共有しました",
         "waiting": "確認待ち",
         "planProposed": "{{name}}: 計画ができました。開始を待っています",
         "planProposedAnonymous": "計画ができました。開始を待っています",
@@ -8450,12 +9303,28 @@
         "attachmentsFailed": "添付ファイルを送信できませんでした。ファイルが残っているか確認するか、削除してから再試行してください",
         "folderNotSupported": "フォルダーは添付できません。中のファイルを選んでください"
       },
+      "outbox": {
+        "sending": "送信中…",
+        "failed": "送信できませんでした",
+        "edit": "編集",
+        "editBlocked": "入力欄に内容があります。送信するか消してから、このメッセージを編集してください"
+      },
+      "quote": {
+        "replyingTo": "{{name}} を引用",
+        "remove": "引用を外す",
+        "jumpLabel": "{{name}} の元のメッセージを表示：{{summary}}",
+        "deleted": "元のメッセージは削除されました",
+        "unavailable": "元のメッセージは閲覧できる履歴にありません",
+        "attachments": "{{name}} など {{total}} 件"
+      },
       "timeline": {
         "loadEarlier": "以前のメッセージを表示",
         "loadEarlierFailed": "以前のメッセージを読み込めませんでした。もう一度お試しください",
         "emptyTitle": "このグループにはまだメッセージがありません",
         "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
         "roundEnded": "仲間たちの発言が終わりました",
+        "stepTag": "ステップ {{count}}",
+        "sending": "送信中",
         "continue": "議論を続ける",
         "continueFailed": "議論を続けられませんでした。もう一度お試しください",
         "nextStep": "次のステップ:",
@@ -8479,7 +9348,18 @@
         "workdirUnavailable": "{{name}} が作業ディレクトリを見つけられません",
         "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
         "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
-        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません"
+        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+        "runtimeFailure": {
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。\n画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。",
+          "MODEL_UNAVAILABLE": "{{name}}は返信できませんでした。利用可能なモデルがありません。\n仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。",
+          "AUTH_REQUIRED": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。\n設定でモデルのプロバイダーに再接続し、メッセージを再送してください。",
+          "RATE_LIMITED": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "UPSTREAM_OVERLOADED": "{{name}}は返信できませんでした。モデルサービスが一時的に混雑しています。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "QUOTA_EXCEEDED": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。\nプロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。",
+          "NETWORK_ERROR": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。\nネットワークやプロキシを確認し、メッセージを再送してください。",
+          "RUNTIME_TIMEOUT": "{{name}}の返信がタイムアウトしました。\nメッセージを再送するか、別の利用可能なモデルを選んでください。",
+          "RUNTIME_ERROR": "{{name}}は今回は返信できませんでした。\nメッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+        }
       },
       "settings": {
         "open": "グループの設定",
@@ -8504,7 +9384,7 @@
         "speakingMode": "発言の順番",
         "speakingModeAuto": "自動",
         "speakingModeSequential": "常に順番に",
-        "speakingModeAutoNote": "メンションなし、または @全員 のときは、最初の一巡は全員が同時に考え、その後は順番に話します。メンションした仲間は、メンションした順に答えます。",
+        "speakingModeAutoNote": "メンションなし・@全員：最初の一巡は同時に考え、その後は順番に発言。特定の仲間へのメンションは指定順です。",
         "speakingModeSequentialNote": "一度に一人の仲間だけが話し、後の仲間は前の返信を見てから答えます。",
         "speakingModeSaveFailed": "発言の順番を保存できませんでした。もう一度お試しください。",
         "setOrganizer": "まとめ役にする",
@@ -8522,10 +9402,26 @@
       "errors": {
         "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
         "memberUnavailable": "利用できない仲間がいます。別の仲間を選んで再試行してください",
+        "mentionUnavailable": "メンションしたメンバーは現在利用できません。送信する前に選び直してください。",
         "notFound": "このグループチャットはもう存在しません",
         "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
         "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
-        "planClosed": "この計画はすでに終了したか、更新されています"
+        "planClosed": "この計画はすでに終了したか、更新されています",
+        "invalidAttachment": "添付ファイルを読み込めません。選び直して送信してください。",
+        "attachmentUnavailable": "スマートフォンから添付ファイルを取得できません。接続を確認して再試行してください。",
+        "attachmentTooLarge": "添付ファイルが 100 MB を超えています。小さいファイルを選んでください。",
+        "mediaUploadFailed": "チャットサービスに添付ファイルをアップロードできません。しばらくしてから再試行してください。",
+        "authRequired": "ログインの有効期限が切れました。パソコンで再度ログインしてください。",
+        "chatUnavailable": "チャットサービスに接続できません。ネットワークを確認して再試行してください。",
+        "importPending": "グループの履歴を同期中です。しばらくしてから再試行してください。",
+        "requestTimeout": "操作の結果をまだ確認できません。更新して結果を確認してから再試行してください。",
+        "permissionDenied": "このグループを管理する権限がありません。",
+        "serviceError": "チャットサービスで処理を完了できません。しばらくしてから再試行してください。",
+        "groupArchived": "このグループはアーカイブ済みのため操作できません。",
+        "quoteUnavailable": "引用したメッセージは削除されたか、表示できなくなりました。引用を外したので、もう一度送信してください。",
+        "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
+        "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
+        "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
       },
       "organizer": "まとめ役",
       "plan": {
@@ -8534,7 +9430,7 @@
         "missing": "この計画は読み込めなくなりました",
         "start": "開始する",
         "dismiss": "今回はやめる",
-        "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+        "editHint": "ステップをクリックすると担当を変えられます",
         "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
         "superseded": "更新済み",
         "dismissed": "見送りました",
@@ -8553,20 +9449,86 @@
       "speaking": {
         "planning": "役割分担を考えています…"
       },
+      "task": {
+        "label": "タスク",
+        "state": {
+          "started": "進行中",
+          "waiting": "確認待ち",
+          "completed": "完了",
+          "failed": "失敗",
+          "cancelled": "キャンセル済み",
+          "timed-out": "タイムアウト"
+        }
+      },
       "files": {
-        "openFailed": "ファイルを開けませんでした。移動または削除された可能性があります"
+        "openFailed": "ファイルを開けませんでした。移動または削除された可能性があります",
+        "untitled": "添付ファイル",
+        "loading": "読み込み中…",
+        "unavailable": "読み込めません"
+      },
+      "addFromChat": {
+        "triggerFor": "{{name}} をグループチャットに追加",
+        "addTo": "{{name}} の追加先",
+        "newGroup": "グループチャットを作成…",
+        "existingGroup": "既存のグループに追加",
+        "added": "{{name}} を「{{group}}」に追加しました",
+        "openGroup": "グループを開く",
+        "unavailable": "{{name}} は現在グループチャットに参加できません"
       },
       "server": {
-        "reply": "返信",
+        "quoteReply": "引用して返信",
+        "startTopic": "スレッドを作成",
+        "openTopic": "スレッドを表示 · {{count}} 件の返信",
+        "topic": "スレッド",
         "replies": "返信",
-        "replyCount": "{{count}} 件の返信",
+        "replyCount_one": "{{count}} 件の返信",
+        "replyCount_other": "{{count}} 件の返信",
+        "thread": {
+          "open_one": "スレッドを開く（返信 {{count}} 件）",
+          "open_other": "スレッドを開く（返信 {{count}} 件）",
+          "lastReply": "最終返信 {{time}}",
+          "emptyReply": "テキストなし",
+          "image": "画像",
+          "file": "ファイル",
+          "attachmentsSummary": "{{label}} · {{name}} など添付 {{count}} 件",
+          "alsoSent": "スレッドで返信し、メインチャットにも送信しました",
+          "sharedReplyFrom": "{{name}} のスレッド返信を共有しました",
+          "sharedReply": "スレッドの返信を共有しました",
+          "edited": "編集済み",
+          "sourceUnavailable": "元の返信は削除されたか、表示する権限がありません。",
+          "viewThread": "スレッドを見る",
+          "viewInMain": "メインチャットで見る",
+          "postToMain": "メインチャットに投稿",
+          "postedBySelf": "あなたがメインチャットに投稿済み",
+          "postedToMain": "メインチャットに投稿済み",
+          "alsoSend": "メインチャットにも送信",
+          "alsoSendFailed_one": "返信はスレッドに送信されましたが、メインチャットには送信できませんでした。",
+          "alsoSendFailed_other": "{{count}} 件の返信はスレッドに送信されましたが、メインチャットには送信できませんでした。",
+          "loadingSource": "元の返信を読み込んでいます…",
+          "shareNotLoaded": "この共有はメインチャットの以前のメッセージにあります。さらに読み込むと表示されます。",
+          "retryPost": "メインチャットに再送信",
+          "alreadyPosted": "この返信はすでにメインチャットに投稿しています。",
+          "shareUnavailable": "この返信は削除されたか表示できないため、メインチャットに投稿できません。"
+        },
         "replyPlaceholder": "このメッセージに返信。@ でパートナーを指定できます…",
         "sendReply": "返信を送信",
         "addReaction": "リアクションを追加",
         "reactionCount": "{{emoji}} · {{count}} 件のリアクション",
+        "reactionWho": "{{emoji}} · {{count}} 件のリアクション：{{names}}",
+        "reactorSelf": "あなた",
+        "reactorFormer": "{{name}}（現在はグループにいません）",
+        "reactorsUnavailable_one": "ほか {{count}} 人のメンバー情報は表示できません",
+        "reactorsUnavailable_other": "ほか {{count}} 人のメンバー情報は表示できません",
         "invite": "グループに招待",
         "join": "グループに参加",
-        "inviteDescription": "リンクは 24 時間有効で、一度だけ使えます。承諾するとメンバーになり、チャット履歴を閲覧できます。",
+        "inviteDescription": "招待を承諾するとメンバーになり、チャット履歴を閲覧できます。",
+        "revokeLink": "このリンクを無効にする",
+        "revokeDescription": "このリンクからはグループに参加できなくなります。他の招待リンクや既存のメンバーには影響しません。",
+        "revokedLink": "この招待リンクは無効化されました。",
+        "revokeUnsupported": "このサーバーでは招待リンクの無効化に対応していません。",
+        "reusableLink": "有効期限なし · 複数の人が繰り返し利用可能",
+        "singleUseUntil": "1 回のみ利用可能 · {{date}} まで有効",
+        "expiredLink": "この招待リンクは期限切れです。",
         "joinDescription": "招待リンクを貼り付けて、グループを確認してから参加してください。",
         "inviteLink": "招待リンク",
         "pasteLink": "招待リンクを貼り付け…",
@@ -8575,9 +9537,12 @@
         "copied": "招待リンクをコピーしました",
         "createLink": "招待リンクを作成",
         "accept": "承諾して参加",
-        "openGroup": "グループを開く",
         "previewInvite": "招待を確認",
-        "invalidInvite": "招待が無効、使用済み、または期限切れです。新しいリンクを取得してください。",
+        "linkDescription": "参加するとメンバーになり、チャット履歴を閲覧できます。",
+        "loadingInvite": "招待を読み込んでいます…",
+        "retryInvite": "招待を再読み込み",
+        "malformedInvite": "招待リンクが不完全か、形式が正しくありません。招待した人に新しいリンクを依頼してください。",
+        "invalidInvite": "招待が無効、使用済み、期限切れ、または無効化されています。新しいリンクを取得してください。",
         "notAllowed": "このアカウントに権限がありません。アカウントを確認するか、グループ管理者に連絡してください。",
         "loginRequired": "ログインしてから再試行してください。",
         "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
@@ -8611,30 +9576,36 @@
           "transfer": "所有権を譲渡",
           "transferTitle": "{{name}} に所有権を譲渡しますか？",
           "transferHint": "相手がオーナーになり、あなたは管理者になります。パートナーもオーナーになれます。",
-          "remove": "グループから削除",
           "removeTitle": "{{name}} をグループから削除しますか？",
           "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーのパートナーも退出します。",
           "addCompanion": "自分のパートナーを招待",
           "leave": "グループを退出",
-          "leaveHint": "あなたとあなたのパートナーが退出します。オーナーは先に所有権を譲渡してください。",
+          "leaveHint": "あなたとあなたの仲間がグループから退出します。新しいメッセージは届かなくなり、グループの履歴を閲覧できなくなります。",
+          "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
           "archive": "グループをアーカイブ",
-          "archiveHint": "履歴を残し、新しいメッセージとパートナーの実行を停止します。",
+          "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージとパートナーの実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
           "confirm": "確認",
           "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
           "conflict": "設定が更新されました。再読み込みしてお試しください。",
-          "replyMode": "メンションがない場合",
-          "speakingMode": "発言順",
-          "all": "全パートナーが返信可能",
-          "mentioned": "メンション時のみ",
-          "auto": "同時に発言",
-          "sequential": "順番に発言",
           "unarchive": "アーカイブを解除",
-          "unarchiveHint": "メッセージとパートナーの実行を再開します。",
+          "unarchiveHint": "アーカイブを解除すると、すべてのメンバーに対してメッセージとパートナーの実行が再開します。",
           "archived": "アーカイブ済みです。履歴は引き続き閲覧できます。",
           "noneHint": "このグループでは仲間の所有者だけが応答を依頼できます。",
           "companionPermissions": "仲間の権限",
           "configureCapabilities": "ツールと利用権限の設定"
         }
+      },
+      "lifecycle": {
+        "dissolve": "グループを解散",
+        "dissolveNote": "この操作は取り消せません。全員がメッセージを送信できなくなり、進行中の作業は停止し、招待は無効になります。メンバーはこれまで閲覧できた履歴を引き続き確認できます。",
+        "hide": "自分のリストから削除",
+        "hideNote": "すべての自分のデバイスでリストからこのチャットを削除します。メンバーの状態、履歴、進行中の作業、他のメンバーには影響しません。",
+        "leave": "グループを退出",
+        "leaveNote": "あなたとあなたの仲間がグループから退出します。新しいメッセージは届かなくなり、グループの履歴を閲覧できなくなります。",
+        "unavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
+        "dissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
+        "failed": "操作を完了できませんでした。もう一度お試しください。",
+        "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
       }
     },
     "joined": {
@@ -8665,6 +9636,7 @@
       "avatar": "{{name}} が新しいアバターを選んでいます",
       "welcome": "最初の挨拶を準備しています",
       "failed": "準備が一時停止しました。完了した内容は保存されています。もう一度試せます。",
+      "changeModel": "モデルを変更",
       "retryFailed": "再試行できませんでした。少し待ってお試しください。",
       "leave": "いったん離れる",
       "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
@@ -8695,7 +9667,11 @@
       "configure": "設定を開く",
       "empty_toolset": "この実行環境には利用できる内蔵ツールがありません。",
       "empty_mcp": "カスタム MCP サーバーはまだ追加されていません。",
-      "empty_skill": "選択できるスキルはありません。"
+      "empty_skill": "選択できるスキルはありません。",
+      "inputHandoff": {
+        "title": "代理入力",
+        "description": "サインイン情報、パスワード、確認コードなど本人の入力が必要なとき、この仲間がいずれかのデバイスでの入力を依頼できます。入力した内容が仲間に渡ることはありません。"
+      }
     },
     "guided": {
       "title": "パートナーを作成",
@@ -8705,7 +9681,9 @@
       "generate": "パートナーを生成",
       "generating": "パートナーを考えています…",
       "generationFailed": "生成できませんでした。入力内容は残っています。もう一度お試しください。",
-      "modelRequired": "まず Cindy で利用可能な既定のモデルを選択してください。",
+      "modelRequired": "上で利用可能なモデルを選択して続けてください。",
+      "modelFollowsDefault": "パートナーの既定モデルに従います。",
+      "modelForThisBot": "この選択はこのパートナーにのみ適用されます。",
       "cindyDescription": "Cindy の使い方やツールの接続をお手伝いし、一緒にやり遂げます。",
       "cindySummary": "Cindy の管理、ツールの接続、仕事のお手伝い。",
       "openCindy": "Cindy を開く",
@@ -8795,12 +9773,229 @@
       "setupDeferred": "パートナーとのチャットでログインと確認を続けられます。",
       "automationInvalid": "自動化の定義を変換できず、作成されていません。",
       "itemFailed": "この項目は未完了です。再試行するか詳細を確認してください。",
-      "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。"
+      "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。",
+      "imBotOwnerMissing": "オーナーのユーザー ID が見つかりませんでした。仲間の「メッセージプラットフォーム」ページでこのボットを接続してください。",
+      "imBotGatewayRunning": "元のゲートウェイがまだこのボットを使っています。停止してから「メッセージプラットフォーム」で接続してください。",
+      "imBotInUse": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
+      "imBotConnectFailed": "このボットに接続できませんでした。仲間の「メッセージプラットフォーム」ページでやり直してください。",
+      "imBotSourceStopUnconfirmed": "元のボットがまだ停止していないため、仲間に引き継いでいません。あとで仲間の「メッセージプラットフォーム」ページで接続できます。",
+      "imBotSourceChanged": "プレビュー後に元のボットが変更されたため、停止していません。再読み込みしてからインポートしてください。",
+      "bots": "メッセージボット",
+      "botsNote": "インポート後、{{source}} のこれらのボットは停止し、仲間が引き継ぎます。",
+      "sourceDisabled": "元から停止中",
+      "botOwner": "オーナー ID {{id}}"
     },
     "learning": {
       "memory": "記憶しました：{{title}}",
       "skillCreated": "スキルを作成：{{title}}",
       "skillUpdated": "スキルを更新：{{title}}"
+    },
+    "cloud": {
+      "homeLabel": "メインのパソコン",
+      "thisComputer": "このパソコン",
+      "homeOffline": "メインのパソコン「{{device}}」がオフラインです",
+      "homeUnreachable": "メインのパソコン「{{device}}」はリモート操作を許可していません",
+      "continueHere": "このパソコンで続ける",
+      "takeOverHint": "このパソコンで続けると、{{name}} はこちらで動作し、下の会話も引き継がれます。",
+      "takingOver": "このパソコンで {{name}} を準備しています…",
+      "takeOverConflict": "{{name}} はすでに「{{device}}」に移っています",
+      "takeOverOffline": "サーバーに接続できないため、今はこのパソコンで続けられません",
+      "takeOverFailed": "このパソコンで {{name}} を引き継げませんでした",
+      "notEnabled": "このサーバーはメインのパソコンの変更に対応していません",
+      "readOnlyNote": "クラウドに保存された会話です。閲覧のみできます",
+      "empty": "クラウドの会話はまだありません",
+      "loadFailed": "クラウドの会話を読み込めませんでした",
+      "reload": "会話を再読み込み",
+      "loadOlder": "以前のメッセージを読み込む",
+      "unknownDevice": "別のパソコン",
+      "loadingDevices": "パソコンの一覧を読み込んでいます…",
+      "devicesFailed": "パソコンの一覧を読み込めませんでした",
+      "noTargets": "引き継げるパソコンがありません。別のパソコンがオンラインで、同じアカウントでログインし、「同一アカウントのデバイスによる操作を許可」をオンにしている必要があります",
+      "resumeToMove": "{{name}} を再開してから別のパソコンに移動してください",
+      "transferBusy": "{{name}} はまだ返信中です。返信が終わってから移動してください",
+      "targetUnavailable": "「{{device}}」は今は使えません。オンラインでリモート操作がオンになっている必要があります",
+      "shadowTitle": "この仲間は「{{device}}」で動作しています",
+      "shadowHint": "ここの会話は閲覧のみできます。",
+      "openOnHome": "「{{device}}」で開く",
+      "runsOn": "「{{device}}」で実行中",
+      "runsHere": "このパソコンで実行中",
+      "switchHint": "{{name}} を実行するパソコンを変更",
+      "switchTo": "「{{device}}」に移す",
+      "switchHere": "このパソコンに移す",
+      "switchTitle": "{{name}} を「{{device}}」で実行しますか？",
+      "switchDescription": "今後 {{name}} は「{{device}}」で実行され、チャット履歴も一緒に移ります。作業ディレクトリ、接続、ローカルのファイルは元のパソコンに残ります。",
+      "switchAction": "「{{device}}」に移す",
+      "switched": "{{name}} は「{{device}}」で実行されるようになりました",
+      "switchConflict": "{{name}} のメインのパソコンはすでに変更されているため、移しませんでした",
+      "switchOffline": "接続できません。{{name}} のメインのパソコンは変わっていません",
+      "switchFailed": "{{name}} を「{{device}}」に移せませんでした",
+      "homeOutdated": "メインのパソコン「{{device}}」の Cindy が古いバージョンです。更新するか、そのパソコンで変更してください",
+      "arrivingLater": "{{name}} はこのパソコンに移り、準備中です。まもなくチームメイト一覧に表示されます",
+      "busyTitle": "{{name}} はまだ返信中です",
+      "busyDescription": "この返信が終わってから「{{device}}」に移すか、返信を止めてすぐに移せます。",
+      "busyWait": "終わってから移す",
+      "busyStop": "止めて移す",
+      "waitingForTurn": "{{name}} の返信が終わるのを待ってから「{{device}}」に移します…",
+      "mergeLabel": "重複した Cindy を統合",
+      "mergeHint": "Cindy が {{count}} 人います：{{devices}}",
+      "mergeTitle": "{{count}} 人の Cindy を1人に統合しますか？",
+      "mergeDescription": "統合後は Cindy が1人だけ残ります。ほかの Cindy のチャット履歴、記憶、スキル、ToDo、ルーティンが引き継がれます。同じ名前で内容が違う記憶とスキルは別に保存され、上書きされません。ほかの Cindy はオフになり、データはクラウドと元のパソコンに残ります。",
+      "mergeKeep": "名前、性格、設定を残す Cindy",
+      "mergeAction": "統合",
+      "merged": "{{count}} 人の Cindy を1人に統合し、{{messages}} 件のメッセージを引き継ぎました",
+      "mergedRenamed": "{{count}} 人の Cindy を1人に統合し、{{messages}} 件のメッセージを引き継ぎました。別名で保存：{{renamed}}",
+      "mergeFailed": "統合できませんでした。あとでもう一度お試しください（統合済みの部分は重複しません）",
+      "mergeBusy": "まだ返信中の Cindy があります。返信が終わってから統合してください",
+      "mergePaused": "一時停止中の Cindy があります。設定で再開してから統合してください",
+      "mergeOffline": "「{{device}}」に接続できません。オンラインになってから統合してください",
+      "mergeOutdated": "「{{device}}」の Cindy が古いバージョンです。先に更新してください",
+      "homeOfflineShort": "メインのパソコンがオフライン",
+      "homeReadOnly": "メインのパソコン：{{device}}",
+      "moveTo": "「{{device}}」に移す",
+      "transferTitle": "{{name}} を「{{device}}」に移しますか？",
+      "transferDescription": "これから {{name}} は「{{device}}」で動作します。作業ディレクトリと接続はこのパソコンに残り、このパソコンの会話は履歴になります。",
+      "transferAction": "「{{device}}」に移す",
+      "transferred": "{{name}} を「{{device}}」に移しました",
+      "transferConflict": "{{name}} のメインのパソコンはすでに変わっているため、移しませんでした",
+      "transferOffline": "サーバーに接続できません。{{name}} は引き続きこのパソコンで動作します",
+      "transferFailed": "{{name}} を「{{device}}」に移せませんでした"
+    },
+    "channels": {
+      "title": "メッセージプラットフォーム",
+      "platform": {
+        "telegram": "Telegram",
+        "feishu": "飛書",
+        "lark": "Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk",
+        "discord": "Discord"
+      },
+      "status": {
+        "connected": "接続済み",
+        "connecting": "接続中…",
+        "offline": "オフライン",
+        "conflict": "別のデバイスがこのボットを使用中",
+        "error": "エラー",
+        "idle": "未接続"
+      },
+      "remove": "削除",
+      "removeAria": "{{platform}} を削除",
+      "empty": "{{name}} にはまだメッセージプラットフォームがありません。Telegram、飛書、WeCom、DingTalk、Discord で作成したボットを追加すると、{{name}} がそこで返信します。",
+      "externalNote": "このボットにメッセージを送る人は全員 {{name}} と話すことになります。あなた自身のメッセージは {{name}} の権限で実行され、それ以外の人には権限を制限した非表示のタスクが個別に用意されます。",
+      "sharedMemoryNote": "{{name}} はここでの情報と他の会話の情報をまとめて使います。記憶を分けたい場合は別の仲間を使ってください。",
+      "groups": {
+        "title": "グループ",
+        "hint": "{{name}} が参加したグループがここに表示されます。「常時」= すべてのメッセージを読み、{{name}} が発言するかを自分で判断します（毎回トークンを消費）。",
+        "empty": "まだグループがありません。ボットをグループに追加し、誰かが発言すると表示されます。",
+        "loadFailed": "グループ一覧を読み込めませんでした",
+        "saveFailed": "保存できず、以前のモードに戻しました",
+        "retry": "再読み込み",
+        "mode": {
+          "mention": "@ のみ",
+          "always": "常時"
+        }
+      },
+      "lanes": {
+        "title": "非表示のタスク",
+        "hint": "グループ、トピック、ほかの人からの DM ごとに非表示のタスクがあります。止まったり話がかみ合わなくなったりしたら、やり直せます。履歴は残ります。",
+        "ownerName": "あなたとの DM",
+        "kind": {
+          "ownerDm": "メインタスク",
+          "group": "グループ",
+          "topic": "トピック",
+          "guestDm": "DM"
+        },
+        "state": {
+          "running": "返信中",
+          "failed": "前回の返信でエラー"
+        },
+        "noActivity": "まだメッセージがありません",
+        "messageCount_other": "現在のコンテキストに {{count}} 件のメッセージ",
+        "reset": "やり直す",
+        "resetAria": "「{{lane}}」をやり直す",
+        "resetConfirm": {
+          "title": "「{{lane}}」をやり直しますか？",
+          "description": "次のメッセージはまっさらなコンテキストから始まり、進行中の返信は停止します。履歴はこの非表示のタスクにすべて残り、{{name}} の記憶は変わりません。",
+          "ownerDescription": "これは {{name}} のメインタスクで、デスクトップでの会話とこの DM で共有しています。次のメッセージはまっさらなコンテキストから始まり、進行中の返信は停止します。履歴、記憶、ファイルはすべて残ります。",
+          "confirm": "やり直す",
+          "cancel": "キャンセル"
+        },
+        "resetDone": "「{{lane}}」をやり直しました。次のメッセージはまっさらなコンテキストから始まります。",
+        "resetFailed": "やり直せませんでした。しばらくしてからもう一度お試しください",
+        "loadFailed": "非表示のタスクを読み込めませんでした",
+        "empty": "グループやほかの人からの DM はまだありません。グループや DM で誰かが {{name}} に話しかけると、ここに表示されます。"
+      },
+      "add": {
+        "button": "プラットフォームを追加",
+        "title": "{{name}} にプラットフォームを追加",
+        "description": "プラットフォームで作成したボットの認証情報を貼り付けてください。このコンピューターにのみ保存されます。",
+        "platformLabel": "プラットフォーム",
+        "telegram": {
+          "tokenLabel": "Bot Token",
+          "tokenPlaceholder": "@BotFather が発行した Token を貼り付け",
+          "ownerLabel": "あなたの Telegram ユーザー ID",
+          "ownerPlaceholder": "数字のみの ID（@userinfobot で確認）",
+          "ownerHint": "この ID からのメッセージは {{name}} 自身の権限で実行されます。それ以外の人はゲストとして扱われます。"
+        },
+        "feishu": {
+          "serviceLabel": "サービス",
+          "appIdLabel": "App ID",
+          "appIdPlaceholder": "cli_xxxxxxxxxxxxxxxx",
+          "appSecretLabel": "App Secret",
+          "appSecretPlaceholder": "App Secret を貼り付け"
+        },
+        "wecom": {
+          "botIdLabel": "Bot ID",
+          "botIdPlaceholder": "WeCom 管理画面の Bot ID",
+          "secretLabel": "Secret",
+          "secretPlaceholder": "WeCom 管理画面の Bot Secret",
+          "ownerHint": "最初にこのボットへ DM を送った人がオーナーになり、{{name}} 自身の権限で実行されます。先にインテリジェントボットを作成し、長時間接続を有効にしてください。"
+        },
+        "dingtalk": {
+          "appKeyLabel": "Client ID",
+          "appKeyPlaceholder": "ボットアプリの Client ID を貼り付け",
+          "appSecretLabel": "Client Secret",
+          "appSecretPlaceholder": "ボットアプリの Client Secret を貼り付け",
+          "ownerHint": "最初にこのボットへ DM を送った人がオーナーになり、{{name}} 自身の権限で実行されます。グループでは @ されたときだけ返信します。"
+        },
+        "discord": {
+          "tokenLabel": "Bot Token",
+          "tokenPlaceholder": "Discord Bot Token を貼り付け",
+          "ownerLabel": "あなたの Discord ユーザー ID",
+          "ownerPlaceholder": "17〜20 桁の数字 ID",
+          "ownerHint": "この ID からの DM だけが {{name}} に届き、{{name}} 自身の権限で実行されます。"
+        },
+        "confirm": "接続",
+        "connecting": "接続中…",
+        "errors": {
+          "invalidToken": "Bot Token の形式ではないようです。123456:ABC… の形式です。",
+          "invalidOwner": "ユーザー ID は数字で入力してください。",
+          "invalidFeishu": "App ID と App Secret の両方を入力してください。",
+          "invalidWecom": "Bot ID と Secret の両方を入力してください。",
+          "invalidDingtalk": "Client ID と Client Secret の両方を入力してください。",
+          "invalidDiscordToken": "Bot Token の形式ではないようです。",
+          "invalidDiscordOwner": "ユーザー ID は 17〜20 桁の数字です。",
+          "conflict": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
+          "botUnavailable": "{{name}} は現在利用できません。復帰後にもう一度お試しください。",
+          "connectFailed": "接続できませんでした：{{reason}}",
+          "failed": "完了できませんでした。しばらくしてからもう一度お試しください。",
+          "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。"
+        },
+        "source": {
+          "label": "接続方法",
+          "existing": "Cindy で設定済みのボットを使う",
+          "manual": "新しい認証情報を入力",
+          "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。"
+        }
+      },
+      "removeConfirm": {
+        "title": "{{platform}} を削除しますか？",
+        "description": "このボットは返信を停止し、認証情報はこのコンピューターから削除され、非表示のタスクはアーカイブされます。{{name}} の記憶と性格は変わりません。",
+        "confirm": "削除",
+        "cancel": "キャンセル",
+        "failed": "削除できませんでした。しばらくしてからもう一度お試しください",
+        "ok": "OK"
+      }
     }
   },
   "common": {
@@ -9152,6 +10347,21 @@
       "addRemoteProject": "リモートプロジェクトを追加"
     },
     "modelSelector": {
+      "displayPricing": {
+        "free": "無料",
+        "estimated": "約 {{price}}",
+        "startingAt": "{{price}} から",
+        "units": {
+          "token": "トークン",
+          "character": "文字",
+          "image": "枚",
+          "second": "秒",
+          "minute": "分",
+          "request": "リクエスト",
+          "megapixel": "メガピクセル",
+          "megapixelSecond": "メガピクセル·秒"
+        }
+      },
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
       "paymentRequired": {
         "badge": "有料",
@@ -9259,7 +10469,10 @@
         "railAll": "すべて",
         "railRemoteProvider": "{{provider}} · {{device}}",
         "remoteLoading": "そのパソコンのモデルを読み込み中…",
+        "remoteFavoriteUnavailable": "{{source}} · そのパソコンのモデルを読み込めません",
         "favoritesGroup": "お気に入り",
+        "favoritesSaveFailed": "お気に入りの変更を保存できませんでした",
+        "favoritesCleanupFailed": "共有が解除されたモデルのお気に入りを削除できませんでした",
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
         "addFavorite": "お気に入りに保存",
         "customize": "カスタマイズ",
@@ -9274,7 +10487,13 @@
         "effortEndSmart": "高精度",
         "railSameEngine": "{{agent}} のみ",
         "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
-        "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。"
+        "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
+        "favoritesSyncFailedUnreachable": "お気に入りはまだ同期されていません。そのパソコンに現在接続できません。接続が戻ってから開き直してください。",
+        "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+        "providerGroupLabel": "{{provider}} · {{group}}",
+        "providerGroupRunningOn": "現在 {{device}} で実行中",
+        "providerGroupRunningHere": "現在このパソコンで実行中",
+        "providerGroupUnassigned": "開始時にプロバイダーグループがパソコンを選び、使用量はそのパソコンの分を表示します"
       }
     },
     "permissionSelector": {
@@ -9373,6 +10592,8 @@
       "browseProjectFolder": "別のプロジェクトフォルダを選択",
       "dialogue": "対話",
       "dialogueOrSelectProject": "対話またはプロジェクトを選択",
+      "searchProjects": "プロジェクトを検索",
+      "noMatchingProjects": "一致するプロジェクトはありません",
       "remoteProjectsLoadFailed": "{{device}} のプロジェクトを読み込めませんでした。接続を確認して再試行してください。",
       "retryRemoteProjects": "プロジェクトを再読み込み",
       "removeFromList": "リストから削除",
@@ -9483,7 +10704,7 @@
         "refining": "整えています",
         "permissionDialog": {
           "title": "マイク権限が必要です",
-          "description": "この入力欄で音声入力を使うには、アプリにマイク権限が必要です。許可した後、もう一度音声入力をクリックしてください。",
+          "description": "マイクへのアクセスを許可してから、もう一度音声入力をクリックしてください。",
           "confirm": "権限を許可",
           "cancel": "キャンセル"
         }
@@ -9603,6 +10824,9 @@
       "editTitle": "貼り付けたテキストを編集",
       "cancelEdit": "編集をキャンセル",
       "saveEdit": "テキストを保存"
+    },
+    "sharedProviderCredential": {
+      "description": "このタスクは共有されたプロバイダーを使うため、Agent が読み取った内容は共有元または共有元が手配したパソコンを経由します。この操作は認証情報（鍵や .env など）に関わる可能性があり、確認が必要です。「このセッションで常に許可」を選ぶと、このタスクで共有に伴う認証情報の確認を繰り返しません。権限モードやプランモードを変更するか Cindy を終了すると、再度確認します。"
     },
     "mediaDownload": {
       "title": "生成されたメディアをダウンロードしますか？",
@@ -9774,6 +10998,8 @@
       "skip": "スキップ",
       "next": "次へ",
       "submit": "送信",
+      "sendAndContinue": "送信して続行",
+      "close": "閉じる",
       "customAnswer": "別の回答を入力…",
       "answerPlaceholder": "回答を入力…"
     },
@@ -9848,7 +11074,9 @@
       "label": "元のセッションから作成"
     },
     "imageMissing": {
-      "title": "画像が失われました"
+      "title": "画像が失われました",
+      "unavailable": "画像を表示できません",
+      "loading": "画像を読み込み中…"
     },
     "visionBridge": {
       "analyzing": "画像を認識中…（{{count}}枚）",
@@ -9969,6 +11197,8 @@
       "syncAuthFailed": "同期に失敗しました：{{msg}}",
       "syncAuthDaemonRestartFailed": "認証情報はリモートに送信されましたが、古い daemon が再起動されませんでした — リモートに再接続してから再試行してください",
       "invalidEncryptedContent": "プロバイダーを変更したため、以前の暗号化が使用できなくなりました。このセッションは元のプロバイダーでのみ続行できます。または Fork をクリックしてプロトコル暗号化コンテンツを破棄し、新しいセッションで続行してください。",
+      "readableHistoryRecovery": "読み取れる履歴から新しいタスクを作成",
+      "readableHistoryRecoveryDescription": "再試行しても失敗する場合は、読み取れる履歴から新しいタスクを作成できます。内部の暗号化情報は省略されます。元のタスクは保持され、失敗したメッセージは自動で再送信されません。",
       "forkStripEncrypted": "Fork して切り離す",
       "forkStripEncryptedRunning": "Fork 中…",
       "forkStripEncryptedTitle": "暗号化推論を除いた新しいセッションを Fork で作成",
@@ -10153,6 +11383,9 @@
       "previewFailed": "Web プレビューを準備できませんでした。ディレクトリと接続を確認して再試行してください。",
       "previewNotFound": "HTML ファイルが見つかりません。ファイルが存在するか確認してください。",
       "previewFetching": "Web プレビューを準備しています…",
+      "previewConnectionBusy": "接続が混雑しているため、Web プレビューの準備が完了していません。しばらくしてから再試行してください。",
+      "previewTimeout": "リモート Web プレビューがタイムアウトしました。しばらくしてから再試行してください。",
+      "previewDisconnected": "リモートデバイスに接続できていません。接続が回復したら再試行してください。",
       "previewTooLarge": "準備中のプレビューが多すぎます。しばらくしてから再試行してください。",
       "previewUnsupported": "ディレクトリをプレビューするには、リモート端末の Cindy を更新してください。",
       "fetching": "リモートからファイルを取得しています…",
@@ -10170,7 +11403,9 @@
       "downloadExtracting": "展開しています…",
       "downloadUnsupported": "リモートコンピュータはまだフォルダのダウンロードに対応していません。そのコンピュータの Cindy を更新してから再試行してください",
       "downloadNoSpace": "ディスクの空き容量が足りないため、ダウンロードを完了できません",
-      "downloadSkipped": "ダウンロードフォルダに保存しましたが、一部のファイルはダウンロードできませんでした"
+      "downloadSkipped": "ダウンロードフォルダに保存しましたが、一部のファイルはダウンロードできませんでした",
+      "cancelTransfer": "キャンセル",
+      "downloadsInProgress": "ダウンロード中（{{count}} 件）"
     },
     "mivoAction": {
       "promptPlaceholder": "プロンプトを入力し、Enter で送信",
@@ -10375,14 +11610,27 @@
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
           "sessionTotal": "このセッションでの再接続 {{count}} 回"
-        }
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} が使用量の上限に達したため、{{to}} で続行しました",
+          "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
+          "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
+          "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました",
+          "failed": "{{from}} で問題が起きたため、{{to}} で続行しました"
+        },
+        "agentReconnect": {
+          "named": "{{computer}} に再接続し、続行しました",
+          "unnamed": "元のパソコンに再接続し、続行しました"
+        },
+        "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
       },
       "autoResumeSeparator": {
         "label": "接続が中断されたため、自動的に再開しました"
       },
       "autoResumePending": {
         "label": "再接続中",
-        "labelWithProgress": "再接続中 {{attempt}}/{{total}}"
+        "labelWithProgress": "再接続中 {{attempt}}/{{total}}",
+        "groupSwitch": "別のパソコンに切り替え中"
       },
       "agentSwitch": {
         "label": "{{from}} から {{to}} に切り替えました",
@@ -10401,7 +11649,8 @@
         "labelStrip": "履歴の画像を整理しました",
         "toggleHint": "引き継ぎ内容を表示",
         "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
-        "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
+        "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)",
+        "labelIdleGap": "しばらく間が空いたため、整理して続行しました"
       },
       "review": {
         "running": "現在の成果をレビュー中",
@@ -10419,9 +11668,13 @@
           "sourceConversationChanged": "元のタスクが変更されました。現在のタスクに対して /review をもう一度実行してください。",
           "sourceFilesChanged": "元のタスクのファイルが変更されました。現在の成果に対して /review をもう一度実行してください。",
           "artifactChanged": "レビュー対象の成果が変更されました。現在の成果に対して /review をもう一度実行してください。",
-          "artifactUnavailable": "Cindy はレビュー対象の成果を安全に読み取れませんでした。ワークスペースまたは添付ファイルを確認して、/review をもう一度実行してください。",
+          "artifactUnavailable": "レビュー用のファイルを準備できませんでした。選択したフォルダーまたは添付ファイルを確認し、/review を再実行してください。",
           "providerFailed": "レビュータスクの実行に失敗しました"
-        }
+        },
+        "directory": "フォルダー：",
+        "baseline": "基準ブランチ：",
+        "additionalDirectories": "ほかに：",
+        "unverifiedResult": "以下の指摘は生成されましたが、現在も有効か確認できませんでした。"
       }
     },
     "markdownRenderer": {
@@ -10432,12 +11685,11 @@
       "blockCopied": "コピー済み",
       "duplicateFiles": "同名のファイルが {{count}} 件見つかりました。絶対パスを使用してください",
       "copyFile": "コピー",
-      "copyFilePath": "ファイルパスをコピー",
+      "copyFilePath": "パスをコピー",
       "copyLocation": "位置をコピー",
       "locationCopied": "位置をコピーしました",
-      "openWith": "アプリで開く",
       "openWithAppFailed": "選択したアプリで開けませんでした",
-      "revealFile": "ファイルの場所を開く",
+      "revealFile": "フォルダーで表示",
       "openInBrowser": "ブラウザで開く",
       "fileCopied": "ファイルをコピーしました",
       "pathCopied": "パスをコピーしました",
@@ -10448,16 +11700,20 @@
       "BROWSER_FILE_OPEN_FAILED": "ブラウザで開けませんでした",
       "openInBrowserFailed": "ブラウザで開けませんでした",
       "openLinkFailed": "リンクを開けませんでした",
+      "openLink": "リンクを開く",
       "anchorNotFound": "対応する見出しが見つかりません",
-      "openInSidebarBrowser": "サイドバーのブラウザで開く",
-      "openInSidebarFileBrowser": "サイドバーのファイルブラウザで開く",
+      "openInSidebarBrowser": "サイドバーで開く",
+      "openInSidebarFileBrowser": "ファイル一覧で表示",
       "openInSidebarFileBrowserFailed": "サイドバーのファイルブラウザで開けませんでした",
       "openInSidebarFileBrowserOutsideWorkdir": "このファイルは現在のセッション作業ディレクトリ外にあるため、サイドバーのファイルブラウザで特定できません",
-      "openInDefaultBrowser": "既定のブラウザで開く",
+      "openInDefaultBrowser": "ブラウザで開く",
       "copyLink": "リンクをコピー",
       "linkCopied": "リンクをコピーしました",
-      "viewSourceFile": "ソースファイルを表示",
-      "openInSidebarFailed": "サイドバーのブラウザで開けませんでした"
+      "viewSourceFile": "ソースを表示",
+      "openInSidebarFailed": "サイドバーのブラウザで開けませんでした",
+      "openInCurrentWindow": "現在のウィンドウで開く",
+      "locateProject": "プロジェクトを表示",
+      "shiftClick": "Shift+クリック"
     },
     "ghostSummon": {
       "directiveLabel": "モデルに追加された指示",
@@ -10510,6 +11766,7 @@
       "pluginSent": "プラグインから送信",
       "pluginViewDetail": "プラグインを表示",
       "sourceIds": {
+        "mcpApp": "$t(mcpApps.serverId)",
         "session": "セッション ID：{{id}}",
         "teammate": "仲間 ID：{{id}}",
         "automation": "自動化 ID：{{id}}",
@@ -10520,13 +11777,8 @@
       },
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",
-      "sessionReference": {
-        "recent": "最近のメッセージ",
-        "aroundAnchor": "リンクしたメッセージの前後",
-        "messageCount_one": "{{count}} 件のメッセージ",
-        "messageCount_other": "{{count}} 件のメッセージ",
-        "truncated": "一部省略"
-      },
+      "sessionLinkFallback": "セッション",
+      "messageLinkFallback": "引用したメッセージ",
       "forkBusy": "現在の応答が終了してから、ここから新しいセッションを始めてください",
       "editStopTimeout": "タスクの停止待ちがタイムアウトしました。もう一度お試しください",
       "editQueueNotEmpty": "このセッションには送信待ちのメッセージがあります。先に送信または削除してから編集してください",
@@ -10554,7 +11806,11 @@
       "referencedMessages": "参照メッセージ（{{count}}）",
       "referencedContext": "参照メッセージ",
       "groupBackground": "グループチャットの背景",
-      "viewThread": "スレッドの文脈を見る ({{count}})"
+      "viewThread": "スレッドの文脈を見る ({{count}})",
+      "memberFromGroup": "{{name}} · {{platform}} グループ「{{group}}」から",
+      "memberFromPlatform": "{{name}} · {{platform}} グループから",
+      "guestFromDm": "{{name}} · {{platform}} の DM から（オーナー以外）",
+      "unknownSender": "グループメンバー"
     },
     "rewind": {
       "noFilesToRollback": "復元できるプロジェクトファイルの変更は検出されませんでした",
@@ -10636,7 +11892,10 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
       "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
       "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。"
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "プロバイダーグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。このプロバイダーの「リモートと共有」ページでグループを確認してください。",
+      "REMOTE_AGENT_DEVICE_LIMIT": "このデバイスのリモートセッション数が上限に達しました。不要なセッションをアーカイブするか、提供者に「リモートと共有」で上限の変更を依頼してください。",
+      "REMOTE_AGENT_TOTAL_LIMIT": "提供者のパソコンのリモートセッション総数が上限に達しました。提供者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。"
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
@@ -10896,6 +12155,7 @@
       },
       "dialogueLabel": "対話",
       "backToAutomations": "Automations に戻る",
+      "backToReviewSource": "元のタスクに戻る",
       "waitForReply": "ドキュメント領域での返信を待っています…",
       "modelSwitchedFastModeOff": "モデルを切り替えました。Fast Mode は無効になりました"
     },
@@ -10979,7 +12239,8 @@
         "awaitingPermission": "承認待ち",
         "awaitingQuestion": "返信待ち",
         "awaitingPlan": "プランの確認待ち",
-        "awaitingPluginSetup": "プラグイン設定待ち"
+        "awaitingPluginSetup": "プラグイン設定待ち",
+        "awaitingInputHandoff": "代理入力待ち"
       },
       "showAllSessions": "すべて表示 {{count}} 件",
       "allSessions": "すべてのセッション",
@@ -11343,7 +12604,11 @@
       "untitled": "無題のセッション",
       "moreActions": "その他の操作",
       "agentDevice": "Agent は {{device}} で実行中",
-      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します"
+      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します",
+      "orcaRemoteLead": "{{device}} からの協同",
+      "orcaRemoteLeadReleased": "協同は終了しました · {{device}} から",
+      "orcaRemoteLeadUnknownDevice": "別のパソコン",
+      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -12280,7 +13545,7 @@
       "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しているため、一覧が不完全な場合があります。",
       "fetchFailedPartialHint": "最新ステータスを取得できませんでした。一部の Issue はステータスが不完全な場合があります。",
       "enhancementFailedHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。Cindy GitHub プラグインのアクセストークンの権限が不足している可能性があります。プラグインページで確認してください。",
-      "enhancementFailedGenericHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。ネットワークまたは GitHub のレート制限が原因の可能性があります。しばらくしてから再読み込みしてください。",
+      "enhancementFailedGenericHint": "GitHub の Issue を読み込めません。右上から再試行してください。",
       "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
     },
     "redirect": {
@@ -12541,6 +13806,125 @@
       "allowDirs": "これらのファイルのフォルダーも許可(このセッション中、同じフォルダーのメディアファイルは再確認しません)",
       "allow": "許可",
       "deny": "拒否"
+    }
+  },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "このページは安全な接続を使っていません。入力内容が他人に読まれる可能性があります。",
+      "ip-address": "このページはドメインではなく IP アドレスを使っています。想定したサイトか確認してください。",
+      "local-host": "このページはこのコンピュータ上のサービスから表示されています。想定したアプリか確認してください。",
+      "local-file": "このページはローカルファイルです。想定した内容か確認してください。",
+      "punycode": "このアドレスには特殊な文字が含まれ、別のサイトを装っている可能性があります。よく確認してください。",
+      "embedded-frame": "入力欄はページに埋め込まれた別サイトの中にあります。提供元が信頼できるか確認してください。"
+    },
+    "agentControlled": "この画面は Agent が開きました。入力する前に、本当にサインインしたい場所か確認してください。",
+    "error": {
+      "decision": "操作が届きませんでした。もう一度お試しください。",
+      "stale": "画面が変わりました。最新の内容で操作してください。",
+      "submit": "入力が届きませんでした。もう一度お試しください。"
+    },
+    "terminal": {
+      "succeeded": "Agent に戻しました。",
+      "cancelled": "代理入力をキャンセルしました。",
+      "failed": "代理入力は終了しました。",
+      "expired": "待ち時間が長すぎたため、代理入力は終了しました。"
+    },
+    "failure": {
+      "permission": "Cindy にこのコンピュータの画面を読む権限がありません。システム設定のアクセシビリティで Cindy を許可してください。",
+      "target_gone": "対象のウインドウが閉じられました。",
+      "unreadable": "この画面を読み取れません。ホストのコンピュータで直接完了してから Agent に戻してください。",
+      "action_failed": "直前の操作が反映されませんでした。画面を確認してもう一度お試しください。",
+      "timeout": "待ち時間が長すぎたため、代理入力は終了しました。",
+      "unsupported": "このコンピュータはまだ代理入力に対応していません。",
+      "origin_changed": "入力前にページが変わったため、何も入力していません。現在のページを確認してからもう一度入力してください。",
+      "picture_unavailable": "このステップの画面を表示できませんでした。システム設定で Cindy の画面収録を許可し、ウインドウが最小化されていないか確認してください。",
+      "screen_locked": "このコンピュータの画面はロックされています（ディスプレイのスリープでもロックされます）。スリープを解除してロックを外してから、Agent にもう一度試すよう伝えてください。",
+      "nothing_to_fill": "この画面には入力が必要な項目がないため、Agent がそのまま続けます。"
+    },
+    "phase": {
+      "reading": "画面を読み取っています…",
+      "working": "入力しています…",
+      "finishing": "完了したようです。{{count}} 秒後に Agent に戻します。",
+      "finishingNow": "完了したようです。Agent に戻しています…"
+    },
+    "action": {
+      "stay": "まだ終わっていない",
+      "done": "Agent に戻す",
+      "claim": "ここで対応",
+      "picture": "画面を見る",
+      "backToForm": "フォームに戻る",
+      "liveView": "ライブ表示",
+      "fill": "入力",
+      "skip": "スキップ",
+      "continue": "続ける",
+      "close": "キャンセル",
+      "showPassword": "パスワードを表示",
+      "hidePassword": "パスワードを隠す",
+      "scan": "スキャン"
+    },
+    "remoteUnavailable": "このコンピュータはリモートから入力を受け取れません。ホストのコンピュータでこのステップを完了してから Agent に戻してください。",
+    "unnamedField": "入力欄",
+    "passwordField": "パスワード",
+    "codeField": "確認コード",
+    "filledHint": "すでに入力済みです。空欄のままにすると変更しません。",
+    "record": {
+      "doneOn_one": "オーナーが {{device}} で {{count}} ステップの入力を完了しました",
+      "doneOn_other": "オーナーが {{device}} で {{count}} ステップの入力を完了しました",
+      "doneHost_one": "オーナーがホストのコンピュータで {{count}} ステップの入力を完了しました",
+      "doneHost_other": "オーナーがホストのコンピュータで {{count}} ステップの入力を完了しました",
+      "donePhone_one": "オーナーがスマートフォンで {{count}} ステップの入力を完了しました",
+      "donePhone_other": "オーナーがスマートフォンで {{count}} ステップの入力を完了しました",
+      "doneElsewhere_one": "オーナーが別のデバイスで {{count}} ステップの入力を完了しました",
+      "doneElsewhere_other": "オーナーが別のデバイスで {{count}} ステップの入力を完了しました",
+      "done": "代理入力が完了しました",
+      "nothingToFill": "入力不要のため Agent に戻しました",
+      "cancelled": "代理入力をキャンセルしました",
+      "expired": "代理入力がタイムアウトしました",
+      "failed": "代理入力は完了しませんでした"
+    },
+    "holder": {
+      "elsewhere": "{{device}} で対応中です。ここで引き継ぐこともできます。",
+      "host": "ホストのコンピュータ",
+      "phone": "スマートフォン",
+      "otherDevice": "別のデバイス"
+    },
+    "agentNote": "Agentからの補足：{{note}}",
+    "picture": {
+      "hint": "画面上の位置をタップすると、Cindy がホストのコンピュータで同じ位置をクリックします。",
+      "open": "このステップの画面を表示",
+      "alt": "対象ウインドウの画面",
+      "loading": "画面を取得しています…",
+      "error": "画面を取得できませんでした。もう一度お試しください。",
+      "field": "選択中の入力欄",
+      "type": "入力",
+      "typeEnter": "入力して Return"
+    },
+    "deviceCode": {
+      "prompt": "このコードでサインイン",
+      "copy": "コードをコピー",
+      "copied": "コードをコピーしました",
+      "copyFailed": "コピーできませんでした",
+      "open": "このデバイスで開く",
+      "openFailed": "リンクを開けませんでした",
+      "then": "開いたページでコードを入力してサインインを完了したら、「Agent に戻す」を選んでください。"
+    },
+    "nothingLeft": "ここで入力が必要な項目はありません。",
+    "dialogNote": "コンピュータ上のこの場所にだけ入力されます。Agent に渡したり保存したりすることはありません。",
+    "qr": {
+      "open": "この端末で {{site}} を開く",
+      "copyLink": "リンクをコピー",
+      "copyText": "内容をコピー",
+      "copied": "コピーしました。",
+      "copyFailed": "コピーできませんでした。もう一度お試しください。",
+      "loading": "QR コードを取得しています…",
+      "scanned": "スキャンしました。スマートフォンで確認してください。確認後は自動で続行します。",
+      "hint": "スマートフォンでこのコードを読み取ってログインしてください。ログイン後は自動で続行します。",
+      "hintLink": "スマートフォンでこのコードを読み取るか、この端末でリンクを開いてログインしてください。ログイン後は自動で続行します。",
+      "copyImage": "画像をコピー",
+      "imageCopied": "画像をコピーしました。",
+      "openFailed": "このリンクを開けませんでした。スマートフォンでコードを読み取ってください。",
+      "alt": "コンピュータ上の QR コード。クリックするとコンピュータ上の同じ位置をクリックします。",
+      "failed": "QR コードを取得できませんでした。クリックして再試行してください。"
     }
   },
   "commandPalette": {
@@ -13210,7 +14594,7 @@
     "workingDirRequired": "作業ディレクトリが必要です",
     "dialogUnavailable": "window.electronAPI.dialog が利用できません",
     "notReadyHeading": "Maker Experimental",
-    "notReadyBody": "window.electronAPI.maker が利用できません。アプリを再起動し、コンソールで IPC 登録エラーを確認してください。",
+    "notReadyBody": "この機能は現在利用できません。アプリを再起動してください。",
     "title": "Maker Experimental — ステージ 1 リファクタ新パイプライン",
     "description": "新パイプライン検証ページ。旧パイプライン（cc-agent / codex）には影響なし。",
     "agentLabel": "エージェント:",
@@ -13406,7 +14790,25 @@
       "optional": "（任意）",
       "initialTaskPlaceholder": "この Worker に渡す任意の最初のタスク",
       "enableCollabTitle": "コラボレーションを開始",
-      "enableCollabSubmit": "コラボレーションを開始"
+      "enableCollabSubmit": "コラボレーションを開始",
+      "executionDeviceLabel": "実行デバイス",
+      "thisComputer": "このデバイス",
+      "deviceOnline": "オンライン",
+      "deviceNeedsUpdate": "要アップデート",
+      "executionDeviceHint": "同じアカウントで、オンラインかつリモート操作が有効なコンピューターのみ表示します。",
+      "executionDeviceRemoteHint": "Worker のタスク、フォルダー、コマンドはすべて {{device}} 上にあります。",
+      "remoteDirLabel": "{{device}} 上の作業フォルダー",
+      "remoteDirChat": "チャット",
+      "remoteDirPath": "フォルダーを指定",
+      "remoteDirChatHint": "{{device}} 上でプロジェクトに紐づけないチャットのセッションを作成します。",
+      "remoteDirPathHint": "{{device}} 上で確認します。存在しない場合はエラーになり、このコンピューターのフォルダーに置き換えることはありません。",
+      "remoteDirInvalid": "{{device}} 上の絶対パスを入力してください。",
+      "errors": {
+        "deviceUnreachable": "{{device}} は現在使用できません。オンラインでリモート操作が有効になっている必要があります。Worker は作成されていません。",
+        "deviceOutdated": "{{device}} の Cindy が古いため、アップデートすると Worker を実行できます。",
+        "dirRejected": "{{device}} 上にこのフォルダーが見つからないか、使用できません。Worker は作成されていません。",
+        "dirUnavailable": "{{device}} のフォルダーは一時的に使用できません。接続やネットワークドライブを確認して再試行してください。Worker は作成されていません。"
+      }
     },
     "rolePill": {
       "unread": "未読の更新",
@@ -13428,13 +14830,22 @@
       "scrollWorkersLeftEdge": "すでに先頭の Worker を表示しています",
       "scrollWorkersRightEdge": "すでに末尾の Worker を表示しています",
       "errorBadge": "エラー",
-      "errorBadgeAria": "エラーが発生した Worker があります"
+      "errorBadgeAria": "エラーが発生した Worker があります",
+      "awaitingBadgeAria": "返信を待っている Worker があります",
+      "executionDevice": "{{device}} で実行",
+      "deviceUnreachable": "状態を取得できません",
+      "unknownDevice": "別のコンピューター",
+      "archiveRemoteWorkerConfirmDesc": "この協同から外し、{{device}} で進行中のラウンドを停止します。{{device}} 上のタスク、履歴、ファイルは保持され「協同は終了しました」と表示されるので、そちらで引き続き確認できます。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session が見つかりません",
       "waitingForWorker": "Worker を待機中",
+      "workerHiddenInSeparateWindow": "別ウィンドウでは Worker の会話を表示しません",
+      "viewWorkerInMainWindow": "メインウィンドウで表示",
+      "remoteWorkerLoading": "{{device}} 上のタスクを読み込み中…",
+      "remoteWorkerUnreachable": "{{device}} に現在接続できません。再接続すると、この Worker のタスクが再び表示されます。",
       "closeAria": "閉じる"
     }
   },
@@ -13459,17 +14870,12 @@
     "pluginDisabled": "無効",
     "pluginAgentInvoked": "Agent が自動で使用",
     "pluginNoCommand": "ここでは使用できません",
-    "sectionTitle": "参照ディレクトリ(読み取り専用)",
+    "sectionTitle": "ディレクトリ",
     "empty": "参照ディレクトリはまだありません",
     "add": "ディレクトリを追加…",
     "addReadOnly": "読み取り専用ディレクトリを追加…",
-    "addWritable": "読み書き可能なディレクトリを追加…",
-    "writableSectionTitle": "読み書き可能なディレクトリ",
-    "writableEmpty": "読み書き可能なディレクトリはまだありません",
     "atLimit": "上限 {{max}} 件に達しました",
     "remove": "{{name}} を削除",
-    "parentConfirmTitle": "親ディレクトリを追加しますか？",
-    "parentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent が作業ディレクトリ外の内容も参照できるようになり、表示範囲が広がります。\n\nそれでも追加しますか？\n\n{{path}}",
     "writableParentConfirmTitle": "親ディレクトリの読み書きを許可しますか？",
     "writableParentConfirmDescription": "選択したディレクトリは、現在の作業ディレクトリの親または祖先です。Agent はその中のファイルを読み取り、作成、変更、削除できるようになります。\n\nそれでも許可しますか？\n\n{{path}}",
     "parentConfirmAccept": "追加する",
@@ -13557,6 +14963,26 @@
       "inline": "メモリ内の添付ファイル",
       "allow": "今回のみ許可",
       "cancel": "キャンセル"
+    },
+    "workspaceSelection": {
+      "cancel": "キャンセル",
+      "title": "レビューするコードを選択",
+      "message": "このディレクトリには利用できるコード差分がありません。現在のコードをレビューするか、実際に開発したディレクトリを選択できます。",
+      "current": "このフォルダーを確認",
+      "choose": "別のフォルダーを選択",
+      "open": "レビュー"
+    },
+    "inputSummary": {
+      "title": "独立レビュー（読み取り専用・開発メモリなし）",
+      "directory": "ディレクトリ：{{dir}}",
+      "baseline": "{{base}} と比較",
+      "uncommitted": "未コミットの変更を含む",
+      "additionalDirectories": "ほかに：{{dirs}}",
+      "uncovered": "対象外：{{dirs}}",
+      "uncheckedDirs": "ほかに {{count}} 個のタスクディレクトリは未確認",
+      "artifacts": "成果物：{{count}} 件",
+      "focus": "重点：{{focus}}",
+      "task": "タスクの目標に照らして現在の成果をレビュー"
     }
   },
   "learn": {
@@ -13623,7 +15049,7 @@
   "sessionShare": {
     "export": {
       "title": "セッションをエクスポート",
-      "sensitiveWarning": "エクスポートされるファイルには、このセッションの全チャット履歴とツール出力（ファイル内容やコマンド結果など機密情報を含む可能性があります）が含まれます。受け取る相手が信頼できることを確認してください。",
+      "sensitiveWarning": "全チャット履歴とツール出力を含みます。機密情報が含まれる場合があるため、信頼できる相手にだけ共有してください。",
       "encryptLabel": "パスワードでエクスポートファイルを暗号化する",
       "passwordPlaceholder": "パスワード（4文字以上）",
       "passwordConfirmPlaceholder": "パスワードを再入力",
@@ -13788,7 +15214,9 @@
         "description": "請求書の発行を申請するには、以下の情報を {{email}} までメールでお送りください。",
         "requiredInfo": "メールには以下の情報を記載してください：",
         "emailSubject": "注文 {{orderId}} の請求書発行申請",
-        "emailBody": "こんにちは。\n\n以下の注文について請求書の発行を申請します。\n\n────────────────────\n注文 ID：{{orderId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n請求金額：{{amount}}\n請求書宛名：\n担当者名：\n電話番号：\nメールアドレス：\n────────────────────\n\nよろしくお願いいたします。",
+        "personalInvoicePolicy": "Cindy個人版へのチャージでは、原則として<strong>個人宛ての請求書</strong>を発行します。宛名には氏名または「個人」を記載できます。会社の経費精算のために企業名義の請求書が必要な場合は、<strong>会社の公印を押印した経費精算説明書</strong>をご提出いただき、説明書に請求書の宛名を明記してください。",
+        "invoiceTitleHint": "記入方法：個人宛ての場合は、氏名または「個人」を記載してください。会社の経費精算のために企業名義で発行する場合は、会社の公印を押印し、請求書の宛名を明記した経費精算説明書をメールに添付してください。",
+        "emailBody": "こんにちは。\n\n以下の注文について請求書の発行を申請します。\n\n────────────────────\n注文 ID：{{orderId}}\nアプリケーション：{{application}}\n支払い方法：{{paymentMethod}}\n請求金額：{{amount}}\n請求書宛名：\n{{invoiceTitleHint}}\n\n担当者名：\n電話番号：\nメールアドレス：\n────────────────────\n\nよろしくお願いいたします。",
         "sendAction": "請求書の申請を送信",
         "emailCopied": "サポートメールアドレスをコピーしました",
         "emailCopyFailed": "サポートメールアドレスをコピーできませんでした。もう一度お試しください。",
@@ -14289,7 +15717,8 @@
         "included": "実行中のバージョンに含まれます",
         "notIncluded": "実行中のバージョンには含まれません",
         "unknown": "実行中のバージョンに含まれるか未確認"
-      }
+      },
+      "failedContinue": "公式に似た変更があるか確認できませんでしたが、このまま続けられます。"
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 環境の準備",
@@ -14684,7 +16113,8 @@
         "installerReady": "インストーラーの準備完了"
       },
       "rounds_other": "編集 {{count}} 回",
-      "files_other": "{{count}} ファイルを変更"
+      "files_other": "{{count}} ファイルを変更",
+      "generatePersonal": "個人版を生成"
     },
     "merge": {
       "getLatest": "最新ソースを同期",
@@ -14727,7 +16157,265 @@
         "interrupted": "操作が中断されました。変更は保持されています。再試行してください。",
         "startFailed": "解決用タスクを開けませんでした。再試行してください。",
         "cancelFailed": "更新をキャンセルできませんでした。再試行してください。個人ソースは保持されています。"
+      },
+      "combine": {
+        "taskTitle": "2 台のコンピューターの変更をまとめる",
+        "status": {
+          "fetching": "まとめる準備をしています…",
+          "merging": "両方の変更をまとめています…",
+          "conflict": "両方で同じ箇所が変更されており、対応が必要です",
+          "resolving": "競合を解決しています",
+          "checking": "まとめた結果を確認しています…",
+          "merged": "両方の変更をまとめました",
+          "failed": "まとめる作業が完了しませんでした",
+          "cancelled": "まとめる作業を取り消しました。どちらの個人版も変わっていません"
+        },
+        "conflictConfirm": {
+          "title": "2 台のコンピューターで同じ箇所が変更されています",
+          "description": "確認すると独立したタスクが作成され、Agent が両方の変更をまとめ、両方の機能を残します。両方を残せない場合は先に確認します。キャンセルするとこのまとめ作業を中止し、どちらの個人版も変わりません。",
+          "confirm": "確認して解決",
+          "cancel": "まとめるのをやめる"
+        }
       }
+    },
+    "storage": {
+      "title": "保存先",
+      "github": "あなたの GitHub · {{repository}}",
+      "localOnly": "このコンピューターのみ",
+      "localOnlyHint": "GitHub に接続すると、この個人版をほかのコンピューターでも使え、変更を公式に提出することもできます。このコンピューターにだけある個人版は、コンピューターの買い替えや再インストール後に復元できません。",
+      "localChosenHint": "このコンピューターにだけ保存する設定です。このコンピューターにだけある個人版は、コンピューターの買い替えや再インストール後に復元できません。",
+      "disconnectedHint": "このコンピューターはまだ GitHub に接続されていません。同期するには接続してください。",
+      "unavailableHint": "現在 GitHub への接続を確認できません。",
+      "actionFailed": "操作を完了できませんでした。もう一度お試しください。",
+      "running": {
+        "save": "GitHub に保存しています",
+        "sync": "GitHub と同期しています",
+        "disconnect": "同期を停止しています"
+      },
+      "step": {
+        "waiting": "ほかのソース操作の完了を待っています",
+        "preparing": "このコンピューターの変更を整理しています",
+        "fork": "GitHub にコピーを作成しています",
+        "connecting": "GitHub に接続しています",
+        "retrieving": "ほかのコンピューターの変更を取得しています",
+        "uploading": "個人版をアップロードしています"
+      },
+      "status": {
+        "synced": "同期済み",
+        "pendingBuild": "個人版の生成後に同期します",
+        "retrieved": "ほかのコンピューターの変更を取得しました。個人版を生成すると使えます",
+        "pending": "まだ GitHub と同期していません",
+        "remoteAhead": "GitHub にほかのコンピューターの新しい変更があります",
+        "diverged": "GitHub とこのコンピューターの両方に新しい変更があり、今は自動でまとめられません",
+        "account": "接続中の GitHub アカウント（{{login}}）はこのリポジトリの所有者ではないため、同期を一時停止しています。",
+        "needsMerge": "GitHub とこのコンピューターの両方に新しい変更があり、まとめる必要があります",
+        "buildFirst": "先に生成してから同期"
+      },
+      "errors": {
+        "github": "GitHub の接続が無効になりました。GitHub に再接続してください。",
+        "account": "接続中の GitHub アカウントが保存先と一致しないため、同期を一時停止しています。",
+        "forkConflict": "GitHub に Cindy のコピーを作成できませんでした。同じ名前のリポジトリが公式リポジトリのコピーではないため、Cindy は変更していません。",
+        "forkUnavailable": "GitHub のコピーの準備がまだ終わっていません。しばらくしてからお試しください。",
+        "network": "GitHub に接続できません。ネットワークを確認してからもう一度お試しください。",
+        "workflowScope": "現在の GitHub の認可ではワークフローファイルをアップロードできません。GitHub に再接続してからもう一度お試しください。",
+        "source": "個人版のソースを現在使用できません。先にソースを準備してください。",
+        "gitOutdated": "このコンピューターの Git が古すぎます。環境準備で Git を更新してからもう一度お試しください。",
+        "interrupted": "前回の操作は中断され、自動では再開されませんでした。",
+        "failed": "同期を完了できませんでした。もう一度お試しください。",
+        "forkMissing": "個人版を保存している GitHub リポジトリが見つかりません。削除された可能性があります。もう一度 GitHub に保存できます。",
+        "forkArchived": "個人版を保存している GitHub リポジトリがアーカイブされているため、アップロードできません。GitHub でアーカイブを解除してから同期してください。"
+      },
+      "card": {
+        "title": "個人版をあなたの GitHub に保存しますか？",
+        "intro": "GitHub アカウント {{login}} に接続しています。保存すると：",
+        "otherComputers": "同じ GitHub アカウントを使うほかのコンピューターでも、この個人版を使えます",
+        "contribute": "あとで変更を Cindy の公式に提出できます",
+        "autoSync": "以降は自動で同期されます",
+        "public": "あなたの GitHub アカウントにある Cindy のコピー（通常は {{repository}}）に保存されます。これは公式リポジトリの公開コピーのため、変更は GitHub 上で誰でも閲覧できます。",
+        "unchanged": "このコンピューターの個人版、制作履歴、進行中の制作は変わりません。",
+        "existingTitle": "あなたの GitHub にはすでに個人版があります",
+        "existingIntro": "アカウント {{login}} の {{repository}} に、ほかのコンピューターで保存した個人版があります。保存すると、このコンピューターでもそれを使い、以降は自動で同期されます。",
+        "existingKeeps": "このコンピューターにまだ独自の変更がなければ、GitHub の個人版をそのまま使います。このコンピューターにある変更が上書きされることはありません。",
+        "prepareFirst": "先に個人版のソースを準備します。数分かかります。"
+      },
+      "actions": {
+        "connect": "GitHub に接続",
+        "reconnect": "GitHub に再接続",
+        "save": "GitHub に保存",
+        "keepLocal": "このコンピューターにだけ保存",
+        "syncNow": "今すぐ同期",
+        "retry": "再試行",
+        "recheck": "再確認",
+        "view": "GitHub で表示",
+        "stop": "同期を停止",
+        "useExisting": "このコンピューターで使う",
+        "saveAgain": "もう一度 GitHub に保存",
+        "keepSeparate": "使わず、このコンピューターで別に作る"
+      },
+      "stopConfirm": {
+        "title": "GitHub との同期を停止しますか？",
+        "description": "このコンピューターは今後、個人版をアップロードしません。GitHub のリポジトリとこのコンピューターの個人版はどちらも残り、あとで再開できます。",
+        "confirm": "同期を停止",
+        "cancel": "キャンセル"
+      },
+      "needsMergeHint": "上の「同期」で両方の変更をまとめ、両方の機能を残します。同じ箇所が変更されていた場合はタスクで自動的に解決します。",
+      "buildFirstHint": "両方のコンピューターに新しい変更があり、このコンピューターの変更はまだ生成されていません。個人版を生成してから「同期」すると両方をまとめられます。"
+    },
+    "contribution": {
+      "action": "公式に提出",
+      "update": "提出内容を更新",
+      "resubmit": "もう一度提出",
+      "view": "GitHub で表示",
+      "submitted": "公式に提出しました（#{{number}}）",
+      "state": {
+        "submitted": "公式に提出済み #{{number}}",
+        "open": "公式に提出済み #{{number}} · レビュー待ち",
+        "merged": "公式に採用されました #{{number}}",
+        "closed": "公式に採用されませんでした #{{number}}"
+      },
+      "dialog": {
+        "title": "公式に提出",
+        "description": "この変更を Pull Request にまとめて Cindy の公式リポジトリに提出し、メンテナーのレビューを受けます。",
+        "loading": "この変更を準備しています…",
+        "existing": "この変更はすでに提出済みです（#{{number}}）。もう一度提出すると更新されます。",
+        "reopen": "前回の提出 #{{number}} はクローズされています。もう一度提出すると新しく作成されます。",
+        "prTitle": "タイトル",
+        "prTitleHint": "feat: や fix: などの種類から始めてください",
+        "body": "説明",
+        "bodyHint": "公式のテンプレートで入力済みです。自由に編集できます。",
+        "author": "署名",
+        "name": "名前",
+        "email": "メールアドレス",
+        "nameRequired": "名前を入力してください",
+        "emailRequired": "有効なメールアドレスを入力してください",
+        "authorHint": "この変更の作成者と署名として GitHub 上に公開されます。",
+        "files": "{{count}} ファイルを含む",
+        "onlyThis": "この変更だけが含まれます。個人版のほかの変更は含まれません。",
+        "public": "あなたの GitHub リポジトリ {{repository}} から提出され、誰でも閲覧できます。",
+        "uiNote": "この変更は画面に関わります。提出後、GitHub でスクリーンショットを追加し、根拠となるデザイン規約を記載してください。",
+        "dco": "この変更を自分で提出し、{{name}} <{{email}}> として開発者原産地証明（DCO）に署名することを確認します。",
+        "submit": "提出",
+        "update": "提出内容を更新",
+        "cancel": "キャンセル",
+        "close": "閉じる",
+        "files_other": "{{count}} ファイルを含む"
+      },
+      "errors": {
+        "notBound": "公式に提出するには、まずこのページ上部の「保存先」で個人版を GitHub に保存してください。",
+        "github": "GitHub の接続が無効になりました。設定で GitHub に再接続してからもう一度お試しください。",
+        "account": "接続中の GitHub アカウントが個人版の保存先と一致しません。元のアカウントに戻してからお試しください。",
+        "unavailable": "この変更の内容がこのコンピューターにもうないため、提出できません。",
+        "changed": "提出内容をもう一度確認してください。このウィンドウを閉じて開き直し、ファイル一覧を確認してから提出してください。",
+        "conflict": "この変更は最新の公式コードと同じ箇所に関わっているため、この変更だけの提出に自動でまとめられません。最新の個人版でこの変更を作り直してから提出してください。",
+        "empty": "公式の最新コードにはすでにこの変更が含まれています。提出は不要です。",
+        "invalid": "タイトル、名前、メールアドレスを確認してください。タイトルは 1 行で入力してください。",
+        "network": "GitHub に接続できません。ネットワークを確認してからもう一度お試しください。",
+        "workflowScope": "この変更は GitHub のワークフローファイルを変更するため、現在の GitHub 認可ではアップロードできません。GitHub に再接続してからお試しください。",
+        "failed": "提出できませんでした。しばらくしてからもう一度お試しください。"
+      }
+    },
+    "summary": {
+      "personal": "個人版",
+      "latestLabel": "公式の最新",
+      "official": "公式 {{version}}",
+      "officialUnknown": "公式バージョン",
+      "development": "公式の開発中のバージョン",
+      "withChanges": "{{version}} ＋ あなたの変更 {{count}} 件",
+      "withOwnChanges": "{{version}} ＋ あなたの変更",
+      "noChanges": "{{version}}（あなたの変更はまだありません）",
+      "latest": {
+        "release": "正式版 {{version}}",
+        "beta": "beta 版 {{version}}",
+        "dev": "GitHub 上の公式の最新コード",
+        "unavailable": "今は確認できません",
+        "unknown": "まだ確認していません"
+      },
+      "included": {
+        "upToDate": "個人版に含まれています",
+        "updateAvailable": "個人版にはまだ含まれていません",
+        "unverified": "個人版に含まれているか確認できません"
+      },
+      "technical": "技術的な詳細（開発者向け）",
+      "withChanges_other": "{{version}} ＋ あなたの変更 {{count}} 件"
+    },
+    "sync": {
+      "action": "同期",
+      "hint": "個人版を公式バージョンに更新します。GitHub に保存している場合は、ほかのコンピューターの変更も取り込んでアップロードします。競合はタスクで自動的に解決します。",
+      "buildingHint": "個人版を生成中です。完了または停止してから同期してください。",
+      "step": {
+        "resuming": "前回の同期を続けています…",
+        "github": "ほかのコンピューターの変更を取り込んでいます…",
+        "combine": "両方の変更をまとめています…",
+        "official": "公式バージョンに更新しています…",
+        "upload": "GitHub にアップロードしています…"
+      },
+      "done": "公式 {{ref}} に同期しました",
+      "doneDevelopment": "公式の最新コードに同期しました",
+      "held": "公式 {{ref}} が公開されましたが、データ形式が変わります。原版に切り替えて Cindy を更新してから同期すると含まれます。",
+      "errors": {
+        "busy": "ほかの操作が進行中です。しばらくしてから同期してください。",
+        "source": "個人版のソースが準備できていないか、変更されたばかりです。しばらくしてから同期してください。",
+        "github": "GitHub との接続でエラーが発生しました。下の「保存先」で接続を確認してから同期してください。",
+        "network": "ネットワークに接続できません。確認してから同期してください。",
+        "diverged": "GitHub の個人版とこのコンピューターの個人版は無関係な公式バージョンに基づいているため、今は自動でまとめられません。",
+        "unavailable": "公式バージョンの情報を取得できません。しばらくしてから同期してください。",
+        "cancelled": "このまとめ作業を中止しました。個人版も GitHub のバージョンも変わっていません。",
+        "failed": "同期が完了しませんでした。もう一度お試しください。",
+        "changed": "同期中にほかのコンピューターが新しい変更をアップロードしました。もう一度「同期」すると取り込めます。",
+        "featurePending": "変更履歴の変更を追加または取り消し中です。終わってから同期してください。",
+        "gitOutdated": "このコンピューターの Git が古いため、GitHub と同期できません。Git を 2.36 以降に更新してください。",
+        "forkMissing": "個人版を保存している GitHub リポジトリが見つかりません。削除された可能性があります。下の「保存先」からもう一度 GitHub に保存できます。",
+        "forkArchived": "個人版を保存している GitHub リポジトリがアーカイブされているため、アップロードできません。GitHub でアーカイブを解除してから同期してください。"
+      },
+      "doneCurrent": "同期しました",
+      "ahead": "個人版は、このコンピューターの Cindy より新しい公式バージョン上にあります（ほかのコンピューターから）。切り替え時に互換性がないと表示された場合は、原版に切り替えて Cindy を更新してください。",
+      "abandon": {
+        "action": "このまとめ作業を中止",
+        "title": "この競合の解決を中止しますか？",
+        "description": "解決タスクは停止し、途中の結果は削除されます。個人版も GitHub に保存されているバージョンもそのまま残り、あとで再度同期できます。",
+        "confirm": "中止する",
+        "cancel": "続ける"
+      },
+      "uploadAfterBuild": "このコンピューターの変更は、個人版を生成すると自動的に GitHub にアップロードされます。",
+      "waiting": {
+        "working": {
+          "combine": "2 台のコンピューターで同じ箇所が変更されています。タスクでまとめている最中で、終わると自動的に同期を続けます。",
+          "official": "公式の更新とあなたの変更が同じ箇所に関わっています。タスクで対応中で、終わると自動的に同期を続けます。"
+        },
+        "input": "競合を処理しているタスクがあなたの回答を待っています。タスクを開いて確認してください。",
+        "interrupted": {
+          "task": "競合の処理中に Cindy が終了しました。タスクを開いて「続けて」と伝えると再開できます。中止することもできます。",
+          "start": "前回の同期が中断されました。中止してから、もう一度「同期」してください。"
+        },
+        "missing": "結果に含まれていないあなたの変更：{{count}} 件。タスクで戻してもらうか、不要であればこの結果をそのまま使えます。",
+        "stale": "処理中に個人版が変更されたため、この結果は古くなりました。中止してから同期し直してください。",
+        "failed": "このまとめ作業は完了しませんでした。タスクを開いて確認するか、中止してから同期し直してください。",
+        "abandoning": "このまとめ作業を中止しています…",
+        "paused": "このまとめ作業のタスクが見つかりません。「続ける」を押すと新しいタスクで続きを行い、これまでの作業は残ります。",
+        "otherAccount": "このまとめ作業は別のアカウントでログインしていたときに始まりました。そのアカウントに戻すと続けたり中止したりできます。"
+      },
+      "waitingHint": "進行中のまとめ作業を先に終えるか、中止してください。",
+      "accept": {
+        "action": "そのまま使う",
+        "title": "この結果をそのまま使いますか？",
+        "description": "結果に含まれていない {{count}} 件の変更は個人版に入りません。両方の元のバージョンはバックアップとして残ります。",
+        "confirm": "そのまま使う",
+        "cancel": "やめておく"
+      },
+      "buildFirst": "このコンピューターにまだ生成していない変更があります。先に個人版を生成すると、同期でほかのコンピューターの変更を取り込めます。",
+      "needsGenerate": "個人版に新しい変更があります。生成すると、このコンピューターで使えるようになります。",
+      "keep": {
+        "hint": "両方の変更をまとめられないときは、どちらかを残せます。もう一方はバックアップされます。",
+        "github": "GitHub の個人版を残す",
+        "local": "このコンピューターの個人版を残す",
+        "githubTitle": "GitHub の個人版を残しますか？",
+        "githubDescription": "このコンピューターは GitHub の個人版（ほかのコンピューターのもの）に切り替わります。このコンピューターの現在の個人版はバックアップされ、変更履歴の変更はあとから追加し直せます。",
+        "localTitle": "このコンピューターの個人版を残しますか？",
+        "localDescription": "GitHub の個人版はこのコンピューターのものに置き換わります。置き換える前に GitHub リポジトリにバックアップのブランチを残すので、ほかのコンピューターの変更はそこから取り戻せます。",
+        "cancel": "やめておく"
+      },
+      "resume": "続ける",
+      "generateFirst": "個人版にまだ生成していない変更があります。先に個人版を生成してから、公式 {{ref}} に同期してください。"
     }
   },
   "taskTags": {
@@ -14808,5 +16496,117 @@
     "idempotencyConflict": "この再試行識別子は別のメッセージに使用されています。",
     "privateUnconfirmed": "個別メッセージの配信は未確認です。同じ識別子で再試行してください。",
     "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。"
+  },
+  "teammateTodo": {
+    "title": "Todo",
+    "new": "Todoを追加",
+    "search": "Todoを検索",
+    "open": "未完了",
+    "done": "完了",
+    "hidden": "非表示 / あとで",
+    "empty": "Todoはありません",
+    "noMatch": "一致するTodoはありません",
+    "loading": "読み込み中…",
+    "retry": "再試行",
+    "error": "操作が完了しませんでした。再試行してください。",
+    "conflict": "Todoが更新されました。確認してから編集してください。",
+    "received": "受付済み",
+    "accepted": "進捗を見る",
+    "unknown": "進捗を確認",
+    "failed": "次の手順を再試行",
+    "view": "詳細を見る",
+    "evidence": "完了の根拠を見る",
+    "more": "その他の操作",
+    "discovered": "見つけた項目",
+    "assigned": "依頼",
+    "suggested": "提案",
+    "candidate": "日付を確認",
+    "overdue": "期限超過",
+    "next": "次の手順",
+    "outcome": "完了条件",
+    "value": "取り組む理由",
+    "sources": "情報源",
+    "associations": "関連",
+    "deadline": "期限",
+    "sourceDeadline": "情報源の期限",
+    "clearDate": "期限を解除",
+    "date": "日付",
+    "time": "時刻（任意）",
+    "zone": "タイムゾーン",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "delete": "この項目を削除",
+    "mute": "この問題を今後提案しない",
+    "later": "あとで",
+    "until": "延期先",
+    "restore": "復元",
+    "reopen": "再開",
+    "complete": "完了にする",
+    "summary": "完了の根拠",
+    "confirmDate": "日付を確定",
+    "deadlineReason": "日付の確認が必要な理由",
+    "override": "設定した期限",
+    "reminder": "延期先",
+    "edit": "Todoを編集",
+    "name": "タイトル",
+    "progress": "進捗",
+    "link": "根拠のリンク（任意）",
+    "page": "{{start}}–{{end}} / {{count}}",
+    "previous": "前へ",
+    "following": "次へ",
+    "order": "並び順",
+    "dueOrder": "期限順",
+    "createdOrder": "作成順",
+    "origin": "種類",
+    "all": "すべて",
+    "close": "閉じる",
+    "laterConflict": "延期しても期限は変わりません",
+    "legacyEvidence": "旧記録の完了の根拠は未確認です",
+    "history": "完了履歴",
+    "deleted": "削除済み",
+    "muted": "今後提案しない",
+    "deferred": "延期中",
+    "continue": "続ける",
+    "filter": "絞り込み",
+    "deleteConfirmTitle": "この項目を削除しますか？",
+    "deleteConfirmBody": "今後は表示されず、同じ問題も再び挙がりません。「非表示 / あとで」から元に戻せます。",
+    "muteConfirmTitle": "この問題を今後提案しないようにしますか？",
+    "muteConfirmBody": "同じ問題は今後 Todo に表示されません。「非表示 / あとで」から元に戻せます。"
+  },
+  "codexResets": {
+    "retryReset": "リセットを再試行",
+    "retryPending": "リセット結果を確認できません。同じリクエストを再試行してください。",
+    "confirmRetryTitle": "Codex リセットを再試行しますか？",
+    "confirmRetryBody": "{{account}} に対して確認済みのリセットを同じリクエストで再試行します。別のリセットは使用しません。",
+    "title": "利用上限のリセット",
+    "available": "利用可能 {{count}} 回",
+    "fullReset": "完全リセット",
+    "expiresAt": "有効期限: {{at}}",
+    "expiryUnknown": "有効期限の情報なし",
+    "useReset": "リセットを使用",
+    "availableAtLimit": "利用上限に達すると使用できます",
+    "noCredit": "利用可能なリセットはありません",
+    "detailsUnavailable": "一部のリセットの詳細は取得できません",
+    "currentAccount": "現在の ChatGPT アカウント",
+    "confirmTitle": "Codex のリセットを1回使用しますか？",
+    "confirmSelectedBody": "{{account}} に選択したリセットを使用します：{{title}}（{{expiry}}）。対象の使用量上限が回復します。この操作は取り消せません。",
+    "confirmBody": "{{account}} のリセットを1回消費します。有効期限が最も早いものから使用し、対象の利用上限を回復します。この操作は取り消せません。",
+    "consumeOnce": "リセットを1回使用",
+    "resetDone": "Codex の利用枠を回復しました",
+    "nothingToReset": "リセットが必要な利用上限はありません",
+    "offerExpired": "アカウントまたはリセットの状態が変わりました。使用量を更新してからリセットを使用してください。",
+    "resetFailed": "リセットの結果を確認できませんでした。使用量を更新して、利用枠が回復したか確認してください。",
+    "limitAction": "リセットを使用 · 残り {{count}} 回"
+  },
+  "mcpApps": {
+    "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
+    "retry": "再読み込み",
+    "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",
+    "updateRequired": "このコンピューターはまだ MCP Apps に対応していません。このコンピューターの Cindy を更新してから、もう一度お試しください。",
+    "appName": "MCP App",
+    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
+    "serverId": "MCP サーバー ID：{{id}}",
+    "exitFullscreen": "全画面表示を終了"
   }
 }

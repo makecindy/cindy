@@ -5,10 +5,14 @@
 
 import path from 'node:path';
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// The injected resolver never opens Electron's persistent store.
+vi.mock('electron-store', () => ({ default: class {} }));
 
 import type { GitHeadInfo } from '../git-context/headReader';
 import {
+  collectTouchedDirs,
   extractDirCandidate,
   findLiveLinkedWorktree,
   posixDriveToWin32,
@@ -52,6 +56,37 @@ describe('extractDirCandidate', () => {
 
   it('普通 Bash(无 cwd)→ null', () => {
     expect(extractDirCandidate(toolUse('Bash', { command: 'ls' }))).toBeNull();
+  });
+
+  it.each([
+    'cd /Users/x/wt-a && git status',
+    "cd '/Users/x/wt-a' && git diff",
+    'cd -- "/Users/x/wt-a" && python edit.py',
+  ])('Claude Bash reports a literal command directory: %s', (command) => {
+    expect(extractDirCandidate(toolUse('Bash', { command }))).toBe('/Users/x/wt-a');
+  });
+
+  it('accepts quoted directory spaces without interpreting shell expressions', () => {
+    expect(extractDirCandidate(toolUse('Bash', { command: "cd '/Users/x/code tree' && git status" })))
+      .toBe('/Users/x/code tree');
+    for (const command of [
+      'cd "$HOME/wt-a" && git status',
+      'cd /Users/$(whoami)/wt-a && git status',
+      'cd ../wt-a && git status',
+      'echo ok && cd /Users/x/wt-a && git status',
+      'cd /Users/x/wt-* && git status',
+    ]) expect(extractDirCandidate(toolUse('Bash', { command }))).toBeNull();
+  });
+
+  it.each([
+    'cd /repo/main && cd ../feature && git diff',
+    'cd /repo/main && git status; cd /repo/feature && git diff',
+    'cd /repo/main &&\ncd -- /repo/feature && git diff',
+    'cd /repo/main && command cd /repo/feature && git diff',
+    'cd /repo/main && pushd /repo/feature && git diff',
+    'cd /repo/main && popd && git diff',
+  ])('does not mistake the first directory for the final one: %s', (command) => {
+    expect(extractDirCandidate(toolUse('Bash', { command }))).toBeNull();
   });
 
   it('相对路径不采纳(cwd / file_path 都要求绝对)→ null', () => {
@@ -104,6 +139,17 @@ describe('resolveSessionGitDir', () => {
         opts.gitDirs[dir] !== undefined ? branchHead(opts.gitDirs[dir]) : null,
     };
   }
+
+  it('uses a Bash-only linked checkout instead of the unchanged task directory', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: null, fallbackWorkingDir: '/Users/x/main' },
+      deps({
+        contents: [toolUse('Bash', { command: 'cd /Users/x/wt-a && git status --short' })],
+        gitDirs: { '/Users/x/main': 'main', '/Users/x/wt-a': 'integration' },
+      }),
+    );
+    expect(res).toMatchObject({ workdir: path.resolve('/Users/x/wt-a'), source: 'telemetry', head: branchHead('integration') });
+  });
 
   it('遥测命中:最近一条候选目录是 git → source=telemetry', async () => {
     const res = await resolveSessionGitDir(
@@ -253,5 +299,45 @@ describe('findLiveLinkedWorktree', () => {
       probeGitDir: async () => null,
     });
     expect(res).toBeNull();
+  });
+});
+
+describe('collectTouchedDirs', () => {
+  const client = path.resolve('/work/client/.cindy-worktrees/fix');
+  const server = path.resolve('/work/server');
+  const piRepo = path.resolve('/work/pi-repo');
+  const row = (createdAt: number, toolName: string, input: Record<string, unknown>) => ({
+    createdAt,
+    content: JSON.stringify({ toolName, input }),
+  });
+
+  it('separates edited directories from command-only ones across Codex, Claude and Pi', () => {
+    // Rows arrive newest first, like the telemetry query.
+    const dirs = collectTouchedDirs([
+      row(60, 'exec', { cwd: server }),
+      row(50, 'file_change', { changes: [{ path: path.join(client, 'src', 'panel.tsx') }, { path: 'relative.ts' }] }),
+      row(40, 'edit', { path: path.join(piRepo, 'price.ts'), edits: [] }),
+      row(35, 'write', { path: 'relative-to-task.ts', content: '' }),
+      row(30, 'bash', { command: 'cd /work/server && git status' }),
+      row(20, 'Edit', { file_path: path.join(server, 'limits.ts') }),
+      row(10, 'Read', { file_path: path.join(piRepo, 'ignored.ts') }),
+    ]);
+    expect(dirs).toEqual([
+      { dir: server, edited: true, firstSeenAt: 20 },
+      { dir: path.join(client, 'src'), edited: true, firstSeenAt: 50 },
+      { dir: piRepo, edited: true, firstSeenAt: 40 },
+    ]);
+  });
+
+  it('records Pi bash and Codex exec directories as command-only', () => {
+    // Shell commands carry POSIX paths on every platform (Git Bash on Windows).
+    const piShellDir = '/work/pi-repo';
+    expect(collectTouchedDirs([
+      row(2, 'bash', { command: `cd '${piShellDir}' && ls`, timeout: 30 }),
+      row(1, 'exec', { cwd: server }),
+    ])).toEqual([
+      { dir: path.resolve(piShellDir), edited: false, firstSeenAt: 2 },
+      { dir: server, edited: false, firstSeenAt: 1 },
+    ]);
   });
 });

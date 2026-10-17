@@ -74,6 +74,8 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
+  refreshPluginUsageBindings: vi.fn(async () => undefined),
+  confirmLegacyLibraryReattach: async () => false,
   getGhostManager: () => ({
     list: () =>
       (runtime.listSequence ? runtime.listSequence() : runtime.ghosts).map((ghost) => ({
@@ -646,6 +648,7 @@ describe('PluginMarketService 自定义市场聚合', () => {
       enabled: true,
     });
     expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('sourceChanged');
   });
 });
 
@@ -1719,6 +1722,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       manifestCap: ghostManifest('alpha'),
+      sourceChanged: true,
     });
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({
       pluginId: customMarketPluginId('team-lib', 'alpha'),
@@ -1980,6 +1984,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { version: '2.0.0' } } });
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       manifestCap: ghostManifest('alpha', '2.0.0'),
+      sourceChanged: true,
     });
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({
       sourceKey: marketSourceKey({ type: 'local', path: dirB }),
@@ -2274,6 +2279,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       }, TEST_INSTALL_CONTEXT),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
     expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
+    expect(runtime.install.mock.calls[0]?.[1]).toHaveProperty('sourceChanged', true);
     expect(h.ledger.installationForGhost('server-plugin')).toMatchObject({
       pluginId: item.id,
       source: 'market',
@@ -2312,6 +2318,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       manifestCap: ghostManifest('alpha'),
+      sourceChanged: true,
     });
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({
       pluginId: customMarketPluginId('team-lib', 'alpha'),
@@ -2373,6 +2380,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       updatedAt: '2026-07-30T02:00:00.000Z',
     });
 
+    runtime.ghosts = [installedGhost(root, 'alpha')];
     await expect(h.service.uninstall(pluginId)).resolves.toEqual({ ok: true });
     expect(runtime.uninstall).toHaveBeenCalledWith('alpha', { skipMarketLedger: true });
     expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);

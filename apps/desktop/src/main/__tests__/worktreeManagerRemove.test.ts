@@ -1,8 +1,11 @@
 // Normal archive/deletion coverage moved to managedWorktreeRecycle.test.ts:
 // non-mutating content snapshots replace the former stash/reapply contract.
+const readWorktreeRuntimePathsMock = vi.hoisted(() => vi.fn(async () => new Set<string>()));
+const reclaimOrphanedRuntimeLeasesMock = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('../worktree/runtimeLeases', () => ({
-  readWorktreeRuntimePaths: async () => new Set(),
+  readWorktreeRuntimePaths: readWorktreeRuntimePathsMock,
   acquireWorktreeRuntimeLease: async () => {}, releaseWorktreeRuntimeLease: async () => {},
+  reclaimOrphanedWorktreeRuntimeLeases: reclaimOrphanedRuntimeLeasesMock,
 }));
 /**
  * removeWorktreeForSession / discardPrecreatedWorktree 删除守卫回归:
@@ -134,6 +137,8 @@ describe('removeWorktreeForSession', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    readWorktreeRuntimePathsMock.mockReset().mockResolvedValue(new Set());
+    reclaimOrphanedRuntimeLeasesMock.mockReset().mockResolvedValue(0);
     storeMap.clear();
     cancelledIds.clear();
     pendingSafeDirectoryCleanups.length = 0;
@@ -324,6 +329,27 @@ describe('removeWorktreeForSession', () => {
       .resolves.toEqual({ status: 'preserved' });
     expect(cancelledIds.has('s1')).toBe(true);
     expect(storeMap.get('s1')).toBe(meta);
+    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
+  });
+
+  it('cancellation rechecks live references after reclaiming a dead-owner lease', async () => {
+    const meta = { ...makeMeta('orphan'), recoveryKey: 'recovery-key-orphan-123456' };
+    storeMap.set(meta.sessionId, meta);
+    const runtimePaths = new Set<string>();
+    readWorktreeRuntimePathsMock.mockImplementation(async () => new Set(runtimePaths));
+    reclaimOrphanedRuntimeLeasesMock.mockImplementation(async () => {
+      runtimePaths.add(meta.path);
+      return 1;
+    });
+
+    await expect(manager.cancelPrecreatedWorktree(
+      meta.sessionId,
+      { recoveryKey: meta.recoveryKey },
+      { canRemove: async () => true },
+    )).resolves.toEqual({ status: 'preserved' });
+
+    expect(reclaimOrphanedRuntimeLeasesMock).toHaveBeenCalledWith(meta.path);
+    expect(storeMap.has(meta.sessionId)).toBe(true);
     expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
   });
 

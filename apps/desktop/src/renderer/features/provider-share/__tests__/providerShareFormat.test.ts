@@ -10,11 +10,13 @@ import {
   formatShareTokens,
   pendingRequestCountByProvider,
   pendingRequestsFromOwned,
+  pendingRequestsFromOwnerState,
   providerShareAgentDeviceId,
   providerShareGate,
   providerShareJoinErrorKind,
   shareAvatarInitial,
   shareLinkRemainingMs,
+  sharesClaudeLoginEmail,
   summarizeShareUsage,
 } from '../providerShareFormat';
 import { PROVIDER_SHARE_MANAGE_PARAM, providerShareManagePath } from '../providerShareNavigation';
@@ -23,6 +25,7 @@ function usage(partial: Partial<ProviderShareModelUsageView>): ProviderShareMode
   return {
     kind: 'claude-code',
     providerId: 'xd',
+    memberKey: 'local',
     model: 'claude-opus-5-5',
     turns: 1,
     inputTokens: 0,
@@ -155,6 +158,31 @@ describe('providerShareFormat', () => {
     expect(counts.get('openai')).toBe(1);
   });
 
+  it('marks requests another computer prompts for and adds the ones this computer prompts for elsewhere', () => {
+    const request = (requestId: string, createdAt: string) => ({
+      requestId, displayName: requestId, avatarUrl: null, region: 'global' as const, pairingCode: '1111', createdAt, expiresAt: '2026-10-08T10:00:00Z',
+    });
+    const pending = pendingRequestsFromOwnerState({
+      ready: true,
+      shares: [{
+        shareId: 's1', providerId: 'xd', providerLabel: 'Cindy AI', createdAt: '2026-10-01T00:00:00Z', members: [],
+        requests: [request('local', '2026-10-07T10:00:00Z'), request('quiet', '2026-10-07T10:03:00Z')],
+      }],
+      quietRequestIds: ['quiet'],
+      watchedRequests: [
+        { request: request('watched', '2026-10-07T10:01:00Z'), share: { shareId: 'g1', providerId: 'xd', providerLabel: 'Cindy AI' }, hostDeviceId: 'group-host' },
+        // 没有来源电脑的条目不是另一台电脑上的分享，不收。
+        { request: request('stray', '2026-10-07T10:02:00Z'), share: { shareId: 'g1', providerId: 'xd', providerLabel: 'Cindy AI' } },
+      ],
+    });
+    expect(pending.map((item) => [item.request.requestId, item.hostDeviceId ?? null, item.quiet ?? false])).toEqual([
+      ['local', null, false],
+      ['watched', 'group-host', false],
+      ['quiet', null, true],
+    ]);
+    expect(pendingRequestsFromOwnerState({ ready: false, shares: [], watchedRequests: pending })).toEqual([]);
+  });
+
   it('reports shares whose availability changed or that disappeared', () => {
     const before = [received({ shareId: 'a' }), received({ shareId: 'b' }), received({ shareId: 'c' })];
     const after = [
@@ -175,5 +203,16 @@ describe('providerShareFormat', () => {
     expect(url.pathname).toBe('/settings');
     expect(url.searchParams.get('tab')).toBe('providers');
     expect(url.searchParams.get(PROVIDER_SHARE_MANAGE_PARAM)).toBe('custom:my provider');
+  });
+});
+
+describe('sharesClaudeLoginEmail', () => {
+  it('is true only for Claude subscription logins, whose email Claude Code hands to the model', () => {
+    expect(sharesClaudeLoginEmail({ id: 'anthropic', source: 'builtin', auth: { method: 'oauth' } })).toBe(true);
+    expect(sharesClaudeLoginEmail({ id: 'claude-work', source: 'user', auth: { method: 'oauth', native: 'claude' } })).toBe(true);
+    expect(sharesClaudeLoginEmail({ id: 'openai', source: 'builtin', auth: { method: 'oauth', native: 'codex' } })).toBe(false);
+    expect(sharesClaudeLoginEmail({ id: 'anthropic-key', source: 'user', auth: { method: 'apiKey' } })).toBe(false);
+    expect(sharesClaudeLoginEmail({ id: 'anthropic', source: 'organization', auth: { method: 'apiKey' } })).toBe(false);
+    expect(sharesClaudeLoginEmail(undefined)).toBe(false);
   });
 });

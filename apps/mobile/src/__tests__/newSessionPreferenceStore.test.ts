@@ -89,7 +89,7 @@ describe('newSessionPreferenceStore', () => {
     // These are the actual normal/goal creation predicates, not a copied guard.
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
     const guards = [...source.matchAll(/const isCurrentOwner = \(\) => \(([\s\S]*?)\n    \);/g)];
-    expect(guards).toHaveLength(2);
+    if (guards.length !== 2) throw new Error('Missing production creation guards');
     for (const [, predicate] of guards) {
       const accepts = new Function('authOwnerAtCreate', 'accountIdAtCreate', 'isMobileAuthOwnerCurrent', `return (${predicate});`);
       const currentOwner = getMobileAuthOwner();
@@ -100,7 +100,12 @@ describe('newSessionPreferenceStore', () => {
     }
     // Existing recovery entries are namespaced by the bare membership ID.
     expect(getMobileAuthOwner().accountId).toBe('shared-member');
-    expect(source.match(/const worktreeAccountId = authOwnerAtCreate.accountId;/g)).toHaveLength(2);
+    const namespaces = [...source.matchAll(/const worktreeAccountId = ([^;]+);/g)];
+    if (namespaces.length !== 2) throw new Error('Missing production recovery namespaces');
+    for (const [, expression] of namespaces) {
+      const recoveryNamespace = new Function('authOwnerAtCreate', `return (${expression});`);
+      expect(recoveryNamespace(getMobileAuthOwner())).toBe('shared-member');
+    }
   });
 
   it('stores the last selected device and agent for new sessions', async () => {

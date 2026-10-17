@@ -28,7 +28,10 @@ vi.mock('../custom-wallpaper.js', () => ({
   importCustomWallpaper: mocks.importWallpaper,
   removeCustomWallpaper: mocks.removeWallpaper,
 }));
-vi.mock('../wallpaper-video.js', () => ({ ensureWallpaperVideo: mocks.ensureVideo }));
+vi.mock('../wallpaper-video.js', () => ({
+  ensureWallpaperVideo: mocks.ensureVideo,
+  ensureWallpaperImage: mocks.ensureVideo,
+}));
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: mocks.fromWebContents },
@@ -53,7 +56,10 @@ vi.mock('../appearance-settings-store.js', () => ({
 }));
 
 import { registerAppearanceSettingsIpc, __testing } from '../appearance-settings-ipc.js';
-import { normalizeAppearanceSettings } from '../../shared/appearanceSettings.js';
+import {
+  normalizeAppearanceSettings,
+  WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
+} from '../../shared/appearanceSettings.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
 
 const persisted = {
@@ -84,29 +90,54 @@ describe('appearance settings IPC authorization', () => {
       expect(() => __testing.parsePatch({ wallpaperVisibility })).toThrow('INVALID_PARAMS');
     }
   });
-  it('authorizes the CDN request and keeps it valid across account switches', async () => {
-    const handler = mocks.ipcHandle.mock.calls.find(
-      ([name]) => name === 'appearance-settings:ensure-wallpaper-video',
-    )?.[1];
-    mocks.ensureVideo.mockResolvedValueOnce(null);
-    expect(await handler({}, 'cindy-window')).toBeNull();
-    expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
-    mocks.ensureVideo.mockImplementationOnce(async () => {
-      mocks.owner = 'owner-b:2';
-      return 'client-video-url';
-    });
-    expect(await handler({}, 'cindy-window')).toBe('client-video-url');
-  });
-  it('rejects an untrusted CDN request before starting a download', async () => {
-    mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
-      throw new Error('untrusted');
-    });
-    const handler = mocks.ipcHandle.mock.calls.find(
-      ([name]) => name === 'appearance-settings:ensure-wallpaper-video',
-    )?.[1];
-    await expect(handler({}, 'cindy-window')).rejects.toThrow('untrusted');
-    expect(mocks.ensureVideo).not.toHaveBeenCalled();
-  });
+  it.each(['video', 'image'])(
+    'authorizes the CDN %s request and keeps it valid across account switches',
+    async (kind) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([name]) => name === `appearance-settings:ensure-wallpaper-${kind}`,
+      )?.[1];
+      mocks.ensureVideo.mockResolvedValueOnce(null);
+      expect(await handler({}, 'cindy-window')).toBeNull();
+      expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
+      mocks.ensureVideo.mockImplementationOnce(async () => {
+        mocks.owner = 'owner-b:2';
+        return 'client-video-url';
+      });
+      expect(await handler({}, 'cindy-window')).toBe('client-video-url');
+    },
+  );
+  it.each(['video', 'image'])(
+    'rejects an untrusted CDN %s request before starting a download',
+    async (kind) => {
+      mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
+        throw new Error('untrusted');
+      });
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([name]) => name === `appearance-settings:ensure-wallpaper-${kind}`,
+      )?.[1];
+      await expect(handler({}, 'cindy-window')).rejects.toThrow('untrusted');
+      expect(mocks.ensureVideo).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['video', 'image'])(
+    'sends %s progress only to the authorized requesting frame',
+    async (kind) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([name]) => name === `appearance-settings:ensure-wallpaper-${kind}`,
+      )?.[1];
+      const send = vi.fn();
+      const progress = { wallpaperId: 'cindy-window', kind, loaded: 2, total: 3 };
+      mocks.ensureVideo.mockImplementationOnce(async (_id, onProgress) => {
+        onProgress(progress);
+        return 'cached-media-url';
+      });
+      await expect(handler({ senderFrame: { send } }, 'cindy-window')).resolves.toBe(
+        'cached-media-url',
+      );
+      expect(send).toHaveBeenCalledExactlyOnceWith(WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL, progress);
+      expect(mocks.trustedReadWindow).not.toHaveBeenCalled();
+    },
+  );
   it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
     'allows %s when the account changes during module loading',
     async (channel) => {

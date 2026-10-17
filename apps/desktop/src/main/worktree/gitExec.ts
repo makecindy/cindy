@@ -83,6 +83,8 @@ export interface GitExecOpts {
    * 省略 = 不超时。
    */
   timeoutMs?: number;
+  /** Called immediately after the git child is spawned. */
+  onSpawn?: (pid: number) => void;
 }
 
 /** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
@@ -154,6 +156,50 @@ async function queryWin32ProcessTable(
       .filter((r) => Number.isFinite(r.pid));
   } catch {
     return null;
+  }
+}
+
+/**
+ * Check whether a detached git process or one of its descendants remains.
+ * Unknown process-table state is protective because reclaim must never race a
+ * filter/helper that still has the worktree open.
+ */
+export async function isGitProcessTreeAlive(pid: number): Promise<boolean> {
+  if (pid <= 0) return true;
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  }
+  if (pidMayBeAliveForGit(pid)) return true;
+  const rows = await queryWin32ProcessTable();
+  if (!rows) return true;
+  // Once the root has exited, a Windows snapshot may have already reparented
+  // or dropped its descendants. Missing ancestry cannot prove the tree is gone.
+  if (!rows.some((row) => row.pid === pid)) return true;
+  const descendants = new Set([pid]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (descendants.has(row.ppid) && !descendants.has(row.pid)) {
+        descendants.add(row.pid);
+        changed = true;
+      }
+    }
+  }
+  return descendants.size > 1;
+}
+
+function pidMayBeAliveForGit(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
@@ -271,6 +317,7 @@ function execFileOnce(
           resolveWithResult({ stdout: stdoutStr, stderr: stderrStr });
         },
       );
+      if (child.pid !== undefined) opts?.onSpawn?.(child.pid);
     } catch (error) {
       const cause = error instanceof Error ? error : new Error(String(error));
       rejectWithGitError(

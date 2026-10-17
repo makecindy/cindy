@@ -3,9 +3,10 @@ import {
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
+  type MobileMarkdownInlineMark,
 } from '@/session/messageMarkdown';
 import { tokenizeCode } from '@/session/codeHighlight';
-import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
+import { parseSessionDeepLinkUrl } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 // lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
@@ -499,7 +500,20 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], ctx: RenderCont
   return inlines.map((inline) => renderInline(inline, ctx)).join('');
 }
 
+const MARK_TAGS: Record<MobileMarkdownInlineMark, string> = {
+  strong: 'strong',
+  emphasis: 'em',
+  strikethrough: 'del',
+};
+
 function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): string {
+  // 强调里的链接 / 代码等:先按原类型渲染,再由内到外套上外层强调标签。
+  if (inline.marks?.length) {
+    return inline.marks.reduceRight(
+      (html, mark) => `<${MARK_TAGS[mark]}>${html}</${MARK_TAGS[mark]}>`,
+      renderInline({ ...inline, marks: undefined }, ctx),
+    );
+  }
   switch (inline.type) {
     case 'text':
       return escapeHtml(inline.text);
@@ -522,7 +536,7 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
           const title =
             explicit ??
             ctx.sessionLinkTitles?.[session.sessionId] ??
-            i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
+            i18n.t('message.renderer.sessionChipFallback');
           return `<span class="xdt-session-chip">›&nbsp;${escapeHtml(title)}</span>`;
         }
         // 本地路径(`[README.md](/abs/README.md:17)` 与正文裸写的路径)、mailto 等:

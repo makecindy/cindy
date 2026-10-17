@@ -358,6 +358,32 @@ describe('parseClaudeCodeMessageLine', () => {
     expect(rows[0].agentMeta).not.toHaveProperty('parentUuid');
   });
 
+  it.each([
+    ['claude-haiku-5-5', 'claude-haiku-5-5'],
+    ['claude-haiku-5-5[1m]', 'claude-haiku-5-5'],
+    ['claude-sonnet-5-5', 'claude-sonnet-5-5'],
+    ['claude-sonnet-5-5[1m]', 'claude-sonnet-5-5'],
+  ])('keeps the 5.5 generation for %s instead of folding it into an older model', (model, expected) => {
+    const rows = parseClaudeCodeMessageLine(
+      line({
+        type: 'assistant',
+        uuid: `assistant-${model}`,
+        message: {
+          id: `msg-${model}`,
+          model,
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+      }),
+      10,
+      sdkSessionId,
+      'claude-sonnet-4-6',
+    );
+
+    expect(rows[0].agentMeta).toMatchObject({ model: expected });
+  });
+
   it('normalizes opus-4-8 full model id to short form', () => {
     const rows = parseClaudeCodeMessageLine(
       line({

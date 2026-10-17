@@ -1,9 +1,13 @@
+import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
-import type { BotGroupAttachment, BotGroupMemberView, BotGroupMessageView, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { botGroupMessageSummaryText, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
+// The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
+import i18next from 'i18next';
 
 export interface ChatRoom {
-  id: string; name: string; state?: string; kind: string; archived: boolean;
+  id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
@@ -19,8 +23,19 @@ export interface ChatMessage {
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
 export interface ChatSnapshot { room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string }> }
-export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null }
-export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST', body?: unknown) => Promise<T>;
+export interface ChatExecutionFailure {
+  id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
+  failure_code?: unknown; updated_at?: string; plan_id?: string | null;
+}
+export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[] }
+/** `actorId` acts as one of the account's own actors (Chat Server `X-Chat-Actor`). */
+export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string) => Promise<T>;
+/** An actor the account owns; a companion's `externalId` is its bot id on every computer. */
+export interface ChatActor { id: string; kind: string; externalId: string; name: string; avatar: string | null; homeDeviceId: string | null }
+export interface ChatCapabilities { companionHome: boolean }
+/** Compare-and-set result: a conflict carries the main computer another device already chose. */
+export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
+export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null }
 
 export function chatId(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('INVALID_CHAT_ID');
@@ -38,10 +53,31 @@ export function chatHttpsUrl(value: string): string {
 export function chatAccessLost(error: unknown): boolean {
   return !!error && typeof error === 'object' && 'status' in error && (error.status === 403 || error.status === 404);
 }
+/** A typed server rejection: its `details` object (possibly empty), or null when it is another error. */
+export function chatRejection(error: unknown, status: number, code: string): Record<string, unknown> | null {
+  if (!error || typeof error !== 'object' || !('status' in error) || error.status !== status) return null;
+  if ((error as { code?: unknown }).code !== code) return null;
+  const details = (error as { details?: unknown }).details;
+  return details && typeof details === 'object' && !Array.isArray(details) ? details as Record<string, unknown> : {};
+}
 const memberName = (member: ChatMember) => member.kind === 'bot' && member.ownerName?.trim()
   ? `${member.name} (${member.ownerName.trim()})` : member.name;
-const contentText = (message: ChatMessage) => message.deleted ? '' : message.content
+// A recognized 引用回复 card renders as the quote; an unknown revision keeps its readable fallback.
+// A task card is the message's task only on a teammate's own message (bot-group-chat.md §10).
+const taskCardOf = (message: ChatMessage) => message.author.kind === 'bot' ? message.content.map(readBotGroupTaskCard).find(Boolean) ?? null : null;
+const bodyBlocks = (message: ChatMessage) => message.deleted || readImportedBotGroupRuntimeFailureCode(message) ? []
+  : message.content.filter(block => !readBotGroupQuoteCard(block) && !(message.author.kind === 'bot' && readBotGroupTaskCard(block)));
+// Media blocks are the message's attachments; only the list preview falls back to their names.
+const contentText = (message: ChatMessage) => bodyBlocks(message)
+  .flatMap(block => block.type === 'media' ? [] : [block.text ?? block.fallback ?? '']).join('\n');
+// The cloud companion transcript has no attachment strip, so it keeps captions inline.
+export const chatMessageText = (message: ChatMessage) => bodyBlocks(message)
   .map(block => block.text ?? block.fallback ?? (block.type === 'media' ? block.caption ?? '' : '')).join('\n');
+// The server makes a caption optional; an unnamed attachment still needs a visible name.
+const attachmentName = (block: ChatMessage['content'][number]) => block.caption?.trim()
+  || (i18next.isInitialized ? i18next.t('groupChat.files.untitled') : '') || 'Attachment';
+const mediaNames = (message: ChatMessage) => message.deleted ? '' : message.content
+  .flatMap(block => block.type === 'media' ? [attachmentName(block)] : []).join(', ');
 
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
 export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: string): HostedRemoteCollectionItem {
@@ -54,7 +90,7 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
     ref: { collectionId: 'bot-groups', kind: 'bot-group', id: room.id },
     revision: String(room.head ?? room.revision), display: { title: room.name,
       subtitle: members.map(memberName).join(' · '),
-      ...(snapshot ? { preview: last ? contentText(last).slice(0, 160) || members.map(memberName).join(' · ') : '' } : {}),
+      ...(snapshot ? { preview: last ? (botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || members.map(memberName).join(' · ') : '' } : {}),
       timestamp: Date.parse(last?.createdAt ?? room.updated_at),
       lastReplyAt: snapshot && selfId ? chatLastReplyAt(snapshot.messages, selfId) : undefined },
     links: members.map(member => ({ rel: 'member', label: memberName(member),
@@ -100,45 +136,130 @@ function chatMemberIdentity(member: ChatMember) {
   return { botId: member.id, name: memberName(member), ...chatMemberAvatar(member.avatar), avatarColor: '' };
 }
 
-/** Sequence strings stay on the wire; numeric positions below are presentation order only. */
-export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteChatData {
+/**
+ * Sequence strings stay on the wire; numeric positions below are presentation order only.
+ * `actors` (the account's own, from `/actors`) tell which computer runs each owned companion.
+ */
+export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = []): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
     ...chatMemberIdentity(member), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role,
+    ...(member.ownerActorId === selfId && member.kind === 'bot'
+      ? { homeDeviceId: actors.find(actor => actor.id === member.id)?.homeDeviceId ?? null } : {}),
     status: 'active',
   }));
+  const deletedIds = new Set(page.messages.filter(message => message.deleted).map(message => message.id));
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
+    const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
+    const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
+    if (runtimeFailureCode) return { id: message.id, sequence: index + 1, kind: 'notice', authorKind: 'system',
+      authorBotId: message.authorId, authorName: typeof legacy?.authorName === 'string' ? legacy.authorName : '', isSelf: false,
+      content: '', mentions: { all: false, botIds: [] }, noticeCode: runtimeFailureCode === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
+      runtimeFailureCode, planId: null, files: [], attachments: [], createdAt: Date.parse(message.createdAt) };
     const member = active.find(candidate => candidate.id === message.authorId);
     const joined = message.origin === 'system' && !message.deleted && message.content.find(block =>
       block.type === 'card' && block.namespace === 'cindy.membership' && block.schemaRevision === 1 && block.data?.type === 'member.joined');
+    const quote = message.origin === 'system' ? null : readBotGroupQuote(message.content);
+    const task = message.origin === 'system' ? null : taskCardOf(message);
     return { id: message.id, sequence: index + 1, kind: message.origin === 'system' ? 'notice' : 'message',
+      ...(task ? { task } : {}),
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joined && typeof joined.data?.displayName === 'string' ? joined.data.displayName
         : member ? memberName(member) : message.author.name,
       isSelf: message.authorId === selfId, content: contentText(message), mentions: { all: false, botIds: [] },
+      ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
       noticeCode: joined ? 'member-joined' : null, planId: null, files: [],
       attachments: message.deleted ? [] : message.content.flatMap(block => {
         if (block.type !== 'media' || !block.mediaId) return [];
-        return [{ id: block.mediaId, name: block.caption ?? '', category: 'file' as const,
+        return [{ id: block.mediaId, name: attachmentName(block), category: 'file' as const,
           mimeType: '', size: 0, url: null, path: null }];
       }), createdAt: Date.parse(message.createdAt) };
   });
   const last = messages.at(-1);
-  return { id: room.id, name: room.name, serverBacked: true, archived: room.archived, selfActorId: selfId,
+  const failures = (page.failures ?? []).flatMap(row => {
+    const failure = readBotGroupExecutionFailure(row, room.id);
+    if (!failure) return [];
+    const member = members.find(candidate => candidate.id === failure.botId);
+    return [{ ...failure, botName: member ? memberName(member) : '' }];
+  });
+  return { id: room.id, name: room.name, serverBacked: true, supportsGroupLeave: true, dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
-    lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: last.content.slice(0, 80), createdAt: last.createdAt } : null,
-    speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages,
+    lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: botGroupMessageSummaryText(last).slice(0, 80), createdAt: last.createdAt } : null,
+    speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { status: 'idle', speakers: [], canContinue: false }, supportsAttachments: false };
 }
 
-export function createChatServerClient(request: ChatRequest) {
+export function createChatServerClient(request: ChatRequest, personalList = createConversationListState()) {
+  async function failures(roomId: string, messages: ChatMessage[]): Promise<ChatExecutionFailure[]> {
+    const sources = new Set(messages.map(message => chatId(message.id)));
+    let value: ChatExecutionFailure[] = [];
+    try {
+      for (const batch of botGroupExecutionFailureBatches([...sources])) {
+        const page = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/execution-failures?sourceIds=${batch.join(',')}`);
+        if (!Array.isArray(page)) throw new Error('INVALID_CHAT_EXECUTIONS');
+        value.push(...page);
+      }
+    }
+    catch (error) {
+      if (!error || typeof error !== 'object' || !('status' in error) || error.status !== 404) throw error;
+      value = await request<ChatExecutionFailure[]>(`/conversations/${chatId(roomId)}/executions`);
+    }
+    if (!Array.isArray(value)) throw new Error('INVALID_CHAT_EXECUTIONS');
+    return value.filter(row => sources.has(row.source_message_id));
+  }
+  async function history(roomId: string, before?: string | null): Promise<ChatHistoryPage> {
+    const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100${before ? `&before=${chatCursor(before)}` : ''}`);
+    if (!Array.isArray(messages)) throw new Error('INVALID_CHAT_MESSAGES');
+    const next = messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null;
+    if (before && next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
+    return { messages, before: next };
+  }
+  let supportsDissolve = false;
+  let supportsListRemoval = false;
+  async function identity() {
+    const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number } }>('/me');
+    if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
+    supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
+    supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
+    return chatId(me.actor.id);
+  }
   return {
+    personalList,
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval }),
+    async syncListState(force = false) {
+      await identity();
+      if (supportsListRemoval) await (force ? personalList.sync(request) : personalList.ensureSynced(request));
+    },
+    async resyncListState() { await identity(); if (supportsListRemoval) await personalList.resync(request); },
+    async hide(roomId: string, operationId: string) {
+      await identity();
+      if (!supportsListRemoval) throw new Error('LIFECYCLE_UNAVAILABLE');
+      await personalList.setHidden(request, chatId(roomId), true, operationId);
+    },
+    async dissolve(roomId: string, expectedRevision: unknown, operationId: string) {
+      const self = await identity();
+      if (!supportsDissolve) throw new Error('LIFECYCLE_UNAVAILABLE');
+      if (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1) throw new Error('REVISION_CONFLICT');
+      const snapshot = await request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`);
+      if (snapshot.room.kind !== 'group') throw new Error('GROUP_REQUIRED');
+      const owner = snapshot.members.find(m => m.state === 'joined' && m.role === 'owner' && (m.id === self || m.ownerActorId === self));
+      if (!owner) throw new Error('OWNER_REQUIRED');
+      const result = await request<{ revision: number; dissolvedAt: string; dissolvedBy: string }>(`/conversations/${roomId}/dissolve`, 'POST', { operationId, expectedRevision }, owner.id);
+      if (!Number.isSafeInteger(result?.revision) || result.revision < 1 || !Number.isFinite(Date.parse(result.dissolvedAt))) throw new Error('INVALID_CHAT_RESPONSE');
+      chatId(result.dissolvedBy);
+    },
+    async leave(roomId: string, operationId: string) {
+      const self = await identity();
+      const snapshot = await request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`);
+      if (snapshot.room.kind !== 'group') throw new Error('GROUP_REQUIRED');
+      await request(`/conversations/${roomId}/members`, 'POST', { operationId, actorId: self, action: 'leave' });
+    },
     async list(): Promise<ChatRoom[]> {
       const rooms = new Map<string, ChatRoom>();
       let after: string | undefined;
@@ -148,19 +269,73 @@ export function createChatServerClient(request: ChatRequest) {
         for (const room of page) {
           chatId(room.id);
           if (!['direct', 'group', 'channel'].includes(room.kind)) throw new Error('INVALID_CHAT_LIST');
-          if (room.state === 'joined' && room.kind === 'group') rooms.set(room.id, room);
+          if (room.state === 'joined' && room.kind === 'group' && !personalList.hidden(room.id)) rooms.set(room.id, room);
         }
         const next = page.length === 100 ? chatId(page.at(-1)!.id) : undefined;
         if (next && next === after) throw new Error('INVALID_CHAT_PAGE');
         after = next;
       } while (after);
-      return [...rooms.values()];
+      return [...rooms.values()].filter(room => !personalList.hidden(room.id));
     },
     async me(): Promise<string> {
-      const { actor } = await request<{ actor: { id: string; kind: string } }>('/me');
-      if (actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
-      return chatId(actor.id);
+      return identity();
     },
+    /** Server feature switches; an older server without them keeps per-computer companions. */
+    async capabilities(): Promise<ChatCapabilities> {
+      const me = await request<{ actor?: { kind?: string }; capabilities?: { companionHome?: unknown } }>('/me');
+      return { companionHome: me?.actor?.kind === 'human' && me.capabilities?.companionHome === true };
+    },
+    async actors(): Promise<ChatActor[]> {
+      const rows = await request<Array<ChatActor & { disabled?: unknown }>>('/actors');
+      if (!Array.isArray(rows)) throw new Error('INVALID_CHAT_ACTORS');
+      return rows.flatMap(row => {
+        // Retired in the cloud (deleted on its main computer): not a companion any more.
+        if (row.disabled === true) return [];
+        try { chatId(row.id); } catch { return []; }
+        if (typeof row.externalId !== 'string' && row.externalId != null) return [];
+        return [{ id: row.id, kind: String(row.kind), externalId: row.externalId ?? '', name: typeof row.name === 'string' ? row.name : '',
+          avatar: typeof row.avatar === 'string' ? row.avatar : null, homeDeviceId: typeof row.homeDeviceId === 'string' && row.homeDeviceId ? row.homeDeviceId : null }];
+      });
+    },
+    /** The main computer has uploaded the profile snapshot another computer builds the companion from. */
+    async hasProfileSnapshot(actorId: string): Promise<boolean> {
+      const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actorId));
+      const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate?.key === 'companion.profile.v1');
+      // Same check as Desktop (companion-cloud/uploader.ts isCompanionProfileSnapshot): a complete profile.
+      const value = row?.value as Record<string, unknown> | null | undefined;
+      return !!value && typeof value === 'object' && !Array.isArray(value)
+        && ['name', 'description', 'soul', 'systemPrompt', 'user'].every(field => typeof value[field] === 'string');
+    },
+    /** Move a companion's main computer only if it is still `expected` (no two devices race it). */
+    async setHome(actorId: string, homeDeviceId: string, expected: string | null): Promise<ChatSetHomeResult> {
+      try {
+        const actor = await request<{ homeDeviceId?: unknown } | null>(`/actors/${chatId(actorId)}`, 'PATCH', { homeDeviceId, expectedHomeDeviceId: expected });
+        return { ok: true, homeDeviceId: typeof actor?.homeDeviceId === 'string' ? actor.homeDeviceId : homeDeviceId };
+      } catch (error) {
+        const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
+        if (!conflict) throw error;
+        return { ok: false, homeDeviceId: typeof conflict.homeDeviceId === 'string' && conflict.homeDeviceId ? conflict.homeDeviceId : null };
+      }
+    },
+    /**
+     * The companion's fixed 1:1 room. Every device asks with the same operation and gets the same
+     * room; a room first created under another name answers OPERATION_CONFLICT, then the name-keyed
+     * operation (the desktop's) resolves the same room.
+     */
+    async companionRoom(actorId: string, name: string, hash: (text: string) => Promise<string>): Promise<string> {
+      const body = { kind: 'direct', name: name.trim().slice(0, 160) || '伙伴', participants: [chatId(actorId)], sourceId: actorId };
+      let room: { id: string };
+      try {
+        room = await request<{ id: string }>('/conversations', 'POST', { operationId: `companion-room:${actorId}`, ...body });
+      } catch (error) {
+        if (!chatRejection(error, 409, 'OPERATION_CONFLICT')) throw error;
+        const suffix = (await hash(body.name)).slice(0, 12);
+        room = await request<{ id: string }>('/conversations', 'POST', { operationId: `companion-room:${actorId}:${suffix}`, ...body });
+      }
+      return chatId(room?.id ?? '');
+    },
+    /** Main-timeline messages of any room kind (a companion's room is `direct`), newest first. */
+    history,
     async snapshot(roomId: string): Promise<ChatSnapshot> {
       return request(`/conversations/${chatId(roomId)}/snapshot`);
     },
@@ -185,12 +360,14 @@ export function createChatServerClient(request: ChatRequest) {
         if (next && BigInt(next) >= BigInt(before)) throw new Error('INVALID_CHAT_PAGE');
         messages.push(...batch); before = next;
       }
-      return { snapshot, messages, before };
+      return { snapshot, messages, before, failures: await failures(room, messages) };
     },
     async older(roomId: string, page: ChatPage): Promise<ChatPage> {
       if (!page.before) return page;
       const messages = await request<ChatMessage[]>(`/conversations/${chatId(roomId)}/messages?limit=100&before=${chatCursor(page.before)}`);
-      return { ...page, messages: [...page.messages, ...messages], before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
+      const loaded = [...page.messages, ...messages];
+      return { ...page, messages: loaded, failures: await failures(roomId, loaded),
+        before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
     async media(roomId: string, mediaId: string): Promise<BotGroupAttachment> {
       const media = await request<{ name: string; type: string; size: string | number; url: string }>(`/conversations/${chatId(roomId)}/media/${chatId(mediaId)}`);

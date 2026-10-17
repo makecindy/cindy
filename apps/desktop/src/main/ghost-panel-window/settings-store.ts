@@ -10,7 +10,7 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 
 const log = desktopMakerLogger.child('ghost-panel-window-settings-store');
@@ -37,7 +37,7 @@ export function normalizeGhostPanelWindowsSettings(raw: unknown): GhostPanelWind
   if (!rawWindows || typeof rawWindows !== 'object') return { windows: {} };
   const windows: Record<string, GhostPanelWindowEntrySettings> = {};
   for (const [id, entry] of Object.entries(rawWindows as Record<string, unknown>)) {
-    if (!isValidGhostId(id)) continue;
+    if (!isValidPluginStoragePart(id)) continue;
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as Record<string, unknown>;
     if (typeof e.detached !== 'boolean' || typeof e.lastOpen !== 'boolean') continue;

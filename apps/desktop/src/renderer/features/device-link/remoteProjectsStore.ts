@@ -1,4 +1,5 @@
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -159,6 +160,8 @@ let bootstrapRetryImpl: ((deviceId: string) => void) | null = null;
 
 /** 扁平合并快照(缓存引用,变化时才换新)。 */
 let mergedSnapshot: Session[] = [];
+/** UI 订阅使用的稳定投影；协议与传输层仍可读取 mergedSnapshot 原始镜像。 */
+let visibleMergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
 /** sessionId → 投影后标题(含标题预览),随 recompute 重建;供消息来源标签 O(1) 查询。 */
@@ -466,6 +469,15 @@ function recompute(): void {
       }
     }
     mergedSnapshot = flat;
+  }
+  const nextVisible = CINDY_MAKE_ENABLED
+    ? mergedSnapshot
+    : mergedSnapshot.filter((session) => !isCindyMakeSource(session.source));
+  if (
+    visibleMergedSnapshot.length !== nextVisible.length ||
+    visibleMergedSnapshot.some((session, index) => session !== nextVisible[index])
+  ) {
+    visibleMergedSnapshot = nextVisible;
   }
   // 设备列表快照:按 deviceName(再 deviceId 兜底)稳定排序,避免 Map 插入序在设备增删时
   // 抖动导致切换栏 chip 乱跳;内容不变时保持旧引用(防 useRemoteDevices 无谓重渲染)。
@@ -1004,6 +1016,11 @@ const actions = {
     return mergedSnapshot;
   },
 
+  /** 用户界面使用的远端会话投影；旧 Cindy Make 行保留在原始镜像中但不可见。 */
+  getVisibleMergedRemoteSessions(): Session[] {
+    return visibleMergedSnapshot;
+  },
+
   /**
    * 发送瞬间登记标题预览(见 {@link pendingTitlePreview})。只影响投影层显示,
    * 权威标题仍由被控端写回;被控端标题到达后本条自动失效。
@@ -1390,7 +1407,7 @@ export function useRemoteSessionTitle(sessionId: string | undefined): string | n
 
 /** 组件内订阅:返回扁平远端会话快照(喂给 sidebar 合并点)。 */
 export function useRemoteProjectSessions(): Session[] {
-  return useSyncExternalStore(subscribe, actions.getMergedRemoteSessions);
+  return useSyncExternalStore(subscribe, actions.getVisibleMergedRemoteSessions);
 }
 
 /** 组件内订阅:返回当前已连接的被控设备摘要列表(机器切换栏 chips)。 */

@@ -81,7 +81,9 @@ import {
   materializeDirectSendOssAttachments,
   normalizeUserMessage,
   materializeQueuedOssAttachmentsDeferred,
+  collectQueuedAttachmentRefs,
 } from '../maker-ipc/normalizeAttachments';
+import { QueuedAttachmentOwnershipRegistry } from '../maker-ipc/queuedAttachmentOwnership';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';
 
@@ -103,6 +105,79 @@ describe('peer attachment materialization', () => {
     expect(ingestMedia).toHaveBeenCalledOnce();
     expect(downloadToFile).not.toHaveBeenCalled();
     expect(removeRemote).not.toHaveBeenCalled();
+  });
+
+  it('keeps the local copy when a queue edit saves the same attachment again', async () => {
+    const metadata = { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 11, sha256: ATTACHMENT_SHA256, mimeType: 'image/png' };
+    const ref = buildPeerAttachmentRef(metadata);
+    const enqueued = await materializeQueuedOssAttachmentsDeferred('sess-1', {
+      files: [{ path: ref, url: ref, mimeType: 'image/png', category: 'image', ext: '.png' }],
+      persistedContent: JSON.stringify({ text: 'before', images: [{ url: ref }] }),
+    });
+    const registry = new QueuedAttachmentOwnershipRegistry();
+    const ownerId = registry.register('sess-1', 'client-1', enqueued.cleanupLocalMaterialization, {
+      parts: enqueued.materializedParts,
+    });
+    registry.activateCurrentOwner('sess-1', 'client-1', ownerId!);
+
+    // The edit only changes text; the attachment is already host-managed, so no new copy exists.
+    const queued = enqueued.item as { files: unknown[]; persistedContent: string };
+    const edited = await materializeQueuedOssAttachmentsDeferred('sess-1', {
+      files: queued.files,
+      persistedContent: JSON.stringify({ ...JSON.parse(queued.persistedContent), text: 'after' }),
+    });
+    expect(edited.cleanupLocalMaterialization).toBeUndefined();
+    const replacementRefs = collectQueuedAttachmentRefs(edited.item);
+    const survivor = registry.retainReferencedOwners('sess-1', 'client-1', null, (value) =>
+      replacementRefs.has(value),
+    );
+    await registry.discardClient('sess-1', 'client-1', survivor ?? undefined);
+
+    expect(survivor).toBe(ownerId);
+    expect(removeRefById).not.toHaveBeenCalled();
+  });
+
+  it('releases only the attachment a queue edit removed from one enqueue', async () => {
+    const hashA = 'b'.repeat(64);
+    const hashB = 'c'.repeat(64);
+    ingestMedia
+      .mockResolvedValueOnce({ hash: hashA, ext: '.png', mimeType: 'image/png', bytes: 11, url: `cindy-media://blobs/${hashA}.png`, deduplicated: false, refIds: ['ref-a'] })
+      .mockResolvedValueOnce({ hash: hashB, ext: '.png', mimeType: 'image/png', bytes: 11, url: `cindy-media://blobs/${hashB}.png`, deduplicated: false, refIds: ['ref-b'] });
+    deleteZeroRefBlobRecord.mockResolvedValue(true);
+    const refA = buildPeerAttachmentRef({ ticket: 'aaaaaaaa-0000-0000-0000-00000000000a', size: 11, sha256: hashA, mimeType: 'image/png' });
+    const refB = buildPeerAttachmentRef({ ticket: 'aaaaaaaa-0000-0000-0000-00000000000b', size: 11, sha256: hashB, mimeType: 'image/png' });
+    const enqueued = await materializeQueuedOssAttachmentsDeferred('sess-1', {
+      files: [refA, refB].map((ref) => ({ path: ref, url: ref, mimeType: 'image/png', category: 'image', ext: '.png' })),
+      persistedContent: JSON.stringify({ text: 'two', images: [{ url: refA }, { url: refB }] }),
+    });
+    expect(enqueued.materializedParts).toHaveLength(2);
+    const registry = new QueuedAttachmentOwnershipRegistry();
+    const ownerId = registry.register('sess-1', 'client-1', enqueued.cleanupLocalMaterialization, {
+      parts: enqueued.materializedParts,
+    });
+    registry.activateCurrentOwner('sess-1', 'client-1', ownerId!);
+
+    // Edit keeps the first image and removes the second.
+    const queued = enqueued.item as { files: unknown[]; persistedContent: string };
+    const persisted = JSON.parse(queued.persistedContent) as { images: unknown[] };
+    const edited = await materializeQueuedOssAttachmentsDeferred('sess-1', {
+      files: queued.files.slice(0, 1),
+      persistedContent: JSON.stringify({ text: 'one', images: persisted.images.slice(0, 1) }),
+    });
+    const replacementRefs = collectQueuedAttachmentRefs(edited.item);
+    const survivor = registry.retainReferencedOwners('sess-1', 'client-1', null, (value) =>
+      replacementRefs.has(value),
+    );
+    await registry.discardClient('sess-1', 'client-1', survivor ?? undefined);
+
+    expect(survivor).toBe(ownerId);
+    expect(removeRefById.mock.calls).toEqual([['ref-b']]);
+    expect(deleteBlobFile).toHaveBeenCalledWith(hashB, '.png');
+    expect(deleteBlobFile).not.toHaveBeenCalledWith(hashA, '.png');
+
+    // Discarding the item later releases the kept attachment exactly once.
+    await registry.discardClient('sess-1', 'client-1');
+    expect(removeRefById.mock.calls).toEqual([['ref-b'], ['ref-a']]);
   });
 });
 

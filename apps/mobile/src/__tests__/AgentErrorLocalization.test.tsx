@@ -44,6 +44,29 @@ const clickText = (text: string) => {
 };
 
 describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
+  it.each(['live', 'tail'] as const)('offers explicit %s recovery without automatically retrying', async surface => {
+    await i18n.changeLanguage(locale);
+    const recover = vi.fn();
+    const retry = vi.fn();
+    const error = 'stream disconnected before completion: stream closed before response.completed';
+    const renderBanner = (busy: boolean) => surface === 'live'
+      ? <InlineQueueSection projection={{ error, errorRetryText: 'original' } as InputProjection} busy={busy}
+          onRecoverHistory={recover} onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
+      : <SessionTailBanner state={{ kind: 'error-tail', text: error, rawError: error, clientId: 'e', continueKind: 'error', retryable: true }}
+          busy={busy} onRecoverHistory={recover} onContinue={retry} onDismiss={vi.fn()} />;
+    await act(async () => root.render(renderBanner(false)));
+    expect(host.textContent).toContain(i18n.t('session.tail.readableHistoryRecoveryDescription'));
+    expect(recover).not.toHaveBeenCalled();
+    await act(async () => clickText(i18n.t('session.tail.readableHistoryRecovery')));
+    expect(recover).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+    await act(async () => root.render(renderBanner(true)));
+    const button = host.querySelector<HTMLButtonElement>('[data-testid="session.readableHistoryRecovery"]')!;
+    expect(button.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
   it.each(['live', 'tail'] as const)('localizes %s, preserves retry and switches locale without another request', async surface => {
     await i18n.changeLanguage(locale);
     for (const key of ['requestFormatError', 'replyFailed', 'showErrorDetails', 'hideErrorDetails', 'retry']) {
@@ -86,6 +109,17 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('recognizes wrapped %s errors from the remote computer', async reason => {
+    await i18n.changeLanguage(locale);
+    const message = `LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [${reason}] upstream diagnostic`;
+    const key = `session.remoteError.REMOTE_AGENT_${reason}`;
+    expect(unclassifiedAgentErrorI18nKey(message)).toBe(key);
+    const [normalized] = normalizeRemoteMessages([row(message)]);
+    expect(normalized.body).toBe(i18n.t(key));
+    expect(normalized.body).not.toContain('upstream diagnostic');
+    expect(unclassifiedAgentErrorI18nKey('[REMOTE_AGENT_BUSY] too many tasks')).toBe('session.remoteError.REMOTE_AGENT_BUSY');
+  });
+
   it('has every desktop bracket-code translation without relying on fallback languages', async () => {
     await i18n.changeLanguage(locale);
     const desktop = JSON.parse(readFileSync(`../desktop/src/renderer/i18n/locales/${locale}/common.json`, 'utf8'));

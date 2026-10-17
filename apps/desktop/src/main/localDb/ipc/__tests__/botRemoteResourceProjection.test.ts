@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { companionHomes } from '../../../companion-cloud/homes.js';
 
 import {
   botRemoteCollectionItemFromSource,
@@ -85,5 +86,16 @@ describe('bot remote resource projection', () => {
     ]);
 
     expect(ordered.map((item) => item.id)).toEqual(['pinned-old', 'recent', 'old']);
+  });
+
+  it('does not list a demoted copy whose main computer is another device', () => {
+    companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['moved'],
+      actors: [{ id: 'actor', externalId: 'moved', name: 'Moved', avatar: null, homeDeviceId: 'laptop' }] });
+    try {
+      const visible = visibleBotRemoteResourceSources([{ ...source, id: 'moved' }, { ...source, id: 'here' }]);
+      expect(visible.map((item) => item.id)).toEqual(['here']);
+    } finally {
+      companionHomes.reset();
+    }
   });
 });

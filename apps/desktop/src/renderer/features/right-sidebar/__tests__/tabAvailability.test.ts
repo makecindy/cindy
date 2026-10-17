@@ -13,6 +13,15 @@ const affected = {
   retirement: { id: 'embedded-ios-simulator', eligible: true, unread: true },
 } as InstalledGhost;
 describe('sidebar availability', () => {
+  it('filters persisted Cindy Make tabs when the product is disabled', () => {
+    const cindyTabs = [
+      { id: 'file', kind: 'file-browser', state: null },
+      { id: 'make', kind: 'cindy-make', state: null },
+    ] as unknown as TabState[];
+    const visible = projectAvailableTabs(cindyTabs, 'make', { installedGhosts: [], subagentsAvailable: true });
+    expect(visible.tabs.map((tab) => tab.id)).toEqual(['file']);
+    expect(visible.activeTabId).toBe('file');
+  });
   it.each([true, false])('preserves an installed plugin old tab (migration eligible=%s)', (eligible) => {
     const visible = projectAvailableTabs(tabs, 'old', {
       installedGhosts: [{

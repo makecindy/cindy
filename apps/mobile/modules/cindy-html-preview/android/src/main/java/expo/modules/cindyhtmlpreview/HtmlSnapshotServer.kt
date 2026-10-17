@@ -30,7 +30,7 @@ internal class HtmlSnapshotServer(root: String, private val entry: String, priva
   private val disconnectWatchers = Executors.newCachedThreadPool()
   private val listener: ServerSocket
   @Volatile private var stopped = false
-  private val origin get() = "http://127.0.0.1:${listener.localPort}"
+  val origin get() = "http://127.0.0.1:${listener.localPort}"
 
   init {
     require(Regex("^[a-f0-9]{48}$").matches(token) && !csp.contains('\r') && !csp.contains('\n'))

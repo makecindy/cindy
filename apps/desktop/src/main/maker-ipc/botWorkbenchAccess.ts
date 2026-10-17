@@ -9,8 +9,8 @@
  * 接手 = 理解,不是搬运:项目是目录。宿主先给每个项目一份有界的素材(文档清单、近期提交与
  * 分支、我的 PR / issue)和近期会话的摘要(起始目的 + 最后几条),伙伴凭这些一次性写下判断
  * (没做完 / 聊过没下文 / 做完),只对拿不准的再读;条目可以是会话,也可以是 PR、issue
- * 或伙伴从素材里摸出来的建议。项目里的 Cindy 任务(含主人自己开的)不论有无判断都带回,
- * 是伙伴随时知道的项目事务。主人点头(或在工作台点「跟进」)的那件才继续。
+ * 或伙伴从素材里摸出来的建议。项目只授予发现范围；逐任务责任来自创建凭据或明确接手，
+ * 不从目录或判断推断。普通候选只给元数据，主人点头的那件才继续。
  *
  * 每次调用都在 main 里确定性校验:
  *  1. 调用方 session → 伙伴:只认本机、在用的伙伴主任务(canonical);
@@ -50,8 +50,7 @@ type Failure = { ok: false; errorCode: string; message: string };
 /** 工具一次最多带回的会话候选数;多出来的只报总数。 */
 export const WORKBENCH_TOOL_MAX_TASKS = 40;
 /**
- * 其中项目里的 Cindy 任务(含主人自己开的)优先占的条数:它们属于伙伴随时知道的项目事务,
- * 不受判断影响;剩下的名额给本机外部会话。
+ * 逐任务负责的 Cindy 任务优先占用的条数；其余名额只返回项目发现元数据。
  */
 export const WORKBENCH_TOOL_MAX_CINDY_TASKS = 30;
 export const WORKBENCH_TOOL_MAX_MESSAGE_CHARS = 4_000;
@@ -76,10 +75,20 @@ export interface WorkbenchTargetFacts {
 
 export type WorkbenchTargetDecision = { ok: true; projectDir: string } | Failure;
 
+export interface WorkbenchTargetOptions {
+  /**
+   * 只读、且该伙伴自己的逐任务责任(接手记录或它发起的后台任务)覆盖这件任务:
+   * 主人在工作台详情里看自己负责列表里的任务。归档、后台任务、项目外的任务都可读;
+   * 删除、伙伴隐藏任务、远端与不支持的来源仍拒绝。写入 / 继续 / 停止不使用此项。
+   */
+  responsibleRead?: boolean;
+}
+
 export function authorizeWorkbenchTarget(
   target: WorkbenchTargetFacts | null,
   projectDirs: readonly string[],
   caseInsensitive: boolean,
+  options: WorkbenchTargetOptions = {},
 ): WorkbenchTargetDecision {
   if (!target || target.status === 'deleted') {
     return { ok: false, errorCode: 'TASK_NOT_FOUND', message: '找不到这件任务,它可能已被删除' };
@@ -89,6 +98,12 @@ export function authorizeWorkbenchTarget(
   }
   if (target.remoteHostId) {
     return { ok: false, errorCode: 'TASK_REMOTE', message: '远端任务不在工作台的范围内' };
+  }
+  if (options.responsibleRead) {
+    if (!isWorkbenchTaskSource(target.source) || target.orcaRole === 'worker') {
+      return { ok: false, errorCode: 'TASK_NOT_SUPPORTED', message: '这类任务不在工作台的范围内' };
+    }
+    return { ok: true, projectDir: findWorkbenchProject(target.workingDir, projectDirs, caseInsensitive) ?? target.workingDir ?? '' };
   }
   if (target.status !== 'active') {
     return { ok: false, errorCode: 'TASK_ARCHIVED', message: '这件任务已归档,请让主人先恢复它' };
@@ -167,6 +182,8 @@ export interface WorkbenchScheduleRow {
 
 export interface BotWorkbenchAccessDeps {
   resolveCaller(callerSessionId: string): Promise<WorkbenchCallerResult>;
+  readResponsibleSessionIds(botId: string): Promise<string[]>;
+  saveResponsibility(botId: string, sessionId: string, responsible: boolean): Promise<void>;
   readState(botId: string): Promise<{ directories: string[]; tasks: Record<string, WorkbenchTaskJudgment> }>;
   projectExists?(dir: string): Promise<boolean>;
   readTarget(sessionId: string): Promise<WorkbenchTargetFacts | null>;
@@ -447,6 +464,35 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
   };
 
   return {
+    async setResponsibility(params: { callerSessionId: string; taskId: string; responsible: boolean }) {
+      if (typeof params.responsible !== 'boolean') return { ok: false as const, errorCode: 'INVALID_ARGS', message: 'Invalid responsibility' };
+      const caller = await deps.resolveCaller(params.callerSessionId);
+      if (!caller.ok) return caller;
+      const ref = parseWorkbenchTaskId(params.taskId);
+      if (!ref || ref.kind !== 'session') return { ok: false as const, errorCode: 'INVALID_ARGS', message: 'A Cindy task ID is required' };
+      const existing = new Set(await deps.readResponsibleSessionIds(caller.botId));
+      const created = await deps.listDelegations(caller.botId);
+      const facts = await deps.readTarget(ref.sessionId);
+      if (!facts || facts.status === 'deleted' || facts.botLinked || facts.source === 'bot' || facts.remoteHostId) {
+        return { ok: false as const, errorCode: 'TASK_NOT_ACCESSIBLE', message: 'Task is unavailable' };
+      }
+      if (params.responsible && (facts.status !== 'active' || facts.orcaRole === 'worker' || !isWorkbenchTaskSource(facts.source))) {
+        return { ok: false as const, errorCode: 'TASK_NOT_ACCESSIBLE', message: 'Task cannot be taken' };
+      }
+      if (params.responsible && !created.has(ref.sessionId)) {
+        const state = await deps.readState(caller.botId);
+        const decision = authorizeWorkbenchTarget(facts, state.directories, deps.caseInsensitive);
+        if (!decision.ok) return decision;
+        const revoked = await stillGranted(caller.botId, decision.projectDir);
+        if (revoked) return revoked;
+      } else if (!params.responsible && !existing.has(ref.sessionId)) {
+        return { ok: false as const, errorCode: 'TASK_NOT_RESPONSIBLE', message: 'You do not own this responsibility' };
+      }
+      if (!scopeCurrent()) return scopeChanged;
+      await deps.saveResponsibility(caller.botId, ref.sessionId, params.responsible);
+      deps.notifyChanged(caller.botId);
+      return { ok: true as const, taskId: ref.sessionId, responsible: params.responsible };
+    },
     async get(params: { callerSessionId: string }) {
       const caller = await deps.resolveCaller(params.callerSessionId);
       if (!caller.ok) return caller;
@@ -454,10 +500,9 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       const projectDirs = workbench.directories;
       const since = now() - WORKBENCH_RECENT_WINDOW_MS;
       const delegations = await deps.listDelegations(caller.botId);
+      const responsible = new Set(await deps.readResponsibleSessionIds(caller.botId));
       const [rows, externals, routines, schedules, exists, briefs] = await Promise.all([
-        projectDirs.length
-          ? deps.listProjectTasks(projectDirs, new Set(delegations.keys()))
-          : Promise.resolve([]),
+        projectDirs.length || responsible.size ? deps.listProjectTasks(projectDirs, responsible) : Promise.resolve([]),
         projectDirs.length ? listExternals(projectDirs) : Promise.resolve({ sessions: [], olderCount: 0, overflowCount: 0 }),
         deps.listRoutines(caller.botId),
         projectDirs.length ? deps.listSchedules() : Promise.resolve([]),
@@ -471,6 +516,7 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
         source: 'cindy' | 'claude-code' | 'codex' | 'pi';
         title: string;
         project: string;
+        responsible: boolean;
         lastActiveMs: number;
         messageCount: number | null;
         row?: WorkbenchTaskRow;
@@ -480,10 +526,10 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       let olderCount = externals.olderCount;
       for (const row of rows) {
         const project = findWorkbenchProject(row.workingDir, projectDirs, deps.caseInsensitive);
-        if (!project) continue;
+        if (!project && !responsible.has(row.id)) continue;
         const lastActiveMs = row.lastActiveAt ?? 0;
         // 只看近期;伙伴自己的后台任务不管多久都列出。
-        if (lastActiveMs < since && !delegations.has(row.id)) {
+        if (lastActiveMs < since && !responsible.has(row.id)) {
           olderCount += 1;
           continue;
         }
@@ -491,7 +537,8 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
           taskId: row.id,
           source: importedSessionOrigin(row.id, row.agentKind) ?? 'cindy',
           title: cleanWorkbenchTitle(row.title, UNTITLED),
-          project: projectName(project),
+          project: project ? projectName(project) : projectName(row.workingDir ?? ''),
+          responsible: responsible.has(row.id),
           lastActiveMs,
           messageCount: row.messageCount ?? null,
           row,
@@ -506,17 +553,18 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
           source: external.source === 'claude' ? 'claude-code' : external.source,
           title: cleanWorkbenchTitle(external.title, UNTITLED),
           project: projectName(project),
+          responsible: false,
           lastActiveMs: external.updatedAt,
           messageCount: null,
           digest: external.digest,
         });
       }
       all.sort((a, b) => b.lastActiveMs - a.lastActiveMs);
-      const cindy = all.filter((candidate) => candidate.row).slice(0, WORKBENCH_TOOL_MAX_CINDY_TASKS);
+      const cindy = all.filter((candidate) => candidate.row && candidate.responsible).slice(0, WORKBENCH_TOOL_MAX_CINDY_TASKS);
       const external = all
-        .filter((candidate) => !candidate.row)
-        .slice(0, WORKBENCH_TOOL_MAX_TASKS - cindy.length);
-      const shown = [...cindy, ...external].sort((a, b) => b.lastActiveMs - a.lastActiveMs);
+        .filter((candidate) => !candidate.responsible)
+        .slice(0, WORKBENCH_TOOL_MAX_TASKS);
+      const shown = cindy.sort((a, b) => b.lastActiveMs - a.lastActiveMs);
       const tasks = await Promise.all(
         shown.map(async (candidate) => {
           const delegationStatus = candidate.row ? (delegations.get(candidate.row.id) ?? null) : null;
@@ -610,11 +658,14 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
             brief: briefs[index],
           })),
           tasks,
+          candidates: external.map(({ taskId, source, title, project }) => ({ taskId, source, title, project })),
           items,
           automations,
           counts,
-          truncated: all.length > shown.length || (externals.overflowCount ?? 0) > 0,
-          totalTasks: all.length + (externals.overflowCount ?? 0),
+          truncated: all.filter(candidate => candidate.responsible).length > shown.length,
+          totalTasks: all.filter(candidate => candidate.responsible).length,
+          totalCandidates: all.filter(candidate => !candidate.responsible).length + (externals.overflowCount ?? 0),
+          candidatesTruncated: all.filter(candidate => !candidate.responsible).length > external.length || (externals.overflowCount ?? 0) > 0,
           olderCount,
         },
       };
@@ -710,6 +761,9 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       }
       const revoked = await stillGranted(allowed.botId, target.projectDir);
       if (revoked) return revoked;
+      if (!scopeCurrent()) return scopeChanged;
+      await deps.saveResponsibility(allowed.botId, sessionId, true);
+      deps.notifyChanged(allowed.botId);
       const sent = await deps.sendToSession({
         targetSessionId: sessionId,
         message,
@@ -731,7 +785,23 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
      */
     async readForOwner(params: { botId: string; taskId: string }) {
       const workbench = await deps.readState(params.botId);
-      const target = await resolveTarget(params.taskId, workbench);
+      // 负责列表里的任务(含已归档、伙伴开的后台任务、项目外的任务)详情只读可看;
+      // 只认该伙伴自己的责任记录,其余仍按已接手项目判定。
+      const ref = parseWorkbenchTaskId(params.taskId);
+      let target: ResolvedTarget | Failure;
+      if (ref?.kind === 'session' && (await deps.readResponsibleSessionIds(params.botId)).includes(ref.sessionId)) {
+        const decision = authorizeWorkbenchTarget(
+          await deps.readTarget(ref.sessionId),
+          workbench.directories,
+          deps.caseInsensitive,
+          { responsibleRead: true },
+        );
+        target = decision.ok
+          ? { ok: true, kind: 'session', taskId: ref.sessionId, sessionId: ref.sessionId, projectDir: decision.projectDir }
+          : decision;
+      } else {
+        target = await resolveTarget(params.taskId, workbench);
+      }
       if (!target.ok) return target;
       const transcript = await readTranscript(target);
       if (!transcript) return { ok: false as const, errorCode: 'TRANSCRIPT_UNAVAILABLE', message: '读不到这条会话的记录' };

@@ -92,3 +92,28 @@ describe('isSessionTurnDispatchBoundaryBusy', () => {
     expect(isSessionTurnDispatchBoundaryBusy(t, 's', null)).toBe(false);
   });
 });
+
+describe('SessionTurnActivityTracker per-session change listener', () => {
+  it('notifies only when a session enters or leaves its turn, including when it closes', () => {
+    const t = new SessionTurnActivityTracker();
+    const changes: string[] = [];
+    t.setSessionTurnChangeListener((sessionId) => changes.push(sessionId));
+    t.setSessionInTurn('s', true);
+    t.setSessionInTurn('s', true);
+    t.scheduleIdleAfterStatusBroadcast('s');
+    t.scheduleIdleAfterTerminalBroadcast('s');
+    t.setSessionInTurn('s', true);
+    t.deleteSession('s');
+    t.deleteSession('s');
+    expect(changes).toEqual(['s', 's', 's', 's']);
+  });
+
+  it('keeps tracking turns when the listener throws', () => {
+    const t = new SessionTurnActivityTracker();
+    t.setSessionTurnChangeListener(() => {
+      throw new Error('listener failed');
+    });
+    t.setSessionInTurn('s', true);
+    expect(t.isSessionInTurn('s')).toBe(true);
+  });
+});

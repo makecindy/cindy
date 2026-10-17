@@ -1,11 +1,13 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Info, TriangleAlert, X } from 'lucide-react';
+import { Folder, Info, TriangleAlert, X } from 'lucide-react';
+import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import {
   connectedProvidersForAgent,
@@ -18,10 +20,12 @@ import {
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { FullAccessConfirmContent } from '@/components/new-chat/FullAccessConfirmContent';
-import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, type RemoteAgentSelectorOptions } from '@/components/new-chat/ModelSelector';
+import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { providersSettingsPath } from '@/features/provider-share/providerShareNavigation';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -29,6 +33,10 @@ import { filterChatBridgedCodexProviders } from '@/lib/providerModels';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
+import {
+  agentDeviceModelMemoryAccessors,
+  useAgentDeviceModelMemoryVersion,
+} from '@/state/agentDeviceModelMemory';
 import {
   getProviderModelEffort,
   getProviderModelFast,
@@ -55,6 +63,15 @@ import { selectWorkerModels } from './workerModelAvailability';
 
 const AUTO_ONLY_WORKER_PERMISSION_MODES = ['auto'] as const;
 
+/** 本机目录的模型级全局预设(与 composer 共用)。 */
+const LOCAL_WORKER_MODEL_MEMORY = {
+  getEffort: getProviderModelEffort,
+  setEffort: setProviderModelEffort,
+  setChoice: setProviderModelChoice,
+  getFast: getProviderModelFast,
+  setFast: setProviderModelFast,
+};
+
 export interface CreateWorkerForm {
   role: string;
   agent: 'claude-code' | 'codex' | 'pi';
@@ -66,6 +83,48 @@ export interface CreateWorkerForm {
   initialTask: string;
   /** 本次 Worker 权限；提交后同时成为下一次创建 Worker 的默认值。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /** 运行设备(同账号另一台电脑)；缺省 = 这台电脑。 */
+  executionDeviceId?: string;
+  /** 运行设备名，只用于失败提示。 */
+  executionDeviceName?: string;
+  /** 运行设备上的指定工作目录；缺省在那台电脑创建对话任务。只在指定运行设备时有意义。 */
+  workingDir?: string;
+  /**
+   * Worker 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null = 任务所在电脑。
+   * 缺省 = 不指定(任务所在电脑不支持选择时)，Worker 跟 Lead。
+   */
+  agentDeviceId?: string | null;
+}
+
+/** 可放 Worker 的同账号其他电脑(`maker:orca:execution-devices`)。 */
+export interface ExecutionDeviceOption {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  /** false = 版本过旧，不可选。 */
+  supported: boolean;
+}
+
+export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
+  const devices = (value as { devices?: unknown } | null)?.devices;
+  if (!Array.isArray(devices)) return [];
+  return devices.flatMap((item) => {
+    const row = item as Record<string, unknown> | null;
+    if (!row || typeof row.deviceId !== 'string' || !row.deviceId) return [];
+    return [
+      {
+        deviceId: row.deviceId,
+        name: typeof row.name === 'string' && row.name ? row.name : row.deviceId,
+        platform: typeof row.platform === 'string' ? row.platform : null,
+        supported: row.supported === true,
+      },
+    ];
+  });
+}
+
+/** 运行设备的系统未知：接受 POSIX、Windows 盘符与 UNC 绝对路径，是否存在由那台检查。 */
+export function isAbsoluteRemoteDir(value: string): boolean {
+  return /^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(value);
 }
 
 export interface CreateWorkerPopoverProps {
@@ -86,6 +145,18 @@ export interface CreateWorkerPopoverProps {
   sshRemote?: boolean;
   /** 开启新协同时必须确认执行端支持权限偏好；已有旧版远程 Team 创建 Worker 仍兼容旧行为。 */
   requireWorkerPermissionModeSupport?: boolean;
+  /** 允许把 Worker 放到同账号另一台电脑运行(仅本机 Lead)。 */
+  executionDevicesEnabled?: boolean;
+  /**
+   * Lead 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null / 缺省 = 任务所在电脑。
+   * Worker 默认跟它，模型目录也先按它读(主进程不指定位置时同样让 Worker 跟 Lead)。
+   */
+  leadAgentDeviceId?: string | null;
+  /**
+   * 可以放 Worker Agent 的其他电脑与分享(与任务输入框模型面板同一份候选，不含任务所在电脑)。
+   * 传了且任务所在电脑支持时，模型面板左侧栏列出这些远程供应商；缺省 = 不提供(SSH 等)。
+   */
+  remoteAgentDevices?: readonly { deviceId: string; name: string }[];
 }
 
 export function CreateWorkerPopover({
@@ -95,9 +166,12 @@ export function CreateWorkerPopover({
   title,
   submitLabel,
   className,
-  deviceId,
+  deviceId: leadDeviceId,
   sshRemote,
   requireWorkerPermissionModeSupport = false,
+  executionDevicesEnabled = false,
+  leadAgentDeviceId,
+  remoteAgentDevices,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -118,6 +192,23 @@ export function CreateWorkerPopover({
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const [executionDevices, setExecutionDevices] = useState<ExecutionDeviceOption[]>([]);
+  const [executionDeviceId, setExecutionDeviceId] = useState<string | null>(null);
+  const [remoteDirMode, setRemoteDirMode] = useState<'dialogue' | 'path'>('dialogue');
+  const [remoteDir, setRemoteDir] = useState('');
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const directoryTargetRef = useRef<{ deviceId: string | null; open: boolean; pickerOpen: boolean }>({ deviceId: null, open, pickerOpen: false });
+  directoryTargetRef.current = { deviceId: executionDeviceId, open, pickerOpen: directoryPickerOpen };
+  useEffect(() => { setDirectoryPickerOpen(false); }, [executionDeviceId, open]);
+  // Worker 的 Agent 所在电脑(远程供应商)；null = 任务所在电脑。打开时跟 Lead。
+  const [agentDeviceId, setAgentDeviceId] = useState<string | null>(null);
+  // 模型、供应商与能力按 Worker 的 Agent 实际运行的电脑读取：选了远程供应商读那台(或分享)，
+  // 远程控制的 Lead 读它所在的电脑，选了运行设备则读运行设备。权限档始终跟 Lead 所在电脑走。
+  const deviceId = agentDeviceId ?? leadDeviceId ?? executionDeviceId ?? undefined;
+  const executionDevice = executionDevices.find((d) => d.deviceId === executionDeviceId) ?? null;
+  const trimmedRemoteDir = remoteDir.trim();
+  const remoteDirInvalid =
+    !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
 
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
@@ -125,18 +216,40 @@ export function CreateWorkerPopover({
   const pickerAgents = useModelPickerAgents(agent, deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
-  const providers = deviceId ? remoteProviders.providers : localProviders.providers;
+  // Agent 在另一台电脑运行时只能用那台允许被远程调用的供应商(那台是最终裁决方)。
+  const providers = useMemo(
+    () =>
+      deviceId
+        ? agentDeviceId
+          ? remoteAgentProviders(remoteProviders.providers)
+          : remoteProviders.providers
+        : localProviders.providers,
+    [agentDeviceId, deviceId, localProviders.providers, remoteProviders.providers],
+  );
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
+  useAgentDeviceModelMemoryVersion();
   const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
+  // 协同的执行端是任务所在电脑：Worker 权限与「能否给 Worker 选 Agent 位置」按它的能力判，
+  // 不跟着模型目录换到 Agent 所在电脑。这两位是整台电脑的协议位，用那台一定注册的 Claude Code
+  // 读(Worker 选的 Agent 可能只装在 Agent 所在电脑上，按它读会读不到)。
+  const hostCaps = useAgentCapabilities(leadDeviceId ? 'claude-code' : null, leadDeviceId);
+  const taskHostCaps = leadDeviceId ? hostCaps.capabilities : activeCaps;
   const supportsWorkerPermissionModeSelection =
-    !deviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
+    !leadDeviceId || taskHostCaps?.supportsOrcaWorkerPermissionMode === true;
   const remoteWorkerPermissionModeUnsupported =
-    !!deviceId
-    && activeCaps !== null
-    && activeCaps?.supportsOrcaWorkerPermissionMode !== true;
+    !!leadDeviceId
+    && taskHostCaps !== null
+    && taskHostCaps?.supportsOrcaWorkerPermissionMode !== true;
+  // 能否给 Worker 单独选 Agent 所在电脑：本机任务恒可以；远程控制的任务要那台声明支持(老端会把
+  // 字段静默丢掉)。SSH Lead 与运行设备 Worker 不适用。
+  const agentLocationSelectable =
+    remoteAgentDevices !== undefined
+    && sshRemote !== true
+    && executionDeviceId === null
+    && (!leadDeviceId || hostCaps.capabilities?.supportsOrcaWorkerAgentDevice === true);
   const activeModels = useMemo(() => {
     return selectWorkerModels({
       agent,
@@ -272,6 +385,11 @@ export function CreateWorkerPopover({
     activeModels.length === 0;
 
   // 打开弹窗时恢复上次选择；initial task 不记忆，避免把旧任务误带到下一次创建。
+  // Lead 的位置按打开那一刻读：打开期间它变化(分享列表异步读到、任务快照刷新)不清掉用户已填的内容，
+  // 只在用户还没自己选过位置时让 Worker 的位置继续跟着 Lead。
+  const leadAgentDeviceIdRef = useRef(leadAgentDeviceId ?? null);
+  leadAgentDeviceIdRef.current = leadAgentDeviceId ?? null;
+  const agentLocationChosenRef = useRef(false);
   useEffect(() => {
     if (!open) {
       setPrefsRestored(false);
@@ -279,16 +397,57 @@ export function CreateWorkerPopover({
     }
     const stored = readWorkerCreationPrefs();
     const agentPrefs = stored[stored.lastAgent];
+    // Worker 默认跟 Lead 在同一处运行 Agent；本机的来源记忆只用于任务所在电脑是本机、Agent 也在本机时。
+    const leadLocation = leadAgentDeviceIdRef.current;
+    agentLocationChosenRef.current = false;
     setPrefs(stored);
     setAgent(stored.lastAgent);
     setModel(agentPrefs.model);
     setEffort(agentPrefs.effort);
     setFast(agentPrefs.fast);
-    setProviderSource(deviceId ? null : agentPrefs.providerId);
+    setAgentDeviceId(leadLocation);
+    setProviderSource(leadDeviceId || leadLocation ? null : agentPrefs.providerId);
     setInitialTask('');
     setSelectedWorkerPermissionMode(stored.workerPermissionMode);
+    setExecutionDeviceId(null);
+    setRemoteDirMode('dialogue');
+    setRemoteDir('');
     setPrefsRestored(true);
-  }, [deviceId, open]);
+  }, [leadDeviceId, open]);
+  useEffect(() => {
+    if (open && !agentLocationChosenRef.current) setAgentDeviceId(leadAgentDeviceId ?? null);
+  }, [leadAgentDeviceId, open]);
+
+  // 可选运行设备：每次打开读一次；读不到就只有这台电脑，不提示错误。
+  useEffect(() => {
+    if (!open || !executionDevicesEnabled) {
+      setExecutionDevices([]);
+      return;
+    }
+    let disposed = false;
+    void Promise.resolve(window.electronAPI?.localDb?.orcaWorkflows?.listExecutionDevices?.())
+      .then((value) => {
+        if (!disposed) setExecutionDevices(parseExecutionDevices(value));
+      })
+      .catch(() => {
+        if (!disposed) setExecutionDevices([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [executionDevicesEnabled, open]);
+
+  const selectExecutionDevice = useCallback(
+    (next: string | null) => {
+      if (next === executionDeviceId) return;
+      setExecutionDeviceId(next);
+      setRemoteDirMode('dialogue');
+      setRemoteDir('');
+      // 另一台电脑的模型目录没有本机的来源维度；回到这台电脑时恢复本机记忆的来源。
+      setProviderSource(next || leadDeviceId ? null : prefs[agent].providerId);
+    },
+    [agent, executionDeviceId, leadDeviceId, prefs],
+  );
 
   useEffect(() => {
     if (
@@ -353,14 +512,17 @@ export function CreateWorkerPopover({
       // 写 —— 关闭弹窗不持久化未提交编辑,语义不变。
       const snapshot: WorkerCreationPrefs = {
         ...prefs,
-        [agent]: {
-          model,
-          effort,
-          fast,
-          // device-link 面板无来源维度(providerSource 恒 null),保留本地记忆原值,
-          // 与提交路径同规则。
-          providerId: deviceId ? prefs[agent].providerId : providerSource,
-        },
+        // 另一台电脑(远程供应商)目录里的选择不进本机 Worker 偏好，与提交路径同规则。
+        [agent]: agentDeviceId
+          ? prefs[agent]
+          : {
+              model,
+              effort,
+              fast,
+              // device-link 面板无来源维度(providerSource 恒 null),保留本地记忆原值,
+              // 与提交路径同规则。
+              providerId: deviceId ? prefs[agent].providerId : providerSource,
+            },
       };
       setPrefs(snapshot);
       setAgent(nextAgent);
@@ -370,7 +532,7 @@ export function CreateWorkerPopover({
       setFast(remembered.fast);
       setProviderSource(deviceId ? null : remembered.providerId);
     },
-    [agent, deviceId, effort, fast, model, prefs, providerSource],
+    [agent, agentDeviceId, deviceId, effort, fast, model, prefs, providerSource],
   );
 
   const updateModel = useCallback(
@@ -494,44 +656,58 @@ export function CreateWorkerPopover({
   // 影响,但来源槽兼容副本按实际生效来源落 key,不在收敛 effect 前的窗口里写给已
   // 失效来源(copilot review;ChatInput 的 effectiveSourceId 同语义);收窄空则回落
   // 该模型的生效默认来源(全局预设本就是跨来源共享)。
-  const activeMemorySourceId = deviceId
+  // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
+  // device-link 远程创建不传:被控端记忆需镜像通道,宁可无记忆也不掺控制端本机。
+  // Agent 在另一台电脑(远程供应商)时用本机为那台单独记的一份，与任务输入框同一份。
+  const modelMemory = useMemo(
+    () =>
+      agentDeviceId
+        ? agentDeviceModelMemoryAccessors(agentDeviceId)
+        : deviceId
+          ? undefined
+          : LOCAL_WORKER_MODEL_MEMORY,
+    [agentDeviceId, deviceId],
+  );
+  const activeMemorySourceId = !modelMemory
     ? null
     : narrowProviderSource(providerSource, model)
       ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
   const updateEffort = useCallback(
     (next: Effort) => {
       setEffort(next);
-      if (activeMemorySourceId && model) {
-        setProviderModelEffort(agent, activeMemorySourceId, model, next);
+      if (modelMemory && activeMemorySourceId && model) {
+        modelMemory.setEffort(agent, activeMemorySourceId, model, next);
       }
     },
-    [activeMemorySourceId, agent, model],
+    [activeMemorySourceId, agent, model, modelMemory],
   );
   const updateFast = useCallback(
     (enabled: boolean) => {
       setFast(enabled);
-      if (activeMemorySourceId && model) {
-        setProviderModelFast(agent, activeMemorySourceId, model, enabled);
+      if (modelMemory && activeMemorySourceId && model) {
+        modelMemory.setFast(agent, activeMemorySourceId, model, enabled);
       }
     },
-    [activeMemorySourceId, agent, model],
+    [activeMemorySourceId, agent, model, modelMemory],
   );
 
-  // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
-  // device-link 远程创建不传:被控端记忆需镜像通道,宁可无记忆也不掺控制端本机。
-  const modelMemory = useMemo(
+  // 远程 Agent：模型面板左侧栏在任务所在电脑的供应商之后列出其他电脑与分享的供应商，选中那里的
+  // 模型 = Worker 的 Agent 在那台运行(与新建任务同一套)。运行设备与它互斥，选了运行设备不列。
+  const remoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(
     () =>
-      deviceId
-        ? undefined
-        : {
-            getEffort: getProviderModelEffort,
-            setEffort: setProviderModelEffort,
-            setChoice: setProviderModelChoice,
-            getFast: getProviderModelFast,
-            setFast: setProviderModelFast,
-          },
-    [deviceId],
+      agentLocationSelectable && remoteAgentDevices && remoteAgentDevices.length > 0
+        ? {
+            devices: remoteAgentDevices,
+            selectedDeviceId: agentDeviceId,
+            ...(leadDeviceId ? { homeDeviceId: leadDeviceId } : { localModelMemory: LOCAL_WORKER_MODEL_MEMORY }),
+            deviceModelMemory: agentDeviceModelMemoryAccessors,
+          }
+        : undefined,
+    [agentDeviceId, agentLocationSelectable, leadDeviceId, remoteAgentDevices],
   );
+  const agentDeviceName = agentDeviceId
+    ? (remoteAgentDevices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
+    : null;
 
   const activeRole = customRole || role;
   const customRoleError =
@@ -539,12 +715,17 @@ export function CreateWorkerPopover({
     PREDEFINED_ROLES.includes(customRole as (typeof PREDEFINED_ROLES)[number])
       ? t('orca.createWorker.customRolePredefinedError')
       : null;
+  // 选了 Lead 之外的位置、但任务所在电脑现在不能带这个字段(能力还在读 / 已降级)：不能悄悄按 Lead 的位置建。
+  const agentLocationUnsendable =
+    !agentLocationSelectable && agentDeviceId !== (leadAgentDeviceId ?? null);
   const canCreate =
     !isSubmitting &&
     activeRole.length >= 1 &&
     activeRole.length <= 32 &&
     !customRoleError &&
     !remoteModelListBlocked &&
+    !remoteDirInvalid &&
+    !agentLocationUnsendable &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
     !!currentModel;
   const resolvedTitle = title ?? t('orca.createWorker.title');
@@ -582,13 +763,16 @@ export function CreateWorkerPopover({
       workerPermissionMode: supportsWorkerPermissionModeSelection
         ? selectedWorkerPermissionMode
         : prefs.workerPermissionMode,
-      [agent]: {
-        model,
-        effort,
-        fast,
-        // device-link 创建不覆盖本地来源记忆(远程面板没有来源维度)。
-        providerId: deviceId ? prefs[agent].providerId : submitProviderId,
-      },
+      // 另一台电脑(远程供应商)目录里的选择不进本机 Worker 偏好(那台的档位已记在那台的那份记忆)。
+      [agent]: agentDeviceId
+        ? prefs[agent]
+        : {
+            model,
+            effort,
+            fast,
+            // device-link 创建不覆盖本地来源记忆(远程面板没有来源维度)。
+            providerId: deviceId ? prefs[agent].providerId : submitProviderId,
+          },
     };
     setPrefs(nextPrefs);
     writeWorkerCreationPrefs(nextPrefs);
@@ -617,6 +801,16 @@ export function CreateWorkerPopover({
         ...(supportsWorkerPermissionModeSelection
           ? { workerPermissionMode: selectedWorkerPermissionMode }
           : {}),
+        ...(executionDevice
+          ? {
+              executionDeviceId: executionDevice.deviceId,
+              executionDeviceName: executionDevice.name,
+              ...(remoteDirMode === 'path' ? { workingDir: trimmedRemoteDir } : {}),
+            }
+          : {}),
+        // 任务所在电脑支持时总是显式带上 Worker 的 Agent 位置(null = 任务所在电脑)，不依赖
+        // 创建时 Lead 的位置；不支持的老被控端不带，Worker 跟 Lead(与面板读的目录一致)。
+        ...(agentLocationSelectable ? { agentDeviceId } : {}),
       });
     } finally {
       submittingRef.current = false;
@@ -627,6 +821,8 @@ export function CreateWorkerPopover({
     prefs,
     activeRole,
     agent,
+    agentDeviceId,
+    agentLocationSelectable,
     deviceId,
     model,
     effort,
@@ -640,6 +836,9 @@ export function CreateWorkerPopover({
     routeEffortMetaFor,
     selectedWorkerPermissionMode,
     supportsWorkerPermissionModeSelection,
+    executionDevice,
+    remoteDirMode,
+    trimmedRemoteDir,
   ]);
 
   const roleInputRef = useRef<HTMLInputElement>(null);
@@ -649,14 +848,16 @@ export function CreateWorkerPopover({
   }, [onClose]);
 
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
+    <><Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
       <Dialog.Portal>
       <Dialog.Overlay
         className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
-        style={WINDOW_DRAG_STYLE}
+        // 遮罩不是拖拽区:标 drag 会把整块视口变成拖拽命中区,只给 500px 的 Content 挖洞,
+        // 探出洞的浮层(模型面板)左侧就被吞掉 —— 与其它 modal 弹窗同口径(windowDrag.tsx)。
+        style={WINDOW_NO_DRAG_STYLE}
       >
       <Dialog.Content
-        className="modal-panel relative z-10 w-[500px] p-6 outline-none"
+        className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
         aria-describedby={undefined}
         onPointerDownOutside={(event) => event.preventDefault()}
         onOpenAutoFocus={(event) => {
@@ -747,6 +948,20 @@ export function CreateWorkerPopover({
           )}
         </div>
 
+        {/* 运行设备与远程供应商互斥：Worker 的 Agent 已在另一台电脑时不提供运行设备。 */}
+        {executionDevices.length > 0 && agentDeviceId === null ? (
+          <ExecutionDeviceField
+            devices={executionDevices}
+            selectedId={executionDevice?.deviceId ?? null}
+            onSelect={selectExecutionDevice}
+            dirMode={remoteDirMode}
+            onDirModeChange={setRemoteDirMode}
+            dir={remoteDir}
+            onPickDirectory={() => setDirectoryPickerOpen(true)}
+            dirInvalid={remoteDirInvalid && trimmedRemoteDir.length > 0}
+          />
+        ) : null}
+
         <div className="mb-4 grid gap-4">
           {deviceId && remoteProviders.unsupported && (
             <VendorSegmentedSwitcher
@@ -777,6 +992,11 @@ export function CreateWorkerPopover({
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
                   updateAgent(nextAgent);
+                  // 列出远程供应商时，行带着它所属的电脑(null = 任务所在电脑)：一起换 Worker 的 Agent 位置。
+                  if (selection.agentDevice !== undefined) {
+                    agentLocationChosenRef.current = true;
+                    setAgentDeviceId(selection.agentDevice?.deviceId ?? null);
+                  }
                   setModel(selection.modelId);
                   setProviderSource(selection.providerId);
                   setEffort(selection.effort ?? '');
@@ -788,6 +1008,11 @@ export function CreateWorkerPopover({
                 onEffortChange={updateEffort}
                 vendorKey={vendorKey}
                 deviceId={deviceId}
+                {...(remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
+                  ? { remoteAgent: remoteAgentOptions }
+                  : {})}
+                // Worker 的 Agent 在另一台电脑运行：trigger 用带信号波纹的远程供应商 Logo。
+                agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
                 // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
                 // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
                 // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
@@ -805,12 +1030,14 @@ export function CreateWorkerPopover({
                 // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
                 // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
                 // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
+                // 只看任务所在电脑(远程控制的 Lead / 运行设备)：Worker 的 Agent 选在分享或其他电脑上时，
+                // 面板自己决定底部入口(分享来的供应商直达设置里那一条)。
                 onNavigateToProviders={
-                  deviceId || isSidebarWindow()
+                  leadDeviceId || executionDeviceId || isSidebarWindow()
                     ? undefined
-                    : () => {
+                    : (target) => {
                         onClose();
-                        navigate('/settings?tab=providers');
+                        navigate(providersSettingsPath(target));
                       }
                 }
                 modelMemory={modelMemory}
@@ -858,7 +1085,7 @@ export function CreateWorkerPopover({
                 void updateWorkerPermissionMode(mode as OrcaWorkerPermissionMode)
               }
               vendorKey={vendorKey}
-              deviceId={deviceId}
+              deviceId={leadDeviceId}
               triggerVariant="field"
               dense
               ariaContext={t('orca.createWorker.permissionLabel')}
@@ -903,5 +1130,148 @@ export function CreateWorkerPopover({
       </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
+    {executionDeviceId ? <AddRemoteProjectDialog
+      open={open && directoryPickerOpen}
+      onOpenChange={setDirectoryPickerOpen}
+      initialDeviceId={executionDeviceId}
+      fixedDeviceId={executionDeviceId}
+      title={t('orca.createWorker.remoteDirLabel', { device: executionDevice?.name })}
+      confirmText={t('newChat.folderPicker.selectFolder')}
+      onProjectAdded={(target) => {
+        const current = directoryTargetRef.current;
+        if (!current.open || !current.pickerOpen || target.kind !== 'device-link' || target.deviceId !== current.deviceId) return;
+        setRemoteDir(target.path);
+        setRemoteDirMode('path');
+      }}
+    /> : null}</>
+  );
+}
+
+const FIELD_LABEL_CLASS =
+  'mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]';
+
+/** 运行设备下拉选择 + 选了其他电脑时的工作目录(对话 / 指定目录)。 */
+function ExecutionDeviceField({
+  devices,
+  selectedId,
+  onSelect,
+  dirMode,
+  onDirModeChange,
+  dir,
+  onPickDirectory,
+  dirInvalid,
+}: {
+  devices: ExecutionDeviceOption[];
+  selectedId: string | null;
+  onSelect: (deviceId: string | null) => void;
+  dirMode: 'dialogue' | 'path';
+  onDirModeChange: (mode: 'dialogue' | 'path') => void;
+  dir: string;
+  onPickDirectory: () => void;
+  dirInvalid: boolean;
+}) {
+  const { t } = useTranslation();
+  const selected = devices.find((d) => d.deviceId === selectedId) ?? null;
+  const segmentClass = (checked: boolean) =>
+    cn(
+      'min-h-8 rounded-full border px-3 py-1.5 text-13 leading-none transition-colors',
+      checked
+        ? 'border-[var(--text-secondary)] bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
+        : 'border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]',
+    );
+  return (
+    <div className="mb-4 grid gap-3" data-testid="worker-execution-device">
+      <div>
+        <div className={FIELD_LABEL_CLASS}>{t('orca.createWorker.executionDeviceLabel')}</div>
+        <Select
+          className="w-full"
+          label={t('orca.createWorker.executionDeviceLabel')}
+          value={selected?.deviceId ?? '__this_computer__'}
+          truncateOptions
+          options={[
+            { value: '__this_computer__', label: t('orca.createWorker.thisComputer') },
+            ...devices.map((device) => ({
+              value: device.deviceId,
+              label: device.name,
+              disabled: !device.supported,
+              endAdornment: (
+                <span className="text-11 font-normal text-[var(--text-secondary)]">
+                  {device.supported
+                    ? t('orca.createWorker.deviceOnline')
+                    : t('orca.createWorker.deviceNeedsUpdate')}
+                </span>
+              ),
+            })),
+          ]}
+          onValueChange={(value) => onSelect(value === '__this_computer__' ? null : value)}
+        />
+        <p className="mt-1.5 text-11 leading-snug text-[var(--text-secondary)]">
+          {selected
+            ? t('orca.createWorker.executionDeviceRemoteHint', { device: selected.name })
+            : t('orca.createWorker.executionDeviceHint')}
+        </p>
+      </div>
+      {selected ? (
+        <div>
+          <div className={FIELD_LABEL_CLASS}>
+            {t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          </div>
+          <div
+            className="flex flex-wrap gap-2"
+            role="radiogroup"
+            aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'dialogue'}
+              className={segmentClass(dirMode === 'dialogue')}
+              onClick={() => onDirModeChange('dialogue')}
+            >
+              {t('orca.createWorker.remoteDirChat')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'path'}
+              className={segmentClass(dirMode === 'path')}
+              onClick={() => onDirModeChange('path')}
+            >
+              {t('orca.createWorker.remoteDirPath')}
+            </button>
+          </div>
+          {dirMode === 'path' ? (
+            <button
+              type="button"
+              className={cn(
+                'mt-2 flex min-h-9 w-full items-center gap-2 rounded-full border bg-transparent px-3 py-2 text-left text-13 leading-snug text-[var(--text-primary)] outline-none hover:bg-[var(--surface-chip)]',
+                dirInvalid
+                  ? 'border-[var(--error-fg)]'
+                  : 'border-[var(--border-default)] focus:border-[var(--text-secondary)]',
+              )}
+              aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+              aria-invalid={dirInvalid}
+              onClick={onPickDirectory}
+            >
+              <Folder size={16} className="shrink-0 text-[var(--text-secondary)]" />
+              <span className="min-w-0 truncate">{dir || t('newChat.folderPicker.selectFolder')}</span>
+            </button>
+          ) : null}
+          <p
+            className={cn(
+              'mt-1.5 text-11 leading-snug',
+              dirInvalid ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
+            )}
+            role={dirInvalid ? 'status' : undefined}
+          >
+            {dirInvalid
+              ? t('orca.createWorker.remoteDirInvalid', { device: selected.name })
+              : dirMode === 'dialogue'
+                ? t('orca.createWorker.remoteDirChatHint', { device: selected.name })
+                : t('orca.createWorker.remoteDirPathHint', { device: selected.name })}
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }

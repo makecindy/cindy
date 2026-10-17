@@ -10,7 +10,7 @@ const h = vi.hoisted(() => {
 });
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
-  return { View: ({ children }: any) => createElement('div', null, children),
+  return { View: ({ children, style }: any) => createElement('div', { style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children),
     Image: ({ source, onError }: any) => { h.failImage = onError; return createElement('img', { src: source.uri, 'data-asset': typeof source === 'string' ? source : undefined }); },
     StyleSheet: { create: (value: any) => value } };
 });
@@ -23,7 +23,7 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invo
 vi.mock('@/device-link/mobileMakerTransport', () => ({ createMobileMakerTransport: () => ({ fetchRemoteMedia: vi.fn() }) }));
 vi.mock('@/session/remoteMedia', () => ({ resolveMobileRemoteMedia: h.remoteMedia }));
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid' }));
-vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
+vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: (factory: any) => factory({}) }));
 vi.mock('lucide-react-native', () => ({ Users: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('@/session/messageMarkdown', () => ({ parseMobileMarkdownInlines: () => [] }));
@@ -33,13 +33,48 @@ vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () =>
 vi.mock('@/device-link/remoteResourceCache', () => ({ cachedBotItem: () => null, readRemoteResourceSnapshot: async () => ({}),
   remoteResourceCacheRevision: () => 0, subscribeRemoteResourceCache: () => () => {}, isRemoteResourceUnread: () => false }));
 import { chatGroupView, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
-import { BotGroupAvatar, useBotGroupIdentities } from '@/session/BotGroupAvatars';
+import { BotGroupAvatar, BotGroupDuoAvatar, useBotGroupIdentities } from '@/session/BotGroupAvatars';
 import { BotGroupListRow } from '@/session/BotGroupList';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 beforeEach(() => { h.remoteMedia.mockClear(); h.invoke.mockClear(); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); });
+
+// Product rule §5/§8.2: previous coverage only exercised single-member image sources.
+// Render the real shared row/header mark: two members expose reversed occlusion;
+// three expose truncation, four/five expose cluster geometry, six expose the cap (unit).
+it.each(['row', 'header'] as const)('keeps the first members in front inside the %s mark as membership changes', async (variant) => {
+  const host = document.createElement('div'); root = createRoot(host);
+  const members = Array.from({ length: 6 }, (_, index) => ({ botId: String(index), name: `Member ${index}`, avatarUrl: `https://avatars.example.invalid/${index}.png` }));
+  for (const count of [2, 3, 4, 5, 6, 1, 0]) {
+    await act(async () => root!.render(createElement(BotGroupDuoAvatar, { deviceId: '', members: members.slice(0, count), online: true, variant })));
+    const images = Array.from(host.querySelectorAll('img'));
+    expect(images.map((img) => img.getAttribute('src'))).toEqual(members.slice(0, Math.min(count, 5)).reverse().map((member) => member.avatarUrl));
+    if (count < 2) continue;
+    const frame = host.firstElementChild as HTMLElement;
+    const box = parseFloat(frame.style.width);
+    const layers = images.map((img) => img.parentElement!);
+    // Paint order only implies foreground when layers are siblings with no overriding z-index.
+    expect(layers.every((layer) => layer.parentElement === frame && layer.style.position === 'absolute' && !layer.style.zIndex)).toBe(true);
+    if (count === 2) continue;
+    const centers = layers.map((layer) => {
+      const size = parseFloat(layer.style.width);
+      const left = parseFloat(layer.style.left), top = parseFloat(layer.style.top);
+      expect(left).toBeGreaterThanOrEqual(0); expect(top).toBeGreaterThanOrEqual(0);
+      expect(left + size).toBeLessThanOrEqual(box + 0.001); expect(top + size).toBeLessThanOrEqual(box + 0.001);
+      return { x: left + size / 2 - box / 2, y: top + size / 2 - box / 2, size };
+    });
+    const distances = centers.map((point, index) => {
+      const next = centers[(index + 1) % centers.length];
+      expect(Math.hypot(point.x, point.y)).toBeCloseTo(Math.hypot(centers[0].x, centers[0].y));
+      const distance = Math.hypot(next.x - point.x, next.y - point.y);
+      expect(distance).toBeLessThan(point.size); // neighboring circles actually overlap
+      return distance;
+    });
+    distances.forEach((distance) => expect(distance).toBeCloseTo(distances[0]));
+  }
+});
 
 it('renders a server member public avatar without computer resolution and recovers after a changed image', async () => {
   const snapshot: ChatSnapshot = { room: { id: 'group', name: 'Discussion', kind: 'group', archived: false, revision: 1,

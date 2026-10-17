@@ -40,6 +40,7 @@ import {
   deviceLinkBrowseAdapter,
   type RemoteBrowseAdapter,
   type BrowseEntry,
+  type BrowseListResult,
 } from './remoteBrowseAdapters';
 import {
   sshExistingProjects,
@@ -148,6 +149,7 @@ export function AddRemoteProjectDialog({
   const [path, setPath] = useState<string>('');
   const [parent, setParent] = useState<string | null>(null);
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
+  const [drives, setDrives] = useState<NonNullable<BrowseListResult['drives']>>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [busy, setBusy] = useState(false);
   // refreshList 请求序号 —— 快速切目标 / 双击进目录时旧请求晚到不得覆盖当前状态。
@@ -160,6 +162,16 @@ export function AddRemoteProjectDialog({
       ? sshBrowseAdapter(selectedTarget.hostId)
       : deviceLinkBrowseAdapter(selectedTarget.deviceId);
   }, [selectedTarget?.key]);
+  const currentBrowseRef = useRef({ open, adapter });
+  currentBrowseRef.current = { open, adapter };
+  useEffect(() => {
+    currentBrowseRef.current = { open, adapter };
+    requestSeqRef.current += 1;
+    return () => {
+      currentBrowseRef.current = { open: false, adapter: null };
+      requestSeqRef.current += 1;
+    };
+  }, [open, adapter]);
 
   // SSH 已有项目:本地会话里该 host 的 project 会话去重(同步,随 sessions 实时重算);
   // device-link 已有项目走隧道异步拉(deviceExisting)。existing 列表取二者之一。
@@ -216,14 +228,25 @@ export function AddRemoteProjectDialog({
   const refreshList = useCallback(
     async (browseApi: RemoteBrowseAdapter, targetPath: string) => {
       const mySeq = ++requestSeqRef.current;
+      const isCurrent = () => mySeq === requestSeqRef.current && currentBrowseRef.current.open
+        && currentBrowseRef.current.adapter === browseApi;
       setLoadingList(true);
       try {
-        const res = await browseApi.listDir(targetPath);
-        if (mySeq !== requestSeqRef.current) return;
+        let res = await browseApi.listDir(targetPath);
+        if (!isCurrent()) return;
         setParent(res.parent);
         setEntries(res.entries);
+        setDrives(res.drives ?? []);
+        if (res.resolvedPath) setPath(current => current === targetPath ? res.resolvedPath : current);
+        setLoadingList(false);
+        for (let attempt = 0; res.drivesPending && attempt < 3; attempt += 1) {
+          try { res = await browseApi.listDir(res.resolvedPath); }
+          catch { return; }
+          if (!isCurrent()) return;
+          setDrives(res.drives ?? []);
+        }
       } catch (err) {
-        if (mySeq !== requestSeqRef.current) return;
+        if (!isCurrent()) return;
         toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.listFailed' })));
         setEntries([]);
       } finally {
@@ -239,6 +262,7 @@ export function AddRemoteProjectDialog({
     setMode('existing');
     setPath('');
     setEntries([]);
+    setDrives([]);
     setParent(null);
   }, [open, selectedTarget?.key]);
 
@@ -307,8 +331,12 @@ export function AddRemoteProjectDialog({
       return;
     }
     setBusy(true);
+    const generation = requestSeqRef.current;
+    const isCurrent = () => generation === requestSeqRef.current && currentBrowseRef.current.open
+      && currentBrowseRef.current.adapter === adapter;
     try {
       const stat = await adapter.statPath(dir);
+      if (!isCurrent()) return;
       let finalPath = stat.resolvedPath;
       if (stat.kind === 'file') {
         toast.error(t('newChat.addRemoteProject.toast.pathIsFile', { path: finalPath }));
@@ -324,8 +352,9 @@ export function AddRemoteProjectDialog({
           confirmText: t('newChat.addRemoteProject.confirmCreate.ok'),
           cancelText: t('newChat.addRemoteProject.confirmCreate.cancel'),
         });
-        if (!ok) return;
+        if (!ok || !isCurrent()) return;
         const mk = await adapter.mkdirP(dir);
+        if (!isCurrent()) return;
         finalPath = mk.resolvedPath;
       }
       if (selectedTarget.kind === 'ssh') {
@@ -338,8 +367,9 @@ export function AddRemoteProjectDialog({
           path: finalPath,
         });
       }
-      onOpenChange(false);
+      if (isCurrent()) onOpenChange(false);
     } catch (err) {
+      if (!isCurrent()) return;
       toast.error(errorText ?? t(
         err instanceof SshModelSelectionError
           ? sshModelSelectionErrorKeys[err.reason]
@@ -615,6 +645,13 @@ export function AddRemoteProjectDialog({
                       </div>
                     </label>
 
+                    {drives.length > 1 ? <div className="flex shrink-0 flex-wrap gap-2" role="group" aria-label={t('newChat.addRemoteProject.path')}>
+                      {drives.map(drive => <Button key={drive.path} variant="secondary" size="sm"
+                        type="button" disabled={busy || loadingList} aria-pressed={drive.current}
+                        onClick={() => { setPath(drive.path); if (adapter) void refreshList(adapter, drive.path); }}>
+                        {drive.name}
+                      </Button>)}
+                    </div> : null}
                     {/* Entries list */}
                     <div
                       className="min-h-0 flex-1 overflow-y-auto rounded-lg border"

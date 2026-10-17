@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { cleanup, render as renderUI, screen } from '@testing-library/react';
 import { SystemCard } from '../SystemCard';
+import { CindyMakeCompleteCard } from '@/components/cindy-make/CindyMakeCompleteCard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -18,6 +19,9 @@ vi.mock('@/features/bots/BotCollaborationCard', () => ({
   BotSessionTaskCard: () => null,
   BotSessionTaskMessageTrace: () => null,
 }));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({
+  BotSessionTaskResultCard: () => null,
+}));
 vi.mock('@/features/learn/LearnStatusCard', () => ({ LearnStatusCard: () => null }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -27,11 +31,14 @@ const render = (ui: ReactElement) => renderUI(ui, { wrapper: MemoryRouter });
 afterEach(() => cleanup());
 
 describe('cindy-make-complete system card', () => {
+  it('hides completion cards in the message stream while Make is disabled', () => {
+    const view = render(<SystemCard cardType="cindy-make-complete" sessionId="make-task" data={{ changedFiles: 3 }} />);
+    expect(view.container.childElementCount).toBe(0);
+  });
+
   it('renders one completion summary with code-verified facts', () => {
     render(
-      <SystemCard
-        cardType="cindy-make-complete"
-        sessionId="make-task"
+      <CindyMakeCompleteCard
         data={{
           reportedAt: Date.UTC(2026, 8, 10, 12, 0),
           changedFiles: 3,
@@ -51,7 +58,7 @@ describe('cindy-make-complete system card', () => {
   });
 
   it('omits the meta line when no facts were collected', () => {
-    render(<SystemCard cardType="cindy-make-complete" sessionId="make-task" data={{}} />);
+    render(<CindyMakeCompleteCard data={{}} />);
     expect(screen.getByRole('region', { name: 'cindyMake.complete.title' })).toBeTruthy();
     expect(screen.queryByText(/changedFiles|commit/)).toBeNull();
   });

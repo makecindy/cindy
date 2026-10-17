@@ -157,6 +157,11 @@ export interface ThemeColors {
    */
   botUnread: string;
   /**
+   * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
+   * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
+   */
+  prMerged: string;
+  /**
    * 错误说明文案的黑白系前景 —— **刻意跟随 textPrimary,不是红色**(黑白反色设计里成段
    * 错误文案不点红,错误语义由文案与上下文承担;"error" 是历史命名)。勿用于按钮文字
    * (破坏性按钮用 destructive)、勿用于状态指示(用 statusError / statusRecording)。
@@ -462,6 +467,7 @@ export const lightColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ac3535',
@@ -552,6 +558,7 @@ export const darkColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ec9898',
@@ -840,5 +847,11 @@ export const navigationChrome = {
       scrim: 'rgba(0, 0, 0, 0.35)',
       selected: 'rgba(255, 255, 255, 0.18)',
     },
+  },
+  // Regular glass over arbitrary page content (in-app browser): a theme tint keeps the
+  // material in the app's polarity instead of adapting to the page behind it.
+  pageTint: {
+    light: '#FFFFFCB3',
+    dark: '#1E1E1EB3',
   },
 } as const;

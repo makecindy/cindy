@@ -49,7 +49,7 @@ const cache = new Map<string, DeviceProvidersPayload>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 export type DeviceProvidersEvent =
-  | { status: 'loading' }
+  | { status: 'loading'; retainDisplaySnapshot?: boolean }
   | ({ status: 'ready' } & DeviceProvidersPayload)
   | { status: 'error'; error: string; unsupported: boolean };
 const listeners = new Map<string, Set<(event: DeviceProvidersEvent) => void>>();
@@ -406,10 +406,16 @@ export function isDeviceProvidersGenerationCurrent(deviceId: string, generation:
   return (deviceGen.get(deviceId) ?? 0) === generation;
 }
 
-export function evictDeviceProviders(deviceId: string): number {
+export function evictDeviceProviders(
+  deviceId: string,
+  options?: { retainDisplaySnapshot?: boolean },
+): number {
   cache.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-  notifyDeviceProviders(deviceId, { status: 'loading' });
+  notifyDeviceProviders(deviceId, {
+    status: 'loading',
+    ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
+  });
   return deviceGen.get(deviceId)!;
 }

@@ -294,6 +294,78 @@ it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])('send
 });
 
 
+describe('imported Gemini native image capability', () => {
+  const id = 'gemini-4-argon';
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const imported = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{ id }] })!);
+  const provider = buildUserProvider({ id: 'google-image-import', name: 'Google', runtimes: {
+    pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: imported },
+  } }, { presets: [preset] });
+  it.each([undefined, true, false])('keeps imported Gemini image input consistent for supportsImageInput=%s', async supportsImageInput => {
+    expect(provider.models.pi![0].supportsImageInput).toBeUndefined();
+    expect(provider.models.pi![0].modalities).toBeUndefined();
+    // Compare the same imported model with no declaration and explicit on/off values.
+    const model = { ...provider.models.pi![0], supportsImageInput };
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;
+    const requests: Request[] = [];
+    let sent: { contents: Array<{ parts: Array<Record<string, unknown>> }> } | undefined;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init); requests.push(request);
+      expect(new URL(request.url).pathname).toBe(`/v1beta/models/${id}:streamGenerateContent`);
+      sent = await request.json() as typeof sent;
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+    });
+    try {
+      const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key',
+        fetchImpl: async () => { throw new Error('Google uses its native SDK transport'); } });
+      const response = await send('https://unused.invalid', { body: JSON.stringify({ model: id, input: [{ role: 'user', content: [
+        { type: 'input_text', text: 'describe the image' },
+        // Existing bridge fixture bytes; this checks serialization, not real recognition.
+        { type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=' },
+      ] }], max_output_tokens: 128, stream: true }) });
+      expect(await response.text()).toContain('response.completed');
+      expect(requests).toHaveLength(1);
+      const parts = sent!.contents[0].parts;
+      expect(parts.some(part => 'inlineData' in part)).toBe(supportsImageInput !== false);
+      if (supportsImageInput !== false) expect(parts).toContainEqual({ inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' } });
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+it('keeps explicitly text-only modalities closed despite the unknown-capability fallback', () => {
+  const upstream = 'https://unknown.example/v1';
+  const provider = buildUserProvider({ id: 'unknown', name: 'Unknown', runtimes: {
+    pi: { baseUrl: upstream, wireProtocol: 'google-generative-ai', models: [{ id: 'unknown-model', name: 'Unknown' }] },
+  } });
+  const model = { ...provider.models.pi![0], supportsImageInput: undefined, modalities: { input: ['text'], output: ['text'] } };
+  expect(invocationModelRecord(model, upstream, 'google-generative-ai')!.supportsImageInput).toBe(false);
+});
+
+it.each(['flag', 'modalities'])('prioritizes active catalog text-only %s over a native image-capable descriptor', declaration => {
+  const native = PROVIDER_MODEL_CATALOG.providers.google.find(row => row.id === 'gemini-2.5-flash')!;
+  expect(native.supportsImageInput).toBe(true);
+  const provider = buildUserProvider({ id: 'google-catalog-override', name: 'Google', runtimes: {
+    pi: { baseUrl: native.upstream, wireProtocol: 'google-generative-ai', models: [{ id: native.id, name: native.name }] },
+  } });
+  const model = { ...provider.models.pi![0],
+    supportsImageInput: declaration === 'flag' ? false : undefined,
+    modalities: declaration === 'modalities' ? { input: ['text'], output: ['text'] } : undefined,
+  };
+  expect(invocationModelRecord(model, native.upstream, 'google-generative-ai')!.supportsImageInput).toBe(false);
+});
+
+it('keeps an undeclared active catalog model closed when its native descriptor explicitly disables images', () => {
+  const native = PROVIDER_MODEL_CATALOG.providers.deepseek.find(row => row.supportsImageInput === false)!;
+  expect(native.supportsImageInput).toBe(false);
+  expect(native.execution.pi.api).toBe('openai-completions');
+  const provider = buildUserProvider({ id: 'deepseek-catalog-undeclared', name: 'DeepSeek', runtimes: {
+    pi: { baseUrl: native.upstream, wireProtocol: 'openai-chat', models: [{ id: native.id, name: native.name }] },
+  } });
+  const model = { ...provider.models.pi![0], supportsImageInput: undefined, modalities: undefined };
+  expect(invocationModelRecord(model, native.upstream, 'openai-completions')!.supportsImageInput).toBe(false);
+});
+
+
 it.each(['individual', 'business', 'enterprise'])('sends Copilot Responses editor headers to the %s host', async account => {
   const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
   let captured = false;

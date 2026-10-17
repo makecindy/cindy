@@ -109,7 +109,7 @@ describe('Bot canonical Session creation retry', () => {
 describe('伙伴创建兼容旧创建链接', () => {
   const router = readFileSync(resolve(__dirname, '..', '..', '..', 'router.tsx'), 'utf8');
   const home = readFileSync(resolve(__dirname, '..', 'BotsHomeView.tsx'), 'utf8');
-  const sidebar = readFileSync(resolve(__dirname, '..', 'BotsSidebar.tsx'), 'utf8');
+  const sidebar = readFileSync(resolve(__dirname, '..', 'TeammatesSection.tsx'), 'utf8');
 
   it('挂在 /bots/roster,且静态段排在 :botId 之前', () => {
     expect(router).toContain("{ path: 'roster', element: <BotRosterView /> }");
@@ -128,8 +128,8 @@ describe('伙伴创建兼容旧创建链接', () => {
 
   it('侧栏加号复用同一个创建弹窗入口', () => {
     expect(sidebar).not.toContain('?add=1');
-    expect(sidebar).toContain('<BotCreateMenu compact />');
-    expect(sidebar).toContain('<BotCreateMenu />');
+    // 伙伴段头的加号与空态入口都走同一个创建菜单。
+    expect(sidebar).toContain('<BotCreateMenu variant="header" />');
     expect(sidebar).toContain("<BotCreateMenu label={t('bots.add')} />");
   });
 });
@@ -166,7 +166,9 @@ describe('Bot task route recovery', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list(');
     expect(source).toContain('lastReadAtByBotId: { [botId]: lastReadAt }');
     expect(source).toContain('botMentions={gate.mentions}');
-    expect(source).toContain('botIdentity={identity ?? gate.identity}');
+    expect(source).toContain('botIdentity={chatIdentity ?? gate.identity}');
+    // The live identity is wrapped with canonicalChat so only the main private chat offers add-to-group.
+    expect(source).toContain('{ ...(identity ?? gateIdentity), canonicalChat }');
     expect(source).toContain('botUnreadBoundaryAt={gate.unreadBoundaryAt}');
   });
 

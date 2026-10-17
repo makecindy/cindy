@@ -13,6 +13,11 @@ const h = vi.hoisted(() => ({
   nativeMenu: true,
 }));
 
+vi.mock('expo-router', () => ({ Stack: { Toolbar: Object.assign(({ children }: any) => children, {
+  Button: (props: any) => el('button', { onClick: props.onPress }, props.accessibilityLabel),
+  Menu: ({ children }: any) => children,
+  MenuAction: (props: any) => el('button', { onClick: props.onPress, disabled: props.disabled }, props.children),
+}) } }));
 vi.mock('react-native', () => {
   const box = ({ children, testID, accessibilityLabel }: any) => el('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
   return {

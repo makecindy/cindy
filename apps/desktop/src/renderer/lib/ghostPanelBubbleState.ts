@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { GHOST_PANEL_KIND_PREFIX, type InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 
 const STORAGE_KEY = 'xdt:ghostPanelBubble:v1';
 
@@ -143,12 +144,12 @@ export function setGhostPanelBubblePosition(ghostId: string, x: number, y: numbe
  * 卸载删条目;失去气泡资格(停用/无 panel/tab 形态/身份卡关按钮)强制还原。
  */
 export function reconcileGhostPanelBubbles(
-  ghosts: readonly Pick<InstalledGhost, 'manifest' | 'enabled'>[],
+  ghosts: readonly Pick<InstalledGhost, 'manifest' | 'enabled' | 'namespace'>[],
 ): void {
   const cur = ensureLoaded();
   const ids = Object.keys(cur);
   if (ids.length === 0) return;
-  const byId = new Map(ghosts.map((g) => [g.manifest.id, g]));
+  const byId = new Map(ghosts.map((g) => [installedGhostStoragePart(g), g]));
   let changed = false;
   const next: GhostPanelBubbleMap = { ...cur };
   for (const id of ids) {

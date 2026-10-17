@@ -66,9 +66,8 @@ async function moveSessionProject(
       if (!target) throwIpcError('NOT_FOUND', 'Task does not exist in this account.');
       if (target.remoteHostId)
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote tasks cannot be moved.');
-      // The agent's conversation record lives on that computer, keyed by the project path.
-      if (target.agentDeviceId)
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'Tasks whose agent runs on another computer cannot be moved.');
+      // A task whose agent runs on another computer may move: that computer keys the agent's
+      // workspace (and its conversation record) by task id, not by this computer's project path.
       if (target.status !== 'active')
         throwIpcError('PRECONDITION_FAILED', 'Only active tasks can be moved.');
       // Review immutability is also enforced by updateSessionInDb for all callers.

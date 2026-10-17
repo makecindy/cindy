@@ -10,6 +10,13 @@ vi.mock('../../../localDb/sessionOpening', () => ({ openSession }));
 import { openChannelSession } from '../openChannelSession';
 
 describe('openChannelSession', () => {
+  it('passes shared execution location into new-session admission', async () => {
+    openSession.mockImplementationOnce(async (input, commit) => ({ row: input.body, value: await commit(input.body, () => undefined) }));
+    const route = { agentDeviceId: 'share:owner', agentKind: 'codex' as const, model: 'm', providerId: 'p', permissionMode: 'auto' as const, workingDir: '/w' };
+    await openChannelSession('shared', route, async () => 'created');
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({ agentDeviceId: 'share:owner', providerId: 'p' }) }), expect.any(Function));
+    openSession.mockClear();
+  });
   it('把渠道路由送进 openSession(agentKind 用库值), 回调拿到准入后的路由', async () => {
     openSession.mockImplementationOnce(async (input, commit) => ({
       row: {

@@ -1,3 +1,4 @@
+import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
@@ -5,13 +6,22 @@ import type { RemoteActionInvokeResponse } from '@cindy/device-link';
 import type { BotGroupAttachment, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
-import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
+import { forgetRemoteResource, markRemoteResourceRead } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
 
-function useChatClient() {
+// Shared only within the current authenticated account generation and realm.
+let listOwner = '';
+let accountList = createConversationListState();
+function listFor(owner: string) {
+  if (listOwner !== owner) { listOwner = owner; accountList = createConversationListState(); }
+  return accountList;
+}
+
+/** The account's Chat Server client, fenced to the current account, realm and mount. */
+export function useChatClient() {
   const auth = useAuth();
   const owner = `${auth.user?.id ?? ''}:${auth.accountGeneration}:${getActiveMobileSessionRealm()}`;
   const active = useRef(owner); active.current = owner;
@@ -36,13 +46,14 @@ function useChatClient() {
         .finally(() => { discovering = undefined; });
       return discovering;
     };
-    const request: ChatRequest = async <T,>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown) => {
+    const request: ChatRequest = async <T,>(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown, actorId?: string) => {
       check();
       const url = await endpoint(); check();
-      const result = await deps.current.apiFetch<T>(`/v1${path}`, { baseUrl: url, method, cache: 'no-store', ...(body !== undefined ? { body } : {}), assertCurrent: check });
+      const result = await deps.current.apiFetch<T>(`/v1${path}`, { baseUrl: url, method, cache: 'no-store', ...(body !== undefined ? { body } : {}),
+        ...(actorId ? { headers: { 'X-Chat-Actor': actorId } } : {}), assertCurrent: check });
       check(); return result;
     };
-    const client = createChatServerClient(request);
+    const client = createChatServerClient(request, listFor(owner));
     return { owner, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client,
       token: async () => { check(); await client.me(); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
@@ -53,12 +64,15 @@ export function useChatServerRoster(enabled: boolean) {
   const api = useChatClient();
   const known = useRef({ owner: api.owner, ids: new Set<string>() });
   if (known.current.owner !== api.owner) known.current = { owner: api.owner, ids: new Set() };
+  // A remounted roster must suppress already-known hidden rooms even if HTTP is offline.
+  for (const id of api.client.personalList.ids()) known.current.ids.add(id);
   const snapshots = useRef(new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot }>());
   const [state, setState] = useState({ owner: api.owner, rooms: [] as ReturnType<typeof chatRoomRow>[], loading: true, refreshing: false, error: null as string | null });
   const read = useRemoteSyncCoordinator(async run => {
     if (!api.enabled || !enabled) return;
     setState(old => ({ ...old, refreshing: run.reasons.includes('visible') }));
     try {
+      await api.client.syncListState(run.reasons.some(reason => ['focus', 'visible', 'connected'].includes(reason)));
       const [rooms, self] = await Promise.all([api.client.list(), api.client.me()]);
       const rows: ReturnType<typeof chatRoomRow>[] = [];
       const fresh = new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot }>();
@@ -89,10 +103,11 @@ export function useChatServerRoster(enabled: boolean) {
         if (run.isStale() || !api.current()) return;
         snapshots.current = fresh;
         for (const room of rooms) known.current.ids.add(room.id);
-        setState({ owner: api.owner, rooms: rows, loading: false, refreshing: false, error: partial ? 'CHAT_LIST_FAILED' : null });
+        for (const id of api.client.personalList.ids()) known.current.ids.add(id);
+        setState({ owner: api.owner, rooms: rows.filter(row => !api.client.personalList.hidden(row.item.ref.id)), loading: false, refreshing: false, error: partial ? 'CHAT_LIST_FAILED' : null });
       }
     } catch (error) {
-      if (!run.isStale() && api.current()) setState(old => ({ owner: api.owner, rooms: old.owner === api.owner && !chatAccessLost(error) ? old.rooms : [], loading: false, refreshing: false, error: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_LIST_FAILED' }));
+      if (!run.isStale() && api.current()) setState(old => ({ owner: api.owner, rooms: old.owner === api.owner && !chatAccessLost(error) ? old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) : [], loading: false, refreshing: false, error: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_LIST_FAILED' }));
     }
   }, api.owner);
   const refresh = useCallback(() => read({ reason: 'visible' }), [read]);
@@ -123,13 +138,18 @@ export function useChatServerRoster(enabled: boolean) {
           }
           await read({ reason: 'connected' });
           return { scope: `actor:${actorId}`, cursor };
-        }, changed: () => { void read({ reason: 'changed' }); }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; } });
+        }, reset: () => api.client.resyncListState(), changed: changes => { for (const change of changes ?? []) if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data); void read({ reason: 'changed' }); }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; } });
       }).catch(() => {}); // HTTP read presents endpoint errors.
     };
     start();
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(poll); } });
     return () => { stop?.(); clearInterval(poll); foreground.remove(); };
   }, [api, enabled, read]));
+  useEffect(() => api.client.personalList.subscribe(() => {
+    if (!api.current()) return;
+    for (const id of api.client.personalList.ids()) known.current.ids.add(id);
+    setState(old => old.owner !== api.owner ? old : { ...old, rooms: old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) });
+  }), [api]);
   const own = state.owner === api.owner;
   return { items: own ? state.rooms : [], serverIds: known.current.ids, loading: api.enabled && (!own || state.loading),
     refreshing: own && state.refreshing, error: own ? state.error : null, refresh };
@@ -141,7 +161,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
   const identity = `${api.owner}:${groupId}`;
   const active = useRef(identity); active.current = identity;
   const [state, setState] = useState<{ identity: string; value: BotGroupChatState; online: boolean; loadingOlder: boolean }>({ identity, value: { kind: 'loading' }, online: true, loadingOlder: false });
-  const page = useRef<{ identity: string; page: ChatPage; self: string } | null>(null);
+  const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(null);
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const olderPending = useRef(false);
@@ -150,19 +170,24 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     accessGeneration.current++; freshRead.current = false; page.current = null;
     setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
   };
+  const view = (next: ChatPage, self: string, actors: ChatActor[]) => ({ ...chatGroupView(next, self, actors), ...api.client.lifecycleCapabilities() });
   const request = useRemoteSyncCoordinator(async run => {
     if (!enabled || !api.enabled) return;
     const generation = accessGeneration.current;
     freshRead.current = false;
     try {
+      await api.client.syncListState(run.reasons.some(reason => ['focus', 'visible', 'connected'].includes(reason)));
       const previous = page.current?.identity === identity ? page.current.page : null;
       const oldest = previous?.messages.reduce<string | undefined>((oldest, message) => !oldest || BigInt(message.seq) < BigInt(oldest) ? message.seq : oldest, undefined);
-      const [next, self] = await Promise.all([api.client.load(groupId, oldest), api.client.me()]);
+      // The account's actors say which computer runs each owned companion (live task cards);
+      // the group still reads when that list is unavailable.
+      const [next, self, actors] = await Promise.all([api.client.load(groupId, oldest), api.client.me(), api.client.actors().catch((): ChatActor[] => [])]);
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
+      if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }
       freshRead.current = true;
-      page.current = { identity, page: next, self };
-      setState({ identity, value: { kind: 'ready', group: chatGroupView(next, self) }, online: true, loadingOlder: false });
+      page.current = { identity, page: next, self, actors };
+      setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, loadingOlder: false });
     } catch (error) {
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       if (chatAccessLost(error)) loseAccess();
@@ -187,12 +212,17 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
       void api.endpoint().then(baseUrl => {
         if (cancelled || !api.current() || active.current !== identity) return;
         disposeSocket = subscribeChatServer({ baseUrl, token: api.token, current: () => api.current() && active.current === identity,
-        socket: url => new WebSocket(url), ready: async () => {
+        socket: url => new WebSocket(url), ready: async actorId => {
+          const head = api.client.lifecycleCapabilities().supportsListRemoval ? await api.request<{ head: string }>(`/changes?scope=actor:${actorId}&after=0&limit=1`).then(value => chatCursor(value.head)).catch(error => {
+            if ((error as { code?: string }).code !== 'RESET_REQUIRED') throw error;
+            return '0';
+          }) : null;
           await request({ reason: 'connected' });
           const latest = page.current;
           if (!freshRead.current || !latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
-          return { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor };
-        }, changed: reload, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; } });
+          return head === null ? { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }
+            : [{ scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }, { scope: `actor:${actorId}`, cursor: head }];
+        }, reset: () => api.client.resyncListState(), changed: changes => { for (const change of changes ?? []) if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data); reload(); }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; } });
       }).catch(() => {}); // Read presents endpoint errors.
     };
     start();
@@ -208,27 +238,48 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
       const next = await api.client.older(groupId, previous.page);
       if (!valid() || page.current !== previous) return;
       page.current = { ...previous, page: next };
-      setState({ identity, value: { kind: 'ready', group: chatGroupView(next, previous.self) }, online: true, loadingOlder: false });
+      setState({ identity, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false });
     } catch (error) {
       if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
       throw error;
     } finally { olderPending.current = false; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
   };
   const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (action === 'dissolve' || action === 'leave' || action === 'hide') {
+      const operationId = (await import('expo-crypto')).randomUUID();
+      if (action === 'hide') {
+        await api.client.hide(groupId, operationId);
+        if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, loadingOlder: false });
+          await forgetRemoteResource(api.userId, groupId); }
+      } else if (action === 'leave') {
+        try { await api.client.leave(groupId, operationId); } catch (error) { if (valid()) reload(); throw error; }
+        if (valid()) loseAccess();
+      } else {
+        try { await api.client.dissolve(groupId, input?.expectedRevision, operationId); } finally { if (valid()) reload(); }
+      }
+      return { effects: [] };
+    }
     if (action !== 'send' || !input || input.division || (Array.isArray(input.attachments) && input.attachments.length)) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     try {
       const mentions = input.mentions as { all: boolean; botIds: string[] };
-      const recipients = mentions.all
-        ? (await api.client.members(groupId)).filter(member => member.state === 'joined').map(member => member.id)
-        : mentions.botIds;
+      const joined = mentions.all || mentions.botIds.length
+        ? (await api.client.members(groupId)).filter(member => member.state === 'joined') : [];
       if (!valid() || page.current?.identity !== identity) throw new Error('OWNER_CHANGED');
+      // Validate every explicit pick before Everyone expansion; never discard a
+      // departed target or submit only the remaining part of the intended list.
+      if (mentions.botIds.some(id => !joined.some(member => member.id === id))) throw new Error('MENTION_UNAVAILABLE');
+      const recipients = mentions.all
+        ? joined.map(member => member.id)
+        : mentions.botIds;
       await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text),
         mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });
       if (valid()) reload();
       return { effects: [] };
     } catch (error) {
+      // An unavailable mention is a draft correction, not a connectivity failure.
+      if (error instanceof Error && error.message === 'MENTION_UNAVAILABLE') throw error;
       if (valid()) {
         freshRead.current = false;
         if (chatAccessLost(error)) loseAccess();
@@ -250,6 +301,12 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
       throw error;
     }
   };
+  useEffect(() => api.client.personalList.subscribe(() => {
+    if (valid() && api.client.personalList.hidden(groupId)) {
+      loseAccess();
+      void forgetRemoteResource(api.userId, groupId);
+    }
+  }), [api, identity, groupId]);
   const markRead = useCallback(async (messageIds: readonly string[]) => {
     const latest = page.current;
     if (!api.current() || active.current !== identity || !latest || latest.identity !== identity) return;
@@ -258,6 +315,14 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     const messages = latest.page.messages.filter(message => seen.has(message.id));
     await markRemoteResourceRead(api.userId, '', groupId, chatLastReplyAt(messages, latest.self), chatLastReplySequence(messages, latest.self));
   }, [api, groupId, identity]);
+  const acceptListState = useCallback(async (value: unknown) => {
+    if (!api.current()) throw new Error('OWNER_CHANGED');
+    if ((value as { conversationId?: unknown } | null)?.conversationId !== groupId) throw new Error('INVALID_CHAT_LIST_STATE');
+    api.client.personalList.merge(value);
+    if (api.current() && api.client.personalList.hidden(groupId)) await forgetRemoteResource(api.userId, groupId);
+  }, [api, groupId]);
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
-    online: state.identity === identity && state.online, reload, act, loadOlder, loadingOlder: state.loadingOlder, media, markRead };
+    listHidden: api.current() && api.client.personalList.hidden(groupId),
+    online: state.identity === identity && state.online, reload, act,
+    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead };
 }

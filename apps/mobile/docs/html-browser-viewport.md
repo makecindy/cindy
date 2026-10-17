@@ -5,8 +5,22 @@ browser controls. The host sets WebKit's public `obscuredContentInsets`, which
 adjusts the layout viewport and fixed/sticky positioning without shrinking the
 native view. Matching scroll-view `contentInset` values let ordinary document
 content scroll clear of both toolbars at the start and end. The obscured prop
-alone does not supply this scroll range. No page styles or browser APIs are overridden. The keyboard is
+alone does not supply this scroll range. No browser APIs are overridden. The keyboard is
 handled by WebKit; it is not added to the browser-chrome prop a second time.
+
+## Appearance
+
+The WebView's native backing follows the app theme, so the strips under the
+controls and the area before the first paint match Light or Dark mode. The
+WebView stays hidden until its first document finishes loading. The native
+backing would otherwise become the canvas of a page that sets no background.
+Like Safari, the viewport script therefore paints `body` with the CSS `Canvas`
+system color, but only when neither `html` nor `body` has a background color or image (an inline `transparent` still counts as none). With `html` transparent, the
+`body` color covers the whole canvas and follows `body`'s `color-scheme`. Unstyled
+pages stay light. Pages that declare `color-scheme` follow the system appearance.
+Pages that set their own background are left unchanged. The floating controls tint their glass
+with the app theme. Untinted glass adapts to the page behind it and would
+turn light under light icons in Dark mode.
 
 Android and older iOS retain a bounded WebView fallback. Optional advisory
 geometry remains available without a page-to-native message handler.

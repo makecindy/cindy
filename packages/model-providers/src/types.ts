@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from './modelDisplayPricing.js';
 import type { ModelMetadata } from "./modelMetadataLayers.js";
 /**
  * @cindy/model-providers — 类型定义。
@@ -199,6 +200,10 @@ export interface RoutingDescriptor {
    * 缺省按 false 处理；它与模型图片输入能力独立，也不得从模型名推断。
    */
   supportsImageGeneration?: boolean;
+  /** Explicit standalone image API; independent of chat wire and Codex hosted tools. */
+  imageApi?: "openai-images";
+  /** Explicit standalone async video API, independent of the chat protocol. */
+  videoApi?: "xai-videos";
   /** Enterprise BYOK image model binding used by the Codex Images route. */
   imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
@@ -301,6 +306,11 @@ export interface ModelCost {
  * 跨 provider(如 gpt-5.5 同时由 openai 与 xd 提供)则必须元数据一致(见 catalog.ts 校验)。
  */
 export interface CatalogModel {
+  /** Same-provider display-only pricing; never inherited through public model metadata. */
+  displayPricing?: ModelDisplayPricing;
+  currency?: 'USD' | 'CNY';
+  costDiscount?: number;
+
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
@@ -309,7 +319,7 @@ export interface CatalogModel {
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
   /** Canonical model API from the accepted Registry; null explicitly means unverified. */
-  nativeApi?: PiModelApi | null;
+  nativeApi?: PiModelApi | import('./modelAccessBean.js').ModelNativeApi | null;
   /** 与 maker-core 现有 model id 一致（如 'claude-opus-4-8' / 'gpt-5.5' / 'codex/gpt-5.5'）。 */
   id: string;
   /** Server entitlement state. Paid-locked models remain present for UI but are never routable. */
@@ -509,6 +519,10 @@ export interface ProviderMediaModel extends Pick<
   discoveredMetadata?: ModelMetadata;
   /** Local projection provenance; not part of the public Registry metadata. */
   sourceAgent?: AgentKind;
+  /** Same-provider display-only pricing; never inherited through public model metadata. */
+  displayPricing?: ModelDisplayPricing;
+  currency?: 'USD' | 'CNY';
+  costDiscount?: number;
   id: string;
   name: string;
   availability?: "available" | "requires_payment";
@@ -769,6 +783,9 @@ export interface CustomProviderRuntimeConfig {
   requestPath?: string;
   /** Codex Responses runtime 是否支持原生图片生成与编辑；缺省为 false。 */
   supportsImageGeneration?: boolean;
+  /** Opt-in to standalone OpenAI Images generation/edits on this runtime's connection. */
+  imageApi?: "openai-images";
+  videoApi?: "xai-videos";
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**

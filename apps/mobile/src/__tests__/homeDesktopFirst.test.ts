@@ -1,13 +1,44 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import ts from 'typescript';
 import { i18n } from '@/i18n';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
-import { resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
-import { describeRemoteError } from '@/device-link/remoteStatus';
+import { resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
+import { connectionHealthCopy, describeRemoteError } from '@/device-link/remoteStatus';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
+}
+
+// Exercise Home's actual feedback expressions: literal-source assertions missed
+// phone-wide outages and broke when the same shared policy gained that input.
+const homeSource = ts.createSourceFile('HomeSurface.tsx', readSource('src/session/HomeSurface.tsx'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const feedbackExpressions = new Map<string, string>();
+const feedbackNames = new Set(['healthCopy', 'showConnectionRow', 'showHomeSyncAction', 'showHomeRecoveryProgress', 'connectionTitle']);
+function collectFeedback(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && feedbackNames.has(node.name.getText(homeSource)) && node.initializer) {
+    feedbackExpressions.set(node.name.getText(homeSource), ts.transpileModule(`const result = ${node.initializer.getText(homeSource)};`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText);
+  }
+  ts.forEachChild(node, collectFeedback);
+}
+collectFeedback(homeSource);
+function homeFeedback(overrides: Record<string, unknown>) {
+  const bindings: Record<string, unknown> = {
+    network: 'available', networkUnavailable: false, status: 'online',
+    selectedDeviceDisconnected: false, activeConnectionIssue: null,
+    homeDeviceRecovery: false, homeDeviceUnresponsive: false, connectionError: null,
+    resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, connectionHealthCopy,
+    t: (key: string) => i18n.t(key), homeConnectionTitle: () => 'online', ...overrides,
+  };
+  for (const name of feedbackNames) {
+    const expression = feedbackExpressions.get(name);
+    if (!expression) throw new Error(`Missing Home feedback: ${name}`);
+    bindings[name] = new Function(...Object.keys(bindings), `${expression}\nreturn result;`)(...Object.values(bindings));
+  }
+  return bindings;
 }
 
 describe('mobile Home connection feedback', () => {
@@ -25,10 +56,20 @@ describe('mobile Home connection feedback', () => {
     const source = readSource('src/session/HomeSurface.tsx');
     expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
     expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
-    expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
-    expect(source).toContain('const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility(');
     expect(source).toContain('deviceUnresponsive: homeDeviceUnresponsive,');
-    expect(source).toContain("homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')");
+    expect(homeFeedback({})).toMatchObject({ showConnectionRow: false, showHomeSyncAction: false });
+    expect(homeFeedback({ selectedDeviceDisconnected: true })).toMatchObject({
+      showConnectionRow: true, connectionTitle: i18n.t('deviceLink.cachedHistory.title'),
+    });
+    expect(homeFeedback({ homeDeviceRecovery: true, homeDeviceUnresponsive: true })).toMatchObject({
+      showConnectionRow: true, showHomeSyncAction: false, showHomeRecoveryProgress: true,
+      connectionTitle: i18n.t('deviceLink.deviceUnresponsiveTitle'),
+    });
+    expect(homeFeedback({ connectionError: 'failed' })).toMatchObject({ showConnectionRow: true, showHomeSyncAction: true });
+    expect(homeFeedback({ network: 'unavailable', networkUnavailable: true, connectionError: 'failed' })).toMatchObject({
+      showConnectionRow: true, showHomeSyncAction: false, showHomeRecoveryProgress: false,
+      connectionTitle: i18n.t('deviceLink.localNetwork.title'),
+    });
     expect(source).toContain("recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'");
     const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
     expect(hydrate.indexOf("updateDeviceConnectionState(device.deviceId, 'syncing')")).toBeLessThan(hydrate.indexOf('const promise = hydrateDeviceSessionsOnce('));
@@ -230,7 +271,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('</HomeChromeFrost>');
     expect(source).toContain('<HomeNativeStackHeader');
     expect(source).toContain('onProjectDragStart={displayedProjectOrder === \'custom\'');
-    expect(source).toContain('projectOrder={displayedProjectOrder}');
+    expect(source).toContain('projectOrder: displayedProjectOrder,');
     expect(source).toContain('resolveDisplayedProjectOrder(');
     expect(source).not.toContain('projectOrder={selectedDeviceId ? hostProjectOrder : projectOrder}');
     expect(source).toContain('<HomeGlassMenuPanel');
@@ -270,19 +311,23 @@ describe('mobile home desktop-first surface', () => {
     expect(chromeDrawer).toContain('GestureHandlerRootView');
     expect(chromeDrawer).not.toContain('remoteSettings');
     expect(source).toContain("guardedPush('/settings')");
-    expect(source).toContain('setChromeMenuCloseInstant(true)');
-    expect(source).not.toContain("pendingMenuActionRef.current = () => guardedPush('/settings')");
+    expect(source).not.toContain('setChromeMenuCloseInstant');
+    expect(source).toContain('onClosed={handleChromeMenuClosed}');
+    for (const route of ['/settings', '/devices/manage', '/plugins']) {
+      expect(source).not.toContain(`pendingMenuActionRef.current = () => guardedPush('${route}')`);
+      expect(source).toContain(`setChromeMenuOpen(false);\n          guardedPush('${route}');`);
+    }
+    const teammateHome = readSource('src/session/TeammateHomeScreen.tsx');
+    expect(teammateHome).toContain("onOpenSettings={() => openDrawerPage('/settings')}");
+    expect(teammateHome).toContain("onOpenAccounts={() => afterDrawer(() => setAccounts(true))}");
     const rootLayout = readSource('app/_layout.tsx');
-    expect(rootLayout).toContain('name="settings"');
-    expect(rootLayout).toContain("animation: 'slide_from_left'");
+    expect(rootLayout).not.toContain("animation: 'slide_from_left'");
     expect(source).toContain("label={t('devices.list.allConversations')}");
-    expect(source).toContain("label={t('devices.list.menu.groupByProject')}");
-    expect(source).toContain("label={t('devices.list.menu.groupDialogue')}");
+    // 显示菜单只有一份菜单模型(homeChromeMenus),原生下拉 / 自绘兜底都消费它,不再有平行的自绘面板。
+    expect(source).toContain('homeDisplayActionPatch(id, displayMenuState)');
+    expect(source).not.toContain('HomeDisplaySettingsModal');
     expect(source).not.toContain('testID="home.deviceMenu.remoteSettings"');
     expect(source).not.toContain('onOpenRemoteSettings');
-    expect(source).toContain('testID="home.deviceMenu.sort.priority"');
-    expect(source).toContain('testID="home.deviceMenu.projectOrder.custom"');
-    expect(source).toContain('testID="home.deviceMenu.status.archived"');
     // 注:首页分区构造逻辑(buildMixedHomeRows / buildGroupedHomeRows / buildHomeSections)
     // 已抽到 @/session/homeSections,并由 homeSections.test.ts 做行为测试,这里不再做源码字符串断言。
     expect(source).toContain('styles.sessionListRow');
@@ -415,7 +460,7 @@ describe('mobile home desktop-first surface', () => {
     expect((homeSource.match(/useRemoteHomeStatusVersion\(\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
     expect(homeSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(homeSource).toContain('useRemoteMessageVersion(normalizedSearchQuery.length > 0)');
-    expect(homeSource).toContain('useMinuteNow();');
+    expect(readSource('src/session/HomeSessionInfoMeta.tsx')).toContain('useMinuteNow();');
     expect(homeSource).toContain('<RadioTower');
     expect(homeSource).toContain('<UsersRound');
     expect(homeSource).not.toContain('<Puzzle');
@@ -516,9 +561,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'syncing');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'failed');");
     expect(source).toContain("updateDeviceConnectionState(device.deviceId, 'idle');");
-    expect(source).toContain(
-      'const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility(',
-    );
+    // Row visibility is exercised through Home's actual expressions above.
     expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
     expect(source).toContain('function DeviceMenuItem');
     expect(source).not.toContain('function DeviceConnectionSpinner');
@@ -574,11 +617,16 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
     // 标签色球紧跟标题(与桌面侧栏一致):标题与色球同在一组,标题只取文字宽度,
     // 不能再用 flex: 1 把色球挤到行尾贴着时间。
-    const titleCluster = sessionRowSource.slice(
-      sessionRowSource.indexOf('<View style={styles.sessionTitleCluster}>'),
-      sessionRowSource.indexOf('{sourceLabel ? ('),
-    );
-    expect(titleCluster).toMatch(/\{item\.title\}\s*<\/Text>\s*<TaskTagDots tags=\{item\.session\.tags\}/);
+    const titleClusterStart = sessionRowSource.indexOf('<View style={[styles.sessionTitleCluster, groupChevronVisible && styles.sessionTitleClusterGroupHit]}>');
+    expect(titleClusterStart).toBeGreaterThan(-1);
+    const titleCluster = sessionRowSource.slice(titleClusterStart, sessionRowSource.indexOf('{sourceLabel ? (', titleClusterStart));
+    expect(titleCluster).toMatch(/\{item\.title\}\s*<\/Text>\s*<TaskTagDots tags=\{item\.session\.tags\} surfaceColor=\{colors\.surface\} \/>\s*<\/View>/);
+    // 自动化组展开箭头在标题组之外、作为标题行的不收缩子项:标签色球不收缩,放在组内会被挤出
+    // 父容器边界导致 44×44 热区被截(#5909 review);热区靠自身尺寸,不靠 hitSlop。
+    const groupChevron = titleCluster.slice(titleCluster.indexOf('</View>'));
+    expect(groupChevron).toContain('testID={`${testID}.automationGroupChevron`}');
+    expect(groupChevron).toContain('style={styles.sessionGroupChevronCell}');
+    expect(groupChevron).not.toContain('hitSlop={');
     const listStyles = readSource('src/session/HomeListVisuals.tsx');
     const titleStyle = listStyles.slice(listStyles.indexOf('  sessionTitle: {'), listStyles.indexOf('},', listStyles.indexOf('  sessionTitle: {')));
     expect(titleStyle).toContain('flexShrink: 1');
@@ -588,14 +636,17 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
     expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
-    expect(sessionRowSource).toContain('const showPreviewLine = !!group || !!preview?.trim() || showSchedule || showPinned;');
+    expect(sessionRowSource).toContain('const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
     expect(sessionRowSource).not.toContain('numberOfLines={2}');
     // 相对时间下沉到独家订阅分钟心跳的叶子组件(行主体 memo 化后由它单独保鲜,风暴修复)
-    expect(sessionRowSource).toContain('<SessionRelativeTime lastActivityAt={item.lastActivityAt}');
-    expect(source).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
+    // 时间槽改由「任务信息」渲染,时间仍是其中独家订阅分钟心跳的叶子组件。
+    expect(sessionRowSource).toContain('<HomeSessionInfoMeta item={item} textStyle={styles.sessionTime} />');
+    const infoMeta = readSource('src/session/HomeSessionInfoMeta.tsx');
+    expect(infoMeta).toContain('<SessionRelativeTime lastActivityAt={item.lastActivityAt}');
+    expect(infoMeta).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
     expect(sessionRowSource).toContain('item.pendingInteractionCount');
     expect(sessionRowSource).toContain('item.scheduleInfo?.unreadCount');
     expect(sessionRowSource).toContain('item.session.pinnedAt');
@@ -636,7 +687,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
     expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
-    expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(\)/);
+    expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(preferenceOwnerRef\.current\)/);
     const preferenceHydration = source.slice(
       source.indexOf('// 冷启动恢复上次的首页视图偏好'),
       source.indexOf('// 卸载时取消所有延后中的 schedule-index hydration'),
@@ -713,7 +764,7 @@ describe('mobile home desktop-first surface', () => {
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
     expect(source).toContain('const { accountGeneration, deviceId: selfDeviceId, user } = auth;');
-    expect(source).toContain('return readDeviceList();');
+    expect(source).toContain('return readDeviceList({ fresh: true });');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');
     expect(source).toContain('syncInFlightRef.current = null;');
@@ -797,14 +848,16 @@ describe('mobile home desktop-first surface', () => {
 describe('home menu native header ownership', () => {
   it('hosts the Duo top-left menu inside the native bar instead of under its touch surface', () => {
     const home = readSource('src/session/HomeSurface.tsx');
-    const header = readSource('src/platform/chrome/HomeNativeStackHeader.tsx');
+    const header = readSource('src/platform/chrome/HomeStackHeader.tsx');
+    expect(readSource('src/platform/chrome/HomeNativeStackHeader.tsx')).toContain('<HomeStackHeader');
     expect(home).toContain("nativeHomeHeader && homeGeometry.barEdge !== 'none'");
     expect(home).toContain('keepMenuTopLeft={keepMenuTopLeft}');
     expect(home).not.toContain('{keepMenuTopLeft ? (');
     const leftToolbar = header.split('<Stack.Toolbar placement="left">')[1].split('</Stack.Toolbar>')[0];
     expect(leftToolbar).toContain('<Stack.Toolbar.View hidesSharedBackground>');
     expect(leftToolbar).toContain('onPress={onOpenMenu}');
-    expect(leftToolbar).toContain('testID="home.chromeMenu"');
+    expect(leftToolbar).toContain('testID={menuTestID}');
+    expect(readSource('src/platform/chrome/HomeNativeStackHeader.tsx')).toContain('menuTestID="home.chromeMenu"');
     // Ordinary system toolbar actions keep their native adaptation.
     expect(leftToolbar).toContain('<Stack.Toolbar.Button');
   });
@@ -838,4 +891,119 @@ describe('home menu presentation', () => {
     // 会丢;搜索动作和其它菜单动作一样延后到 onClosed 再执行。
     expect(home).toContain('pendingMenuActionRef.current = () => setSearchOpen(true);');
   });
+});
+
+// Guard: remote-and-mobile-adaptation lifecycle/ownership contract. HomeSurface
+// must coordinate freshness tokens, shared remote-store reseeds and schedule
+// event generations; reordered commits can clear a newer request or miss rows
+// while Home is covered. Unit planner/store behavior remains in homeListFreshness.
+describe('Home list sync wiring', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8').replace(/\r\n/g, '\n');
+
+  it('keeps the visible-device sync scope while Home is covered', () => {
+    const scope = source.slice(source.indexOf('const homeSyncDeviceIds = useMemo('), source.indexOf('const homeSyncDeviceIdSet'));
+    expect(scope).toContain('resolveHomeDeviceSyncIds(');
+    expect(scope).not.toContain('screenFocused');
+    // Devices that stop being visible/usable are still released and unsubscribed.
+    const reconcile = source.slice(source.indexOf('const reconcileHomeDeviceSyncScope'), source.indexOf('useEffect(() => () => {'));
+    expect(reconcile).toMatch(/for \(const deviceId of diff\.release\) \{[\s\S]*homeListFreshnessRef\.current\.invalidate\(deviceId\);[\s\S]*releaseHomeListOwner\(deviceId\);/);
+    expect(source).toContain("void unsubscribe(HOME_LIST_SUBSCRIPTION_OWNER, deviceId, ['sessions']).catch(() => undefined);");
+  });
+
+  it('records freshness only after a successful list pull and invalidates on failure', () => {
+    const hydrate = source.slice(source.indexOf('const hydrateDeviceSessionsOnce = useCallback('), source.indexOf('const hydrateDeviceSessions = useCallback('));
+    const capture = hydrate.indexOf('homeListFreshnessRef.current.capture(device.deviceId)');
+    const subscribe = hydrate.indexOf("await subscribe(HOME_LIST_SUBSCRIPTION_OWNER, device.deviceId, ['sessions']);");
+    const list = hydrate.indexOf("'local-db:sessions:list'");
+    const applied = hydrate.indexOf('remoteSessionStore.setDeviceSessions(');
+    const fresh = hydrate.indexOf('homeListFreshnessRef.current.markFresh(');
+    expect(capture).toBeGreaterThan(-1);
+    expect(capture).toBeLessThan(subscribe);
+    expect(subscribe).toBeLessThan(list);
+    expect(applied).toBeLessThan(fresh);
+    expect(hydrate.slice(hydrate.indexOf('} catch (err) {'))).toContain('homeListFreshnessRef.current.invalidate(device.deviceId);');
+  });
+
+  it('refills only stale devices on focus return and keeps the full sync for other triggers', () => {
+    const focus = source.slice(source.indexOf('const refillStaleHomeDevices = useCallback('), source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'));
+    expect(focus).toContain('screenFocusedRef.current = true;');
+    expect(focus).toContain('const plan = planHomeListFocusReturn({');
+    expect(focus).toMatch(/if \(plan\.kind === 'refill'\) \{\s*refillStaleHomeDevices\(plan\.deviceIds\);\s*if \(scheduleDirty\.size > 0\) refreshHomeScheduleIndexes\(scheduleDirty\);\s*return;\s*\}\s*refreshHomeScheduleIndexes\(\);\s*startSilentHomeSync\(\);/);
+    expect(focus).toContain("if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();");
+    expect(focus).toContain("if (nextState === 'active') startSilentHomeSync();");
+  });
+
+  it('keeps a full-reload request from every full-sync trigger until a loadHome started after it commits', () => {
+    // Invariant: any trigger needing a full sync (mount, foreground, reconnect, a full focus return,
+    // dependency changes) leaves a request that only a later-started, committed loadHome clears.
+    // A sync that fails, is skipped while covered or exits because Home blurred mid-flight keeps it,
+    // so a quick return cannot downgrade to a device-row refill and miss bound/unbound computers.
+    const silent = source.slice(source.indexOf('const startSilentHomeSync = useCallback(() => {'), source.indexOf('}, [deviceIdentityCacheReady, homeListCacheHydrated'));
+    expect(silent.indexOf('requestHomeFullReload();')).toBeGreaterThan(-1);
+    expect(silent.indexOf('requestHomeFullReload();')).toBeLessThan(silent.indexOf('if (!screenFocusedRef.current) return;'));
+    // Single funnel: no other call site sets the request, nothing but a commit or account reset clears it.
+    expect(source.match(/requestHomeFullReload\(\);/g)).toHaveLength(1);
+    expect(source.match(/homeFullReloadOnFocusRef\.current = null/g)).toHaveLength(2);
+    const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
+    const focusBody = focus.slice(0, focus.indexOf('}, [refillStaleHomeDevices'));
+    expect(focusBody).toContain('const forceFull = homeFullReloadOnFocusRef.current !== null;');
+    const load = source.slice(source.indexOf('const loadHome = useCallback('), source.indexOf('loadHomeRef.current = loadHome;'));
+    expect(load.indexOf('const fullReloadRequestAtStart = homeFullReloadOnFocusRef.current;'))
+      .toBeLessThan(load.indexOf('const rawTask = (async () => {'));
+    // Blurring after the device-list read exits before the commit, leaving the request in place.
+    expect(load.indexOf('if (!screenFocusedRef.current) return;')).toBeLessThan(load.indexOf('lastSyncedAtRef.current = now;'));
+    const commit = load.slice(load.indexOf('lastSyncedAtRef.current = now;'));
+    expect(commit).toContain('if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;');
+  });
+
+  it('refreshes automation badges on return only for devices that sent schedule events while away', () => {
+    const events = source.slice(source.indexOf('useEffect(() => remoteScheduleEventStore.subscribe('), source.indexOf('const refreshHomeScheduleIndexes = useCallback('));
+    expect(events).toMatch(/if \(!screenFocusedRef\.current\) \{\s*markHomeScheduleIndexDirty\(deviceId\);\s*continue;\s*\}\s*refreshDeviceScheduleIndex\(deviceId, sessionIds\);/);
+    // The old unconditional "refresh every device on focus" effect is gone.
+    expect(source).not.toContain('兜底刷新一次 scheduleIndex');
+    const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
+    expect(focus.indexOf('screenFocusedRef.current = true;')).toBeLessThan(focus.indexOf('refreshHomeScheduleIndexes('));
+    expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());');
+  });
+
+  it('keeps automation badge refreshes pending until one is applied', () => {
+    const refresh = source.slice(source.indexOf('const refreshDeviceScheduleIndex = useCallback('), source.indexOf('const hydrateDeviceSessionsOnce = useCallback('));
+    // Recorded before the focus gate, so a skipped refresh or a dropped in-flight result is refilled on return.
+    expect(refresh.indexOf('const pendingSeq = markHomeScheduleIndexDirty(deviceId);'))
+      .toBeLessThan(refresh.indexOf("if (!screenFocusedRef.current || AppState.currentState !== 'active') return;"));
+    const apply = refresh.slice(refresh.indexOf('setScheduleIndex((current) => replaceSessionScheduleIndexEntries('));
+    expect(apply).toMatch(/if \(homeScheduleIndexDirtyRef\.current\.get\(deviceId\) === pendingSeq\) \{\s*homeScheduleIndexDirtyRef\.current\.delete\(deviceId\);/);
+    const hydrate = source.slice(source.indexOf('const hydrateDeviceSessionsOnce = useCallback('), source.indexOf('const hydrateDeviceSessions = useCallback('));
+    expect(hydrate.indexOf('markHomeScheduleIndexDirty(device.deviceId);'))
+      .toBeLessThan(hydrate.indexOf('scheduleIndexDeferRegistryRef.current.schedule(device.deviceId'));
+    expect(hydrate).toContain('nextSessions.length >= LIST_LIMIT');
+    expect(hydrate).toContain('remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId)');
+  });
+
+  it('marks a device stale whenever its list asks for a reseed, even while Home is covered', () => {
+    const reseed = source.slice(source.indexOf('remoteSessionStore.registerReseedHandler(item.device.deviceId'));
+    expect(reseed.indexOf('homeListFreshnessRef.current.invalidate(item.device.deviceId);'))
+      .toBeLessThan(reseed.indexOf('void hydrateDeviceSessions(item.device, accountGeneration'));
+  });
+
+  it('clears freshness with the rest of the account-owned Home state', () => {
+    const reset = source.slice(source.indexOf('useLayoutEffect(() => {\n    syncInFlightRef.current = null;'), source.indexOf('}, [accountGeneration]);'));
+    expect(reset).toContain('homeListFreshnessRef.current.clear();');
+    expect(reset).toContain('homeFullReloadOnFocusRef.current = null;');
+    expect(reset).toContain('homeScheduleIndexDirtyRef.current.clear();');
+  });
+});
+
+
+// Guard: list projection and per-row usage subscriptions are one cross-file data contract.
+describe('Home usage subscription contract', () => {
+  const meta = readSource('src/session/HomeSessionInfoMeta.tsx');
+  const store = readSource('src/session/remoteSessionStore.ts');
+  it('reads token / cost per row because the Home projection strips usage fields', () => {
+    // Home 列表投影刻意去掉用量(避免用量推送重排分组),行上的 Token / 费用必须单独订阅。
+    expect(store).toContain('delete projected.totalTokenUsage;');
+    expect(meta).toContain("taskInfoFields.includes('tokens') || taskInfoFields.includes('cost')");
+    expect(meta.match(/useRemoteSessionUsage\(/g)?.length).toBe(2);
+  });
+
 });

@@ -20,6 +20,8 @@
  *      the active session (FP-3).
  *    - It has pending local plugin setup (`hasPendingPluginSetup`) while NOT
  *      being the active session.
+ *    - It has a pending input handoff (`hasPendingInputHandoff`, 代输入) while
+ *      NOT being the active session.
  *
  * Notifications are cleared when:
  *    - The user navigates to that session (clicks it) — done / awaiting only。
@@ -53,7 +55,10 @@ import {
   isSessionTerminalNotificationOwnedByScheduler,
   isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
-import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
+import {
+  noteSessionTurnStartedForAlerts,
+  refreshPendingAlerts,
+} from '@/hooks/usePendingAlertAttention';
 import {
   ensureAgentIslandActivitySubscribed,
   isSessionCompletionHeldByAgentIsland,
@@ -134,6 +139,9 @@ export function useSessionRunningStatus(
   // when pending states disappear and auto-clear notifications.
   const prevPendingRef = useRef(new Set<string>());
 
+  /** 本 hook 因 turn 以错误结束而点的红点(新一轮正常结束时据此收掉过期的那颗)。 */
+  const liveErrorMarkedRef = useRef(new Set<string>());
+
   /**
    * Pending done-notifications waiting for a debounce window to expire.
    * 场景:用户排了队列,turn A done → main 会几十毫秒后自动 spawn turn B。
@@ -169,10 +177,11 @@ export function useSessionRunningStatus(
         // hasSessionTerminalError 仍为 true 时不清(mivo 等 skipTurnReset 上升沿
         // 不拆横幅);派生账本另走 noteSessionTurnStartedForAlerts,只在仍认领
         // 错误尾行时重算,横幅已灭则差分熄灭红点。
-        if (
-          getSessionAttentionKind(sessionId) === 'error' &&
-          !makerChatStore.hasSessionTerminalError(sessionId)
-        ) {
+        if (getSessionAttentionKind(sessionId) !== 'error') {
+          // 本 hook 点的那颗已被处置(关横幅、重试等)：不再认领，之后别的来源点的红点不归它收。
+          liveErrorMarkedRef.current.delete(sessionId);
+        } else if (!makerChatStore.hasSessionTerminalError(sessionId)) {
+          liveErrorMarkedRef.current.delete(sessionId);
           clearSessionAttention(sessionId, { intent: 'explicit' });
         }
         noteSessionTurnStartedForAlerts(sessionId);
@@ -228,6 +237,7 @@ export function useSessionRunningStatus(
           // 横幅就在眼前时列表同样亮点(2026-07 统一决策)。不能沿用「活跃会话不亮」
           // 的 done 语义。清除只能来自用户处置横幅或 pending-alerts 派生收敛。
           addSessionAttention(sessionId, 'error');
+          liveErrorMarkedRef.current.add(sessionId);
           if (!notificationOwnedByScheduler) onSessionErrorRef.current?.(sessionId);
           continue;
         }
@@ -239,6 +249,19 @@ export function useSessionRunningStatus(
         // A recoverable interruption clears the terminal error while waiting to
         // retry. That idle gap is not completion, even if it lasts beyond debounce.
         if (makerChatStore.hasSessionRecoveryPending(sessionId)) continue;
+
+        // 这一轮正常结束、错误已不在，上一次失败的红点却还亮着：新一轮启动那一刻可能还读到旧错误
+        // (撞上限后自动换电脑、额度恢复后自动继续时尤其如此)，当时没收掉，之后就再没人收。本 hook
+        // 自己点的直接收；派生账本(错误尾行 / 中断)重算一次，仍有未处置的告警会重新点亮。
+        if (
+          getSessionAttentionKind(sessionId) === 'error' &&
+          !makerChatStore.hasSessionTerminalError(sessionId)
+        ) {
+          if (liveErrorMarkedRef.current.delete(sessionId)) {
+            clearSessionAttention(sessionId, { intent: 'explicit' });
+          }
+          void refreshPendingAlerts();
+        }
 
         // 正常 done:走 debounce。QUEUE_DEBOUNCE_MS 内若同 session 又变 running
         // (main 自动衔接下一条队列),上面的 "--- 1. Detect new turn starts ---"
@@ -283,7 +306,8 @@ export function useSessionRunningStatus(
             (cur.hasPendingAskUser ||
               cur.hasPendingPermission ||
               cur.hasPendingPlanReview ||
-              cur.hasPendingPluginSetup);
+              cur.hasPendingPluginSetup ||
+              cur.hasPendingInputHandoff === true);
           // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
           if (!hasTerminalError && (isSessionDoneSilenced(sessionId)
             || makerChatStore.wasLastStopQuietCompletion(sessionId))) return;
@@ -314,7 +338,8 @@ export function useSessionRunningStatus(
         info.hasPendingAskUser ||
         info.hasPendingPermission ||
         info.hasPendingPlanReview ||
-        info.hasPendingPluginSetup
+        info.hasPendingPluginSetup ||
+        info.hasPendingInputHandoff === true
       ) {
         currentPendingSet.add(id);
         const isActive = id === activeSessionId;

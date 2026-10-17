@@ -180,3 +180,63 @@ describe('live stream interruption wiring', () => {
     expect(unsubscribe).toContain('noteSessionLiveStreamsInterrupted(toSend);');
   });
 });
+
+// guard: Persistent data boundary: evicting a render cache must never delete the offline history.
+describe("mobileSessionMessageCache.test.ts call-site contracts", () => {
+it('does not treat an empty in-memory render snapshot as a cache deletion', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/remoteSessionStore.ts'), 'utf8');
+    expect(source).toContain('空内存可能只是 regular LRU 淘汰');
+    expect(source).toContain('if (messages.length === 0) return;');
+    expect(source).toContain("if (retentionForSession(sessionId) === 'schedule')");
+  });
+});
+
+// guard: remote-and-mobile-adaptation.md: stale session identity, loading cleanup, and retry generations cross the page/coordinator boundary.
+describe("remoteSyncTask.test.ts call-site contracts", () => {
+function readSessionScreenSource(): string {
+  return readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8').replace(/\r\n/g, '\n');
+}
+it('clears loading when a queued sync is blocked for a newly-created session', () => {
+    const source = readSessionScreenSource();
+    expect(source).toContain(
+      'if (shouldBlockSessionSync(sessionId)) {\n      if (!syncRun.isStale()) setLoading(false);\n      return;\n    }',
+    );
+  });
+
+it('resets loading when the reused screen switches sessions', () => {
+    const source = readSessionScreenSource();
+    expect(source).toContain(
+      'setRewindState({ kind: \'idle\' });\n    setMessageActionBusy(null);\n    setLoading(false);',
+    );
+  });
+
+it('uses the force-reopen callback for subscription and snapshot retries', () => {
+    const source = readSessionScreenSource();
+    expect(source).toContain(
+      'reopenLink: () => syncReopenCoordinator.reopenAfter(subscriptionAttemptVersion)',
+    );
+    expect(source).toContain(
+      'await syncReopenCoordinator.reopenAfter(failedAtVersion);',
+    );
+    expect(source).toContain(
+      'const syncReopenCoordinator = createRemoteSyncReopenCoordinator(',
+    );
+    expect(source).not.toContain(
+      'reopenLink: async () => {\n          await openLink(deviceId);\n        }',
+    );
+  });
+
+it('applies coordinator context and task changes after render commits', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/device-link/remoteSyncTask.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    expect(source).toContain(
+      'useLayoutEffect(() => {\n    taskRef.current = task;\n    coordinatorRef.current?.setContext(contextKey);\n  }, [contextKey, task]);',
+    );
+    expect(source).not.toContain(
+      '  taskRef.current = task;\n  const coordinatorRef =',
+    );
+    expect(source).not.toContain('coordinatorRef.current.setContext(contextKey);');
+  });
+});

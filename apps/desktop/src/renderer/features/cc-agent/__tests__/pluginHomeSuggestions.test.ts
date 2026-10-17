@@ -4,6 +4,8 @@ import {
   buildHomeTaskCatalog,
   nextHomeTaskBatch,
   pluginSuggestionCategory,
+  pluginSuggestionComposerText,
+  pluginSuggestionDisplayText,
   type HomeTaskBatch,
 } from '../pluginHomeSuggestions';
 
@@ -23,6 +25,19 @@ function random(seed: number) {
 }
 
 describe('host plugin recommendation selection', () => {
+  it('keeps same-name instances as separate recommendations', () => {
+    const snapshot = {
+      ...empty,
+      sources: [
+        { ghostId: 'helper', name: 'Root', enabled: true, items: [task] },
+        { ghostId: '_ns__acme__helper', name: 'Org', enabled: true, items: [task] },
+      ],
+    };
+    const catalog = buildHomeTaskCatalog(snapshot, 'en', t).filter((entry) => entry.pluginId?.includes('helper'));
+    expect(catalog.map((entry) => entry.id)).toEqual([
+      'plugin:helper:one', 'plugin:_ns__acme__helper:one',
+    ]);
+  });
   it('includes curated installation tasks and respects an explicit empty author catalog', () => {
     expect(buildHomeTaskCatalog(empty, 'en', t).filter((x) => x.needsInstall)).toHaveLength(3);
     const snapshot = {
@@ -115,5 +130,32 @@ describe('host plugin recommendation selection', () => {
       rng,
     );
     expect(next.items.every((x) => !x.pluginId)).toBe(true);
+  });
+});
+
+describe('pluginSuggestionDisplayText', () => {
+  const t = (key: string) => key;
+  const labels = { team: '团队共享' };
+  const plugin = (namespace?: string | null) => ({
+    manifest: { id: 'sites', name: 'Sites', command: 'draw' },
+    ...(namespace !== undefined ? { namespace } : {}),
+  });
+
+  it('hides a same-name qualifier like the composer pill and keeps it in the inserted text', () => {
+    const org = plugin('acme');
+    const root = plugin(null);
+    const roster = [org, root];
+    expect(pluginSuggestionComposerText('go', org, t, roster)).toBe('$draw/acme go');
+    expect(pluginSuggestionDisplayText('go', org, t, roster, labels, false)).toBe('$draw go');
+    expect(pluginSuggestionDisplayText('go', org, t, roster, labels, true)).toBe('$draw 团队共享 go');
+    expect(pluginSuggestionDisplayText('go', root, t, roster, labels, true)).toBe('$draw go');
+  });
+
+  it('keeps unique commands bare and shows the qualifier when a sibling is not yet identifiable', () => {
+    const org = plugin('acme');
+    expect(pluginSuggestionDisplayText('go', org, t, [org], labels, true)).toBe('$draw go');
+    const root = plugin(null);
+    const legacy = plugin();
+    expect(pluginSuggestionDisplayText('go', root, t, [root, legacy], labels, true)).toBe('$draw/@root go');
   });
 });

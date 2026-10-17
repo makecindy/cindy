@@ -45,6 +45,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -142,6 +143,7 @@ import {
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
+  buildClaudeDisallowedTools,
   buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
   buildClaudeRemoteOrcaCallerGuards,
@@ -220,8 +222,10 @@ import {
 import {
   DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
   DEVICE_HOSTED_EXEC_MCP_SERVER,
+  DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
   deviceHostedBuiltinToolName,
   deviceHostedClaudeNote,
+  deviceHostedGuestAgentDenial,
   deviceHostedGuestClaudeMdExcludes,
   deviceHostedMcpUrl,
   deviceHostedSubagentAllows,
@@ -1208,7 +1212,9 @@ export class ClaudeCodeAgent extends BaseAgent {
    * 按 name 去重), 二者共享 ~/.claude/{...} 扫盘事实, 但消费者不同。
    */
   async listCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
-    const result = await scanClaudeCustomizations(opts);
+    const result = await (this.deps.scanLocalCustomizations
+      ? this.deps.scanLocalCustomizations('claude-code', opts)
+      : scanClaudeCustomizations(opts));
     if (!opts.kinds || opts.kinds.includes('skill')) {
       result.items.push(...(await this.deps.getManagedSkills?.() ?? []).filter((skill) => skill.path).map((skill) => ({
         engine: 'claude-code' as const, kind: 'skill', scope: 'user', name: skill.name,
@@ -1663,6 +1669,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       ? `${DEVICE_HOSTED_GUEST_ROUTE_HEADER}: ${guestProvider.routeToken}`
       : undefined;
     if (guestProvider) env.ANTHROPIC_SMALL_FAST_MODEL = sdkModel;
+    // Input handoff askpass for this owner's own local tasks only.
+    if (!opts.remoteHostId && !hosted && !reviewMode && opts.sessionId) {
+      Object.assign(env, this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId }));
+    }
     if (guestRouteHeader) {
       env.ANTHROPIC_CUSTOM_HEADERS = env.ANTHROPIC_CUSTOM_HEADERS
         ? `${env.ANTHROPIC_CUSTOM_HEADERS}\n${guestRouteHeader}`
@@ -1810,6 +1820,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       : this.deps.claudeAllowedTools?.length
         ? [...this.deps.claudeAllowedTools]
         : undefined;
+    // 与 Cindy 重复且结果在 Cindy 里看不到的 Claude 自带工具(host 路由表决定),
+    // 加上设备托管时交给 cindy_exec 顶替的本机工具。启动时快照, 整条会话不变。
+    const claudeDisallowedTools = [...new Set([
+      ...(hosted ? DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS : []),
+      ...buildClaudeDisallowedTools(reviewMode ? undefined : this.deps.capabilityRouting),
+    ])];
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
      * canUseTool 用它把 `mcp__<server>__<tool>` 归属到唯一 server; 空集合时
@@ -2021,6 +2037,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (hosted) {
         if (input.hook_event_name === 'PreToolUse') {
           const pre = input as PreToolUseHookInput & { agent_id?: string; agent_type?: string };
+          // 受邀者：子代理不能用隔离选项(在本机建 worktree，或用本机用户的 claude.ai 账号开云端任务)。
+          const guestDenial = hosted.guest ? deviceHostedGuestAgentDenial(pre.tool_name, pre.tool_input) : null;
+          if (guestDenial) {
+            return {
+              continue: true,
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse' as const,
+                permissionDecision: 'deny' as const,
+                permissionDecisionReason: guestDenial,
+              },
+            };
+          }
           const builtin = deviceHostedBuiltinToolName(pre.tool_name);
           // 参数化规则(Bash(git diff:*) 之类)要按本次命令判范围，不能当成整个工具放行。
           const toolInput = pre.tool_input as Record<string, unknown> | undefined;
@@ -2869,6 +2897,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 受邀者(另一个账号)的托管会话：不执行任何设置与插件里的 hooks / 状态栏命令，
         // 不加载会话目录之外(属于本机用户)的 CLAUDE.md 与规则。
         settings.disableAllHooks = true;
+        // 本机用户 claude.ai 账号里的连接器、Remote Control，以及技能与命令里的内联 shell
+        // (会在本机执行)一律关闭。
+        settings.disableClaudeAiConnectors = true;
+        settings.disableRemoteControl = true;
+        settings.disableSkillShellExecution = true;
         const excludes = deviceHostedGuestClaudeMdExcludes(hosted);
         if (excludes.length > 0) settings.claudeMdExcludes = [...(settings.claudeMdExcludes ?? []), ...excludes];
         // 路由令牌请求头在最高优先级的设置层再写一次：会话中途出现的项目设置不能把它改掉。
@@ -3053,9 +3086,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         // keep exact repetition/rotation guards, not category-only retries.
         contractConsecutiveLimit: Number.POSITIVE_INFINITY,
       }), {
-        // 供应商分享受邀者不复核：复核走本机用户自己的辅助模型，会把受邀者的工具内容发给分享之外的
-        // 供应商。疑似循环按缺省直接中断。
-        reviewer: hosted?.guest ? undefined : this.deps.toolLoopReviewer,
+        // 供应商分享受邀者同样复核：与本机自己的任务一样走本机(分享者)的辅助模型链
+        // (2026-10-13 用户裁决)。
+        reviewer: this.deps.toolLoopReviewer,
         reviewBudget: toolLoopReviewBudget,
         context: () => ({
           sessionId: sid,
@@ -3327,6 +3360,34 @@ export class ClaudeCodeAgent extends BaseAgent {
     /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
     let upstreamResponseIdleSliceStartedAt = 0;
     const pendingToolIds: Set<string> = new Set();
+    async function withRemoteApprovalIdleGuard(
+      rawParams: unknown,
+      approve: () => Promise<unknown>,
+    ): Promise<unknown> {
+      // SSH daemon canUseTool bypasses the local callback. Its requestId is the
+      // SDK toolUseID: executable input is available even before full assistant.
+      const toolUseId = (rawParams as { requestId?: unknown } | null)?.requestId;
+      const generation = turnState.generation;
+      const tracked = !closed && turnInFlight && typeof toolUseId === 'string' && toolUseId.length > 0;
+      if (tracked) {
+        pendingToolIds.add(toolUseId);
+        clearUpstreamResponseIdle();
+      }
+      let awaitingToolResult = false;
+      try {
+        const result = await approve();
+        const decision = result as { kind?: string; behavior?: string } | null;
+        awaitingToolResult = decision?.behavior === 'allow' || decision?.kind === 'ask_user_question';
+        return result;
+      } finally {
+        // Allowed tools stay protected until tool_result. Denial / failure may
+        // never produce one, so resume idle timing. Never re-add a cleared id or
+        // let an old approval remove/reset the next turn's pending tools/budget.
+        if (!awaitingToolResult && tracked && turnState.generation === generation && pendingToolIds.delete(toolUseId)) {
+          armUpstreamResponseIdle();
+        }
+      }
+    }
     function clearUpstreamResponseIdle(): void {
       if (upstreamResponseIdleTimer) {
         clearTimeout(upstreamResponseIdleTimer);
@@ -3762,6 +3823,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // cc-manager 的 QueryStartParams 已原生支持 allowedTools; 传副本避免 RPC
           // 序列化前后任一侧原地改写 session 快照。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
+          ...(claudeDisallowedTools.length > 0
+            ? { disallowedTools: [...claudeDisallowedTools] }
+            : {}),
           ...(remoteToolGuards.length > 0
             ? { toolGuards: remoteToolGuards }
             : {}),
@@ -3836,7 +3900,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 同一个 scope key 也必须随注册的 session ctx 走: prompt 段用它读索引
           // (上方 memoryScopeKey), 远端工具侧不给就会回落到 workdir 键。
           ...((makerMemoryEnabled || opts.makerMemoryScopeKey) ? { makerMemoryScopeKey: memoryScopeKey } : {}),
-          onApprovalRequest: async (rawParams: unknown) => {
+          onApprovalRequest: (rawParams: unknown) => withRemoteApprovalIdleGuard(rawParams, async () => {
             // 110s timeout — must respond before daemon's 120s server-request timeout.
             // On timeout, dismiss the pending interaction (clears UI) and reject to
             // let cc-manager-client return deny to daemon.
@@ -4092,7 +4156,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 ? formatPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason)
                 : decision.reason,
             };
-          },
+          }),
           onSubagentModelAccessRequest: async (rawParams: unknown) => {
             const params = typeof rawParams === 'object' && rawParams !== null
               ? rawParams as Record<string, unknown>
@@ -4393,8 +4457,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           // Bot MCP selection is explicit; native delegation remains available.
           // 设备托管：只用经隧道的 MCP(本机用户 / 项目里的 MCP 启动命令会在本机执行)。
           ...(opts.botRuntimeProfile || hosted ? { strictMcpConfig: true } : {}),
-          // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替。
-          ...(hosted ? { disallowedTools: [...DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS] } : {}),
+          // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替；
+          // 另含 host 路由表关闭的自带工具(见 claudeDisallowedTools)。
+          ...(claudeDisallowedTools.length > 0
+            ? { disallowedTools: [...claudeDisallowedTools] }
+            : {}),
+          // 受邀者(另一个账号)：自带工具只开白名单里的，其余都作用于本机或本机用户的账号。
+          ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
           settingSources: reviewMode || !!opts.botRuntimeProfile
@@ -5662,10 +5731,16 @@ export class ClaudeCodeAgent extends BaseAgent {
                 toolName?: unknown,
                 input?: unknown,
                 parentToolUseId?: string,
+                inputStreaming?: boolean,
               ) => {
-                pendingToolIds.add(id);
                 getToolLoopMonitor(parentToolUseId).onToolUse(id, toolName, input);
-                clearUpstreamResponseIdle();
+                // content_block_start precedes input_json_delta: the model still
+                // owns the response until the complete tool input is delivered.
+                // canUseTool independently pauses the watchdog during approval.
+                if (!inputStreaming) {
+                  pendingToolIds.add(id);
+                  clearUpstreamResponseIdle();
+                }
               },
               onToolResultDone: (
                 id: string,
@@ -7247,6 +7322,15 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude Code SDK does not support getContextUsage');
         }
         return await getContextUsage.call(q) as import('../../types/context-usage.js').ContextUsageData;
+      },
+
+      async readMcpServerTools(serverName: string) {
+        // SSH remote queries do not expose MCP status; report no engine entry.
+        const readStatus = (q as {
+          mcpServerStatus?: () => Promise<ClaudeMcpServerStatusEntry[]>;
+        }).mcpServerStatus;
+        if (typeof readStatus !== 'function') return null;
+        return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {

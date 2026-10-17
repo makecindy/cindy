@@ -62,10 +62,10 @@ describe('Chat Server membership notices', () => {
     messages = [joined()];
     fixture.handle.mockImplementation(route => {
       if (route === '/me') return { body: { actor: { id: selfId } } };
-      if (route === '/conversations?limit=100') return { body: [{ id: roomId, state: 'joined' }] };
+      if (route === '/conversations?limit=100') return { body: [{ id: roomId, kind: 'group', state: 'joined' }] };
       if (route === '/executions/claim') return { body: { execution: null } };
       if (route.endsWith('/snapshot')) return { body: {
-        room: { id: roomId, name: 'Group', response_mode: 'all', speaking_mode: 'auto',
+        room: { id: roomId, kind: 'group', name: 'Group', response_mode: 'all', speaking_mode: 'auto',
           created_at: '2026-10-08T00:00:00Z', updated_at: '2026-10-08T00:00:00Z' },
         members: [{ id: memberId, kind: 'human', name: 'Renamed after joining', state: 'left', ownerActorId: memberId, ownerName: '' }],
         messages, cursor: '12',
@@ -132,13 +132,96 @@ describe('Chat Server membership notices', () => {
       const result = await service.getGroup(roomId);
       expect(result.ok && result.group.messages.map(m => m.id)).toEqual([joined().id]);
     }
+    // Duplicate notices coalesce into one push at the end of the 150ms window.
+    await vi.advanceTimersByTimeAsync(150);
     expect(changed).toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(fixture.handle.mock.calls.some(([route, method]) => method === 'POST' && route.includes('/messages'))).toBe(false);
+  });
+
+  it('resyncs personal state and resumes actor events at the reset head', async () => {
+    lifecycle();
+    let states: unknown[] = [];
+    const handle = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => route.startsWith('/conversation-list-state?') ? { body: states } : handle(route, ...args));
+    await service.listGroups();
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    states = [{ conversationId: roomId, hidden: true, revision: 1 }];
+    socket.emit('message', JSON.stringify({ type: 'scope_error', scope: `actor:${selfId}`, error: { code: 'RESET_REQUIRED', details: { head: '42' } } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '42' }));
+    expect(await service.listGroups()).toMatchObject({ ok: true, groups: [] });
+    expect(changed.mock.calls.map(([payload]) => payload)).toContainEqual(expect.objectContaining({ groupId: roomId, change: 'list', listState: expect.objectContaining({ hidden: true }) }));
+    socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '43', changes: [
+      { type: 'conversation.list.changed', data: { conversationId: roomId, hidden: false, revision: 2 } },
+    ] }));
+    expect((await service.getGroup(roomId)).ok).toBe(true);
   });
 
   it('never continues a discussion from an admission event', async () => {
     expect((await service.continueRound(roomId)).ok).toBe(false);
     expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/continue'))).toBe(false);
   });
+  function lifecycle(options: { supported?: boolean; kind?: string; role?: string; ownedBot?: boolean; failHide?: boolean; left?: boolean; dissolvedAt?: string } = {}) {
+    const previous = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, ...(options.supported === false ? {} : { capabilities: { groupLifecycleVersion: 1, conversationListStateVersion: 1 } }) } };
+      if (route.startsWith('/conversation-list-state?')) return { body: [] };
+      if (route.endsWith('/list-state')) return options.failHide ? { status: 409, body: { error: { code: 'REVISION_CONFLICT' } } }
+        : { body: { conversationId: roomId, hidden: true, revision: 1 } };
+      if (route.endsWith('/dissolve')) return { body: { revision: 2, dissolvedAt: '2026-10-15T00:00:00Z', dissolvedBy: selfId } };
+      if (route.endsWith('/snapshot')) {
+        if (options.left) return { status: 403, body: { error: { code: 'NOT_MEMBER' } } };
+        const result = previous(route, method, body);
+        result.body.room = { ...result.body.room, kind: options.kind ?? 'group', revision: 1, archived: false, dissolved_at: options.dissolvedAt ?? null };
+        result.body.members = [{ id: options.ownedBot ? memberId : selfId, kind: options.ownedBot ? 'bot' : 'human', name: 'Fixture',
+          ownerActorId: selfId, state: 'joined', role: options.role ?? 'owner' }];
+        return result;
+      }
+      return previous(route, method, body);
+    });
+  }
+  it('projects dissolved lifecycle and reaction versions together without enabling invitations', async () => {
+    const dissolvedAt = '2026-10-15T00:00:00Z';
+    lifecycle({ dissolvedAt });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: {
+      archived: false, dissolvedAt, supportsGroupLeave: true, supportsDissolve: true, supportsListRemoval: true,
+      canInvite: false, reactionRevision: expect.any(Number), reactionRevisions: {},
+    } });
+  });
+  it('never substitutes archive or delete on an old server', async () => {
+    lifecycle({ supported: false });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'dissolve', expectedRevision: 1 } })).toMatchObject({ ok: false, errorCode: 'LIFECYCLE_UNAVAILABLE' });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'hide' } })).toMatchObject({ ok: false, errorCode: 'LIFECYCLE_UNAVAILABLE' });
+    expect(fixture.handle.mock.calls.some(([route, method]) => method === 'PATCH' || route.endsWith('/dissolve') || route.endsWith('/list-state'))).toBe(false);
+  });
+  it.each([false, true])('dissolves only a current owned owner (companion=%s), with the edited revision', async ownedBot => {
+    lifecycle({ ownedBot });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'dissolve', expectedRevision: 1 } })).toMatchObject({ ok: true });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/dissolve`, 'POST', expect.objectContaining({ expectedRevision: 1, operationId: expect.any(String) }));
+    expect(fixture.handle.mock.calls.some(([, method]) => method === 'PATCH')).toBe(false);
+  });
+  it.each([{ kind: 'direct', code: 'CONVERSATION_NOT_FOUND' }, { role: 'admin', code: 'OWNER_REQUIRED' }, { role: 'member', code: 'OWNER_REQUIRED' }])('refuses invalid dissolution %j', async ({ code, ...options }) => {
+    lifecycle(options);
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'dissolve', expectedRevision: 1 } })).toMatchObject({ ok: false, errorCode: code });
+    expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/dissolve'))).toBe(false);
+  });
+  it('removes personal history after leave without reading or deleting its forbidden snapshot', async () => {
+    lifecycle({ left: true });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'hide' } })).toMatchObject({ ok: true, listState: { conversationId: roomId, hidden: true, revision: 1 } });
+    expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/snapshot'))).toBe(false);
+    expect(changed).toHaveBeenCalledWith(expect.objectContaining({ groupId: roomId, change: 'list', listState: expect.objectContaining({ hidden: true }) }), undefined);
+    expect(await service.listGroups()).toMatchObject({ ok: true, groups: [] });
+  });
+  it('keeps a failed personal removal visible and retryable', async () => {
+    lifecycle({ failHide: true });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'hide' } })).toMatchObject({ ok: false, errorCode: 'REVISION_CONFLICT' });
+    expect(changed.mock.calls.some(([event]) => event.change === 'list')).toBe(false);
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+  });
+
 });

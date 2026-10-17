@@ -53,12 +53,16 @@ export async function fetchPublicImageBytes(
   url: string,
   maxBytes: number,
   guardedFetch: GuardedImageFetch = fetchWithSsrFGuard,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<{ buffer: Uint8Array; mimeType?: string }> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error('invalid remote image size limit');
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? FETCH_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
   let result: GuardedFetchResult | null = null;
   try {
     result = await guardedFetch({
@@ -79,6 +83,7 @@ export async function fetchPublicImageBytes(
     };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abort);
     await result?.release();
   }
 }

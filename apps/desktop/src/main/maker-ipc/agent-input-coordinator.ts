@@ -3,6 +3,7 @@ import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
+import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -60,6 +61,7 @@ import type {
   AgentInputRecovery,
   AgentInputSessionReferenceContext,
   AgentInputToolLoopDetails,
+  AutoResumeAgentSwitchCause,
   AutoResumeInfo,
   RecoveryCheckpoint,
 } from '../../shared/agentInputQueue.js';
@@ -204,6 +206,8 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  /** Main-only App grant, checked by the send/steer transaction at dispatch. */
+  readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   /** Main-owned identity of the zero-output user turn being replaced. */
   retryUserClientId?: string;
@@ -429,6 +433,17 @@ export interface AgentInputCoordinatorDeps {
     candidateToken: number,
   ) => void;
   /**
+   * **纯判定**：这条将交给 `onUsageLimitedTurnError` 的错误会不会先由供应商组试着换电脑
+   * (docs/product-rules/provider-groups.md §6.1)。返回换电脑的原因时，这次错误照常成为当前状态
+   * (重试入口、限额等待候选都绑定它)，只是先不呈现：投影里不带 error，改带「正在换一台电脑继续」，
+   * 直到 host 调 `releaseProviderGroupSwitchHold`，或续跑 / 用户接手换掉了这次错误。
+   */
+  providerGroupSwitchCandidate?: (
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+    item: AgentInputQueuedMessage,
+  ) => AutoResumeAgentSwitchCause | null;
+  /**
    * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
    * 不消耗额度、不排期、无副作用。
    *
@@ -599,8 +614,11 @@ export interface AgentInputCoordinatorDeps {
    * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
    */
   previewQueuedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
-  /** 自动输入推进了会话，但不构成真人介入，也不能重置自动恢复预算。 */
-  onAutomaticEnqueue?: (sessionId: string) => void;
+  /**
+   * 自动输入推进了会话，但不构成真人介入，也不能重置自动恢复预算。`item` 是这条自动输入(协同消息等)，
+   * host 据此判断要不要按「有人接手」处理(供应商组：Lead 给 Worker 发来消息即开始新的一轮)。
+   */
+  onAutomaticEnqueue?: (sessionId: string, item?: AgentInputQueuedMessage) => void;
   /**
    * 派发失败后队列可能已空(项目已从队列移除但未被放回时)回调。
    * host 用它触发 notifyQueueEmptied, 让 AgentIsland 中因队列非空而延迟的完成事件得到补发。
@@ -655,6 +673,11 @@ interface ActiveTurn {
    * `undefined` 表示当前没有待回滚的采纳。
    */
   preContinuationVendorTurnGeneration?: number | null;
+  /**
+   * 供应商组在发送前等原电脑恢复(这条还没派出去，provider-groups.md §6.1)：投影的进行中行显示
+   * 「重新连接中 n/5」。挂在这一轮上，轮次结束或换掉即一起消失。
+   */
+  providerGroupReconnect?: AutoResumeInfo;
 }
 
 interface PendingCompactRequest {
@@ -744,6 +767,19 @@ interface SessionInputState {
     resumeAt: number | null;
     token: number;
     recovery: NonNullable<AgentInputRecovery>;
+  } | null;
+  /**
+   * 供应商组正在为这次错误换电脑(docs/product-rules/provider-groups.md §6.1)：错误仍是当前状态，
+   * 重试入口与限额等待候选照旧绑定它，只是投影里先不呈现(换成了就不出现，组里都不行才出来)。
+   * 绑定登记时的 recovery：续跑、用户接手、清空换掉 recovery 即自然失效，不需要在每个入口单独撤。
+   */
+  providerGroupSwitchHold: {
+    /** 每次登记唯一：host 暂存的 error 行与结算都按它对号，迟到的旧结算不会碰到下一次失败。 */
+    id: number;
+    recovery: NonNullable<AgentInputRecovery>;
+    cause: AutoResumeAgentSwitchCause;
+    /** 投影里的进行中行：换电脑时「正在换一台电脑继续」，先等原电脑恢复时「重新连接中 n/5」。 */
+    info: AutoResumeInfo;
   } | null;
   recovery: AgentInputRecovery;
   drainScheduled: boolean;
@@ -848,6 +884,7 @@ function createInitialInputState(
     autoResumePending: null,
     autoResumeAttemptToken: null,
     usageLimitWait: null,
+    providerGroupSwitchHold: null,
     recovery: null,
     drainScheduled: false,
     drainWakeupGeneration: 0,
@@ -887,6 +924,33 @@ function isUsageLimitCandidateCurrent(state: SessionInputState, token?: number):
 /** 已排期（有自动继续时刻）且仍有效的等待。 */
 function isUsageLimitWaitLive(state: SessionInputState, token?: number): boolean {
   return state.usageLimitWait?.resumeAt != null && isUsageLimitCandidateCurrent(state, token);
+}
+
+/**
+ * 换电脑期间进行中行的内容。`error` 只用来让 renderer 认出随后到达的终态 event 是同一次失败的回声(不再点亮
+ * 横幅)。换电脑时次数都给 0(不是重连)，旧端按普通的「重新连接中」显示、不带次数；先等原电脑恢复时就是一次
+ * 普通的重连：不带 groupSwitchPending，新旧端都显示「重新连接中 n/5」，展开看原因。
+ */
+function providerGroupSwitchHoldInfo(
+  cause: AutoResumeAgentSwitchCause,
+  error: string | undefined,
+  progress: { attempt: number; maxAttempts: number } | null,
+): AutoResumeInfo {
+  const base = error ? { error } : {};
+  return progress
+    ? { ...base, attempt: progress.attempt, maxAttempts: progress.maxAttempts, sessionTotal: 0 }
+    : { ...base, attempt: 0, maxAttempts: 0, sessionTotal: 0, groupSwitchPending: { cause } };
+}
+
+/** 换电脑期间先不呈现的那次错误仍是当前状态：登记时的 recovery 没被换掉、错误仍在、没有别的自愈接管。 */
+function isProviderGroupSwitchHoldLive(state: SessionInputState): boolean {
+  const hold = state.providerGroupSwitchHold;
+  return (
+    hold !== null &&
+    hold.recovery === state.recovery &&
+    state.error !== null &&
+    state.autoResumePending === null
+  );
 }
 
 function readSessionInstanceId(identity: object | null | undefined): string | null {
@@ -1142,6 +1206,7 @@ export class AgentInputCoordinator {
   private readonly states = new Map<string, SessionInputState>();
   /** 账号限额等待计划的单调令牌（跨会话唯一，迟到的 host 定时器据此失效）。 */
   private usageLimitWaitSeq = 0;
+  private providerGroupSwitchHoldSeq = 0;
   private readonly steerAbortControllers = new Map<string, Map<string, AbortController>>();
   /**
    * Stop clears visible steer markers before the provider promise necessarily settles. Retain
@@ -1235,6 +1300,24 @@ export class AgentInputCoordinator {
       authoredText: typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : undefined,
       originKind: item.origin?.kind,
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
+  }
+
+  /**
+   * Owner-only Host actions (app update) require the active input itself to be text
+   * this account's user typed on Desktop or a same-account remote device. Automation,
+   * other tasks, Orca, plugins, shared-task guests and automatic resumes never qualify.
+   */
+  isActiveInputOwnerAuthored(sessionId: string): boolean {
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
+    const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
+    if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
+    if (item.sourcePlugin || item.sharedTaskAuthor || item.botTaskCoordination) return false;
+    if (item.clientId.startsWith('plugin-task:') || item.originalSyntheticTrigger) return false;
+    // Automatic continuations and zero-output retries are never fresh owner input.
+    if (item.autoResume) return false;
+    const text = item.autoReviewUserText;
+    return typeof text === 'string' && !!text.trim() && !text.startsWith('[UI_ACTION_TRIGGER]');
   }
 
   /** Inputs consumed by this native turn, excluding queued work and stale generations. */
@@ -1497,7 +1580,17 @@ export class AgentInputCoordinator {
     // have lost the originating execution's callbacks; a new claim on this
     // lane must never authorize their prompts (including restored plan inputs).
     const staleGroupItems = restorable.filter((item) => isBotGroupClientId(item.clientId));
-    const restored = restorable.filter((item) => item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId));
+    // App grants are Main-only Symbols, lost across JSON persistence. Drop the
+    // stale row instead of putting a permanent authorization error at the queue
+    // head. Its normal discard settlement runs exactly once, even if another
+    // non-restorable origin also applies.
+    const staleAppItems = restorable.filter((item) =>
+      item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && isUnrestorableMcpAppMessage(item));
+    const restored = restorable.filter((item) =>
+      item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId) && !isUnrestorableMcpAppMessage(item));
+    for (const item of staleAppItems) {
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+    }
     for (const item of staleGroupItems) {
       if (item.origin?.kind !== 'scheduler') this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
@@ -1766,7 +1859,7 @@ export class AgentInputCoordinator {
         this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
       }
     } else if (automaticOrigin && !schedulerOrigin) {
-      this.deps.onAutomaticEnqueue?.(sessionId);
+      this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
     }
@@ -1919,7 +2012,7 @@ export class AgentInputCoordinator {
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
     this.rememberEnqueuedClientId(state, item.clientId);
     this.cancelPreparedAutoResume(sessionId, state);
-    this.deps.onAutomaticEnqueue?.(sessionId);
+    this.deps.onAutomaticEnqueue?.(sessionId, item);
     state.autoResumePending = null;
     state.autoResumeAttemptToken = null;
     markPendingTerminalSupersededByUser(state.activeTurn);
@@ -2457,7 +2550,9 @@ export class AgentInputCoordinator {
         item.persistedContent,
         referenceContexts,
       );
+      const appMessageGuard = queuedAppMessageGuard(item);
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+        ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: appMessageGuard } : {}),
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
         ...(item.autoReviewUserText && typeof item.autoReviewUserText === 'object' && item.autoReviewUserText.kind === 'delegated-continuation'
@@ -3870,6 +3965,10 @@ export class AgentInputCoordinator {
             return;
           }
         }
+        // 供应商组会先试着换电脑时，在 emit 之前登记先不呈现：不让用户先看到一帧红横幅。
+        if (!takeover && outcome === 'kept' && active.item) {
+          this.holdForProviderGroupSwitch(sessionId, state, active.item, message, signals);
+        }
         this.emit(sessionId);
         if (!takeover && outcome === 'kept' && active.item) {
           this.notifyUsageLimitedTurnError(sessionId, active.item, message, signals);
@@ -4072,10 +4171,18 @@ export class AgentInputCoordinator {
    *   input signal(#1930),但**其余清理必须照常**(activeTurn / steer / queue
    *   状态不能残留,否则 rebuild 失败或 close 后不 rebuild 时 coordinator
    *   残留旧状态阻塞后续发送)。
+   * @param opts.wakeQueuedInput 为 true 时，收口后若仍有用户排队消息就重新 drain。
+   *   用于非请求关闭(进程退出 / 远端 Agent 断连)：这类关闭不带 done 事件，
+   *   turn-done 唤醒永远不会来，队首会静默滞留到用户再次操作。drain 走
+   *   lazy create-session 重建运行时；暂停、recovery 等 gate 照常拦截。
    */
   onSessionClosed(
     sessionId: string,
-    opts?: { preserveInputBoundary?: boolean; preserveAutoResumeIntent?: boolean },
+    opts?: {
+      preserveInputBoundary?: boolean;
+      preserveAutoResumeIntent?: boolean;
+      wakeQueuedInput?: boolean;
+    },
   ): void {
     const state = this.getState(sessionId);
     // Planned-upgrade suppression is per Session incarnation. Replacement
@@ -4140,6 +4247,8 @@ export class AgentInputCoordinator {
       // Old provider busy is gone with this Session. The 10s SESSION_RUNNING
       // retry was cleared above; wake the hidden CONTINUE onto the replacement.
       this.scheduleDrain(sessionId, 'session-closed-preserved-auto-resume');
+    } else if (opts?.wakeQueuedInput && state.pendingQueue.length > 0) {
+      this.scheduleDrain(sessionId, 'session-closed-unexpected');
     }
   }
 
@@ -4257,14 +4366,19 @@ export class AgentInputCoordinator {
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {
     const pendingQueue = state.pendingQueue.map((item) => this.toProjectedItem(item));
+    // 供应商组正在换电脑：错误先不呈现(没有红横幅、没有限额倒计时)，聊天流里只有「正在换一台电脑继续」。
+    const groupSwitchHeld = isProviderGroupSwitchHoldLive(state);
+    const error = groupSwitchHeld ? null : state.error;
     // Draining removes the queue row before asynchronous preparation starts.
     // Keep the existing recovery projection until dispatch settles; derive it
     // from the active owner so cancellation/failure cannot leave a stale flag.
     const autoResumePending = state.autoResumePending ?? (
-      state.activeTurn?.item?.autoResume &&
-      state.activeTurn.dispatchLifecycle !== 'dispatched'
-        ? state.activeTurn.item.autoResumeInfo
-        : undefined
+      groupSwitchHeld
+        ? state.providerGroupSwitchHold!.info
+        : state.activeTurn && state.activeTurn.dispatchLifecycle !== 'dispatched'
+          ? state.activeTurn.providerGroupReconnect ??
+            (state.activeTurn.item?.autoResume ? state.activeTurn.item.autoResumeInfo : undefined)
+          : undefined
     );
     const recovery: AgentInputRecovery =
       state.recovery?.kind === 'active-turn'
@@ -4289,12 +4403,12 @@ export class AgentInputCoordinator {
       queueInteractionLocks: [...state.queueInteractionLocks],
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
-      error: state.error,
-      ...(state.error && state.errorReason ? { errorReason: state.errorReason } : {}),
-      ...(state.error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
+      error,
+      ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
+      ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
       recovery,
       ...(autoResumePending ? { autoResumePending } : {}),
-      usageLimitWait: isUsageLimitWaitLive(state)
+      usageLimitWait: !groupSwitchHeld && isUsageLimitWaitLive(state)
         ? { resumeAt: state.usageLimitWait!.resumeAt! }
         : null,
       errorRetryText: projectionRetryText(state.pendingQueue, state.recovery),
@@ -4310,6 +4424,7 @@ export class AgentInputCoordinator {
   /** Renderer projection may carry routing hints, but never quoted history bodies. */
   private toProjectedItem(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
     const projected = { ...item };
+    Reflect.deleteProperty(projected, MCP_APP_MESSAGE_GUARD);
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.autoReviewUserText;
@@ -4806,6 +4921,7 @@ export class AgentInputCoordinator {
     state.activeTurn = active;
     this.emit(sessionId);
 
+    let appMessageGuardRejected = false;
     try {
       // 意识拦截钩(订阅槽①):落库/派发之前问一遍——block 即丢弃本项
       // (不入库不起 turn),通知宿主降级气泡,继续放行后续排队消息;
@@ -4873,7 +4989,16 @@ export class AgentInputCoordinator {
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
+      const appMessageGuard = queuedAppMessageGuard(head);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
+        ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
+          try {
+            await appMessageGuard();
+          } catch (error) {
+            appMessageGuardRejected = true;
+            throw error;
+          }
+        } } : {}),
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
         ...(head.autoReviewUserText && typeof head.autoReviewUserText === 'object' && head.autoReviewUserText.kind === 'delegated-continuation'
@@ -4967,6 +5092,10 @@ export class AgentInputCoordinator {
       if (this.discardOnStaleActiveTurn(sessionId, active, isSendDispatched(result))) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {
+        if (appMessageGuardRejected) {
+          this.discardRevokedAppInput(sessionId, active, head);
+          return;
+        }
         const rewound = await this.rewindSchedulerPreparationFailure(sessionId, active, head, result);
         if (this.discardOnStaleActiveTurn(sessionId, active)) return;
         this.handleSendNotDispatched(sessionId, active, head, result, rewound);
@@ -5020,6 +5149,10 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
     } catch (err) {
       if (this.discardOnStaleActiveTurn(sessionId, active)) return;
+      if (appMessageGuardRejected) {
+        this.discardRevokedAppInput(sessionId, active, head);
+        return;
+      }
       // 派发 / 落库失败(含 SESSION_RUNNING 让位):暂存的 error 候选到此作废,补落它的行。
       // 放在分支之前 —— 三条出口都不会再走到接管决策。
       this.discardDeferredResumableCandidate(sessionId, active);
@@ -5107,6 +5240,27 @@ export class AgentInputCoordinator {
       // be replayed now; otherwise Agent Island stays in "running" indefinitely.
       this.deps.onQueueEmptied?.(sessionId);
     }
+  }
+
+  /** A failed live View grant cannot become valid again by retrying this item. */
+  private discardRevokedAppInput(
+    sessionId: string,
+    active: ActiveTurn,
+    item: AgentInputQueuedMessage,
+  ): void {
+    const state = this.getState(sessionId);
+    this.discardDeferredResumableCandidate(sessionId, active);
+    state.activeTurn = null;
+    this.clearCredentialSwitchWait(state);
+    this.notifyRejectedUserTurn(sessionId, item);
+    if (active.persisted) {
+      this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
+    } else {
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+    }
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'mcp-app-grant-revoked');
+    this.deps.onQueueEmptied?.(sessionId);
   }
 
   /** Only proven preparation rejection can erase a scheduled continuation row.
@@ -5921,7 +6075,7 @@ export class AgentInputCoordinator {
     // fallback turn 的 text/done 被旧 run 消费。scheduler 自己与 UI Continue 仍保留
     // 各自的续跑归属，不按无关用户输入处理。
     if (isAutomaticOriginItem(item)) {
-      if (!isSchedulerOriginItem(item)) this.deps.onAutomaticEnqueue?.(sessionId);
+      if (!isSchedulerOriginItem(item)) this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!isUiContinuationItem(item)) {
       this.deps.onUserEnqueue?.(sessionId);
       this.deps.previewQueuedUserTurn?.(sessionId, item);
@@ -6466,31 +6620,132 @@ export class AgentInputCoordinator {
     }
   }
 
+  /** 这次终态错误会不会真的交给 `onUsageLimitedTurnError`(与 notifyUsageLimitedTurnError 同一判据)。 */
+  private willNotifyUsageLimitedTurnError(
+    state: SessionInputState,
+    item: AgentInputQueuedMessage,
+  ): boolean {
+    // scheduler origin(含复用它的 Slack / X / Telegram Hook 消息)终态失败时本就不留
+    // recovery、由各自 runner 收尾,没有可续的入口。共享任务访客的回合也不自动续:
+    // 授权可能在等待期间被撤销,数小时后替访客重发原指令不安全,交给房主手动处理。
+    return Boolean(
+      this.deps.onUsageLimitedTurnError &&
+        !isSchedulerOriginItem(item) &&
+        !item.sharedTaskAuthor &&
+        state.recovery?.kind === 'active-turn' &&
+        state.error !== null,
+    );
+  }
+
   private notifyUsageLimitedTurnError(
     sessionId: string,
     item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
-    // scheduler origin(含复用它的 Slack / X / Telegram Hook 消息)终态失败时本就不留
-    // recovery、由各自 runner 收尾,没有可续的入口。共享任务访客的回合也不自动续:
-    // 授权可能在等待期间被撤销,数小时后替访客重发原指令不安全,交给房主手动处理。
-    if (
-      !this.deps.onUsageLimitedTurnError ||
-      isSchedulerOriginItem(item) ||
-      item.sharedTaskAuthor
-    ) {
-      return;
-    }
     const state = this.states.get(sessionId);
-    if (!state || state.recovery?.kind !== 'active-turn' || state.error === null) return;
+    if (!state || !this.willNotifyUsageLimitedTurnError(state, item)) return;
     const token = ++this.usageLimitWaitSeq;
-    state.usageLimitWait = { resumeAt: null, token, recovery: state.recovery };
+    state.usageLimitWait = { resumeAt: null, token, recovery: state.recovery! };
     try {
-      this.deps.onUsageLimitedTurnError(sessionId, { ...(signals ?? {}), message }, item, token);
+      this.deps.onUsageLimitedTurnError!(sessionId, { ...(signals ?? {}), message }, item, token);
     } catch (err) {
       log.warn('onUsageLimitedTurnError failed', { sessionId, error: errorMessage(err) });
+      // 没人接手这次错误了：先不呈现的要立刻放出来。
+      this.releaseProviderGroupSwitchHold(sessionId);
     }
+  }
+
+  /**
+   * 终态错误交给 `onUsageLimitedTurnError` 之前(emit 之前)：供应商组会先试着换电脑时登记先不呈现。
+   * 只在确实会回调时登记，否则没有人放出来。
+   */
+  private holdForProviderGroupSwitch(
+    sessionId: string,
+    state: SessionInputState,
+    item: AgentInputQueuedMessage,
+    message?: string,
+    signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+  ): void {
+    state.providerGroupSwitchHold = null;
+    const candidate = this.deps.providerGroupSwitchCandidate;
+    if (!candidate || !this.willNotifyUsageLimitedTurnError(state, item)) return;
+    let cause: AutoResumeAgentSwitchCause | null = null;
+    try {
+      cause = candidate(sessionId, { ...(signals ?? {}), message }, item);
+    } catch (err) {
+      log.warn('providerGroupSwitchCandidate failed', { sessionId, error: errorMessage(err) });
+    }
+    if (!cause) return;
+    state.providerGroupSwitchHold = {
+      id: ++this.providerGroupSwitchHoldSeq,
+      recovery: state.recovery!,
+      cause,
+      info: providerGroupSwitchHoldInfo(cause, message, null),
+    };
+  }
+
+  /**
+   * 换电脑这一趟先等原电脑恢复(那台连不上)：进行中行改为「重新连接中 attempt/maxAttempts」；传 null 回到
+   * 「正在换一台电脑继续」。只认仍有效的那次登记；返回是否更新了。
+   */
+  setProviderGroupSwitchHoldProgress(
+    sessionId: string,
+    id: number,
+    progress: { attempt: number; maxAttempts: number } | null,
+  ): boolean {
+    const state = this.states.get(sessionId);
+    const hold = state?.providerGroupSwitchHold;
+    if (!state || !hold || hold.id !== id || !isProviderGroupSwitchHoldLive(state)) return false;
+    hold.info = providerGroupSwitchHoldInfo(hold.cause, hold.info.error, progress);
+    this.emit(sessionId);
+    return true;
+  }
+
+  /**
+   * 供应商组在发送前等原电脑恢复(这条还没派出去)：进行中行显示「重新连接中 attempt/maxAttempts」，没等到、开始换电脑
+   * 时(`switching`)显示「正在换一台电脑继续」，传 null 撤掉。只挂在还没派发的这一轮上；没有这样的一轮时不做什么。
+   */
+  setProviderGroupSendReconnect(
+    sessionId: string,
+    progress: { attempt: number; maxAttempts: number } | 'switching' | null,
+  ): void {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (!active || active.dispatchLifecycle === 'dispatched') return;
+    if (!progress && !active.providerGroupReconnect) return;
+    if (progress) {
+      active.providerGroupReconnect = providerGroupSwitchHoldInfo(
+        'unavailable',
+        undefined,
+        progress === 'switching' ? null : progress,
+      );
+    } else {
+      delete active.providerGroupReconnect;
+    }
+    this.emit(sessionId);
+  }
+
+  /**
+   * 这次错误正因供应商组换电脑而先不呈现时返回那次登记的 id(host 据此暂不落 error 行、不弹 Agent Island，
+   * 并按 id 结算)；没有返回 null。
+   */
+  getProviderGroupSwitchHoldId(sessionId: string): number | null {
+    const state = this.states.get(sessionId);
+    return state && isProviderGroupSwitchHoldLive(state) ? state.providerGroupSwitchHold!.id : null;
+  }
+
+  /**
+   * 换电脑这一趟结束(没换成、交回原有处理，或已不再需要)：撤掉那次先不呈现的登记(不传 id 时撤当前的)。
+   * 错误仍是当前状态时投影随即带出红横幅，返回 true；已被续跑或用户接手换掉时只清登记，返回 false。
+   */
+  releaseProviderGroupSwitchHold(sessionId: string, id?: number): boolean {
+    const state = this.states.get(sessionId);
+    const hold = state?.providerGroupSwitchHold;
+    if (!state || !hold || (id !== undefined && hold.id !== id)) return false;
+    const live = isProviderGroupSwitchHoldLive(state);
+    state.providerGroupSwitchHold = null;
+    if (live) this.emit(sessionId);
+    return live;
   }
 
   /**
@@ -6506,6 +6761,44 @@ export class AgentInputCoordinator {
     state.usageLimitWait = { ...state.usageLimitWait!, resumeAt };
     this.emit(sessionId);
     return true;
+  }
+
+  /**
+   * 供应商组自动换电脑(docs/product-rules/provider-groups.md §6.1)：交接会关闭旧会话，而关闭会
+   * 撤销限额等待。交接前用终态错误下发的候选令牌取得这次错误的重试入口(不透明句柄)，交接完成后凭它
+   * `rearmUsageLimitWait` 重新挂上等待。返回 null = 那次错误已不是当前状态(用户已接手等)。
+   */
+  leaseUsageLimitRecovery(sessionId: string, token: number): object | null {
+    const state = this.states.get(sessionId);
+    if (!state || state.activeTurn !== null || !isUsageLimitCandidateCurrent(state, token)) return null;
+    return state.recovery;
+  }
+
+  /** 句柄对应的那次错误是否仍是当前状态(没有新 turn、用户没有接手、没有被中断自愈接管)。 */
+  isUsageLimitRecoveryLeaseCurrent(sessionId: string, lease: object): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(
+      state &&
+        state.activeTurn === null &&
+        state.recovery !== null &&
+        state.recovery === lease &&
+        state.error !== null &&
+        state.autoResumePending === null,
+    );
+  }
+
+  /**
+   * 凭 `leaseUsageLimitRecovery` 的句柄重新挂上限额等待并返回新令牌(resumeAt 为 null 只登记候选，
+   * 交给额度重置后自动继续去排期)。重试入口已变(用户发消息、重试、收下错误)、已有 turn 在跑或已被
+   * 中断自愈接管时返回 null，不替用户续跑。
+   */
+  rearmUsageLimitWait(sessionId: string, lease: object, resumeAt: number | null): number | null {
+    const state = this.states.get(sessionId);
+    if (!state || !state.recovery || !this.isUsageLimitRecoveryLeaseCurrent(sessionId, lease)) return null;
+    const token = ++this.usageLimitWaitSeq;
+    state.usageLimitWait = { resumeAt, token, recovery: state.recovery };
+    this.emit(sessionId);
+    return token;
   }
 
   /** 等待计划是否仍有效（host 到点前复核用）。 */
@@ -6555,6 +6848,22 @@ export class AgentInputCoordinator {
     if (surfacedMessage) {
       state.error = message ?? null;
       clearErrorProjectionSignals(state);
+    }
+    if (
+      state.activeTurn === null &&
+      state.recovery?.kind === 'active-turn' &&
+      isSchedulerOriginItem(state.recovery.item)
+    ) {
+      // Scheduler recovery only belongs to the live auto-resume attempt. Once
+      // that attempt ends, the runner settles the failed run; keeping Retry
+      // here would block every later fire (and replay outside run accounting).
+      this.setActiveTurnRecovery(state, state.recovery.item);
+      // Reuse normal scheduler failure settlement, including its bounded wait
+      // for a paired done, so an old terminal cannot clear the next turn.
+      this.markPendingExternalTerminalDone(sessionId, state);
+      this.emit(sessionId);
+      this.scheduleDrainAfterExternalTurnSettles(sessionId, 'scheduler-auto-resume-abandoned');
+      return;
     }
     // cancelPreparedAutoResume 已为队列 / active 变化 emit；纯退避态仍需
     // 单独投影接管结束。没有任何接管状态时保持既有 no-op 语义。
@@ -6902,16 +7211,27 @@ export class AgentInputCoordinator {
           return;
         }
       }
-      this.emit(sessionId);
-      if (
+      const notifyUsageLimited =
         !deferredTakeover &&
         outcome === 'kept' &&
         active.item &&
-        terminalEvent.supersededByUser !== true
-      ) {
+        terminalEvent.supersededByUser !== true;
+      // 与 onTurnEvent 的 persisted 分支对称。这条时序下横幅在持久化期间已经出现过、error 行也已落库，
+      // 这里至少让换电脑期间不再挂着横幅。
+      if (notifyUsageLimited) {
+        this.holdForProviderGroupSwitch(
+          sessionId,
+          state,
+          active.item!,
+          terminalEvent.message,
+          terminalEvent.signals,
+        );
+      }
+      this.emit(sessionId);
+      if (notifyUsageLimited) {
         this.notifyUsageLimitedTurnError(
           sessionId,
-          active.item,
+          active.item!,
           terminalEvent.message,
           terminalEvent.signals,
         );

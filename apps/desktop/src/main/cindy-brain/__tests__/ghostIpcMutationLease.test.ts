@@ -55,7 +55,8 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
   it('ghosts:set-enabled 同步委托共用入口，入口先持 owner 租约再异步修改', () => {
     const block = handlerBlock(source, 'ghosts:set-enabled');
     expect(block).toContain('assertTrustedAppRendererEvent(event)');
-    expect(block).toContain('return setGhostEnabledForUser(id, enabled)');
+    expect(block).toContain('return setGhostEnabledForUser(id, enabled, expectedInstalledApproval)');
+    expect(block).toContain('!isGhostInstallApprovalToken(expectedInstalledApproval)');
     expect(block).not.toMatch(/\bawait\b/);
     const start = source.indexOf('async function setGhostEnabledForUser(');
     expect(start).toBeGreaterThan(-1);
@@ -64,7 +65,9 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     const lease = fn.indexOf('beginGhostMutation(captureGhostMutationOwner())');
     expect(lease).toBeGreaterThan(-1);
     expect(lease).toBeLessThan(fn.indexOf('await '));
-    expect(fn).toContain('await manager.setEnabled(id, enabled)');
+    expect(fn).toContain('const relId = installedGhostPhysicalRelId(target)');
+    expect(fn).toContain('const storagePart = installedGhostStoragePart(target)');
+    expect(fn).toContain('await manager.setEnabled(relId, enabled, expectedInstalledApproval ?? approvalToken)');
     expect(fn).toMatch(/finally\s*\{\s*releaseMutation\(\)/);
   });
 
@@ -76,11 +79,22 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     const outerStart = source.indexOf('export async function uninstallGhostAndCleanup');
     expect(outerStart).toBeGreaterThan(-1);
     const outer = source.slice(outerStart, source.indexOf('\n}', outerStart));
-    expect(outer).toContain('withGhostInstallLock(');
+    expect(outer).toContain('withGhostInstallLock(identity.ghostId');
+    expect(outer).toContain('installedGhostStoragePart(ghost)');
     const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
     expect(start).toBeGreaterThan(-1);
     const fn = source.slice(start, source.indexOf('\n}', start));
     expect(fn).toContain('beginGhostMutation(');
+  });
+
+  it('卸载按物理存储键清理寄存引用、近期使用及提醒，而非目录相对路径', () => {
+    const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
+    const block = source.slice(start, source.indexOf('\n}', start));
+    expect(block).toContain("removeRefs({ refKind: 'ghost-deposit', refId: storagePart })");
+    expect(block).toContain('forgetGhostRecentUsage(storagePart)');
+    expect(block).toContain('forgetGhostRecommendations(storagePart)');
+    expect(block).toContain('extinguishGhostUnread(storagePart)');
+    expect(block).toContain('badgeSlotSingleton?.forget(storagePart)');
   });
 
   it('市场装入/更新持租约(installOrUpdateMarketGhostPackage)', () => {

@@ -3,8 +3,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
 import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
+import type { InstalledGhost } from '../../../../shared/ghost';
 import { __resetInstalledGhostsStoreForTest } from '@/cindy-brain/useInstalledGhosts';
 import {
   cancelPendingPluginSuggestion,
@@ -15,7 +17,8 @@ import {
 } from '@/features/cc-agent/pendingPluginSuggestion';
 import { GhostPluginPage } from '../GhostPluginPage';
 
-const { auth, translation } = vi.hoisted(() => ({
+const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
+  pickAndUpdateGhost: vi.fn(),
   auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner' },
   translation: {
     t: (key: string) => key,
@@ -30,6 +33,10 @@ vi.mock('../GhostPagePanelHost', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
+vi.mock('@/cindy-brain/installFlow', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/cindy-brain/installFlow')>()),
+  pickAndUpdateGhost,
+}));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => translation,
@@ -87,6 +94,7 @@ beforeEach(() => {
   cancelPendingPluginSuggestion();
   __resetInstalledGhostsStoreForTest();
   loadDetail.mockReset().mockResolvedValue(detail);
+  pickAndUpdateGhost.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal('electronAPI', {
     platform: 'win32',
     sidebarSettings: {
@@ -118,6 +126,7 @@ afterEach(() => {
   cancelPendingPluginSuggestion();
   __resetInstalledGhostsStoreForTest();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function RetirementNavigation() {
@@ -149,6 +158,113 @@ async function openFromCatalog() {
 }
 
 describe('plugin page return navigation', () => {
+  // Regression #2871 (98929118d6): the real market-detail install flow must refresh
+  // the current page after an update/replacement. The card helper only checks the
+  // navigation decision; it cannot catch clearing marketDetail in the parent.
+  // Minimal unit input: one installed plugin and either market update state.
+  // Only IPC is faked; page/detail components and the install flow stay real.
+  // File alone: 20 tests, Vitest 5.29s / wall 6.12s on 2026-10-16.
+  it.each(['update-available', 'conflict'] as const)(
+    'keeps the market detail visible and refreshed after %s succeeds',
+    async (installState) => {
+      const installed: InstalledGhost = {
+        manifest: { ...detail.manifest, name: 'Installed Plugin', version: '0.9.0' },
+        dir: path.join('plugins', detail.ghostId),
+        enabled: true,
+        approval: { state: 'approved', revision: 'market-navigation-revision' },
+      };
+      const marketDetail = { ...detail, installState };
+      const refreshedDetail: PluginMarketDetail = {
+        ...detail,
+        installState: 'installed',
+        enabled: true,
+        description: 'Refreshed market details after installation',
+      };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      let installationComplete = false;
+      loadDetail.mockImplementation(async () =>
+        installationComplete ? refreshedDetail : marketDetail,
+      );
+      const install = vi.fn(async () => {
+        installationComplete = true;
+        return {
+          ghost: { ...installed, manifest: { ...installed.manifest, version: detail.version } },
+        };
+      });
+      Object.assign(window.electronAPI.pluginMarket, { install });
+      render(page(`/plugins?market=${detail.pluginId}`));
+      await screen.findByRole('heading', { level: 1, name: detail.name });
+      const marketPage = screen.getByRole('main');
+
+      fireEvent.click(screen.getByRole('button', {
+        name: installState === 'conflict'
+          ? 'settings.ghosts.market.replace'
+          : 'settings.ghosts.market.update',
+      }));
+
+      await screen.findByText(refreshedDetail.description!);
+      expect(install).toHaveBeenCalledWith(detail.pluginId, expect.objectContaining({
+        expectedReleaseId: detail.releaseId,
+        expectedManifest: detail.manifest,
+        expectedInstalledApproval: 'approved:market-navigation-revision',
+        allowSourceReplacement: installState === 'conflict',
+      }));
+      expect(screen.getByRole('main')).toBe(marketPage);
+      expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBeTruthy();
+      expect((screen.getByRole('button', {
+        name: 'settings.ghosts.market.installed',
+      }) as HTMLButtonElement).disabled).toBe(true);
+    },
+  );
+
+  it.each(['xd-ordinary', 'filo-ordinary'])(
+    'updates an ordinary root %s from a local file and offers export in packaged builds',
+    async (ghostId) => {
+      vi.stubEnv('DEV', false);
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      const installed: InstalledGhost = {
+        manifest: { ...detail.manifest, id: ghostId, name: ghostId },
+        dir: '/tmp/brain/' + ghostId,
+        namespace: null,
+        enabled: true,
+        approval: { state: 'approved', revision: 'ordinary-root-revision' },
+        trust: {
+          level: 'unverified',
+          publisherSigned: false,
+          publisherVerified: false,
+          reviewed: false,
+        },
+      };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      window.electronAPI.pluginMarket.snapshot = async () => ({
+        items: [],
+        unavailableReason: null,
+        customSourceNames: [],
+        unavailableCustomSourceNames: [],
+      });
+      render(page('/plugins?ghost=' + ghostId));
+      await screen.findByRole('button', { name: 'settings.ghosts.detail.backToList' });
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+        { button: 0, ctrlKey: false },
+      );
+      expect(
+        screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
+      ).toBeTruthy();
+      fireEvent.click(
+        screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
+      );
+      expect(pickAndUpdateGhost).toHaveBeenCalledWith(ghostId, { t: translation.t });
+    },
+  );
+
   it.each(['button', 'Escape'] as const)(
     '%s cancels the recommendation and restores the catalog scroll position',
     async (method) => {
@@ -161,7 +277,7 @@ describe('plugin page return navigation', () => {
       if (method === 'button') {
         fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
       } else {
-        fireEvent.keyDown(window, { key: 'Escape' });
+        fireEvent.keyDown(document.body, { key: 'Escape' });
       }
 
       expect(screen.getByRole('main').scrollTop).toBe(640);
@@ -177,7 +293,7 @@ describe('plugin page return navigation', () => {
   it('restores ordinary catalog navigation without a pending recommendation', async () => {
     render(page('/plugins'));
     await openFromCatalog();
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(screen.getByRole('main').scrollTop).toBe(640);
     expect(getPendingPluginSuggestion()).toBeNull();
   });
@@ -198,7 +314,7 @@ describe('plugin page return navigation', () => {
     mounted.rerender(page(`/plugins?recommendation=${nonce}`));
     await waitFor(() => expect(loadDetail).toHaveBeenCalledTimes(2));
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document.body, { key: 'Escape' });
     await act(async () => {
       finishRefresh({ ...detail, name: 'Refreshed Plugin' });
     });
@@ -305,16 +421,68 @@ describe('retirement migration from the original plugin', () => {
     expect(document.querySelector('webview')).toBeNull();
   });
 
-  it('enables an existing replacement without reinstalling it', async () => {
-    const bridge = installFixture([old, replacement]);
+  it.each(['legacy', 'root'] as const)('enables the %s replacement without reinstalling it', async (layout) => {
+    const instanceId = layout === 'root' ? '_root__baguette-simulator' : 'baguette-simulator';
+    const installed = { ...replacement, namespace: null,
+      dir: path.join('plugins', ...(layout === 'root' ? ['_ns', '_root'] : []), 'baguette-simulator') };
+    const bridge = installFixture([old, installed]);
+    vi.mocked(bridge.ghosts.setEnabled).mockImplementation(async (id) => {
+      if (id !== instanceId) throw new Error('[NOT_FOUND] Wrong plugin instance');
+      return { ok: true };
+    });
     render(page('/plugins?retired=ios-simulator'));
     fireEvent.click(
       await screen.findByRole('button', { name: 'settings.ghosts.retirement.enable' }),
     );
     await waitFor(() =>
-      expect(bridge.ghosts.setEnabled).toHaveBeenCalledWith('baguette-simulator', true),
+      expect(bridge.ghosts.setEnabled).toHaveBeenCalledWith(instanceId, true,
+        'approved:' + installed.approval.revision),
     );
     expect(loadDetail).not.toHaveBeenCalled();
+  });
+
+  it('enables the market-matched organization replacement instead of its root sibling', async () => {
+    const root = { ...replacement, namespace: null, enabled: true, dir: 'plugins/baguette-simulator' };
+    const organization = {
+      ...replacement,
+      namespace: 'acme',
+      enabled: false,
+      dir: 'plugins/_ns/acme/baguette-simulator',
+    };
+    const bridge = installFixture([old, root, organization]);
+    const marketReplacement = {
+      ...detail,
+      pluginId: 'cb93909aaa6ac600bbc2f6b8a',
+      ghostId: 'baguette-simulator',
+      name: 'Baguette',
+      namespace: 'acme',
+      scope: 'organization' as const,
+      organizationId: 'org-acme',
+      installState: 'installed' as const,
+      enabled: false,
+      manifest: replacement.manifest,
+    };
+    bridge.pluginMarket.snapshot = async () => ({
+      items: [marketReplacement],
+      unavailableReason: null,
+      customSourceNames: [],
+      unavailableCustomSourceNames: [],
+    });
+    vi.mocked(bridge.ghosts.setEnabled).mockImplementation(async (id) => {
+      if (id !== '_ns__acme__baguette-simulator') throw new Error('[NOT_FOUND] Wrong plugin instance');
+      return { ok: true };
+    });
+    render(page('/plugins?retired=ios-simulator'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.ghosts.retirement.enable' }),
+    );
+    await waitFor(() =>
+      expect(bridge.ghosts.setEnabled).toHaveBeenCalledWith(
+        '_ns__acme__baguette-simulator',
+        true,
+        'approved:' + organization.approval.revision,
+      ),
+    );
   });
 
   it('opens an enabled replacement panel from the retirement notice', async () => {
@@ -334,5 +502,48 @@ describe('retirement migration from the original plugin', () => {
     render(page('/plugins?retired=ios-simulator'));
     expect(screen.queryByText('settings.ghosts.retirement.embeddedSimulator.title')).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.ghosts.retirement.install' })).toBeNull();
+  });
+});
+
+describe('organization catalog access notice', () => {
+  function marketSnapshot(organizationAccessError?: string, items = [detail]) {
+    window.electronAPI.pluginMarket.snapshot = async () => ({
+      items,
+      unavailableReason: null,
+      customSourceNames: [],
+      unavailableCustomSourceNames: [],
+      ...(organizationAccessError ? { organizationAccessError } : {}),
+    });
+  }
+
+  it('shows the upgrade hint beside a public plugin', async () => {
+    marketSnapshot('PLUGIN_NAMESPACE_CLIENT_REQUIRED');
+    render(page('/plugins'));
+    expect(await screen.findByText('Navigation Plugin')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.market.errors.namespaceClientRequired')).toBeTruthy();
+  });
+
+  it('keeps the catalog notice when nothing is installable', async () => {
+    marketSnapshot('PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', []);
+    render(page('/plugins'));
+    expect(
+      await screen.findByText('settings.ghosts.market.errors.organizationContextUnavailable'),
+    ).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.page.recommendedSection')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.page.emptyFiltered')).toBeNull();
+  });
+
+  it('uses the generic hint for an unknown organization access code', async () => {
+    marketSnapshot('PLUGIN_FUTURE_REASON');
+    render(page('/plugins'));
+    expect(await screen.findByText('settings.ghosts.market.errors.organizationUnavailable')).toBeTruthy();
+    expect(screen.getByText('Navigation Plugin')).toBeTruthy();
+  });
+
+  it('does not show an organization access hint when the catalog is complete', async () => {
+    render(page('/plugins'));
+    expect(await screen.findByText('Navigation Plugin')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.market.errors.namespaceClientRequired')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.market.errors.organizationUnavailable')).toBeNull();
   });
 });

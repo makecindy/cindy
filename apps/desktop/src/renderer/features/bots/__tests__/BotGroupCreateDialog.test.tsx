@@ -112,6 +112,18 @@ describe('BotGroupCreateDialog', () => {
     expect(onCreated).not.toHaveBeenCalled();
   });
 
+  it('starts with the private-chat teammate already picked and still lets the user change it', async () => {
+    const onCreated = vi.fn();
+    render(<BotGroupCreateDialog initialBotIds={['c']} onOpenChange={vi.fn()} onCreated={onCreated} />);
+    expect(checkbox('Bot c').getAttribute('aria-checked')).toBe('true');
+    expect(checkbox('Bot a').getAttribute('aria-checked')).toBe('false');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '新项目' } });
+    fireEvent.click(checkbox('Bot a'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new'));
+    expect(mocks.createBotGroup).toHaveBeenCalledWith({ name: '新项目', botIds: ['a', 'c'] });
+  });
+
   it('closes from Cancel', () => {
     const { onOpenChange } = renderDialog();
     fireEvent.click(screen.getByRole('button', { name: 'bots.cancel' }));

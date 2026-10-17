@@ -8,6 +8,8 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { parseSharedTaskPeer } from "@cindy/device-link";
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { cindyMakeOutboxPolicy } from './cindyMakeOutboxPolicy';
 import {
   createMobileMakerTransport,
   type RemoteInvoke,
@@ -39,20 +41,20 @@ import {
 import { buildQueuedTextMessage } from "./inputProjection";
 import { outboxItemAttachments } from "./sessionOutbox";
 import { sessionFromCreateResult } from "./newSession";
-import { dismissRecoveredPrecreatedSession, getNewSessionCreationTask } from "./newSessionCreation";
+import { dismissRecoveredPrecreatedSession, getNewSessionCreationTask, restoreNewSessionDurableEdit } from "./newSessionCreation";
 import {
   MobileSessionReferenceError,
   prepareMobileQueuedSessionReferences,
 } from "./sessionReferences";
 import { remoteSessionStore } from "./remoteSessionStore";
 import { cacheOutboxHistory } from "./outboxHistoryCache";
+import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
 import {
   isDurableOutboxHandedOff,
   isDurableOutboxSettled,
   type DurableOutboxRecord,
 } from "./durableOutbox";
-import type { InputProjection } from "./types";
 
 /** Runs only while the OS gives the app execution time; foreground/reconnect resume the same ledger. */
 export function MobileOutboxBridge() {
@@ -87,6 +89,11 @@ export function MobileOutboxBridge() {
     const guard = () => {
       if (!isCurrent()) throw new Error("OUTBOX_OWNER_CHANGED");
     };
+    const knownSession = (record: DurableOutboxRecord) =>
+      remoteSessionStore.getSessions().find(session =>
+        session.id === record.item.sessionId && session.deviceLinkDeviceId === record.deviceId);
+    const hidden = (record: DurableOutboxRecord) =>
+      !CINDY_MAKE_ENABLED && isCindyMakeSource(knownSession(record)?.source);
     const invoke: RemoteInvoke = async (deviceId, channel, args) => {
       guard();
       const result = await latest.current.link.invoke(deviceId, channel, args, {
@@ -102,6 +109,7 @@ export function MobileOutboxBridge() {
           guard();
           if (!mobileDurableOutbox.getSnapshot().includes(record))
             throw new Error("OUTBOX_STALE_WRITE");
+          if (hidden(record)) throw new Error('OUTBOX_SESSION_DISABLED');
         };
         guardRecord();
         const result = await latest.current.link.invoke(
@@ -134,7 +142,8 @@ export function MobileOutboxBridge() {
       if (!isCurrent()) return;
       const keys = new Set<string>();
       for (const record of mobileDurableOutbox.getSnapshot()) {
-        if (isDurableOutboxSettled(record)) continue;
+        if (isDurableOutboxSettled(record) || hidden(record)) continue;
+        if (restoreNewSessionDurableEdit(record)) continue;
         if (record.creation?.cancelled) {
           dismissRecoveredPrecreatedSession({ sessionId: record.item.sessionId, deviceId: record.deviceId });
           continue;
@@ -181,13 +190,18 @@ export function MobileOutboxBridge() {
       canRun: (r) =>
         AppState.currentState !== "background" &&
         AppState.currentState !== "inactive" &&
-        (isDurableOutboxSettled(r) ||
+        (hidden(r) || isDurableOutboxSettled(r) ||
           (!r.suspended && !r.creation?.cancelled &&
             needsReconciliation(r) &&
             !isDurableOutboxCreationHeld(r.item.sessionId) &&
             latest.current.link.status === "online" &&
             latest.current.link.getPresenceAvailability(r.deviceId) !== false &&
             getNewSessionCreationTask(r.item.sessionId) === null)),
+      sessionPolicy: (record) => cindyMakeOutboxPolicy(record, {
+        knownSession: () => knownSession(record),
+        readSession: () => maker(record).getSession(record.item.sessionId),
+        isCurrent: () => isCurrent() && mobileDurableOutbox.getSnapshot().includes(record),
+      }),
       projection: async (r) => {
         epochs.set(leaseKey(r), {
           authority: remoteSessionStore.captureInputProjectionAuthorityEpoch(
@@ -272,6 +286,7 @@ export function MobileOutboxBridge() {
             token,
             deviceId: r.deviceId,
             sharedTaskId: parseSharedTaskPeer(r.deviceId)?.sharedTaskId,
+            isActive: () => isCurrent() && mobileDurableOutbox.getSnapshot().includes(r),
           },
         );
         if (!isCurrent() || !mobileDurableOutbox.getSnapshot().includes(r)) {
@@ -291,17 +306,24 @@ export function MobileOutboxBridge() {
             }
           : attachment;
       },
-      enqueue: (r) =>
-        invokeOwned(r)<InputProjection>(r.deviceId, "maker:input:enqueue", [
+      beforeEnqueue: async (r) => {
+        if (r.resourceRef) {
+          await latest.current.link.openLink(r.deviceId);
+          guard();
+          await validateOutboxResourceBinding(invokeOwned(r), r.deviceId, r.item.sessionId, r.resourceRef, i18n.language);
+          guard();
+        }
+      },
+      enqueue: (r) => maker(r).input.enqueue(
           r.item.sessionId,
-          r.prepared,
+          r.prepared!,
           {
             sendAtMs: r.sendAtMs,
             ...(r.clearBoundaryMs !== undefined
               ? { expectedClearBoundaryMs: r.clearBoundaryMs }
               : {}),
           },
-        ]),
+        ),
       cancel: async (r) => {
         const result = await invokeOwned(r)<{
           inputDeliveryCancelled?: boolean;
@@ -373,6 +395,7 @@ export function MobileOutboxBridge() {
         if (isCurrent()) Alert.alert(i18n.t("session.outbox.restoreFailed"));
       });
     const off = mobileDurableOutbox.subscribe(run);
+    const offSessions = remoteSessionStore.subscribe(run);
     const timer = setInterval(run, 2_000);
     const appState = AppState.addEventListener("change", (state) => {
       if (state === "active") {
@@ -385,6 +408,7 @@ export function MobileOutboxBridge() {
       delivery.stop();
       if (runnerRef.current === delivery) runnerRef.current = null;
       off();
+      offSessions();
       clearInterval(timer);
       appState.remove();
       for (const lease of leases.values()) lease.release();

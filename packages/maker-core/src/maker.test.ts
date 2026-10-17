@@ -1414,6 +1414,7 @@ describe('Maker session close events', () => {
       if (event.type === 'session:closed' && event.sessionId === 'session-crash') {
         expect(event.reason).toBe('unexpected');
         expect(maker.getSessionCloseReason(event.session)).toBe('unexpected');
+        expect(event.session.wasClosedByRuntime()).toBe(true);
         resolveClosed();
       }
     });
@@ -2166,6 +2167,24 @@ describe('Maker session capabilities', () => {
   });
 });
 
+describe('Session engine MCP tool status', () => {
+  it('reads the live engine and reports an engine without a status entry as null', async () => {
+    const read = vi.fn(async () => ({ state: 'connected' as const, tools: [{ name: 'search' }] }));
+    const codex = createAgent(async (opts) => ({
+      ...createHandle({ id: opts.sessionId ?? 'with-status' }), readMcpServerTools: read,
+    }));
+    const pi = createAgent(async (opts) => createHandle({ id: opts.sessionId ?? 'plain', agentKind: 'pi' }), 'pi');
+    const maker = new Maker({ agents: { codex, pi }, storage: createStorage(), logger: createLogger() });
+    try {
+      const withStatus = await maker.createSession({ id: 'with-status', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      const plain = await maker.createSession({ id: 'plain', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+      expect(await withStatus.readMcpServerTools('custom_omc')).toEqual({ state: 'connected', tools: [{ name: 'search' }] });
+      expect(read).toHaveBeenCalledWith('custom_omc');
+      expect(await plain.readMcpServerTools('custom_omc')).toBeNull();
+    } finally { await maker.shutdown(); }
+  });
+});
+
 describe('Maker Pi runtime skill status', () => {
   it('keeps managed skills pinned to the active session launch snapshot', async () => {
     const managedPath = '/managed/context-mode/SKILL.md';
@@ -2536,6 +2555,7 @@ describe('Maker Pi runtime skill status', () => {
       vi.spyOn(fsPromises, 'realpath').mockImplementation(async (...args) => {
         if (!delayed) {
           delayed = true;
+          // real-wait: keep the realpath operation pending to exercise the cancellation race.
           await new Promise((resolve) => setTimeout(resolve, 300));
         }
         return realRealpath(...args);
@@ -3503,6 +3523,7 @@ describe('Session turn send guard', () => {
       await closed;
       expect(vi.getTimerCount()).toBe(0);
       expect(terminalErrors).toEqual([]);
+      expect(session.wasClosedByRuntime()).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -3620,6 +3641,32 @@ describe('Session turn send guard', () => {
     await closePromise;
     expect(session.getStatus()).toBe('closed');
     expect(handle.close).toHaveBeenCalledTimes(1);
+    // An external close that began first keeps ownership of the cause.
+    expect(session.wasClosedByRuntime()).toBe(false);
+  });
+
+  it('does not report direct close() or closeIfIdle() as a runtime self-close', async () => {
+    const createIdleSession = (id: string) => {
+      const handle = createHandle({ id: `thread-${id}` });
+      handle.close = vi.fn(async () => undefined);
+      return new Session({
+        id,
+        agentKind: 'codex',
+        workDir: '/repo',
+        handle,
+        capabilities: createAgent(async () => handle).capabilities,
+        logger: createLogger(),
+      });
+    };
+    const direct = createIdleSession('session-direct-close');
+    await direct.close();
+    expect(direct.getStatus()).toBe('closed');
+    expect(direct.wasClosedByRuntime()).toBe(false);
+
+    const idle = createIdleSession('session-close-if-idle');
+    await expect(idle.closeIfIdle()).resolves.toBe(true);
+    expect(idle.getStatus()).toBe('closed');
+    expect(idle.wasClosedByRuntime()).toBe(false);
   });
 
   it('does not revive a closed session when abort is called after the event iterator crashes', async () => {

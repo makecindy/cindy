@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { BotTodoList } from './BotTodoList';
+import { useWorkbenchSessionPages } from './useWorkbenchSessionPages';
+import { useWorkbenchSessionActions } from './useWorkbenchSessionActions';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   ArrowLeft,
   ArrowUp,
@@ -13,6 +16,7 @@ import {
   GitPullRequest,
   Lightbulb,
   Link2,
+  MoreHorizontal,
   Plus,
   Square,
   SquareArrowOutUpRight,
@@ -24,6 +28,12 @@ import { useNavigate } from 'react-router-dom';
 import type { Routine, RoutineRun } from '@cindy/maker-scheduler';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { FileTypeTile } from '@/components/ui/file-type-tile';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -32,6 +42,7 @@ import { collectCachedGeneratedFiles } from '@/components/chat/generatedFilesPro
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { useElementVisible } from '@/cindy-brain/ghostUnreadStore';
+import type { Session } from '@/lib/ccAgent.types';
 import type { PrStatusKind } from '@/lib/gitContext.types';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -60,12 +71,14 @@ import {
 import { useBotDelegations } from './botDelegationLive';
 import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
 import { useBotProfiles } from './botStore';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import {
   buildWorkbenchProjectOptions,
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
   countUnjudgedCandidates,
   groupWorkbenchTiles,
+  summarizeWorkbenchGroups,
   workbenchGroupHasFollowUp,
   tierWorkbenchProjectOptions,
   type ExternalSessionCandidate,
@@ -74,6 +87,7 @@ import {
   type WorkbenchProjectOption,
   type WorkbenchRoutineInput,
   type WorkbenchTile,
+  type WorkbenchTileGroup,
 } from './botWorkbenchProjection';
 
 /**
@@ -81,11 +95,12 @@ import {
  *
  * - 没接手项目时:从已有项目里选一个 →「交给<伙伴>」,两次点击完成接手。接手 = 理解:
  *   只记下目录、告诉伙伴一声,不批量导入;伙伴随后读候选、写判断,条目随之出现。
- * - 接手后:项目胶囊、伙伴还在读时一行「正在了解…」、单列任务列表、最近产出。项目里最近
- *   30 天的 Cindy 任务(含主人自己开的)都在,随任务列表实时更新。列表按 等你 / 在做 / 待做 /
- *   做完 分组(做完默认折叠),每条两层:完整标题 + 伙伴的意见(末尾可带 PR 状态标)。
+ * - 接手后一列到底:项目胶囊 → 一句汇总 → 任务列表 → 待办 → 产出。
+ *   任务列表只有一套:伙伴负责的 Cindy 任务、PR / issue / 建议、项目自动化与伙伴的例行任务,
+ *   按 等你 / 在做 / 待做 / 做完 分组(空组不出,做完默认折叠,已归档的负责任务按页接在做完最底部),
+ *   每条两层:完整标题 + 伙伴的意见(末尾可带 PR 状态标)。
  * - 推进:待做 / 等你 两组的「跟进」以主人身份让伙伴在左边接着干;点一条在本标签内打开详情:
- *   伙伴的判断、PR、最近内容、补一句让伙伴接着做。
+ *   伙伴的判断、正在做、产出、最近内容、补一句让伙伴接着做;任务操作收在条目的「…」里。
  */
 
 /** 默认展示几格;「全部 N」展开其余。 */
@@ -222,17 +237,19 @@ function useWorkbenchData(botId: string): BotWorkbenchData | null {
       return;
     }
     let alive = true;
+    let request = 0;
     const load = () => {
+      const seq = ++request;
       const owner = getDataOwnerGeneration();
       void api
         .get(botId)
         .then((next) => {
-          if (alive && isDataOwnerGenerationCurrent(owner)) {
-            setData(next ? { directories: next.directories ?? [], tasks: next.tasks ?? {} } : EMPTY_WORKBENCH);
+          if (alive && seq === request && isDataOwnerGenerationCurrent(owner)) {
+            setData(next ? { directories: next.directories ?? [], tasks: next.tasks ?? {}, responsibleSessionIds: next.responsibleSessionIds ?? [] } : EMPTY_WORKBENCH);
           }
         })
         .catch(() => {
-          if (alive) setData((previous) => previous ?? EMPTY_WORKBENCH);
+          if (alive && seq === request && isDataOwnerGenerationCurrent(owner)) setData(EMPTY_WORKBENCH);
         });
     };
     setData(null);
@@ -243,9 +260,11 @@ function useWorkbenchData(botId: string): BotWorkbenchData | null {
       // 伙伴继续一条本机会话时会先把它导入;刷新任务列表,让新任务出现在格子里。
       emitRefresh();
     });
+    const offDelegation = window.electronAPI?.maker?.onBotDelegationChanged?.(() => load());
     return () => {
       alive = false;
       off?.();
+      offDelegation?.();
     };
   }, [botId]);
   return data;
@@ -314,6 +333,17 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   const judgments = useMemo(() => workbench?.tasks ?? {}, [workbench]);
   const projectDirs = useMemo(() => directories.map((dir) => dir.path), [directories]);
   const candidates = useExternalCandidates(botId, projectDirs.join('\n'));
+  const [listRevision, setListRevision] = useState(0);
+  const responsibleIds = useMemo(() => workbench?.responsibleSessionIds ?? [], [workbench]);
+  const listScope = `${botId}:${projectDirs.join('\n')}:${listRevision}`;
+  // 活跃与归档按同一责任 ID 集合分别有界读取;归档的接在「做完」最底部,按页加载。
+  const activePages = useWorkbenchSessionPages(listScope, 'active', Boolean(workbench), responsibleIds);
+  const archivedPages = useWorkbenchSessionPages(listScope, 'archived', Boolean(workbench), responsibleIds);
+  const sessionRows = activePages.rows;
+  const refreshList = useCallback(() => { setListRevision(value => value + 1); emitRefresh(); }, []);
+  const actionRows = useMemo(() => [...activePages.rows, ...archivedPages.rows], [activePages.rows, archivedPages.rows]);
+  const sessionActions = useWorkbenchSessionActions(actionRows, refreshList);
+
   const hiddenIds = useMemo(() => collectBotHiddenSessionIds(profiles), [profiles]);
   const erroredIds = useMemo(
     () => new Set([...attentionKinds].filter(([, kind]) => kind === 'error').map(([id]) => id)),
@@ -323,7 +353,9 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   const tiles = useMemo(
     () =>
       buildWorkbenchTiles({
-        sessions,
+        sessions: sessionRows,
+        archivedSessions: archivedPages.rows,
+        responsibleSessionIds: responsibleIds,
         hiddenIds,
         projectDirs,
         caseInsensitive,
@@ -336,7 +368,9 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         candidates,
       }),
     [
-      sessions,
+      sessionRows,
+      archivedPages.rows,
+      responsibleIds,
       hiddenIds,
       projectDirs,
       caseInsensitive,
@@ -362,12 +396,18 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   const [adding, setAdding] = useState(false);
   const picking = workbench !== null && (directories.length === 0 || adding);
+  // 还没接手项目(或正在加项目)时,伙伴负责的任务与例行任务照常列出;项目来的条目等接手后再出。
+  const listTiles = useMemo(
+    () => (picking ? tiles.filter((tile) => tile.type === 'routine' || tile.type === 'session') : tiles),
+    [picking, tiles],
+  );
+  const groups = useMemo(() => groupWorkbenchTiles(listTiles), [listTiles]);
   const now = useNow(tiles.some((tile) => tile.state === 'running' && tile.startedAtMs !== null));
 
   const openTile = useCallback(
     (tile: WorkbenchTile) => {
       if (tile.type === 'session' || tile.type === 'external' || tile.type === 'item') {
-        // 任务在本标签内打开详情,不换路由、不跳任务页。
+        // 任务在本标签内打开详情,不换路由、不跳任务页;归档的也只是看,不恢复。
         setDetailOpened(tile);
       } else if (tile.type === 'schedule') {
         if (!inSidebarWindow) navigate(scheduleFocusPath(tile.id));
@@ -431,18 +471,12 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
     const out: Array<{ path: string; name: string }> = [];
     const seen = new Set<string>();
     const push = (file: { path: string; name: string }) => {
-      if (out.length >= MAX_OUTPUTS || seen.has(file.path)) return;
+      if (out.length >= MAX_OUTPUTS_LISTED || seen.has(file.path)) return;
       seen.add(file.path);
       out.push(file);
     };
     for (const task of [...delegations].sort((a, b) => b.createdAt - a.createdAt)) {
-      for (const artifact of task.artifacts) {
-        if (!artifact.absolutePath || artifact.status === 'deleted') continue;
-        const name = artifact.absolutePath.split(/[\\/]/).pop() ?? artifact.path;
-        if (isBotPrimaryGeneratedFile({ path: artifact.absolutePath, name, source: 'tool' })) {
-          push({ path: artifact.absolutePath, name });
-        }
-      }
+      for (const file of delegationOutputs(task)) push(file);
     }
     if (chat && chatWorkingDir && chat.messages.length > 0) {
       const files = collectCachedGeneratedFiles(chat.messages, chatWorkingDir);
@@ -463,9 +497,10 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
     );
   }
 
-  const routineTiles = tiles.filter((tile) => tile.type === 'routine');
-
   if (detailTile && (detailTile.type === 'session' || detailTile.type === 'external' || detailTile.type === 'item')) {
+    const delegation = detailTile.type === 'session'
+      ? delegations.find((task) => task.childSessionId === detailTile.id) ?? null
+      : null;
     return (
       <TaskDetail
         botId={botId}
@@ -476,6 +511,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         canNavigate={!inSidebarWindow}
         projectDirs={projectDirs}
         caseInsensitive={caseInsensitive}
+        outputs={delegation ? delegationOutputs(delegation) : []}
         onBack={() => setDetailOpened(null)}
       />
     );
@@ -483,6 +519,22 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   // 最近交给伙伴的项目排在最前,正在了解的通常就是它。
   const understandingProject = understanding ? (directories[0]?.name ?? '') : '';
+  const pageControl = (page: typeof activePages, showLoading: boolean) =>
+    page.loading
+      ? showLoading
+        ? <Spinner size={14} className="my-2 ml-2" role="status" aria-label={t('ccAgent.common.loading')} />
+        : null
+      : page.error || page.hasMore
+        ? (
+            <Button variant="secondary" size="sm" tone="quiet" compact className="my-1" onClick={() => void page.load()}>
+              {t(page.error ? 'commonUi.retry' : 'settings.contacts.list.loadMore')}
+            </Button>
+          )
+        : null;
+  const rowMenu = (tile: WorkbenchTile) => {
+    const row = tile.type === 'session' ? sessionActions.byId.get(tile.id) : undefined;
+    return row ? <SessionRowMenu row={row} canNavigate={!inSidebarWindow} actions={sessionActions} /> : null;
+  };
 
   return (
     <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
@@ -507,61 +559,117 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
             onAdd={directories.length < BOT_WORKBENCH_MAX_DIRECTORIES ? () => setAdding(true) : undefined}
           />
           {understanding ? (
-            <p className="flex items-center gap-1.5 px-5 pb-3 pt-1 text-13 leading-5 text-[var(--text-secondary)]">
+            <p className="flex items-center gap-1.5 px-5 pt-2.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
               <Spinner size={12} aria-hidden className="shrink-0" />
               <span className="min-w-0 truncate">
                 {t('bots.workbench.understanding', { name: botName, project: understandingProject })}
               </span>
             </p>
           ) : null}
+          <WorkbenchSummary groups={groups} />
         </>
       )}
 
-      {/* 还没接手项目时,伙伴已有的自动化(例行任务、导入来的自动化)照常列在下面。 */}
-      {!picking || routineTiles.length > 0 ? (
-        <TaskGroups
-          tiles={picking ? routineTiles : tiles}
-          now={now}
-          language={i18n.language}
-          showEmpty={!picking && !understanding}
-          followingKey={followingKey}
-          onOpen={openTile}
-          onFollowUp={followUp}
-        />
+      <TaskGroups
+        groups={groups}
+        now={now}
+        language={i18n.language}
+        followingKey={followingKey}
+        onOpen={openTile}
+        onFollowUp={followUp}
+        rowMenu={rowMenu}
+        archivedFooter={pageControl(archivedPages, true)}
+      />
+      {/* No「做完」group yet (nothing finished, no archived row loaded): a failed archived
+          read still needs its retry somewhere, or it could never be reloaded. */}
+      {archivedPages.error && !groups.some((group) => group.key === 'done') ? (
+        <div className="px-5">{pageControl(archivedPages, false)}</div>
+      ) : null}
+      {activePages.error || (activePages.hasMore && !activePages.loading) ? (
+        <div className="px-5">{pageControl(activePages, false)}</div>
       ) : null}
 
-      {!picking ? (
-        <section className="border-t border-[var(--border-default)] px-5 pb-5">
-          <h3 className="flex h-11 items-center text-16 font-medium leading-6 text-[var(--text-primary)]">
-            {t('bots.workbench.outputs')}
-          </h3>
-          {outputs.length === 0 ? (
-            <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
-              {t('bots.workbench.outputsEmpty', { name: botName })}
-            </p>
-          ) : (
-            <div className="grid grid-cols-4 gap-2.5">
-              {outputs.map((file) => (
-                <button
-                  key={file.path}
-                  type="button"
-                  title={file.path}
-                  onClick={() => void window.electronAPI.openPath?.(file.path)}
-                  className="group flex min-w-0 flex-col items-center gap-1.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  <span className="flex h-[52px] w-full items-center justify-center rounded-xl border border-[var(--border-default)] transition-colors group-hover:bg-[var(--surface-hover)]">
-                    <FileTypeTile name={file.name} />
-                  </span>
-                  <span className="w-full truncate text-center text-12 leading-4 text-[var(--text-secondary)]">
-                    {file.name}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      ) : null}
+      <BotTodoList botId={botId} />
+
+      {!picking ? <WorkbenchOutputs outputs={outputs} botName={botName} /> : null}
     </div>
+  );
+}
+
+/** 产出区最多收集多少个文件(默认只显示前 4 个,「全部」展开其余)。 */
+const MAX_OUTPUTS_LISTED = 60;
+
+type DelegationLike = ReturnType<typeof useBotDelegations>[number];
+
+/** 一件后台任务交回的主要文件(已删除的不算)。 */
+function delegationOutputs(task: DelegationLike): Array<{ path: string; name: string }> {
+  const out: Array<{ path: string; name: string }> = [];
+  for (const artifact of task.artifacts) {
+    if (!artifact.absolutePath || artifact.status === 'deleted') continue;
+    const name = artifact.absolutePath.split(/[\\/]/).pop() ?? artifact.path;
+    if (isBotPrimaryGeneratedFile({ path: artifact.absolutePath, name, source: 'tool' })) {
+      out.push({ path: artifact.absolutePath, name });
+    }
+  }
+  return out;
+}
+
+/** 胶囊下面的一句汇总:「1 件等你 · 2 件在做 · 4 件待做」,为 0 的不说。 */
+function WorkbenchSummary({ groups }: { groups: readonly WorkbenchTileGroup[] }) {
+  const { t } = useTranslation();
+  const counts = summarizeWorkbenchGroups(groups);
+  const parts = (['waiting', 'running', 'todo'] as const)
+    .filter((key) => counts[key] > 0)
+    .map((key) => t(`bots.workbench.summary.${key}`, { count: counts[key] }));
+  if (parts.length === 0) return null;
+  return <p className="px-5 pt-2.5 text-12 leading-[1.5] text-[var(--text-secondary)]">{parts.join(' · ')}</p>;
+}
+
+function WorkbenchOutputs({ outputs, botName }: { outputs: ReadonlyArray<{ path: string; name: string }>; botName: string }) {
+  const { t } = useTranslation();
+  const [all, setAll] = useState(false);
+  const shown = all ? outputs : outputs.slice(0, MAX_OUTPUTS);
+  return (
+    <section className="px-5 pb-5" aria-label={t('bots.workbench.outputs')}>
+      <div className="mb-1.5 mt-3.5 flex min-h-[22px] items-center gap-1.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+        <h3>{t('bots.workbench.outputs')}</h3>
+        {outputs.length > 0 ? <span className="tabular-nums text-[var(--text-tertiary)]">{outputs.length}</span> : null}
+        {outputs.length > MAX_OUTPUTS ? (
+          <button
+            type="button"
+            aria-expanded={all}
+            onClick={() => setAll((value) => !value)}
+            className="ml-auto flex h-6 items-center rounded-lg px-1.5 text-12 text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            {t(all ? 'bots.workbench.outputsLess' : 'bots.workbench.outputsAll')}
+          </button>
+        ) : null}
+      </div>
+      {outputs.length === 0 ? (
+        <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          {t('bots.workbench.outputsEmpty', { name: botName })}
+        </p>
+      ) : (
+        <div className="grid grid-cols-4 gap-2">
+          {shown.map((file) => (
+            <button
+              key={file.path}
+              type="button"
+              title={file.path}
+              onClick={() => void window.electronAPI.openPath?.(file.path)}
+              className="group flex min-w-0 flex-col items-center gap-1.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              <span className="flex h-[52px] w-full items-center justify-center rounded-xl border border-[var(--border-default)] transition-colors group-hover:bg-[var(--surface-hover)]">
+                <FileTypeTile name={file.name} />
+              </span>
+              <span className="w-full truncate text-center text-12 leading-4 text-[var(--text-secondary)]">
+                {file.name}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -865,8 +973,8 @@ function ProjectCapsules({
 }) {
   const { t } = useTranslation();
   const remove = useCallback(
-    (dirPath: string) => {
-      void window.electronAPI?.localDb?.bots?.workbench?.removeDirectory(botId, dirPath).catch(() => {});
+    (dirPath: string, deviceId?: string) => {
+      void window.electronAPI?.localDb?.bots?.workbench?.removeDirectory(botId, dirPath, deviceId).catch(() => {});
     },
     [botId],
   );
@@ -874,19 +982,20 @@ function ProjectCapsules({
     <div className="flex flex-wrap items-center gap-2 px-5 pt-3">
       {directories.map((dir) => (
         <span
-          key={dir.path}
-          title={dir.exists ? dir.path : t('bots.workbench.dirMissing')}
+          key={`${dir.deviceId ?? ''}:${dir.path}`}
+          title={dir.deviceId ? dir.path : dir.exists ? dir.path : t('bots.workbench.dirMissing')}
           className={cn(
             'inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[var(--surface-chip)] pl-3 pr-1 text-13',
-            dir.exists ? 'text-[var(--text-primary)]' : 'text-[var(--text-danger)]',
+            dir.deviceId ? 'text-[var(--text-secondary)]' : dir.exists ? 'text-[var(--text-primary)]' : 'text-[var(--text-danger)]',
           )}
         >
           <Folder size={14} strokeWidth={1.8} aria-hidden className="shrink-0" />
           <span className="min-w-0 truncate">{dir.name}</span>
+          {dir.deviceId ? <DirectoryElsewhere deviceId={dir.deviceId} /> : null}
           <Tip text={t('bots.workbench.removeProject', { name: botName, project: dir.name })}>
             <button
               type="button"
-              onClick={() => remove(dir.path)}
+              onClick={() => remove(dir.path, dir.deviceId)}
               aria-label={t('bots.workbench.removeProject', { name: botName, project: dir.name })}
               className={cn(ICON_BUTTON_CLASS, 'size-6 text-[var(--text-tertiary)]')}
             >
@@ -913,11 +1022,30 @@ function ProjectCapsules({
 
 // ─── 任务列表:单列、按四组、每条两层 ─────────────────────────────────
 
-/** 「等你」组第二层写等的是什么;其它组不写状态词。 */
+/** 「等你」第二层:状态 + 等的是什么(权限 / 提问 / 方案…,有具体内容时带上)。 */
 function waitingText(tile: WorkbenchTile, t: Translate): string {
-  if (tile.state === 'waiting') return t('bots.workbench.line.waiting');
-  const kind = tile.line.kind;
-  if (kind === 'interrupted' || kind === 'errored' || kind === 'failed') return t(`bots.workbench.line.${kind}`);
+  const line = tile.line;
+  if (tile.state === 'waiting') {
+    const interaction = line.kind === 'waiting' ? line.interaction : null;
+    const label = t(
+      interaction === 'permission'
+        ? 'bots.workbench.line.waitingPermission'
+        : interaction === 'ask_user_question'
+          ? 'bots.workbench.line.waitingQuestion'
+          : interaction === 'plan_review'
+            ? 'bots.workbench.line.waitingPlan'
+            : interaction === 'plugin_setup' || interaction === 'input_handoff'
+              ? 'bots.workbench.line.waitingAction'
+              : 'bots.workbench.line.waiting',
+    );
+    const text = line.kind === 'waiting' ? line.text : null;
+    return text ? t('bots.workbench.line.waitingFor', { label, text }) : label;
+  }
+  if (line.kind === 'failed') {
+    const label = t('bots.workbench.line.failed');
+    return line.text ? t('bots.workbench.line.waitingFor', { label, text: line.text }) : label;
+  }
+  if (line.kind === 'interrupted' || line.kind === 'errored') return t(`bots.workbench.line.${line.kind}`);
   return t('bots.workbench.line.errored');
 }
 
@@ -937,21 +1065,282 @@ function automationLine(tile: WorkbenchTile, t: Translate, language: string, now
   return extra ? `${cycle} · ${extra}` : cycle;
 }
 
+type RowNote = { text: string; accent?: string | null } | null;
+
 /**
- * 第二层只写「伙伴的意见」:伙伴写的下一步;没有时在做的写「在做 · 用时」,自动化写周期与下次运行,
- * 排队的写「排队中」,做完的不写。来源与相对时间都不显示(在详情里)。
+ * 第二层只写「伙伴的意见」:
+ * - 等你:状态 + 等的是什么(伙伴另写了下一步时接在后面);
+ * - 在做:当前动作(运行色)+ 用时;没有动作时「在做 · 用时」;
+ * - 待做:伙伴写的下一步;没有时「排队中」/「没做完」/「聊过没下文」;
+ * - 做完:不写;自动化写周期与下次运行,已归档的写「已归档」。
+ * 来源与相对时间都不显示(在详情里)。
  */
-function tileNote(tile: WorkbenchTile, group: WorkbenchGroupKey, t: Translate, language: string, now: number): string | null {
-  if ('next' in tile && tile.next) return tile.next;
+function rowNote(tile: WorkbenchTile, group: WorkbenchGroupKey, t: Translate, language: string, now: number): RowNote {
+  const next = 'next' in tile && tile.next ? tile.next : null;
   const automation = automationLine(tile, t, language, now);
-  if (automation) return automation;
-  if (group === 'running') {
-    return tile.startedAtMs
-      ? `${t('bots.workbench.state.running')} · ${elapsed(tile.startedAtMs, now)}`
-      : t('bots.workbench.state.running');
+  if (group === 'waiting') {
+    const waiting = waitingText(tile, t);
+    return { text: next ? `${waiting} · ${next}` : waiting };
   }
-  if (tile.state === 'queued') return t('bots.workbench.line.queued');
-  return null;
+  if (group === 'running') {
+    const time = tile.startedAtMs ? elapsed(tile.startedAtMs, now) : null;
+    if (tile.line.kind === 'action') return { accent: tile.line.text, text: time ?? '' };
+    if (automation && !time) return { text: `${t('bots.workbench.state.running')} · ${automation}` };
+    return { text: time ? `${t('bots.workbench.state.running')} · ${time}` : t('bots.workbench.state.running') };
+  }
+  if (group === 'todo') {
+    if (next) return { text: next };
+    if (tile.state === 'queued') return { text: t('bots.workbench.line.queued') };
+    if ('verdict' in tile && tile.verdict) return { text: t(`bots.workbench.verdict.${tile.verdict}`) };
+    return automation ? { text: automation } : null;
+  }
+  if (tile.type === 'session' && tile.archived) return { text: t('ccAgent.sidebar.filterStatus.archived') };
+  return automation ? { text: automation } : null;
+}
+
+/** 行首 16px 的状态字形:在做转圈、等你蓝点、待做空心圈、做完勾(自动化为时钟)。 */
+function LeadGlyph({ tile, group }: { tile: WorkbenchTile; group: WorkbenchGroupKey }) {
+  const { t } = useTranslation();
+  const label = t(`bots.workbench.group.${group}`);
+  let glyph: ReactNode;
+  if (group === 'running') {
+    glyph = <Spinner size={14} strokeWidth={2} role="img" aria-label={label} className="text-[var(--text-secondary)]" />;
+  } else if (group === 'waiting') {
+    glyph = <span role="img" aria-label={label} className="size-2 rounded-full bg-[var(--card-status-awaiting)]" />;
+  } else if (group === 'todo') {
+    glyph = (
+      <span
+        role="img"
+        aria-label={tile.state === 'queued' ? t('bots.workbench.state.queued') : label}
+        className={cn(
+          'size-3.5 rounded-full border-[1.5px] border-[var(--text-tertiary)]',
+          tile.state === 'queued' && 'border-dashed',
+        )}
+      />
+    );
+  } else {
+    const automation = tile.type === 'schedule' || tile.type === 'routine';
+    const Icon = automation ? Clock3 : CircleCheck;
+    glyph = (
+      <span role="img" aria-label={label} className="flex">
+        <Icon
+          size={14}
+          strokeWidth={1.8}
+          aria-hidden
+          className={
+            automation || (tile.type === 'session' && tile.archived)
+              ? 'text-[var(--text-tertiary)]'
+              : 'text-[var(--card-status-done)]'
+          }
+        />
+      </span>
+    );
+  }
+  return <span className="flex h-5 w-4 shrink-0 items-center justify-center">{glyph}</span>;
+}
+
+function TaskRow({
+  tile,
+  group,
+  now,
+  language,
+  following,
+  onOpen,
+  onFollowUp,
+  menu,
+}: {
+  tile: WorkbenchTile;
+  group: WorkbenchGroupKey;
+  now: number;
+  language: string;
+  /** 这一条刚点了「跟进」,在等伙伴开始干活。 */
+  following: boolean;
+  onOpen: (tile: WorkbenchTile) => void;
+  onFollowUp?: (tile: WorkbenchTile) => void;
+  /** 悬停才出现的「…」(Cindy 任务的打开 / 置顶 / 归档 / 删除)。 */
+  menu?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const title = tile.title || t('bots.workbench.untitled');
+  const note = rowNote(tile, group, t, language, now);
+  const { ref: observe, visible } = useElementVisible();
+  const pr = useTilePr(tile, visible);
+  return (
+    <li
+      ref={observe}
+      data-workbench-row={tile.key}
+      className="group -mx-2 flex min-w-0 items-start gap-1 rounded-lg transition-colors hover:bg-[var(--surface-hover)]"
+    >
+      <button
+        type="button"
+        onClick={() => onOpen(tile)}
+        aria-label={t('bots.workbench.openTask', { title, state: t(`bots.workbench.group.${group}`) })}
+        className="flex min-w-0 flex-1 items-start gap-2 rounded-lg py-2 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+      >
+        <LeadGlyph tile={tile} group={group} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="line-clamp-3 text-13 leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
+            {title}
+          </span>
+          {note || pr ? (
+            <span className="mt-0.5 flex min-w-0 items-start gap-1.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+              {note ? (
+                <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">
+                  {note.accent ? <span className="text-[var(--status-bar-accent)]">{note.accent}</span> : null}
+                  {note.accent && note.text ? ' · ' : null}
+                  {note.text}
+                </span>
+              ) : null}
+              {pr ? <PrTag pr={pr} /> : null}
+            </span>
+          ) : null}
+        </span>
+      </button>
+      <span className="flex shrink-0 items-center gap-0.5 pr-1.5 pt-1.5">
+        {menu}
+        {onFollowUp ? (
+          <button
+            type="button"
+            onClick={() => onFollowUp(tile)}
+            disabled={following}
+            aria-label={t('bots.workbench.followUp.aria', { title })}
+            className="flex h-6 items-center gap-1 rounded-full border border-[var(--border-default)] px-2.5 text-12 leading-4 text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default"
+          >
+            {following ? <Spinner size={12} aria-hidden /> : null}
+            {t('bots.workbench.followUp.label')}
+          </button>
+        ) : null}
+      </span>
+    </li>
+  );
+}
+
+type SessionActions = ReturnType<typeof useWorkbenchSessionActions>;
+
+/** Cindy 任务条目的「…」:与任务侧栏同一套操作与守卫;悬停或键盘聚焦时出现。 */
+function SessionRowMenu({ row, canNavigate, actions }: { row: Session; canNavigate: boolean; actions: SessionActions }) {
+  const { t } = useTranslation();
+  const archived = row.status === 'archived';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+          className="flex size-6 items-center justify-center rounded-lg text-[var(--text-tertiary)] opacity-0 outline-none transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] group-hover:opacity-100 data-[state=open]:opacity-100"
+        >
+          <MoreHorizontal size={14} aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {canNavigate ? (
+          <DropdownMenuItem onSelect={() => actions.open(row.id)}>{t('bots.workbench.detail.openInTasks')}</DropdownMenuItem>
+        ) : null}
+        {!archived ? (
+          <DropdownMenuItem onSelect={() => void actions.togglePin(row.id)}>
+            {t(row.pinnedAt ? 'ccAgent.sidebar.sessionMenu.unpin' : 'ccAgent.sidebar.sessionMenu.pin')}
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem onSelect={() => void actions.action(row.id, archived ? 'unarchive' : 'archive')}>
+          {t(archived ? 'ccAgent.sidebar.sessionMenu.unarchive' : 'ccAgent.sidebar.sessionMenu.archived')}
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="danger" onSelect={() => void actions.action(row.id, 'delete')}>
+          {t('ccAgent.sidebar.sessionMenu.delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+const GROUP_HEADING_CLASS = 'mb-0.5 mt-3.5 flex min-h-[22px] items-center gap-1.5 text-12 leading-[1.5] text-[var(--text-secondary)]';
+
+function TaskGroups({
+  groups,
+  now,
+  language,
+  followingKey,
+  onOpen,
+  onFollowUp,
+  rowMenu,
+  archivedFooter,
+}: {
+  groups: readonly WorkbenchTileGroup[];
+  now: number;
+  language: string;
+  followingKey: string | null;
+  onOpen: (tile: WorkbenchTile) => void;
+  onFollowUp?: (tile: WorkbenchTile) => void;
+  rowMenu?: (tile: WorkbenchTile) => ReactNode;
+  /** 「做完」展开后接在归档条目下面的加载更多 / 重试。 */
+  archivedFooter?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [openDone, setOpenDone] = useState(false);
+  if (groups.length === 0) return null;
+  return (
+    <div className="flex flex-col px-5 pb-1">
+      {groups.map((group) => {
+        const open = !group.defaultCollapsed || openDone;
+        const label = t(`bots.workbench.group.${group.key}`);
+        const heading = (
+          <>
+            <span>{label}</span>
+            <span className="tabular-nums text-[var(--text-tertiary)]">{group.total}</span>
+          </>
+        );
+        const followUp = onFollowUp && workbenchGroupHasFollowUp(group.key) ? onFollowUp : undefined;
+        const row = (tile: WorkbenchTile) => (
+          <TaskRow
+            key={tile.key}
+            tile={tile}
+            group={group.key}
+            now={now}
+            language={language}
+            following={followingKey === tile.key}
+            onOpen={onOpen}
+            onFollowUp={followUp}
+            menu={rowMenu?.(tile)}
+          />
+        );
+        return (
+          <section key={group.key} aria-label={label}>
+            {group.defaultCollapsed ? (
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOpenDone((value) => !value)}
+                className={cn(
+                  GROUP_HEADING_CLASS,
+                  '-mx-1 rounded-lg px-1 outline-none transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                <ChevronRight
+                  size={13}
+                  aria-hidden
+                  className={cn('text-[var(--text-tertiary)] transition-transform', open && 'rotate-90')}
+                />
+                {heading}
+              </button>
+            ) : (
+              <h3 className={GROUP_HEADING_CLASS}>{heading}</h3>
+            )}
+            {open ? (
+              <ul className="flex flex-col">
+                {group.tiles.map(row)}
+                {group.hiddenCount > 0 ? (
+                  <li className="py-1 pl-6 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                    {t('bots.workbench.olderCount', { count: group.hiddenCount })}
+                  </li>
+                ) : null}
+                {group.archivedTiles.map(row)}
+                {group.key === 'done' && archivedFooter ? <li className="pl-4">{archivedFooter}</li> : null}
+              </ul>
+            ) : null}
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 type TilePr = { number: number; kind: PrStatusKind | null; url: string };
@@ -1015,159 +1404,6 @@ function PrTag({ pr }: { pr: TilePr }) {
         {pr.kind ? ` · ${t(`ccAgent.gitContext.pr.status.${pr.kind}`)}` : ''}
       </span>
     </span>
-  );
-}
-
-function TaskRow({
-  tile,
-  group,
-  now,
-  language,
-  following,
-  onOpen,
-  onFollowUp,
-}: {
-  tile: WorkbenchTile;
-  group: WorkbenchGroupKey;
-  now: number;
-  language: string;
-  /** 这一条刚点了「跟进」,在等伙伴开始干活。 */
-  following: boolean;
-  onOpen: (tile: WorkbenchTile) => void;
-  onFollowUp?: (tile: WorkbenchTile) => void;
-}) {
-  const { t } = useTranslation();
-  const title = tile.title || t('bots.workbench.untitled');
-  const waiting = group === 'waiting' ? waitingText(tile, t) : null;
-  const note = tileNote(tile, group, t, language, now);
-  const second = waiting ? (note ? `${waiting} · ${note}` : waiting) : note;
-  const { ref: observe, visible } = useElementVisible();
-  const pr = useTilePr(tile, visible);
-  return (
-    <li
-      ref={observe}
-      className="group flex min-w-0 items-start rounded-xl bg-[var(--surface-elevated)] transition-colors hover:bg-[var(--surface-hover)]">
-      <button
-        type="button"
-        onClick={() => onOpen(tile)}
-        aria-label={t('bots.workbench.openTask', { title, state: t(`bots.workbench.group.${group}`) })}
-        className={cn(
-          'flex min-w-0 flex-1 flex-col rounded-xl py-3 pl-3.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          onFollowUp ? 'pr-2' : 'pr-3.5',
-        )}
-      >
-        <span className="line-clamp-3 text-14 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
-          {title}
-        </span>
-        {second || pr ? (
-          <span className="mt-1.5 flex min-w-0 items-start gap-1.5 text-13 leading-5 text-[var(--text-secondary)]">
-            {waiting ? (
-              <span aria-hidden className="mt-[7px] size-1.5 shrink-0 rounded-full bg-[var(--card-status-awaiting)]" />
-            ) : null}
-            {second ? <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">{second}</span> : null}
-            {pr ? <PrTag pr={pr} /> : null}
-          </span>
-        ) : null}
-      </button>
-      {onFollowUp ? (
-        <button
-          type="button"
-          onClick={() => onFollowUp(tile)}
-          disabled={following}
-          aria-label={t('bots.workbench.followUp.aria', { title })}
-          className="mr-2.5 mt-2.5 flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-2.5 text-12 font-medium leading-4 text-[var(--text-tertiary)] outline-none transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] group-hover:text-[var(--text-secondary)] disabled:cursor-default"
-        >
-          {following ? <Spinner size={12} aria-hidden /> : null}
-          {t('bots.workbench.followUp.label')}
-        </button>
-      ) : null}
-    </li>
-  );
-}
-
-function TaskGroups({
-  tiles,
-  now,
-  language,
-  showEmpty,
-  followingKey,
-  onOpen,
-  onFollowUp,
-}: {
-  tiles: readonly WorkbenchTile[];
-  now: number;
-  language: string;
-  showEmpty: boolean;
-  followingKey: string | null;
-  onOpen: (tile: WorkbenchTile) => void;
-  onFollowUp?: (tile: WorkbenchTile) => void;
-}) {
-  const { t } = useTranslation();
-  const groups = useMemo(() => groupWorkbenchTiles(tiles), [tiles]);
-  const [openDone, setOpenDone] = useState(false);
-  if (groups.length === 0) {
-    return showEmpty ? (
-      <p className="px-5 pb-5 pt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.tasksEmpty')}</p>
-    ) : null;
-  }
-  return (
-    <div className="flex flex-col gap-5 px-5 pb-5 pt-1">
-      {groups.map((group) => {
-        const open = !group.defaultCollapsed || openDone;
-        const label = t(`bots.workbench.group.${group.key}`);
-        const heading = (
-          <>
-            <span>{label}</span>
-            <span className="font-normal tabular-nums text-[var(--text-tertiary)]">{group.total}</span>
-          </>
-        );
-        const followUp = onFollowUp && workbenchGroupHasFollowUp(group.key) ? onFollowUp : undefined;
-        return (
-          <section key={group.key} aria-label={label}>
-            {group.defaultCollapsed ? (
-              <button
-                type="button"
-                aria-expanded={open}
-                onClick={() => setOpenDone((value) => !value)}
-                className="-mx-1 flex h-6 items-center gap-1.5 rounded-[8px] px-1 text-13 font-medium leading-5 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                {heading}
-                <ChevronRight
-                  size={14}
-                  aria-hidden
-                  className={cn('text-[var(--text-tertiary)] transition-transform', open && 'rotate-90')}
-                />
-              </button>
-            ) : (
-              <h3 className="flex h-6 items-center gap-1.5 text-13 font-medium leading-5 text-[var(--text-secondary)]">
-                {heading}
-              </h3>
-            )}
-            {open ? (
-              <ul className="mt-2 flex flex-col gap-2">
-                {group.tiles.map((tile) => (
-                  <TaskRow
-                    key={tile.key}
-                    tile={tile}
-                    group={group.key}
-                    now={now}
-                    language={language}
-                    following={followingKey === tile.key}
-                    onOpen={onOpen}
-                    onFollowUp={followUp}
-                  />
-                ))}
-                {group.hiddenCount > 0 ? (
-                  <li className="px-3.5 pt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-                    {t('bots.workbench.olderCount', { count: group.hiddenCount })}
-                  </li>
-                ) : null}
-              </ul>
-            ) : null}
-          </section>
-        );
-      })}
-    </div>
   );
 }
 
@@ -1281,9 +1517,22 @@ type TranscriptState =
   | { kind: 'ready'; transcript: WorkbenchTranscript }
   | { kind: 'failed' };
 
+const DETAIL_ACTION_CLASS =
+  'inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-12 text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mb-4">
+      <h4 className="mb-1.5 text-11 font-medium leading-[1.45] text-[var(--text-tertiary)]">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
 /**
- * 详情视图:不换路由、不跳任务页。伙伴的判断在上,最近内容(同一份有界只读摘录)在中,
- * 底部「补一句」以主人身份发给伙伴,由伙伴决定怎么继续——不绕过伙伴直接投给任务。
+ * 详情视图:不换路由、不跳任务页。面包屑「工作台 › 标题」,状态行(状态 · 用时 · 来源 · PR),
+ * 伙伴的判断,正在做,到现在的产出,最近内容(同一份有界只读摘录);底部「补一句」以主人身份
+ * 发给伙伴,由伙伴决定怎么继续——不绕过伙伴直接投给任务。已归档的任务只读,不给「补一句」。
  */
 function TaskDetail({
   botId,
@@ -1294,6 +1543,7 @@ function TaskDetail({
   canNavigate,
   projectDirs,
   caseInsensitive,
+  outputs,
   onBack,
 }: {
   botId: string;
@@ -1304,6 +1554,8 @@ function TaskDetail({
   canNavigate: boolean;
   projectDirs: readonly string[];
   caseInsensitive: boolean;
+  /** 这件任务(伙伴的后台任务)交回的文件。 */
+  outputs: ReadonlyArray<{ path: string; name: string }>;
   onBack: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -1312,8 +1564,14 @@ function TaskDetail({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const title = tile.title || t('bots.workbench.untitled');
+  const archived = tile.type === 'session' && tile.archived === true;
   const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
-  const statusText = live || !tile.verdict ? t(`bots.workbench.state.${tile.state}`) : t(`bots.workbench.verdict.${tile.verdict}`);
+  const statusText = archived
+    ? t('ccAgent.sidebar.filterStatus.archived')
+    : live || !tile.verdict
+      ? t(`bots.workbench.state.${tile.state}`)
+      : t(`bots.workbench.verdict.${tile.verdict}`);
+  const currentAction = tile.state === 'running' && tile.line.kind === 'action' ? tile.line.text : null;
   // 运行中的任务内容在变:状态变化时重读一次,不轮询。
   const reloadKey = `${tile.type}:${tile.id}:${tile.state}:${tile.lastActiveMs}`;
 
@@ -1387,166 +1645,205 @@ function TaskDetail({
     void resolveSessionRoute(tile.id).then((target) => navigate(target));
   }, [navigate, tile]);
 
+  const transcriptBody =
+    transcript.kind === 'loading' ? (
+      <div className="flex justify-center py-6">
+        <Spinner size={16} className="text-[var(--text-tertiary)]" role="status" aria-label={t('ccAgent.common.loading')} />
+      </div>
+    ) : transcript.kind === 'failed' ? (
+      <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.loadFailed')}</p>
+    ) : transcript.transcript.items.length === 0 ? (
+      <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.empty')}</p>
+    ) : (
+      <div className="flex flex-col gap-3">
+        {transcript.transcript.truncated ? (
+          <p className="text-center text-11 text-[var(--text-tertiary)]">{t('bots.workbench.detail.truncated')}</p>
+        ) : null}
+        {transcript.transcript.items.map((item, index) =>
+          item.role === 'user' ? (
+            <div
+              key={`${item.at}-${index}`}
+              className="max-w-[90%] self-end whitespace-pre-wrap break-words rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-3.5 py-2.5 text-13 leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]"
+            >
+              {item.text}
+            </div>
+          ) : (
+            <div
+              key={`${item.at}-${index}`}
+              className="whitespace-pre-wrap break-words text-13 leading-[1.69] text-[var(--text-primary)] [overflow-wrap:anywhere]"
+            >
+              {item.text}
+            </div>
+          ),
+        )}
+        <p className="text-11 text-[var(--text-tertiary)]">
+          {relativeTime(transcript.transcript.items.at(-1)?.at ?? 0, i18n.language, now)}
+        </p>
+      </div>
+    );
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
-      <div className="flex h-[52px] shrink-0 items-center gap-1 pl-2 pr-2.5">
+      <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-[var(--border-default)] py-2 pl-1.5 pr-2.5">
         <Tip text={t('bots.workbench.detail.back')}>
           <button
             type="button"
             onClick={onBack}
             aria-label={t('bots.workbench.detail.back')}
-            className={cn(ICON_BUTTON_CLASS, 'size-8 text-[var(--text-secondary)]')}
+            className={cn(ICON_BUTTON_CLASS, 'size-7 text-[var(--text-secondary)]')}
           >
-            <ArrowLeft size={16} aria-hidden />
+            <ArrowLeft size={15} aria-hidden />
           </button>
         </Tip>
-        <h3 className="min-w-0 flex-1 truncate text-15 font-medium leading-[1.47] text-[var(--text-primary)]">{title}</h3>
-        {tile.type === 'session' && tile.state === 'running' ? (
-          <Tip text={t('bots.workbench.detail.stop')}>
-            <button
-              type="button"
-              onClick={stop}
-              aria-label={t('bots.workbench.detail.stop')}
-              className={cn(ICON_BUTTON_CLASS, 'size-8 text-[var(--text-secondary)]')}
-            >
-              <Square size={12} fill="currentColor" aria-hidden />
-            </button>
-          </Tip>
-        ) : null}
-        {tile.type === 'session' && canNavigate ? (
-          <Tip text={t('bots.workbench.detail.openInTasks')}>
-            <button
-              type="button"
-              onClick={openInTasks}
-              aria-label={t('bots.workbench.detail.openInTasks')}
-              className={cn(ICON_BUTTON_CLASS, 'size-8 text-[var(--text-secondary)]')}
-            >
-              <SquareArrowOutUpRight size={14} aria-hidden />
-            </button>
-          </Tip>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-2 px-5 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-        {tile.type === 'item' ? <ItemIcon tile={tile} /> : <StateIcon state={tile.state} verdict={tile.verdict} />}
-        <span className="text-[var(--text-secondary)]">
-          {statusText}
-          {tile.state === 'running' && tile.startedAtMs ? ` ${elapsed(tile.startedAtMs, now)}` : ''}
-        </span>
-        <span aria-hidden>·</span>
-        <span className="min-w-0 truncate">{tile.type === 'item' ? itemLabel(tile, t) : originLabel(tile.origin, t)}</span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-default)] px-5 py-4">
-        {tile.verdict && tile.next ? (
-          <section className="mb-4 rounded-xl border border-[var(--border-default)] px-3.5 py-3">
-            <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
-              {t('bots.workbench.detail.judgment', { name: botName })}
-            </p>
-            <p className="mt-1 text-13 leading-5 text-[var(--text-primary)]">{tile.next}</p>
-          </section>
-        ) : null}
-        {pr ? (
+        <nav aria-label={t('bots.workbench.title')} className="flex min-w-0 flex-1 items-center gap-1 text-12 text-[var(--text-secondary)]">
           <button
             type="button"
-            onClick={() => void window.electronAPI.openExternal?.(pr.url)}
-            aria-label={t('bots.workbench.detail.openPr', { number: pr.number })}
-            className="mb-3 flex w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--border-default)] px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            onClick={onBack}
+            className="shrink-0 rounded-lg px-1 outline-none transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
-            <span className="min-w-0 flex-1">
-              <PrTag pr={pr} />
-            </span>
-            <SquareArrowOutUpRight size={13} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+            {t('bots.workbench.title')}
+          </button>
+          <ChevronRight size={12} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+          <h3 title={title} aria-current="page" className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
+            {title}
+          </h3>
+        </nav>
+        {tile.type === 'session' && canNavigate ? (
+          <button type="button" onClick={openInTasks} className={DETAIL_ACTION_CLASS}>
+            <SquareArrowOutUpRight size={13} aria-hidden />
+            {t('bots.workbench.detail.openInTasks')}
           </button>
         ) : null}
-        {tile.type === 'item' ? (
-          reference || pr ? (reference ? (
+        {tile.type === 'session' && tile.state === 'running' ? (
+          <button type="button" onClick={stop} aria-label={t('bots.workbench.detail.stop')} className={DETAIL_ACTION_CLASS}>
+            <Square size={10} fill="currentColor" aria-hidden />
+            {t('bots.workbench.detail.stopLabel')}
+          </button>
+        ) : null}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+        <div className="mb-4 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          {tile.type === 'item' ? <ItemIcon tile={tile} /> : <StateIcon state={tile.state} verdict={tile.verdict} />}
+          <span className="text-[var(--text-secondary)]">
+            {statusText}
+            {tile.state === 'running' && tile.startedAtMs ? ` · ${elapsed(tile.startedAtMs, now)}` : ''}
+          </span>
+          <span aria-hidden>·</span>
+          <span className="min-w-0 truncate">{tile.type === 'item' ? itemLabel(tile, t) : originLabel(tile.origin, t)}</span>
+          {pr ? (
             <button
               type="button"
-              onClick={openReference}
-              className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--border-default)] px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              onClick={() => void window.electronAPI.openExternal?.(pr.url)}
+              aria-label={t('bots.workbench.detail.openPr', { number: pr.number })}
+              className="inline-flex h-6 items-center rounded-full border border-[var(--border-default)] px-2 outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
-              {/^https:\/\//i.test(reference) ? (
-                <Link2 size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
-              ) : (
-                <FileText size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
-              )}
-              <span className="min-w-0 flex-1">
-                <span className="block text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.ref')}</span>
-                <span className="block truncate text-13 leading-5 text-[var(--text-primary)]">{reference}</span>
-              </span>
+              <PrTag pr={pr} />
             </button>
-          ) : null) : (
+          ) : null}
+        </div>
+        {tile.next ? (
+          <DetailSection title={t('bots.workbench.detail.judgment', { name: botName })}>
+            <p className="border-l-2 border-[var(--border-default)] py-1 pl-2.5 text-13 leading-[1.65] text-[var(--text-primary)] [overflow-wrap:anywhere]">
+              {tile.next}
+            </p>
+          </DetailSection>
+        ) : null}
+        {currentAction ? (
+          <DetailSection title={t('bots.workbench.detail.doing')}>
+            <p className="flex min-w-0 items-start gap-2 text-12 leading-[1.5]">
+              <span className="flex h-[18px] shrink-0 items-center">
+                <Spinner size={12} aria-hidden className="text-[var(--text-secondary)]" />
+              </span>
+              <span className="min-w-0 text-[var(--status-bar-accent)] [overflow-wrap:anywhere]">{currentAction}</span>
+            </p>
+          </DetailSection>
+        ) : null}
+        {outputs.length > 0 ? (
+          <DetailSection title={t('bots.workbench.detail.outputs')}>
+            <div className="flex flex-wrap gap-1.5">
+              {outputs.map((file) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  title={file.path}
+                  onClick={() => void window.electronAPI.openPath?.(file.path)}
+                  className="inline-flex h-6 min-w-0 max-w-full items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 text-12 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <FileText size={12} aria-hidden className="shrink-0" />
+                  <span className="min-w-0 truncate">{file.name}</span>
+                </button>
+              ))}
+            </div>
+          </DetailSection>
+        ) : null}
+        {tile.type === 'item' ? (
+          reference ? (
+            <DetailSection title={t('bots.workbench.detail.ref')}>
+              <button
+                type="button"
+                onClick={openReference}
+                className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--border-default)] px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {/^https:\/\//i.test(reference) ? (
+                  <Link2 size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+                ) : (
+                  <FileText size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-13 leading-5 text-[var(--text-primary)]">{reference}</span>
+              </button>
+            </DetailSection>
+          ) : pr ? null : (
             <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.noRef')}</p>
           )
-        ) : transcript.kind === 'loading' ? (
-          <div className="flex justify-center py-6">
-            <Spinner size={16} className="text-[var(--text-tertiary)]" role="status" aria-label={t('ccAgent.common.loading')} />
-          </div>
-        ) : transcript.kind === 'failed' ? (
-          <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.loadFailed')}</p>
-        ) : transcript.transcript.items.length === 0 ? (
-          <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.empty')}</p>
         ) : (
-          <div className="flex flex-col gap-3">
-            {transcript.transcript.truncated ? (
-              <p className="text-center text-11 text-[var(--text-tertiary)]">{t('bots.workbench.detail.truncated')}</p>
-            ) : null}
-            {transcript.transcript.items.map((item, index) =>
-              item.role === 'user' ? (
-                <div
-                  key={`${item.at}-${index}`}
-                  className="max-w-[90%] self-end whitespace-pre-wrap break-words rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-3.5 py-2.5 text-13 leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]"
-                >
-                  {item.text}
-                </div>
-              ) : (
-                <div
-                  key={`${item.at}-${index}`}
-                  className="whitespace-pre-wrap break-words text-13 leading-[1.69] text-[var(--text-primary)] [overflow-wrap:anywhere]"
-                >
-                  {item.text}
-                </div>
-              ),
-            )}
-            <p className="text-11 text-[var(--text-tertiary)]">
-              {relativeTime(transcript.transcript.items.at(-1)?.at ?? 0, i18n.language, now)}
-            </p>
-          </div>
+          <DetailSection title={t('bots.workbench.detail.recent')}>{transcriptBody}</DetailSection>
         )}
       </div>
-      <form
-        className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <Input
-          value={draft}
-          onChange={setDraft}
-          size="md"
-          className="min-w-0 flex-1"
-          placeholder={t('bots.workbench.detail.placeholder', { name: botName })}
-          ariaLabel={t('bots.workbench.detail.placeholder', { name: botName })}
-          disabled={sending}
-          onKeyDown={(event) => {
-            // 输入法组字时回车只确认候选,不发送。
-            if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault();
+      {archived ? null : (
+        <form
+          className="flex shrink-0 items-center gap-2 border-t border-[var(--border-default)] px-3 pb-3 pt-2.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send();
           }}
-        />
-        <Tip text={t('bots.workbench.detail.send')}>
-          <button
-            type="submit"
-            disabled={sending || !draft.trim()}
-            aria-label={t('bots.workbench.detail.send')}
-            className={cn(
-              ICON_BUTTON_CLASS,
-              'size-8 border border-[var(--border-default)] text-[var(--text-secondary)] disabled:opacity-50',
-            )}
-          >
-            {sending ? <Spinner size={12} aria-hidden /> : <ArrowUp size={14} aria-hidden />}
-          </button>
-        </Tip>
-      </form>
+        >
+          <Input
+            value={draft}
+            onChange={setDraft}
+            size="md"
+            className="min-w-0 flex-1"
+            placeholder={t('bots.workbench.detail.placeholder', { name: botName })}
+            ariaLabel={t('bots.workbench.detail.placeholder', { name: botName })}
+            disabled={sending}
+            onKeyDown={(event) => {
+              // 输入法组字时回车只确认候选,不发送。
+              if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault();
+            }}
+          />
+          <Tip text={t('bots.workbench.detail.send')}>
+            <button
+              type="submit"
+              disabled={sending || !draft.trim()}
+              aria-label={t('bots.workbench.detail.send')}
+              className={cn(
+                ICON_BUTTON_CLASS,
+                'size-8 border border-[var(--border-default)] text-[var(--text-secondary)] disabled:opacity-50',
+              )}
+            >
+              {sending ? <Spinner size={12} aria-hidden /> : <ArrowUp size={14} aria-hidden />}
+            </button>
+          </Tip>
+        </form>
+      )}
     </div>
   );
 }
+
+/** A folder that stayed on the companion's previous computer: reachable there, not here. */
+function DirectoryElsewhere({ deviceId }: { deviceId: string }) {
+  const { t } = useTranslation();
+  const devices = useDeviceLinkDeviceList();
+  const device = devices?.find((candidate) => candidate.deviceId === deviceId)?.name?.trim() || t('bots.cloud.unknownDevice');
+  return <span className="shrink-0 text-12 text-[var(--text-tertiary)]">{t('bots.workbench.dirElsewhere', { device })}</span>;
+}
+

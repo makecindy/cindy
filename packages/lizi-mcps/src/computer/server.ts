@@ -492,6 +492,8 @@ export function createComputerMcpServer(
       sessionId,
     );
     if (staleResult) return staleResult;
+    const secureFieldResult = await checkSecureField(name as ComputerMcpToolName, parsedData, sessionId);
+    if (secureFieldResult) return secureFieldResult;
     const postcondition = parsedData.postcondition;
     delete parsedData.postcondition; // Cindy-owned verification, never part of driver action args.
     if (postcondition && typeof parsedData.window_id !== "number") {
@@ -1503,6 +1505,48 @@ export function createComputerMcpServer(
           reason: verdict.reason,
           hint:
             'The element reference does not identify the latest observation of this window. Call get_window_state again, then use its top-level snapshot_id with element_index or element_token. Supplying that snapshot_id is required when the driver reuses tokens between observations.',
+        },
+      },
+      true,
+    );
+  }
+
+  /**
+   * 代输入 hint: a password field is the owner's to fill. Typing into one from
+   * the agent would put the secret in the model's context, so refuse and point
+   * at request_input_handoff. Runs after the freshness check resolved the target.
+   */
+  async function checkSecureField(
+    name: ComputerMcpToolName,
+    parsedData: Record<string, unknown>,
+    sessionId: string | undefined,
+  ) {
+    if ((name !== 'type_text' && name !== 'set_value') || !deps.isSecureTarget) return null;
+    const pid = parsedData.pid as number;
+    let snapshotId = typeof parsedData.snapshot_id === 'string' ? parsedData.snapshot_id : undefined;
+    let index = typeof parsedData.element_index === 'number' ? parsedData.element_index : undefined;
+    if (typeof parsedData.element_token === 'string') {
+      const ref = snapshotTracker.elementReference(sessionId, parsedData.element_token, snapshotId);
+      if (ref) {
+        snapshotId = ref.snapshotId;
+        index = ref.index;
+      }
+    }
+    const windowId = typeof parsedData.window_id === 'number' ? parsedData.window_id : undefined;
+    const frame = index === undefined ? undefined : snapshotTracker.elementFrame(sessionId, pid, windowId, index, snapshotId);
+    // An element we cannot place is not guessed at; plain typing goes to the focused element.
+    if (index !== undefined && !frame) return null;
+    const point = frame ? { x: frame.x + frame.w / 2, y: frame.y + frame.h / 2 } : undefined;
+    const secure = await deps.isSecureTarget({ pid, ...(point ? { point } : {}) }).catch(() => false);
+    if (!secure) return null;
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'SECURE_FIELD',
+        data: {
+          tool: name,
+          message: 'This element is a password field. Cindy does not let the agent type into password fields.',
+          hint: 'Call request_input_handoff with this pid and window so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
         },
       },
       true,

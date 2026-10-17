@@ -1073,6 +1073,7 @@ describe("buildUserProvider (per-runtime)", () => {
           baseUrl: "https://images.example/v1",
           wireProtocol: "openai-responses",
           supportsImageGeneration: true,
+          imageApi: "openai-images",
           models: [
             { id: "generate", name: "Generate" },
             { id: "input", name: "Input", supportsImageInput: true },
@@ -1081,6 +1082,7 @@ describe("buildUserProvider (per-runtime)", () => {
       },
     });
     expect(p.routing.codex?.supportsImageGeneration).toBe(true);
+    expect(p.routing.codex?.imageApi).toBe("openai-images");
     expect(p.models.codex?.[0]?.supportsImageInput).toBeUndefined();
     expect(p.models.codex?.[1]?.supportsImageInput).toBe(true);
   });

@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
-import { historyOutlineContent, withHistoryArtifacts } from '../historyViewOutline';
+import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from '../historyViewOutline';
 
 function outline(role: string, content: unknown, agentMeta: unknown = null, raw = false) {
   const db = new DatabaseSync(':memory:');
@@ -14,7 +14,24 @@ function outline(role: string, content: unknown, agentMeta: unknown = null, raw 
   } finally { db.close(); }
 }
 
+function stamp(content: string) {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE messages (content TEXT)');
+    db.prepare('INSERT INTO messages VALUES (?)').run(content);
+    const query = new SQLiteSyncDialect().sqlToQuery(historyOutlineContentStamp());
+    return db.prepare(`SELECT ${query.sql} AS stamp FROM messages`).get(...query.params as string[])!.stamp as string;
+  } finally { db.close(); }
+}
+
 describe('SQLite history outline', () => {
+  it('stamps a body with a short fact that changes when it is rewritten in place', () => {
+    const summary = JSON.stringify('build summary');
+    const full = JSON.stringify(`build summary\n${'full log line\n'.repeat(50000)}`);
+    expect(stamp(summary)).not.toBe(stamp(full));
+    expect(stamp(full).length).toBeLessThan(64);
+    expect(stamp(JSON.stringify('结果：完成'))).toBe(stamp(JSON.stringify('结果：完成')));
+  });
   it('does not return folded thinking, tool outputs or file bodies to the main thread', () => {
     const body = 'private heavy body '.repeat(100000);
     expect(JSON.stringify(outline('thinking', { text: body, durationMs: 1000 })).length).toBeLessThan(100);
@@ -75,5 +92,31 @@ describe('SQLite history outline', () => {
     const projected = withHistoryArtifacts({ id: '1', clientId: '1', role: 'tool_use', content, createdAt: '2026-09-25T00:00:00Z' });
     expect(projected.historyArtifacts).toMatchObject([{ path: '/work/code.ts', exclude: 'command' }]);
     expect(JSON.stringify(content)).not.toContain('heavy');
+  });
+});
+
+describe('history artifact inference cache (#5503)', () => {
+  it('infers command artifacts once per immutable row and keys on command text', async () => {
+    const { commandArtifactCacheSize, resetCommandArtifactCache } = await import('../historyViewOutline');
+    resetCommandArtifactCache();
+    const command = `echo '${'x'.repeat(200000)}' > /work/cached-report.txt`;
+    const content = outline('tool_use', { toolName: 'Bash', input: { command } });
+    const row = { id: 'row-1', clientId: '1', role: 'tool_use' as const, content, createdAt: '2026-09-25T00:00:00Z' };
+    const first = withHistoryArtifacts(row);
+    expect(first.historyArtifacts).toMatchObject([{ path: '/work/cached-report.txt', source: 'command' }]);
+    expect(commandArtifactCacheSize()).toBe(1);
+    const started = performance.now();
+    for (let index = 0; index < 50; index += 1) withHistoryArtifacts(row);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(commandArtifactCacheSize()).toBe(1);
+    // Same id with different text is a different entry, never a stale hit.
+    const changed = outline('tool_use', { toolName: 'Bash', input: { command: 'echo ok > /work/other.txt' } });
+    expect(withHistoryArtifacts({ ...row, content: changed }).historyArtifacts).toMatchObject([{ path: '/work/other.txt' }]);
+    expect(commandArtifactCacheSize()).toBe(2);
+    // Returned arrays are copies: callers mutating artifacts cannot poison the cache.
+    const again = withHistoryArtifacts(row);
+    again.historyArtifacts!.length = 0;
+    expect(withHistoryArtifacts(row).historyArtifacts).toHaveLength(1);
+    resetCommandArtifactCache();
   });
 });

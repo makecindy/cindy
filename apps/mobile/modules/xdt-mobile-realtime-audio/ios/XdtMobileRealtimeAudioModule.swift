@@ -37,7 +37,16 @@ public class XdtMobileRealtimeAudioModule: Module {
     Events(onAudioChunk, onAudioError)
 
     AsyncFunction("start") { (options: [String: Any]?) in
-      try self.startCapture(options: options)
+      return try self.sessionStateQueue.sync { () -> [String: Any] in
+        try self.startCaptureLocked(options: options)
+        let session = AVAudioSession.sharedInstance()
+        // Port types only: names and UIDs can contain personal information.
+        return [
+          "inputPortTypes": session.currentRoute.inputs.map { $0.portType.rawValue },
+          "inputSampleRate": session.sampleRate,
+          "inputChannels": session.inputNumberOfChannels
+        ]
+      }
     }
 
     AsyncFunction("stop") {
@@ -137,12 +146,6 @@ public class XdtMobileRealtimeAudioModule: Module {
     guard session.category == .playAndRecord, session.mode == .measurement,
           session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers, .defaultToSpeaker] else { return }
     try? session.setActive(false, options: .notifyOthersOnDeactivation)
-  }
-
-  private func startCapture(options: [String: Any]?) throws {
-    try sessionStateQueue.sync {
-      try self.startCaptureLocked(options: options)
-    }
   }
 
   // Must run on sessionStateQueue.

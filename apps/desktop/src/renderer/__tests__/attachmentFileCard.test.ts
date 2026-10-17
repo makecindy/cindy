@@ -7,7 +7,7 @@
  * 正中只印大写扩展名 —— 并排两份 PDF 完全认不出谁是谁,文件名只在 hover
  * tooltip 里出现。现在改成横向文件卡:图标块 + 文件名 + 「类型 · 大小」。
  *
- * 与同目录 thumbnailClickPreview.test.ts 同族,走源码断言:ThumbnailItem 依赖
+ * 与同目录的预览行为测试同族,走源码断言:ThumbnailItem 依赖
  * ChatInput 的大量本地状态,单独挂载成本远高于收益,这里把关键契约钉在源码层,
  * 防止后续重构悄悄退回「只有扩展名」的形态。托盘组件在 ComposerAttachments.tsx
  * (ChatInput 与伙伴群聊输入框共用)。

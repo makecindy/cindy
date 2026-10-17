@@ -7,11 +7,11 @@ import {
   resolveProfile,
 } from '../_generated/extension/src/browser/config.js';
 
-function launchArgs(extraArgs: string[]): string[] {
+function launchArgs(extraArgs: string[], headless = true): string[] {
   const resolved = resolveBrowserConfig({
     enabled: true,
     defaultProfile: 'Cindy',
-    headless: true,
+    headless,
     extraArgs,
     profiles: {
       Cindy: { driver: 'openclaw', cdpPort: 18800, color: '#00D9C5' },
@@ -29,6 +29,18 @@ function launchArgs(extraArgs: string[]): string[] {
 }
 
 describe('managed Chrome proxy launch arguments', () => {
+  it('starts headed automation Chrome without showing an empty startup window', () => {
+    const args = launchArgs([], false);
+    expect(args).toContain('--no-startup-window');
+    expect(args).not.toContain('--headless=new');
+  });
+
+  it('keeps headless launches headless without the headed startup flag', () => {
+    const args = launchArgs([]);
+    expect(args).toContain('--headless=new');
+    expect(args).not.toContain('--no-startup-window');
+  });
+
   it('retains explicit direct mode', () => {
     const args = launchArgs([]);
     expect(args).toContain('--no-proxy-server');

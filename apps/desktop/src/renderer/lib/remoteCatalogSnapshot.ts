@@ -18,7 +18,7 @@ const refreshes = new Map<
 >();
 
 export async function refreshRemoteCatalogSnapshot(deviceId: string): Promise<void> {
-  const generation = evictDeviceProviders(deviceId);
+  const generation = evictDeviceProviders(deviceId, { retainDisplaySnapshot: true });
   evictDeviceCapabilities(deviceId);
   const previous = refreshes.get(deviceId);
   const refresh = {

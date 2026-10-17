@@ -9,7 +9,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  *  - 通用工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
  *    异步提问使用独立的 ask_user_question_async 入口，以便 harness 验证根代理身份。
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
- *    - 'auth'    : 由 Host 保存凭证的供应商授权
+ *    - 'auth'    : 由 Host 保存凭证的供应商授权；代输入(request_input_handoff)
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
  *                  list_sessions / list_session_queue / get_chat_history /
  *                  search_chat_history)
@@ -35,6 +35,7 @@ import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/typ
 import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
+import { registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
 import { jsonObjectArg } from './json-object-arg.js';
 import { registerAsyncQuestionTool, supportsAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
 
@@ -75,7 +76,7 @@ import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
-import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import type { SendToRemoteSessionCallback, SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type {
   AuthorizeSkillLearningCallback,
   StartSkillLearningCallback,
@@ -88,6 +89,7 @@ import {
   registerBotWorkbenchTools,
   type BotWorkbenchCallbacks,
 } from './xdt-helper/bot_workbench.js';
+import { registerTeammateHomeTools, type TeammateHomeCallbacks } from './xdt-helper/teammate_home.js';
 import {
   registerBotCapabilityTools,
   withCindyGatedBotToolDescriptions,
@@ -119,7 +121,7 @@ export type {
 
 const D_LIST_TOOLS =
   `探索当前任务获准使用的 ${BRAND_NAME} 辅助能力。` +
-  '不传 category 先取得可用类目；只在确有需要时查看一个类目，再用 call_tool 执行。';
+  '不传 category 先取得可用类目（含每类的用途与作用范围：本机 / 可跨电脑）；只在确有需要时查看一个类目，再用 call_tool 执行。';
 
 const D_CALL_TOOL =
   '调用 list_tools 为当前任务返回的一个具体工具。不要猜工具名，也不要把它当成通用命令入口。';
@@ -135,6 +137,23 @@ const CALL_TOOL_INPUT = {
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
 const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots'] as const;
+
+/**
+ * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
+ * 阶段就要能判断「这件事有没有工具、管不管得到另一台电脑」,不能等点进某个工具的参数
+ * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
+ */
+export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
+  cindy: `${BRAND_NAME} 能力说明与当前任务信息；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引。本机。`,
+  auth: '供应商授权登录（Grok 设备码）。本机。',
+  control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改仅本机。',
+  history: '查询任务、工作目录、聊天记录与输入队列。任务列表、搜索、读取聊天记录可跨电脑（device 参数 / deviceId::sessionId）；其余本机。',
+  feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
+  handoff: '给已有任务发消息，或新建任务。发给已有任务可跨电脑（deviceId::sessionId）；新建只在本机。',
+  skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
+  app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
+  bots: '伙伴：资料、能力、工作台、待办、后台任务、伙伴间消息与主力电脑。伙伴间消息（list_agents / send_to_agent）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；其余本机。',
+};
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
@@ -287,6 +306,7 @@ function registerListToolsEntry(
               categories: registry.listCategories().filter((c) => (counts[c] ?? 0) > 0).map((c) => ({
                 name: c,
                 tool_count: counts[c] ?? 0,
+                description: HELPER_CATEGORY_DESCRIPTIONS[c as (typeof CATEGORY_ENUM)[number]],
               })),
               hint: '用 list_tools({category}) 查看某类目下的工具列表',
             }),
@@ -409,9 +429,11 @@ function registerStartSessionTaskEntry(
             expects_result: true,
             ...(result.completionDestination ? { completion_destination: result.completionDestination } : {}),
             guidance:
-              (result.completionDestination === 'teammate-private-chat'
-                ? 'Tell the owner that the task card, permission/questions, and final result will appear in their private chat with this teammate. '
-                : '') + "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
+              (result.completionDestination === 'group'
+                ? 'This task lives in this group: its card is being posted here, and anything it needs confirmed plus its final result are sent here as your own messages (only if the group can no longer take them do they go to your owner privately). Tell the group briefly what you started; do not claim the card or result is already here. '
+                : result.completionDestination === 'private'
+                  ? 'This older group cannot carry task messages: anything the task needs confirmed and its final result go to your owner\'s private chat with you, not here. Tell the group briefly what you started and that the result will reach your owner privately. '
+                  : '') + "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -730,6 +752,8 @@ export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
   appUpdate?: AppUpdateCallbacks;
   grokLogin?: GrokLoginCallbacks;
+  /** 代输入: hand an on-screen step to the owner; values stay on the host. */
+  inputHandoff?: InputHandoffCallbacks;
   /**
    * Host-owned runtime classification. `bot-main` is a local Bot's main task: it sees
    * the ordinary task surface plus Bot tools, and every call is judged by `authorizeCall`.
@@ -763,6 +787,8 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** 另一台电脑上的既有任务(send_to_session 的 deviceId::sessionId 目标)。 */
+  sendToRemoteSession?: SendToRemoteSessionCallback;
   /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
   skillLearning?: StartSkillLearningCallback;
   /** Search catalogs and publish the current user's Skills through the host's SkillHub service. */
@@ -793,6 +819,8 @@ export interface XdtHelperMcpDeps {
    */
   botWorkbench?: BotWorkbenchCallbacks;
   botCapabilities?: BotCapabilityCallbacks;
+  /** Which computer runs a teammate, and moving it to another (cloud companions). */
+  teammateHome?: TeammateHomeCallbacks;
   /**
    * 官方反馈 issue 提交回调(弹确认卡片 → 用户确认 → POST server)。host 注入后,
    * feedback 类工具 submit_github_issue 会被注册; 不注入则不出现在 list_tools 里。
@@ -814,6 +842,7 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
 }
 
 /**
@@ -875,6 +904,8 @@ export function createXdtHelperMcpServer(
   }
   if (deps.grokLogin)
     registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
+  if (deps.inputHandoff)
+    registerInputHandoffTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.inputHandoff);
   registerGetCurrentSessionIdTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
   });
@@ -918,6 +949,7 @@ export function createXdtHelperMcpServer(
     const archiveDeps = {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       setSessionsStatus: deps.setSessionsStatus,
+      setRemoteSessionsStatus: deps.setRemoteSessionsStatus,
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
@@ -969,6 +1001,7 @@ export function createXdtHelperMcpServer(
     registerSendToSessionTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
+      ...(deps.sendToRemoteSession ? { sendToRemoteSession: deps.sendToRemoteSession } : {}),
     });
   }
   if (deps.skillLearning && deps.authorizeSkillLearning) {
@@ -998,6 +1031,12 @@ export function createXdtHelperMcpServer(
     });
   }
 
+  if (deps.teammateHome) {
+    registerTeammateHomeTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.teammateHome,
+    });
+  }
   if (deps.botCapabilities) {
     registerBotCapabilityTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),

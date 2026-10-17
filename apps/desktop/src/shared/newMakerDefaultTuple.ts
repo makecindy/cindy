@@ -1,5 +1,6 @@
 import {
   isModelSelectableForNewRoute,
+  providerCatalogId,
   defaultEffortForCapabilities,
   clampEffortToSupported,
   type AgentKind,
@@ -21,18 +22,23 @@ interface ProviderDefaultPolicy {
   accessKind: 'subscription' | 'managed';
   agents: readonly AgentKind[];
   modelIds: readonly string[];
-  requireNewSessionDefault?: boolean;
-  requireImageInput?: boolean;
+  allowOtherModels?: boolean;
 }
 
 /**
  * 新用户的产品默认顺序。
  *
- * Claude / Codex 订阅优先，再采用 Gateway 推荐组合，最后保留 xAI 回退。
- * 出厂推荐按完整路由选择：Opus 使用 Claude Code，Astra 使用 Codex，Gateway 使用 Pi。
+ * Codex / Claude 订阅优先，再采用服务端提供的 Cindy Auto，最后保留 xAI 回退。
+ * 出厂推荐按完整路由选择：Sol 使用 Codex，Opus 使用 Claude Code，Cindy Auto 使用 Pi。
  * 不为了提供默认值把订阅模型静默放到另一个 Harness。
  */
 const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
+  {
+    providerId: 'openai',
+    accessKind: 'subscription',
+    agents: ['codex'],
+    modelIds: ['gpt-6.1-sol', 'chatgpt/gpt-6.1-sol'],
+  },
   {
     providerId: 'anthropic',
     accessKind: 'subscription',
@@ -40,18 +46,11 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
     modelIds: ['claude-opus-5-5', 'anthropic/claude-opus-5-5'],
   },
   {
-    providerId: 'openai',
-    accessKind: 'subscription',
-    agents: ['codex'],
-    modelIds: ['gpt-6-astra', 'chatgpt/gpt-6-astra'],
-  },
-  {
     providerId: 'xd',
     accessKind: 'managed',
     agents: ['pi'],
-    modelIds: ['z-ai/glm-5.3-flash', 'glm-5.3-flash'],
-    requireNewSessionDefault: true,
-    requireImageInput: true,
+    modelIds: ['auto'],
+    allowOtherModels: false,
   },
   {
     providerId: 'xai',
@@ -76,6 +75,9 @@ export function isKnownProductDefaultTupleIdentity(args: {
 }): boolean {
   // Old automatic selections remain recognizable after the factory policy changes.
   const legacyPolicies: readonly ProviderDefaultPolicy[] = [
+    { providerId: 'openai', accessKind: 'subscription', agents: ['codex'], modelIds: ['gpt-6-sol', 'chatgpt/gpt-6-sol'] },
+    { providerId: 'openai', accessKind: 'subscription', agents: ['codex'], modelIds: ['gpt-6-astra', 'chatgpt/gpt-6-astra'] },
+    { providerId: 'xd', accessKind: 'managed', agents: ['pi'], modelIds: ['z-ai/glm-5.3-flash', 'glm-5.3-flash'] },
     { providerId: 'openai', accessKind: 'subscription', agents: ['codex', 'claude-code', 'pi'], modelIds: ['chatgpt/gpt-5.6-sol', 'gpt-5.6-sol'] },
     { providerId: 'anthropic', accessKind: 'subscription', agents: ['claude-code', 'codex', 'pi'], modelIds: ['claude-opus-5', 'anthropic/claude-opus-5'] },
   ];
@@ -87,31 +89,26 @@ export function isKnownProductDefaultTupleIdentity(args: {
   );
 }
 
-function supportsImageInput(
-  model: NonNullable<ProviderView['models'][AgentKind]>[number],
-): boolean {
-  return model.supportsImageInput === true || model.modalities?.input.includes('image') === true;
-}
-
 function matchingModel(
   provider: ProviderView,
   agent: AgentKind,
   modelIds: readonly string[],
-  requireNewSessionDefault = false,
-  requireImageInput = false,
+  allowOtherModels = true,
   enabled?: (agent: AgentKind, providerId: string, model: { id: string; defaultEnabled?: boolean }) => boolean,
 ) {
   const models = provider.models[agent] ?? [];
   const preferred = modelIds.map((id) => models.find((model) => model.id === id));
-  // Once the owner has an enabled list, a disabled factory recommendation must
-  // yield to another enabled model from this source, never bypass that list.
-  return (enabled ? [...preferred, ...models] : preferred)
+  // Both renderer and unattended callers keep the same-provider fallback.
+  // Without local visibility overrides, use the catalog's default visibility.
+  // Cindy Auto is an upstream route identity; do not substitute a fixed model.
+  const fallback = allowOtherModels ? models.slice().sort(
+    (a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
+  ) : [];
+  return [...preferred, ...fallback]
     .find(
       (model) =>
         model !== undefined &&
         (enabled ? enabled(agent, provider.id, model) : model.defaultEnabled !== false) &&
-        (!requireNewSessionDefault || model.newSessionDefault?.includes(agent) === true) &&
-        (!requireImageInput || supportsImageInput(model)) &&
         isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
     );
 }
@@ -119,8 +116,8 @@ function matchingModel(
 /**
  * 为“尚未自定义”的本地新任务与伙伴按产品顺序挑选可用默认组合。
  *
- * 返回空数组表示没有足够证据给默认值：供应商仍在加载、没有可用来源，或推荐模型不在
- * 当前账号目录里。调用方此时保留连接引导/既有空态，绝不编造一个看似可发送的组合。
+ * 返回空数组表示没有足够证据给默认值：供应商仍在加载、没有可用来源，或推荐与允许的回退
+ * 都不在当前账号的可用目录里。调用方此时保留连接引导/既有空态，绝不编造一个看似可发送的组合。
  */
 export function resolveNewMakerDefaultTuples(args: {
   providers: readonly ProviderView[];
@@ -134,39 +131,43 @@ export function resolveNewMakerDefaultTuples(args: {
   const tuples: NewMakerDefaultTuple[] = [];
 
   for (const policy of DEFAULT_POLICIES) {
-    const provider = providers.find(
+    const matchingProviders = providers.filter(
       (candidate) =>
-        candidate.id === policy.providerId &&
+        providerCatalogId(candidate) === policy.providerId &&
         candidate.connected &&
         !candidate.suspended &&
         !candidate.modelDiscoveryFailure &&
         candidate.access?.kind === policy.accessKind,
     );
-    if (!provider) continue;
-
-    for (const agent of policy.agents) {
-      const vendor = vendorForAgent(agent);
-      if (!availableAgents.has(vendor)) continue;
-      const model = matchingModel(
-        provider,
-        agent,
-        policy.modelIds,
-        policy.requireNewSessionDefault,
-        policy.requireImageInput,
-        args.isModelEnabled,
-      );
-      if (!model) continue;
-      tuples.push({
-        vendor,
-        providerId: provider.id,
-        model: model.id,
-        // Missing or stale optional metadata does not disqualify a usable route.
-        effort: model.efforts.length === 0 ? null
-          : model.defaultEffort === null ? null
-            : (clampEffortToSupported(model.defaultEffort, model.efforts)
-              ?? defaultEffortForCapabilities(model.efforts)) as Effort | null,
-      });
-      break;
+    // Search every account for the recommendation before falling back to other
+    // enabled models. An earlier account's fallback must not hide a later Sol.
+    policySearch: for (const allowOtherModels of [false, true]) {
+      if (allowOtherModels && policy.allowOtherModels === false) break;
+      for (const provider of matchingProviders) {
+        for (const agent of policy.agents) {
+          const vendor = vendorForAgent(agent);
+          if (!availableAgents.has(vendor)) continue;
+          const model = matchingModel(
+            provider,
+            agent,
+            policy.modelIds,
+            allowOtherModels,
+            args.isModelEnabled,
+          );
+          if (!model) continue;
+          tuples.push({
+            vendor,
+            providerId: provider.id,
+            model: model.id,
+            // Missing or stale optional metadata does not disqualify a usable route.
+            effort: model.efforts.length === 0 ? null
+              : model.defaultEffort === null ? null
+                : (clampEffortToSupported(model.defaultEffort, model.efforts)
+                  ?? defaultEffortForCapabilities(model.efforts)) as Effort | null,
+          });
+          break policySearch;
+        }
+      }
     }
   }
   return tuples;

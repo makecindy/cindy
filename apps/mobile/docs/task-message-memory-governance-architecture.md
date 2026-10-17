@@ -6,7 +6,8 @@
 
 ### `sessionRetention.ts`
 
-唯一分类入口：`source === 'scheduler'` 返回 `schedule`，其余返回 `regular`。
+唯一分类入口：`source === 'scheduler'` 且从未打开过详情时返回 `schedule`，其余返回 `regular`。
+定时任务一旦被用户打开查看，本次 App 运行期间就与普通任务完全一致。
 
 ### `sessionMessageLifecycle.ts`
 
@@ -91,7 +92,8 @@ microtask 让同一轮 React cleanup 中的 outbox 恢复草稿、上传取消�
 ```text
 unknown source => regular (conservative)
 fresh session metadata arrives with source=scheduler
-  -> cache clear queued after older writes
+  -> opened in detail this run: stays regular, nothing below applies
+  -> never opened: cache clear queued after older writes
   -> visible: clamp to one window
   -> hidden: request reclaim
   -> pending hydrate/timer commit rechecks retention and rejects
@@ -103,10 +105,11 @@ fresh session metadata arrives with source=scheduler
 2. leave 先撤权，后判断能否做破坏性回收。
 3. deferred reclaim 的所有者是常驻 controller，不是页面 effect。
 4. `messages.length === 0` 不是磁盘删除指令。
-5. schedule 不读取或持久化长期完整消息缓存。
+5. 从未打开的 schedule 不读取或持久化长期完整消息缓存；打开过的按 regular 处理。
 6. regular LRU 只淘汰内存，不碰磁盘窗口。
 7. 本地系统卡没有服务端副本，所有压窗与缓存归一化必须保护。
-8. 当前详情保护对 regular 与 schedule 一致；回前台必须重新 enter。
+8. 当前详情保护对 regular 与 schedule 一致；回前台必须重新 enter。打开过详情的 schedule
+   离场或切后台只压窗，不归零。
 9. status、通知摘要与 live activity 不依赖完整消息驻留。
 10. source 缺失时只能保守按 regular，不能用标题或索引猜测。
 11. 页面聚合租约结束不代表异步发送结束；send/outbox 独立租约只能由自己的 `finally` 释放。
@@ -135,17 +138,17 @@ fresh session metadata arrives with source=scheduler
 ### 恢复前允许展示什么？
 
 - regular 可展示仍在内存或合法 hydrate 的最新缓存窗口；
-- schedule 回收后展示加载态/空窗，直到新代际读取完成；
+- 从未打开的 schedule 没有驻留正文，首次打开展示加载态，直到读取完成；
 - 不允许旧代际响应、旧订阅 push 或旧流式批次填回正文。
 
 ## 5. 交付检查清单
 
-- [x] 分类只看 source。
+- [x] 分类只看 source 与本次运行内是否打开过详情；删除、归档或移除设备时清掉打开标记。
 - [x] per-session generation authority。
 - [x] focus、AppState 与 session switch 接线。
 - [x] 常驻工作租约与卸载后补回收。
 - [x] async send 与 outbox dispatch 独立租约。
-- [x] schedule 单窗、隐藏后归零、禁用加载更早。
+- [x] 从未打开的 schedule 不驻留正文；打开后按 regular 驻留。
 - [x] regular 80 条压窗与 800 条 / 64 MiB LRU。
 - [x] 草稿、运行、交互、pending queue、本地工作保护。
 - [x] regular 离场/LRU 释放详情投影并抬升 projection epoch。

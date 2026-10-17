@@ -1,8 +1,28 @@
+import type { HistoryWorkLine } from './historyWorkLines.js';
+
 /** Reading projections never replace persisted messages or the agent transcript. */
 export const HISTORY_VIEW_VERSION = 1 as const;
 export const HISTORY_VIEW_PAGE_ITEMS = 20;
 export const HISTORY_VIEW_PAGE_BYTES = 1024 * 1024;
 export const HISTORY_DETAIL_PAGE_BYTES = 256 * 1024;
+
+/** Local ordering only: the run changes on restart, and order never uses the wall clock. */
+export interface HistoryCacheReceipt { run: string; order: number }
+const cacheReceiptRun = `${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+let cacheReceiptOrder = 0;
+export function nextHistoryCacheReceipt(): HistoryCacheReceipt {
+  return { run: cacheReceiptRun, order: ++cacheReceiptOrder };
+}
+export function isHistoryCacheReceipt(value: unknown): value is HistoryCacheReceipt {
+  const receipt = value as HistoryCacheReceipt | null;
+  return !!receipt && typeof receipt.run === 'string' && Number.isSafeInteger(receipt.order) && receipt.order > 0;
+}
+/** Only a current-run push can supersede a restored page from another run. */
+export function historyCacheReceiptFollows(receipt: unknown, read: unknown, restored = false): boolean {
+  if (!isHistoryCacheReceipt(receipt)) return false;
+  if (!isHistoryCacheReceipt(read)) return true;
+  return receipt.run === read.run ? receipt.order > read.order : restored && receipt.run === cacheReceiptRun;
+}
 
 export function isHistoryViewUnavailable(error: unknown): boolean {
   return /CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY|not registered|No handler/i.test(String(error));
@@ -26,10 +46,14 @@ export interface HistoryMessageSource {
   content: unknown;
   createdAt: string;
   rowid?: number;
+  /** Controller-local order of a durable push; never a Host revision. */
+  cacheReceipt?: HistoryCacheReceipt;
   toolUseId?: string | null;
   agentMeta?: object | null;
   /** Host outline only; transferred in work summaries, never as a replacement body. */
   historyArtifacts?: HistoryFileArtifact[];
+  /** Host outline only: changes when the hidden body is rewritten; hashed into revisions. */
+  historyContentStamp?: string;
 }
 
 /** Both endpoints are real host message IDs, inclusive, in host database order. */
@@ -53,6 +77,11 @@ export interface HistoryWorkSummary extends HistoryWorkReference {
   model?: string;
   /** Existing detail endpoint can read just the visible desktop tail. */
   preview?: HistoryWorkSummary;
+  /**
+   * Latest single-line activities of a running range, already projected by the Host.
+   * Present only when the controller asked for `workLines`; old Hosts omit it.
+   */
+  lines?: HistoryWorkLine[];
   startedAtMs: number;
   endedAtMs: number;
   isStreaming: boolean;
@@ -69,6 +98,10 @@ export interface DeferredHistoryWork {
   revision?: string;
   setVisible?(expanded: boolean, preview: boolean): void;
   previewComplete?: boolean;
+  /** Host-projected running lines; when present a folded preview needs no detail read. */
+  lines?: readonly HistoryWorkLine[];
+  /** No detail rows are in hand yet; an expanded group keeps showing `lines` until they arrive. */
+  awaitingDetails?: boolean;
   expanded: boolean;
   loading: boolean;
   failed: boolean;
@@ -104,6 +137,39 @@ export interface HistoryViewPage<TMessage extends HistoryMessageSource> {
   nextCursor: string | null;
   hasMore: boolean;
 }
+
+/** Keep already read pages only when the latest page proves a continuous source boundary. */
+export function retainHistoryViewPrefix<T extends HistoryMessageSource>(
+  page: HistoryViewPage<T>,
+  previous: { items: readonly HistoryViewItem<T>[]; hasMore: boolean; nextCursor: string | null } | null | undefined,
+): HistoryViewPage<T> {
+  if (!page.hasMore || !previous?.items.length) return page;
+  const firstSourceId = (item: HistoryViewItem<T> | undefined) => item?.type === 'work'
+    ? item.summary.firstMessageId : item?.messages[0]?.id;
+  const first = page.items[0];
+  const sourceId = firstSourceId(first);
+  const boundary = previous.items.findIndex(item => item.key === first?.key
+    || (sourceId !== undefined && firstSourceId(item) === sourceId));
+  // Completed groups can replace a running key while keeping its exact source start.
+  // A later overlap cannot prove continuity; a full page/rewind replaces the old view.
+  if (boundary <= 0) return page;
+  return { ...page, items: [...previous.items.slice(0, boundary), ...page.items],
+    hasMore: previous.hasMore, nextCursor: previous.nextCursor };
+}
+
+/**
+ * Host → controller replacement of one running top-level work item. The Host sends it
+ * only when everything else on the latest page is unchanged since its last delivery to
+ * that controller; `baseRevision` is the item revision that delivery carried.
+ */
+export interface HistoryWorkPatch {
+  version: typeof HISTORY_VIEW_VERSION;
+  sessionId: string;
+  baseRevision: string;
+  item: { type: 'work'; key: string; summary: HistoryWorkSummary };
+}
+
+export const HISTORY_WORK_PATCH_CHANNEL = 'maker:history-work-patch';
 
 export interface HistoryDetailPage<TMessage extends HistoryMessageSource> {
   version: typeof HISTORY_VIEW_VERSION;

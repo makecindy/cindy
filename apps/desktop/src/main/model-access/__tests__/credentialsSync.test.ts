@@ -321,4 +321,127 @@ describe('credentialsSync', () => {
       expect(h.sync.getStatus().state).toBe('ok');
     });
   });
+
+  describe('resyncAfterKeyRejection(Key 被拒后的静默同步)', () => {
+    async function okHarness(overrides: Partial<CredentialsSyncDeps> = {}) {
+      const h = makeHarness(overrides);
+      h.fetchMock.mockResolvedValueOnce({ endpoint: 'https://laxa.test.invalid', apiKey: 'sk-old' });
+      await h.sync.sync();
+      expect(h.sync.getStatus().state).toBe('ok');
+      h.statuses.length = 0;
+      h.fetchMock.mockReset();
+      return h;
+    }
+
+    it.each([
+      ['5xx', () => Promise.reject(serverError('INTERNAL', 500))],
+      ['网络错误', () => Promise.reject(new Error('socket hang up'))],
+      ['payload 不合法', () => Promise.resolve({ endpoint: '', apiKey: '' })],
+    ])('可重试失败(%s)重试用尽后保持 ok,不广播 syncing / failed', async (_label, failure) => {
+      const h = await okHarness();
+      h.fetchMock.mockImplementation(failure as () => Promise<CredentialsPayload>);
+
+      const result = await h.sync.resyncAfterKeyRejection();
+      expect(h.fetchMock).toHaveBeenCalledTimes(3); // 首次 + retryDelaysMs 两次
+      expect(result.state).toBe('ok');
+      expect(h.sync.getStatus().state).toBe('ok');
+      expect(h.statuses).toEqual([]);
+      expect(h.written).toEqual(['sk-old']);
+    });
+
+    it('从 failed 出发的静默失败保持 failed', async () => {
+      const h = makeHarness();
+      h.fetchMock.mockRejectedValue(serverError('INTERNAL', 500));
+      await h.sync.sync();
+      expect(h.sync.getStatus().state).toBe('failed');
+      h.statuses.length = 0;
+
+      const result = await h.sync.resyncAfterKeyRejection();
+      expect(result.state).toBe('failed');
+      expect(h.statuses).toEqual([]);
+    });
+
+    it('拿到新 Key:写入并转 ok,与 sync() 一致(不广播 syncing)', async () => {
+      const h = await okHarness();
+      h.fetchMock.mockResolvedValue({ endpoint: 'https://laxa.test.invalid', apiKey: 'sk-new' });
+
+      const result = await h.sync.resyncAfterKeyRejection();
+      expect(result.state).toBe('ok');
+      expect(h.written).toEqual(['sk-old', 'sk-new']);
+      expect(h.statuses.map((s) => s.state)).toEqual(['ok']);
+    });
+
+    it.each([
+      [503, 'MODEL_ACCESS_DISABLED', 'disabled'],
+      [403, 'ORG_NOT_SUPPORTED', 'unsupported'],
+    ] as const)('服务端 %s 是确定终态,照常转 %s', async (statusCode, code, state) => {
+      const h = await okHarness();
+      h.fetchMock.mockRejectedValue(serverError(code, statusCode));
+
+      const result = await h.sync.resyncAfterKeyRejection();
+      expect(result.state).toBe(state);
+      expect(h.statuses.map((s) => s.state)).toEqual([state]);
+      // 终态后与 sync() 一样不再打服务端。
+      await h.sync.resyncAfterKeyRejection();
+      expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('写 key 失败:保持原状态,不转 failed', async () => {
+      let allowWrite = true;
+      const h = await okHarness({
+        writeXdKey: async () => allowWrite,
+      });
+      allowWrite = false;
+      h.fetchMock.mockResolvedValue({ endpoint: 'https://laxa.test.invalid', apiKey: 'sk-new' });
+
+      const result = await h.sync.resyncAfterKeyRejection();
+      expect(result.state).toBe('ok');
+      expect(h.statuses).toEqual([]);
+    });
+
+    it('同世代已有同步在途时复用,不重复请求', async () => {
+      const h = makeHarness();
+      let resolveFetch!: (p: CredentialsPayload) => void;
+      h.fetchMock.mockImplementation(
+        () => new Promise<CredentialsPayload>((resolve) => {
+          resolveFetch = resolve;
+        }),
+      );
+      const first = h.sync.sync();
+      const second = h.sync.resyncAfterKeyRejection();
+      await vi.waitFor(() => expect(h.fetchMock).toHaveBeenCalledTimes(1));
+      resolveFetch({ endpoint: 'https://laxa.test.invalid', apiKey: 'sk-1' });
+      await expect(second).resolves.toMatchObject({ state: 'ok' });
+      await expect(first).resolves.toMatchObject({ state: 'ok' });
+      expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('静默同步在途时 sync() 复用它,失败语义回到 sync():仍转 failed', async () => {
+      const h = await okHarness();
+      let rejectFirst!: (e: unknown) => void;
+      h.fetchMock
+        .mockImplementationOnce(
+          () => new Promise<CredentialsPayload>((_resolve, reject) => {
+            rejectFirst = reject;
+          }),
+        )
+        .mockRejectedValue(serverError('INTERNAL', 500));
+      const silent = h.sync.resyncAfterKeyRejection();
+      const loud = h.sync.sync();
+      await vi.waitFor(() => expect(h.fetchMock).toHaveBeenCalledTimes(1));
+      rejectFirst(serverError('INTERNAL', 500));
+      await expect(loud).resolves.toMatchObject({ state: 'failed', errorCode: 'SYNC_FAILED' });
+      await expect(silent).resolves.toMatchObject({ state: 'failed' });
+      expect(h.fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('sync() 原有失败语义不变:仍转 failed', async () => {
+      const h = await okHarness();
+      h.fetchMock.mockRejectedValue(serverError('INTERNAL', 500));
+
+      const result = await h.sync.sync();
+      expect(result).toMatchObject({ state: 'failed', errorCode: 'SYNC_FAILED' });
+      expect(h.statuses.map((s) => s.state)).toEqual(['syncing', 'failed']);
+    });
+  });
 });

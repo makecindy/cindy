@@ -19,8 +19,9 @@ import {
   type ProviderShareRequestState,
 } from '@cindy/device-link';
 
-import { isAppSessionBoundaryPending } from '../appSessionState.js';
-import { getAuthState } from '../authManager.js';
+import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import type { ProviderShareFavoriteRecovery, ProviderShareReceivedSnapshot } from '../../shared/providerShare.js';
+import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -33,10 +34,15 @@ import {
   crossRegionSendRequest,
   crossRegionWithdraw,
   getCrossRegionReceived,
+  getConfirmedCrossRegionReceivedRegions,
+  isCrossRegionReceivedComplete,
+  isCrossRegionReceivedReady,
+  ensureCrossRegionReceivedForFavorites,
   refreshProviderShareCrossRegion,
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from './providerShareCrossRegion.js';
+import { captureProviderShareGuestPrefsRemoval, pruneProviderShareGuestPrefs } from './providerShareGuestPrefs.js';
 
 const log = createLogger('provider-share:guest');
 
@@ -98,8 +104,53 @@ function allReceived(rt: Runtime | null): ProviderShareReceived[] {
   return rt ? [...rt.received, ...getCrossRegionReceived()] : [];
 }
 
-function emitChanged(rt: Runtime): void {
-  if (current(rt)) rt.events.changed(allReceived(rt));
+/** 已收到的分享变化的旁听者(见 onProviderShareReceivedChanged)。 */
+const receivedListeners = new Set<() => void>();
+
+/** 已拿到权威名单的区域(本区域要拉到过一次；对方区域按跨区域运行时的已加载状态)。 */
+function confirmedRegions(rt: Runtime): Region[] {
+  return [...(rt.fetchedAt > 0 ? [getActiveAuthRealm()] : []), ...getConfirmedCrossRegionReceivedRegions()];
+}
+
+function emitChanged(rt: Runtime): Promise<void> | void {
+  if (!current(rt)) return;
+  const received = allReceived(rt);
+  // 分享被分享者删除后，它在这台电脑上的本机偏好一起清掉；还没加载的区域不动。
+  const pruning = pruneProviderShareGuestPrefs(new Set(received.map((share) => share.shareId)), confirmedRegions(rt));
+  const notify = () => {
+    if (!current(rt)) return;
+    rt.events.changed(received);
+    for (const listener of receivedListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn('received shares listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  };
+  if (pruning) return pruning.then(notify);
+  notify();
+}
+
+/**
+ * 已收到的分享变了：供应商组据此把已被删除或已退出的分享移出组(provider-groups.md §3)。只通知，不带内容；
+ * 读名单用 {@link getConfirmedReceivedShareIds}。
+ */
+export function onProviderShareReceivedChanged(listener: () => void): () => void {
+  receivedListeners.add(listener);
+  return () => {
+    receivedListeners.delete(listener);
+  };
+}
+
+/**
+ * 完整可信的已收到分享名单：本区域已拉到过，本账号可能有分享的对方区域也都已确认。只有这时才能据此认定某个分享
+ * 已被删除或已退出；说不准时为 null(还没拉到、拉取失败、换账号中)。
+ */
+export function getConfirmedReceivedShareIds(): ReadonlySet<string> | null {
+  const rt = runtime;
+  if (!rt || !current(rt) || rt.fetchedAt === 0 || !isCrossRegionReceivedComplete()) return null;
+  return new Set(allReceived(rt).map((share) => share.shareId));
 }
 
 // ─── 任务绑定 ────────────────────────────────────────────────────
@@ -144,12 +195,6 @@ export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): 
   if (rt.fetchedAt === 0) await refreshReceivedShares('resolve');
   if (rt.fetchedAt === 0) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared providers are not loaded yet');
   return resolveRemoteAgentTarget(agentDeviceId);
-}
-
-/** 分隔条与模型列表展示用的电脑名。 */
-export function describeProviderShareDevice(agentDeviceId: string): string | null {
-  const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
-  return shareId ? findReceivedShare(shareId)?.deviceName ?? null : null;
 }
 
 // ─── 已收到的分享 ────────────────────────────────────────────────
@@ -202,7 +247,8 @@ export function refreshReceivedShares(reason: string): Promise<void> {
       if (!current(rt)) return;
       rt.received = received;
       rt.fetchedAt = Date.now();
-      emitChanged(rt);
+      const changed = emitChanged(rt);
+      if (changed) await changed;
     } catch (error) {
       if (current(rt)) log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -242,6 +288,28 @@ export function noteProviderShareAccessFailure(): void {
 
 export function getReceivedShares(): readonly ProviderShareReceived[] {
   return allReceived(runtime);
+}
+
+/** 首次本区及已标记跨区收到分享的拉取已完成；空列表只有在此状态下才代表真实的空结果。 */
+export function isReceivedSharesReady(): boolean {
+  const rt = runtime;
+  return !!rt && current(rt) && rt.fetchedAt > 0 && isCrossRegionReceivedReady();
+}
+
+export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecovery): ProviderShareReceivedSnapshot {
+  const rt = runtime;
+  const valid = !!rt && current(rt);
+  const ownerStamp = getActiveDataOwnerPushStamp();
+  if (valid && recovery && recovery.ownerStamp.dataOwnerId === ownerStamp.dataOwnerId &&
+      recovery.ownerStamp.ownerGeneration === ownerStamp.ownerGeneration) {
+    // 不等待对方区域网络，已加载区域的收藏仍立即可用。
+    ensureCrossRegionReceivedForFavorites(recovery.regions);
+  }
+  return {
+    ownerStamp,
+    confirmedRegions: valid ? confirmedRegions(rt) : [],
+    received: valid ? allReceived(rt) : [],
+  };
 }
 
 // ─── 加入 ────────────────────────────────────────────────────────
@@ -347,8 +415,16 @@ export async function withdrawProviderShareRequest(requestId: string): Promise<v
 }
 
 export async function leaveProviderShare(memberId: string): Promise<void> {
-  requireRuntime();
-  if (await crossRegionLeave(memberId)) return;
-  await providerShareApi.leave(memberId);
-  await refreshReceivedShares('left');
+  const rt = requireRuntime();
+  const shareId = allReceived(rt).find((share) => share.memberId === memberId)?.shareId ?? null;
+  const forgetPrefs = shareId ? captureProviderShareGuestPrefsRemoval(shareId) : null;
+  const crossRegion = await crossRegionLeave(memberId);
+  if (!crossRegion) {
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
+    await providerShareApi.leave(memberId);
+  }
+  // 退出后这个分享的本机偏好(「信任 {分享者}」)一起忘掉。
+  if (forgetPrefs) await forgetPrefs();
+  if (!current(rt)) return;
+  if (!crossRegion) await refreshReceivedShares('left');
 }

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import type { RemoteSessionListItem } from '@cindy/maker-shared/session-list';
 import { resolveMobileSessionRowStatus } from '../session/sessionRightStatus';
@@ -49,7 +50,22 @@ describe('automation group row press', () => {
   });
 
   it('keeps the arrow independent from row navigation', () => {
-    const arrow = source.slice(source.indexOf('event.stopPropagation();', start));
-    expect(arrow).toMatch(/^event.stopPropagation\(\);\s+onToggleAutomationGroup\?\.\(group.key\);/);
+    const tree = ts.createSourceFile('HomeSurface.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let callback: ts.ArrowFunction | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isArrowFunction(node) && node.parameters[0]?.name.getText(tree) === 'event'
+        && node.body.getText(tree).includes('event.stopPropagation();')
+        && node.body.getText(tree).includes('onToggleAutomationGroup')) callback = node;
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!callback) throw new Error('Missing production automation arrow callback');
+    const onToggleAutomationGroup = vi.fn();
+    const stopPropagation = vi.fn();
+    const arrow = new Function('group', 'onToggleAutomationGroup', `return (${callback.getText(tree)});`)({ key: 'group' }, onToggleAutomationGroup);
+    arrow({ stopPropagation });
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(onToggleAutomationGroup).toHaveBeenCalledExactlyOnceWith('group');
+    expect(stopPropagation.mock.invocationCallOrder[0]).toBeLessThan(onToggleAutomationGroup.mock.invocationCallOrder[0]!);
   });
 });

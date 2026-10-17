@@ -84,6 +84,13 @@ function parseImDefaultAgentSettings(
   }
   const input = raw as Record<string, unknown>;
   let providerId = defaults.providerId;
+  let agentDeviceId: string | null = null;
+  if ('agentDeviceId' in input && input.agentDeviceId !== null) {
+    if (typeof input.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.agentDeviceId)) {
+      throwIpcError('INVALID_PARAMS', 'im default agentDeviceId invalid');
+    }
+    agentDeviceId = input.agentDeviceId.trim();
+  }
   let model = defaults.model;
   let effort = defaults.effort;
   if ('providerId' in input) {
@@ -107,5 +114,6 @@ function parseImDefaultAgentSettings(
     }
     effort = input.effort;
   }
-  return { providerId, model, effort };
+  if (agentDeviceId && !providerId) throwIpcError('INVALID_PARAMS', 'remote providerId required');
+  return { providerId, model, effort, ...(agentDeviceId ? { agentDeviceId } : {}) };
 }

@@ -78,6 +78,10 @@ import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import {
+  mergeOrcaLeadAttentionKind,
+  useOrcaLeadWorkerAttentionKind,
+} from '../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -112,12 +116,13 @@ const CARD_TITLE_META_SLOT_CLASS =
  */
 function getNeutralAwaitingKind(
   sessionId: string,
-): 'permission' | 'plan_review' | 'ask_user' | 'plugin_setup' | '' {
+): 'permission' | 'plan_review' | 'ask_user' | 'plugin_setup' | 'input_handoff' | '' {
   const info = makerChatStore.getRunningSnapshot().get(sessionId);
   if (info?.hasPendingPermission) return 'permission';
   if (info?.hasPendingPlanReview) return 'plan_review';
   if (info?.hasPendingAskUser) return 'ask_user';
   if (info?.hasPendingPluginSetup) return 'plugin_setup';
+  if (info?.hasPendingInputHandoff) return 'input_handoff';
   return '';
 }
 
@@ -172,7 +177,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   // list 变体与文字模式共用右侧状态优先级:
   // error > awaiting > running > done > time。远程会话由被控端活动镜像覆盖
   // 本地 attention 链路，与 SessionItem 完全一致。
-  const attentionKind = useSessionAttentionKind(session.id);
+  // Orca Lead 另并入其 Worker 的出错 / 等待确认,见 lib/orcaLeadWorkerAttention.ts。
+  const ownAttentionKind = useSessionAttentionKind(session.id);
+  const orcaWorkerAttentionKind = useOrcaLeadWorkerAttentionKind(session.id);
+  const attentionKind = mergeOrcaLeadAttentionKind(ownAttentionKind, orcaWorkerAttentionKind);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
@@ -187,7 +195,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
       : isRunning || cindyMakeActivity != null,
-    hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
+    hasAttentionNotification:
+      hasAttentionNotification ||
+      orcaWorkerAttentionKind !== undefined ||
+      remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
@@ -257,7 +268,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           ? t('ccAgent.sidebar.card.awaitingPlan')
           : awaitingKind === 'plugin_setup'
             ? t('ccAgent.sidebar.card.awaitingPluginSetup')
-            : t('ccAgent.sidebar.card.awaitingQuestion');
+            : awaitingKind === 'input_handoff'
+              ? t('ccAgent.sidebar.card.awaitingInputHandoff')
+              : t('ccAgent.sidebar.card.awaitingQuestion');
   const runningDetail =
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
@@ -560,8 +573,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     !session.deviceLinkDeviceId &&
-    // Agent 在另一台电脑运行：它的会话记录按项目路径存在那台，移动后无法继续。
-    !session.agentDeviceId &&
+    // Agent 在另一台电脑运行的任务也可移动：那台按任务 id 定址 Agent 工作区，与本机路径无关。
     session.status !== 'archived';
 
   const moveToProjectSubmenu = canMoveToProject ? (

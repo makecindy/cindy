@@ -1,7 +1,7 @@
 /**
  * 待发送消息气泡(渲染在消息流里,不再是列表 footer)。
  *
- * 形态与已发送用户气泡同款(右对齐、surfaceElevated + borderStrong)但整体半透明——
+ * 形态与已发送用户气泡同款(右对齐、surfaceElevated + border)但整体半透明——
  * 「这就是你的消息,只是还没生效」;落定时提高不透明度,回流后同一个列表位置换成正式
  * 消息,原地变实。徽标语义:
  *  - 转圈 = 还没有「已被收下」这个事实(enqueue 在途 / 已出队待回流 / 附件上传中);
@@ -56,6 +56,8 @@ import {
   type ResolveRemoteMediaFn,
 } from '@/session/remoteMedia';
 import type { MobileOutboxThumb } from '@/session/sessionOutbox';
+import type { MessagePayload } from '@/session/messagePayload';
+import { pendingSendGalleryImage } from '@/session/pendingSendImages';
 import {
   fontWeight,
   iconSize,
@@ -66,6 +68,7 @@ import {
   type ThemeColors,
 } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
+import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
 
 /** 与已发送消息上的来源标签同一组图标(自动化 Timer / 任务 Send / Orca Bot / 插件 Ghost)。 */
 function sourceIcon(kind: MobilePendingSendSourceKind): LucideIcon {
@@ -156,28 +159,45 @@ function useThumbCellUri(
 
 function ThumbCell({
   thumb,
+  slot,
   resolveRemoteMedia,
   renderImage,
+  onOpenImage,
 }: {
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   thumb: MobileOutboxThumb;
+  slot: number;
   resolveRemoteMedia?: ResolveRemoteMediaFn;
+  onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const [failedUris, setFailedUris] = useState<readonly string[]>([]);
   const uri = useThumbCellUri(thumb, resolveRemoteMedia, failedUris);
+  const image = pendingSendGalleryImage(thumb, uri, slot);
+  const canOpen = !!image && !!onOpenImage;
   return (
-    <View style={styles.thumbCell}>
+    <Pressable
+      accessibilityLabel={image?.title}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !canOpen }}
+      disabled={!canOpen}
+      onPress={(event) => {
+        event.stopPropagation();
+        if (image) onOpenImage?.(image.payload);
+      }}
+      style={styles.thumbCell}
+      testID={`pendingSend.image.${thumb.key}`}
+    >
       {renderImage(uri, thumb.uri, () => {
         if (uri) setFailedUris((failed) => failed.includes(uri) ? failed : [...failed, uri]);
       })}
       {thumb.uploading ? (
-        <View style={styles.thumbUploadingOverlay}>
+        <View pointerEvents="none" style={styles.thumbUploadingOverlay}>
           <ActivityIndicator color={colors.ctaText} size="small" />
         </View>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
@@ -186,19 +206,22 @@ function AttachmentThumbStrip({
   resolveRemoteMedia,
   renderImage,
   gap,
+  onOpenImage,
 }: {
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   gap: number;
   thumbs: readonly MobileOutboxThumb[];
   resolveRemoteMedia?: ResolveRemoteMediaFn;
+  onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
   useSentAttachmentThumbsVersion();
   if (thumbs.length === 0) return null;
   return (
     <View style={[styles.thumbStrip, { gap }]} testID="pendingSend.thumbStrip">
-      {thumbs.map((thumb) => (
-        <ThumbCell renderImage={renderImage} key={thumb.key} resolveRemoteMedia={resolveRemoteMedia} thumb={thumb} />
+      {thumbs.map((thumb, slot) => (
+        <ThumbCell renderImage={renderImage} key={thumb.key} resolveRemoteMedia={resolveRemoteMedia}
+          thumb={thumb} slot={slot} onOpenImage={onOpenImage} />
       ))}
     </View>
   );
@@ -213,6 +236,7 @@ export function PendingSendBubble({
   renderFile,
   screenWidth,
   viewerDeviceId,
+  onOpenImage,
 }: {
   /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
   viewerDeviceId?: string | null;
@@ -224,10 +248,13 @@ export function PendingSendBubble({
   actions: PendingSendBubbleActions;
   /** 远端媒体取件(粘贴时已上传到媒体总仓的图靠它取缩略图)。 */
   resolveRemoteMedia?: ResolveRemoteMediaFn;
+  onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  // 待发送的一定是自己的消息;与落定后的正式气泡同色,避免发出瞬间换色。
+  const { colors: userBubbleColors } = useUserBubbleAppearance();
   const spinning = pendingSendSpins(item.phase);
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
@@ -406,6 +433,7 @@ export function PendingSendBubble({
             <View key={`attachments:${item.clientId}`} onLayout={measureBadgeAnchor} style={[styles.attachmentStrip, { gap: layout.attachmentGap }]}>
               <AttachmentThumbStrip
                 gap={layout.attachmentGap}
+                onOpenImage={onOpenImage}
                 renderImage={renderImage}
                 resolveRemoteMedia={resolveRemoteMedia}
                 thumbs={item.thumbs}
@@ -426,7 +454,12 @@ export function PendingSendBubble({
               onTouchMove={interactive ? handleBubbleTouchMove : undefined}
               onTouchStart={interactive ? handleBubbleTouchStart : undefined}
               onTouchCancel={cancelBubbleTouch}
-              style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}
+              style={[
+                styles.bubble,
+                density === 'compact' && styles.bubbleCompact,
+                density === 'rich' && styles.bubbleRich,
+                userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
+              ]}
               testID={`pendingSend.body.${item.clientId}`}
             >
               {rendersSentInlineBody ? (
@@ -617,7 +650,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   bubbleRich: { gap: spacing.sm },
   bubble: {
     backgroundColor: colors.surfaceElevated,
-    borderColor: colors.borderStrong,
+    borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.xs,

@@ -21,3 +21,9 @@ export { registerScheduleSetPreRunHookTool } from './setPreRunHook.js';
 
 export { classifySchedulerError } from './errors.js';
 export type { SchedulerToolError, SchedulerToolErrorCode } from './errors.js';
+export type {
+  SchedulerDevice,
+  SchedulerRemoteDeps,
+  SchedulerRemoteOp,
+  SchedulerRemoteResult,
+} from './_devices.js';

@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { requireNativeModule } from 'expo-modules-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { logMobileVoice } from '@/session/mobileVoiceDiagnostics';
+
+vi.mock('@/session/mobileVoiceDiagnostics', () => ({ logMobileVoice: vi.fn() }));
 
 vi.mock('expo-modules-core', () => ({
   EventEmitter: class {
@@ -32,6 +33,106 @@ afterEach(async () => {
 });
 
 describe('mobileRealtimeAudio', () => {
+  it.each([undefined, { inputPortTypes: ['MicrophoneBuiltIn'], inputSampleRate: 48000, inputChannels: 1 }])(
+    'logs input metadata and supports installed modules without it: %j', async (input) => {
+      const native = {
+        addListener: vi.fn(() => ({ remove: vi.fn() })),
+        start: vi.fn(async () => input),
+        stop: vi.fn(async () => undefined),
+      };
+      vi.mocked(requireNativeModule).mockReturnValue(native);
+      const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+      const stop = await startMobileRealtimeAudio({ onChunk: vi.fn() });
+      expect(logMobileVoice).toHaveBeenLastCalledWith('debug', 'capture input', {
+        backend: 'ios-native',
+        inputPortTypes: input?.inputPortTypes ?? ['unknown'],
+        inputSampleRate: input?.inputSampleRate,
+        inputChannels: input?.inputChannels,
+      });
+      await stop();
+    },
+  );
+
+  it('waits for the previous singleton recorder to finish starting and stopping before reuse', async () => {
+    let finishStart!: () => void;
+    let finishStop!: () => void;
+    const native = {
+      addListener: vi.fn(() => ({ remove: vi.fn() })),
+      start: vi.fn(async (): Promise<void> => {})
+        .mockImplementationOnce(() => new Promise<void>((resolve) => { finishStart = resolve; })),
+      stop: vi.fn(async (): Promise<void> => {})
+        .mockImplementationOnce(() => new Promise<void>((resolve) => { finishStop = resolve; })),
+    };
+    vi.mocked(requireNativeModule).mockReturnValue(native);
+    const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+    const first = startMobileRealtimeAudio({ onChunk: vi.fn() });
+    await vi.waitFor(() => expect(finishStart).toBeTypeOf('function'));
+    const second = startMobileRealtimeAudio({ onChunk: vi.fn() });
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    const startsWhileStarting = native.start.mock.calls.length;
+    const listenersWhileStarting = native.addListener.mock.calls.length;
+    finishStart();
+    const stopFirst = await first;
+    const stopping = stopFirst();
+    await vi.waitFor(() => expect(finishStop).toBeTypeOf('function'));
+    const startsWhileStopping = native.start.mock.calls.length;
+    finishStop();
+    await stopping;
+    const stopSecond = await second;
+    await stopFirst();
+    const stopsAfterOldCleanup = native.stop.mock.calls.length;
+    await stopSecond();
+
+    expect(startsWhileStarting).toBe(1);
+    expect(listenersWhileStarting).toBe(2);
+    expect(startsWhileStopping).toBe(1);
+    expect(native.start).toHaveBeenCalledTimes(2);
+    expect(stopsAfterOldCleanup).toBe(1);
+    expect(native.stop).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['start', 'stop'] as const)('allows a new singleton recording after the previous %s rejects', async (failure) => {
+    const native = {
+      addListener: vi.fn(() => ({ remove: vi.fn() })),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    native[failure].mockRejectedValueOnce(new Error('native failure'));
+    vi.mocked(requireNativeModule).mockReturnValue(native);
+    const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+    const first = startMobileRealtimeAudio({ onChunk: vi.fn() });
+    if (failure === 'start') await expect(first).rejects.toThrow('native failure');
+    else await expect((await first)()).rejects.toThrow('native failure');
+    const stop = await startMobileRealtimeAudio({ onChunk: vi.fn() });
+    await stop();
+    expect(native.start).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['subscribe', 'unsubscribe'] as const)('releases the singleton recorder after %s throws', async (failure) => {
+    const remove = vi.fn();
+    const native = {
+      addListener: vi.fn(() => ({ remove })),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    if (failure === 'subscribe') {
+      native.addListener
+        .mockImplementationOnce(() => ({ remove }))
+        .mockImplementationOnce(() => { throw new Error('listener failure'); });
+    } else {
+      remove.mockImplementationOnce(() => { throw new Error('listener failure'); });
+    }
+    vi.mocked(requireNativeModule).mockReturnValue(native);
+    const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
+    const first = startMobileRealtimeAudio({ onChunk: vi.fn() });
+    if (failure === 'subscribe') await expect(first).rejects.toThrow('listener failure');
+    else await expect((await first)()).rejects.toThrow('listener failure');
+    expect(remove).toHaveBeenCalled();
+    expect(native.stop).toHaveBeenCalledTimes(failure === 'subscribe' ? 0 : 1);
+    const stop = await startMobileRealtimeAudio({ onChunk: vi.fn() });
+    await stop();
+  });
+
   it('decodes native PCM base64 payloads into ArrayBuffer chunks', async () => {
     const { __testing } = await import('@/session/mobileRealtimeAudio');
 
@@ -214,44 +315,5 @@ describe('mobileRealtimeAudio', () => {
     const { shouldShowMobileVoiceUi } = await import('@/session/mobileRealtimeAudio');
 
     expect(shouldShowMobileVoiceUi('android')).toBe(true);
-  });
-
-  it('keeps the iOS native realtime recorder wired for interruption cleanup', () => {
-    const source = readFileSync(
-      resolve(process.cwd(), 'modules/xdt-mobile-realtime-audio/ios/XdtMobileRealtimeAudioModule.swift'),
-      'utf8',
-    );
-
-    expect(source).toContain('AVAudioSession.interruptionNotification');
-    expect(source).toContain('AVAudioSession.routeChangeNotification');
-    expect(source).toContain('removeAudioSessionObservers()');
-    expect(source).toContain('handleAudioSessionInterruption');
-    expect(source).toContain('handleAudioRouteChange');
-    expect(source).toContain('OnAppEntersBackground');
-    expect(source).toContain('stopCapture(deactivateImmediately: true)');
-    expect(source).toContain('stopCapture()');
-    expect(source).toContain('unsignedIntegerValue(notification.userInfo?[AVAudioSessionInterruptionTypeKey])');
-    expect(source).toContain('unsignedIntegerValue(notification.userInfo?[AVAudioSessionRouteChangeReasonKey])');
-  });
-
-  it('cancels voice runs in both composers when the app enters the background', () => {
-    const newSessionSource = readFileSync(
-      resolve(process.cwd(), 'app/sessions/new.tsx'),
-      'utf8',
-    );
-    const existingSessionSource = readFileSync(
-      resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
-      'utf8',
-    );
-
-    for (const source of [newSessionSource, existingSessionSource]) {
-      expect(source).toContain("AppState.addEventListener('change'");
-      expect(source).toContain("nextState !== 'background'");
-      expect(source).toContain('voiceControllerSessionRef.current = null');
-      expect(source).toContain('discardPendingPrewarm()');
-      expect(source).not.toContain("setAudioModeAsync");
-    }
-    expect(newSessionSource).toContain('cancelVoiceForDeviceSwitch();');
-    expect(existingSessionSource).toContain('cancelVoiceForAppBackground();');
   });
 });

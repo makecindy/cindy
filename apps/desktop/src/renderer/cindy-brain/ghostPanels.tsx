@@ -2,7 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../shared/ghost';
+import { ghostInstallApprovalToken, ghostPanelKind, type InstalledGhost } from '../../shared/ghost';
+import {
+  installedGhostLogicalIdentity,
+  installedGhostStoragePart,
+  pluginStoragePart,
+} from '../../shared/pluginIdentity';
 import { minimizeGhostPanel, reconcileGhostPanelBubbles } from '../lib/ghostPanelBubbleState';
 import { toast } from '../lib/toast';
 import { usePanelMaximize } from '../layout/panelMaximize';
@@ -19,6 +24,7 @@ import { GhostChipPanelBody, GhostPanelError } from './ghostPanelBody';
 import { ghostInstallErrorKey } from './installErrorKey';
 import { pruneGhostSettingsHeights } from './ghostSettingsHeight';
 import { useGhostRuntimeState } from './runtimeStates';
+import { readInstalledGhostsSnapshot, useInstalledGhosts } from './useInstalledGhosts';
 import { getDataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 
 /**
@@ -55,8 +61,12 @@ const PANEL_ENTER_ARMED_AT = Date.now() + 1500;
 const PANEL_EXIT_MS = 180;
 
 /** 意识面板宿主:标准头(PanelChrome)+ 沙箱自绘面板体(崩溃时错误接管)。 */
-function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifest }): ReactNode {
-  const kind = ghostPanelKind(manifest.id);
+function GhostPanel({
+  ghost,
+}: PanelComponentProps & { ghost: InstalledGhost }): ReactNode {
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
+  const kind = ghostPanelKind(instanceId);
   const fillContainer = usePaneFill();
   const atWindowTop = usePaneAtWindowTop();
   // 宽度由引擎下发(fraction × 可用宽,缝把手可拖);兜底用清单 minWidth。
@@ -74,7 +84,7 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
     if (!maximizeEnabled && isMaximized) maximize?.toggle(kind);
   }, [maximizeEnabled, isMaximized, maximize, kind]);
   // 沙箱崩了 → 面板原地进入错误接管态。
-  const runtimeState = useGhostRuntimeState(manifest.id);
+  const runtimeState = useGhostRuntimeState(instanceId);
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
   // 挂载即定(useState 初始化跑一次):启动首屏后出现的面板播宽度展开。
   const [enter] = useState(() => Date.now() >= PANEL_ENTER_ARMED_AT);
@@ -88,11 +98,11 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
     if (closing) return;
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
     if (reduced || isMaximized) {
-      minimizeGhostPanel(manifest.id);
+      minimizeGhostPanel(instanceId);
       return;
     }
     setClosing(true);
-    closeTimerRef.current = window.setTimeout(() => minimizeGhostPanel(manifest.id), PANEL_EXIT_MS);
+    closeTimerRef.current = window.setTimeout(() => minimizeGhostPanel(instanceId), PANEL_EXIT_MS);
   };
   // 标准头「关闭」= 二次确认后停用整个插件(setEnabled false):面板、工具、
   // 沙箱一并休眠,与插件页全局开关同一条链路(ghosts:changed 广播回来时
@@ -100,17 +110,36 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
   // 身份卡 systemButtons 控制——它是宿主给用户的退路,不是作者可关的能力。
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const closeAbortRef = useRef<AbortController | null>(null);
+  const approvalToken = ghostInstallApprovalToken(ghost.approval);
+  useEffect(
+    () => () => closeAbortRef.current?.abort(),
+    [instanceId, ghost.dir, ghost.namespace, approvalToken],
+  );
   const beginClose = async (): Promise<void> => {
-    const approved = await confirm({
-      title: t('ghostPanel.disableConfirm.title', { name: manifest.name }),
-      description: t('ghostPanel.disableConfirm.body'),
-      confirmText: t('ghostPanel.disableConfirm.confirm'),
-    });
-    if (!approved) return;
+    if (closeAbortRef.current) return;
+    const abort = new AbortController();
+    closeAbortRef.current = abort;
     try {
-      await window.electronAPI?.ghosts?.setEnabled(manifest.id, false);
+      const approved = await confirm({
+        title: t('ghostPanel.disableConfirm.title', { name: manifest.name }),
+        description: t('ghostPanel.disableConfirm.body'),
+        confirmText: t('ghostPanel.disableConfirm.confirm'),
+      }, abort.signal);
+      if (!approved || abort.signal.aborted) return;
+      const current = readInstalledGhostsSnapshot().find(
+        (candidate) => installedGhostStoragePart(candidate) === instanceId,
+      );
+      if (
+        !current?.enabled || !current.manifest.panel || current.manifest.panel.position === 'tab' ||
+        current.dir !== ghost.dir || current.namespace !== ghost.namespace ||
+        ghostInstallApprovalToken(current.approval) !== approvalToken
+      ) return;
+      await window.electronAPI?.ghosts?.setEnabled(instanceId, false, approvalToken);
     } catch (error) {
       toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
+    } finally {
+      if (closeAbortRef.current === abort) closeAbortRef.current = null;
     }
   };
   return (
@@ -145,23 +174,22 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
           onMinimize={minimizeEnabled ? beginMinimize : undefined}
           onDetach={
             detachEnabled
-              ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(manifest.id, true)
+              ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(instanceId, true)
               : undefined
           }
           onClose={() => void beginClose()}
         />
         {broken ? (
-          <GhostPanelError manifest={manifest} state={runtimeState} />
+          <GhostPanelError ghost={ghost} state={runtimeState} />
         ) : (
-          <GhostChipPanelBody manifest={manifest} />
+          <GhostChipPanelBody ghost={ghost} />
         )}
       </section>
     </div>
   );
 }
 
-/** 已注册意识面板:kind → 清单指纹(内容没变就不重注册,避免组件身份变化触发无谓重挂载)。 */
-const registeredFingerprints = new Map<string, string>();
+const registeredKinds = new Set<string>();
 
 /**
  * 把注册表与"当前已装清单"对齐:新装的注册、卸下的注销、没变的不动。
@@ -176,29 +204,36 @@ export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 注意用全量清单(含沉睡)——沉睡只是不注册面板,高度仍可复用。
   pruneGhostSettingsHeights(
     getDataOwnerGeneration().dataOwnerId,
-    ghosts.map((g) => g.manifest.id),
+    ghosts.map((g) => pluginStoragePart(installedGhostLogicalIdentity(g))),
   );
   // 气泡状态对齐(与高度 prune 不同:停用/失格的要强制还原,不只清卸载)——
   // 气泡是"面板不可见 + 唯一恢复入口",失格后必须回停靠,不留死角。
   reconcileGhostPanelBubbles(ghosts);
   const seen = new Set<string>();
-  for (const { manifest, enabled } of ghosts) {
+  for (const ghost of ghosts) {
+    const { manifest, enabled } = ghost;
     if (!manifest.panel) continue; // 无面板的意识(未来纯工具卡)不进注册表
     if (manifest.panel.position === 'tab') continue; // 页签形态由插件页承载(面板收束)
     if (enabled === false) continue; // 停用 = 休眠,不注册(注销走下方 seen 差集)
-    const kind = ghostPanelKind(manifest.id);
+    const instanceId = installedGhostStoragePart(ghost);
+    const kind = ghostPanelKind(instanceId);
     seen.add(kind);
-    const fingerprint = JSON.stringify(manifest);
-    if (registeredFingerprints.get(kind) === fingerprint) continue;
-    registeredFingerprints.set(kind, fingerprint);
-    const Component = (props: PanelComponentProps): ReactNode => (
-      <GhostPanel {...props} manifest={manifest} />
-    );
+    if (registeredKinds.has(kind)) continue;
+    registeredKinds.add(kind);
+    const Component = (props: PanelComponentProps): ReactNode => {
+      const installed = useInstalledGhosts().find(
+        (candidate) => installedGhostStoragePart(candidate) === instanceId,
+      );
+      if (!installed?.enabled || !installed.manifest.panel || installed.manifest.panel.position === 'tab') {
+        return null;
+      }
+      return <GhostPanel {...props} ghost={installed} />;
+    };
     registerPanelKind({ kind, Component, collapseMemory: 'global' });
   }
-  for (const kind of [...registeredFingerprints.keys()]) {
+  for (const kind of registeredKinds) {
     if (seen.has(kind)) continue;
-    registeredFingerprints.delete(kind);
+    registeredKinds.delete(kind);
     unregisterPanelKind(kind);
   }
 }
@@ -216,7 +251,7 @@ export function ensureGhostPanelsRegistered(): void {
   // 视同"没装任何意识",不是错误。
   const api = window.electronAPI?.ghosts;
   if (!api) return;
-  syncGhostPanelRegistrations(api.listSync().ghosts);
+  syncGhostPanelRegistrations(readInstalledGhostsSnapshot());
 }
 
 /**
@@ -241,5 +276,5 @@ export function useGhostPanelsSync(): number {
 /** 仅测试用:允许用例重复走首帧注册路径。 */
 export function __resetGhostPanelsForTest(): void {
   initialSynced = false;
-  registeredFingerprints.clear();
+  registeredKinds.clear();
 }

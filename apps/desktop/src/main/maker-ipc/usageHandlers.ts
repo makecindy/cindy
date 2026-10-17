@@ -1,3 +1,4 @@
+import { CLAUDE_QUOTA_STATE_READ } from '../../shared/claudeQuotaState';
 /**
  * maker:usage:* IPC 的纯 handler body。
  *
@@ -71,6 +72,7 @@ export function toLegacyUsdModelPricing(
 
 /** usage handler 需要的 host-level 查询与刷新能力。 */
 export interface MakerUsageHandlerDeps {
+  readClaudeAccountQuotaClear?(): { quotaState: 'unlimited' | 'invalidated' } | null;
   readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTodayUsage>;
   readCodexAccountUsageSnapshot(providerId?: string): Promise<RateLimitSnapshot | null>;
   readCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
@@ -110,7 +112,8 @@ export function registerMakerUsageHandlers(
       // Both first load and explicit refresh must reach the existing owner-scoped fetcher.
       // Cached reads retain its throttle; an empty cache gets the existing warm-start path.
       await deps.triggerClaudeAccountUsageRefresh(deps.readClaudeAccountUsageSnapshot() === null);
-      return deps.readClaudeAccountUsageSnapshot();
+      return deps.readClaudeAccountUsageSnapshot()
+        ?? (providerId === CLAUDE_QUOTA_STATE_READ ? deps.readClaudeAccountQuotaClear?.() ?? null : null);
     }
     return null;
   });

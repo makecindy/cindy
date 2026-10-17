@@ -37,6 +37,11 @@ vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.profiles }));
 vi.mock('../BotAvatar', () => ({
   BotAvatar: ({ bot }: { bot: { name: string } }) => <span data-avatar={bot.name} />,
 }));
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: ({ content, allowPrivilegedLinks }: any) => (
+    <div data-markdown={String(allowPrivilegedLinks)}>{content}</div>
+  ),
+}));
 
 function HeaderSlot() {
   return <header data-testid="content-header">{useFeatureContentHeader()}</header>;
@@ -112,6 +117,8 @@ describe('BotDirectMessageView', () => {
     render(<TestPage />, { reactStrictMode: true });
     expect(await screen.findByText('Can you check this?')).toBeTruthy();
     expect(screen.getByText('Checked.')).toBeTruthy();
+    // Messages render as Markdown, never with privileged links.
+    expect(screen.getByText('Checked.').getAttribute('data-markdown')).toBe('false');
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.getByText('bots.directMessage.limitReached')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.directMessage.close' }));

@@ -3,7 +3,7 @@
  *
  * 群专线是一条普通 Cindy Session：权限请求 / 提问经 maker 事件进入 makerChatStore，
  * 与任务页是同一份状态（按 sessionId 分片），这里只读它的轻量快照并复用任务页的
- * PermissionPrompt / AskUserQuestionPrompt，作答也走同一条 store 动作。其它交互（计划
+ * PermissionPrompt / AskUserQuestionPrompt / InputHandoffCard，作答也走同一条路径。其它交互（计划
  * 审阅、插件配置等）在群里只提示「在等你确认」。
  *
  * 灵动岛活动镜像报告等待交互、store 里却没有卡片时（窗口刚重载、错过了实时推送），
@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
+import { InputHandoffCard } from '@/features/input-handoff/InputHandoffCard';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import type { BotChatIdentity } from './BotSessionContentHeader';
@@ -63,6 +64,15 @@ export function BotGroupPendingInteraction({
         onViewerStateChange={(next) => makerChatStore.setAskUserViewerState(sessionId, next)}
         draft={light.askUserDraft}
         onDraftChange={(next) => makerChatStore.setAskUserDraft(sessionId, next)}
+      />
+    );
+  }
+  if (light.pendingInputHandoff) {
+    return (
+      <InputHandoffCard
+        key={light.pendingInputHandoff.requestId}
+        sessionId={sessionId}
+        snapshot={light.pendingInputHandoff}
       />
     );
   }

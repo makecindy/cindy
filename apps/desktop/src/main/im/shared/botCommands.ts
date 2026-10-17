@@ -304,11 +304,37 @@ export function buildOfficialBotCommandMenus(
   }));
 }
 
-/** 按桌面端语言渲染 owner 作用域的 Telegram 命令菜单。 */
+/**
+ * 连接交给伙伴后不在渠道里改的命令: 模型 / 权限 / 工作目录归伙伴设置管(伙伴的 Home
+ * 工作区与模型链是伙伴的正本)。slashCommands 拒绝它们、命令菜单不列它们, 同一张表。
+ */
+const COMPANION_MANAGED_COMMANDS: ReadonlySet<string> = new Set(['project', 'model', 'permission']);
+
+/**
+ * 渠道文案包没提供 `slash.companionManagedCommand` 时的兜底(与 Telegram / 飞书同文):
+ * 拦截不能依赖文案包是否定义了这条提示, 否则没定义的渠道会把 /permission 等直接作用到伙伴任务上。
+ */
+export const COMPANION_MANAGED_COMMAND_FALLBACK =
+  '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。';
+
+/** `cmd` 可带或不带开头的斜杠。 */
+export function isCompanionManagedCommand(cmd: string): boolean {
+  return COMPANION_MANAGED_COMMANDS.has(cmd.replace(/^\//, '').toLowerCase());
+}
+
+/**
+ * 按桌面端语言渲染 owner 作用域的 Telegram 命令菜单。
+ * `surface: 'companion'` = 伙伴自有连接的菜单, 去掉交给伙伴后会被拒的三条。
+ */
 export function buildPersonalBotCommandMenu(
   translate: (key: NonNullable<BotCommandDefinition['telegramMenuDescriptionKey']>) => string,
+  options: { surface?: 'personal' | 'companion' } = {},
 ): ReadonlyArray<{ command: string; description: string }> {
-  return PERSONAL_BOT_COMMANDS.map(({ command, telegramMenuDescriptionKey }) => ({
+  const definitions =
+    options.surface === 'companion'
+      ? PERSONAL_BOT_COMMANDS.filter((definition) => !isCompanionManagedCommand(definition.command))
+      : PERSONAL_BOT_COMMANDS;
+  return definitions.map(({ command, telegramMenuDescriptionKey }) => ({
     command,
     // 个人 bot 的每条命令都有菜单 key(botCommands.test.ts 守门), 非空断言安全。
     description: translate(telegramMenuDescriptionKey!),

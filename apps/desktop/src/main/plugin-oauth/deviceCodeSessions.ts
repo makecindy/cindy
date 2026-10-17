@@ -1,5 +1,6 @@
 import {
   oauthId,
+  oauthGhostId,
   PLUGIN_OAUTH_TTL_MS,
   parseDeviceAuthorizationUrl,
   parseAuthorizationUserCode,
@@ -32,7 +33,7 @@ function parseRequest(raw: unknown): PluginOauthDeviceCodeRequest {
   if (
     Object.keys(v).sort().join(',') !== 'actionId,deviceId,ghostId,operation,requestId' ||
     !oauthId(v.deviceId) ||
-    !oauthId(v.ghostId) ||
+    !oauthGhostId(v.ghostId) ||
     !oauthId(v.requestId) ||
     typeof v.actionId !== 'string' ||
     !v.actionId ||

@@ -1,0 +1,541 @@
+/**
+ * Opening a server group waits on main's Chat Server reads. Every request here answers after
+ * a fixed simulated round trip, so the elapsed fake time counts the serial request rounds on
+ * the open path. These are simulated latencies, not production measurements.
+ *
+ * The realtime cases run against a small model of the Chat Server contract (chat-server
+ * sync.ts / realtime.ts): a snapshot returns its scope head as `cursor`, a subscription
+ * delivers every change after its cursor, and the next batch waits for the ack.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const fixture = vi.hoisted(() => ({ handle: vi.fn(), latencyMs: 100, profiles: [] as unknown[], localGroupIds: [] as string[],
+  sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), page: [] as unknown[],
+  /** When the server reads its state and when the answer reaches the client, in ms after the request. */
+  timing: null as null | ((route: string) => { serve: number; deliver: number }),
+  offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void) }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
+vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated' } }));
+vi.mock('node:fs', () => ({ existsSync: () => true, readFileSync: () => '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}' }));
+vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
+vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
+  select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), {
+    limit: async () => fixture.localGroupIds.map(id => ({ id })),
+  }) }) }),
+  insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
+}, tx: async () => undefined }) }));
+vi.mock('node:http', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { request: (url: string, options: { method: string }, callback: (response: unknown) => void) => {
+    const req = Object.assign(new EventEmitter(), {
+      end: (data?: string) => {
+        const route = new URL(url).pathname.slice(3) + new URL(url).search;
+        fixture.routes.push(route);
+        const { serve, deliver } = fixture.timing?.(route) ?? { serve: fixture.latencyMs, deliver: fixture.latencyMs };
+        setTimeout(() => {
+          if (fixture.offline) { setTimeout(() => req.emit('error', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })), deliver - serve); return; }
+          const answered = Promise.resolve(fixture.handle(route, options.method, data ? JSON.parse(data) : undefined));
+          const answer = () => void answered.then(result => {
+            const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200, headers: {} });
+            callback(response);
+            response.emit('data', Buffer.from(JSON.stringify(result?.body ?? {})));
+            response.emit('end');
+          }, error => req.emit('error', error));
+          if (deliver > serve) setTimeout(answer, deliver - serve); else answer();
+        }, serve);
+      },
+      destroy: (error: Error) => req.emit('error', error),
+    });
+    return req;
+  } };
+});
+vi.mock('node:https', async () => ({ request: (await import('node:http')).request }));
+vi.mock('ws', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: class extends EventEmitter {
+    static OPEN = 1; readyState = 1;
+    send = vi.fn((frame: string) => fixture.onFrame?.(this, JSON.parse(frame)));
+    constructor() { super(); fixture.sockets.push(this as unknown as import('ws').WebSocket); }
+    close() { this.emit('close'); }
+  } };
+});
+import { withChatServer } from '../chatServer.js';
+import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
+
+const selfId = '30000000-0000-4000-8000-000000000001';
+const rooms = Array.from({ length: 8 }, (_, index) => `10000000-0000-4000-8000-00000000000${index + 1}`);
+const room = (id: string) => ({ id, kind: 'group', name: `Room ${id.slice(-1)}`, state: 'joined', response_mode: 'all', speaking_mode: 'auto',
+  created_at: '2026-10-03T00:00:00Z', updated_at: '2026-10-03T00:00:00Z', revision: 1, archived: false });
+const message = { id: '50000000-0000-4000-8000-000000000001', seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' },
+  content: [{ type: 'text', text: 'hello' }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId: null };
+function response(route: string) {
+  if (route === '/me') return { body: { actor: { id: selfId } } };
+  if (route === '/actors') return { body: [] };
+  if (route.startsWith('/conversations?')) return { body: rooms.map(room) };
+  if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '57' } };
+  if (route === '/executions/claim') return { body: { execution: null } };
+  if (route.includes('/messages?')) return { body: fixture.page };
+  if (route.endsWith('/executions') || route.includes('/execution-failures?') || route.includes('/plans')) return { body: [] };
+  return { body: {} };
+}
+
+async function timed<T>(run: () => Promise<T>): Promise<{ ms: number; value: T; routes: string[] }> {
+  const start = Date.now();
+  const from = fixture.routes.length;
+  let settled: { value: T } | undefined;
+  void run().then(value => { settled = { value }; });
+  while (!settled) await vi.advanceTimersByTimeAsync(5);
+  // Background claims/leases are independent of the open path.
+  const routes = fixture.routes.slice(from).filter(route => !route.startsWith('/executions/'));
+  return { ms: Date.now() - start, value: settled.value, routes };
+}
+
+describe('Chat Server group open latency (simulated 100ms per request)', () => {
+  let service: BotGroupChatService;
+  let local: { listGroups: ReturnType<typeof vi.fn>; settleLaneTurn: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
+  let onChanged: ReturnType<typeof vi.fn>;
+  // Each scenario starts right after an actor registration, as the two-second poll keeps it.
+  const warm = async () => { await timed(() => service.chatServer!.ownedBots()); };
+  const sent = () => vi.mocked(fixture.sockets[0].send).mock.calls.map(([frame]) => JSON.parse(String(frame)));
+  async function connected() {
+    await vi.advanceTimersByTimeAsync(2500);
+    fixture.sockets[0].emit('message', JSON.stringify({ type: 'ready' }));
+  }
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    vi.stubEnv('XDT_ISOLATED', '1');
+    fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 100;
+    fixture.timing = null; fixture.offline = false; fixture.onFrame = null;
+    fixture.page = [message];
+    fixture.handle.mockImplementation(response);
+    fixture.download.mockResolvedValue(null);
+    onChanged = vi.fn();
+    local = { listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() };
+    service = withChatServer(local as unknown as BotGroupChatService, { onChanged } as unknown as BotGroupChatServiceDeps);
+  });
+  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+  it('opens a group in three request rounds and a followed group in two', async () => {
+    const firstOpen = await timed(() => service.getGroup(rooms[0]));
+    await warm();
+    const firstVisit = await timed(() => service.getGroup(rooms[1]));
+    await warm();
+    const revisit = await timed(() => service.getGroup(rooms[0]));
+    await warm();
+    const firstList = await timed(() => service.listGroups());
+    await warm();
+    const nextList = await timed(() => service.listGroups());
+    // Before: 800 / 500 / 500 / 400 / 400 ms, every open reading snapshot → messages →
+    // executions → failures → plans one after another.
+    console.info(`[group-open-latency] ${JSON.stringify({ firstOpenMs: firstOpen.ms, firstVisitMs: firstVisit.ms, revisitMs: revisit.ms,
+      firstSidebarListMs: firstList.ms, nextSidebarListMs: nextList.ms, revisitRequests: revisit.routes.length })}`);
+    expect([firstOpen, firstVisit, revisit, firstList, nextList].every(read => read.value.ok)).toBe(true);
+    expect(firstVisit.ms).toBe(300);
+    expect(revisit.ms).toBe(200);
+    expect(nextList.ms).toBe(300);
+    // Shorter, not more: the same five reads per open.
+    expect(revisit.routes).toHaveLength(5);
+  });
+
+  it('answers a send after one parallel read round and its post', async () => {
+    await timed(() => service.getGroup(rooms[0]));
+    await warm();
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/messages') && method === 'POST'
+      ? { body: { id: '50000000-0000-4000-8000-000000000099' } } : route.endsWith('/members') ? { body: [] } : response(route));
+    const plain = await timed(() => service.sendMessage({ groupId: rooms[0], text: 'hello', clientId: 'open-latency-send-1', mentions: { all: false, botIds: [] } }));
+    const everyone = await timed(() => service.sendMessage({ groupId: rooms[0], text: 'hello all', clientId: 'open-latency-send-2', mentions: { all: true, botIds: [] } }));
+    // Before: snapshot → plans → members → post, one after another (400ms each).
+    console.info(`[group-send-latency] ${JSON.stringify({ plainMs: plain.ms, everyoneMs: everyone.ms, plainRequests: plain.routes.length, everyoneRequests: everyone.routes.length })}`);
+    expect([plain.value, everyone.value]).toEqual([{ ok: true, messageId: '50000000-0000-4000-8000-000000000099' }, { ok: true, messageId: '50000000-0000-4000-8000-000000000099' }]);
+    expect(plain.ms).toBe(200);
+    expect(everyone.ms).toBe(200);
+    // An unaddressed message needs no member read.
+    expect(plain.routes).toHaveLength(3);
+    expect(everyone.routes).toHaveLength(4);
+  });
+
+  it('starts a claimed turn after one parallel read round and one lease check', async () => {
+    service.dispose();
+    const botActor = '20000000-0000-4000-8000-000000000001';
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const execution = { id: '40000000-0000-4000-8000-000000000001', conversation_id: rooms[0], source_message_id: message.id, bot_id: botActor,
+      context_seq: '1', epoch: 1, status: 'running', access_mode: 'chat', access_revision: 1 };
+    let queued = true;
+    let claimedAt = 0;
+    let dispatchedAt = 0;
+    fixture.handle.mockImplementation(route => {
+      if (route === '/actors') return { body: [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
+      if (route === '/executions/claim') {
+        if (!queued) return { body: { execution: null } };
+        // Served and answered at once: this is when the claim reaches the client.
+        queued = false; claimedAt = Date.now();
+        return { body: { execution } };
+      }
+      return response(route);
+    });
+    service = withChatServer(local as unknown as BotGroupChatService, { onChanged,
+      ensureLane: async () => ({ ok: true, sessionId: 'lane' }), abortLane: async () => {},
+      dispatch: async () => { dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
+    await vi.advanceTimersByTimeAsync(3000);
+    // Before: snapshot → lease check → history → lease check → dispatch (400ms after the claim).
+    console.info(`[group-pickup-latency] ${JSON.stringify({ afterClaimMs: dispatchedAt - claimedAt })}`);
+    expect(dispatchedAt).toBeGreaterThan(0);
+    expect(dispatchedAt - claimedAt).toBe(200);
+  });
+
+  it('reads a new room only after the snapshot whose cursor it follows from', async () => {
+    await warm();
+    const from = fixture.routes.length;
+    let snapshotAnswered = false;
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) snapshotAnswered = true;
+      return response(route);
+    });
+    const early: string[] = [];
+    const watch = setInterval(() => { if (!snapshotAnswered) early.push(...fixture.routes.slice(from)); }, 1);
+    await timed(() => service.getGroup(rooms[2]));
+    clearInterval(watch);
+    expect(early.filter(route => !route.startsWith('/executions/') && !route.endsWith('/snapshot'))).toEqual([]);
+  });
+
+  it('follows a newly opened room from its snapshot cursor and resumes after the last acked cursor', async () => {
+    await connected();
+    await timed(() => service.getGroup(rooms[0]));
+    expect(sent()).toContainEqual({ type: 'subscribe', scope: `conversation:${rooms[0]}`, after: '57' });
+    fixture.sockets[0].emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${rooms[0]}`, cursor: '58', changes: [] }));
+    vi.mocked(fixture.sockets[0].send).mockClear();
+    onChanged.mockClear();
+    fixture.sockets[0].emit('message', JSON.stringify({ type: 'ready' }));
+    expect(sent()).toContainEqual({ type: 'subscribe', scope: `conversation:${rooms[0]}`, after: '58' });
+    // A reconnect still re-reads every followed room once, after the 150ms coalescing window.
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChanged).toHaveBeenCalledWith({ groupId: rooms[0], change: 'messages' }, undefined);
+  });
+
+  it('keeps the membership answer when a parallel read of a followed room fails first', async () => {
+    await timed(() => service.getGroup(rooms[0]));
+    await warm();
+    fixture.handle.mockImplementation(route => route.endsWith('/snapshot') ? { status: 404, body: { error: { code: 'CONVERSATION_NOT_FOUND' } } }
+      : route.includes('/messages?') ? { status: 403, body: { error: { code: 'FORBIDDEN' } } } : response(route));
+    fixture.timing = route => route.endsWith('/snapshot') ? { serve: 80, deliver: 80 } : { serve: 10, deliver: 10 };
+    const left = await timed(() => service.getGroup(rooms[0]));
+    expect(left.value).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+  });
+
+  it('reports the first failure in the former read order, not the fastest one', async () => {
+    await timed(() => service.getGroup(rooms[0]));
+    await warm();
+    fixture.handle.mockImplementation(route => route.includes('/messages?') ? { status: 403, body: { error: { code: 'FORBIDDEN' } } }
+      : route.endsWith('/executions') ? { status: 503, body: { error: { code: 'UNAVAILABLE' } } } : response(route));
+    fixture.timing = route => route.includes('/messages?') ? { serve: 90, deliver: 90 } : { serve: 10, deliver: 10 };
+    const denied = await timed(() => service.getGroup(rooms[0]));
+    // Serially, messages failed before executions was ever requested.
+    expect(denied.value).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+  });
+
+  it('re-reads a room once for a page of attachments instead of once per file', async () => {
+    const media = Array.from({ length: 20 }, (_, index) => ({ ...message, id: `50000000-0000-4000-8000-0000000001${String(index).padStart(2, '0')}`,
+      content: [{ type: 'media', mediaId: `60000000-0000-4000-8000-0000000001${String(index).padStart(2, '0')}` }] }));
+    fixture.page = media;
+    fixture.download.mockImplementation((_room: string, mediaId: string) => new Promise(resolve => setTimeout(
+      () => resolve({ id: mediaId, name: 'image.png', category: 'image', path: '/test/image.png', url: null }), 10 + Number(mediaId.slice(-2)) * 5)));
+    await timed(() => service.getGroup(rooms[0]));
+    onChanged.mockClear();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onChanged.mock.calls.filter(([payload]) => payload.groupId === rooms[0])).toHaveLength(1);
+    const reread = await timed(() => service.getGroup(rooms[0]));
+    expect(reread.value.ok && reread.value.group.messages.every(item => item.attachments.length === 1)).toBe(true);
+  });
+
+  it('keeps attachment order, failures and a later retry when completions share one re-read', async () => {
+    const ids = ['60000000-0000-4000-8000-000000000201', '60000000-0000-4000-8000-000000000202', '60000000-0000-4000-8000-000000000203'];
+    fixture.page = [{ ...message, content: [{ type: 'text', text: 'three files' }, ...ids.map(mediaId => ({ type: 'media', mediaId }))] }];
+    const attachment = (mediaId: string) => ({ id: mediaId, name: `${mediaId.slice(-3)}.png`, category: 'image', path: `/test/${mediaId.slice(-3)}.png`, url: null });
+    let secondFails = true;
+    fixture.download.mockImplementation((_room: string, mediaId: string) => new Promise((resolve, reject) => setTimeout(() => {
+      if (mediaId === ids[1] && secondFails) reject(new Error('OBJECT_STORE_UNAVAILABLE'));
+      else resolve(attachment(mediaId));
+      // The last finishes first: order must come from the message, not from completion.
+    }, mediaId === ids[2] ? 10 : mediaId === ids[1] ? 40 : 60)));
+    await timed(() => service.getGroup(rooms[0]));
+    onChanged.mockClear();
+    await vi.advanceTimersByTimeAsync(1000);
+    // Two successes and one failure settle inside one window: one re-read shows their states.
+    expect(onChanged.mock.calls.filter(([payload]) => payload.groupId === rooms[0])).toHaveLength(1);
+    const settled = await timed(() => service.getGroup(rooms[0]));
+    // Every media block keeps its slot in message order; the failed one says so instead of vanishing.
+    expect(settled.value.ok && settled.value.group.messages[0].attachments.map(item => [item.id, item.state ?? 'ready']))
+      .toEqual([[ids[0], 'ready'], [ids[1], 'unavailable'], [ids[2], 'ready']]);
+    // A failed file is not retried during its backoff, then is retried by the next read.
+    expect(fixture.download).toHaveBeenCalledTimes(3);
+    secondFails = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    onChanged.mockClear();
+    await timed(() => service.getGroup(rooms[0]));
+    expect(fixture.download).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onChanged.mock.calls.filter(([payload]) => payload.groupId === rooms[0])).toHaveLength(1);
+    const recovered = await timed(() => service.getGroup(rooms[0]));
+    expect(recovered.value.ok && recovered.value.group.messages[0].attachments.map(item => [item.id, item.state ?? 'ready']))
+      .toEqual(ids.map(mediaId => [mediaId, 'ready']));
+  });
+
+  it('notifies again for an attachment that settles after a coalesced re-read was sent', async () => {
+    const ids = ['60000000-0000-4000-8000-000000000301', '60000000-0000-4000-8000-000000000302'];
+    fixture.page = [{ ...message, content: ids.map(mediaId => ({ type: 'media', mediaId })) }];
+    fixture.download.mockImplementation((_room: string, mediaId: string) => new Promise(resolve => setTimeout(
+      () => resolve({ id: mediaId, name: 'late.png', category: 'image', path: '/test/late.png', url: null }), mediaId === ids[0] ? 10 : 900)));
+    await timed(() => service.getGroup(rooms[0]));
+    onChanged.mockClear();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onChanged.mock.calls.filter(([payload]) => payload.groupId === rooms[0])).toHaveLength(2);
+    const read = await timed(() => service.getGroup(rooms[0]));
+    expect(read.value.ok && read.value.group.messages[0].attachments.map(item => item.id)).toEqual(ids);
+  });
+
+  describe('attachment notices across the coalescing window', () => {
+    const media = (index: number) => `60000000-0000-4000-8000-0000000004${String(index).padStart(2, '0')}`;
+    const attachment = (mediaId: string) => ({ id: mediaId, name: 'file.png', category: 'image', path: '/test/file.png', url: null });
+    /** Downloads settle at the given ms after the first read; returns their settle times. */
+    function scheduleDownloads(plan: Array<{ at: number; fails?: boolean }>) {
+      fixture.page = [{ ...message, content: plan.map((_, index) => ({ type: 'media', mediaId: media(index) })) }];
+      const settled: number[] = [];
+      fixture.download.mockImplementation((_room: string, mediaId: string) => {
+        const step = plan[Number(mediaId.slice(-2))]!;
+        return new Promise((resolve, reject) => setTimeout(() => {
+          settled.push(Date.now());
+          if (step.fails) reject(new Error('OBJECT_STORE_UNAVAILABLE')); else resolve(attachment(mediaId));
+        }, step.at));
+      });
+      return settled;
+    }
+    let notices: number[] = [];
+    beforeEach(() => {
+      notices = [];
+      onChanged.mockImplementation((payload: { groupId: string }) => { if (payload.groupId === rooms[0]) notices.push(Date.now()); });
+    });
+
+    it.each([
+      ['the last one succeeds', false],
+      ['the last one fails', true],
+    ])('delivers a notice after every settle when %s, across the window boundary', async (_name, lastFails) => {
+      // The last settle lands inside the window opened by the one before it.
+      const settled = scheduleDownloads([{ at: 0 }, { at: 150 }, { at: 199 }, { at: 200 }, { at: 201 }, { at: 399 }, { at: 650 }, { at: 700, fails: lastFails }]);
+      await timed(() => service.getGroup(rooms[0]));
+      notices = [];
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(settled).toHaveLength(8);
+      // No settle is left without a later notice, so the last state is always re-read.
+      for (const at of settled) expect(notices.some(time => time >= at)).toBe(true);
+      expect(Math.max(...notices)).toBeGreaterThanOrEqual(Math.max(...settled));
+      expect(notices.length).toBeLessThan(settled.length);
+      const read = await timed(() => service.getGroup(rooms[0]));
+      // Eight slots either way; a failed last download is shown as unavailable, not dropped.
+      const attachments = read.value.ok ? read.value.group.messages[0].attachments : [];
+      expect(attachments).toHaveLength(8);
+      expect(attachments.map(item => item.state ?? 'ready')).toEqual([...Array(7).fill('ready'), lastFails ? 'unavailable' : 'ready']);
+    });
+
+    it('re-reads again when a download settles while the previous refresh is still in flight', async () => {
+      scheduleDownloads([{ at: 0 }, { at: 260 }]);
+      await timed(() => service.getGroup(rooms[0]));
+      // Each notice starts a refresh, as the group page does; the newest answer is shown.
+      let shown: string[] = [];
+      let version = 0;
+      onChanged.mockImplementation((payload: { groupId: string }) => {
+        if (payload.groupId !== rooms[0]) return;
+        notices.push(Date.now());
+        const current = ++version;
+        void service.getGroup(rooms[0]).then(result => {
+          if (current === version && result.ok) shown = result.group.messages[0].attachments.map(item => item.id);
+        });
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      // The first refresh (sent at ~200ms, reads ~200ms) was in flight when the second file settled.
+      expect(notices.length).toBe(2);
+      expect(shown).toEqual([media(0), media(1)]);
+    });
+
+    it('keeps notices per group', async () => {
+      fixture.page = [{ ...message, content: [{ type: 'media', mediaId: media(0) }] }];
+      fixture.download.mockImplementation((_room: string, mediaId: string) => new Promise(resolve => setTimeout(() => resolve(attachment(mediaId)), 50)));
+      await Promise.all([timed(() => service.getGroup(rooms[0])), timed(() => service.getGroup(rooms[1]))]);
+      onChanged.mockClear();
+      await vi.advanceTimersByTimeAsync(1000);
+      const groups = onChanged.mock.calls.map(([payload]) => payload.groupId);
+      expect(groups.filter(id => id === rooms[0])).toHaveLength(1);
+      expect(groups.filter(id => id === rooms[1])).toHaveLength(1);
+    });
+
+    it('drops a pending notice of the previous account after a switch', async () => {
+      service.dispose();
+      let epoch = 0;
+      const ownerChanged = vi.fn();
+      service = withChatServer(local as unknown as BotGroupChatService, {
+        captureOwnerScope: () => ({ epoch }),
+        isOwnerScopeCurrent: (scope: { epoch: number }) => scope.epoch === epoch,
+        onChanged: ownerChanged,
+      } as unknown as BotGroupChatServiceDeps);
+      scheduleDownloads([{ at: 0 }, { at: 100 }]);
+      await timed(() => service.getGroup(rooms[0]));
+      await vi.advanceTimersByTimeAsync(50);
+      ownerChanged.mockClear();
+      epoch += 1;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ownerChanged).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not summarize every local history to open a server room', async () => {
+    await timed(() => service.getGroup(rooms[0]));
+    expect(local.listGroups).not.toHaveBeenCalled();
+    fixture.localGroupIds = [rooms[1]];
+    await warm();
+    await timed(() => service.getGroup(rooms[1]));
+    expect(local.listGroups).toHaveBeenCalled();
+  });
+});
+
+describe('Chat Server realtime cursor against a server model', () => {
+  const roomId = rooms[0];
+  const peer = '30000000-0000-4000-8000-000000000002';
+  let service: BotGroupChatService;
+  let head = 0;
+  let history: Array<Record<string, unknown>> = [];
+  /** Per socket: the subscription cursor and the batch awaiting its ack, as realtime.ts keeps them. */
+  const subscriptions = new Map<unknown, Map<string, { cursor: number; pending?: number }>>();
+  /** The renderer's rule: the newest request wins, a failed refresh keeps what is shown. */
+  let shown: string[] = [];
+  let requestVersion = 0;
+  const show = () => {
+    const version = ++requestVersion;
+    void service.getGroup(roomId).then(result => {
+      if (version === requestVersion && result.ok) shown = result.group.messages.map(item => item.content);
+    });
+  };
+  const commit = (text: string) => {
+    head += 1;
+    history.push({ id: `50000000-0000-4000-8000-${String(head).padStart(12, '0')}`, seq: String(head), authorId: peer, author: { kind: 'human', name: 'Peer' },
+      content: [{ type: 'text', text }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId: null });
+  };
+  const socket = () => fixture.sockets.at(-1)!;
+  /** One realtime poll: each idle subscription behind the head receives one batch. */
+  const pump = () => {
+    for (const [scope, entry] of subscriptions.get(socket()) ?? []) {
+      if (entry.pending !== undefined || entry.cursor >= head) continue;
+      entry.pending = head;
+      socket().emit('message', JSON.stringify({ type: 'changes', scope, cursor: String(head), changes: [{ type: 'message.created' }] }));
+    }
+  };
+  const ready = () => socket().emit('message', JSON.stringify({ type: 'ready' }));
+  const subscribeFrames = () => fixture.sockets.flatMap(item => vi.mocked(item.send).mock.calls.map(([frame]) => JSON.parse(String(frame))))
+    .filter(frame => frame.type === 'subscribe' && frame.scope === `conversation:${roomId}`);
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    vi.stubEnv('XDT_ISOLATED', '1');
+    fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 20;
+    fixture.timing = null; fixture.offline = false;
+    head = 0; history = []; shown = []; requestVersion = 0; subscriptions.clear();
+    for (const text of ['one', 'two', 'three']) commit(text);
+    fixture.onFrame = (owner, frame) => {
+      const scopes = subscriptions.get(owner) ?? new Map();
+      subscriptions.set(owner, scopes);
+      if (frame.type === 'subscribe') scopes.set(String(frame.scope), { cursor: Number(frame.after) });
+      if (frame.type === 'ack') {
+        const entry = scopes.get(String(frame.scope));
+        if (entry?.pending === Number(frame.cursor)) { entry.cursor = entry.pending; entry.pending = undefined; }
+      }
+    };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [], messages: [...history].reverse().slice(0, 100), cursor: String(head) } };
+      if (route.includes('/messages?')) return { body: [...history].reverse().slice(0, 100) };
+      return response(route);
+    });
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService,
+      { onChanged: vi.fn(payload => { if (payload.groupId === roomId) show(); }) } as unknown as BotGroupChatServiceDeps);
+    await vi.advanceTimersByTimeAsync(2500);
+    ready();
+    show();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+  it('shows a change that a parallel read missed, even when its refresh fails during a disconnect', async () => {
+    expect(shown).toEqual(['one', 'two', 'three']);
+    expect(subscribeFrames()).toEqual([{ type: 'subscribe', scope: `conversation:${roomId}`, after: '3' }]);
+    // A followed room: messages are read before "four" commits, the snapshot after it.
+    fixture.timing = route => route.endsWith('/snapshot') ? { serve: 90, deliver: 100 } : { serve: 10, deliver: 20 };
+    show();
+    setTimeout(() => commit('four'), 50);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(shown).toEqual(['one', 'two', 'three']);
+    // The change arrives, but its refresh fails and the connection drops before any re-read.
+    fixture.offline = true;
+    pump();
+    socket().emit('close');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(shown).not.toContain('four');
+    fixture.offline = false;
+    fixture.timing = null;
+    await vi.advanceTimersByTimeAsync(600);
+    expect(fixture.sockets).toHaveLength(2);
+    ready();
+    await vi.advanceTimersByTimeAsync(500);
+    // Resumes after what was read, without replaying the history, and re-reads the room.
+    expect(subscribeFrames().at(-1)).toEqual({ type: 'subscribe', scope: `conversation:${roomId}`, after: '4' });
+    expect(shown).toEqual(['one', 'two', 'three', 'four']);
+    commit('five');
+    pump();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(shown).toEqual(['one', 'two', 'three', 'four', 'five']);
+  });
+
+  it('follows a new room from the first snapshot answer and never rewinds to a late older one', async () => {
+    service.dispose();
+    fixture.sockets = []; subscriptions.clear(); shown = [];
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService,
+      { onChanged: vi.fn(payload => { if (payload.groupId === roomId) show(); }) } as unknown as BotGroupChatServiceDeps);
+    await vi.advanceTimersByTimeAsync(2500);
+    ready();
+    let snapshots = 0;
+    // The first snapshot is read at "three" but answers last; the second is read at "four" and answers first.
+    fixture.timing = route => {
+      if (!route.endsWith('/snapshot')) return { serve: 10, deliver: 20 };
+      snapshots += 1;
+      return snapshots === 1 ? { serve: 10, deliver: 300 } : { serve: 60, deliver: 100 };
+    };
+    const results: string[][] = [];
+    const read = () => void service.getGroup(roomId).then(result => { if (result.ok) results.push(result.group.messages.map(item => item.content)); });
+    read();
+    setTimeout(() => commit('four'), 30);
+    setTimeout(read, 40);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(subscribeFrames()).toEqual([{ type: 'subscribe', scope: `conversation:${roomId}`, after: '4' }]);
+    expect(results).toEqual([['one', 'two', 'three', 'four'], ['one', 'two', 'three', 'four']]);
+    fixture.timing = null;
+    socket().emit('close');
+    await vi.advanceTimersByTimeAsync(600);
+    ready();
+    expect(subscribeFrames().at(-1)).toEqual({ type: 'subscribe', scope: `conversation:${roomId}`, after: '4' });
+    commit('five');
+    pump();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(shown.at(-1)).toBe('five');
+  });
+
+  it('starts a new room from a stale cursor only through the server reset path', async () => {
+    // A cursor below the server floor answers RESET_REQUIRED; the room is re-read from a new snapshot.
+    commit('four');
+    socket().emit('message', JSON.stringify({ type: 'scope_error', scope: `conversation:${roomId}`, error: { code: 'RESET_REQUIRED' } }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(subscribeFrames().at(-1)).toEqual({ type: 'subscribe', scope: `conversation:${roomId}`, after: '4' });
+    expect(shown).toEqual(['one', 'two', 'three', 'four']);
+  });
+});
+

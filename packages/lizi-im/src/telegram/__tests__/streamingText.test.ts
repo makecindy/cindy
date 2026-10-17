@@ -86,6 +86,35 @@ function makeHarness(
 }
 
 describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
+  it.each(['', ' \n\t '])('空终稿 %j 不发送消息，并撤掉已有过程消息', async (text) => {
+    const h = makeHarness();
+    const handle = await startTelegramStreaming(h.deps, '工作中');
+    await handle.finalize(text);
+    await handle.finalize(text);
+    expect(h.calls).toEqual(['send:工作中', 'delete:msg-1']);
+  });
+
+  it('未建过程消息的空终稿没有任何出站动作', async () => {
+    const h = makeHarness();
+    const handle = await startTelegramStreaming(h.deps);
+    await handle.finalize('');
+    expect(h.calls).toEqual([]);
+  });
+
+  it('没有文字但有图片的终稿仍发送附件', async () => {
+    const uploadImages = vi.fn(async () => undefined);
+    const h = makeHarness();
+    const handle = await startTelegramStreaming({ ...h.deps, uploadImages });
+    handle.addExtraImageAbsPath!('/tmp/telegram-test-image.png');
+    await handle.finalize('');
+    expect(uploadImages).toHaveBeenCalledWith(
+      expect.any(String),
+      ['abs:/tmp/telegram-test-image.png'],
+      expect.objectContaining({ startIndex: 0 }),
+    );
+    expect(h.reposted.join('')).not.toContain('空回复');
+  });
+
   it('过程消息存在时终稿始终新发，随后才删除旧消息', async () => {
     const h = makeHarness();
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 3s');

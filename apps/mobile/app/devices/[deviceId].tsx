@@ -1,4 +1,5 @@
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useSharedValue } from 'react-native-reanimated';
@@ -40,6 +41,7 @@ import {
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useRemoteSyncTask } from '@/device-link/remoteSyncTask';
 import {
@@ -160,6 +162,7 @@ function DeviceDetailScreenContent() {
     automationWorkingDir?: string;
     automationSessionIds?: string;
     statusFilter?: string;
+    search?: string;
   }>();
   const deviceId = readRouteString(params.deviceId) ?? '';
   const deviceName = readRouteString(params.name) ?? readRouteString(params.deviceName) ?? deviceId;
@@ -202,7 +205,7 @@ function DeviceDetailScreenContent() {
     () => parseRouteStatusFilter(readRouteString(params.statusFilter)),
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(() => readRouteString(params.search) === '1');
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
@@ -596,9 +599,15 @@ function DeviceDetailScreenContent() {
       const failed: typeof rows = [];
       await Promise.all(rows.map(async (row) => {
         try {
-          const updated = await maker.patchSessionMeta(row.session.id, patch);
+          const updated = await withNewSessionCreationRemoval(row.session.id, deviceId, patch.status,
+            () => maker.patchSessionMeta(row.session.id, patch));
           if (updated) remoteSessionStore.applySessionPatch(row.rowDeviceId, row.session.id, updated);
-        } catch {
+        } catch (err) {
+          if (isExplicitRemoteNotFoundError(err) && patch.status !== undefined) {
+            remoteSessionStore.applySessionPatch(row.rowDeviceId, row.session.id, { status: 'deleted' });
+            remoteSessionStore.requestReseed(row.rowDeviceId);
+            return;
+          }
           failed.push(row);
         }
       }));

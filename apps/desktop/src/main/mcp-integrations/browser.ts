@@ -63,6 +63,7 @@ import {
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
+import { hasSecretPages, isSecretPage } from '../input-handoff/secretTaint.js';
 import {
   BrowserOpenForLoginError,
   browserOpenForLoginErrorCodeFromData,
@@ -450,6 +451,7 @@ export function getBrowserMcpDeps(): {
   logger: typeof logger;
   getUserRecipes(): Promise<UserRecipesResult>;
   saveUserRecipe(input: Parameters<typeof writeUserRecipe>[0]): Promise<WriteUserRecipeResult>;
+  pageReadsRestricted(target: { profile?: string; targetId?: string }): Promise<boolean>;
 } {
   return {
     setBackend: async (kind) => {
@@ -467,6 +469,17 @@ export function getBrowserMcpDeps(): {
     getRuntime: () => backendController,
     supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
     supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
+    // 代输入: pause page-state reads on a tab still showing a page where the owner typed a secret.
+    pageReadsRestricted: async ({ profile, targetId }) => {
+      if (!hasSecretPages()) return false;
+      const listed = await backendController.call({ action: 'tabs', ...(profile ? { profile } : {}) });
+      if (!listed.ok) return true;
+      const tabs = (listed.data as { tabs?: Array<{ targetId?: unknown; url?: unknown }> } | undefined)?.tabs ?? [];
+      // Without a target the runtime acts on its last tab; check every tab conservatively.
+      return tabs
+        .filter((tab) => !targetId || tab.targetId === targetId)
+        .some((tab) => typeof tab.url === 'string' && isSecretPage(tab.url));
+    },
     logger,
   };
 }

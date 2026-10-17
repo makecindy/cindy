@@ -120,6 +120,9 @@ describe('mobileHomeListCache', () => {
         extraDirs: ['/a', '/b'],
         providerId: 'anthropic',
         totalTokenUsage: 99999,
+        totalCostUsd: 1.5,
+        totalMoney: { amount: 12, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+        contextTokens: 4000,
         attached: true,
         deviceLinkAttached: true,
         hasDraft: true,
@@ -139,6 +142,10 @@ describe('mobileHomeListCache', () => {
     expect(cached.worktreePath).toBe('/repo/demo/.claude/worktrees/x');
     expect(cached.hasDraft).toBe(true);
     expect(cached.hasPausedQueue).toBe(true);
+    // 显示菜单「任务信息」的 Token / 费用在行内展示,冷启动也要有。
+    expect(cached.totalTokenUsage).toBe(99999);
+    expect(cached.totalCostUsd).toBe(1.5);
+    expect(cached.totalMoney).toEqual({ amount: 12, currency: 'CNY', approximate: false, kind: 'actual-cost' });
     // live-only / 大字段被剥除:缓存的设备不是 live 设备,不缓存在线态;统计字段列表行不消费。
     expect(cached.attached).toBeUndefined();
     expect(cached.deviceLinkAttached).toBeUndefined();
@@ -146,7 +153,7 @@ describe('mobileHomeListCache', () => {
     expect(cached.sdkSessionId).toBeUndefined();
     expect(cached.extraDirs).toBeUndefined();
     expect(cached.providerId).toBeUndefined();
-    expect(cached.totalTokenUsage).toBeUndefined();
+    expect(cached.contextTokens).toBeUndefined();
   });
 
   it('drops orca worker sessions, deleted sessions and unstamped sessions', async () => {
@@ -334,6 +341,43 @@ describe('mobileHomeListCache', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.has(__testing.legacyStorageKey)).toBe(false);
   });
+
+  it('restores the home cache when an outbox task arrived before the full list', async () => {
+    const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+    const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    remoteSessionStore.clear();
+    try {
+      await cacheHomeListSnapshot(USER_ID, [makeSession('s-outbox', 'dev-a'), makeSession('s-other', 'dev-a')]);
+      const snapshot = await getCachedHomeListSnapshot(USER_ID);
+      const restored = makeSession('s-outbox', 'dev-a', { title: 'restored draft', pendingLocalCreation: true });
+      remoteSessionStore.upsertDeviceSession('dev-a', 'current computer', restored);
+      remoteSessionStore.hydrateDeviceSessionsIfEmpty('dev-a', 'cached computer', snapshot[0].sessions);
+      expect(remoteSessionStore.getSessions().map(s => s.id).sort()).toEqual(['s-other', 's-outbox']);
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's-outbox')).toMatchObject({
+        title: 'restored draft', pendingLocalCreation: true, deviceLinkDeviceName: 'current computer',
+      });
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's-outbox')?.cacheSeeded).toBeUndefined();
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's-other')?.cacheSeeded).toBe(true);
+      remoteSessionStore.setDeviceSessions('dev-a', 'current computer', [makeSession('s-new', 'dev-a')]);
+      expect(remoteSessionStore.getSessions().map(s => s.id).sort()).toEqual(['s-new', 's-outbox']);
+    } finally { remoteSessionStore.clear(); }
+  });
+
+  it.each(['empty-list', 'removed-device', 'deleted', 'archived'] as const)(
+    'does not restore stale home rows after %s', async (boundary) => {
+      const { remoteSessionStore } = await import('@/session/remoteSessionStore');
+      remoteSessionStore.clear();
+      try {
+        const cached = [makeSession('s-old', 'dev-a'), makeSession('s-other', 'dev-a')];
+        remoteSessionStore.upsertDeviceSession('dev-a', 'computer', cached[0]);
+        if (boundary === 'empty-list') remoteSessionStore.setDeviceSessions('dev-a', 'computer', []);
+        else if (boundary === 'removed-device') remoteSessionStore.removeDevice('dev-a');
+        else remoteSessionStore.applySessionPatch('dev-a', 's-old', { status: boundary });
+        remoteSessionStore.hydrateDeviceSessionsIfEmpty('dev-a', 'computer', cached);
+        expect(remoteSessionStore.getSessions()).toEqual([]);
+      } finally { remoteSessionStore.clear(); }
+    },
+  );
 
   it('hydrateDeviceSessionsIfEmpty seeds an absent shard and never clobbers fresh data', async () => {
     const { remoteSessionStore } = await import('@/session/remoteSessionStore');

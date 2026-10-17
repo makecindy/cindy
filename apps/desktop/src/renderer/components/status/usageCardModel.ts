@@ -34,6 +34,7 @@ export interface UsageCardWindow {
 
 export interface UsageCardAccount {
   title?: string;
+  identity?: string | null;
   planLabel?: string | null;
   windows: UsageCardWindow[];
   details?: string[];

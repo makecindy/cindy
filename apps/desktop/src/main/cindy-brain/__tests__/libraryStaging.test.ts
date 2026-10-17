@@ -9,7 +9,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { LibraryStagingStore, DEFAULT_LIBRARY_STAGING_LIMITS } from '../libraryStaging.js';
+import { LibraryStagingStore, DEFAULT_LIBRARY_STAGING_LIMITS, relocateLibraryStagingOwner } from '../libraryStaging.js';
 import { LibraryVault, DEFAULT_LIBRARY_LIMITS } from '../libraryVault.js';
 
 const sha256Of = (s: string | Buffer): string => createHash('sha256').update(s).digest('hex');
@@ -92,6 +92,64 @@ describe('LibraryStagingStore 故障恢复', () => {
     if (!chunk.ok) throw new Error(`chunk ${taskId}: ${JSON.stringify(chunk)}`);
     return { stagingId: begin.stagingId, digest, bytes: buf.byteLength };
   }
+
+  it('relocates durable manifests and unfinished intents without losing upload identity or bytes', async () => {
+    const originalRoot = path.join(tmp, 'library-staging', ghostId);
+    const original = makeStore(originalRoot);
+    const durable = await beginChunk(original, 'durable', body);
+    expect((await original.commit({ ghostId, stagingId: durable.stagingId })).ok).toBe(true);
+    const unfinished = await beginChunk(original, 'unfinished', 'pending');
+    await original.dispose();
+    const destinationId = '_ns__xd__mivo-canvas';
+    const destinationRoot = path.join(tmp, 'library-staging', destinationId);
+    await fs.promises.rename(originalRoot, destinationRoot);
+    const before = await fs.promises.readFile(path.join(destinationRoot, 'tasks', durable.stagingId, 'manifest.json'), 'utf8');
+    await relocateLibraryStagingOwner(destinationRoot, ghostId, destinationId, 'local:owner-a:1', () => {});
+    await relocateLibraryStagingOwner(destinationRoot, ghostId, destinationId, 'local:owner-a:1', () => {});
+    const after = JSON.parse(await fs.promises.readFile(path.join(destinationRoot, 'tasks', durable.stagingId, 'manifest.json'), 'utf8'));
+    expect(after).toEqual({ ...JSON.parse(before), ghostId: destinationId });
+    const intent = JSON.parse(await fs.promises.readFile(path.join(destinationRoot, 'tasks', unfinished.stagingId, 'intent.json'), 'utf8'));
+    expect(intent).toMatchObject({ ghostId: destinationId, taskId: 'unfinished' });
+    const restored = new LibraryStagingStore({
+      rootDir: destinationRoot, ghostId: destinationId, ownerScopeKey: 'local:owner-a:1',
+      captureOwnerScope: () => scope, getDiskFreeBytes: async () => 1024 ** 4,
+    });
+    expect(await restored.list({ ghostId: destinationId })).toMatchObject({
+      ok: true, items: [expect.objectContaining({ stagingId: durable.stagingId, sha256: durable.digest })],
+    });
+    expect(await restored.read({ ghostId: destinationId, stagingId: durable.stagingId })).toMatchObject({
+      ok: true, content: Buffer.from(body).toString('base64'),
+    });
+    expect(await restored.begin({
+      ghostId: destinationId, taskId: 'new', sourceRevision: 'rev-1',
+      totalBytes: body.length, sha256: sha, mime: 'image/png', recovery,
+    })).toMatchObject({ ok: true });
+    await restored.dispose();
+  });
+
+  it.each(['foreign-plugin', 'foreign-owner', 'corrupt'] as const)('refuses %s task metadata and can resume after repairing it', async (fault) => {
+    const { store, stagingId } = await commitOne();
+    await store.dispose();
+    const root = path.join(tmp, 'library-staging', ghostId);
+    const file = path.join(root, 'tasks', stagingId, 'manifest.json');
+    const original = await fs.promises.readFile(file, 'utf8');
+    const changed = fault === 'corrupt' ? '{' : JSON.stringify({
+      ...JSON.parse(original), ...(fault === 'foreign-plugin' ? { ghostId: 'other' } : { ownerScopeKey: 'local:owner-b:1' }),
+    });
+    await fs.promises.writeFile(file, changed);
+    await expect(relocateLibraryStagingOwner(root, ghostId, '_ns__xd__mivo-canvas', 'local:owner-a:1', () => {})).rejects.toThrow();
+    expect(await fs.promises.readFile(file, 'utf8')).toBe(changed);
+    expect(await fs.promises.readFile(path.join(root, 'tasks', stagingId, 'blob.bin'), 'utf8')).toBe(body);
+    await fs.promises.writeFile(file, original);
+    await relocateLibraryStagingOwner(root, ghostId, '_ns__xd__mivo-canvas', 'local:owner-a:1', () => {});
+    expect(JSON.parse(await fs.promises.readFile(file, 'utf8'))).toMatchObject({ ghostId: '_ns__xd__mivo-canvas' });
+  });
+
+  it('does not create a missing staging root', async () => {
+    const root = path.join(tmp, 'missing');
+    await relocateLibraryStagingOwner(root, ghostId, '_ns__xd__mivo-canvas', 'local:owner-a:1', () => {});
+    await expect(fs.promises.stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   async function commitOne(
     store = makeStore(),

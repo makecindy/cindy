@@ -142,7 +142,7 @@ describe('PI Subagent reclaim before an update relaunch', () => {
       source.indexOf('async function executeRelaunch('),
       source.indexOf('async function executeRelaunchUnguarded('),
     );
-    expect(wrapper).toMatch(/try \{\s*await executeRelaunchUnguarded\(theme\);\s*\} catch/);
+    expect(wrapper).toMatch(/try \{\s*await executeRelaunchUnguarded\(theme, options\);\s*\} catch/);
     expect(wrapper).toContain("handleApplyFailure('relaunch_failed')");
     // The gate and everything after it live in the guarded body.
     const guarded = source.slice(source.indexOf('async function executeRelaunchUnguarded('));

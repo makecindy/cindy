@@ -124,3 +124,11 @@ export async function clearRemoteResourceCache(): Promise<void> {
   const keys = await AsyncStorage.getAllKeys().catch(() => []);
   await AsyncStorage.multiRemove(keys.filter((key) => key.startsWith(PREFIX))).catch(() => undefined);
 }
+
+/** Drop only this account's display/unread mirror after a confirmed personal removal. */
+export const forgetRemoteResource = (userId: string, resourceId: string) => update(userId, s => {
+  for (const id of Object.keys(s.items)) s.items[id] = s.items[id].filter(row => row.item.ref.id !== resourceId);
+  for (const map of [s.read, s.readSequences ?? {}]) for (const key of Object.keys(map)) {
+    try { if (JSON.parse(key)[1] === resourceId) delete map[key]; } catch { /* legacy cache key */ }
+  }
+});

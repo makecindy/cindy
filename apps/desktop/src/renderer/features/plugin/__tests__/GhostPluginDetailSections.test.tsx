@@ -6,6 +6,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import type { InstalledGhost } from '../../../../shared/ghost';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -75,20 +76,19 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.expandInfoValue': `Show full ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
-        'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
         'settings.defaults.restore': 'Restore default',
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
-      return labels[key] ?? key;
+      return labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
     },
+    i18n: { language: 'en' },
   }),
 }));
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
-import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
 import {
   DetailsSection,
   GhostPluginDetailView,
@@ -97,7 +97,7 @@ import {
   ToolDescriptionChip,
   ToolsSection,
 } from '../GhostPluginDetailView';
-import type { GhostPluginDetail } from '../lib/ghostPluginViewModel';
+import { toGhostPluginDetail, type GhostPluginDetail } from '../lib/ghostPluginViewModel';
 
 const permissions: GhostPermissionItem[] = [
   {
@@ -136,6 +136,7 @@ const permissions: GhostPermissionItem[] = [
 
 const detail: GhostPluginDetail = {
   id: 'builtin.example',
+  ghostId: 'builtin.example',
   name: 'Example',
   description: 'Example plugin',
   version: '1.2.3',
@@ -151,8 +152,8 @@ const detail: GhostPluginDetail = {
   permissions: [],
   tools: [],
   hasSettingsUi: false,
-  cindyCapabilities: [],
   hasTaskPreferences: false,
+  hasPluginTasks: false,
   panelMinWidth: 320,
   installDir: '/tmp/cindy-brain/builtin.example',
   trust: {
@@ -198,7 +199,7 @@ describe('Ghost plugin detail sections', () => {
         ghost={
           { manifest: { id: 'cindy-github' }, enabled: true, trust: { level: 'unverified' } } as any
         }
-        detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+        detail={{ ...detail, id: 'cindy-github', ghostId: 'cindy-github', hasSettingsUi: true }}
         panelStatus={null}
         onBack={vi.fn()}
         onToggle={vi.fn()}
@@ -211,9 +212,12 @@ describe('Ghost plugin detail sections', () => {
     );
     expect(verify).not.toHaveBeenCalled();
   });
-  it.each([{ status: 'missing' }, { status: 'auth', source: 'token' }])(
-    'connects GitHub from $status and reloads the installed plugin settings after authorization',
-    async (connection) => {
+  it.each([
+    { layout: 'legacy', connection: { status: 'missing' } },
+    { layout: 'root', connection: { status: 'auth', source: 'token' } },
+  ])(
+    'connects GitHub in $layout layout and reloads settings after authorization',
+    async ({ layout, connection }) => {
       vi.stubGlobal(
         'ResizeObserver',
         class {
@@ -230,16 +234,19 @@ describe('Ghost plugin detail sections', () => {
           startGithubSetup: async () => ({ phase: 'connected' }),
         },
       });
+      const ghost: InstalledGhost = {
+        manifest: { schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip',
+          id: 'cindy-github', name: 'GitHub', version: '1.0.0', entry: 'main.js', settingsHtml: 'settings.html' },
+        dir: path.join('plugins', ...(layout === 'root' ? ['_ns', '_root'] : []), 'cindy-github'),
+        namespace: null,
+        enabled: true,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+        trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
+      };
       const { unmount } = render(
         <GhostPluginDetailView
-          ghost={
-            {
-              manifest: { id: 'cindy-github' },
-              enabled: true,
-              trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
-            } as any
-          }
-          detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+          ghost={ghost}
+          detail={toGhostPluginDetail(ghost)}
           panelStatus={null}
           onBack={vi.fn()}
           onToggle={vi.fn()}
@@ -260,6 +267,23 @@ describe('Ghost plugin detail sections', () => {
       unmount();
     },
   );
+  it('places Background Tasks after settings and before Tools for plugins declaring hiddenTasks', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const listBackgroundTasks = vi.fn(async () => ({ items: [
+      { taskId: 'bg-1', title: 'Hidden grading', status: 'active' as const, updatedAt: Date.now(), running: false },
+    ] }));
+    Object.assign(window.electronAPI, { ghosts: { listBackgroundTasks, revealBackgroundTask: vi.fn() } });
+    const ghost = { manifest: { agent: { tasks: true, hiddenTasks: true } }, enabled: true, taskCapabilityApproved: true } as InstalledGhost;
+    render(<GhostPluginDetailView ghost={ghost} detail={{ ...detail, tools: [{ name: 'render', description: 'Render.' }] }} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(await screen.findByText('Hidden grading')).toBeTruthy();
+    expect(listBackgroundTasks).toHaveBeenCalledWith(detail.id);
+    const heading = screen.getByRole('heading', { name: 'settings.ghosts.backgroundTasks.title' });
+    const tools = screen.getByRole('heading', { name: 'Tools' });
+    expect(heading.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Outside a router the open action is omitted; showing in the task list stays available.
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.backgroundTasks.open' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.backgroundTasks.reveal' })).toBeTruthy();
+  });
   it('lets the user retry task permission, disables duplicate clicks, and hides after approval', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     let finish!: (value: { granted: boolean }) => void;
@@ -695,13 +719,11 @@ describe('Ghost plugin detail sections', () => {
         disconnect() {}
       },
     );
-    // packaged 构建上 Main 会对 cindy- / filo- / xd- 前缀直接 GHOST_ID_RESERVED,
-    // 把这个必失败动作留在菜单里等于让用户选完文件才吃错误。
     // vitest 默认 DEV=true,这里显式模拟打包产物(DEV=false)。
     vi.stubEnv('DEV', false);
     // 显式标注类型:JSX prop 位置的内联展开会让 tsc 现推一个巨大的匿名类型,
     // desktop 的 typecheck 本就贴着 CI 的 4GB 堆上限跑,能省则省。
-    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art' };
+    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art', ghostId: 'cindy-art' };
     render(
       <GhostPluginDetailView
         ghost={null}
@@ -730,42 +752,48 @@ describe('Ghost plugin detail sections', () => {
     vi.unstubAllEnvs();
   });
 
-  it('keeps the local .cindy update entry for ordinary third-party plugins', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    // 同样是打包产物,但非保留前缀:Main 不会拒,入口必须留着。
-    vi.stubEnv('DEV', false);
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={detail}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={vi.fn()}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
+  it.each(['builtin.example', 'xd-ordinary', 'filo-ordinary'])(
+    'keeps the local .cindy update entry actionable for ordinary root %s',
+    async (ghostId) => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      vi.stubEnv('DEV', false);
+      const onUpdateFromFile = vi.fn();
+      const ordinaryDetail: GhostPluginDetail = { ...detail, id: ghostId, ghostId };
+      render(
+        <GhostPluginDetailView
+          ghost={null}
+          detail={ordinaryDetail}
+          panelStatus={null}
+          onBack={vi.fn()}
+          onToggle={vi.fn()}
+          onUse={vi.fn()}
+          onUpdate={vi.fn()}
+          onUpdateFromFile={onUpdateFromFile}
+          onUninstall={vi.fn()}
+          toggleDisabled={false}
+        />,
+      );
 
-    fireEvent.pointerDown(
-      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
-      { button: 0, ctrlKey: false },
-    );
-    expect(
-      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
-    ).toBeTruthy();
-    expect(screen.getByRole('separator')).toBeTruthy();
-    vi.unstubAllEnvs();
-  });
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+        { button: 0, ctrlKey: false },
+      );
+      const updateItem = screen.getByRole('menuitem', {
+        name: 'settings.ghosts.detail.updateFromFile',
+      });
+      expect(screen.getByRole('separator')).toBeTruthy();
+      fireEvent.click(updateItem);
+      expect(onUpdateFromFile).toHaveBeenCalledOnce();
+      vi.unstubAllEnvs();
+    },
+  );
 
   it('renders an export menu item only when onExport is provided', async () => {
     vi.stubGlobal(
@@ -823,415 +851,68 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('By Cindy').className).toContain('truncate');
   });
 
-  it('uses each Cindy capability catalog in the responsive control group', () => {
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: {},
-            image: {
-              options: [
-                {
-                  id: 'image-default',
-                  label: 'Image Default',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-                {
-                  id: 'image-option',
-                  label: 'Image Option',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-              ],
-              defaultModel: {
-                id: 'image-default',
-                label: 'Image Default',
-                providerId: 'xd',
-                providerName: 'Cindy AI',
-              },
-            },
-            imageEdit: {
-              options: [
-                {
-                  id: 'image-edit',
-                  label: 'Image Edit',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-                {
-                  id: 'image-edit-option',
-                  label: 'Image Edit Option',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-              ],
-              defaultModel: {
-                id: 'image-edit',
-                label: 'Image Edit',
-                providerId: 'xd',
-                providerName: 'Cindy AI',
-              },
-            },
-            video: {
-              options: [{ id: 'video-default', label: 'Video Default' }],
-              defaultModel: { id: 'video-default', label: 'Video Default' },
-            },
-            videoEdit: {
-              options: [{ id: 'video-edit', label: 'Video Edit' }],
-              defaultModel: { id: 'video-edit', label: 'Video Edit' },
-            },
-          }),
-          setCindyPref: vi.fn(),
-        },
+  it.each([
+    { name: 'quick answers only', manifest: { cindy: { text: ['oneshot'] } }, taskRows: false },
+    { name: 'plugin tasks', manifest: { agent: { tasks: true } }, taskRows: true },
+  ])('shows one model field for $name and no per-ability model card', ({ manifest, taskRows }) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    Object.assign(window.electronAPI, {
+      ghosts: {
+        errandPrefsSync: () => ({ config: {}, auxiliaryModelLabel: 'Grok 4.6' }),
+        setErrandConfig: vi.fn(async () => ({ config: {} })),
       },
+      showOpenDirectoryDialog: vi.fn(),
     });
-
-    const { container } = render(
-      <CindyCapabilityPrefs
-        ghostId="builtin.example"
-        capabilities={['image.generate', 'image.edit']}
-        appearance="plugin"
-      />,
-    );
-
-    expect(container.querySelector('.cindy-capability-prefs')).toBeTruthy();
-    expect(container.querySelector('.cindy-capability-row')).toBeTruthy();
-    const pickers = screen.getAllByRole('combobox');
-    expect(pickers).toHaveLength(2);
-    fireEvent.click(pickers[0]!);
-    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
-    expect(screen.getByText('Image Option')).toBeTruthy();
-    fireEvent.click(pickers[0]!);
-    fireEvent.click(pickers[1]!);
-    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
-    expect(screen.getByText('Image Edit Option')).toBeTruthy();
-    expect(pickers[0]!.className).toContain('max-w-[60%]');
-  });
-
-  // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
-  // 分组 / 折扣与订阅徽标 / 搜索),身份卡声明偏好时"跟随默认"行如实展示。
-  it('text capability uses the shared picker and preserves exact subscription route selection', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+    const ghost: InstalledGhost = {
+      manifest: {
+        schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip', id: 'model-plugin',
+        name: 'Model plugin', version: '1.0.0', entry: 'main.js',
+        ...(manifest as Partial<InstalledGhost['manifest']>),
       },
-    );
-    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: {},
-            image: { options: [], defaultModel: null },
-            imageEdit: { options: [], defaultModel: null },
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-            text: {
-              options: [
-                {
-                  id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
-                  group: 'Cindy AI',
-                  providerId: 'xd',
-                  agentKind: 'codex',
-                  modelId: 'codex/gpt-5.5',
-                  modelName: 'GPT 5.5 折扣',
-                  agentSuffix: 'Codex',
-                  budget: true,
-                  subscription: false,
-                },
-                {
-                  id: 'cat:openai:codex:gpt-5.5',
-                  label: 'Codex · GPT 5.5 · OpenAI',
-                  group: 'OpenAI',
-                  providerId: 'openai',
-                  agentKind: 'codex',
-                  modelId: 'gpt-5.5',
-                  modelName: 'GPT 5.5',
-                  agentSuffix: 'Codex',
-                  budget: false,
-                  subscription: true,
-                },
-                {
-                  id: 'cat:openai:codex:chatgpt/gpt-5.5',
-                  label: 'Codex · GPT 5.5 · OpenAI',
-                  group: 'OpenAI',
-                  providerId: 'openai',
-                  agentKind: 'codex',
-                  modelId: 'chatgpt/gpt-5.5',
-                  modelName: 'GPT 5.5',
-                  agentSuffix: 'Codex',
-                  budget: false,
-                  subscription: true,
-                },
-                {
-                  id: 'cat:openai:claude-code:chatgpt/gpt-5.5',
-                  label: 'Claude Code · GPT 5.5 · OpenAI',
-                  group: 'OpenAI',
-                  providerId: 'openai',
-                  agentKind: 'claude-code',
-                  modelId: 'chatgpt/gpt-5.5',
-                  modelName: 'GPT 5.5',
-                  agentSuffix: 'Claude Code',
-                  budget: false,
-                  subscription: true,
-                },
-              ],
-              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
-              declaredModel: { id: 'cat:xd:codex:codex/gpt-5.5', label: 'codex/gpt-5.5' },
-            },
-          }),
-          setCindyPref,
-        },
-      },
-    });
-
+      dir: '/plugins/model-plugin',
+      namespace: null,
+      enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' },
+      ...(taskRows ? { taskCapabilityApproved: true as const } : {}),
+      trust: detail.trust,
+    };
+    const projected = toGhostPluginDetail(ghost);
+    expect(projected).toMatchObject({ hasTaskPreferences: true, hasPluginTasks: taskRows });
     render(
-      <CindyCapabilityPrefs
-        ghostId="xdt-knowledge"
-        capabilities={['text.oneshot']}
-        appearance="plugin"
+      <GhostPluginDetailView
+        ghost={ghost}
+        detail={projected}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
       />,
     );
-    fireEvent.click(
-      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }),
-    );
-
-    const listbox = await screen.findByRole('listbox');
-    expect(document.querySelector('[data-unified-model-panel]')).toBeTruthy();
-    expect(within(listbox).getByRole('group', { name: 'Cindy AI' })).toBeTruthy();
-    expect(within(listbox).getByRole('group', { name: 'OpenAI' })).toBeTruthy();
-    expect(listbox.querySelector('[data-row-customize]')).not.toBeNull();
-    expect(listbox.querySelector('[data-agent-kind]')).toBeNull();
-    const plainRow = within(listbox)
-      .getByText('GPT 5.5', { exact: true })
-      .closest<HTMLElement>('[role="option"]')!;
-    expect(within(plainRow).queryByText('settings.providers.models.subscription')).toBeNull();
-    fireEvent.click(plainRow);
-    await waitFor(() =>
-      expect(setCindyPref).toHaveBeenCalledWith(
-        'xdt-knowledge',
-        'text.oneshot',
-        'cat:openai:codex:gpt-5.5',
-      ),
-    );
-    // A different supported Harness must remain reachable after replacing the old Agent step.
-    fireEvent.click(
-      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }),
-    );
-    const reopened = await screen.findByRole('listbox');
-    const routeRow = within(reopened)
-      .getByText('GPT 5.5', { exact: true })
-      .closest<HTMLElement>('[role="option"]')!;
-    fireEvent.click(routeRow.querySelector('[data-row-customize]')!);
-    const flyout = await screen.findByTestId('unified-model-config-flyout');
-    expect(flyout.querySelector('[role="slider"], [data-fast-toggle]')).toBeNull();
-    fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]')!);
-    fireEvent.click(routeRow);
-    await waitFor(() =>
-      expect(setCindyPref).toHaveBeenLastCalledWith(
-        'xdt-knowledge',
-        'text.oneshot',
-        'cat:openai:claude-code:chatgpt/gpt-5.5',
-      ),
-    );
-
-    vi.unstubAllEnvs();
+    expect(screen.getByText('settings.ghosts.detail.errandPrefs.title')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.detail.cindyPrefs.title')).toBeNull();
+    expect(screen.getAllByText('settings.ghosts.detail.errandPrefs.model')).toHaveLength(1);
+    expect(screen.getByText(`settings.ghosts.detail.errandPrefs.${taskRows ? 'desc' : 'descModelOnly'}`)).toBeTruthy();
+    expect(Boolean(screen.queryByText('settings.ghosts.detail.errandPrefs.permission'))).toBe(taskRows);
+    expect(Boolean(screen.queryByText('settings.ghosts.detail.errandPrefs.workdir'))).toBe(taskRows);
   });
 
-  // 2026-08-05 review:存量轻量档位钉(目录扩展前的合法钉值)回显友好名,
-  // 不当 stale 露原始 id。
-  it('text capability shows a friendly label for a legacy utility-profile pin', () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+  it('does not show the model card for media-only plugins (media always follows the system default)', () => {
+    const ghost: InstalledGhost = {
+      manifest: {
+        schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip', id: 'art', name: 'Art',
+        version: '1.0.0', entry: 'main.js', cindy: { image: ['generate', 'edit'], embed: ['text'] },
       },
-    );
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
-            image: { options: [], defaultModel: null },
-            imageEdit: { options: [], defaultModel: null },
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-            text: {
-              options: [
-                {
-                  id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
-                  group: 'Cindy AI',
-                  providerId: 'xd',
-                  agentKind: 'codex',
-                  modelId: 'codex/gpt-5.5',
-                  modelName: 'GPT 5.5 折扣',
-                  budget: true,
-                  subscription: false,
-                },
-              ],
-              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
-              utilityProfiles: [{ id: 'litellm-kimi-k2.6', label: 'kimi-k2.6 · Gateway' }],
-            },
-          }),
-          setCindyPref: vi.fn(async () => ({ overrides: {} })),
-        },
-      },
-    });
-
-    render(
-      <CindyCapabilityPrefs
-        ghostId="xdt-knowledge"
-        capabilities={['text.oneshot']}
-        appearance="plugin"
-      />,
-    );
-    const trigger = screen.getByRole('button', {
-      name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/,
-    });
-    expect(trigger.textContent).toContain('kimi-k2.6 · Gateway');
-    expect(trigger.textContent).not.toContain('litellm-kimi-k2.6');
-    vi.unstubAllEnvs();
-  });
-
-  // 2026-08-05 review:stale 目录钉(模型已下架)点中 = 当前值,只收起不回写
-  // (回写必被白名单拒成「操作失败」);清钉走「跟随默认」行。
-  it('stale catalog pin is not rewritten and can be cleared through the default row', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
-            image: { options: [], defaultModel: null },
-            imageEdit: { options: [], defaultModel: null },
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-            text: {
-              options: [
-                {
-                  id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · Cindy AI',
-                  group: 'Cindy AI',
-                  providerId: 'xd',
-                  agentKind: 'codex',
-                  modelId: 'codex/gpt-5.5',
-                  modelName: 'GPT 5.5 折扣',
-                  budget: true,
-                  subscription: false,
-                },
-              ],
-              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
-              utilityProfiles: [],
-            },
-          }),
-          setCindyPref,
-        },
-      },
-    });
-
-    render(
-      <CindyCapabilityPrefs
-        ghostId="xdt-knowledge"
-        capabilities={['text.oneshot']}
-        appearance="plugin"
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }),
-    );
-    const listbox = await screen.findByRole('listbox');
-    // Retired pins remain visible on the trigger, but never become selectable routes.
-    expect(
-      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ })
-        .textContent,
-    ).toContain('retired-model');
-    expect(within(listbox).queryByText('cat:gone:codex:retired-model')).toBeNull();
-    expect(setCindyPref).not.toHaveBeenCalled();
-    fireEvent.click(within(listbox).getAllByRole('option')[0]!);
-    await waitFor(() =>
-      expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null),
-    );
-    vi.unstubAllEnvs();
-  });
-
-  it('keeps a reset entry for a stale media override when the catalog has no models', async () => {
-    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: { 'video.generate': 'retired-video-model' },
-            image: {
-              options: [
-                {
-                  id: 'image-default',
-                  label: 'Image Default',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-              ],
-              defaultModel: {
-                id: 'image-default',
-                label: 'Image Default',
-                providerId: 'xd',
-                providerName: 'Cindy AI',
-              },
-            },
-            imageEdit: {
-              options: [{ id: 'image-edit', label: 'Image Edit' }],
-              defaultModel: { id: 'image-edit', label: 'Image Edit' },
-            },
-            // 目录没给视频清单 = 能力暂不可用。
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-          }),
-          setCindyPref,
-        },
-      },
-    });
-
-    const { container } = render(
-      <CindyCapabilityPrefs
-        ghostId="builtin.example"
-        capabilities={['image.generate', 'video.generate', 'video.edit']}
-        appearance="plugin"
-      />,
-    );
-
-    // 三行都在(插件确实申请了这三项能力),但只有图像那行给下拉。
-    expect(container.querySelectorAll('.cindy-capability-row')).toHaveLength(3);
-    expect(screen.getAllByRole('combobox')).toHaveLength(1);
-
-    const empties = container.querySelectorAll('.cindy-capability-empty');
-    expect(empties).toHaveLength(1);
-    expect(empties[0]!.textContent).toBe('No models available');
-    expect(empties[0]!.className).toContain('text-[var(--text-tertiary)]');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Restore default' }));
-    await waitFor(() => {
-      expect(setCindyPref).toHaveBeenCalledWith('builtin.example', 'video.generate', null);
-    });
+      dir: '/plugins/art',
+      namespace: null,
+      enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000003' },
+      trust: detail.trust,
+    };
+    expect(toGhostPluginDetail(ghost)).toMatchObject({ hasTaskPreferences: false, hasPluginTasks: false });
   });
 
   it('shows only the Tool description after an explicit click', async () => {
@@ -1421,4 +1102,15 @@ describe('Ghost plugin detail sections', () => {
       within(dialog).getByText((_, element) => element?.textContent === 'scope.read\nscope.write'),
     ).toBeTruthy();
   });
+});
+
+it('adds shared counts to installed detail metadata while preserving author and version', () => {
+  const { container } = render(<GhostPluginMetadata author="Cindy" version="1.7.5" marketItem={{
+    sourceType: 'server', scope: 'organization',
+    downloadStatistics: { requestCount: '1284' },
+    usageStatistics: { usageCount: '8932', usageCountLast7Days: '12', asOf: '2026-10-13T00:00:00Z' },
+  } as import('../../../../shared/pluginMarket').PluginMarketItem} />);
+  expect(container.textContent).toContain('By Cindy·v1.7.5');
+  expect(container.textContent).toContain('1,284 settings.ghosts.usage.downloadsValue');
+  expect(container.textContent).toContain('8,932 settings.ghosts.usage.usesValue');
 });

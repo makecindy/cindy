@@ -20,7 +20,7 @@ import { readRemoteDeviceFile } from '../device-link/fileAccess';
  * watcherManager;远程 watch 桥接见 remote-watch.ts。
  */
 
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, type WebContents } from 'electron';
 import {
   createFile,
   createFolder,
@@ -62,7 +62,7 @@ import {
   type ChatFileFetchArgs,
   buildDevicePathUrl,
 } from './chat-file.js';
-import { createFileTransferProgressReporter } from './transfer-progress.js';
+import { createFileTransferProgressReporter, fileTransferRequestId } from './transfer-progress.js';
 import { downloadChatEntry, type ChatDownloadDeps } from './chat-download.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { makeSshChunkExecutor } from './ssh-media.js';
@@ -71,6 +71,7 @@ import { getRemoteWatchRegistry } from './remote-watch.js';
 import { throwRemoteFsIpcError } from './remote.js';
 import { watcherManager, type FileTreeEvent } from './watcher.js';
 import { registerHtmlPreviewIpc } from './html-preview-ipc.js';
+import { statSshPreviewMetadata } from './html-preview-read.js';
 import { toWorkdirRel } from '../../shared/workdirPath.js';
 
 const log = createLogger('file-browser/ipc');
@@ -106,6 +107,8 @@ export const FILE_BROWSER_INVOKE = {
   CHAT_FILE_STAT: 'maker:chat-file:stat',
   /** 远程文件 / 文件夹下载到系统「下载」文件夹(见 chat-download.ts)。 */
   CHAT_FILE_DOWNLOAD: 'maker:chat-file:download',
+  /** 取消进行中的聊天文件取回 / 下载(按发起时的 requestId)。 */
+  CHAT_FILE_CANCEL: 'maker:chat-file:cancel',
 } as const;
 
 export const FILE_BROWSER_PUSH = {
@@ -174,8 +177,11 @@ interface WatchArgs extends RemoteRoutedArgs {
  * ({ok,result}|{ok:false,error}),handler 的真实返回值在 result 里——renderer
  * 通路由 ipc.ts 解包,main 直调必须自己解,否则读信封字段恒错(真机实踩)。
  */
-async function deviceOpInvoke<T>(deviceId: string, opArgs: Record<string, unknown>): Promise<T> {
-  const payload = await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs]);
+async function deviceOpInvoke<T>(deviceId: string, opArgs: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const options = signal ? { preSend: () => signal.throwIfAborted() } : undefined;
+  const payload = options
+    ? await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs], options)
+    : await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs]);
   if (!payload.ok) {
     throw new Error(`[${payload.error.code}] ${payload.error.message}`);
   }
@@ -194,6 +200,8 @@ async function fetchRemoteBigFile(
     mtimeMs: number;
     remoteHostId?: string | null;
     deviceId?: string | null;
+    /** HTML background reads must validate beyond the outer size/mtime cache key. */
+    revalidate?: boolean;
   },
   onProgress: (received: number, total: number, phase?: 'upload' | 'download') => void,
   signal?: AbortSignal,
@@ -224,6 +232,8 @@ async function fetchRemoteBigFile(
           remoteInvoke,
           {
             // Cache fills are shared: closing one preview must not cancel another consumer.
+            // This fill is keyed by the caller's stat; never relabel stale bytes as that version.
+            cacheFirst: false,
             workdir: args.workdir,
             relPath: args.relPath,
             maxBytes: Math.max(1, args.size),
@@ -330,6 +340,7 @@ async function fetchRemoteBigFile(
       },
       onProgress,
       signal,
+      { revalidate: args.revalidate },
     );
   }
   if (args.remoteHostId) {
@@ -353,6 +364,7 @@ async function fetchRemoteBigFile(
       ),
       onProgress,
       signal,
+      { revalidate: args.revalidate },
     );
   }
   throw new Error('fetch-remote requires remoteHostId or deviceId');
@@ -363,23 +375,55 @@ async function fetchRemoteBigFile(
  * during bootstrap. The handlers themselves are stateless beyond the
  * watcherManager singleton.
  */
+/** 进行中的聊天文件取回 / 下载:发起窗口 + requestId → 中止器(供提示条上的「取消」)。 */
+const chatTransfers = new Map<string, AbortController>();
+
+/** requestId 与进度事件同一判据(非空且 ≤64 字符),不合格时不登记、不可取消。 */
+function chatTransferKey(wc: WebContents, requestId: unknown): string | null {
+  const id = fileTransferRequestId(requestId);
+  return id ? `${wc.id}:${id}` : null;
+}
+
+/** 用户取消、发起窗口关闭或渲染进程崩溃时中止:停止轮询 / 关闭 SSH 流,不再落盘。 */
+function beginChatTransfer(wc: WebContents, requestId: unknown) {
+  const abort = new AbortController();
+  const key = chatTransferKey(wc, requestId);
+  if (key) chatTransfers.set(key, abort);
+  const onGone = () => abort.abort();
+  wc.once('destroyed', onGone);
+  wc.once('render-process-gone', onGone);
+  return {
+    signal: abort.signal,
+    end: () => {
+      if (key && chatTransfers.get(key) === abort) chatTransfers.delete(key);
+      wc.removeListener('destroyed', onGone);
+      wc.removeListener('render-process-gone', onGone);
+    },
+  };
+}
+
 export function registerFileBrowserIpc(): void {
   // file-browser-core 是宿主无关的共享包(也跑在远端 file-service daemon 里),
   // 日志设施由宿主注入——desktop 侧接统一 logger(规则 12),scope 与抽包前一致。
   setFileBrowserCoreLoggerFactory(createLogger);
   registerHtmlPreviewIpc({
-    stat: async (args, root, relPath) => {
+    cached: (args, root, relPath) => {
+      if (args.origin.kind === 'local') return Promise.resolve(null);
+      return findStaleCached({
+        transport: args.origin.kind,
+        endpointId: args.origin.kind === 'device' ? args.origin.deviceId : args.origin.remoteHostId,
+        workdir: root,
+        relPath,
+      });
+    },
+    stat: async (args, root, relPath, signal) => {
+      signal?.throwIfAborted();
       if (args.origin.kind === 'device') {
         return deviceOpInvoke<import('@cindy/file-browser-core').FileStat>(args.origin.deviceId, {
           op: 'stat', workdir: root, relPath,
-        });
+        }, signal);
       }
-      if (args.origin.kind !== 'ssh') throw new Error('BAD_ARGS');
-      await getRemoteFileBrowser().request(args.origin.remoteHostId, 'stat', {
-        workdir: args.workdir,
-        relPath: toWorkdirRel(args.workdir, args.absPath)!,
-      });
-      return getRemoteFileBrowser().request(args.origin.remoteHostId, 'stat', { workdir: root, relPath });
+      return statSshPreviewMetadata(getRemoteFileBrowser(), args, root, relPath, signal);
     },
     read: async (args, root, entry, signal) => {
       if (signal?.aborted) throw new Error('PREVIEW_CANCELLED');
@@ -389,6 +433,7 @@ export function registerFileBrowserIpc(): void {
           relPath: entry.relPath,
           size: entry.size,
           mtimeMs: entry.mtimeMs,
+          revalidate: true,
           deviceId: args.origin.kind === 'device' ? args.origin.deviceId : undefined,
           remoteHostId: args.origin.kind === 'ssh' ? args.origin.remoteHostId : undefined,
         },
@@ -479,13 +524,16 @@ export function registerFileBrowserIpc(): void {
   };
   ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_FETCH, async (event, args: ChatFileFetchArgs) => {
     const wc = event.sender;
+    const transfer = beginChatTransfer(wc, args?.requestId);
     const onProgress = createFileTransferProgressReporter(
       { workdir: args?.workdir ?? '', relPath: args?.absPath ?? '', requestId: args?.requestId },
       (progress) => {
         if (!wc.isDestroyed()) wc.send(FILE_BROWSER_PUSH.TRANSFER, progress);
       },
     );
-    const result = await fetchChatFile(args, onProgress, chatFileDeps);
+    const result = await fetchChatFile(args, onProgress, chatFileDeps, transfer.signal).finally(
+      transfer.end,
+    );
     if (!result.ok) {
       log.warn('chat-file fetch failed', {
         code: result.code,
@@ -568,11 +616,7 @@ export function registerFileBrowserIpc(): void {
       // 会把远端内容写进用户的下载文件夹:只接受 Cindy 自有页面发起(与 HTML 预览同一判据)。
       assertTrustedAppRendererEvent(event);
       const wc = event.sender;
-      // 发起窗口关闭或渲染进程崩溃时中止:停止轮询 / 关闭 SSH 流,不再落盘。
-      const abort = new AbortController();
-      const onGone = () => abort.abort();
-      wc.once('destroyed', onGone);
-      wc.once('render-process-gone', onGone);
+      const transfer = beginChatTransfer(wc, args?.requestId);
       // 进度带上发起方的请求 id:同一路径同时有取回 / 下载时 renderer 不串线。
       const onProgress = createFileTransferProgressReporter(
         { workdir: args?.workdir ?? '', relPath: args?.absPath ?? '', requestId: args?.requestId },
@@ -584,11 +628,8 @@ export function registerFileBrowserIpc(): void {
         args,
         onProgress,
         chatDownloadDeps,
-        abort.signal,
-      ).finally(() => {
-        wc.removeListener('destroyed', onGone);
-        wc.removeListener('render-process-gone', onGone);
-      });
+        transfer.signal,
+      ).finally(transfer.end);
       if (!result.ok) {
         log.warn('chat-file download failed', {
           code: result.code,
@@ -599,6 +640,13 @@ export function registerFileBrowserIpc(): void {
       return result;
     },
   );
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_CANCEL, (event, requestId: unknown) => {
+    // 会中止主进程里的传输:与下载同一来源判据,只接受 Cindy 自有页面发起。
+    assertTrustedAppRendererEvent(event);
+    const key = chatTransferKey(event.sender, requestId);
+    if (key) chatTransfers.get(key)?.abort();
+  });
 
   // chip 点亮预检:远端精确 stat,verdict 见 statChatFile 注释。查询型接口,
   // 任何异常都折叠进 verdict(unknown),不 throw。

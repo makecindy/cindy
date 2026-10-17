@@ -14,6 +14,13 @@ import {
 import { parseImDefaultSettingsPatch } from '../parseDefaultSettingsPatch.js';
 
 describe('parseImDefaultSettingsPatch', () => {
+  it('preserves a shared route and clears its location when selecting local', () => {
+    const shared = { providerId: 'openai', model: 'gpt-5.5', effort: 'high', agentDeviceId: 'share:alice' };
+    expect(parseImDefaultSettingsPatch({ agents: { codex: shared } }).agents?.codex).toEqual(shared);
+    expect(parseImDefaultSettingsPatch({ agents: { codex: { ...shared, agentDeviceId: null } } }).agents?.codex?.agentDeviceId).toBeUndefined();
+    expect(() => parseImDefaultSettingsPatch({ agents: { codex: { ...shared, providerId: null } } })).toThrow();
+    expect(() => parseImDefaultSettingsPatch({ agents: { codex: { ...shared, agentDeviceId: 42 } } })).toThrow();
+  });
   it('keeps agentKind / permissionMode / groupPermissionMode', () => {
     expect(
       parseImDefaultSettingsPatch({

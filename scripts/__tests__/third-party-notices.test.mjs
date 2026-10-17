@@ -26,6 +26,15 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+test("speaker models and native inference libraries are disclosed on both clients", () => {
+  for (const artifact of artifactNames) {
+    const notices = read(`docs/legal/notices/${artifact}.txt`);
+    assert.ok(notices.includes("Silero VAD (runtime-downloaded model)"));
+    assert.ok(notices.includes("3D-Speaker CAM++ zh-en advanced"));
+    assert.ok(notices.includes("ONNX Runtime (native inference library)"));
+  }
+});
+
 test("Windows input helper dependencies participate in Cargo license collection", () => {
   const source = read("scripts/generate-third-party-notices.mjs");
   assert.ok(source.includes('"windows-gamepad-helper"'));

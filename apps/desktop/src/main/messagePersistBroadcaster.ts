@@ -2667,6 +2667,24 @@ export function onTurnErrorEvent(
   //   避免 Date.now() 落在 /clear 之后导致 error 行在清空后的历史中浮现。
   const blockCreatedAt = assistantBlocks.get(sessionId)?.createdAt;
   flushAssistantBlock(sessionId, agentMeta);
+  enqueueTurnErrorRow(sessionId, persistId, {
+    content: buildTurnErrorContent(sessionId, data, message),
+    agentMeta: agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null,
+    agentKind: getSessionDbAgentKind(sessionId) ?? undefined,
+    orderedAt: capturedAt,
+    turnStartedAt: turnStartedAtSnapshot,
+    blockCreatedAt,
+  });
+  notePersistedMessage(sessionId, 'error', persistId);
+  return persistId;
+}
+
+/** error 行 content：{ message, reason?, sdkError?, toolLoop?, providerId? }，在入队前同步取值。 */
+function buildTurnErrorContent(
+  sessionId: string,
+  data: { reason?: unknown; sdkError?: unknown; toolLoop?: unknown } | null | undefined,
+  message: string,
+): Record<string, unknown> {
   const content: Record<string, unknown> = { message };
   if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
   if (typeof data?.sdkError === 'string' && data.sdkError) {
@@ -2682,8 +2700,24 @@ export function onTurnErrorEvent(
   // 余额分类(fail-closed),与 live 路径「显式 providerId 才分类」同一判据。
   const providerIdAtError = getSessionProvider(sessionId);
   if (providerIdAtError) content.providerId = providerIdAtError;
-  const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  const dbAgentKindSnapshot = getSessionDbAgentKind(sessionId) ?? undefined;
+  return content;
+}
+
+/** 入队写一条 error 行。除 blockCreatedAt 外的字段都是调用方在入队前同步取好的快照。 */
+function enqueueTurnErrorRow(
+  sessionId: string,
+  persistId: string,
+  row: {
+    content: Record<string, unknown>;
+    agentMeta: AgentMeta | null;
+    agentKind: 'cc' | 'codex' | 'pi' | undefined;
+    /** 行的排序时间上界(通常是错误到达的时刻)。 */
+    orderedAt: number;
+    turnStartedAt: number;
+    blockCreatedAt?: number;
+  },
+): void {
+  const { content, agentMeta: meta, agentKind: dbAgentKindSnapshot, orderedAt, turnStartedAt, blockCreatedAt } = row;
   enqueueTurnErrorWrite(sessionId, persistId, async (ownerScope) => {
     // 两个分支统一 +1：保证 error.createdAt 严格晚于本轮所有已入库行。
     // 注意：register.ts 在 flushAssistantBlock 之后调本函数，blockCreatedAt
@@ -2691,25 +2725,24 @@ export function onTurnErrorEvent(
     // 返回本轮最后入库行的 createdAt，与 error 行同值会让 mobile 排序不可控
     // （mobile 无 rowid tie-breaker，同 createdAt 依赖 server 响应原始顺序）。
     // 统一 +1 确保 error 行始终排在本轮所有正文/工具行之后。
-    // Math.min(..., capturedAt)：把异步查询结果的上界锁定在 onTurnErrorEvent 调用时刻，
-    // 防止写队列延迟消费时（用户已 /clear 并发了新消息）取到 post-clear 时间戳，
-    // 使 error.createdAt > clearedAt 从而出现在清空后的新会话历史里。
+    // Math.min(..., orderedAt)：把异步查询结果的上界锁定在 onTurnErrorEvent 调用时刻(延后补落时是错误
+    // 实际发生的时刻)，防止写队列延迟消费时（用户已 /clear 或发了新消息）取到之后的时间戳，
+    // 使 error.createdAt > clearedAt 从而出现在清空后的新会话历史里，或排到用户新消息之后。
     const rawLatestTs =
       blockCreatedAt != null
         ? blockCreatedAt
         : await latestMessageCreatedAt(sessionId);
-    const latestTs = rawLatestTs != null ? Math.min(rawLatestTs, capturedAt) : capturedAt;
+    const latestTs = rawLatestTs != null ? Math.min(rawLatestTs, orderedAt) : orderedAt;
     // /clear 边界 cap:防止 pre-clear 旧 turn 的 error 行在清空后的新会话中浮现。
-    // 用 turnStartedAtSnapshot（入队前同步捕获，不受 resetTurnPersistState 影响）
+    // 用 turnStartedAt（入队前同步捕获，不受 resetTurnPersistState 影响）
     // 判定 "stale pre-clear turn"，而非 rawLatestTs（异步查询，write queue 延迟消费时可能返回
     // post-clear 新消息时间戳，导致误判竞态：旧 turn error 在 /clear 后且用户已发新消息后才入队，
     // rawLatestTs > clearBoundary → 跳过 cap → error.createdAt > clearedAt → 串入新会话）。
-    // turnStartedAtSnapshot <= clearBoundary：turn 在 /clear 之前启动 → stale → cap。
-    // turnStartedAtSnapshot > clearBoundary：turn 在 /clear 之后启动 → 新 turn → 不 cap。
+    // turnStartedAt <= clearBoundary：turn 在 /clear 之前启动 → stale → cap。
+    // turnStartedAt > clearBoundary：turn 在 /clear 之后启动 → 新 turn → 不 cap。
     // 无 noteTurnStarted：回退到 capturedAt 作保守锚，行为等价于
     //   "error 事件到达时刻" 作 stale 判定（边缘 case，如 status:isRunning=true 未发的 agent）。
     const clearBoundary = clearBoundaryBySession.get(sessionId);
-    const turnStartedAt = turnStartedAtSnapshot;
     const createdAt =
       clearBoundary != null && turnStartedAt <= clearBoundary
         ? Math.min(latestTs + 1, clearBoundary)
@@ -2748,7 +2781,61 @@ export function onTurnErrorEvent(
       broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', payload, ownerStamp);
     }
   });
-  notePersistedMessage(sessionId, 'error', persistId);
+}
+
+/**
+ * 延后补落的 error 行(供应商组换电脑期间先暂存，provider-group/heldTurnErrors.ts)：错误发生那一刻取好写库要用的
+ * 一切——内容(含错误来源 provider)、agentMeta、agentKind、turn 开始时刻与出错时刻。
+ *
+ * 补落发生在之后任意时刻：那时任务可能已开始新的一轮(用户中途接手)，旧会话也可能已在交接时关闭、按会话的
+ * 持久化状态已清空，所以补落不能再读任何按会话的「当前一轮」状态。
+ */
+export interface DeferredTurnErrorRow {
+  content: Record<string, unknown>;
+  agentMeta: AgentMeta | null;
+  agentKind: 'cc' | 'codex' | 'pi' | undefined;
+  turnStartedAt: number;
+  occurredAt: number;
+}
+
+/** 在失败那一轮里(错误到达时)同步调用，取好补落要用的 error 行；没有错误文案时返回 null。 */
+export function captureDeferredTurnError(
+  sessionId: string,
+  data:
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | null
+    | undefined,
+  agentMeta: AgentMeta | null = null,
+): DeferredTurnErrorRow | null {
+  const message = typeof data?.message === 'string' ? redactSensitiveText(data.message) : '';
+  if (!message) return null;
+  const occurredAt = Date.now();
+  return {
+    content: buildTurnErrorContent(sessionId, data, message),
+    agentMeta: agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null,
+    agentKind: getSessionDbAgentKind(sessionId) ?? undefined,
+    turnStartedAt:
+      _turnStartedAtBySession.get(sessionId) ??
+      _savedTurnStartedAtForDeferred.get(sessionId) ??
+      occurredAt,
+    occurredAt,
+  };
+}
+
+/**
+ * 补落 `captureDeferredTurnError` 取好的 error 行：只写这一行，不碰补落时正在进行的那一轮——不 flush 在飞正文
+ * (失败那一轮的正文在终态边界已经落库)、不占用去重键(当前一轮同样的错误照常落库)、不改相邻行记录。
+ * 行按出错的时刻排序：用户在这期间发的新消息仍排在它后面。返回行 id。
+ */
+export function persistDeferredTurnError(sessionId: string, row: DeferredTurnErrorRow): string {
+  const persistId = createId();
+  enqueueTurnErrorRow(sessionId, persistId, {
+    content: row.content,
+    agentMeta: row.agentMeta,
+    agentKind: row.agentKind,
+    orderedAt: Math.min(row.occurredAt, Date.now()),
+    turnStartedAt: row.turnStartedAt,
+  });
   return persistId;
 }
 

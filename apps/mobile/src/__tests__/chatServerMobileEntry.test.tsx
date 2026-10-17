@@ -5,12 +5,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1, apiFetch: vi.fn(), getAccessToken: vi.fn(async () => 'fixture') },
   link: { status: 'offline', connectionEpoch: 1, presenceVersion: 1, invoke: vi.fn(), openLink: vi.fn(),
-    getPresenceAvailability: () => false, onRemoteResourceChanged: () => () => {}, subscribe: vi.fn(), unsubscribe: vi.fn() },
+    getPresenceAvailability: (): boolean => false, onRemoteResourceChanged: () => () => {}, subscribe: vi.fn(), unsubscribe: vi.fn() },
   legacy: { items: [] as any[], loading: false, refreshing: false, error: null as string | null, isOnline: vi.fn(() => false), refresh: vi.fn() },
   targets: [] as { deviceId: string; deviceName: string }[],
   foreground: new Set<(state: string) => void>(),
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}), getAllKeys: vi.fn(async () => []), multiRemove: vi.fn(async () => {}) } }));
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
@@ -45,12 +46,32 @@ beforeEach(() => {
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
     throw new Error('Unexpected request');
   });
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
+it('shows safe execution failures through the direct phone entry and removes them after retry', async () => {
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let status = 'failed';
+  h.auth.apiFetch.mockImplementation(async (path, options) => (path.endsWith('/executions') || path.includes('/execution-failures?'))
+    ? [{ id, source_message_id: self, bot_id: self, epoch: 1, status, failure_code: 'AUTH_REQUIRED', detail: { message: 'private diagnostic' } }]
+    : original(path, options));
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  if (chat.state.kind !== 'ready') throw new Error('Expected ready group');
+  expect(chat.state.group.messages).toHaveLength(2);
+  expect(chat.state.group.messages[1]).toMatchObject({ id: `execution-failure:${id}:1`, runtimeFailureCode: 'AUTH_REQUIRED' });
+  expect(chat.state.group.lastMessage?.preview).toBe('Fixture message');
+  expect(JSON.stringify(chat.state.group)).not.toContain('private diagnostic');
+  expect(h.link.invoke).not.toHaveBeenCalled();
+  status = 'queued';
+  await act(async () => { chat.reload(); });
+  if (chat.state.kind !== 'ready') throw new Error('Expected ready group after retry');
+  expect(chat.state.group.messages).toHaveLength(1);
+});
 it('lists and opens an existing joined server group with all computers and the relay offline', async () => {
   await render();
   expect(roster.items).toHaveLength(1);
@@ -80,7 +101,7 @@ it('never includes the current human actor in explicit or everyone server mentio
 it('imports read_seq and acknowledges only displayed incoming messages with their exact sequences', async () => {
   await clearRemoteResourceCache();
   const first = '9007199254740992', second = '9007199254740993';
-  const messages = [first, second].map((seq, index) => ({ id: `incoming-${index}`, seq, authorId: id,
+  const messages = [first, second].map((seq, index) => ({ id: `00000000-0000-4000-8000-${String(index + 20).padStart(12, '0')}`, seq, authorId: id,
     author: { kind: 'human', name: 'Other' }, content: [{ type: 'text', text: 'hello' }],
     createdAt: '2026-10-09T10:00:00.123Z', deleted: false, threadRootId: null }));
   const original = h.auth.apiFetch.getMockImplementation()!;
@@ -94,9 +115,9 @@ it('imports read_seq and acknowledges only displayed incoming messages with thei
   const unread = () => isRemoteResourceUnread('owner', '', id, row.item.display.lastReplyAt, row.lastReplySequence);
   expect(unread()).toBe(true);
   showChat = true; await render();
-  await act(async () => { await chat.markRead!(['incoming-0', 'unseen-id']); });
+  await act(async () => { await chat.markRead!([messages[0].id, 'unseen-id']); });
   expect(unread()).toBe(true);
-  await act(async () => { await chat.markRead!(['incoming-0', 'incoming-1']); });
+  await act(async () => { await chat.markRead!([messages[0].id, messages[1].id]); });
   expect(unread()).toBe(false);
   expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
 });
@@ -116,6 +137,40 @@ it('resolves everyone using authorized members at send time instead of the displ
   showChat = true; await render();
   await act(async () => { await chat.act('send', { text: 'everyone', clientId: 'fixture-new-member', mentions: { all: true, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-new-member', content: [{ type: 'text', text: 'everyone' }], mentions: [joined] } }));
+});
+
+it.each([
+  ['human', false], ['human', true], ['bot', false], ['bot', true],
+] as const)('refuses any unavailable explicit %s target before sending (everyone=%s)', async (kind, all) => {
+  const target = '00000000-0000-4000-8000-000000000003';
+  const available = '00000000-0000-4000-8000-000000000004';
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let membership = 'joined';
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    const value = await original(path, options);
+    const members = [{ id: target, kind, state: membership, name: 'Ann', ownerActorId: self, ownerName: '', role: 'member', avatar: null },
+      { id: available, kind: 'bot', state: 'joined', name: 'Available', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
+    if (path.endsWith('/members')) return [...value, ...members.filter(member => member.state !== 'missing')];
+    return path.endsWith('/snapshot') ? { ...value, members: [...value.members, ...members] } : value;
+  });
+  showChat = true; await render();
+  for (membership of ['left', 'removed', 'banned', 'invited', 'missing']) {
+    for (const botIds of [[target], [available, target]]) {
+      await act(async () => {
+        await expect(chat.act('send', { text: '@Ann hello', clientId: 'fixture-stale-target', mentions: { all, botIds } }))
+          .rejects.toThrow('MENTION_UNAVAILABLE');
+      });
+      expect(chat.online).toBe(true);
+      expect(chat.state.kind).toBe('ready');
+      expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+    }
+  }
+  await act(async () => {
+    await chat.act('send', { text: '@Available hello', clientId: 'fixture-reselected', mentions: { all, botIds: [available] } });
+  });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({
+    method: 'POST', body: { operationId: 'fixture-reselected', content: [{ type: 'text', text: '@Available hello' }], mentions: [available] },
+  }));
 });
 
 it('keeps REST sending available after the group WebSocket disconnects', async () => {
@@ -254,4 +309,103 @@ it('rebuilds realtime after membership returns while the same group page remains
   await receive(sockets[1], { type: 'changes', scope: `conversation:${id}`, cursor: '2', changes: [] });
   expect(h.auth.apiFetch.mock.calls.length).toBeGreaterThan(previous);
   expect(chat.state.kind).toBe('ready');
+});
+
+it('exposes an actor-scope personal hide to the current screen and clears it after an account switch', async () => {
+  vi.useFakeTimers();
+  h.auth.accountGeneration = 105;
+  const sockets: any[] = [];
+  vi.stubGlobal('WebSocket', class {
+    readyState = 1; onopen?: Function; onmessage?: Function; onclose?: Function; onerror?: Function;
+    send = vi.fn();
+    constructor() { sockets.push(this); }
+    close() { this.onclose?.({}); }
+  });
+  const allowed = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { conversationListStateVersion: 1 } };
+    if (path.startsWith('/v1/conversation-list-state?')) return [];
+    if (path.startsWith('/v1/changes?')) return { head: '10' };
+    return allowed(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => { sockets[0].onmessage({ data: JSON.stringify({ type: 'ready', actorId: self }) }); });
+  expect(chat.listHidden).toBe(false);
+  await act(async () => { sockets[0].onmessage({ data: JSON.stringify({ type: 'changes', scope: `actor:${self}`, cursor: '11', changes: [
+    { type: 'conversation.list.changed', data: { conversationId: id, hidden: true, revision: 1 } },
+  ] }) }); });
+  expect(chat.state.kind).toBe('missing');
+  expect(chat.listHidden).toBe(true);
+  expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.endsWith('/list-state') && options.method === 'POST')).toBe(false);
+  h.auth.accountGeneration++;
+  await render();
+  expect(chat.listHidden).toBe(false);
+});
+
+it('supports direct leave, then personal removal independently without a readable snapshot', async () => {
+  h.auth.accountGeneration = 101;
+  const allowed = h.auth.apiFetch.getMockImplementation()!;
+  let left = false;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    options.assertCurrent();
+    if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { groupLifecycleVersion: 1, conversationListStateVersion: 1 } };
+    if (path.startsWith('/v1/conversation-list-state?')) return [];
+    if (path.endsWith('/members') && options.method === 'POST') { left = true; return { revision: 2 }; }
+    if (path.endsWith('/list-state')) return { conversationId: id, hidden: true, revision: 1 };
+    if (left && path.endsWith('/snapshot')) throw Object.assign(new Error('NOT_MEMBER'), { status: 403 });
+    return allowed(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  expect(chat.state.kind === 'ready' && chat.state.group.supportsListRemoval).toBe(true);
+  await act(async () => { await chat.act('leave'); });
+  expect(chat.state.kind).toBe('missing');
+  h.auth.apiFetch.mockClear();
+  await act(async () => { await chat.act('hide'); });
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/snapshot'))).toBe(false);
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/list-state'))).toBe(true);
+});
+it('keeps a hidden room out of the roster even if an old server list and computer cache contain it', async () => {
+  h.auth.accountGeneration = 102;
+  const allowed = h.auth.apiFetch.getMockImplementation()!;
+  const legacyHost = { deviceId: 'old-computer', deviceName: 'Old' };
+  h.targets = [legacyHost]; h.legacy.isOnline.mockReturnValue(true);
+  h.legacy.items = [{ host: legacyHost, item: { ref: { id, kind: 'bot-group', collectionId: 'bot-groups' } } }];
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { conversationListStateVersion: 1 } };
+    if (path.startsWith('/v1/conversation-list-state?')) return [{ conversationId: id, hidden: true, revision: 4 }];
+    return allowed(path, options);
+  });
+  await render();
+  expect(roster.items).toEqual([]);
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/snapshot'))).toBe(false);
+  expect(roster.error).toBeNull();
+});
+
+it('merges a computer-confirmed personal removal without requiring direct server access or trusting stale room data', async () => {
+  h.auth.accountGeneration = 103;
+  h.link.status = 'online';
+  h.link.subscribe.mockResolvedValue(undefined); h.link.unsubscribe.mockResolvedValue(undefined);
+  h.link.getPresenceAvailability = () => true;
+  h.auth.apiFetch.mockRejectedValue(new Error('Offline direct endpoint'));
+  const target = { deviceId: 'computer', deviceName: 'Computer' };
+  const resource = { ref: { id, collectionId: 'bot-groups', kind: 'bot-group' }, revision: '1', display: { title: 'Fixture' }, links: [],
+    blocks: [{ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '', data: { id, name: 'Fixture', serverBacked: true,
+      supportsListRemoval: true, members: [], messages: [], plans: [], round: { status: 'idle', speakers: [], canContinue: false } } }] };
+  h.link.invoke.mockImplementation(async (_id, channel) => channel === 'maker:remote-resources:get' ? resource
+    : { effects: [], result: { listState: { conversationId: id, hidden: true, revision: 7 } } });
+  function RemoteProbe() { chat = useBotGroupChat(target, id); return null; }
+  root = createRoot(document.createElement('div'));
+  await act(async () => root!.render(createElement(RemoteProbe)));
+  expect(chat.state.kind).toBe('ready');
+  await act(async () => { await chat.act('hide'); });
+  expect(chat.state.kind).toBe('missing');
+  expect(h.auth.apiFetch).not.toHaveBeenCalled();
+  expect(h.link.invoke.mock.calls.find(call => call[1] === 'maker:remote-resources:invoke')?.[2][0]).toMatchObject({ actionId: 'hide', resourceRef: { id } });
+  await act(async () => root!.unmount()); root = undefined;
+  h.targets = [target]; h.legacy.isOnline.mockReturnValue(true);
+  h.legacy.items = [{ host: target, item: { ref: { id, kind: 'bot-group', collectionId: 'bot-groups' } } }];
+  await render();
+  expect(roster.items).toEqual([]);
+  h.link.status = 'offline'; h.link.getPresenceAvailability = () => false;
 });

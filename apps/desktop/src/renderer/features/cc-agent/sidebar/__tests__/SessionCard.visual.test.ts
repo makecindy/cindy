@@ -164,10 +164,8 @@ vi.mock('@/hooks/useSessionPausedQueue', () => ({
 
 vi.mock('@/lib/sessionAttentionStore', () => ({
   useSessionAttentionKind: (sessionId: string) => mocks.attentionKindBySession.get(sessionId),
-}));
-
-vi.mock('../../lib/scrollIntoNearestView', () => ({
-  scrollIntoNearestView: vi.fn(),
+  getSessionAttentionKinds: () => mocks.attentionKindBySession,
+  subscribeSessionAttention: () => () => undefined,
 }));
 
 vi.mock('@/lib/toast', () => ({
@@ -241,7 +239,13 @@ function sessionRowEl(): HTMLElement {
 }
 
 describe('SessionCard visual cases', () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
     clearRemoteSessionActivity();
     mocks.navigate.mockReset();
     mocks.dropdownMenuOpen = false;
@@ -257,6 +261,41 @@ describe('SessionCard visual cases', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
+
+  it('scrolls a text row into nearest view only when it becomes active', () => {
+    const props = {
+      session: sessionCardVisualCases[0].session,
+      isActive: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const view = render(createElement(SessionItem, props));
+    const row = view.container.querySelector(`[data-session-id="${props.session.id}"]`);
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    expect(row).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The old source guard never exercised this transition. Keep the real
+    // SessionItem effect and helper in this unit regression; only stub native DOM.
+    view.rerender(createElement(SessionItem, { ...props, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'nearest', behavior: 'smooth' });
+    expect(scrollIntoView.mock.contexts).toEqual([row]);
+
+    const updatedSession = { ...props.session, preview: 'Updated preview' };
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: true }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    view.rerender(createElement(SessionItem, { ...props, session: updatedSession, isActive: false }));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   it.each(['list', 'text'] as const)('reuses the %s presentation for shared navigation without task actions', (variant) => {

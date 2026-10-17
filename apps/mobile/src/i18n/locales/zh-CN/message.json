@@ -10,11 +10,13 @@
   },
   "renderer": {
     "moreActions": "更多消息操作",
+    "reply": "回复",
     "newMessagesToBottom": "有新消息，跳到底部",
     "jumpToBottom": "跳到底部",
     "openForkOrigin": "打开分叉来源消息",
     "viewForkOrigin": "查看分叉来源",
     "emptyMessages": "暂无消息",
+    "historyNotCached": "历史消息尚未缓存，连接电脑后同步",
     "syncing": "正在同步",
     "copyLinkHint": "点按复制消息链接",
     "sentTime": "发送时间 {{time}}",
@@ -104,7 +106,8 @@
     "handoffContentDesc": "交接内容——切换时发送给新引擎的上下文摘要（不计入对话记录，仅在此展示）",
     "handoffContentDescEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文（不计入对话记录，仅在此展示）",
     "openDiagramDetail": "打开图表详情",
-    "sessionChipFallback": "任务 {{id}}",
+    "sessionChipFallback": "某个任务",
+    "messageChipFallback": "引用的消息",
     "imageFallbackTitle": "图片",
     "mermaidExportFailedTitle": "导出失败",
     "mermaidRenderIncompleteBody": "图表尚未渲染完成或导出出错，请稍后重试。",
@@ -260,12 +263,25 @@
       "usageReset": "用量已恢复，已自动继续",
       "pending": "重新连接中…",
       "pendingWithProgress": "重新连接中 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "正在换一台电脑继续…",
       "details": "本次重试 {{attempt}}/{{total}} · 本任务累计重连 {{count}} 次",
       "detail": {
         "reason": "中断原因",
         "attempt": "本次重试 {{attempt}}/{{total}}",
         "sessionTotal": "本任务累计重连 {{count}} 次"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} 撞到用量上限，已换到 {{to}} 继续",
+        "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
+        "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
+        "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续",
+        "failed": "{{from}} 出了问题，已换到 {{to}} 继续"
+      },
+      "agentReconnect": {
+        "named": "已重新连上 {{computer}}，继续运行",
+        "unnamed": "已重新连上原来的电脑，继续运行"
+      },
+      "groupSwitch": "已自动换一台电脑继续"
     },
     "modelLabel": "模型",
     "sessionLabel": "任务",

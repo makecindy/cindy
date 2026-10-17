@@ -27,6 +27,7 @@ import { RefreshCw, Pencil, Trash2, Check, X, Monitor } from 'lucide-react';
 import { toast } from '@/lib/toast';
 
 import { Switch } from '@/components/ui/switch';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import type { DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
@@ -82,6 +83,7 @@ function deviceSubtitle(
 ): string {
   const parts = [
     platformLabel(device.platform),
+    device.appVersion?.trim() ? `Cindy ${device.appVersion.trim()}` : null,
     hardwareLabel(device.deviceInfo),
     memoryLabel(device.deviceInfo?.memoryGb),
     opts.statusOverride ?? deviceStatusLabel(device, t),
@@ -199,6 +201,9 @@ export function MyDevicesPanel({
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<DeviceLinkDeviceView | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deletePending = useRef(false);
   // 被对方撤销了本机访问权限的设备(控制端内存推导)。
   const revokedByPeer = useSyncExternalStore(
     revokedDevicesStore.subscribe,
@@ -255,8 +260,20 @@ export function MyDevicesPanel({
   // 失败,故必须看返回值)。否则若删的是被对方撤销过的设备,切换栏的 buildSwitcherDevices 仍会拿
   // revoked id 单独撑起一颗陈旧 rejected chip,直到登出 / 停服才消失;而删除失败时清掉则会错误地
   // 抹掉一台仍存在、仍被撤销的设备的被拒状态。
-  const handleDelete = async (deviceId: string) => {
-    if (await s.remove(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
+  const handleDelete = async () => {
+    if (!deleteTarget || deletePending.current) return;
+    const { deviceId } = deleteTarget;
+    deletePending.current = true;
+    setDeleting(true);
+    try {
+      if (await s.remove(deviceId)) {
+        revokedDevicesStore.clearRevoked(deviceId);
+        setDeleteTarget(null);
+      }
+    } finally {
+      deletePending.current = false;
+      setDeleting(false);
+    }
   };
 
   const cardClass = 'rounded-xl border border-[var(--border-default)] px-4 py-3';
@@ -345,6 +362,11 @@ export function MyDevicesPanel({
                     })
                   : `${t('settings.devices.thisDevice')} · ${t(`settings.devices.linkStatus.${s.linkStatus}`)}`}
               </span>
+              {self ? (
+                <span className="break-all text-11 text-[var(--text-tertiary)]">
+                  {self.deviceId}
+                </span>
+              ) : null}
               {activeConnectionIssue ? (
                 <span className="text-11 text-[var(--error-fg)]">
                   {t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)}
@@ -461,8 +483,11 @@ export function MyDevicesPanel({
                         {d.name}
                       </span>
                     )}
-                    <span className="truncate text-11 text-[var(--text-tertiary)]">
+                    <span className="break-words text-11 text-[var(--text-tertiary)]">
                       {deviceSubtitle(d, t, { isControlling })}
+                    </span>
+                    <span className="break-all text-11 text-[var(--text-tertiary)]">
+                      {d.deviceId}
                     </span>
                   </div>
                   {editingId !== d.deviceId && (
@@ -488,9 +513,8 @@ export function MyDevicesPanel({
                       </button>
                       <button
                         type="button"
-                        onClick={() => void handleDelete(d.deviceId)}
-                        disabled={d.online}
-                        title={d.online ? t('settings.devices.deleteOnlineHint') : undefined}
+                        onClick={() => setDeleteTarget(d)}
+                        disabled={deleting}
                         aria-label={t('settings.devices.delete')}
                         className="rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                       >
@@ -538,6 +562,19 @@ export function MyDevicesPanel({
           })
         )}
       </ul>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deletePending.current) setDeleteTarget(null);
+        }}
+        presentation="standard"
+        title={t('settings.devices.deleteTitle', { name: deleteTarget?.name ?? '' })}
+        description={t('settings.devices.deleteMessage')}
+        confirmText={t('settings.devices.delete')}
+        confirmVariant="destructive"
+        loading={deleting}
+        onConfirm={() => void handleDelete()}
+      />
     </div>
   );
 }

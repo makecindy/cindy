@@ -1,17 +1,48 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { isDeliveryProseText } from '@cindy/maker-shared/message-render';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   HISTORY_VIEW_PAGE_BYTES, HISTORY_VIEW_PAGE_ITEMS, HISTORY_DETAIL_PAGE_BYTES,
-  projectHistoryView, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries, type HistoryMessageSource, type HistoryViewItem,
-  type HistoryViewPage, type HistoryDetailPage, type HistoryWorkReference,
+  HISTORY_WORK_LINE_LIMIT, completesHistoryTurn, projectHistoryView, projectHistoryWorkLines, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries,
+  type HistoryMessageSource, type HistoryWorkLine, type HistoryViewItem, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkReference,
 } from '@cindy/maker-shared/message-window';
 
 export const MAX_HISTORY_SCAN_ROWS = 2000;
 const MAX_HISTORY_SCAN_BYTES = 8 * 1024 * 1024;
+const WORK_LINE_SOURCE_BATCH = 24;
+/** Bounds the bodies read for one running preview; a longer duplicate run shows fewer lines. */
+const MAX_WORK_LINE_SOURCE_ROWS = 384;
 
 interface ReadOptions { limit: number; before?: string; after?: string }
+
+/**
+ * What a latest page looked like when it was delivered. Each top-level item has a
+ * fingerprint taken before the outline revision suffix (a DB-wide write counter that
+ * changes on every write); a running leaf work item is identified only by its start,
+ * because its contents are exactly what a work patch replaces.
+ */
+export interface HistoryPageShape {
+  keys: string[];
+  fingerprints: string[];
+  /** Running top-level leaf work items, key → revision exactly as delivered. */
+  running: Map<string, string>;
+}
+
+export interface HistoryPageOptions {
+  /** Attach Host-projected single-line activities to running top-level work items. */
+  workLines?: boolean;
+  /** Receives the latest page's shape; never serialized. */
+  onShape?: (shape: HistoryPageShape) => void;
+}
+
+function isRunningLeafWork<T extends HistoryMessageSource>(item: HistoryViewItem<T>): item is Extract<HistoryViewItem<T>, { type: 'work' }> {
+  return item.type === 'work' && !item.children && item.summary.isStreaming;
+}
+
+function fingerprint(value: unknown): string {
+  return createHash('sha1').update(JSON.stringify(value)).digest('base64');
+}
 export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   list(sessionId: string, opts: ReadOptions, skipImport: boolean): Promise<T[]>;
   /** Lightweight rows sufficient for grouping, never used as message bodies. */
@@ -70,7 +101,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
   let detailRevision: string | undefined;
   let detailCacheBytes = 0;
   return {
-    async page(sessionId: string, before?: string, lazyDetails = false): Promise<HistoryViewPage<T>> {
+    async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
       const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
       const batchSize = outlined ? 1000 : 100;
       const rowBudget = outlined ? 100000 : MAX_HISTORY_SCAN_ROWS;
@@ -94,8 +125,9 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         // A page may start at a sealed answer. Keep that answer as right-hand
         // context when reading the preceding page, or an older progress seal
         // would become the "last answer" and escape its completed work group.
-        const context = beforeAnchor?.role === 'assistant'
-          && (beforeAnchor.agentMeta as { turnCompleted?: unknown } | null)?.turnCompleted === true
+        // Uses the projection's seal, so a cost-stamped interrupted answer still
+        // closes its turn when it is the first item of the newer page.
+        const context = beforeAnchor?.role === 'assistant' && completesHistoryTurn(beforeAnchor)
           ? beforeAnchor : undefined;
         const projected = projectHistoryView(
           [...raw.slice(boundary), ...live, ...(context ? [context] : [])],
@@ -158,6 +190,37 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         const hydrated = new Map((await deps.hydrate!(sessionId, [...new Set(ids)])).map((row) => [row.id, row]));
         items.splice(items.length - candidate.length, candidate.length,
           ...mapHistoryViewMessages(candidate, (rows) => rows.map((row) => hydrated.get(row.id) ?? row)));
+      }
+      if (options.workLines && !before) {
+        const rows = [...raw, ...live];
+        for (const item of items.filter(isRunningLeafWork)) {
+          const start = rows.findIndex((row) => row.id === item.summary.firstMessageId);
+          const end = rows.findIndex((row) => row.id === item.summary.lastMessageId);
+          try {
+            // Repeated reads and empty thoughts are dropped by the projection, so a fixed
+            // source tail can yield fewer lines than are visible. Widen from the end until
+            // five display lines exist or the group starts, hydrating each row only once.
+            const full = new Map<string, T>();
+            let lines: HistoryWorkLine[] = [];
+            for (let take = WORK_LINE_SOURCE_BATCH; start >= 0 && end >= start; take *= 2) {
+              const from = Math.max(start, end + 1 - Math.min(take, MAX_WORK_LINE_SOURCE_ROWS));
+              const tail = rows.slice(from, end + 1);
+              const missing = outlined ? tail.filter((row) => !row.id.startsWith('history-live:') && !full.has(row.id)) : [];
+              if (missing.length) for (const row of await deps.hydrate!(sessionId, missing.map((row) => row.id))) full.set(row.id, row);
+              lines = projectHistoryWorkLines(tail.map((row) => full.get(row.id) ?? row), true);
+              if (lines.length >= HISTORY_WORK_LINE_LIMIT || from === start || take >= MAX_WORK_LINE_SOURCE_ROWS) break;
+            }
+            item.summary.lines = lines;
+          } catch {
+            // Lines are a display hint. A range changing mid-read keeps the page usable;
+            // the next activity notice recomputes them.
+            item.summary.lines = [];
+          }
+        }
+      }
+      const fingerprints = options.onShape && !before ? new Map(items.map((item) => [item,
+        isRunningLeafWork(item) ? `running:${item.summary.firstMessageId}` : fingerprint(item)])) : undefined;
+      if (outlined) {
         // The outline deliberately omits bodies, so it cannot hash their bytes.
         // SQLite change counters also cover edits to hidden bodies without
         // reading them. Unchanged snapshots retain their rendering identities.
@@ -187,6 +250,13 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       const anchors = raw.length ? [raw[0].id, raw[raw.length - 1].id] : [];
       if (beforeAnchor) anchors.push(beforeAnchor.id);
       await Promise.all(anchors.map((id) => deps.anchor(sessionId, id, outlined)));
+      if (fingerprints) {
+        options.onShape!({
+          keys: selected.map((item) => item.key),
+          fingerprints: selected.map((item) => fingerprints.get(item)!),
+          running: new Map(selected.filter(isRunningLeafWork).map((item) => [item.key, item.summary.revision])),
+        });
+      }
       return { version: 1, items: selected, hasMore,
         nextCursor: hasMore && selected.length ? firstId(selected[0]) : null };
     },

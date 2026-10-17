@@ -4,6 +4,7 @@ import { extractIpcError } from '../shared/ipcError.js';
 import {
   APPEARANCE_LIMITS,
   WALLPAPER_IDS,
+  WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
   clampAppearanceWallpaperOverlay,
   clampAppearanceWallpaperVisibility,
   clampAppearanceWallpaperBlur,
@@ -58,8 +59,18 @@ export function registerAppearanceSettingsIpc(): void {
   ipcMain.handle('appearance-settings:ensure-wallpaper-video', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
     const { ensureWallpaperVideo } = await import('./wallpaper-video.js');
-    const result = await ensureWallpaperVideo(id);
+    const result = await ensureWallpaperVideo(id, (progress) => {
+      event.senderFrame?.send(WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL, progress);
+    });
     return result;
+  });
+
+  ipcMain.handle('appearance-settings:ensure-wallpaper-image', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const { ensureWallpaperImage } = await import('./wallpaper-video.js');
+    return ensureWallpaperImage(id, (progress) => {
+      event.senderFrame?.send(WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL, progress);
+    });
   });
 
   ipcMain.handle('appearance-settings:import-wallpaper', async (event) => {

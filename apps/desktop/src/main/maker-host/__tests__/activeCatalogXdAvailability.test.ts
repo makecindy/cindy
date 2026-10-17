@@ -797,6 +797,53 @@ describe('XD 网关权威模型清单重建', () => {
     expect(cc.find((m) => m.id === 'missing-output')?.cost).toBeUndefined();
   });
 
+  it('Muse Wonder 网关条目按 Registry 补齐三引擎资料，原生 Responses 只在 Codex / Pi 默认显示', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      { id: 'meta/muse-wonder-1.0', agents: ['claude-code', 'codex', 'pi'] },
+    ]);
+    const efforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = xdModels(agent).find((m) => m.id === 'meta/muse-wonder-1.0');
+      expect(model, agent).toMatchObject({
+        name: 'Muse Wonder',
+        nativeApi: 'openai-responses',
+        contextWindow: 1_048_576,
+        supportsImageInput: true,
+        efforts,
+        defaultEffort: 'medium',
+      });
+      // 跨 Harness bridge 默认关闭；原生引擎缺省即默认显示（目录未标 defaultEnabled:false）。
+      if (agent === 'claude-code') expect(model?.defaultEnabled).toBe(false);
+      else expect(model?.defaultEnabled).not.toBe(false);
+    }
+    expect(resolveXdPiGatewayApi('meta/muse-wonder-1.0')).toBe('openai-responses');
+  });
+
+  it.each(['google/gemini-4-argon', 'gemini-4-argon'])(
+    'Gemini 4 Argon 网关条目 %s 按公共型号补齐三引擎资料，只在原生 Pi 默认显示',
+    (id) => {
+      setActiveCatalog(BUNDLED_CATALOG);
+      setXdGatewayModels([{ id, agents: ['claude-code', 'codex', 'pi'] }]);
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const model = xdModels(agent).find((m) => m.id === id);
+        expect(model, agent).toMatchObject({
+          name: 'Gemini 4 Argon',
+          group: 'google',
+          nativeApi: 'google-generative-ai',
+          contextWindow: 1_048_576,
+          supportsImageInput: true,
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        });
+        // Claude Code / Codex 走跨 Harness bridge，默认关闭；Pi 原生支持 Google 协议。
+        if (agent === 'pi') expect(model?.defaultEnabled).not.toBe(false);
+        else expect(model?.defaultEnabled).toBe(false);
+      }
+      expect(resolveXdPiGatewayApi(id)).toBe('google-generative-ai');
+    },
+  );
+
   it('efforts 缺失时不合成档位，也不猜默认档', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
@@ -936,6 +983,7 @@ describe('gateway cross-harness defaults', () => {
         ['z-ai/glm-5.3-flash', 'openai-completions'],
         ['tencent/hy4-preview', 'openai-completions'],
         ['meta/muse-spark-1.3', 'openai-responses'],
+        ['meta/muse-wonder-1.0', 'openai-responses'],
         ['x-ai-grok/grok-4.6', 'openai-responses'],
         ['minimax/MiniMax-M3', 'anthropic-messages'],
         ['anthropic-claude/claude-fable-5-1', 'anthropic-messages'],

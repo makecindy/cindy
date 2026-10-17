@@ -47,7 +47,13 @@ vi.mock("react-i18next", () => ({
 vi.mock("@/session/ComposerSheet", () => ({
   ComposerSheet: ({ children, footer }: any) => <div>{children}{footer}</div>,
 }));
-vi.mock("@/session/ComposerNativeRow", () => ({ ComposerNativeRow: () => null }));
+vi.mock("@/session/ComposerNativeRow", () => ({
+  ComposerNativeRow: ({ title, subtitle, selected, disabled, onPress, testID }: any) => (
+    <button data-testid={testID} aria-pressed={selected} disabled={disabled} onClick={onPress}>
+      {title}{subtitle}
+    </button>
+  ),
+}));
 vi.mock("@/session/ComposerNativeSection", () => ({
   ComposerNativeSection: ({ children }: any) => <div>{children}</div>,
 }));
@@ -361,6 +367,38 @@ function directoryProps(overrides: Partial<NewTaskSelectionSheetProps> = {}): Ne
     ...overrides,
   };
 }
+
+it.each(["light", "dark"])("selects equivalent remote Windows workspaces without rewriting their paths in %s", (mode) => {
+  state.mode = mode;
+  const props = directoryProps({
+    page: "workspace", workingDir: "d:/PROJECTS/cindy/",
+    workspaces: [{ title: "cindy", workingDir: "D:\\projects\\cindy" }],
+  });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  const row = host.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.textContent).toContain("D:\\projects\\cindy");
+  act(() => row.click());
+  expect(props.onProject).toHaveBeenCalledExactlyOnceWith("D:\\projects\\cindy");
+  const dialogueHost = mount(<NewTaskSelectionSheet {...props} workspaceKind="dialogue" />);
+  expect(dialogueHost.querySelector('[data-testid="newSession.workspaceProjectOption"]')!.getAttribute("aria-pressed"))
+    .toBe("false");
+});
+
+it.each([
+  ["/repo", "/repo/.cindy-worktrees/branch"],
+  ["D:/repo", "d:\\repo\\.cindy-worktrees\\branch"],
+])("does not mark %s selected for a remembered worktree directory", (base, worktree) => {
+  const props = directoryProps({
+    page: "workspace", workingDir: worktree, workspaces: [{ title: "repo", workingDir: base }],
+  });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  const row = host.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("false");
+  expect(props.workingDir).toBe(worktree);
+  act(() => row.click());
+  expect(props.onProject).toHaveBeenCalledExactlyOnceWith(base);
+});
 
 it.each(["light", "dark"])("gives the current-folder label a contrasting color and keeps selection working in %s", (mode) => {
   state.mode = mode;

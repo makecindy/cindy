@@ -13,7 +13,7 @@ import type {
   ConversationSearchStatusFilter,
 } from '../../shared/conversationSearch.js';
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
@@ -77,7 +77,7 @@ export async function searchConversations(
   const limit = clampLimit(request.limit);
   const filters = normalizeFilters(request);
   const sessionSources = hostScope.sessionSources === undefined
-    ? DESKTOP_VISIBLE_SESSION_SOURCES
+    ? DESKTOP_TASK_LIST_SESSION_SOURCES
     : hostScope.sessionSources;
   const sortBy = normalizeSortBy(request.sortBy);
   const skipVector = request.semanticMode === 'keyword';
@@ -331,6 +331,8 @@ async function listSearchableSessions(
   const agentCond = filters.agentKind === 'all' ? undefined : eq(sessions.agentKind, filters.agentKind);
   const sessionIdsCond = filters.sessionIds ? inArray(sessions.id, filters.sessionIds) : undefined;
   const workerCond = or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker'));
+  // 插件后台隐藏任务不进入任何会话搜索；用户从插件详情页「后台任务」查看与接手。
+  const visibleCond = isNull(sessions.hiddenAt);
   const activityCutoff = cutoffForLastActivity(filters.lastActivity);
   // 兼容存量 DB 行：旧版 touchUserSendInDb 只写 user_send_at 不 bump updated_at，
   // 侧栏排序用 max(userSendAt, updatedAt)，这里也同步用 OR 避免漏掉这些行。
@@ -346,6 +348,7 @@ async function listSearchableSessions(
       agentCond,
       sessionIdsCond,
       workerCond,
+      visibleCond,
       activityCond,
     ))
     .orderBy(desc(sessions.updatedAt));

@@ -103,14 +103,16 @@ describe('discord streaming text', () => {
     expect(deps.uploadImages).toHaveBeenCalledWith('dm-1|m1', ['/tmp/abc123.png']);
   });
 
-  it('skips empty final edit when there is no text or image to send', async () => {
+  it.each(['', ' \n '])('removes progress for an empty final %j', async (text) => {
     const deps = makeDeps();
     const handle = await startStreaming(deps);
 
-    await handle.finalize('');
+    await handle.finalize(text);
+    await handle.finalize(text);
 
     expect(deps.edit).not.toHaveBeenCalled();
     expect(deps.uploadImages).not.toHaveBeenCalled();
+    expect(deps.remove).toHaveBeenCalledExactlyOnceWith('dm-1|m1');
   });
 
   it('close prevents future edits', async () => {
@@ -135,6 +137,7 @@ function makeDeps() {
     edit: vi.fn(async (...args: [string, string]) => {
       void args;
     }),
+    remove: vi.fn(async (_messageId: string) => {}),
     markdownToDiscord,
     chunk: chunkDiscordText,
     resolveImageUrl: vi.fn((url: string) => `/tmp/${url.replace('xdt-image://', '')}.png`),

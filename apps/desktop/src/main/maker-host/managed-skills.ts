@@ -12,6 +12,7 @@ import { builtInSkillDescriptors, sharedBuiltInSkillsRoot } from './built-in-ski
 import { getGhostManager, listAvailableGhostsForAuthorization } from '../cindy-brain/index.js';
 import { withSharedGlobalSkillProjectionMutation } from '../authBoundaryQuarantine.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 /** Reconcile the selected app-server home, including independently routed accounts. */
 export async function prepareCindyCodexSkills(codexHome: string): Promise<void> {
@@ -70,7 +71,7 @@ export const listCindyManagedSkills: NonNullable<AgentDeps['getManagedSkills']> 
       addSkill(
         path.join(ghost.approvedSkillRoot, item.dir),
         item.name,
-        `cindy-plugin-${ghost.manifest.id}`,
+        `cindy-plugin-${installedGhostStoragePart(ghost)}`,
         item.description,
       );
     }

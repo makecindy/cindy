@@ -1,5 +1,5 @@
 import { FILE_PEER_MAX_BYTES } from '@cindy/device-link';
-import type { InvokeResultPayload } from '@cindy/device-link';
+import type { InvokeResultPayload, DeviceFileResult } from '@cindy/device-link';
 import type { PeerAttachment } from '@cindy/device-link';
 type PeerUpload = (device: string, uri: string, metadata: Omit<PeerAttachment, 'ticket'>, signal?: AbortSignal) => Promise<string | null>;
 let upload: PeerUpload | null = null;
@@ -37,6 +37,7 @@ export interface LocalPeerMedia {
   ossKey: string;
   size: number;
   mimeType: string;
+  version?: string;
 }
 const localUris = new WeakMap<object, { uri: string; expiresAt: string }>();
 const owned = new Map<
@@ -78,11 +79,14 @@ export function recordPeerMedia(
   });
   return true;
 }
+type FileVersionMetadata = Pick<DeviceFileResult, 'version' | 'size' | 'mimeType'> & { skipCache?: boolean };
 type Download = (
   device: string,
   url: string,
   signal?: AbortSignal,
   trace?: number,
+  metadata?: FileVersionMetadata,
+  onProgress?: (loaded: number, total: number) => void,
 ) => Promise<LocalPeerMedia | null>;
 let download: Download | null = null;
 export function installPeerFileDownload(value: Download) {
@@ -96,13 +100,18 @@ export async function tryMobilePeerFile(
   url: string,
   signal?: AbortSignal,
   trace?: number,
+  metadata?: FileVersionMetadata,
+  onProgress?: (loaded: number, total: number) => void,
 ) {
-  return download?.(device, url, signal, trace) ?? null;
+  return download?.(device, url, signal, trace, metadata, onProgress) ?? null;
 }
 
 /** Budget includes retained files; reserve room for the consumer copy and keep 256 MiB free. */
 export function canStagePeerMedia(size: number, availableBytes = Infinity): boolean {
   return Number.isSafeInteger(size) && size >= 0 && size <= FILE_PEER_MAX_BYTES &&
     ownedBytes + size <= 4 * 1024 * 1024 * 1024 &&
-    availableBytes >= 2 * size + 256 * 1024 * 1024;
+    availableBytes >= 2 * size + PEER_FILE_DISK_RESERVE_BYTES;
 }
+
+/** Keep the existing transfer reserve free even when keeping reusable disk copies. */
+export const PEER_FILE_DISK_RESERVE_BYTES = 256 * 1024 * 1024;

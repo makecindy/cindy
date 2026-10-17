@@ -1,6 +1,6 @@
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
@@ -35,6 +35,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { FormField } from '@/components/ui/form-field';
 import { Tip } from '@/components/ui/tooltip';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -70,6 +71,7 @@ import {
   restoreHydratedApiKey,
   stripCredentialHeaders,
   type CustomProviderAuthMode,
+  type ProviderConnectionTestSignatureFields,
   type SavedProviderProbeBaseline,
 } from '@/lib/providerModelFetch';
 import {
@@ -101,6 +103,7 @@ import type {
   CustomProviderConfig,
   ProviderPreset,
   ProviderRuntimeModelConfig,
+  ProviderView,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -153,6 +156,8 @@ function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
 
 interface ProviderConnectionDialogProps {
   initial?: CustomProviderConfig;
+  /** Effective modes from the same connection's active catalog, separate from editable overrides. */
+  catalogModels?: ProviderView['models'];
   /** 已占用的全部 provider id（内置 anthropic/openai/xd + 全部自定义）；新建时自动生成 id 时避让，防撞内置保留 id。 */
   existingIds?: string[];
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
@@ -195,11 +200,19 @@ interface RuntimeFields extends RuntimeFillDraft {
   catalogPresetId?: string;
   /** Codex Responses runtime 级原生图片生成能力。 */
   supportsImageGeneration: boolean;
+  /** Standalone Images API, independent of the Codex Responses hosted tool. */
+  imageApi?: 'openai-images';
+  videoApi?: 'xai-videos';
 }
 
-function runtimeProbeFields(agent: DialogAgentKind, runtime: RuntimeFields): RuntimeFields {
+function runtimeProbeFields(
+  agent: DialogAgentKind,
+  runtime: RuntimeFields,
+  catalogModels?: ProviderConnectionTestSignatureFields['catalogModels'],
+): RuntimeFields & Pick<ProviderConnectionTestSignatureFields, 'catalogModels'> {
   return {
     ...runtime,
+    catalogModels,
     requestPath: agent === 'pi' ? '' : runtime.requestPath,
     models: modelsAfterProviderEndpointEdit(runtime.models, runtime.modelRouteBaseUrl, runtime.baseUrl),
   };
@@ -278,6 +291,8 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
         piCatalogProviderId: rc.piCatalogProviderId,
         catalogPresetId: rc.catalogPresetId,
         supportsImageGeneration: a === 'codex' && rc.supportsImageGeneration === true,
+        imageApi: rc.imageApi,
+        videoApi: rc.videoApi,
         headersState: rc.headersState,
       });
     }
@@ -397,6 +412,7 @@ function PresetDropdown({
 
 export function ProviderConnectionDialog({
   initial,
+  catalogModels,
   existingIds,
   returnFocusRef,
   focusAgent,
@@ -408,6 +424,7 @@ export function ProviderConnectionDialog({
   const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
   const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
   const editing = !!initial;
+  const catalogModelsRef = useRef(catalogModels);
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
   const formId = useId();
@@ -440,6 +457,7 @@ export function ProviderConnectionDialog({
   }, [fieldError]);
   const [name, setName] = useState(initial?.name ?? '');
   const [manualModel, setManualModel] = useState('');
+  const [manualModelMode, setManualModelMode] = useState('inherit');
   const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
   const [activeTab, setActiveTab] = useState<DialogAgentKind>(
     () =>
@@ -669,6 +687,18 @@ export function ProviderConnectionDialog({
   // （见 setRtSynced），不用被动 useEffect——effect 在 commit 后才跑，IPC 响应若落在
   // 状态更新与 effect 之间会读到旧值。
   const rtRef = useRef(rt);
+  useLayoutEffect(() => {
+    const previousCatalogModels = catalogModelsRef.current;
+    catalogModelsRef.current = catalogModels;
+    const changedAgents = AGENTS.filter(agent =>
+      firstProviderChatModel(rtRef.current[agent].models, previousCatalogModels?.[agent])?.id !==
+      firstProviderChatModel(rtRef.current[agent].models, catalogModels?.[agent])?.id);
+    if (changedAgents.length) setTest(previous => {
+      const next = { ...previous };
+      for (const agent of changedAgents) next[agent] = IDLE_TEST;
+      return next;
+    });
+  }, [catalogModels]);
   /** 唯一的 rt 写入口：状态更新的同时同步镜像进 rtRef（updater 幂等，StrictMode 双调无害）。 */
   const setRtSynced = useCallback(
     (
@@ -740,10 +770,10 @@ export function ProviderConnectionDialog({
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
         ...(agent === 'pi'
-          ? { modelPiApi: firstProviderChatModel(rc.models)?.piApi }
+          ? { modelPiApi: firstProviderChatModel(rc.models, catalogModels?.[agent])?.piApi }
           : {}),
-        modelRoute: firstProviderChatModel(rc.models)?.route,
-        modelApi: firstProviderChatModel(rc.models)?.api,
+        modelRoute: firstProviderChatModel(rc.models, catalogModels?.[agent])?.route,
+        modelApi: firstProviderChatModel(rc.models, catalogModels?.[agent])?.api,
         catalogPresetId: rc.catalogPresetId,
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
@@ -751,7 +781,7 @@ export function ProviderConnectionDialog({
             : [],
       };
     },
-    [editing, initial],
+    [editing, initial, catalogModels],
   );
 
   // URL edits temporarily clear an untouched hydrated key so it cannot be
@@ -1168,6 +1198,7 @@ export function ProviderConnectionDialog({
   );
 
   const f = rt[activeTab];
+  const mediaOnly = f.models.some(model => model.id.trim()) && !firstProviderChatModel(f.models, catalogModels?.[activeTab]);
   const boundPreset = presets.find(preset => preset.id === f.catalogPresetId);
   const templateBound = Boolean(f.catalogPresetId);
   const endpointTemplate = boundPreset?.runtimes[activeTab]?.baseUrl;
@@ -1192,9 +1223,9 @@ export function ProviderConnectionDialog({
   const handleTest = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
-    const probeFields = runtimeProbeFields(agent, rf);
+    const probeFields = runtimeProbeFields(agent, rf, catalogModels?.[agent]);
     const defaultBaseUrl = rf.baseUrl.trim();
-    const firstModelConfig = firstProviderChatModel(rf.models);
+    const firstModelConfig = firstProviderChatModel(rf.models, catalogModels?.[agent]);
     const firstModel = firstModelConfig?.id.trim();
     if (!matchesEndpointTemplate(agent, rf)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
@@ -1262,7 +1293,7 @@ export function ProviderConnectionDialog({
       );
       if (
         providerConnectionTestRequestSignature(
-          runtimeProbeFields(agent, rtRef.current[agent]),
+          runtimeProbeFields(agent, rtRef.current[agent], catalogModelsRef.current?.[agent]),
           authModeRef.current,
         ) !== requestSig
       )
@@ -1276,7 +1307,7 @@ export function ProviderConnectionDialog({
     } catch (e) {
       if (
         providerConnectionTestRequestSignature(
-          runtimeProbeFields(agent, rtRef.current[agent]),
+          runtimeProbeFields(agent, rtRef.current[agent], catalogModelsRef.current?.[agent]),
           authModeRef.current,
         ) !== requestSig
       )
@@ -1285,7 +1316,7 @@ export function ProviderConnectionDialog({
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate]);
+  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels]);
 
   // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
   // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
@@ -1359,6 +1390,7 @@ export function ProviderConnectionDialog({
             id: m.id.trim(),
             name: m.name.trim(),
             mode: m.mode,
+            nativeApi: m.nativeApi,
             modalities: m.modalities,
             officialDocs: m.officialDocs,
             discoveredMetadata: m.discoveredMetadata,
@@ -1403,6 +1435,7 @@ export function ProviderConnectionDialog({
                 m.discoveredMetadata ?? { contextWindow: m.contextWindow }),
               discoveredCost: m.discoveredCost,
               mode: cur?.mode,
+              nativeApi: cur?.nativeApi,
               modalities: cur?.modalities,
               officialDocs: cur?.officialDocs,
               nameExplicit: cur ? (cur.nameExplicit ?? !cur.discoveredMetadata) : undefined,
@@ -1490,6 +1523,7 @@ export function ProviderConnectionDialog({
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
         mode: latest ? latest.mode : m.mode,
+        nativeApi: latest ? latest.nativeApi : m.nativeApi,
         modalities: latest?.modalities ?? m.modalities,
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
@@ -1517,6 +1551,7 @@ export function ProviderConnectionDialog({
           id,
           name: m.name.trim() || id,
           mode: m.mode,
+          nativeApi: m.nativeApi,
           modalities: m.modalities,
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
@@ -1618,6 +1653,7 @@ export function ProviderConnectionDialog({
           id: m.id.trim(),
           name: m.name.trim(),
           mode: m.mode,
+          nativeApi: m.nativeApi,
           modalities: m.modalities,
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
@@ -1685,6 +1721,8 @@ export function ProviderConnectionDialog({
         ...(a === 'codex' && rf.supportsImageGeneration && canRuntimeUseNativeImageGeneration(rf)
           ? { supportsImageGeneration: true }
           : {}),
+        ...(rf.imageApi ? { imageApi: rf.imageApi } : {}),
+        ...(rf.videoApi ? { videoApi: rf.videoApi } : {}),
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
@@ -2401,13 +2439,33 @@ export function ProviderConnectionDialog({
                       onChange={setManualModel} />
                         )}
                   </FormField>
+                  <FormField id={fieldId(`${activeTab}:manualModelMode`)}
+                    label={t('settings.providers.custom.fields.modelType')}
+                    hint={t('settings.providers.connection.manualModelTypeHint')}>
+                    {(control) => (
+                      <Select {...control} label={t('settings.providers.custom.fields.modelType')}
+                        value={manualModelMode} onValueChange={setManualModelMode}
+                        options={[
+                          { value: 'inherit', label: t('settings.providers.connection.modelTypeAutomatic') },
+                          { value: 'chat', label: t('settings.providers.models.kindFilter.chat') },
+                          ...([
+                            ['image_generation', 'image'], ['video_generation', 'video'],
+                            ['audio_speech', 'tts'], ['audio_transcription', 'stt'],
+                            ['audio_generation', 'audio'], ['realtime', 'realtime'], ['embedding', 'embedding'],
+                          ] as const).map(([value, category]) => ({ value, label: t(`newChat.modelSelector.category.${category}`) })),
+                        ]} />
+                    )}
+                  </FormField>
                   <Button variant="secondary" disabled={!manualModel.trim()} onClick={() => {
                     const ids = [...new Set(manualModel.split(/[,\n]/).map((id) => id.trim()).filter(Boolean))];
                     patch(activeTab, (runtime) => ({ ...runtime, models: [
-                      ...runtime.models.filter((model) => model.id.trim()),
-                      ...ids.filter((id) => !runtime.models.some((model) => model.id === id)).map((id) => ({ id, name: id })),
+                      ...runtime.models.filter((model) => model.id.trim()).map(model =>
+                        ids.includes(model.id) ? { ...model, mode: manualModelMode === 'inherit' ? undefined : manualModelMode } : model),
+                      ...ids.filter((id) => !runtime.models.some((model) => model.id === id))
+                        .map((id) => ({ id, name: id, ...(manualModelMode === 'inherit' ? {} : { mode: manualModelMode }) })),
                     ] }));
                     setManualModel('');
+                    setManualModelMode('inherit');
                     setFieldError(null);
                   }}>{t('settings.providers.custom.fields.addModel')}</Button>
                 </div>
@@ -2531,6 +2589,72 @@ export function ProviderConnectionDialog({
                     {t('settings.providers.custom.fields.addHeader')}
                   </button>
                 </div>
+
+                {authMode !== 'oauth' && (
+                  <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
+                    <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
+                      <input
+                        type="checkbox"
+                        id={fieldId(`${activeTab}:image-api`)}
+                        aria-describedby={fieldId(`${activeTab}:image-api-hint`)}
+                        checked={f.imageApi === 'openai-images'}
+                        onChange={(event) => {
+                          const enabled = event.currentTarget.checked;
+                          // One explicit media owner per provider; other chat routes and keys stay intact.
+                          setRtSynced((prev) => Object.fromEntries(
+                            Object.entries(prev).map(([agent, runtime]) => [agent, {
+                              ...runtime,
+                              imageApi: agent === activeTab && enabled
+                                ? 'openai-images'
+                                : enabled || agent === activeTab ? undefined : runtime.imageApi,
+                            }]),
+                          ) as Record<DialogAgentKind, RuntimeFields>);
+                        }}
+                        className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                      />
+                      {t('settings.providers.custom.fields.openaiImages')}
+                    </label>
+                    <p
+                      id={fieldId(`${activeTab}:image-api-hint`)}
+                      className="text-12 leading-5 text-[var(--settings-section-desc)]"
+                    >
+                      {t('settings.providers.custom.fields.openaiImagesHint')}
+                    </p>
+                  </div>
+                )}
+
+                {authMode !== 'oauth' && (
+                  <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
+                    <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
+                      <input
+                        type="checkbox"
+                        id={fieldId(`${activeTab}:video-api`)}
+                        aria-describedby={fieldId(`${activeTab}:video-api-hint`)}
+                        checked={f.videoApi === 'xai-videos'}
+                        onChange={(event) => {
+                          const enabled = event.currentTarget.checked;
+                          // One explicit media owner per provider; other chat routes and keys stay intact.
+                          setRtSynced((prev) => Object.fromEntries(
+                            Object.entries(prev).map(([agent, runtime]) => [agent, {
+                              ...runtime,
+                              videoApi: agent === activeTab && enabled
+                                ? 'xai-videos'
+                                : enabled || agent === activeTab ? undefined : runtime.videoApi,
+                            }]),
+                          ) as Record<DialogAgentKind, RuntimeFields>);
+                        }}
+                        className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                      />
+                      {t('settings.providers.custom.fields.xaiVideos')}
+                    </label>
+                    <p
+                      id={fieldId(`${activeTab}:video-api-hint`)}
+                      className="text-12 leading-5 text-[var(--settings-section-desc)]"
+                    >
+                      {t('settings.providers.custom.fields.xaiVideosHint')}
+                    </p>
+                  </div>
+                )}
 
                 {/* Codex Responses Provider 级能力。放在自定义请求头之后，默认收起；
                     同一张说明卡片支持 hover/focus 临时预览和 click/tap 固定。 */}
@@ -2676,7 +2800,7 @@ export function ProviderConnectionDialog({
                     用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
             {authMode !== 'oauth' && (
               <div className="flex min-h-[32px] flex-wrap items-center gap-2.5">
-                    <Button
+                    {!mediaOnly && <Button
                       variant="secondary"
                       size="sm"
                       compact
@@ -2687,7 +2811,7 @@ export function ProviderConnectionDialog({
                     >
                       <Plug size={13} />
                       {t('settings.providers.custom.test.button')}
-                    </Button>
+                    </Button>}
                     {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
                         用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
                     <Button
@@ -2703,7 +2827,7 @@ export function ProviderConnectionDialog({
                       <RefreshCw size={13} />
                       {t('settings.providers.custom.fetch.button')}
                     </Button>
-                {test[activeTab].status === 'ok' && (
+                {!mediaOnly && test[activeTab].status === 'ok' && (
                   <span
                     className="flex items-center gap-1 text-12"
                     style={{ color: 'var(--remote-status-ready)' }}
@@ -2712,9 +2836,14 @@ export function ProviderConnectionDialog({
                     {t('settings.providers.custom.test.ok', { ms: test[activeTab].latencyMs ?? 0 })}
                   </span>
                 )}
-                {test[activeTab].status === 'fail' && (
+                {!mediaOnly && test[activeTab].status === 'fail' && (
                   <span className="text-12 text-[var(--error-fg)]">
                     {t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
+                  </span>
+                )}
+                {mediaOnly && (
+                  <span className="w-full text-12 text-[var(--text-secondary)]">
+                    {t('settings.providers.connection.mediaOnlyTestHint')}
                   </span>
                 )}
               </div>

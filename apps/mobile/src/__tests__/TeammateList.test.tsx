@@ -2,7 +2,7 @@
 import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ awaiting: new Set<string>() }));
+const h = vi.hoisted(() => ({ awaiting: new Set<string>(), list: {} as any, scrollToOffset: vi.fn() }));
 vi.mock('react-native', () => ({
   View: ({ children, testID, style }: any) => el('div', { 'data-testid': testID, style: Object.assign({}, ...[style].flat().filter(Boolean)) }, children),
   Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress,
@@ -11,7 +11,7 @@ vi.mock('react-native', () => ({
   Animated: { View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children), Value: class { setValue() {} }, timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
   Easing: { inOut: () => undefined, ease: undefined },
   StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 },
-  FlatList: ({ ListHeaderComponent, ListEmptyComponent, data, renderItem }: any) => el('div', null, ListHeaderComponent, data.length ? data.map((item: any) => renderItem({ item })) : ListEmptyComponent),
+  FlatList: ({ ref, ...props }: any) => { if (ref) ref.current = { scrollToOffset: h.scrollToOffset }; h.list = props; const { ListHeaderComponent, ListEmptyComponent, data, renderItem } = props; return el('div', null, ListHeaderComponent, data.length ? data.map((item: any, index: number) => renderItem({ item, index })) : ListEmptyComponent); },
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: async () => ({ blocks: [] }) }) }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
@@ -166,4 +166,41 @@ it('mixes group chats into the list by latest activity', async () => {
   expect(order).toEqual(['group.g1', 'teammates.item.host.bot']);
   await act(async () => (node.querySelector('[data-testid="group.g1"]') as HTMLButtonElement).click());
   expect(onGroup).toHaveBeenCalledWith(group);
+});
+
+it('reserves the native home bar once for content, scroll indicator and refresh; other routes keep automatic insets', async () => {
+  const props = { items: [item], error: null, isOnline: () => true, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn() };
+  await act(async () => root.render(el(TeammateList, { ...props, topInset: 106, notice: el('span', null, 'Preference could not be saved') })));
+  expect(Object.assign({}, ...h.list.contentContainerStyle.filter(Boolean)).paddingTop).toBe(106);
+  expect(h.list.contentInsetAdjustmentBehavior).toBe('never');
+  expect(h.list.automaticallyAdjustsScrollIndicatorInsets).toBe(false);
+  expect(h.list.scrollIndicatorInsets).toEqual({ top: 106 });
+  expect(h.list.refreshControl.props.progressViewOffset).toBe(106);
+  expect(node.textContent).toContain('Preference could not be saved');
+  // A kept-alive list may be scrolled past the header; the failure must come into view.
+  expect(h.scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: true });
+  await act(async () => root.render(el(TeammateList, { ...props,
+    scrollInsetProps: { contentInsetAdjustmentBehavior: 'automatic', automaticallyAdjustsScrollIndicatorInsets: true },
+  })));
+  expect(h.list.contentInsetAdjustmentBehavior).toBe('automatic');
+  expect(h.list.automaticallyAdjustsScrollIndicatorInsets).toBe(true);
+  expect(h.list.scrollIndicatorInsets).toBeUndefined();
+});
+
+it.each([false, null, true])('opens cached teammates while connection evidence is %s and the roster is unverified', async connected => {
+  const select = vi.fn();
+  await act(async () => root.render(el(TeammateList, { items: [item], error: null, isOnline: () => false,
+    connectionState: () => connected, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: select, embedded: true })));
+  const button = node.querySelector<HTMLButtonElement>('[data-testid="teammates.item.host.bot"]')!;
+  expect(button.disabled).toBe(false);
+  await act(async () => button.click());
+  expect(select).toHaveBeenCalledExactlyOnceWith(item);
+  if (connected === true) expect(button.textContent).not.toContain('devices.resources.hostOffline');
+});
+
+it('keeps a cloud companion quiet while its main computer looks offline: no offline text, dot or dimming', async () => {
+  await act(async () => root.render(el(TeammateList, { items: [item], error: null, isOnline: () => false, quietPresence: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  expect(node.textContent).not.toContain('devices.resources.hostOffline');
+  expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')).toBeNull();
 });

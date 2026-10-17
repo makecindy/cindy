@@ -22,6 +22,7 @@ import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SplashScreen } from '@/components/splash/SplashScreen';
 import { LoginFirstLaunchLightGateBridge } from '@/components/login/LoginFirstLaunchLightGateBridge';
 import { LoginBrandStage } from '@/components/login/LoginBrandStage';
+import { StartupLogSupport } from '@/components/log-support/StartupLogSupport';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
@@ -444,6 +445,9 @@ export function App() {
                               <PluginPublisherConfirmHost />
                               <OwnerScopedRouter />
                             </EnvCheckGuard>
+                            {!isSecondaryWindow() &&
+                              !isSidebarWindow() &&
+                              !isGhostPanelWindow() && <StartupLogSupport />}
                           </LoginHandoffHost>
                           <FindInPageBar />
                           <ToastContainer />

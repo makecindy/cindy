@@ -31,7 +31,7 @@ export interface RemoteSessionActivity {
   workingPhase?: string;
   interactionKind?: string;
   attention: boolean;
-  completionNotification?: 'pending' | 'teammate';
+  completionNotification?: 'pending' | 'teammate' | 'silent';
 }
 
 /** Active remote turns must win over the persisted "started without ended" heuristic. */
@@ -159,7 +159,7 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
     workingPhase: typeof p.workingPhase === 'string' ? p.workingPhase : undefined,
     interactionKind: typeof p.interactionKind === 'string' ? p.interactionKind : undefined,
     attention,
-    completionNotification: p.completionNotification === 'pending' || p.completionNotification === 'teammate' ? p.completionNotification : undefined,
+    completionNotification: p.completionNotification === 'pending' || p.completionNotification === 'teammate' || p.completionNotification === 'silent' ? p.completionNotification : undefined,
   };
   let activityMap = activityByDevice.get(deviceId);
   if (!activityMap) {

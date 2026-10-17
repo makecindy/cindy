@@ -3,10 +3,11 @@
  *
  * GhostManager and builtin reconciliation both publish full snapshots. This
  * tracker turns those broad broadcasts into one revision-only change event
- * per plugin whose manifest, enabled state, or session availability changed.
+ * per plugin whose manifest, approval, enabled state, or session availability changed.
  */
 
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { installedGhostStoragePart, installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
 import type { GhostSetupChangeBus } from './ghostSetupChangeBus.js';
 
 export class GhostSetupManifestTracker {
@@ -41,11 +42,12 @@ export class GhostSetupManifestTracker {
   private snapshot(ghosts: InstalledGhost[]): Map<string, string> {
     return new Map(
       ghosts.map((ghost) => [
-        ghost.manifest.id,
+        installedGhostStoragePart(ghost),
         JSON.stringify({
           enabled: ghost.enabled,
-          available: this.isAvailable(ghost.manifest.id),
+          available: this.isAvailable(installedGhostStoragePart(ghost)),
           manifest: ghost.manifest,
+          target: installedGhostMutationTargetToken(ghost, ''),
         }),
       ]),
     );

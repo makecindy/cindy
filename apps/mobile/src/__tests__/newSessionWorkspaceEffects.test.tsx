@@ -87,6 +87,7 @@ const bindingNames = [
   'saveNewSessionPreferences', 'drainStashedNewSessionDraft', 'loadBrowsePath', 'setDevicePickerOpen',
   'setAttachmentError', 'setBrowseOpen', 'setBrowseError',
   'setShowHiddenDirectories', 'setWorkspacePickerOpen',
+  'editRecoveredDraft', 'creatingRef', 'voiceDictionaryLearningTrackerRef',
 ];
 const readRouteString = source.statements.find((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'readRouteString');
@@ -117,7 +118,8 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
   const deviceOptions = [{ deviceId: 'a', name: 'A' }, { deviceId: 'b', name: 'B' }];
   const initialWorkingDir = options.initialWorkingDir ?? null;
   const bindings = {
-    isRemoteTaskSuggestionId, params: { suggestion: options.suggestion, draft: options.routeDraft }, t: i18n.getFixedT('zh-CN'),
+    editRecoveredDraft: vi.fn(), creatingRef: { current: false }, voiceDictionaryLearningTrackerRef: { current: null },
+    isRemoteTaskSuggestionId, params: { suggestion: options.suggestion, draft: options.routeDraft, editSessionId: options.restoredKind ? 'failed-task' : undefined }, t: i18n.getFixedT('zh-CN'),
     useState, useRef, useMemo, useEffect, useCallback, DEFAULT_NEW_SESSION_DRAFT,
     pickNewSessionDefaultDevice, buildRecentWorkspaceOptions,
     pickInitialNewSessionWorkspace: vi.fn(pickInitialNewSessionWorkspace),
@@ -129,7 +131,7 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
     })),
     readNewSessionPreferences: vi.fn(() => pendingRead),
     saveNewSessionPreferences: vi.fn(async () => {}),
-    drainStashedNewSessionDraft: vi.fn(() => options.restoredKind ? {
+    drainStashedNewSessionDraft: vi.fn((sessionId?: string, deviceId?: string) => options.restoredKind && sessionId === 'failed-task' && deviceId === 'a' ? {
       draft: { ...DEFAULT_NEW_SESSION_DRAFT, workspaceKind: options.restoredKind,
         workingDir: options.restoredKind === 'project' ? '/restored/project' : '',
         firstMessage: 'restored draft' },
@@ -192,6 +194,7 @@ describe('new session workspace page effects', () => {
 
   it('leaves an unknown recommendation empty and keeps recovery drafts authoritative', async () => {
     const page = mountWorkspace({ suggestion: 'unknown' });
+    expect(page.bindings.drainStashedNewSessionDraft).toHaveBeenCalledExactlyOnceWith(undefined, 'a');
     expect(page.current.draft.firstMessage).toBe(DEFAULT_NEW_SESSION_DRAFT.firstMessage);
     await page.resolvePreferences('dialogue');
     expect(page.current.draft.firstMessage).toBe(DEFAULT_NEW_SESSION_DRAFT.firstMessage);
@@ -220,6 +223,7 @@ describe('new session workspace page effects', () => {
 
   it.each(['project', 'dialogue'] as const)('preserves a restored %s draft over a late default', async (kind) => {
     const page = mountWorkspace({ restoredKind: kind, suggestion: 'findFile' });
+    expect(page.bindings.drainStashedNewSessionDraft).toHaveBeenCalledExactlyOnceWith('failed-task', 'a');
     await page.resolvePreferences(kind === 'project' ? 'dialogue' : 'project', 'b');
     expect(page.current.draft).toMatchObject({ workspaceKind: kind,
       workingDir: kind === 'project' ? '/restored/project' : '' });

@@ -17,6 +17,14 @@ describe('apiFetchRaw', () => {
     vi.unstubAllGlobals();
   });
 
+  it('sends extra headers without letting them replace auth or content type', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    vi.stubGlobal('fetch', fetch);
+    await apiFetchRaw('/v1/preferences', { baseUrl: 'https://chat.example.invalid', token: 'tok',
+      headers: { 'X-Chat-Actor': 'actor-1', Authorization: 'Bearer other', 'Content-Type': 'text/plain' } });
+    expect(fetch.mock.calls[0]![1].headers).toMatchObject({ 'X-Chat-Actor': 'actor-1', Authorization: 'Bearer tok', 'Content-Type': 'application/json' });
+  });
+
   it('classifies RN offline failures as a typed NETWORK_UNAVAILABLE ApiError (中文文案,可被重试层识别)', async () => {
     // RN 离线时 fetch 抛 TypeError("Network request failed")——不含 "fetch" 子串,
     // 历史实现匹配不到,英文原文一路透传到 UI。

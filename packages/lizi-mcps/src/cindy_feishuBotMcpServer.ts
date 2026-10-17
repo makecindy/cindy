@@ -23,7 +23,8 @@ import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { FeishuBotToolRegistry, type FeishuBotToolResult } from './cindy_feishuBotToolRegistry';
-import type { FeishuBotMcpHostDeps } from './types.js';
+import { registerFeishuLaneTools } from './cindy_feishuBotLaneTools.js';
+import type { FeishuBotLaneScope, FeishuBotMcpHostDeps } from './types.js';
 
 import descListTools from './prompts/cindy_feishu_bot/tools/list_tools.md?raw';
 import descCallTool from './prompts/cindy_feishu_bot/tools/call_tool.md?raw';
@@ -101,7 +102,13 @@ const RULES: Record<string, string> = {};
  * chatId or bot owner fallback" into a single `getChatId` result. So this
  * interface omits the host-only accessor and adds the resolved closure.
  */
-export type FeishuBotMcpDeps = Omit<FeishuBotMcpHostDeps, 'getOwnerOpenId'> & {
+export type FeishuBotMcpDeps = Omit<FeishuBotMcpHostDeps, 'getOwnerOpenId' | 'readLaneScope'> & {
+  /**
+   * 当前 tool-call 的飞书逐轮作用域(provider 闭包从 session ctx 解出);null 表示本轮
+   * 不是由飞书消息触发或轮次已结束,轮次内工具一律 fail closed。缺省(未注入)时不注册
+   * 轮次内工具,server 形态与 2026-10 之前字节级一致。
+   */
+  getLaneScope?: () => FeishuBotLaneScope | null;
   /**
    * Resolved receiver chatId for the current tool invocation. The provider
    * closure returns feishu-session chatId when present and falls back to
@@ -376,6 +383,8 @@ export function createFeishuBotMcpServer(deps: FeishuBotMcpDeps): McpServer {
 
   registerListToolsEntry(server, registry, d);
   registerCallToolEntry(server, registry, d);
+  // 飞书轮次内的直通工具(顶层具名注册,审批策略能按工具名分档;只在宿主注入作用域读取器时出现)。
+  if (deps.getLaneScope) registerFeishuLaneTools(server, deps.getLaneScope);
 
   return server;
 }

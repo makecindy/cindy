@@ -835,11 +835,12 @@ describe('readUsageHistoryWith', () => {
 
 describe('production cache and empty payload', () => {
   it('overlays current local task metadata on a cached aggregate', async () => {
-    const meta = (sessionId: string, title: string) => ({
+    const meta = (sessionId: string, title: string, source: string | null = null) => ({
       sessionId,
       title,
       model: 'gpt-5.5',
       providerId: null,
+      source,
       contextTokens: 0,
       contextWindow: 0,
       lastActiveAt: 1,
@@ -855,9 +856,11 @@ describe('production cache and empty payload', () => {
     const first = await readUsageHistory({ days: 30, includeTasks: true });
     expect(first.tasks?.map((task) => task.title)).toEqual(['Old title', 'Doomed']);
     // 重命名 s1、删除 s2:不产生用量,聚合缓存照常复用,但出口的任务元数据必须是当前值。
-    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title')]);
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title', 'cindy-make')]);
     const second = await readUsageHistory({ days: 30, includeTasks: true });
     expect(second.tasks?.map((task) => [task.sessionId, task.title])).toEqual([['s1', 'New title']]);
+    expect(second.tasks?.[0].source).toBe('cindy-make');
+    expect(second.taskDaily).toEqual(first.taskDaily);
     expect(getSessionUsageSince).toHaveBeenCalledTimes(1);
   });
 

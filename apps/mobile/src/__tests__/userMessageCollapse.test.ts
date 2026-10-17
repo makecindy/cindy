@@ -1,6 +1,13 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import * as React from 'react';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import ts from 'typescript';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
+import { buildMessageContentLayout, nextSettledContentWidth } from '@/session/messageContentLayout';
+import { selectableTextVerticalOffset } from '@/session/selectableTextAlignment';
+import { rendererFunction, rendererSource, executeRenderer } from './fixtures/messageRendererComponents';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 
 import {
@@ -133,46 +140,149 @@ describe('truncateTextToVisualLines', () => {
   });
 });
 
-describe('MessageRenderer 长消息测量接线', () => {
-  it('caps the invisible native text layout at one line past the collapse threshold', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const measureStart = source.indexOf('{collapseMeasureEnabled ? (');
-    const measureEnd = source.indexOf('{shouldCollapseLongMessage ? (', measureStart);
+// Regression: PR-watch Markdown used to mount a giant iOS UITextView after
+// expansion, causing blank content. Execute the existing collapse hooks/bubble
+// and MarkdownBody callbacks; only native surfaces and inline formatting adapt.
+function bodyStatement(name: string, functionName: string): ts.Statement {
+  const statement = rendererFunction(functionName).body!.statements.find(candidate =>
+    ts.isVariableStatement(candidate) && candidate.declarationList.declarations.some(declaration => {
+      const names = ts.isIdentifier(declaration.name) ? [declaration.name.text]
+        : ts.isArrayBindingPattern(declaration.name) ? declaration.name.elements.flatMap(element => ts.isBindingElement(element) && ts.isIdentifier(element.name) ? [element.name.text] : []) : [];
+      return names.includes(name);
+    }));
+  if (!statement) throw new Error('Renderer state declaration was not found: ' + name);
+  return statement;
+}
+const bubbleStatements = rendererFunction('MessageBubble').body!.statements;
+const collapseStart = bubbleStatements.indexOf(bodyStatement('automationOrigin', 'MessageBubble'));
+const collapseEnd = bubbleStatements.indexOf(bodyStatement('longMessageCollapsed', 'MessageBubble'));
+const collapseCode = bubbleStatements.slice(collapseStart, collapseEnd + 1).map(statement => statement.getText(rendererSource)).join(String.fromCharCode(10));
+const markdownStateCode = ['contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
+  .map(name => bodyStatement(name, 'MarkdownBody').getText(rendererSource)).join(String.fromCharCode(10));
+const markdownReturn = rendererFunction('MarkdownBody').body!.statements.find(ts.isReturnStatement);
+if (!markdownReturn) throw new Error('MarkdownBody return was not found');
 
-    expect(measureStart).toBeGreaterThan(-1);
-    expect(measureEnd).toBeGreaterThan(measureStart);
-    expect(source.slice(measureStart, measureEnd)).toContain(
-      'numberOfLines={collapseThreshold + 1}',
-    );
+let root: Root;
+let host: HTMLDivElement;
+const nativeLayouts = new Map<string, (event: unknown) => void>();
+const nativeTextLayouts = new Map<string, (event: unknown) => void>();
+type SurfaceProps = { children?: React.ReactNode; testID?: string; style?: unknown; onPress?: () => void; onLayout?: (event: unknown) => void; onTextLayout?: (event: unknown) => void; numberOfLines?: number; accessibilityElementsHidden?: boolean };
+function NativeView(props: SurfaceProps) {
+  if (props.onLayout) nativeLayouts.set(props.testID ?? 'anonymous', props.onLayout);
+  return React.createElement('div', { 'data-testid': props.testID, 'data-hidden': props.accessibilityElementsHidden, 'data-style': JSON.stringify(props.style) }, props.children);
+}
+function nativeText(surface: string) {
+  return (props: SurfaceProps) => {
+    if (props.onTextLayout) nativeTextLayouts.set(props.testID ?? 'measure', props.onTextLayout);
+    return React.createElement(props.onPress ? 'button' : 'span', {
+      'data-testid': props.testID, 'data-surface': surface, 'data-max-lines': props.numberOfLines,
+      'data-style': JSON.stringify(props.style), onClick: props.onPress,
+    }, props.children);
+  };
+}
+const Text = nativeText('rn-text');
+const UITextView = nativeText('ios-text-view');
+const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
+const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
+  rendererFunction('MarkdownSelectableText').getText(rendererSource) + String.raw`
+function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, selectable, text, layout, code = false }) {
+  const styles = {};
+  const onOpenPayload = undefined;
+  const inlinesSelectable = () => true;
+  const spanFor = () => undefined;
+  const renderInlines = inlines => inlines.map(inline => inline.text).join('');
+  const t = i18n.t.bind(i18n);
+  ` + markdownStateCode + String.raw`
+  const groups = [{ type: 'block', key: 'body', block: code
+    ? { type: 'code', key: 'code', text, language: 'text' }
+    : { type: 'paragraph', key: 'paragraph', inlines: [{ type: 'text', text }] } }];
+  ` + markdownReturn.getText(rendererSource) + String.raw`
+}
+const MarkdownBody = MarkdownHarness;
+function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
+  const styles = {};
+  const isUser = kind === 'user';
+  const item = { message: { kind, body, automationOrigin: origin } };
+  const displayBubbleBody = body;
+  const bubbleBody = body;
+  const hasPluginInvocations = false;
+  const userBubbleColors = undefined;
+  const actions = {};
+  const colors = {};
+  const presentation = {};
+  const rendersSentInlineBody = false;
+  const canSelectVisibleText = true;
+  const isStreamingAssistant = false;
+  const contentLayout = buildMessageContentLayout({ screenWidth: 402 });
+  const t = i18n.t.bind(i18n);
+  ` + collapseCode + bodyStatement('bubble', 'MessageBubble').getText(rendererSource) + String.raw`
+  return bubble;
+}
+return { BubbleHarness, MarkdownHarness };
+`, {
+    useContext: React.useContext, useRef: React.useRef, useMemo: React.useMemo,
+    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState,
+    SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
+    Platform: { OS: 'ios' }, StyleSheet: { flatten: (style: unknown) => style },
+    selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,
+    View: NativeView, Text, UITextView, ScrollView,
+    buildMessageContentLayout, nextSettledContentWidth,
+    MarkdownBlockContent: ({ block, renderBlock }: { block: unknown; renderBlock: (block: unknown) => React.ReactNode }) => renderBlock(block),
+    HighlightedCodeText: ({ text }: { text: string }) => React.createElement('code', null, text),
+    mayExceedVisualLineThreshold, resolveUserMessageCollapse,
+    AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD, AUTOMATION_USER_MESSAGE_COLLAPSED_LINES,
+    LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, LONG_USER_MESSAGE_COLLAPSED_LINES,
   });
 
-  it('falls back from the giant iOS UITextView only after a long message is expanded', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const bubbleStart = source.indexOf('function MessageBubble');
-    const bubbleEnd = source.indexOf('function copyActionLabel', bubbleStart);
-    const bubbleSource = source.slice(bubbleStart, bubbleEnd);
+describe('MessageRenderer bounded long-message native behavior', () => {
+  beforeEach(async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    await i18n.changeLanguage('en');
+    host = document.createElement('div');
+    root = createRoot(host);
+    nativeLayouts.clear();
+    nativeTextLayouts.clear();
+  });
+  afterEach(() => act(() => root.unmount()));
 
-    expect(bubbleSource).toContain('allowIosUITextView={!shouldCollapseLongMessage}');
-    expect(source).toContain('if (selectable && allowIosUITextView && Platform.OS === \'ios\')');
+  it('bounds hidden native measurement and keeps the message collapsible after its capped layout reply', () => {
+    act(() => root.render(React.createElement(BubbleHarness, { body: PR_WATCH_EXPANDED_BLANK_FIXTURE })));
+    const measure = host.querySelector('[data-hidden="true"] [data-max-lines]');
+    expect(measure?.getAttribute('data-max-lines')).toBe(String(LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD + 1));
+    act(() => nativeTextLayouts.get('measure')!({ nativeEvent: { lines: Array.from({ length: Number(measure!.getAttribute('data-max-lines')) }, () => ({ text: 'line' })) } }));
+    expect(host.querySelector('[data-testid="message.collapsedBody"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="message.collapseToggle"]')).not.toBeNull();
+    // Automation inputs use the actual tighter threshold, including their native cap.
+    act(() => root.render(React.createElement(BubbleHarness, { body: PR_WATCH_EXPANDED_BLANK_FIXTURE, automationOrigin: { kind: 'schedule' } })));
+    expect(host.querySelector('[data-hidden="true"] [data-max-lines]')?.getAttribute('data-max-lines'))
+      .toBe(String(AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD + 1));
   });
 
-  it('keeps expanded user markdown hugging the bubble instead of pinning list width', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const bubbleStart = source.indexOf('function MessageBubble');
-    const bubbleEnd = source.indexOf('function copyActionLabel', bubbleStart);
-    const bubbleSource = source.slice(bubbleStart, bubbleEnd);
-    const markdownBodyStart = source.indexOf('function MarkdownBody');
-    const markdownBodyEnd = source.indexOf('function ChatPathChipSpan', markdownBodyStart);
-    const markdownBodySource = source.slice(markdownBodyStart, markdownBodyEnd);
+  it('uses RN Text for expanded long iOS messages while ordinary selectable messages keep UITextView', () => {
+    act(() => root.render(React.createElement(BubbleHarness, { body: 'A short message' })));
+    expect(host.querySelector('[data-testid="message.markdownBody"] [data-surface]')?.getAttribute('data-surface')).toBe('ios-text-view');
+    act(() => root.render(React.createElement(BubbleHarness, { body: PR_WATCH_EXPANDED_BLANK_FIXTURE })));
+    expect(host.querySelector('[data-testid="message.collapsedBody"]')?.getAttribute('data-surface')).toBe('ios-text-view');
+    act(() => host.querySelector<HTMLButtonElement>('[data-testid="message.collapseToggle"]')!.click());
+    expect(host.querySelector('[data-testid="message.markdownBody"] [data-surface]')?.getAttribute('data-surface')).toBe('rn-text');
+    expect(host.querySelector('[data-testid="message.markdownBody"]')?.textContent).toBe(PR_WATCH_EXPANDED_BLANK_FIXTURE);
+  });
 
-    expect(bubbleSource).toContain('pinContentWidth={!isUser}');
-    expect(markdownBodySource).toContain('if (!pinContentWidth) return;');
-    const codeStart = markdownBodySource.indexOf("if (block.type === 'code')");
-    const headingStart = markdownBodySource.indexOf("if (block.type === 'heading')", codeStart);
-    const codeSource = markdownBodySource.slice(codeStart, headingStart);
-    expect(codeStart).toBeGreaterThan(-1);
-    expect(headingStart).toBeGreaterThan(codeStart);
-    expect(codeSource).not.toContain('<ScrollView');
-    expect(codeSource).toContain('围栏代码在气泡内换行');
+  it('keeps user markdown at its content width and wraps fenced code without a nested scroll host', () => {
+    const body = PR_WATCH_EXPANDED_BLANK_FIXTURE;
+    act(() => root.render(React.createElement(BubbleHarness, { body })));
+    act(() => host.querySelector<HTMLButtonElement>('[data-testid="message.collapseToggle"]')!.click());
+    const markdown = () => host.querySelector('[data-testid="message.markdownBody"]')!;
+    const before = markdown().getAttribute('data-style');
+    act(() => nativeLayouts.get('message.markdownBody')!({ nativeEvent: { layout: { width: 402 } } }));
+    expect(markdown().getAttribute('data-style')).toBe(before);
+    expect(markdown().firstElementChild?.getAttribute('data-style')).toBe('null');
+    act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
+    act(() => nativeLayouts.get('message.markdownBody')!({ nativeEvent: { layout: { width: 402 } } }));
+    expect(JSON.parse(markdown().firstElementChild!.getAttribute('data-style')!)).toMatchObject({ width: 402 });
+    const code = 'code '.repeat(200);
+    act(() => root.render(React.createElement(MarkdownHarness, { text: code, code: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
+    expect(host.querySelector('code')?.textContent).toBe(code);
+    expect(host.querySelector('[data-scroll]')).toBeNull();
   });
 });

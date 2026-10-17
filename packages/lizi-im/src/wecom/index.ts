@@ -13,6 +13,7 @@ import {
   type WsFrame,
 } from "@wecom/aibot-node-sdk";
 
+import { classifyInboundAttachment } from "../inboundKind.js";
 import { BaseIM } from "../BaseIM.js";
 import type { ImFinalOutput, TextChannelIM } from "../channelIM.js";
 import type { Logger } from "../logger.js";
@@ -37,8 +38,9 @@ import {
   escapeWecomMarkdown,
 } from "./codec.js";
 import {
+  MAX_MEDIA_BYTES,
   mimeTypeForFilename,
-  persistWecomDownload,
+  stageWecomDownload,
   readWecomOutboundFile,
   resolveAllowedWecomOutboundFile,
   safeWecomFilename,
@@ -80,9 +82,32 @@ interface PendingResponse {
 export interface WecomIMOptions {
   clientFactory?: (options: WSClientOptions) => WSClient;
   now?: () => number;
+  /**
+   * 凭证在 host.secrets 里的键名前缀。缺省为空 = 设置页那份个人 bot 的历史键名;
+   * 伙伴自有连接各给一个前缀, 同一进程里多份实例互不读写对方的凭证。
+   */
+  secretKeyPrefix?: string;
+  /**
+   * 是否注册 `wecomBot:*` 设置卡 IPC 并广播状态(缺省 true)。通道名固定, 同进程
+   * 第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
+   */
+  ipc?: boolean;
+}
+
+export interface WecomConfigState {
+  status: IMStatus;
+  botId: string | null;
+  ownerUserId: string | null;
+  saveErrorStatus?: IMStatus;
 }
 
 /** Enterprise WeChat transport with durable chunked-text output. */
+/** 原生图片/视频消息的 MIME: 共用判据认出同类就用它, 否则按消息类型的默认容器。 */
+function nativeMediaMime(fileName: string, kind: "image" | "av", fallback: string): string {
+  const classified = classifyInboundAttachment(mimeTypeForFilename(fileName), fileName);
+  return classified.kind === kind ? classified.mimeType : fallback;
+}
+
 export class WecomIM extends BaseIM implements TextChannelIM {
   private readonly messageHandlers = new Set<MessageHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
@@ -91,7 +116,6 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   private readonly pendingResponses = new Map<string, PendingResponse[]>();
   private readonly inboundTails = new Map<string, Promise<void>>();
   private readonly seenMessageIds = new Set<string>();
-  private readonly mediaDir: string;
   private readonly now: () => number;
   private client: WSClient | null = null;
   private status: IMStatus = { kind: "idle" };
@@ -106,20 +130,14 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     private readonly options: WecomIMOptions = {},
   ) {
     super("wecom", host);
-    if (!host.paths.wecomMediaDir) {
-      throw new Error(
-        "IMHost.paths.wecomMediaDir is required to wire the WeCom channel",
-      );
-    }
-    this.mediaDir = host.paths.wecomMediaDir;
     this.now = options.now ?? Date.now;
   }
 
   async init(): Promise<void> {
-    this.botId = this.host.secrets.read(BOT_ID_SECRET_KEY)?.trim() ?? "";
+    this.botId = this.host.secrets.read(this.key(BOT_ID_SECRET_KEY))?.trim() ?? "";
     this.ownerUserId =
-      this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? "";
-    const secret = this.host.secrets.read(BOT_SECRET_SECRET_KEY)?.trim() ?? "";
+      this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY))?.trim() ?? "";
+    const secret = this.host.secrets.read(this.key(BOT_SECRET_SECRET_KEY))?.trim() ?? "";
     if (!this.botId || !secret) {
       this.setStatus({ kind: "idle" });
       return;
@@ -138,13 +156,114 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     this.setStatus({ kind: "idle" });
   }
 
-  registerIpc(): void {
-    const state = (saveErrorStatus?: IMStatus) => ({
+  /** 本实例的 secret 键名(见 WecomIMOptions.secretKeyPrefix)。 */
+  private key(base: string): string {
+    return `${this.options.secretKeyPrefix ?? ""}${base}`;
+  }
+
+  getConfigState(saveErrorStatus?: IMStatus): WecomConfigState {
+    return {
       status: this.status,
       botId: this.botId || null,
       ownerUserId: this.ownerUserId || null,
       ...(saveErrorStatus ? { saveErrorStatus } : {}),
-    });
+    };
+  }
+
+  /** TOFU 认定的主人(首个私聊发言人); 还没人私聊过时为空串。 */
+  getOwnerUserId(): string {
+    return this.ownerUserId;
+  }
+
+  /**
+   * 直接认定主人(不等首个私聊): 宿主把设置页那份个人 bot 移给伙伴时带上原主人,
+   * 避免 TOFU 在迁移后换人。写不进安全存储时返回 false, 内存态不变。
+   */
+  presetOwnerUserId(ownerUserId: string): boolean {
+    const next = ownerUserId.trim();
+    if (!next) return false;
+    if (!this.host.secrets.write(this.key(OWNER_USER_ID_SECRET_KEY), next)) return false;
+    this.ownerUserId = next;
+    return true;
+  }
+
+  /**
+   * 保存凭证并建连(设置卡与伙伴连接共用)。凭证写不进安全存储时回滚并返回
+   * saveErrorStatus; 建连是异步的, 返回时 status 通常还是 connecting, 调用方按
+   * onStatusChange 等终态。
+   */
+  async setConfig(payload: unknown): Promise<WecomConfigState> {
+    const record = isRecord(payload) ? payload : {};
+    const botId = typeof record.botId === "string" ? record.botId.trim() : "";
+    const secret = typeof record.secret === "string" ? record.secret.trim() : "";
+    if (!botId || !secret) {
+      const failed: IMStatus = {
+        kind: "error",
+        reason: "Bot ID 和 Secret 不能为空",
+      };
+      this.setStatus(failed);
+      return this.getConfigState(failed);
+    }
+    if (!this.host.secrets.isAvailable()) {
+      const failed: IMStatus = {
+        kind: "error",
+        reason: SECRET_WRITE_FAILED_REASON,
+      };
+      this.setStatus(failed);
+      return this.getConfigState(failed);
+    }
+
+    const previousBotId = this.host.secrets.read(this.key(BOT_ID_SECRET_KEY));
+    const previousSecret = this.host.secrets.read(this.key(BOT_SECRET_SECRET_KEY));
+    const previousOwner = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY));
+    const botChanged = Boolean(
+      previousBotId?.trim() && previousBotId.trim() !== botId,
+    );
+    const saved =
+      this.host.secrets.write(this.key(BOT_ID_SECRET_KEY), botId) &&
+      this.host.secrets.write(this.key(BOT_SECRET_SECRET_KEY), secret);
+    if (!saved) {
+      this.restoreSecret(this.key(BOT_ID_SECRET_KEY), previousBotId);
+      this.restoreSecret(this.key(BOT_SECRET_SECRET_KEY), previousSecret);
+      this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwner);
+      const failed: IMStatus = {
+        kind: "error",
+        reason: SECRET_WRITE_FAILED_REASON,
+      };
+      this.setStatus(failed);
+      return this.getConfigState(failed);
+    }
+    if (botChanged) {
+      this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
+      this.ownerUserId = "";
+    }
+    this.botId = botId;
+    this.connect(botId, secret);
+    return this.getConfigState();
+  }
+
+  /** 断开并清掉本实例的全部凭证(含 TOFU 主人)。 */
+  async clearCredentials(): Promise<WecomConfigState> {
+    this.generation += 1;
+    this.client?.disconnect();
+    this.client = null;
+    this.pendingFrames.clear();
+    this.pendingResponses.clear();
+    this.inboundTails.clear();
+    this.seenMessageIds.clear();
+    this.host.secrets.remove(this.key(BOT_ID_SECRET_KEY));
+    this.host.secrets.remove(this.key(BOT_SECRET_SECRET_KEY));
+    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
+    this.botId = "";
+    this.ownerUserId = "";
+    this.setStatus({ kind: "idle" });
+    return this.getConfigState();
+  }
+
+  registerIpc(): void {
+    // 伙伴自有连接不注册设置卡 IPC: 通道名固定, 第二份实例会重复注册;
+    // 它们由宿主的伙伴连接 IPC 按连接 id 分发到实例方法。
+    if (this.options.ipc === false) return;
     const runAccountScoped = <T>(operation: () => Promise<T>): Promise<T> => {
       const accountScope = this.host.accountScope;
       if (!accountScope) return operation();
@@ -157,86 +276,21 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       return accountScope.run(token, operation);
     };
 
-    this.host.ipc.handle("wecomBot:get-status", () => state());
+    this.host.ipc.handle("wecomBot:get-status", () => this.getConfigState());
     this.host.ipc.handle("wecomBot:set-config", (payload) =>
-      runAccountScoped(async () => {
-        const record = isRecord(payload) ? payload : {};
-        const botId =
-          typeof record.botId === "string" ? record.botId.trim() : "";
-        const secret =
-          typeof record.secret === "string" ? record.secret.trim() : "";
-        if (!botId || !secret) {
-          const failed: IMStatus = {
-            kind: "error",
-            reason: "Bot ID 和 Secret 不能为空",
-          };
-          this.setStatus(failed);
-          return state(failed);
-        }
-        if (!this.host.secrets.isAvailable()) {
-          const failed: IMStatus = {
-            kind: "error",
-            reason: SECRET_WRITE_FAILED_REASON,
-          };
-          this.setStatus(failed);
-          return state(failed);
-        }
-
-        const previousBotId = this.host.secrets.read(BOT_ID_SECRET_KEY);
-        const previousSecret = this.host.secrets.read(BOT_SECRET_SECRET_KEY);
-        const previousOwner = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
-        const botChanged = Boolean(
-          previousBotId?.trim() && previousBotId.trim() !== botId,
-        );
-        const saved =
-          this.host.secrets.write(BOT_ID_SECRET_KEY, botId) &&
-          this.host.secrets.write(BOT_SECRET_SECRET_KEY, secret);
-        if (!saved) {
-          this.restoreSecret(BOT_ID_SECRET_KEY, previousBotId);
-          this.restoreSecret(BOT_SECRET_SECRET_KEY, previousSecret);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwner);
-          const failed: IMStatus = {
-            kind: "error",
-            reason: SECRET_WRITE_FAILED_REASON,
-          };
-          this.setStatus(failed);
-          return state(failed);
-        }
-        if (botChanged) {
-          this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-          this.ownerUserId = "";
-        }
-        this.botId = botId;
-        this.connect(botId, secret);
-        return state();
-      }),
+      runAccountScoped(() => this.setConfig(payload)),
     );
     this.host.ipc.handle("wecomBot:reconnect", () =>
       runAccountScoped(async () => {
-        const botId = this.host.secrets.read(BOT_ID_SECRET_KEY)?.trim() ?? "";
+        const botId = this.host.secrets.read(this.key(BOT_ID_SECRET_KEY))?.trim() ?? "";
         const secret =
-          this.host.secrets.read(BOT_SECRET_SECRET_KEY)?.trim() ?? "";
+          this.host.secrets.read(this.key(BOT_SECRET_SECRET_KEY))?.trim() ?? "";
         if (botId && secret) this.connect(botId, secret);
-        return state();
+        return this.getConfigState();
       }),
     );
     this.host.ipc.handle("wecomBot:disconnect", () =>
-      runAccountScoped(async () => {
-        this.generation += 1;
-        this.client?.disconnect();
-        this.client = null;
-        this.pendingFrames.clear();
-        this.pendingResponses.clear();
-        this.inboundTails.clear();
-        this.seenMessageIds.clear();
-        this.host.secrets.remove(BOT_ID_SECRET_KEY);
-        this.host.secrets.remove(BOT_SECRET_SECRET_KEY);
-        this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-        this.botId = "";
-        this.ownerUserId = "";
-        this.setStatus({ kind: "idle" });
-        return state();
-      }),
+      runAccountScoped(() => this.clearCredentials()),
     );
   }
 
@@ -408,7 +462,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       .filter(Boolean)
       .join("\n\n");
     const chunks = chunkWecomMarkdown(
-      visibleText || (attachments.length > 0 ? "📎 附件如下" : "_(空回复)_"),
+      visibleText || (attachments.length > 0 ? "📎 附件如下" : ""),
     );
     await this.sendFinalChunks(output.userId, chunks);
     let failedAttachmentCount = 0;
@@ -650,21 +704,77 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     await this.emitInbound(frame, client, generation, async () => {
       const file = frame.body?.file;
       if (!file) return unsupportedPayload("file", "文件内容缺失");
+      // 文件名要下载后才知道, 三类去处都不可用时才免下载。
+      if (!this.host.files && !this.host.media) {
+        return unsupportedPayload("file:unsupported", "文件暂不支持");
+      }
       try {
         const downloaded = await client.downloadFile(file.url, file.aeskey);
         if (!this.isCurrent(client, generation)) {
           return unsupportedPayload("file:stale", "文件下载已取消");
         }
-        const persisted = await persistWecomDownload({
-          mediaDir: this.mediaDir,
+        // 去处只由共用判据决定: 以文件消息发来的图片/音视频同样只进媒体总仓, 总仓
+        // 不可用或拒收格式时标不支持, 不回落文件暂存(媒体统一由 cindy-media 记账与回收)。
+        const originalName = safeWecomFilename(downloaded.filename);
+        const classified = classifyInboundAttachment(mimeTypeForFilename(originalName), originalName);
+        if (classified.kind !== "file") {
+          // 与文件暂存同一入站上限(stageWecomDownload 的 MAX_MEDIA_BYTES), 媒体分支不得绕过。
+          if (downloaded.buffer.length > MAX_MEDIA_BYTES) {
+            return unsupportedPayload("file:oversize", `文件超过大小上限：${originalName}`);
+          }
+          const media = this.host.media;
+          const store =
+            classified.kind === "image"
+              ? media && ((params: Parameters<typeof media.cacheImage>[0]) => media.cacheImage({ ...params, staging: true }))
+              : media?.cacheMedia?.bind(media);
+          if (!store) {
+            return unsupportedPayload("file:unsupported-media", `媒体文件暂不支持：${originalName}`);
+          }
+          let stored: { absPath: string; url: string; mimeType?: string; discard?: () => Promise<void> };
+          try {
+            stored = await store({
+              integration: "wecom",
+              token: `${frame.body!.msgid}:file`,
+              buffer: downloaded.buffer,
+              mimeType: classified.mimeType,
+            });
+          } catch {
+            return unsupportedPayload("file:unsupported-media", `媒体格式暂不支持：${originalName}`);
+          }
+          if (!this.isCurrent(client, generation)) {
+            await this.discardStagedMedia(stored.discard);
+            return unsupportedPayload("file:stale", "文件下载已取消");
+          }
+          return {
+            text: "",
+            attachments: [
+              {
+                kind: classified.kind === "image" ? "image" : "file",
+                absPath: stored.absPath,
+                originalName,
+                mimeType: stored.mimeType ?? classified.mimeType,
+                url: stored.url,
+              },
+            ],
+            unsupported: [],
+            discard: stored.discard,
+          };
+        }
+        const files = this.host.files;
+        if (!files) {
+          return unsupportedPayload("file:unsupported", "文件暂不支持");
+        }
+        const { discard, ...staged } = await stageWecomDownload({
+          files,
           buffer: downloaded.buffer,
           filename: downloaded.filename,
           shouldKeep: () => this.isCurrent(client, generation),
         });
         return {
           text: "",
-          attachments: [{ kind: "file", ...persisted }],
+          attachments: [{ kind: "file", ...staged }],
           unsupported: [],
+          discard,
         };
       } catch (error) {
         this.log.warn("failed to stage inbound file", safeError(error));
@@ -695,7 +805,8 @@ export class WecomIM extends BaseIM implements TextChannelIM {
           integration: "wecom",
           token: `${frame.body!.msgid}:video`,
           buffer: downloaded.buffer,
-          mimeType: mimeTypeForFilename(originalName),
+          // 原生视频消息: 文件名无可识别扩展名时按消息类型取默认 MIME, 不交出 octet-stream。
+          mimeType: nativeMediaMime(originalName, "av", "video/mp4"),
         });
         if (!this.isCurrent(client, generation)) {
           await this.discardStagedMedia(stored.discard);
@@ -766,6 +877,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       contextId: body.aibotid || this.botId,
       messageId: body.msgid,
       text: normalized.text,
+      invoked: body.chattype === "group",
       attachments: normalized.attachments,
       unsupported: normalized.unsupported,
       ...(body.chattype === "group"
@@ -803,16 +915,18 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     if (!sender) return false;
     if (this.ownerUserId) return sender === this.ownerUserId;
     if (body.chattype !== "single") return false;
-    if (!this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, sender)) {
+    if (!this.host.secrets.write(this.key(OWNER_USER_ID_SECRET_KEY), sender)) {
       this.log.warn("failed to persist first owner binding");
       return false;
     }
     this.ownerUserId = sender;
-    this.host.ipc.broadcast("wecomBot:status-changed", {
-      status: this.status,
-      botId: this.botId,
-      ownerUserId: sender,
-    });
+    if (this.options.ipc !== false) {
+      this.host.ipc.broadcast("wecomBot:status-changed", {
+        status: this.status,
+        botId: this.botId,
+        ownerUserId: sender,
+      });
+    }
     return true;
   }
 
@@ -842,42 +956,35 @@ export class WecomIM extends BaseIM implements TextChannelIM {
         },
       };
     }
+    // 图片只进 cindy-media 总仓; host 未提供时不下载, 不写 legacy 目录。
+    if (!this.host.media) return null;
     try {
       const downloaded = await client.downloadFile(image.url, image.aeskey);
       if (!this.isCurrent(client, generation)) return null;
       const filename = safeWecomFilename(downloaded.filename, ".jpg");
-      const mimeType = mimeTypeForFilename(filename);
-      if (this.host.media) {
-        const stored = await this.host.media.cacheImage({
-          integration: "wecom",
-          token,
-          buffer: downloaded.buffer,
-          mimeType,
-          staging: true,
-        });
-        if (!this.isCurrent(client, generation)) {
-          await this.discardStagedMedia(stored.discard);
-          return null;
-        }
-        return {
-          attachment: {
-            kind: "image",
-            absPath: stored.absPath,
-            originalName: filename,
-            mimeType,
-            url: stored.url,
-          },
-          discard: stored.discard,
-        };
-      }
-      const persisted = await persistWecomDownload({
-        mediaDir: this.mediaDir,
+      // 原生图片消息: 文件名无可识别扩展名(如 "image")时按消息类型取默认 MIME。
+      const mimeType = nativeMediaMime(filename, "image", "image/jpeg");
+      const stored = await this.host.media.cacheImage({
+        integration: "wecom",
+        token,
         buffer: downloaded.buffer,
-        filename,
-        fallbackExtension: ".jpg",
-        shouldKeep: () => this.isCurrent(client, generation),
+        mimeType,
+        staging: true,
       });
-      return { attachment: { kind: "image", ...persisted } };
+      if (!this.isCurrent(client, generation)) {
+        await this.discardStagedMedia(stored.discard);
+        return null;
+      }
+      return {
+        attachment: {
+          kind: "image",
+          absPath: stored.absPath,
+          originalName: filename,
+          mimeType: stored.mimeType ?? mimeType,
+          url: stored.url,
+        },
+        discard: stored.discard,
+      };
     } catch (error) {
       this.log.warn("failed to stage inbound image", safeError(error));
       return null;
@@ -1064,11 +1171,13 @@ export class WecomIM extends BaseIM implements TextChannelIM {
   private setStatus(status: IMStatus): void {
     this.status = status;
     for (const handler of this.statusHandlers) handler(status);
-    this.host.ipc.broadcast("wecomBot:status-changed", {
-      status,
-      botId: this.botId || null,
-      ownerUserId: this.ownerUserId || null,
-    });
+    if (this.options.ipc !== false) {
+      this.host.ipc.broadcast("wecomBot:status-changed", {
+        status,
+        botId: this.botId || null,
+        ownerUserId: this.ownerUserId || null,
+      });
+    }
   }
 
   private restoreSecret(key: string, previous: string | null): void {
@@ -1126,8 +1235,8 @@ function quoteContext(
       0);
   return {
     author: "引用消息",
-    text: text || "[附件]",
-    ...(attachmentCount ? { attachmentCount } : {}),
+    text: text || (attachmentCount ? "[引用包含附件，本轮未提供文件内容]" : "[引用正文不可用]"),
+    ...(attachmentCount ? { unavailableAttachments: [`引用消息的 ${attachmentCount} 个附件未提供文件内容`] } : {}),
   };
 }
 

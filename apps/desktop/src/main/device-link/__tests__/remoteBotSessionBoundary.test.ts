@@ -196,3 +196,11 @@ it('bounds normalized tag authorization and ignores unrelated object references'
   );
   expect(lookup).toHaveBeenCalledTimes(1);
 });
+
+it('does not let another computer message a hidden teammate task through session handoff', async () => {
+  setRemoteBotSessionLookup(async (id) => id === 'secret' ? 'hidden' : 'ordinary');
+  const request = (sessionId: string) => [{ sessionId, message: 'hi', sender: { sessionId: 'sender' } }];
+  await expect(assertRemoteBotInvocationAllowed(request('secret'), 'maker:session:handoff'))
+    .rejects.toThrow('[NOT_FOUND] Session does not exist');
+  await expect(assertRemoteBotInvocationAllowed(request('normal'), 'maker:session:handoff')).resolves.toBeUndefined();
+});

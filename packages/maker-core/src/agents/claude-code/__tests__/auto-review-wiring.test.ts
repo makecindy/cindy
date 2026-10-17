@@ -1,4 +1,4 @@
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT } from '../../base-agent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT, type DeviceHostedSession } from '../../base-agent.js';
 /**
  * Auto-review 接线集成测试:官方 Claude OAuth 在没有 host MCP 时保留原生 Auto classifier；
  * 一旦有 host MCP 或使用第三方路由,映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
@@ -163,6 +163,7 @@ async function startSession(
   permissionMode: PermissionMode,
   options: {
     providerId?: string;
+    deviceHosted?: DeviceHostedSession;
     authSource?: 'oauth' | 'api-key';
     reviewVerdict?: 'allow' | 'block' | 'ask';
     reviewer?: AgentDeps['reviewAutoPermissionAction'];
@@ -204,6 +205,7 @@ async function startSession(
     providerId: options.providerId ?? 'xd',
     workingDir,
     permissionMode,
+    deviceHosted: options.deviceHosted,
     extraDirs: options.extraDirs,
     writableDirs: options.writableDirs,
   });
@@ -1325,4 +1327,28 @@ it.each(['Do not publish.', ''])('keeps live Claude intent %j over stale continu
   const intent=reviewedRequest(reviewAutoPermissionAction).userIntent;
   if(restriction) expect(JSON.stringify(intent)).toContain(restriction); else expect(intent).toBe('');
  } finally {await handle.close();}
+});
+
+
+it.each([false, true])('honors Full access for worktree edits and tests without asking (hosted=%s)', async hosted => {
+  const { handle, canUseTool, seen, reviewAutoPermissionAction } = await startSession('bypassPermissions', {
+    deviceHosted: hosted ? {
+      workingDir: '/repo', extraDirs: [], writableDirs: [], platform: 'darwin', shell: '/bin/zsh',
+      isGitRepo: true, tunnelUrl: 'http://127.0.0.1:1', tunnelToken: 'test-only', mcpServers: [],
+    } : undefined,
+    reviewVerdict: 'ask',
+  });
+  try {
+    const input = { command: `cd /repo-contacts-worktree && python3 - <<'PY'
+p='cindy-contacts/main.js'
+s=open(p,encoding='utf-8').read()
+s=s.replace('LIMIT 200', 'ORDER BY id')
+open(p,'w',encoding='utf-8').write(s)
+PY
+node --test .tests/cindy-contacts.test.mjs` };
+    expect((await canUseTool(hosted ? 'mcp__cindy_exec__Bash' : 'Bash', input, { toolUseID: 'worktree-edit' })).behavior)
+      .toBe('allow');
+    expect(seen).toEqual([]);
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+  } finally { await handle.close(); }
 });

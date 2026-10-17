@@ -1,4 +1,4 @@
-import type { InstalledGhost } from '../../shared/ghost.js';
+import { ghostDeclaresHiddenTasks, type InstalledGhost } from '../../shared/ghost.js';
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
 import { isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
 import { hasPluginTaskApproval } from './taskCapability.js';
@@ -20,6 +20,7 @@ export const PLUGIN_TASK_OPERATIONS = [
   'listRuns',
   'cancel',
   'readMessages',
+  'setHidden',
 ] as const;
 export type PluginTaskHandler = (pluginId: string, request: PluginTaskRequest) => Promise<unknown>;
 const object = (v: unknown): v is Record<string, unknown> =>
@@ -32,7 +33,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     capabilities: [],
     models: [],
     setModel: ['taskId', 'expectedRevision', 'route'],
-    create: ['requestKey', 'title', 'route', 'isolatedWorkspace', 'callId'],
+    create: ['requestKey', 'title', 'route', 'isolatedWorkspace', 'callId', 'hidden'],
     list: ['after', 'limit'],
     get: ['taskId'],
     requestWriteAccess: ['taskId', 'mode'],
@@ -45,6 +46,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     listRuns: ['taskId', 'after', 'limit'],
     readMessages: ['taskId', 'after', 'limit'],
     cancel: ['runId', 'requestKey'],
+    setHidden: ['taskId', 'hidden'],
   };
   if (typeof value.kind !== 'string' || !Object.hasOwn(allowed, value.kind)) return false;
   const kind = value.kind;
@@ -54,10 +56,13 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (kind === 'requestWriteAccess' && value.mode !== undefined && !['acceptEdits', 'auto'].includes(String(value.mode))) return false;
   const requires = (key: string) => text(value[key], 128);
   if (['create', 'send', 'cancel'].includes(value.kind) && !requires('requestKey')) return false;
-  if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker'].includes(value.kind) && !requires('taskId'))
+  if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'setHidden'].includes(value.kind) && !requires('taskId'))
     return false;
+  if (kind === 'setHidden' && typeof value.hidden !== 'boolean') return false;
+  if (value.hidden !== undefined && typeof value.hidden !== 'boolean') return false;
   if (['getRun', 'cancel'].includes(value.kind) && !requires('runId')) return false;
-  if (kind === 'setModel' && (!object(value.route) || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)) return false;
+  const pluginDefault = kind === 'setModel' && value.route === 'plugin-default';
+  if (kind === 'setModel' && ((!pluginDefault && !object(value.route)) || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)) return false;
   if (value.callId !== undefined && !text(value.callId, 128)) return false;
   if (value.isolatedWorkspace !== undefined && typeof value.isolatedWorkspace !== 'boolean') return false;
   if (value.kind === 'create' && !text(value.title, 100)) return false;
@@ -91,7 +96,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
       labels.add(String(item.label));
     }
   }
-  if (value.route !== undefined) {
+  if (value.route !== undefined && !pluginDefault) {
     const r = value.route;
     if (
       !object(r) ||
@@ -135,6 +140,11 @@ export async function handlePluginTaskRequest(
     try { await deps.ensureAuthorized(); } catch { /* No UI or persistence failure grants nothing. */ }
   }
   if (!permitted()) return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
+  // Background tasks need their own manifest declaration (agent.hiddenTasks with tasks);
+  // hidden:false on create is the default and stays available to every tasks plugin.
+  const declaresHiddenTasks = () => ghostDeclaresHiddenTasks(deps.getGhost(pluginId)?.manifest);
+  if (((value.kind === 'create' && value.hidden === true) || value.kind === 'setHidden') && !declaresHiddenTasks())
+    return error('PERMISSION_DENIED', 'Background tasks require agent.hiddenTasks in ghost.json');
   if (value.kind === 'capabilities')
     return {
       ok: true,
@@ -145,7 +155,9 @@ export async function handlePluginTaskRequest(
         targets: ['own-plugin-local-session'],
         maxPageSize: 100,
         exactRoute: true,
+        pluginDefaultModel: true,
         sourceCallContext: true,
+        hiddenTasks: declaresHiddenTasks(),
       },
     };
   if (!deps.handler) return error('HOST_NOT_READY', 'Task service is not ready', true);

@@ -123,6 +123,20 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0125_magical_night_thrasher.sql') {
+    ensureColumnSync(db, 'orca_workers', 'pending_remote_report', 'text');
+    ensureColumnSync(db, 'orca_workers', 'remote_stop_confirmed_at', 'integer');
+    db.exec('CREATE TABLE IF NOT EXISTS orca_remote_opens (remote_session_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    return;
+  }
+  if (fileName === '0124_funny_glorian.sql') {
+    ensureColumnSync(db, 'orca_workers', 'execution_device_id', 'text');
+    ensureColumnSync(db, 'orca_workers', 'remote_session_id', 'text');
+    ensureColumnSync(db, 'orca_workers', 'last_bridged_message_id', 'text');
+    ensureColumnSync(db, 'orca_workers', 'remote_released_at', 'integer');
+    ensureColumnSync(db, 'sessions', 'orca_remote_lead', 'text');
+    return;
+  }
   if (fileName === '0097_fresh_stryfe.sql') {
     ensureColumnSync(db, 'sessions', 'list_preview', 'text');
     ensureColumnSync(db, 'sessions', 'list_preview_role', 'text');
@@ -219,6 +233,20 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0125_magical_night_thrasher.sql') {
+    await ensureColumn(target, 'orca_workers', 'pending_remote_report', 'text');
+    await ensureColumn(target, 'orca_workers', 'remote_stop_confirmed_at', 'integer');
+    await target.exec('CREATE TABLE IF NOT EXISTS orca_remote_opens (remote_session_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    return;
+  }
+  if (fileName === '0124_funny_glorian.sql') {
+    await ensureColumn(target, 'orca_workers', 'execution_device_id', 'text');
+    await ensureColumn(target, 'orca_workers', 'remote_session_id', 'text');
+    await ensureColumn(target, 'orca_workers', 'last_bridged_message_id', 'text');
+    await ensureColumn(target, 'orca_workers', 'remote_released_at', 'integer');
+    await ensureColumn(target, 'sessions', 'orca_remote_lead', 'text');
+    return;
+  }
   if (fileName === '0097_fresh_stryfe.sql') {
     await ensureColumn(target, 'sessions', 'list_preview', 'text');
     await ensureColumn(target, 'sessions', 'list_preview_role', 'text');

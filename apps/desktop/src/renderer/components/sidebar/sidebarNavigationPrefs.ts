@@ -1,15 +1,18 @@
 import { useSyncExternalStore } from 'react';
-import { Bot, Plug, Search, Timer, type LucideIcon } from 'lucide-react';
+import { Plug, Search, Timer, type LucideIcon } from 'lucide-react';
 
 import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 
-/** Stable built-in entries only; installed app entries keep their own visibility settings. */
-export type SidebarNavigationItemId = 'automations' | 'plugins' | 'bots' | 'search';
+/**
+ * Stable built-in entries only; installed app entries keep their own visibility settings.
+ * Teammates left this list on 2026-10-13: they live in the sidebar's own section above
+ * Pinned. Saved orders and visibility that still name `bots` are dropped on read.
+ */
+export type SidebarNavigationItemId = 'automations' | 'plugins' | 'search';
 
 export const SIDEBAR_NAVIGATION_ITEMS: readonly SidebarNavigationItemId[] = [
   'automations',
   'plugins',
-  'bots',
   'search',
 ];
 
@@ -17,14 +20,12 @@ export const SIDEBAR_NAVIGATION_ITEMS: readonly SidebarNavigationItemId[] = [
 export const SIDEBAR_NAVIGATION_ITEM_ICONS: Record<SidebarNavigationItemId, LucideIcon> = {
   automations: Timer,
   plugins: Plug,
-  bots: Bot,
   search: Search,
 };
 
 export const DEFAULT_SIDEBAR_NAVIGATION_VISIBLE: readonly SidebarNavigationItemId[] = [
   'automations',
   'plugins',
-  'bots',
   'search',
 ];
 
@@ -40,7 +41,7 @@ export type SidebarNavigationAppEntryId = `app:${string}`;
 export type SidebarNavigationEntryId = SidebarNavigationItemId | SidebarNavigationAppEntryId;
 
 const APP_ENTRY_PREFIX = 'app:';
-const MAX_APP_ENTRY_LENGTH = APP_ENTRY_PREFIX.length + 128;
+const MAX_APP_ENTRY_LENGTH = APP_ENTRY_PREFIX.length + 256;
 
 export function appEntryId(ghostId: string): SidebarNavigationAppEntryId {
   return `${APP_ENTRY_PREFIX}${ghostId}`;

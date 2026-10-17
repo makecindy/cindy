@@ -243,13 +243,16 @@ export async function getInstall(
 /**
  * 一次性扫描 manifests/ 目录，展平所有 install 记录。
  * 单文件 JSON 损坏 → 跳过 + 记日志，不影响其他文件读取
+ * readOnly 仅消费 profile 内主/备份元数据，不探测 installPath 或执行恢复写入。
  */
-export async function listAllInstalls(): Promise<
+export async function listAllInstalls(options: { readOnly?: boolean } = {}): Promise<
   Array<{ skillName: string; installPath: string; entry: StoredInstall }>
 > {
   const filesByName = new Map<string, StoredManifest>();
   for (const { skillName } of await manifestIO.listAllFiles()) {
-    const manifest = await withLock(skillName, () => readManifestWithBackup(skillName)).catch((err) => {
+    const manifest = await (options.readOnly
+      ? manifestIO.readFile(skillName).then((value) => value ? migrateStoredManifest(value).manifest : null)
+      : withLock(skillName, () => readManifestWithBackup(skillName))).catch((err) => {
       log.warn(`read registry manifest failed for ${skillName}:`, err);
       return null;
     });
@@ -257,7 +260,9 @@ export async function listAllInstalls(): Promise<
   }
   for (const skillName of await listBackupSkillNames()) {
     if (filesByName.has(skillName)) continue;
-    const restored = await withLock(skillName, () => readManifestWithBackup(skillName)).catch((err) => {
+    const restored = await (options.readOnly
+      ? readBackupManifest(skillName)
+      : withLock(skillName, () => readManifestWithBackup(skillName))).catch((err) => {
       log.warn(`restore registry from backup failed for ${skillName}:`, err);
       return null;
     });

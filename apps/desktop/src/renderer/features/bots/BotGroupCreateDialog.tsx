@@ -28,14 +28,18 @@ function pickableBots(bots: readonly BotProfile[]): BotProfile[] {
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
-function isSelectable(bot: BotProfile): boolean {
+/** Whether a teammate can join a group right now (shared with entry points outside this dialog). */
+export function isSelectable(bot: BotProfile): boolean {
   return (bot.status ?? 'active') === 'active' && bot.enabled !== false;
 }
 
 export function BotGroupCreateDialog({
+  initialBotIds = [],
   onOpenChange,
   onCreated,
 }: {
+  /** Preselected teammates, e.g. the one whose private chat started this group. */
+  initialBotIds?: readonly string[];
   onOpenChange: (open: boolean) => void;
   onCreated: (groupId: string) => void;
 }) {
@@ -51,7 +55,7 @@ export function BotGroupCreateDialog({
   }, []);
   const minMembers = serverBacked ? 0 : BOT_GROUP_MIN_MEMBERS;
   const [name, setName] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>(() => initialBotIds.slice(0, BOT_GROUP_MAX_MEMBERS));
   const [nameError, setNameError] = useState(false);
   const [membersError, setMembersError] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);

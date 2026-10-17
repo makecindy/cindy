@@ -22,12 +22,22 @@
  * 右栏（Sidebar 侧保持无横线的连续表面）；设置页隐形 chrome 连边框也不画。
  */
 
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 
 import { useFeatureContentHeader } from '@/features/feature-context';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { cn } from '@/lib/utils';
 import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
+
+export const CONTENT_HEADER_HEIGHT_PX = 46;
+
+const ContentHeaderHiddenContext = createContext(false);
+
+/** Routes whose top is entirely non-host content (such as a plugin webview) can
+ * add a window drag area exactly when the common header is hidden. */
+export function useIsContentHeaderHidden(): boolean {
+  return useContext(ContentHeaderHiddenContext);
+}
 
 /**
  * Windows 窗口控制按钮宽度（3 × 46px）。固定侧栏入口位于下一行的内容区，
@@ -71,6 +81,8 @@ interface ContentHeaderProps {
   rightSidebarAvailable: boolean;
   /** MainLayout 经 useContentHeaderHidden 预判的结果(与 --content-header-h 同源)。 */
   hidden: boolean;
+  /** 右端占位左侧、紧挨 mac 右栏开关的按钮(任务所在电脑的远程桌面等);按钮自挖 no-drag。 */
+  trailing?: ReactNode;
 }
 
 export function ContentHeader({
@@ -79,6 +91,7 @@ export function ContentHeader({
   isSidebarRail,
   rightSidebarAvailable,
   hidden,
+  trailing,
 }: ContentHeaderProps) {
   const { isMac, isFullscreen } = useMacFullscreen();
   const headerContent = useFeatureContentHeader();
@@ -117,7 +130,7 @@ export function ContentHeader({
   return (
     <header
       className={cn(
-        // 46px 行高:红绿灯钉 y=16(实测灯心 ≈23 = 46/2,macOS 渲染比理论低约 1pt),标题/图标与
+        // 46px 行高 (与 CONTENT_HEADER_HEIGHT_PX 同步):红绿灯钉 y=16(实测灯心 ≈23 = 46/2,macOS 渲染比理论低约 1pt),标题/图标与
         // 红绿灯同轴(对齐 Codex 的紧凑 titlebar)。与 ChromeActions / Sidebar
         // 顶行 / MainLayout 右上浮层同一常量,改动必须连同 main 侧
         // trafficLightPosition 一起同步。
@@ -169,6 +182,8 @@ export function ContentHeader({
           元素自行 no-drag。 */}
       <div className="flex h-full min-w-0 flex-1 items-center">{headerContent}</div>
 
+      {trailing}
+
       {/* 右端占位 —— 平台分流（两端都只留占位，不再放交互按钮）：
           - mac：全屏聊天视图在场时（rightSidebarAvailable）留出固定唤起按钮等宽占位。
             按钮本身已 hoist 到 MainLayout 顶层浮层（钉窗口右上角）；这里仅占位防注入
@@ -198,6 +213,7 @@ export function ContentHeaderSlot({
   showCollapsedActions,
   isSidebarRail,
   rightSidebarAvailable,
+  trailing,
   children,
 }: Omit<ContentHeaderProps, 'hidden'> & { children: ReactNode }) {
   const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable });
@@ -209,11 +225,17 @@ export function ContentHeaderSlot({
         isSidebarRail={isSidebarRail}
         rightSidebarAvailable={rightSidebarAvailable}
         hidden={hidden}
+        trailing={trailing}
       />
       <div
-        style={{ display: 'contents', ['--content-header-h' as string]: hidden ? '0px' : '46px' }}
+        style={{
+          display: 'contents',
+          ['--content-header-h' as string]: hidden ? '0px' : `${CONTENT_HEADER_HEIGHT_PX}px`,
+        }}
       >
-        {children}
+        <ContentHeaderHiddenContext.Provider value={hidden}>
+          {children}
+        </ContentHeaderHiddenContext.Provider>
       </div>
     </>
   );

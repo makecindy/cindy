@@ -10,6 +10,7 @@
  *  - 「忽略」→ error-tail 持久化 dismiss / interrupted 写 ack,不再提示。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { Pressable, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
@@ -22,11 +23,12 @@ import { radius, spacing, typeScale } from '@/theme/tokens';
 export interface SessionTailBannerProps {
   state: NonNullable<SessionTailBannerState>;
   busy?: boolean;
+  onRecoverHistory?: () => void;
   onContinue(): void;
   onDismiss(): void;
 }
 
-export function SessionTailBanner({ state, busy, onContinue, onDismiss }: SessionTailBannerProps) {
+export function SessionTailBanner({ state, busy, onContinue, onDismiss, onRecoverHistory }: SessionTailBannerProps) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   const isInterrupted = state.kind === 'interrupted' || state.continueKind === 'interrupted';
@@ -43,6 +45,7 @@ export function SessionTailBanner({ state, busy, onContinue, onDismiss }: Sessio
         {text}
       </Text>
       {state.kind === 'error-tail' && state.rawError && !isInterrupted ? <AgentErrorDetails message={state.rawError} /> : null}
+      {onRecoverHistory ? <ReadableHistoryRecovery onRecover={onRecoverHistory} busy={busy} /> : null}
       <View style={styles.actions}>
         {showContinue ? (
           <TailPill

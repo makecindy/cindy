@@ -236,9 +236,10 @@ describe('ChatInput model source switching wiring', () => {
     expect(shrinkGate).toContain("typeof contextTokens === 'number'");
     expect(shrinkGate).toContain('const hasVerifiedUsage = trustedContextTokens !== undefined;');
     expect(zeroUsagePass).toBeGreaterThan(legacyPiGuard);
-    expect(shrinkGate).toContain('return true;');
+    expect(shrinkGate).toContain('return acceptedWindow;');
+    expect(shrinkGate).toContain('stagingSameAgentSelection && hasVerifiedTargetWindow && hasVerifiedUsage');
     expect(guard).toContain(
-      "if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;",
+      "if (!requireDestructiveConfirmation && verdict.level === 'ok') return acceptedWindow;",
     );
     expect(remoteBlock).toBeLessThan(warningPath);
     expect(remoteBlock).toBeLessThan(confirmPath);

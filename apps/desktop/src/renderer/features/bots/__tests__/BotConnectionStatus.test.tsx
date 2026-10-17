@@ -4,14 +4,18 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 afterEach(cleanup);
-it('local online stays green; only known remote offline is red; unknown stays neutral', () => {
+it('only known offline shows a status dot; online and unknown stay quiet', () => {
   const view = render(<BotConnectionStatus />);
   const dot = () => view.container.firstElementChild!;
-  expect(dot().className).toContain('--remote-status-ready');
-  expect(dot().getAttribute('title')).toBe('bots.remote.online');
+  expect(dot()).toBeNull();
   view.rerender(<BotConnectionStatus online={false} />);
   expect(dot().className).toContain('--remote-status-failed');
   view.rerender(<BotConnectionStatus online={null} />);
-  expect(dot().className).toContain('--text-tertiary');
-  expect(dot().getAttribute('title')).toBe('bots.remote.unknown');
+  expect(dot()).toBeNull();
+  view.rerender(<BotConnectionStatus inline />);
+  expect(dot()).toBeNull();
+  view.rerender(<BotConnectionStatus inline deviceName="Studio" />);
+  expect(dot().textContent).toBe('Studio');
+  view.rerender(<BotConnectionStatus inline online={false} deviceName="Studio" />);
+  expect(dot().textContent).toBe('bots.remote.offline · Studio');
 });

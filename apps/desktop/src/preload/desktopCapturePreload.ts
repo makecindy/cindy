@@ -28,6 +28,7 @@ const api: DesktopCaptureApi = {
 };
 if (location.search === '?mode=files') {
   const files: FilePeerHostApi = {
+    closed: (connection) => ipcRenderer.invoke(FILE_PEER_LOCAL.CLOSED, connection),
     register: () => ipcRenderer.invoke(FILE_PEER_LOCAL.REGISTER),
     onCommand: (listener) => {
       const wrapped = (_e: Electron.IpcRendererEvent, id: string, command: FilePeerCommand) =>

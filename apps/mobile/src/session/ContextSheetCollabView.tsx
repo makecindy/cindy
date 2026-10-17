@@ -10,7 +10,7 @@
  */
 import { useTranslation } from 'react-i18next';
 import { View } from 'react-native';
-import { Bot, CircleStop, UserPlus } from 'lucide-react-native';
+import { Bot, CircleStop, Folder, UserPlus } from 'lucide-react-native';
 import {
   ORCA_PREDEFINED_WORKER_ROLES,
   ORCA_WORKER_ROLE_MAX_LENGTH,
@@ -26,15 +26,19 @@ import {
   ContextSheetGroup,
   ContextSheetNote,
   ContextSheetRow,
+  ContextSheetSelectRow,
   ContextSheetTextField,
 } from '@/session/ContextSheet';
 import {
   orcaAgentLabel,
+  orcaWorkerAgentElsewhere,
   orcaWorkerDisplayName,
   orcaWorkerStatusLabel,
+  isAbsoluteOrcaWorkerDir,
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
 import { iconSize, iconStroke, lineHeight, radius, typeScale, useTheme } from '@/theme';
+import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 
 const CUSTOM_ROLE = '__custom__';
 
@@ -51,7 +55,8 @@ export function orcaWorkerFormErrorKey(form: OrcaWorkerFormValue, customRoleMode
 }
 
 export function canSubmitOrcaWorkerForm(form: OrcaWorkerFormValue, customRoleMode: boolean): boolean {
-  return form.role.trim().length > 0 && orcaWorkerFormErrorKey(form, customRoleMode) === null;
+  return form.role.trim().length > 0 && orcaWorkerFormErrorKey(form, customRoleMode) === null
+    && (!form.executionDeviceId || form.remoteDirMode !== 'path' || isAbsoluteOrcaWorkerDir(form.remoteDir ?? ''));
 }
 
 export interface OrcaWorkerFormViewProps {
@@ -66,9 +71,13 @@ export interface OrcaWorkerFormViewProps {
   onPermissionChange(mode: OrcaWorkerPermissionMode): void;
   agents: readonly OrcaWorkerAgentKind[];
   onPickModel(): void;
+  onPickDirectory(): void;
   busy: boolean;
   notice?: string | null;
   error?: string | null;
+  executionDevices?: readonly OrcaExecutionDeviceView[];
+  executionDevicesLoading?: boolean;
+  executionDevicesError?: string | null;
 }
 
 export function OrcaWorkerFormView({
@@ -80,9 +89,13 @@ export function OrcaWorkerFormView({
   onPermissionChange,
   agents,
   onPickModel,
+  onPickDirectory,
   busy,
   notice,
   error,
+  executionDevices = [],
+  executionDevicesLoading = false,
+  executionDevicesError,
 }: OrcaWorkerFormViewProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -124,6 +137,67 @@ export function OrcaWorkerFormView({
         ) : null}
         <ContextSheetNote text={validation ? t(validation) : t('session.collab.roleHint')} tone={validation ? 'error' : 'secondary'} />
       </ContextSheetGroup>
+      {/* 运行设备与远程供应商互斥：Worker 的 Agent 已选在另一台电脑时不提供运行设备。 */}
+      {(executionDevices.length > 0 || form.executionDeviceId) && !orcaWorkerAgentElsewhere(form) ? (
+        <ContextSheetGroup label={t('session.collab.executionDeviceLabel')}>
+          <ContextSheetSelectRow
+            disabled={busy || executionDevicesLoading}
+            label={t('session.collab.executionDeviceLabel')}
+            options={[
+              { id: '__lead__', label: t('session.collab.leadComputer') },
+              ...(form.executionDeviceId && !executionDevices.some((device) => device.deviceId === form.executionDeviceId)
+                ? [{ id: form.executionDeviceId, label: t('session.collab.deviceUnavailable'), disabled: true }]
+                : []),
+              ...executionDevices.map((device) => ({
+                id: device.deviceId,
+                label: device.name,
+                detail: t(device.supported ? 'session.collab.deviceOnline' : 'session.collab.deviceNeedsUpdate'),
+                disabled: !device.supported,
+              })),
+            ]}
+            value={form.executionDeviceId ?? '__lead__'}
+            onChange={(id) => onChange({ executionDeviceId: id === '__lead__' ? undefined : id })}
+            testID="collab.executionDevice"
+          />
+          <ContextSheetNote text={t('session.collab.executionDeviceHint')} />
+        </ContextSheetGroup>
+      ) : null}
+      {form.executionDeviceId ? (
+        <ContextSheetGroup label={t('session.collab.remoteDirLabel')}>
+          <ContextSheetChoiceRow
+            disabled={busy}
+            label={t('session.collab.remoteDirLabel')}
+            options={[
+              { id: 'dialogue', label: t('session.collab.remoteDirChat') },
+              { id: 'path', label: t('session.collab.remoteDirPath') },
+            ]}
+            value={form.remoteDirMode ?? 'dialogue'}
+            onChange={(remoteDirMode) => onChange({ remoteDirMode })}
+            testID="collab.remoteDirMode"
+          />
+          {form.remoteDirMode === 'path' ? (
+            <ContextSheetRow
+              label={t('session.new.selectWorkspace')}
+              detail={form.remoteDir || t('session.new.chooseOtherFolder')}
+              dismissBeforePress
+              disabled={busy}
+              icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+              onPress={onPickDirectory}
+              trailing="chevron"
+              testID="collab.remoteDirPicker"
+            />
+          ) : null}
+          <ContextSheetNote
+            text={t(form.remoteDirMode === 'path'
+              ? !form.remoteDir || isAbsoluteOrcaWorkerDir(form.remoteDir) ? 'session.collab.remoteDirPathHint' : 'session.collab.remoteDirInvalid'
+              : 'session.collab.remoteDirChatHint')}
+            tone={form.remoteDirMode === 'path' && !!form.remoteDir && !isAbsoluteOrcaWorkerDir(form.remoteDir) ? 'error' : 'secondary'}
+          />
+        </ContextSheetGroup>
+      ) : null}
+      {executionDevicesError ? <ContextSheetGroup label={t('session.collab.executionDeviceLabel')}>
+        <ContextSheetNote text={executionDevicesError} tone="error" />
+      </ContextSheetGroup> : null}
       <ContextSheetGroup label={t('session.collab.agentLabel')}>
         <ContextSheetChoiceRow
           disabled={busy || agents.length < 2}
@@ -243,10 +317,15 @@ export function OrcaTeamPanelView({
       <ContextSheetGroup label={t('session.collab.workerCountSummary', { count: workers.length, running })}>
         {workers.map((worker) => (
           <ContextSheetRow
-            detail={[
-              orcaAgentLabel(worker.agentKind),
-              worker.model,
-            ].filter(Boolean).join(' · ')}
+            detail={(worker.executionDevice
+              ? [
+                  worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
+                  ...(worker.executionDevice.reachable === false
+                    ? [t('session.collab.deviceUnreachable')]
+                    : [orcaAgentLabel(worker.agentKind), worker.model]),
+                ]
+              : [orcaAgentLabel(worker.agentKind), worker.model]
+            ).filter(Boolean).join(' · ')}
             disabled={busy}
             icon={<WorkerStatusDot status={worker.status} />}
             key={worker.workerId}
@@ -254,7 +333,7 @@ export function OrcaTeamPanelView({
             onLongPress={() => onWorkerLongPress(worker)}
             onPress={() => onWorkerPress(worker)}
             testID={`collab.worker.${worker.workerId}`}
-            trailing={(
+            trailing={worker.executionDevice?.reachable === false ? undefined : (
               <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
                 {orcaWorkerStatusLabel(worker.status)}
               </Text>

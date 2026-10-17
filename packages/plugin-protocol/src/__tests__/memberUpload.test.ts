@@ -149,6 +149,10 @@ describe('member upload contract', () => {
   it.each([
     'PUBLISH_PREFIX_UNREGISTERED',
     'PUBLISH_GHOST_ID_PREFIX_MISMATCH',
+    'PUBLISH_GHOST_ID_INVALID',
+    'PLUGIN_GHOST_ID_RESERVED',
+    'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+    'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
     'PUBLISH_VERSION_EXISTS',
   ] as const)('parses %s failure codes without throwing', (code) => {
     const response = parsePluginMemberUploadStatusResponse({

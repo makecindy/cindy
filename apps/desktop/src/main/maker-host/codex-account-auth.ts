@@ -13,6 +13,10 @@ import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
+import {
+  broadcastCodexAccountAuthReady,
+  broadcastCodexAccountAuthStarted,
+} from '../usageBroadcaster.js';
 
 /** Native account homes never participate in system Codex credential reconciliation. */
 export function isCodexAccountProvider(providerId?: string | null): boolean {
@@ -182,6 +186,8 @@ export async function loginCodexAccount(
   const current = () =>
     !cancelled && isCurrent() && getActiveAppSession().generation === owner.generation;
   const staging = path.join(home, `login-${randomUUID()}`);
+  let accountAuthTransitionStarted = false;
+  let accountAuthReadySent = false;
   try {
     await fsp.mkdir(staging, { recursive: true, mode: 0o700 });
     await fsp.writeFile(
@@ -253,6 +259,8 @@ export async function loginCodexAccount(
     }
     // An explicit login may replace this connection's account or workspace.
     // Retire its old runtime before committing the newly authorized identity.
+    broadcastCodexAccountAuthStarted(providerId);
+    accountAuthTransitionStarted = true;
     await retireAccount(providerId);
     if (!current()) return { ok: false, reason: 'login_cancelled' };
     const files = ['auth.json', 'account.json', 'config.toml', 'disconnected', 'invalidated'];
@@ -285,6 +293,8 @@ export async function loginCodexAccount(
     fs.renameSync(path.join(staging, 'auth.json'), path.join(home, 'auth.json'));
     fs.rmSync(path.join(home, 'disconnected'), { force: true });
     fs.rmSync(path.join(home, 'invalidated'), { force: true });
+    broadcastCodexAccountAuthReady(providerId);
+    accountAuthReadySent = true;
     return { ok: true, firstLogin: previous === null, previousIdentity: previous?.label, rollbackCredentials };
   } finally {
     onBrowserUrl?.(null);
@@ -292,6 +302,11 @@ export async function loginCodexAccount(
     try {
       await fsp.rm(staging, { recursive: true, force: true });
     } finally {
+      // If login was cancelled or failed after retirement, resume reads from the
+      // credentials that remain on disk. A successful commit already signaled above.
+      if (accountAuthTransitionStarted && !accountAuthReadySent) {
+        broadcastCodexAccountAuthReady(providerId);
+      }
       finish();
     }
   }

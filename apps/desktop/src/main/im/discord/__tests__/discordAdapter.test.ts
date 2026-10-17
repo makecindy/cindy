@@ -106,3 +106,14 @@ describe('discord ImChannelAdapter characterization', () => {
     );
   });
 });
+
+describe('discord teammate-owned connection', () => {
+  it('maps only the configured owner to the teammate main task', () => {
+    const im = { getOwnerUserId: () => '123456789012345678', botContextId: '9001' } as unknown as DiscordIM;
+    const adapter = buildDiscordAdapter(im, CONFIG, { companionBotId: 'bot-mia' });
+    expect(adapter.companionLane?.('123456789012345678')).toEqual({ kind: 'owner-dm' });
+    expect(adapter.companionLane?.('42')).toEqual({ kind: 'guest-dm', userId: '42' });
+    const unset = buildDiscordAdapter({ getOwnerUserId: () => '' } as unknown as DiscordIM, CONFIG, { companionBotId: 'bot-mia' });
+    expect(unset.companionLane?.('123456789012345678')).toEqual({ kind: 'guest-dm', userId: '123456789012345678' });
+  });
+});

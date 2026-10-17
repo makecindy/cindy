@@ -13,6 +13,7 @@ const setCindySkillEnabled = vi.fn(async () => undefined);
 const isCindyLearnSkillEnabled = vi.fn(() => true);
 vi.mock('../activationPreferences', () => ({
   isCindyLearnSkillEnabled,
+  isCindyLearnSkillEnabledForListing: isCindyLearnSkillEnabled,
   setCindySkillEnabled,
 }));
 
@@ -113,6 +114,13 @@ vi.mock('../scanner', () => ({
   scanAllSkills,
   writeSkillFile,
 }));
+
+const inspectSkillListGrants = vi.fn();
+vi.mock('../customizationScanHost', async () => {
+  const { prepareSkillScanGrants } = await import('../skillScanGrants');
+  inspectSkillListGrants.mockImplementation(async (input) => prepareSkillScanGrants(input, resolveExistingSkillPathForGrant));
+  return { inspectSkillListGrants };
+});
 
 vi.mock('../folderHash', () => ({
   computeFolderHashDetailed: vi.fn(),
@@ -233,6 +241,21 @@ describe('registerSkillhubIpc usage handlers', () => {
       }
     },
   );
+
+  it('does not publish grants when the owner changes during isolated grant preparation', async () => {
+    let finish!: (value: { entries: Array<{ root: string }>; records: never[] }) => void;
+    inspectSkillListGrants.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    scanAllSkills.mockResolvedValueOnce({ skills: [], sources: [] });
+    const event = { sender: { id: 222, once: vi.fn(), on: vi.fn() } };
+    const scan = handlers.get('skillhub:scan')!(event, {});
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    ownerState.pending = true;
+    finish({ entries: [{ root: path.join(fixtureRoot, 'stale') }], records: [] });
+    await scan;
+    expect(await handlers.get('skillhub:read-skill')!(event, { mdPath: path.join(fixtureRoot, 'stale', 'SKILL.md') }))
+      .toMatchObject({ success: false });
+    expect(readSkillContent).not.toHaveBeenCalled();
+  });
 
   it('delivers private publication feedback only to currently trusted app windows', async () => {
     const { BrowserWindow } = await import('electron');

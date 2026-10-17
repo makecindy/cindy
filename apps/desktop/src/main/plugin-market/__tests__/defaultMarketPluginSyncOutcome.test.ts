@@ -30,4 +30,19 @@ describe('defaultMarketPluginSyncOutcome', () => {
   it('fails retryably when an individual default install or upgrade failed', () => {
     expect(defaultMarketPluginSyncOutcome(snapshot(null), 'failed')).toBe('failed');
   });
+
+  it.each([
+    'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE',
+    'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+    'PLUGIN_FUTURE_REASON',
+  ])('keeps retrying while the organization catalog is unavailable with %s', (code) => {
+    expect(defaultMarketPluginSyncOutcome({ ...snapshot(null), organizationAccessError: code })).toBe('failed');
+  });
+
+  it('does not retry an organization catalog that needs a newer client', () => {
+    expect(defaultMarketPluginSyncOutcome({
+      ...snapshot(null),
+      organizationAccessError: 'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
+    })).toBe('completed');
+  });
 });

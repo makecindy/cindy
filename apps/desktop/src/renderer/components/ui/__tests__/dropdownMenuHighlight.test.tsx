@@ -10,6 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
+  DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../dropdown-menu';
@@ -130,6 +131,31 @@ describe('shared dropdown menu glide highlight', () => {
     expect(document.activeElement?.textContent).toBe('Rename');
     await key('Enter');
     expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens submenu content outside the parent menu in the document body', async () => {
+    render(
+      <DropdownMenu defaultOpen modal={false}>
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Move</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>Cindy</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    const parentMenu = menu();
+    expect(screen.queryByRole('menu', { name: 'Move' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move' }));
+    const submenu = await screen.findByRole('menu', { name: 'Move' });
+    // A nested submenu was clipped by the parent's glass/overflow. This unit
+    // regression checks the actual SubContent DOM boundary after opening it.
+    expect(parentMenu.contains(submenu)).toBe(false);
+    expect(document.body.contains(submenu)).toBe(true);
+    expect(submenu.contains(screen.getByRole('menuitem', { name: 'Cindy' }))).toBe(true);
   });
 
   it('follows the Radix highlighted item with one decorative layer per panel', async () => {

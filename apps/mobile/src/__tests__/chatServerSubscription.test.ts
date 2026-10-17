@@ -10,6 +10,19 @@ function socket(): MockSocket {
 }
 const receive = async (ws: ChatSocket, data: unknown) => { ws.onmessage?.({ data: JSON.stringify(data) } as MessageEvent); await Promise.resolve(); await Promise.resolve(); };
 let stop = () => {};
+it('waits for reset state before resubscribing and ignores completion after disposal', async () => {
+  let finish!: () => void;
+  const reset = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: async () => 'fixture', current: () => true,
+    socket, ready: async () => ({ scope: `actor:${actorId}`, cursor: '0' }), changed: vi.fn(), unavailable: vi.fn(), reset });
+  await Promise.resolve(); const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  await receive(ws, { type: 'scope_error', scope: `actor:${actorId}`, error: { code: 'RESET_REQUIRED', details: { head: '50' } } });
+  expect(reset).toHaveBeenCalledOnce();
+  expect(ws.send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `actor:${actorId}`, after: '50' }));
+  stop(); finish(); await Promise.resolve(); await Promise.resolve();
+  expect(ws.send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `actor:${actorId}`, after: '50' }));
+});
 afterEach(() => { stop(); sockets.length = 0; vi.useRealTimers(); });
 it('authenticates inside the socket, acknowledges string cursors and reconnects without replaying writes', async () => {
   vi.useFakeTimers(); const changed = vi.fn(); const token = vi.fn(async () => 'fixture-token');
@@ -43,4 +56,16 @@ it('does not authenticate or reconnect after owner change or disposal', async ()
   stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: () => new Promise(r => { resolve = r; }), current: () => current,
     socket, ready: vi.fn(), changed: vi.fn(), unavailable: vi.fn() });
   current = false; resolve('old-owner'); await Promise.resolve(); expect(sockets).toHaveLength(0);
+});
+
+it('subscribes focused history and the human account scope together, forwarding personal state events', async () => {
+  const changed = vi.fn();
+  stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: async () => 'fixture', current: () => true, socket,
+    ready: async () => [{ scope: 'conversation:room', cursor: '9' }, { scope: `actor:${actorId}`, cursor: '10' }], changed, unavailable: vi.fn() });
+  await Promise.resolve(); const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: 'conversation:room', after: '9' }));
+  const changes = [{ type: 'conversation.list.changed', data: { conversationId: actorId, hidden: true, revision: 3 } }];
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '11', changes });
+  expect(changed).toHaveBeenCalledWith(changes);
 });

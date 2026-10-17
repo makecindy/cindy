@@ -283,6 +283,7 @@ describe('MakerScheduleRunner 顺延 / 礼让', () => {
       heartbeatSchedule({
         targetSessionId: undefined,
         workingDir: 'F:\\X',
+        model: 'gpt-6-astra',
       }),
       createFireContext(),
     );

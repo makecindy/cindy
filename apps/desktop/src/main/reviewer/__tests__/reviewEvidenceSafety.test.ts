@@ -8,6 +8,7 @@ import {
   reviewChangeSetContentPaths,
   sanitizeReviewChangeSet,
   sanitizeReviewDiffBucket,
+  usableReviewChangeSet,
 } from '../reviewEvidenceSafety.js';
 
 function fileDiff(overrides: Partial<FileDiff> = {}): FileDiff {
@@ -157,6 +158,19 @@ describe('review change set content paths', () => {
   function file(path: string, oldPath: string | null = null): TurnChangeSetDetail['files'][number] {
     return { id: path, path, oldPath, status: 'modified', additions: 1, deletions: 0 };
   }
+
+  it('does not make incomplete Claude Bash history a prerequisite for current Git review', () => {
+    const captured = changeSet([], '/repo', {
+      provider: 'claude-code', state: 'partial', isReversible: false,
+      incompleteReasons: ['opaque-tool', 'concurrent-workspace'],
+    });
+    expect(reviewChangeSetContentPaths(captured, '/repo').truncated).toBe(true);
+    expect(usableReviewChangeSet(captured, '/repo', { hasGitBaseline: true, hasExplicitArtifacts: false })).toBeNull();
+    expect(usableReviewChangeSet(captured, '/repo', { hasGitBaseline: false, hasExplicitArtifacts: true })).toBeNull();
+    expect(usableReviewChangeSet(captured, '/repo', { hasGitBaseline: false, hasExplicitArtifacts: false })).toBe(captured);
+    const complete = changeSet([file('src/a.ts')]);
+    expect(usableReviewChangeSet(complete, '/repo', { hasGitBaseline: true, hasExplicitArtifacts: false })).toBe(complete);
+  });
 
   it('resolves changed and renamed-from paths against the recorded cwd', () => {
     expect(

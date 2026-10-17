@@ -233,6 +233,53 @@ describe('统一 composer 建议入口', () => {
     expect(onRemove).toHaveBeenCalledWith('/repo-shared');
   });
 
+  it('空目录只显示一个添加入口，不显示重复标题或空状态', () => {
+    const run = vi.fn();
+    render(createElement(AtMentionPanel, {
+      query: '',
+      state: { kind: 'ready', items: [], truncated: false },
+      entries: [{ kind: 'action', action: { id: 'add-extra-dir', label: 'extraDirs.add', run } }],
+      focusedIndex: 0,
+      onFocusedIndexChange: vi.fn(),
+      onSelect: (entry) => { if (entry.kind === 'action') entry.action.run(); },
+      onClose: vi.fn(),
+      onRetry: vi.fn(),
+      referenceDirs: { dirs: [], onRemove: vi.fn() },
+      writableDirs: { dirs: [], onRemove: vi.fn() },
+    }));
+    expect(screen.queryByText('extraDirs.sectionTitle')).toBeNull();
+    expect(screen.queryByText('extraDirs.empty')).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'extraDirs.add' }));
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('没有添加入口时仍能在统一列表移除旧授权，分别调用原来的撤销路径', () => {
+    const removeReference = vi.fn();
+    const removeWritable = vi.fn();
+    render(createElement(AtMentionPanel, {
+      query: '',
+      state: { kind: 'ready', items: [], truncated: false },
+      entries: [],
+      focusedIndex: 0,
+      onFocusedIndexChange: vi.fn(),
+      onSelect: vi.fn(),
+      onClose: vi.fn(),
+      onRetry: vi.fn(),
+      referenceDirs: { dirs: ['/reference'], onRemove: removeReference },
+      writableDirs: { dirs: ['/output'], onRemove: removeWritable },
+    }));
+    expect(screen.getAllByRole('list')).toHaveLength(1);
+    expect(screen.getByText('reference')).toBeTruthy();
+    expect(screen.getByText('output')).toBeTruthy();
+    const buttons = screen.getAllByLabelText('extraDirs.remove');
+    fireEvent.click(buttons[1]!);
+    expect(removeWritable).toHaveBeenCalledWith('/output');
+    expect(removeReference).not.toHaveBeenCalled();
+    fireEvent.click(buttons[0]!);
+    expect(removeReference).toHaveBeenCalledWith('/reference');
+  });
+
   it('已停用优先显示停用状态；可用但无直接入口的 Skill 标为 Agent 自动调用', () => {
     const disabledEntries = buildComposerSuggestionEntries({
       query: '',

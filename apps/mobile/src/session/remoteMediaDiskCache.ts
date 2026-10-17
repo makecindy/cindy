@@ -15,20 +15,24 @@
  * remoteMediaDiskCacheExpo.ts。
  */
 
+import { validFileVersion } from '@cindy/device-link';
+
 export interface RemoteMediaDiskCacheIO {
   /** 确保缓存目录存在(幂等)。 */
   ensureDir(): void | Promise<void>;
   readIndexText(): Promise<string | null>;
   writeIndexText(text: string): void | Promise<void>;
   fileExists(name: string): boolean | Promise<boolean>;
+  fileSize?(name: string): number | Promise<number>;
   fileUri(name: string): string;
   deleteFile(name: string): void | Promise<void>;
   /**
    * 下载 url 到缓存文件;成功返回字节数,失败返回 null(不抛)。
    * 契约:落位必须原子(临时位置下载、成功后移入)——失败时不得破坏已存在的
    * 同名文件,store 的失败清理依赖这一点区分「半成品」与「现存好文件」。
+   * 提供 expectedSize 时必须在移入前校验，尺寸不符返回 null 并保留旧文件。
    */
-  download(url: string, name: string): Promise<number | null>;
+  download(url: string, name: string, expectedSize?: number): Promise<number | null>;
   /**
    * 把 base64 字节写入缓存文件(inline 缩略图落盘用);成功返回字节数,失败返回
    * null(不抛)。契约与 download 相同:落位必须原子,失败不得破坏既有同名文件。
@@ -42,6 +46,10 @@ export interface RemoteMediaDiskCacheIO {
 export interface RemoteMediaDiskCacheOptions {
   /** 可选缓存总量上限(字节),默认不限额。 */
   maxBytes?: number;
+  /** Optional pressure-driven cleanup; no time expiry and no new fixed quota. */
+  availableBytes?(): number;
+  reserveBytes?: number;
+  persistAccess?: boolean;
   now?(): number;
 }
 
@@ -49,11 +57,15 @@ export interface RemoteMediaDiskCacheHit {
   uri: string;
   mimeType: string;
   size: number;
+  version?: string;
 }
 
 export interface RemoteMediaDiskCache {
   /** 命中返回本地 file:// 引用并刷新 LRU 时间;未命中 / 文件丢失返回 null。 */
-  lookup(sourceUrl: string): Promise<RemoteMediaDiskCacheHit | null>;
+  lookup(sourceUrl: string, version?: string): Promise<RemoteMediaDiskCacheHit | null>;
+  /** Frees the oldest copies under disk pressure, excluding the pending copy's source. */
+  prune(requiredBytes?: number, protectedSourceUrl?: string): Promise<boolean>;
+  remove(sourceUrl: string): Promise<void>;
   /**
    * 把已取件成功的图片落盘(同 url 并发只下载一次;失败静默,缓存是纯优化)。
    * expectedSize(已知对象字节数)超过 maxBytes 时直接跳过——落盘只会立刻被
@@ -61,10 +73,11 @@ export interface RemoteMediaDiskCache {
    *
    * 返回值 = **本次是否真的写入了新字节**。false 覆盖三种"promise 正常完成但盘上
    * 不是本次对象"的情形:超预算跳过、下载失败(按 IO 契约原子落位失败,现存同名
-   * 好文件被刻意保留)、落成 0 字节被作废。调用方据此决定能否改用本地文件——
+   * 好文件被刻意保留)、未声明为空的对象落成 0 字节被作废。expectedSize === 0
+   * 时允许保存有效空文件。调用方据此决定能否改用本地文件——
    * 只看 promise resolve 会把**已被证伪的旧文件**当成本次结果(PR #1125 review)。
    */
-  store(sourceUrl: string, downloadUrl: string, mimeType: string, expectedSize?: number): Promise<boolean>;
+  store(sourceUrl: string, downloadUrl: string, mimeType: string, expectedSize?: number, version?: string): Promise<boolean>;
   /**
    * 把已在内存里的字节(base64,inline 缩略图回包)落盘,不经网络下载。
    * 与 store 共用同键串行化,防止同源并发写撕;IO 不支持 writeFileBase64 时静默跳过。
@@ -81,6 +94,7 @@ interface IndexEntry {
   mimeType: string;
   size: number;
   lastUsedAt: number;
+  version?: string;
 }
 
 interface IndexShape {
@@ -101,7 +115,6 @@ export function createRemoteMediaDiskCache(
   const downloading = new Map<string, { downloadUrl: string; task: Promise<boolean> }>();
 
   async function init(): Promise<void> {
-    if (entries) return;
     initPromise ??= (async () => {
       await io.ensureDir();
       const text = await io.readIndexText().catch(() => null);
@@ -116,7 +129,8 @@ export function createRemoteMediaDiskCache(
         await Promise.resolve(io.deleteFile(name)).catch(() => undefined);
       }
     })();
-    await initPromise;
+    try { await initPromise; }
+    catch (error) { entries = null; initPromise = null; throw error; }
   }
 
   async function persistIndex(): Promise<void> {
@@ -129,7 +143,7 @@ export function createRemoteMediaDiskCache(
    * download / writeFileBase64 落位之后的共同收尾(两条写入路径同一套失败语义):
    *   - size === null:写入失败(IO 契约保证原子落位、失败不动现有文件)——同名
    *     刷新场景下 name 就是现存条目的好文件,不能误删;只清理并非现存条目的半成品;
-   *   - size <= 0:0 字节文件已落位顶替,文件与同名旧条目一并作废,下次 lookup 重取;
+   *   - size === 0:仅 expectedSize === 0 时有效,否则作废并在下次 lookup 重取;
    *   - 成功:mime 变化换扩展名时删除不再被引用的旧文件,登记条目并做配额回收。
    * 返回 true 仅当本次确实登记了新写入的字节(见 store 返回值契约)。
    */
@@ -139,6 +153,8 @@ export function createRemoteMediaDiskCache(
     prev: IndexEntry | undefined,
     size: number | null,
     mimeType: string,
+    version?: string,
+    expectedSize?: number,
   ): Promise<boolean> {
     if (size === null) {
       if (!prev || prev.name !== name) {
@@ -146,7 +162,7 @@ export function createRemoteMediaDiskCache(
       }
       return false;
     }
-    if (size <= 0 || !entries) {
+    if (size < 0 || (size === 0 && expectedSize !== 0) || !entries) {
       await Promise.resolve(io.deleteFile(name)).catch(() => undefined);
       if (prev && prev.name === name && entries) {
         entries.delete(key);
@@ -157,7 +173,7 @@ export function createRemoteMediaDiskCache(
     if (prev && prev.name !== name) {
       await Promise.resolve(io.deleteFile(prev.name)).catch(() => undefined);
     }
-    entries.set(key, { name, mimeType, size, lastUsedAt: now() });
+    entries.set(key, { name, mimeType, size, lastUsedAt: now(), ...(version ? { version } : {}) });
     await evictOverBudget();
     await persistIndex().catch(() => undefined);
     // 配额回收可能把刚写入的条目本身逐出(单对象接近 maxBytes 时);此时盘上已无
@@ -180,43 +196,87 @@ export function createRemoteMediaDiskCache(
     }
   }
 
+  async function prune(requiredBytes = 0, protectedSourceUrl?: string): Promise<boolean> {
+    await init();
+    const protectedKey = protectedSourceUrl === undefined ? undefined : cacheKeyOf(protectedSourceUrl);
+    const enough = () => !options.availableBytes ||
+      options.availableBytes() >= requiredBytes + (options.reserveBytes ?? 0);
+    if (enough()) return true;
+    const oldest = [...entries!.entries()].sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+    for (const [key, entry] of oldest) {
+      if (enough()) break;
+      if (key === protectedKey || downloading.has(key)) continue;
+      try {
+        await io.deleteFile(entry.name);
+        entries!.delete(key);
+      } catch { /* Failed deletions remain accounted for; retry at the next operation. */ }
+    }
+    await persistIndex().catch(() => undefined);
+    return enough();
+  }
+
   return {
-    async lookup(sourceUrl) {
+    prune,
+    async remove(sourceUrl) {
+      await init();
+      const key = cacheKeyOf(sourceUrl);
+      await downloading.get(key)?.task.catch(() => false);
+      const entry = entries?.get(key);
+      if (!entry) return;
+      entries!.delete(key);
+      await Promise.resolve(io.deleteFile(entry.name)).catch(() => undefined);
+      await persistIndex().catch(() => undefined);
+    },
+    async lookup(sourceUrl, version) {
+      if (version !== undefined && !validFileVersion(version)) return null;
       await init();
       const key = cacheKeyOf(sourceUrl);
       const entry = entries?.get(key);
       if (!entry) return null;
+      if (version !== undefined && entry.version !== version) {
+        // Keep the last usable copy until its replacement commits successfully.
+        return null;
+      }
       const exists = await Promise.resolve(io.fileExists(entry.name)).catch(() => false);
-      if (!exists) {
+      const sizeMatches = !io.fileSize || await Promise.resolve(io.fileSize(entry.name)).catch(() => -1) === entry.size;
+      if (!exists || !sizeMatches) {
         // 文件被 OS 清掉 / 手动删除:丢弃条目自愈,当未命中处理。
         entries?.delete(key);
         return null;
       }
       entry.lastUsedAt = now();
-      return { uri: io.fileUri(entry.name), mimeType: entry.mimeType, size: entry.size };
+      if (options.persistAccess) await persistIndex().catch(() => undefined);
+      return { uri: io.fileUri(entry.name), mimeType: entry.mimeType, size: entry.size,
+        ...(entry.version ? { version: entry.version } : {}) };
     },
 
-    async store(sourceUrl, downloadUrl, mimeType, expectedSize) {
+    async store(sourceUrl, downloadUrl, mimeType, expectedSize, version) {
+      if (version !== undefined && !validFileVersion(version)) return false;
       await init();
       // 单对象就超预算:落盘立刻会被 LRU 逐出,整个下载都是白费,直接跳过。
       if (expectedSize !== undefined && expectedSize > maxBytes) return false;
+      if (options.availableBytes && !(await prune(expectedSize ?? 0, sourceUrl))) return false;
       const key = cacheKeyOf(sourceUrl);
       const run = async (): Promise<boolean> => {
-        const name = `${key}.${extOfMime(mimeType)}`;
+        // The OS or manual cache cleanup may remove the directory after init.
+        await io.ensureDir();
+        // Versioned bytes have immutable names: a reader copying the previous
+        // version must never race an overwrite of the same physical file.
+        const name = `${key}${version ? `-${version}` : ''}.${extOfMime(mimeType)}`;
         const prev = entries?.get(key);
-        const size = await io.download(downloadUrl, name);
-        return commitWrittenFile(key, name, prev, size, mimeType);
+        const size = await io.download(downloadUrl, name, expectedSize);
+        return commitWrittenFile(key, name, prev, size, mimeType, version, expectedSize);
       };
       const pending = downloading.get(key);
       // 只合并**同一下载地址**的并发 store。forceRefresh 自愈会带全新 presign 地址,
       // 若并入旧地址的 pending(常见:已证伪的 stale key),旧下载失败会让新图永远
       // 不落盘——退屏清理还会删掉新 OSS 对象,下次进会话被迫重传。不同地址排在
       // 旧任务之后串行执行(旧任务成败都不影响新写入)。
-      if (pending && pending.downloadUrl === downloadUrl) return pending.task;
+      if (pending && pending.downloadUrl === `${downloadUrl}\n${version ?? ''}`) return pending.task;
       const base: Promise<boolean> = pending
         ? pending.task.catch(() => undefined).then(run)
         : run();
-      const entry = { downloadUrl, task: base };
+      const entry = { downloadUrl: `${downloadUrl}\n${version ?? ''}`, task: base };
       entry.task = base.finally(() => {
         if (downloading.get(key) === entry) downloading.delete(key);
       });
@@ -229,6 +289,7 @@ export function createRemoteMediaDiskCache(
       await init();
       const key = cacheKeyOf(sourceUrl);
       const run = async (): Promise<boolean> => {
+        await io.ensureDir();
         const name = `${key}.${extOfMime(mimeType)}`;
         const prev = entries?.get(key);
         const size = await Promise.resolve(io.writeFileBase64!(name, base64)).catch(() => null);
@@ -261,9 +322,11 @@ function parseIndex(text: string | null): Record<string, IndexEntry> {
     for (const [key, value] of Object.entries(parsed.entries)) {
       if (value
         && typeof value.name === 'string'
+        && /^[a-f0-9]{18}(?:-[a-f0-9]{64})?\.[a-z0-9]+$/.test(value.name)
         && typeof value.mimeType === 'string'
-        && typeof value.size === 'number'
-        && typeof value.lastUsedAt === 'number') {
+        && Number.isSafeInteger(value.size) && value.size >= 0
+        && Number.isFinite(value.lastUsedAt)
+        && (value.version === undefined || validFileVersion(value.version))) {
         out[key] = value;
       }
     }

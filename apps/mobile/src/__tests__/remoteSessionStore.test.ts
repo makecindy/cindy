@@ -3,7 +3,10 @@ import { MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL } from '@cindy/device-l
 import { clampLiveRowCreatedAt } from '@/session/messagePaging';
 import { MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES } from '@/session/messageToolPayloadProjection';
 import { remoteSessionStore, resolveSessionWriteDevices, sessionPendingWrites } from '@/session/remoteSessionStore';
+import { buildMobileSessionMessageDeepLink, parseSessionDeepLinkUrl, resolveSessionLinkDeviceId } from '@/session/sessionLinks';
+import { sessionMenuCopyLink } from '@/session/sessionMenu';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { setJankMetricsEnabled, takeJankMetrics } from '@/debug/jankMetrics';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -134,6 +137,76 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const item: PendingInteraction = { persistId: 'p1',
+      request: { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Q?' }] } };
+    remoteSessionStore.setPendingInteractions('s1', [item]);
+    remoteSessionStore.protectAsyncQuestion('s1', item);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'q1', reason: 'resolved', decision: { dismissed: true },
+    });
+    const visible = remoteSessionStore.getVisiblePendingInteractions('s1');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toBe(visible);
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(0);
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0]).toMatchObject({ retainedDraft: true });
+    remoteSessionStore.invalidateSessionMessageWindow('s1', 'dev-1');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
+  it.each(['deleted', 'archived', 'logout'] as const)('drops protected cards on %s', (action) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.protectAsyncQuestion('s1', { request: {
+      kind: 'ask_user_question', requestId: 'q1', delivery: 'async',
+    } });
+    if (action === 'logout') remoteSessionStore.clear();
+    else remoteSessionStore.applySessionPatch('dev-1', 's1', { status: action });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
+  it('keeps Make mirrors for transport while excluding them from visible session snapshots', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('make', { source: 'cindy-make' }),
+      session('merge', { source: 'cindy-make-merge' }),
+      session('ordinary', { source: 'desktop' }),
+    ]);
+    expect(remoteSessionStore.getSessions()).toHaveLength(3);
+    expect(remoteSessionStore.getSessionDeviceId('make')).toBe('dev-1');
+    const visible = remoteSessionStore.getVisibleSessions();
+    expect(visible.map(item => item.id)).toEqual(['ordinary']);
+    const home = remoteSessionStore.getHomeSessions();
+    expect(home.map(item => item.id)).toEqual(['ordinary']);
+    remoteSessionStore.applySessionPatch('dev-1', 'make', { totalCostUsd: 1 });
+    expect(remoteSessionStore.getVisibleSessions()).toBe(visible);
+    expect(remoteSessionStore.getHomeSessions()).toBe(home);
+    remoteSessionStore.applySessionPatch('dev-1', 'ordinary', { totalCostUsd: 2 });
+    expect(remoteSessionStore.getVisibleSessions()[0].totalCostUsd).toBe(2);
+    expect(remoteSessionStore.getHomeSessions()).toBe(home);
+    remoteSessionStore.applySessionPatch('dev-1', 'ordinary', { source: 'cindy-make-merge' });
+    expect(remoteSessionStore.getVisibleSessions()).toEqual([]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getVisibleSessions()).toEqual([]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('removes %s from Home when source metadata arrives late', (source) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('unknown'),
+      session('ordinary', { source: 'desktop' }),
+    ]);
+    const ordinary = remoteSessionStore.getHomeSessions()[1];
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 'unknown', phase: 'error', attention: true });
+    remoteSessionStore.applySessionPatch('dev-1', 'unknown', { source });
+    expect(remoteSessionStore.getHomeSessions()).toEqual([ordinary]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(ordinary);
+    expect(remoteSessionStore.getSessions()).toHaveLength(2);
+    expect(remoteSessionStore.getSessionLiveActivity('unknown')).toMatchObject({ phase: 'error', attention: true });
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 'unknown', phase: 'completed', attention: true });
+    expect(remoteSessionStore.getHomeSessions()).toEqual([ordinary]);
+  });
 
   it('releases a large persisted tool input when the matching result is appended', () => {
     remoteSessionStore.setMessages('s1', [{
@@ -417,6 +490,100 @@ describe('remoteSessionStore', () => {
       totalCostUsd: 1.23,
       totalTokenUsage: 45_000,
     });
+  });
+
+  it('keeps the cached home projection stable across usage-only refreshes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const beforeRow = before[0];
+    expect(beforeRow).toBeDefined();
+    expect(beforeRow).not.toHaveProperty('totalCostUsd');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 2.5,
+    });
+    expect(remoteSessionStore.getHomeSessions()).toBe(before);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(beforeRow);
+
+    // A later ordinary recompute must still reuse the projection because usage
+    // fields are intentionally absent from Home.
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'dev-1', name: 'Mac' }]);
+    expect(remoteSessionStore.getHomeSessions()).toBe(before);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(beforeRow);
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toHaveProperty('totalCostUsd');
+  });
+
+  it('black-box: repeated device refreshes keep the visible home snapshot stable', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const beforeRows = [...before];
+
+    for (let index = 0; index < 100; index += 1) {
+      remoteSessionStore.setDeviceIdentity([
+        { deviceId: 'dev-1', name: 'Mac' },
+        { deviceId: `unrelated-${index}`, name: `Other ${index}` },
+      ]);
+    }
+
+    const after = remoteSessionStore.getHomeSessions();
+    expect(after).toBe(before);
+    expect(after).toEqual(beforeRows);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalCostUsd'))).toBe(true);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalMoney'))).toBe(true);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalTokenUsage'))).toBe(true);
+  });
+
+  it('refreshes Home metadata after unchanged device refreshes and usage-only pushes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const homeChanged = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribeHomeStatus(homeChanged);
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', { sessionId: 's1', totalTokens: 500 });
+      for (let index = 0; index < 10; index += 1) {
+        remoteSessionStore.setDeviceIdentity([
+          { deviceId: 'dev-1', name: 'Mac' },
+          { deviceId: `other-${index}`, name: 'Other' },
+        ]);
+      }
+      expect(remoteSessionStore.getHomeSessions()).toBe(before);
+      expect(homeChanged).not.toHaveBeenCalled();
+      expect(remoteSessionStore.getSessions()[0].totalTokenUsage).toBe(500);
+      expect(remoteSessionStore.getDeviceIdentity()[1].deviceId).toBe('other-9');
+
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Renamed' });
+      const renamed = remoteSessionStore.getHomeSessions();
+      expect(renamed).not.toBe(before);
+      expect(renamed[0]).toMatchObject({ id: 's1', title: 'Renamed' });
+      expect(renamed[0]).not.toHaveProperty('totalTokenUsage');
+      expect(renamed[1]).toBe(before[1]);
+      expect(homeChanged).toHaveBeenCalledTimes(1);
+
+      remoteSessionStore.renameDevice('dev-1', 'New Mac');
+      expect(remoteSessionStore.getHomeSessions().every((row) => row.deviceLinkDeviceName === 'New Mac')).toBe(true);
+      expect(homeChanged).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each(['remove', 'clear'] as const)('rebuilds Home after %s and reusing a session ID', (action) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s2'), session('s1')]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([before[1], before[0]]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(before[1]);
+
+    if (action === 'clear') remoteSessionStore.clear();
+    else remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    expect(remoteSessionStore.getHomeSessions()).toHaveLength(1);
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toBe(before[0]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toMatchObject({ id: 's1', title: 's1' });
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Restored title' });
+    expect(remoteSessionStore.getHomeSessions()[0].title).toBe('Restored title');
   });
 
   it('removes archived sessions from the active mirror', () => {
@@ -2341,6 +2508,94 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('断流期间漏收超过一页：补读到已验证上界后，整段旧历史保留', () => {
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted();
+    const latestPage = [
+      messageAt('gap-3', 's1', '2026-01-01T09:00:05.000Z'),
+      messageAt('gap-4', 's1', '2026-01-01T09:00:06.000Z'),
+    ];
+    // 本页最旧行晚于已验证上界:直接提交会丢掉 old-*,所以需要先补读。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, true)).toBe(true);
+    // 本页不满页(历史到头)、或已验证区间不存在时,补读不改变结果。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, false)).toBe(false);
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s2', latestPage, true)).toBe(false);
+
+    const bridged = [
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('gap-1', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('gap-2', 's1', '2026-01-01T09:00:04.000Z'),
+      ...latestPage,
+    ];
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', bridged, true)).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', bridged, { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'old-1',
+      'old-2',
+      'gap-1',
+      'gap-2',
+      'gap-3',
+      'gap-4',
+    ]);
+  });
+
+  it('漏推提示后只信区间下界：补读覆盖整段才相接，旧历史不被整段丢弃', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    // 订阅内的 push 把上界推过了一条被漏推的 gap-3。
+    remoteSessionStore.appendMessage('s1', messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'));
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+
+    const latestPage = [
+      messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'),
+      messageAt('new-5', 's1', '2026-01-01T09:00:05.000Z'),
+    ];
+    // 上界已不可信:即使最新页与 live-4 有交集,也要补读到区间下界。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, true)).toBe(true);
+    const bridged = [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('gap-3', 's1', '2026-01-01T09:00:03.000Z'),
+      ...latestPage,
+    ];
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', bridged, true)).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', bridged, { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'old-1', 'old-2', 'gap-3', 'live-4', 'new-5',
+    ]);
+  });
+
+  it('漏推提示后没补读到区间下界时，仍按未验证处置', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'));
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('gap-3', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'),
+    ], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['gap-3', 'live-4']);
+  });
+
+  it('来源不明的缓存段没有已验证区间可接，不触发补读', () => {
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+    ]);
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ], true)).toBe(false);
+  });
+
   it('rejects late paging whose anchor was removed by a concurrent latest-window refresh', () => {
     const old = messageAt('old-anchor', 's1', '2026-01-01T09:00:00.000Z');
     const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
@@ -3198,6 +3453,23 @@ describe('remoteSessionStore', () => {
       generationActive: false,
       generationReliable: true,
     });
+  });
+
+  it('carries the host tok/s across statuses without it and clears it for the next turn', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const tokenSpeed = { rate: 42, average: 40, tokens: 120, elapsedMs: 3_000, streaming: true };
+    pushMakerStatus('s1', { isRunning: true, status: 'Generating...', tokenSpeed });
+    pushMakerStatus('s1', { isRunning: true, status: 'Running tool' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toEqual(tokenSpeed);
+    // The host withdrew the speed (suspended mid-generation): the stale reading goes too.
+    pushMakerStatus('s1', { isRunning: true, generationReliable: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+    pushMakerStatus('s1', { isRunning: false });
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+    pushMakerStatus('s1', { isRunning: false });
+    pushMakerStatus('s1', { isRunning: true, status: 'Thinking' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
   });
 
   it('clears leftover task updates on a real turn start, scoped to that session', () => {
@@ -4924,6 +5196,35 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionDeviceId('s-stale')).toBe('stale-mac');
   });
 
+  it('keeps links generated after re-link routed to the new device after archival removes the lookup', () => {
+    const routeDeviceId = 'old-mac';
+    remoteSessionStore.setDeviceIdentity([{ deviceId: routeDeviceId, name: 'Mac' }]);
+    remoteSessionStore.setDeviceSessions(routeDeviceId, 'Mac', [session('source')]);
+    const before = remoteSessionStore.getSessions()[0]!;
+    expect(parseSessionDeepLinkUrl(buildMobileSessionMessageDeepLink(
+      'source', 'anchor', { session: before, deviceId: routeDeviceId },
+    ))?.deviceId).toBe(routeDeviceId);
+
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'new-mac', name: 'Mac' }]);
+    const current = remoteSessionStore.getSessions()[0]!;
+    expect(current.canonicalDeviceId).toBe('new-mac');
+    expect(current.deviceLinkDeviceId).toBe(routeDeviceId);
+    const links = [
+      buildMobileSessionMessageDeepLink('source', 'anchor', { session: current, deviceId: routeDeviceId }),
+      sessionMenuCopyLink(current),
+    ];
+    remoteSessionStore.applySessionPatch(routeDeviceId, 'source', { status: 'archived' });
+    expect(remoteSessionStore.getSessionDeviceId('source')).toBeUndefined();
+    for (const link of links) {
+      const target = parseSessionDeepLinkUrl(link)!;
+      expect(resolveSessionLinkDeviceId({
+        listedDeviceId: remoteSessionStore.getSessionDeviceId(target.sessionId),
+        linkedDeviceId: target.deviceId,
+        currentDeviceId: 'other-mac',
+      })).toBe('new-mac');
+    }
+  });
+
   it('dedupes the same session id across stale/current shards, keeping the current shard copy', () => {
     remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Lizi Mac' }]);
     // 同一 session id 同时出现在 stale 与 current 两个 shard(re-link 后旧 shard 残留)。
@@ -5430,19 +5731,46 @@ describe('任务消息内存治理', () => {
     expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(afterReset, 'dev-1')).toBe(true);
   });
 
-  it('schedule 失焦后回收到 0，后续 push 不会复活完整正文', async () => {
+  it('打开过的 schedule 离场后与 regular 一致：压回单窗而不是清空', async () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
     const authority = remoteSessionStore.enterSessionMessageDetail('s1');
-    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
 
-    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'app-background', authority);
     await flushReclaim();
-    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.at(-1)?.id).toBe('s1-m-99');
+  });
 
+  it.each(['deleted', 'archived'] as const)('%s 后同 id 重新出现的 schedule 不沿用旧的已打开标记', (status) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+  });
+
+  it('移除设备后同 id 重新出现的 schedule 不沿用旧的已打开标记', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+
+    remoteSessionStore.removeDevice('dev-1');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1', { source: 'scheduler' })]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+  });
+
+  it('从未打开的 schedule 不驻留推送来的完整正文', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
     remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
       sessionId: 's1',
-      message: message('late-push', 's1'),
+      message: message('unopened-push', 's1'),
     });
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
     expect(remoteSessionStore.getMessages('s1')).toEqual([]);
   });
 
@@ -5484,34 +5812,34 @@ describe('任务消息内存治理', () => {
   });
 
   it('页面卸载后本地工作排空仍会完成 deferred reclaim', async () => {
-    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const work = remoteSessionStore.acquireSessionMessageWork('s1', true);
     const authority = remoteSessionStore.enterSessionMessageDetail('s1');
-    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
     remoteSessionStore.leaveSessionMessageDetail('s1', 'session-switch', authority);
 
     await flushReclaim();
-    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(100);
     work.release();
     await flushReclaim();
-    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
   });
 
-  it('pending queue 暂缓 schedule 回收，queue 排空后由 store 主动补回收', async () => {
-    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+  it('pending queue 暂缓回收，queue 排空后由 store 主动补回收', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const authority = remoteSessionStore.enterSessionMessageDetail('s1');
-    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
     remoteSessionStore.setInputProjection('s1', projection('s1'));
     remoteSessionStore.leaveSessionMessageDetail('s1', 'app-background', authority);
 
     await flushReclaim();
-    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(100);
     remoteSessionStore.setInputProjection('s1', {
       ...projection('s1'),
       pendingQueue: [],
     });
     await flushReclaim();
-    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
   });
 
   it('regular 失焦压回单窗，同时保留窗口外的本地系统卡', async () => {
@@ -5531,8 +5859,53 @@ describe('任务消息内存治理', () => {
     expect(rows.at(-1)?.id).toBe('s1-m-99');
   });
 
+  it('后台运行中的 regular 任务持续收到列表推送，内存窗口不超过一页', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const pushed = manyMessages('s1', 300);
+    for (const row of pushed) {
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', listMessage: true, message: row,
+      });
+    }
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.at(-1)?.id).toBe('s1-m-299');
+  });
+
+  it('后台单窗上限只裁可重取的行，保留本地系统卡', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const localCard = {
+      ...messageAt('mobile-system-local-only', 's1', '2025-12-31T23:59:59.000Z'),
+      role: 'system' as const,
+    };
+    remoteSessionStore.setMessages('s1', [localCard]);
+    for (const row of manyMessages('s1', 200)) {
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', listMessage: true, message: row,
+      });
+    }
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.some((row) => row.id === localCard.id)).toBe(true);
+    expect(rows.at(-1)?.id).toBe('s1-m-199');
+  });
+
+  it('正在看的 regular 任务不受后台单窗上限影响', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 120), { authority });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1', listMessage: true, message: messageAt('s1-new', 's1', '2026-01-01T01:00:00.000Z'),
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(121);
+  });
+
   it('regular 全局 LRU 不淘汰当前详情，且总量压回约 800 条', () => {
-    const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
+    // 后台任务各自封顶一页(80)，要 11 个以上后台任务才会触发全局淘汰。
+    const sessions = Array.from({ length: 13 }, (_, index) => session(`s${index}`));
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
     remoteSessionStore.enterSessionMessageDetail('s0');
     for (const item of sessions) {
@@ -5549,17 +5922,17 @@ describe('任务消息内存治理', () => {
   });
 
   it('notifies an evicted session preview subscriber when another session exceeds the LRU budget', () => {
-    const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
+    const sessions = Array.from({ length: 13 }, (_, index) => session(`s${index}`));
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
     const previewChanged = vi.fn();
     const unsubscribe = remoteSessionStore.subscribeSessionMessagePreview('s0', previewChanged);
     try {
-      remoteSessionStore.setMessages('s0', manyMessages('s0', 100));
+      remoteSessionStore.setMessages('s0', manyMessages('s0', 80));
       expect(remoteSessionStore.getSessionMessagePreview('s0')).toBeDefined();
       previewChanged.mockClear();
 
       for (const item of sessions.slice(1)) {
-        remoteSessionStore.setMessages(item.id, manyMessages(item.id, 100));
+        remoteSessionStore.setMessages(item.id, manyMessages(item.id, 80));
       }
 
       expect(remoteSessionStore.getMessages('s0')).toEqual([]);
@@ -5597,18 +5970,18 @@ describe('任务消息内存治理', () => {
   });
 
   it('regular LRU 只淘汰可重取正文，不丢尚未落盘的本地系统卡', () => {
-    const sessions = Array.from({ length: 9 }, (_, index) => session(`s${index}`));
+    const sessions = Array.from({ length: 13 }, (_, index) => session(`s${index}`));
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
     const localCard = {
       ...messageAt('mobile-system-local-only', 's0', '2025-12-31T23:59:59.000Z'),
       role: 'system' as const,
     };
-    remoteSessionStore.setMessages('s0', [localCard, ...manyMessages('s0', 99)]);
+    remoteSessionStore.setMessages('s0', [localCard, ...manyMessages('s0', 79)]);
     for (const item of sessions.slice(1)) {
-      remoteSessionStore.setMessages(item.id, manyMessages(item.id, 100));
+      remoteSessionStore.setMessages(item.id, manyMessages(item.id, 80));
     }
 
-    expect(remoteSessionStore.getMessages('s0')).toHaveLength(100);
+    expect(remoteSessionStore.getMessages('s0')).toHaveLength(80);
     expect(remoteSessionStore.getMessages('s0').some((row) => row.id === localCard.id)).toBe(true);
   });
 
@@ -5633,18 +6006,18 @@ describe('任务消息内存治理', () => {
     )).toBe(false);
   });
 
-  it('source 晚到改判 schedule：当前详情立即压窗，失焦后归零', async () => {
+  it('source 晚到为 scheduler：已打开的详情仍按 regular 驻留', async () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const authority = remoteSessionStore.enterSessionMessageDetail('s1');
     remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
 
     remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', { source: 'scheduler' }));
-    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
-    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(100);
 
-    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur');
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
     await flushReclaim();
-    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
   });
 
   it('归档会话会撤销旧 authority，并拒绝迟到 push 复活正文', () => {
@@ -6666,5 +7039,74 @@ describe('task tag source isolation', () => {
     });
     expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([]);
     expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
+  });
+});
+
+describe('list message reuse', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('keeps explicitly prefetched prose after leaving a task, while stale detail pushes remain blocked', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', message: message('stale', 's1') });
+    const content = '完整正文'.repeat(2000);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: { ...message('prefetched', 's1'), content } });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['prefetched']);
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+  });
+
+  it('merges the disk window under list-only rows when the task opens', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const at = (id: string, createdAt: string) => messageAt(id, 's1', createdAt);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: at('prefetched', '2026-01-01T00:00:09.000Z') });
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      at('older', '2026-01-01T00:00:01.000Z'), { ...at('prefetched', '2026-01-01T00:00:09.000Z'), content: 'cached copy' },
+    ]);
+    expect(remoteSessionStore.getMessages('s1').map(row => [row.id, row.content])).toEqual([
+      ['older', 'hello'], ['prefetched', 'hello'],
+    ]);
+    // Only a list-only mirror merges; a loaded window keeps the existing "if empty" rule.
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [at('ignored', '2026-01-01T00:00:00.000Z')]);
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['older', 'prefetched']);
+  });
+
+  it('does not let another device seed the same task ID', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    remoteSessionStore.applyRemotePush('other', 'local-db:messages:created', { sessionId: 's1', listMessage: true, message: message('wrong', 's1') });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+});
+
+describe('jank metrics store size', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('counts full-store, home status and per-task preview subscribers separately', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1'), session('s2')]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1'), message('m2', 's1')]);
+    const before = takeJankMetrics().store!;
+    const unsubscribe = [
+      remoteSessionStore.subscribe(() => undefined),
+      remoteSessionStore.subscribeHomeStatus(() => undefined),
+      remoteSessionStore.subscribeHomeStatus(() => undefined),
+      remoteSessionStore.subscribeSessionMessagePreview('s1', () => undefined),
+      remoteSessionStore.subscribeSessionMessagePreview('s2', () => undefined),
+      remoteSessionStore.subscribeSessionMessagePreview('s2', () => undefined),
+    ];
+    setJankMetricsEnabled(true);
+    try {
+      const store = takeJankMetrics().store!;
+      expect(store).toMatchObject({ sessionCount: 1, messageCount: 2, maxSessionMessageCount: 2 });
+      expect(store.subscriberCount - before.subscriberCount).toBe(1);
+      expect(store.homeStatusSubscriberCount - before.homeStatusSubscriberCount).toBe(2);
+      expect(store.previewSubscriberCount - before.previewSubscriberCount).toBe(3);
+    } finally {
+      setJankMetricsEnabled(false);
+      for (const off of unsubscribe) off();
+    }
   });
 });

@@ -7,6 +7,7 @@ import {
   type ModelFavoriteMutation,
 } from '@cindy/device-link';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { extractIpcError } from '@/utils/ipcError';
 import type { ModelFavoriteItem, ModelFavoriteConfig, ModelFavoritePatch } from './modelFavorites';
 
 export interface FavoriteStore {
@@ -24,6 +25,7 @@ export function useRemoteModelFavorites(deviceId?: string) {
   current.current = key;
   const [state, setState] = useState<{ key: string; items: ModelFavoriteItem[] } | null>(null);
   const [error, setError] = useState(false);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [writeErrorKey, setWriteErrorKey] = useState<string | null>(null);
   const sequence = useRef(0);
   const items = state?.key === key ? state.items : [];
@@ -40,9 +42,11 @@ export function useRemoteModelFavorites(deviceId?: string) {
         return;
       setState({ key, items: parseModelFavorites(value) as ModelFavoriteItem[] });
       setError(false);
-    } catch {
+      setErrorCode(null);
+    } catch (err) {
       if (current.current === key && sequence.current === seq) {
         setError(true);
+        setErrorCode(extractIpcError(err)?.code ?? null);
       }
     }
   };
@@ -98,6 +102,7 @@ export function useRemoteModelFavorites(deviceId?: string) {
     } catch (error) {
       if (current.current === key) {
         setWriteErrorKey(key);
+        setErrorCode(extractIpcError(error)?.code ?? null);
         void refresh();
       }
       throw error;
@@ -122,5 +127,5 @@ export function useRemoteModelFavorites(deviceId?: string) {
     },
     remove: (uid) => write({ kind: 'remove', expected: expected(uid) }),
   };
-  return { items, store, error: error || writeErrorKey === key };
+  return { items, store, error: error || writeErrorKey === key, errorCode };
 }

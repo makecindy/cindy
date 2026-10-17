@@ -35,14 +35,22 @@ describe('replaceScope / get*', () => {
     expect(getMirrorFast(DRAFT, 'codex', 'openai', 'unknown')).toBeUndefined();
   });
 
-  it('只读真实 provider 槽,不采用 * 全局槽', () => {
+  it('* 权威槽优先于 provider 兼容副本,旧快照没有它才回落来源槽', () => {
     replaceScope(DRAFT, {
       'claude-code:*': { effortByModel: { opus: 'xhigh' }, fastByModel: { opus: true } },
       'claude-code:anthropic': { effortByModel: { opus: 'high' }, fastByModel: { opus: false } },
     });
+    // 权威槽优先:同一模型换个来源也读到同一档,不会被来源副本拽回旧值。
+    expect(getMirrorEffort(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe('xhigh');
+    expect(getMirrorEffort(DRAFT, 'claude-code', 'xd', 'opus')).toBe('xhigh');
+    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(true);
+    // 被控端旧快照只写过来源槽(没有 `*`)→ 回落来源副本;没有该来源条目时仍为 undefined
+    // (旧快照本就是降级路径:能读多少算多少,不会跨来源乱借)。
+    replaceScope(DRAFT, {
+      'claude-code:anthropic': { effortByModel: { opus: 'high' }, fastByModel: { opus: false } },
+    });
     expect(getMirrorEffort(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe('high');
     expect(getMirrorEffort(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
-    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
   });
 
   it('replaceScope(undefined) 等于清空该 scope', () => {
@@ -70,11 +78,11 @@ describe('scope 隔离', () => {
     expect(getMirrorEffort(SESSION, 'claude-code', 'anthropic', 'opus')).toBe('low');
   });
 
-  it('同 agent/model 按 provider 隔离,不同 agent 也隔离', () => {
+  it('同 agent/model 跨来源共享,不同 agent 仍隔离', () => {
     setMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus', true);
-    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
+    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(true);
     setMirrorFast(DRAFT, 'claude-code', 'xd', 'opus', false);
-    expect(getMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe(true);
+    expect(getMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe(false);
     expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(false);
     expect(getMirrorFast(DRAFT, 'codex', 'xd', 'opus')).toBeUndefined();
   });
@@ -125,7 +133,8 @@ describe('makeMirrorAccessors', () => {
     const acc = makeMirrorAccessors(SESSION, onWrite);
     acc.setChoice?.('claude-code', 'anthropic', 'opus', 'high');
     expect(acc.getEffort('claude-code', 'anthropic', 'opus')).toBe('high');
-    expect(acc.getEffort('claude-code', 'xd', 'opus')).toBeUndefined();
+    // 权威槽跨来源共享:另一个来源读到同一档。
+    expect(acc.getEffort('claude-code', 'xd', 'opus')).toBe('high');
     expect(onWrite).toHaveBeenCalledWith('claude-code', 'anthropic', 'opus', {
       effort: 'high',
       markModelChoice: true,

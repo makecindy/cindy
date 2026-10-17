@@ -103,7 +103,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     agentDeviceId: `share:${shareId}`,
     shareId,
     providerId: 'anthropic',
-    deviceName: "Magi's Mac Mini",
+    providerLabel: "Anthropic",
     ownerName: 'Magi',
     status: 'active',
     hostOnline: true,
@@ -120,7 +120,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     loaded: input.loaded ?? true,
     keepDeviceIds: input.keepDeviceIds ?? [],
     keepOnly: input.keepOnly,
-    deviceName: (item) => `${item.deviceName} · 来自 ${item.ownerName} 的分享`,
+    deviceName: (item) => `来自 ${item.ownerName} 的分享`,
     unavailableName: '已不可用的分享',
   });
 
@@ -135,7 +135,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     const [catalog] = build({ shares: [share('one')] });
     expect(catalog).toEqual({
       deviceId: 'share:one',
-      name: "Magi's Mac Mini · 来自 Magi 的分享",
+      name: "来自 Magi 的分享",
       status: 'ready',
       providers: [providers[0]],
       modelVisibilityOverrides: { 'claude-code:anthropic:claude-x': true },

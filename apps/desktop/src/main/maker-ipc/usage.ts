@@ -6,6 +6,7 @@
  * handler 时拉起 Electron / runtime config 副作用。
  */
 
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { createHash } from 'node:crypto';
 import { readSubscriptionAccountUsage, triggerSubscriptionAccountUsage, syncSubscriptionAccountUsage, setSubscriptionAccountUsageBroadcaster } from '../usage/subscriptionAccountUsage.js';
@@ -16,6 +17,7 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
   readClaudeAccountUsageSnapshot,
+  readClaudeAccountQuotaClear,
   triggerClaudeAccountUsageRefresh,
 } from '../usage/claudeAccountUsage.js';
 import {
@@ -248,6 +250,17 @@ export function triggerCodexAccountUsageRefresh(providerId?: string): void {
   });
 }
 
+type CodexRateLimitsReader = (providerId?: string) => Promise<MobileCodexRateLimitsResult>;
+let codexRateLimitsReader: CodexRateLimitsReader | null = null;
+
+/**
+ * Codex 限额与重置次数的同一次读取(与设置页、用量 chip 同一个 reset service)。供菜单栏等
+ * 主进程消费方使用；IPC 尚未注册时返回 null。
+ */
+export async function readCodexRateLimitsForHost(providerId?: string): Promise<MobileCodexRateLimitsResult | null> {
+  return codexRateLimitsReader ? codexRateLimitsReader(providerId) : null;
+}
+
 export function registerMakerUsageIpc(maker: Maker): void {
   log.info('registering maker:usage:* IPC handlers');
 
@@ -284,22 +297,25 @@ export function registerMakerUsageIpc(maker: Maker): void {
     return service;
   }
 
+  // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
+  // this account-level RPC. A stale response still returns its usage payload but cannot consume a
+  // newer recovery state.
+  const readCodexRateLimits: CodexRateLimitsReader = async (providerId) => {
+    const scope = activeOwnerScopeKey();
+    const service = getResetService(providerId);
+    const result = providerId && providerId !== 'openai'
+      ? await service.read()
+      : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
+    if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+    return { ...result, providerId: providerId ?? 'openai' };
+  };
+  codexRateLimitsReader = readCodexRateLimits;
+
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
     readAgentTodayUsage,
     readCodexAccountUsageSnapshot: readCodexAccountUsageSnapshotWithWebRefresh,
-    // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
-    // this account-level RPC. A stale response still returns its usage payload but cannot consume a
-    // newer recovery state.
-    readCodexRateLimits: async (providerId) => {
-      const scope = activeOwnerScopeKey();
-      const service = getResetService(providerId);
-      const result = providerId && providerId !== 'openai'
-        ? await service.read()
-        : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
-      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
-      return { ...result, providerId: providerId ?? 'openai' };
-    },
+    readCodexRateLimits,
     consumeCodexRateLimitReset: async (key, providerId) => {
       const scope = activeOwnerScopeKey();
       const result = await getResetService(providerId).consume(key);
@@ -313,6 +329,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     },
     readClaudeAccountUsageSnapshot,
+  readClaudeAccountQuotaClear,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,
     readReferenceModelPricing: getReferenceModelPricing,

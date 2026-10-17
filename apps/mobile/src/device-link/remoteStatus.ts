@@ -3,7 +3,8 @@ import {
   isDeviceUnresponsiveRemoteError,
   isTransientRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
-import type { DeviceLinkConnectionIssueKind, DeviceLinkStatus } from '@cindy/device-link';
+import type { DeviceLinkConnectionIssue, DeviceLinkConnectionIssueKind, DeviceLinkStatus } from '@cindy/device-link';
+import type { LocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { i18n } from '@/i18n';
 
 export {
@@ -18,6 +19,7 @@ const CONNECTION_ISSUE_COPY_KEYS: Record<
   { title: string; hint: string }
 > = {
   'auth-failed': { title: 'deviceLink.authFailedTitle', hint: 'deviceLink.authFailedHint' },
+  'device-removed': { title: 'deviceLink.deviceRemovedTitle', hint: 'deviceLink.deviceRemovedHint' },
   replaced: { title: 'deviceLink.replacedTitle', hint: 'deviceLink.replacedHint' },
   'too-many-connections': {
     title: 'deviceLink.tooManyConnectionsTitle',
@@ -37,6 +39,33 @@ export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): strin
 
 export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string {
   return i18n.t(CONNECTION_ISSUE_COPY_KEYS[kind].hint);
+}
+
+/** Shared by Home and detail banners. Only native evidence blames the phone;
+ * only an online service's device verdict blames the computer. */
+export function connectionHealthCopy(input: {
+  network: LocalNetworkStatus;
+  status: DeviceLinkStatus;
+  issue: DeviceLinkConnectionIssue | null;
+  deviceDisconnected?: boolean;
+  deviceUnresponsive?: boolean;
+}): { title: string; hint: string } | null {
+  if (input.network === 'unavailable') {
+    return { title: i18n.t('deviceLink.localNetwork.title'), hint: i18n.t('deviceLink.localNetwork.hint') };
+  }
+  if (input.issue && (input.status !== 'online' || input.issue.kind === 'unstable')) {
+    return { title: connectionIssueTitle(input.issue.kind), hint: connectionIssueHint(input.issue.kind) };
+  }
+  if (input.status !== 'online') {
+    return { title: i18n.t('deviceLink.serviceConnection.title'), hint: i18n.t('deviceLink.serviceConnection.hint') };
+  }
+  if (input.deviceDisconnected) {
+    return { title: i18n.t('deviceLink.cachedHistory.title'), hint: i18n.t('deviceLink.cachedHistory.hint') };
+  }
+  if (input.deviceUnresponsive) {
+    return { title: i18n.t('deviceLink.deviceUnresponsiveTitle'), hint: i18n.t('deviceLink.deviceUnresponsiveHint') };
+  }
+  return null;
 }
 
 export function relayStatusLabel(status: DeviceLinkStatus): string {
@@ -120,6 +149,14 @@ export function isAutoRecoveringRemoteError(error: unknown): boolean {
 }
 
 /**
+ * 被控端因任务仍在运行而拒绝操作（如删除消息）。handler 的 `[SESSION_RUNNING]`
+ * 前缀随隧道放在 message 里（外层 code 为 IPC_ERROR），code 与 message 两种形态都认。
+ */
+export function isSessionRunningRemoteError(error: unknown): boolean {
+  return formatRemoteErrorShared(error).includes('SESSION_RUNNING');
+}
+
+/**
  * 权威同步的一轮内置瞬态重试耗尽后，页面继续自动恢复所用的外层退避。
  * 900ms 尽快吃掉短抖动，随后指数放缓并封顶 30s，避免电脑长期离线时形成请求风暴。
  */
@@ -188,4 +225,3 @@ export function describeRemoteComposerBlockingError(error: string | null): strin
   if (!COMPOSER_BLOCKING_MARKERS.some((marker) => error.includes(marker))) return null;
   return localizedStableRemoteError(error);
 }
-

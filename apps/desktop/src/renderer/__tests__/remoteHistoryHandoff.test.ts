@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
-  HistoryViewController, HistoryViewHandoff, projectHistoryView, renderHistoryView, historyViewLeaves,
+  HistoryViewController, HistoryViewHandoff, projectHistoryView, renderHistoryView, historyViewLeaves, nextHistoryCacheReceipt,
 } from '@cindy/maker-shared/message-window';
 import { buildRenderItems, groupWorkRuns, selectVisibleMessages, collectTurnFinalAssistantClientIds,
   findLastUserMessageClientId, planSessionBelongsToLatestUserTurn } from '../components/chat/MessageStream';
@@ -37,6 +37,7 @@ function fixture() {
       view, snapshot, liveMessages: raw, streaming: false,
       isLive: (message) => message.isStreaming === true,
       pendingHandoff: state.pending,
+      staleTail: state.tail,
       isLocalUser: (message) => message.role === 'user' && (message.isPendingPersist === true || !!message.blockedByGhost || !!message.localSendPrecedingClientIds),
       build,
       structure: {
@@ -52,6 +53,99 @@ function fixture() {
 }
 
 describe('desktop remote history uses the shared live-to-history handoff', () => {
+  // Same-ID body updates must survive cache restore and yield to a later Host read.
+  it('renders a later list receipt instead of the old cached body', async () => {
+    const { view, render, setSource } = fixture();
+    const old = { ...row('reply'), content: 'old cached body' };
+    const readReceipt = nextHistoryCacheReceipt();
+    const received = { ...old, content: 'updated received body', cacheReceipt: nextHistoryCacheReceipt() };
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ items: projectHistoryView([old], false), details: new Map(),
+      expanded: new Set(), nextCursor: null, hasMore: false, loading: false, ready: true, error: null,
+      readReceipt }));
+    expect(render([received]).text).toContain('updated received body');
+    expect(render([received]).text).not.toContain('old cached body');
+    setSource([{ ...old, content: 'authoritative body' }]);
+    view.setActive(true);
+    await view.refresh();
+    expect(render([received]).text).toContain('authoritative body');
+    expect(render([received]).text).not.toContain('updated received body');
+    view.setActive(false);
+  });
+
+  it.each([false, true])('places a late harness boundary before the reserved send (history ready=%s)', async (ready) => {
+    const { view, render, setSource } = fixture();
+    if (ready) await view.refresh();
+    const previous = row('user');
+    const sent = reserveRemoteUser({ ...row('sent'), role: 'user' as const, isPendingPersist: true }, [previous]);
+    const boundary: HistoryChatMessage = { ...row('switch'), systemCardType: 'agent-switch',
+      createdAt: '2026-09-08T00:00:02Z' };
+    const raw = [previous, sent, boundary];
+    const ids = () => render(raw).items.filter((item) => item.type === 'message').map((item) => item.message.clientId);
+    // Local Desktop sends have no explicit reservation until their DB echo.
+    const { localSendPrecedingClientIds: _reservation, ...localPending } = sent;
+    expect(projectRemoteUsers([previous, localPending, boundary]).map((message) => message.clientId))
+      .toEqual(['user', 'switch', 'sent']);
+    expect(projectRemoteUsers(raw).map((message) => message.clientId)).toEqual(['user', 'switch', 'sent']);
+    if (!ready) expect(ids()).toEqual(['user', 'switch', 'sent']);
+    setSource([previous, boundary]);
+    await view.refresh();
+    expect(ids()).toEqual(['user', 'switch', 'sent']);
+    raw[1] = { ...sent, id: 'db-sent', isPendingPersist: undefined };
+    expect(ids()).toEqual(['user', 'switch', 'sent']);
+    setSource([previous, boundary, raw[1]]);
+    await view.refresh();
+    expect(ids()).toEqual(['user', 'switch', 'sent']);
+    view.setActive(false);
+  });
+
+  it('does not pull a later harness switch across a reply into an earlier send', () => {
+    const previous = row('user');
+    const sent = reserveRemoteUser({ ...row('sent'), role: 'user' as const }, [previous]);
+    const reply = row('reply');
+    const boundary = { ...row('switch'), systemCardType: 'agent-switch' as const };
+    const next = reserveRemoteUser({ ...row('next'), role: 'user' as const }, [previous, sent, reply]);
+    expect(projectRemoteUsers([previous, sent, reply, next, boundary]).map((message) => message.clientId))
+      .toEqual(['user', 'sent', 'reply', 'switch', 'next']);
+  });
+
+  it.each([false, true])('keeps consecutive switches with their sends without a reply (next echoed=%s)', (echoed) => {
+    const previous = row('user');
+    const firstSwitch = { ...row('switch-first'), systemCardType: 'agent-switch' as const };
+    const secondSwitch = { ...row('switch-next'), systemCardType: 'agent-switch' as const };
+    // The first DB echo has arrived, but history has not retired its reservation.
+    const first = reserveRemoteUser({ ...row('first'), role: 'user' as const }, [previous]);
+    const next = reserveRemoteUser({ ...row('next'), role: 'user' as const,
+      isPendingPersist: !echoed }, [previous, firstSwitch, first]);
+    const raw = [previous, firstSwitch, first, secondSwitch, next];
+    const expected = ['user', 'switch-first', 'first', 'switch-next', 'next'];
+    expect(projectRemoteUsers(raw).map((message) => message.clientId)).toEqual(expected);
+    expect(projectRemoteUsers(raw, new Set(['user', 'switch-first'])).map((message) => message.clientId)).toEqual(expected);
+    const confirmedIds = new Set(expected);
+    expect(projectRemoteUsers(confirmRemoteUsers(raw, confirmedIds), confirmedIds).map((message) => message.clientId)).toEqual(expected);
+  });
+
+  it('shows a list-pushed reply after a restored snapshot until the page read covers it', async () => {
+    const { view, render, setSource } = fixture();
+    const reply = { ...row('reply'), content: 'prefetched reply', createdAt: '2026-09-08T00:00:09Z' };
+    const pendingUser = { ...row('typing'), role: 'user' as const, content: 'local draft send',
+      isPendingPersist: true, createdAt: '2026-09-08T00:00:10Z' };
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ items: projectHistoryView([row('user')], false), details: new Map(),
+      expanded: new Set(), nextCursor: null, hasMore: false, loading: false, ready: true, error: null }));
+    const restored = render([row('user'), reply, pendingUser]);
+    expect(restored.state.tail).toEqual(new Set(['reply', 'typing']));
+    expect(restored.text).toContain('prefetched reply');
+    expect(restored.text.split('local draft send')).toHaveLength(2);
+    setSource([row('user'), reply]);
+    view.setActive(true);
+    await view.refresh();
+    const fresh = render([row('user'), reply]);
+    expect(fresh.state.tail.size).toBe(0);
+    expect(fresh.text.split('prefetched reply')).toHaveLength(2);
+    view.setActive(false);
+  });
+
   it('keeps the live tail after history when the last send reservation retires', async () => {
     const { view, render, setSource } = fixture();
     await view.refresh();

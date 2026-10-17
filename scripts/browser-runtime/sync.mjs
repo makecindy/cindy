@@ -1510,7 +1510,95 @@ export async function quarantineTargetWithoutClosing(opts: {
 }`,
     },
   ],
+  'extension/src/browser/cdp.ts': [
+    {
+      desc: 'let callers create automation-only tabs without activating the headed browser window',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `  cdpUrl: string;\n  url: string;\n  ssrfPolicy?: SsrFPolicy;`,
+            `  cdpUrl: string;\n  url: string;\n  background?: boolean;\n  navigationPolicy?: ReturnType<typeof withBrowserNavigationPolicy>;\n  ssrfPolicy?: SsrFPolicy;`,
+          ],
+          [
+            `    url: opts.url,\n    ...withBrowserNavigationPolicy(opts.ssrfPolicy),`,
+            `    url: opts.url,\n    ...(opts.navigationPolicy ?? withBrowserNavigationPolicy(opts.ssrfPolicy)),`,
+          ],
+          [
+            `          const created = (await send("Target.createTarget", { url: opts.url })) as {`,
+            `          const created = (await send("Target.createTarget", {\n            url: opts.url,\n            background: opts.background === true,\n          })) as {`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/routes/tabs.ts': [
+    {
+      desc: 'carry the background-open intent from the neutral runtime into tab creation',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `      const url = toStringOrEmpty((req.body as { url?: unknown })?.url);\n      const label = readOptionalTabLabel(req.body);`,
+            `      const url = toStringOrEmpty((req.body as { url?: unknown })?.url);\n      const label = readOptionalTabLabel(req.body);\n      const background = (req.body as { background?: unknown })?.background === true;`,
+          ],
+          [
+            `          const tab = await profileCtx.openTab(url, { label });`,
+            `          const tab = await profileCtx.openTab(url, { label, background });`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/server-context.selection.ts': [
+    {
+      desc: 'keep the implicit first tab used by agent navigation in the background',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `  openTab: (url: string) => Promise<BrowserTab>;`,
+            `  openTab: (url: string, opts?: { background?: boolean }) => Promise<BrowserTab>;`,
+          ],
+          [
+            `        openedTab = await openTab("about:blank");`,
+            `        openedTab = await openTab("about:blank", { background: true });`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/server-context.tab-ops.ts': [
+    {
+      desc: 'propagate background tab creation to the managed Chrome CDP target',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;`,
+            `  openTab: (url: string, opts?: { label?: string; background?: boolean }) => Promise<BrowserTab>;`,
+          ],
+          [
+            `  const openTab = async (url: string, opts?: { label?: string }): Promise<BrowserTab> => {`,
+            `  const openTab = async (\n    url: string,\n    opts?: { label?: string; background?: boolean },\n  ): Promise<BrowserTab> => {`,
+          ],
+          [
+            `      cdpUrl: profile.cdpUrl,\n      url,\n      ssrfPolicy: getCdpControlPolicy(),`,
+            `      cdpUrl: profile.cdpUrl,\n      url,\n      background: opts?.background,\n      navigationPolicy: ssrfPolicyOpts,\n      ssrfPolicy: getCdpControlPolicy(),`,
+          ],
+          [
+            `    const createdViaCdp = await createTargetViaCdp(createTargetOpts)\n      .then((r) => r.targetId)\n      .catch(() => null);`,
+            `    const createdViaCdp = await createTargetViaCdp(createTargetOpts)\n      .then((r) => r.targetId)\n      .catch((err: unknown) => {\n        if (opts?.background === true) {\n          throw err;\n        }\n        return null;\n      });`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/server-context.types.ts': [
+    {
+      desc: 'type the host-only background option on profile tab operations',
+      find: `  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;`,
+      replace: `  openTab: (url: string, opts?: { label?: string; background?: boolean }) => Promise<BrowserTab>;`,
+    },
+  ],
   'extension/src/browser/chrome.ts': [
+    {
+      desc: 'start headed automation Chrome without an empty foreground window',
+      find: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  }`,
+      replace: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  } else {\n    args.push("--no-startup-window");\n  }`,
+    },
     {
       desc: 'expose managed-profile PID lookup so the host can confirm process exit from the OS, not from CDP endpoint silence (a stalled Chrome stops answering while still alive)',
       find: `function clearChromeSingletonArtifacts(userDataDir: string) {`,

@@ -21,6 +21,13 @@ export interface OrcaDiagnosticWorkerSnapshot {
     effort: string | null;
     workingDir: string;
   };
+  /** 跑在另一台电脑上的 Worker：运行设备投影；本机 Worker 无此字段。 */
+  executionDevice?: {
+    deviceId: string;
+    deviceName?: string;
+    reachable?: boolean;
+    workingDir?: string;
+  };
 }
 
 export interface OrcaDiagnosticsDeps {
@@ -68,7 +75,17 @@ async function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnostic
     model: worker.session.model,
     effort: worker.session.effort ?? null,
     focused: worker.focused,
-    working_dir: worker.session.workingDir,
+    // 远端 Worker 的本机代理行没有目录；展示运行设备上的目录。
+    working_dir: worker.executionDevice?.workingDir ?? worker.session.workingDir,
+    ...(worker.executionDevice
+      ? {
+          execution_device: {
+            device_id: worker.executionDevice.deviceId,
+            device_name: worker.executionDevice.deviceName ?? null,
+            reachable: worker.executionDevice.reachable ?? null,
+          },
+        }
+      : {}),
   };
 }
 

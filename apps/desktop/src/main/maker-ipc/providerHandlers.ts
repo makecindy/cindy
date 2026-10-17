@@ -1,4 +1,6 @@
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { pruneProviderGroupBindings } from '../provider-group/bindings.js';
+import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -287,6 +289,11 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): (() => void) & { commit?: () => void };
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /**
+   * 自定义供应商删除后立即让供应商组转分享同步；删除组配置本身是异步落盘，不能等下一轮轮询。
+   * 生产接线为 providerGroupReshare.kick，单测可注入内存桩。
+   */
+  kickProviderGroupReshare?(reason: string): void;
   /** Non-sensitive spawn-config signature for one custom Provider config. */
   codexCustomProviderConfigSignature?(config: CustomProviderConfig): string;
   /** Force-retire the shared local Codex Host and hold its change guard before mutation. */
@@ -1101,9 +1108,20 @@ export function registerProviderHandlers(
         ownerGeneration: ownerAtIngress?.generation ?? 0,
         providers: providers.map((provider) => {
           const safe = withoutProviderHeaderCredentials(provider);
+          const view = {
+            ...safe,
+            ...(safe.models ? {
+              models: Object.fromEntries(
+                Object.entries(safe.models).map(([agent, models]) => [
+                  agent,
+                  models?.map((model) => ({ ...model, effortsUnknown: model.effortsUnknown === true })),
+                ]),
+              ),
+            } : {}),
+          };
           return remoteAccess
-            ? { ...safe, remoteInvocationEnabled: remoteAccess(provider.id) }
-            : safe;
+            ? { ...view, remoteInvocationEnabled: remoteAccess(provider.id) }
+            : view;
         }),
         providerOrder,
         modelVisibilityOverrides,
@@ -2255,6 +2273,18 @@ export function registerProviderHandlers(
             await afterChange(codexHostPrepared, commitRouteMutation);
             assertProviderMutationOwner(ownerAtIngress);
             deps.broadcastPricingChanged();
+            // 删除连接即删除它的供应商组(provider-groups.md §3)：同名重建会得到同一个 id，不能让旧组复活。
+            await writeProviderGroup(providerId, null)
+              .then(() => {
+                deps.kickProviderGroupReshare?.('provider-delete');
+                return pruneProviderGroupBindings(providerId, null);
+              })
+              .catch((error) => {
+                log.warn('provider group cleanup after provider deletion failed', {
+                  providerId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
           });
         };
         if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {

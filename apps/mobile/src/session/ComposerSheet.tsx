@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 export interface ComposerSheetProps {
   nativeContent?: boolean;
+  /** Preserve the RN sheet path for content with its own ScrollView. */
+  contentScrolls?: boolean;
+  /** Use an ungrouped system list instead of the default form. */
+  nativeList?: boolean;
   /** Protect an unsaved or in-flight form; explicit Back/Save remains available. */
   preventDismiss?: boolean;
   nativeHeader?: ReactNode;

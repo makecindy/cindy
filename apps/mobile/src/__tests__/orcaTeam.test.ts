@@ -13,6 +13,8 @@ import {
   rememberOrcaStartFailure,
   narrowOrcaWorkerProvider,
   orcaWorkerProvidersForLead,
+  parseOrcaExecutionDevices,
+  isAbsoluteOrcaWorkerDir,
   subscribeOrcaStartFailure,
   takeOrcaStartFailure,
 } from '@/session/orcaTeam';
@@ -32,6 +34,7 @@ function fakeMaker(opts: {
   orca?: OrcaFake;
 }): MobileMakerTransport {
   return {
+    listAvailableAgents: vi.fn(async () => ['codex']),
     getCapabilities: vi.fn(async () => {
       if (opts.capabilitiesError) throw opts.capabilitiesError;
       return opts.capabilities ?? { supportsOrcaWorkerPermissionMode: true };
@@ -53,6 +56,10 @@ function fakeMaker(opts: {
 }
 
 const project = { orcaRole: null, workspaceKind: 'project' as const, workingDir: '/repo', remoteHostId: null };
+const remoteLead = {
+  leadDeviceId: 'lead-device', leadDeviceName: 'Lead computer', leadSessionId: 'lead-1',
+  leadTitle: 'Lead task', workerLabel: 'tester',
+};
 
 describe('mobile Orca collaboration entry', () => {
   it('only offers collaboration to Lead-capable tasks', () => {
@@ -121,6 +128,114 @@ describe('mobile Orca collaboration mutations', () => {
     role: 'Reviewer',
     initialTask: 'check tests',
   };
+
+  it('preserves the remote device for first and added Workers and sends a folder only in path mode', async () => {
+    const remote = { ...form, executionDeviceId: 'device-b', remoteDirMode: 'dialogue' as const, remoteDir: '/stale' };
+    expect(buildOrcaEnableOptions(remote)).toMatchObject({ executionDeviceId: 'device-b' });
+    expect(buildOrcaEnableOptions(remote)).not.toHaveProperty('workingDir');
+    const maker = fakeMaker({});
+    await createOrcaWorker(maker, 'lead-1', remote, []);
+    expect(maker.orca.createWorker).toHaveBeenCalledWith(expect.objectContaining({ executionDeviceId: 'device-b' }));
+    expect(vi.mocked(maker.orca.createWorker).mock.calls[0]![0]).not.toHaveProperty('workingDir');
+    const path = { ...remote, remoteDirMode: 'path' as const, remoteDir: '  D:\\projects\\worker  ' };
+    expect(buildOrcaEnableOptions(path)).toMatchObject({ executionDeviceId: 'device-b', workingDir: 'D:\\projects\\worker' });
+    await createOrcaWorker(maker, 'lead-1', path, []);
+    expect(maker.orca.createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ workingDir: 'D:\\projects\\worker' }));
+    for (const remoteDir of ['', 'relative/path', 'C:relative']) {
+      expect(() => buildOrcaEnableOptions({ ...path, remoteDir })).toThrow('INVALID_PARAMS');
+      await expect(createOrcaWorker(maker, 'lead-1', { ...path, remoteDir }, [])).rejects.toThrow('INVALID_PARAMS');
+    }
+    expect(maker.orca.createWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['project', 'dialogue'] as const)('hides collaboration for a real remote Worker in a %s workspace', async (workspaceKind) => {
+    const maker = fakeMaker({});
+    const session = { ...project, workspaceKind, orcaRemoteLead: remoteLead };
+    expect(isOrcaCollabEligible(session)).toBe(false);
+    await expect(readOrcaCollabEntryStatus(maker, session, 'codex')).resolves.toBe('ineligible');
+    expect(maker.getCapabilities).not.toHaveBeenCalled();
+    expect(maker.orca.getCollabPolicy).not.toHaveBeenCalled();
+    // 与桌面一致：解除协同仍保留来源标记，不把历史 Worker 当作新的 Lead。
+    expect(isOrcaCollabEligible({ ...session, orcaRemoteLead: { ...remoteLead, releasedAt: 1 } })).toBe(false);
+    expect(isOrcaCollabEligible({ ...session, orcaRole: 'lead' })).toBe(false);
+    expect(isOrcaCollabEligible({ ...session, orcaRemoteLead: null })).toBe(true);
+  });
+
+  it('parses device versions conservatively and recognizes cross-platform absolute folders', () => {
+    expect(parseOrcaExecutionDevices({ devices: [null, {}, { deviceId: 'b', name: 'B', supported: true }, { deviceId: 'old', supported: 1 }] }))
+      .toEqual([{ deviceId: 'b', name: 'B', platform: null, supported: true }, { deviceId: 'old', name: 'old', platform: null, supported: false }]);
+    expect(parseOrcaExecutionDevices(null)).toEqual([]);
+    expect(parseOrcaExecutionDevices({ devices: 'bad' })).toEqual([]);
+    for (const path of ['/srv/worker', 'C:\\work', 'C:/work', '\\\\server\\share']) expect(isAbsoluteOrcaWorkerDir(path)).toBe(true);
+  });
+
+  it('checks the Lead host through its registered Agent when the remote Worker uses Pi', async () => {
+    const maker = fakeMaker({});
+    vi.mocked(maker.getCapabilities).mockImplementation(async (agent) => {
+      if (agent !== 'codex') throw new Error(`Agent '${agent}' is not registered`);
+      return { supportsOrcaWorkerPermissionMode: true };
+    });
+    const remote = { ...form, agent: 'pi' as const, executionDeviceId: 'device-b' };
+    await expect(enableOrcaTeam(maker, 'lead-1', buildOrcaEnableOptions(remote)))
+      .resolves.toEqual({ workerSessionId: 'worker-1' });
+    await expect(createOrcaWorker(maker, 'lead-1', remote, []))
+      .resolves.toEqual({ workerSessionId: 'worker-2' });
+    expect(maker.getCapabilities).toHaveBeenCalledTimes(2);
+    expect(maker.getCapabilities).toHaveBeenCalledWith('codex');
+    expect(maker.getCapabilities).not.toHaveBeenCalledWith('pi');
+    expect(maker.orca.enable).toHaveBeenCalledWith('lead-1', expect.objectContaining({ workerAgent: 'pi', executionDeviceId: 'device-b' }));
+    expect(maker.orca.createWorker).toHaveBeenCalledWith(expect.objectContaining({ agent: 'pi', executionDeviceId: 'device-b' }));
+  });
+
+  it('still refuses remote creation when the Lead host has no Agent or no permission support', async () => {
+    const remote = { ...form, agent: 'pi' as const, executionDeviceId: 'device-b' };
+    const empty = fakeMaker({});
+    vi.mocked(empty.listAvailableAgents).mockResolvedValue([]);
+    for (const maker of [empty, fakeMaker({ capabilities: {} })]) {
+      await expect(enableOrcaTeam(maker, 'lead-1', buildOrcaEnableOptions(remote))).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+      await expect(createOrcaWorker(maker, 'lead-1', remote, [])).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+      expect(maker.orca.enable).not.toHaveBeenCalled();
+      expect(maker.orca.createWorker).not.toHaveBeenCalled();
+    }
+  });
+
+  // 远程供应商与本机供应商一视同仁(2026-10-10)：Worker 的 Agent 可以放到另一台电脑或分享上。
+  it('sends the Worker Agent location only to a host that declares support', async () => {
+    const elsewhere = {
+      ...form,
+      agent: 'pi' as const,
+      agentDeviceId: 'share:s1',
+      model: { id: 'spark/qwen', providerId: 'spark', effort: 'high', fast: false },
+    };
+    const supported = fakeMaker({ capabilities: { supportsOrcaWorkerPermissionMode: true, supportsOrcaWorkerAgentDevice: true } });
+    await createOrcaWorker(supported, 'lead-1', elsewhere, []);
+    expect(supported.orca.createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'pi', agentDeviceId: 'share:s1', model: 'spark/qwen', providerId: 'spark',
+    }));
+    // Worker 的 Agent 不在被控电脑上：用 Lead 已注册的 Agent 查被控电脑的能力。
+    expect(supported.getCapabilities).toHaveBeenCalledWith('codex');
+    expect(buildOrcaEnableOptions({ ...form, agentDeviceId: null })).toMatchObject({ agentDeviceId: null });
+    expect(buildOrcaEnableOptions(form)).not.toHaveProperty('agentDeviceId');
+
+    // 旧被控端会静默丢掉这个字段：表单展示后被控端降级时 fail-closed。
+    const legacy = fakeMaker({});
+    await expect(createOrcaWorker(legacy, 'lead-1', elsewhere, [])).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    await expect(enableOrcaTeam(legacy, 'lead-1', buildOrcaEnableOptions(elsewhere))).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(legacy.orca.createWorker).not.toHaveBeenCalled();
+    expect(legacy.orca.enable).not.toHaveBeenCalled();
+  });
+
+  it("keeps another computer's source when narrowing against the controlled computer's catalog", () => {
+    const elsewhere = { ...form, agentDeviceId: 'agent-pc', model: { id: 'spark/qwen', providerId: 'spark', effort: 'high', fast: false } };
+    expect(narrowOrcaWorkerProvider(elsewhere, [])).toBe(elsewhere);
+  });
+
+  it('explains an unreachable Agent computer or share with the remote Agent wording', () => {
+    expect(describeOrcaError(new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] offline'), null))
+      .toBe(i18n.t('session.remoteError.REMOTE_AGENT_UNAVAILABLE'));
+    expect(describeOrcaError(new Error('IPC_ERROR [REMOTE_AGENT_SHARE_PAUSED] paused'), null))
+      .toBe(i18n.t('session.remoteError.REMOTE_AGENT_SHARE_PAUSED'));
+  });
 
   it('builds enable options with a derived label and only the chosen model fields', () => {
     expect(buildOrcaEnableOptions(form, 'task')).toEqual({

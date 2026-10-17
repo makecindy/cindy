@@ -27,7 +27,9 @@ import {
   useState,
 } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
 import {
@@ -59,7 +61,6 @@ import {
 
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
-import { BotWorkingStatus } from '@/features/bots/BotWorkingStatus';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
@@ -91,6 +92,7 @@ import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
+import { InputHandoffCard } from '@/features/input-handoff/InputHandoffCard';
 import { RemoteDesktopConfirmationNotice } from './RemoteDesktopConfirmationNotice';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
@@ -105,10 +107,7 @@ import {
   readSendFollowCancelGeneration,
   tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
-import {
-  getMessageStreamIndicatorResizeTargets,
-  measureMessageStreamIndicatorClearanceOffset,
-} from '@/components/chat/messageStreamIndicatorPosition';
+import { useComposerOverlayMetrics } from './useComposerOverlayMetrics';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -169,6 +168,7 @@ import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import {
   controlledTaskAgentLocationReadable,
+  controlledTaskReadableShareIds,
   controlledTaskSupportsAgentLocation,
   selectControlledTaskAgentDevices,
 } from '@/lib/controlledTaskAgentLocation';
@@ -191,6 +191,7 @@ import {
   useRemoteSessionConnection,
 } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionTurnActiveTruth';
+import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
 import { decideRemoteSessionExit } from './remoteSessionExit';
@@ -281,6 +282,7 @@ import {
   resolveRunningUsageMeta,
 } from './lib/runningTokenUsage';
 import { RunningTokenRatePopover, useRunningTokenRateHistory } from './RunningTokenRatePopover';
+import type { TokenSpeedSnapshot } from './lib/runningTokenRateHistory';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -309,7 +311,7 @@ import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
   attachGhostMediaToSession,
-  getGhostMediaUriFromDataTransfer,
+  getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import {
@@ -317,7 +319,7 @@ import {
   getDroppedFileItems,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
-import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { getCollaborationStartErrorMessage, workerAgentDeviceErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { consumePendingRemoteCollab, enableRemoteCollabForSession } from './remoteCollabHandoff';
@@ -343,6 +345,7 @@ import {
   shouldRevealOrcaWorkersBeforeFirstPaint,
 } from './lib/orcaPassiveReveal';
 import { didOpenOrcaWorkersTab, revealOrcaWorkersWithRetry } from './lib/orcaWorkersRevealRetry';
+import { nextCollabEnabledEdge, type CollabEnabledBaseline } from './lib/collabEnabledEdge';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
   ensureOrcaWorkersTab,
@@ -764,7 +767,16 @@ export function createWritableDirRemovalQueue() {
   };
 }
 
-export function CCAgentSessionView({
+export function CCAgentSessionView(props: CCAgentSessionViewProps) {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  return (
+    <CindyMakeSessionGate sessionId={props.sessionIdProp ?? sessionId}>
+      <CCAgentSessionContent {...props} />
+    </CindyMakeSessionGate>
+  );
+}
+
+function CCAgentSessionContent({
   sessionIdProp,
   routeOwner,
   compact,
@@ -843,11 +855,16 @@ export function CCAgentSessionView({
   const setRightSidebarSessionId = outletContext?.setRightSidebarSessionId;
   const setRightSidebarWorkdir = outletContext?.setRightSidebarWorkdir;
   const { enabled: silentEncryptedRetryEnabled } = useSilentEncryptedRetry();
-  const [forkStripEncryptedRunning, setForkStripEncryptedRunning] = useState(false);
   // 从 Automations 的 RunHistoryCard 跳过来的 navigate 会带 state.from='automations'，
   // 在聊天区左上角显示一个返回按钮；点别的 session 入口（不带 state）时按钮自然消失。
-  const navState = location.state as { from?: string } | null;
+  const navState = location.state as { from?: string; sourceSessionId?: unknown } | null;
   const cameFromAutomations = navState?.from === 'automations';
+  // /review 审查任务不在任务列表里,从来源任务的审查卡片进入时带上来源 id,
+  // 左上角给出回到来源任务的返回按钮(侧栏收起时这是唯一的回路)。
+  const reviewSourceSessionId =
+    navState?.from === 'review-source' && typeof navState.sourceSessionId === 'string'
+      ? navState.sourceSessionId
+      : null;
   const handoffFrom = useMemo(() => parseHandoffState(location.state), [location.state]);
   const locationSearchJump = useMemo(() => parseSearchJumpState(location.state), [location.state]);
   const searchJump = searchJumpProp !== undefined ? searchJumpProp : locationSearchJump;
@@ -987,9 +1004,7 @@ export function CCAgentSessionView({
   // Bot route gates have already checked durable ownership. The async runtime
   // snapshot may be absent during load/reconnect; it must never change the skin.
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
-  // 伙伴没有 RunningStatusBar，折叠呼吸灯继续留在输入框上方，不能随状态行一起消失。
-  const showCenteredControlledBanner =
-    hasControlledBanner && (!controlledBannerCollapsed || Boolean(botChatIdentity));
+  const showCenteredControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
   const botAssistantAvatar = useMemo(
@@ -1503,10 +1518,7 @@ export function CCAgentSessionView({
   const overlayRef = useCallback((node: HTMLDivElement | null) => {
     setOverlayEl(node);
   }, []);
-  const [overlayHeight, setOverlayHeight] = useState(200);
-  const [bottomCenterClearanceOffset, setBottomCenterClearanceOffset] = useState<
-    number | undefined
-  >(undefined);
+  const { overlayHeight, bottomCenterClearanceOffset } = useComposerOverlayMetrics(overlayEl);
   const [inlinePlanVisibilityState, setInlinePlanVisibilityState] = useState<{
     sessionId: string | undefined;
     value: InlinePlanVisibility | null;
@@ -1531,42 +1543,6 @@ export function CCAgentSessionView({
     },
     [sessionId],
   );
-
-  useEffect(() => {
-    if (!overlayEl) return;
-    const measureOverlay = () => {
-      // 状态行会动态出现 / 收起，overlay 总高度不等于底部中央控件的避让边界。
-      // 空中央行仍以 composer 栈为锚；步骤 / 接管胶囊在场时改取中央组顶边，
-      // 让消息流悬浮按钮与它们纵向成栈，而不是共享同一块 32px 区域。
-      setOverlayHeight(overlayEl.offsetHeight);
-      setBottomCenterClearanceOffset(measureMessageStreamIndicatorClearanceOffset(overlayEl));
-    };
-    const ro = new ResizeObserver(measureOverlay);
-    let observedTargets = new Set<HTMLElement>();
-    const syncResizeTargetsAndMeasure = () => {
-      const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
-      for (const target of observedTargets) {
-        if (!nextTargets.has(target)) ro.unobserve(target);
-      }
-      for (const target of nextTargets) {
-        if (!observedTargets.has(target)) ro.observe(target);
-      }
-      observedTargets = nextTargets;
-      measureOverlay();
-    };
-
-    // Seed with the current geometry so the first paint after remount does not
-    // reuse stale state. The plan flyout is absolutely positioned and mounts
-    // only on hover/click, so its insertion does not resize the center group;
-    // resync observed targets whenever that subtree changes.
-    syncResizeTargetsAndMeasure();
-    const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);
-    mutationObserver.observe(overlayEl, { childList: true, subtree: true });
-    return () => {
-      mutationObserver.disconnect();
-      ro.disconnect();
-    };
-  }, [overlayEl]);
 
   // F-FP-5: 点击 workingDir → 在系统文件管理器里直接打开目录(复用 shell:open-path IPC)。
   // local only:remote session 的 chip 仅作展示,不响应点击(见下方 remoteHostId 早返 +
@@ -1816,6 +1792,7 @@ export function CCAgentSessionView({
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm,
     pendingRemoteDesktopConfirmation,
+    pendingInputHandoff,
     respondToGhostGrantConfirm,
     lastExpandedPlanViewerState,
     updatePlanContent,
@@ -2099,15 +2076,48 @@ export function CCAgentSessionView({
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders } = useProviders();
   const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
+  const {
+    begin: beginHistoryRecovery,
+    invalidate: invalidateHistoryRecoveryNavigation,
+    isPending: isHistoryRecoveryPending,
+    pending: forkStripEncryptedRunning,
+  } =
+    useHistoryRecoveryNavigation({
+      source: `${dataOwnerId}:${remoteDeviceId ?? ''}:${sessionId}:${navigationMode}`,
+      running: agentStatus.isRunning || isStreaming || remoteTurnActive,
+      startedAt: session?.activeTurnStartedAt ?? null,
+      endedAt: session?.lastTurnEndedAt ?? null,
+    });
   // Agent 在另一台电脑运行的任务:模型目录同样以那台为准(任务本身在本机)。
   const agentDeviceId = remoteDeviceId ? undefined : (session?.agentDeviceId ?? undefined);
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
   const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
+  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
+  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
+  const {
+    devices: providerShareDevices,
+    nameFor: providerShareDeviceName,
+    isReceived: isReceivedProviderShare,
+  } = useProviderShareAgentDevices([session?.agentDeviceId, pendingAgentDeviceId], remoteDeviceId);
+  // 被控电脑上的任务 Agent 现在 / 挂着的位置是分享时:分享按账号授予,本机也收到了同一条就经本机
+  // 的分享通道读它的目录,模型按钮按分享显示(否则只能读到被控电脑自己的目录,显示「模型信息暂
+  // 不可用」)。本机没收到的分享读不到,维持原样。
+  const controlledShareIds = useMemo(
+    () =>
+      remoteDeviceId
+        ? controlledTaskReadableShareIds({
+            agentDeviceId: session?.agentDeviceId,
+            pendingAgentDeviceId,
+            isReceived: isReceivedProviderShare,
+          })
+        : undefined,
+    [remoteDeviceId, session?.agentDeviceId, pendingAgentDeviceId, isReceivedProviderShare],
+  );
   // 远程控制的被控电脑上的任务:被控电脑支持远程 Agent 时,同样列出其他电脑的供应商(与手机同一
   // 套)。共享任务访客读到的是自己账号的设备、与任务无关,SSH 任务不支持;Agent 现在或挂着的位置
-  // 在本机读不到目录的地方(被控电脑收到的分享 / 本机自己)时,维持原有的被控电脑列表。
+  // 在本机读不到目录的地方(本机没收到的分享 / 本机自己)时,维持原有的被控电脑列表。
   const controlledAgentLocation =
     !!remoteDeviceId &&
     !session?.remoteHostId &&
@@ -2117,16 +2127,12 @@ export function CCAgentSessionView({
       agentDeviceId: session?.agentDeviceId,
       pendingAgentDeviceId,
       selfDeviceId,
+      ...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),
     });
   /** 被控电脑上的任务里 Agent 现在所在的电脑(undefined = 被控电脑本身)。 */
   const controlledAgentDeviceId = controlledAgentLocation
     ? (session?.agentDeviceId ?? undefined)
     : undefined;
-  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，只并进本机任务，
-  // 不进设备切换器(被控电脑上的任务用不了本机收到的分享)。已暂停 / 已不在的分享只在它正是
-  // 当前或即将使用的位置时保留。
-  const { devices: providerShareDevices, nameFor: providerShareDeviceName } =
-    useProviderShareAgentDevices([agentDeviceId, pendingAgentDeviceId]);
   const remoteAgentDevices = useMemo(() => {
     if (session?.remoteHostId) return undefined;
     if (remoteDeviceId) {
@@ -2135,6 +2141,8 @@ export function CCAgentSessionView({
             devices: selectableDevices,
             controlledDeviceId: remoteDeviceId,
             keepDeviceIds: [controlledAgentDeviceId, pendingAgentDeviceId],
+            // 新分享落点须由被控端名单确认；不要求任务先使用它。
+            shareDevices: providerShareDevices,
           })
         : undefined;
     }
@@ -2156,6 +2164,8 @@ export function CCAgentSessionView({
     session?.remoteHostId,
     controlledAgentLocation,
     controlledAgentDeviceId,
+    controlledShareIds,
+    providerShareDeviceName,
     agentDeviceId,
     pendingAgentDeviceId,
   ]);
@@ -2290,7 +2300,9 @@ export function CCAgentSessionView({
     [messages, agentStatus.isRunning, isStreaming, continuationTurnClientId, continuationInFlightProjectionCapability],
   );
   const reconnectStatus = activeReconnect
-    ? activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
+    ? activeReconnect.groupSwitchPending
+      ? t('chat.systemCard.autoResumePending.groupSwitch')
+      : activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
       ? t('chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: activeReconnect.attempt,
           total: activeReconnect.maxAttempts,
@@ -2404,7 +2416,8 @@ export function CCAgentSessionView({
     }
   }, [syntheticContinuationPending, errorTailBannerHiddenFor]);
   const handleErrorTailContinue = useCallback(async () => {
-    if (!sessionId || !errorTailMsg) return;
+    if (!sessionId || !errorTailMsg || isHistoryRecoveryPending()) return;
+    invalidateHistoryRecoveryNavigation();
     setErrorTailBannerHiddenFor(errorTailMsg.clientId);
     try {
       // 隐藏的英文续跑指令([UI_ACTION_TRIGGER] 前缀,消息流不渲染)——用户视角
@@ -2436,6 +2449,8 @@ export function CCAgentSessionView({
   }, [
     errorTailKind,
     errorTailMsg,
+    invalidateHistoryRecoveryNavigation,
+    isHistoryRecoveryPending,
     markCurrentUnreadFailedScheduleRun,
     rebuildClaudeSubscriptionSessionBeforeRetry,
     sessionId,
@@ -2956,6 +2971,7 @@ export function CCAgentSessionView({
     workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
+    orcaRemoteWorker: !!session?.orcaRemoteLead,
     remoteHostId: session?.remoteHostId,
     // 粘滞归属:relay 瞬时重连清空注册表的窗口内不把远程会话误判成本机 —— 误判会让
     // 协同策略退回查控制端本机,读到的是另一台机器的开关。
@@ -2996,22 +3012,26 @@ export function CCAgentSessionView({
   // 同步打开 tab, effect 触发时 addOrFocusSingletonTab 会幂等聚焦已有 tab。
   // 用 ref 跟踪 prevCollabEnabled 只在边沿触发;已处于协同中的会话 mount 时由上方
   // 常驻 tab effect 打开协同 tab,这里不重复处理。
+  // 基线带 sessionId:切任务时视图实例复用，换任务只记基线不触发；任务数据未就绪
+  // (session 为空或还是上一个任务的)按未知处理，见 nextCollabEnabledEdge。
   // doc rail (isCompactRail) 完全跳过 — WorkdirBrowseRoute 已经按 orcaRole reactive
   // 自动切到 OrcaSplitView toggle 布局, 不需要 router-level navigate。
-  const prevCollabEnabledRef = useRef<boolean | null>(null);
+  const prevCollabEnabledRef = useRef<CollabEnabledBaseline | null>(null);
+  const knownCollabEnabled = session?.id === collabSessionId ? collabEnabled : null;
   useEffect(() => {
-    if (prevCollabEnabledRef.current === null) {
-      prevCollabEnabledRef.current = collabEnabled;
-      return;
-    }
-    const prev = prevCollabEnabledRef.current;
-    prevCollabEnabledRef.current = collabEnabled;
+    const { baseline, edge } = nextCollabEnabledEdge(
+      prevCollabEnabledRef.current,
+      collabSessionId,
+      knownCollabEnabled,
+    );
+    prevCollabEnabledRef.current = baseline;
+    if (!edge) return;
     if (isCompactRail) return;
     if (!collabSessionId) return;
 
     // false → true 边沿:外部 MCP/team 刚开启协同，属于新的显式意图；即使该会话
-    // 历史上收起过右栏，也应重新展开并聚焦协同 tab。mount 时 prev=null 已在上方返回。
-    if (!prev && collabEnabled) {
+    // 历史上收起过右栏，也应重新展开并聚焦协同 tab。mount 与切任务时只记基线，不会走到这里。
+    if (edge === 'enabled') {
       void revealOrcaWorkersTab(collabSessionId).catch((err) => {
         log.warn('revealOrcaWorkersTab after external enable failed', err);
       });
@@ -3019,7 +3039,7 @@ export function CCAgentSessionView({
     }
 
     // true → false 边沿:关闭协同 tab;兼容 /orca 路由仍在场时, navigate 回单 session 路由。
-    if (prev && !collabEnabled) {
+    if (edge === 'disabled') {
       void closeOrcaWorkersTabAfterTeamEnd(collabSessionId).catch((err) => {
         log.warn('closeOrcaWorkersTabAfterTeamEnd failed', err);
       });
@@ -3027,7 +3047,7 @@ export function CCAgentSessionView({
         navigate(`/cc-agent/${collabSessionId}`, { replace: true });
       }
     }
-  }, [collabEnabled, collabSessionId, isCompactRail, isOrcaMode, navigate, ownsWindowRoute]);
+  }, [collabSessionId, isCompactRail, isOrcaMode, knownCollabEnabled, navigate, ownsWindowRoute]);
 
   // F-COLLAB: 关闭协同复用 useStopOrcaCollab hook(与 OrcaWorkflowRoute Worker pane × 同一份逻辑)。
   // navigate 触发条件:仅兼容 orca route 仍在场时需要跳回单 session 路由。
@@ -3089,6 +3109,14 @@ export function CCAgentSessionView({
           providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
           workerPermissionMode: form.workerPermissionMode,
+          ...(form.executionDeviceId
+            ? {
+                executionDeviceId: form.executionDeviceId,
+                ...(form.workingDir ? { workingDir: form.workingDir } : {}),
+              }
+            : {}),
+          // 首个 Worker 的 Agent 所在电脑(远程供应商)；面板只在任务所在电脑支持时才带。
+          ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
         };
         const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) {
@@ -3118,9 +3146,10 @@ export function CCAgentSessionView({
         setCollabWorker(previousWorker);
         log.error('enableOrca failed', err);
         toast.error(
-          getCollaborationStartErrorMessage(err, t, {
-            remoteDevice: Boolean(remoteDeviceId),
-          }),
+          (form.agentDeviceId && workerAgentDeviceErrorMessage(err, t))
+            || getCollaborationStartErrorMessage(err, t, {
+              remoteDevice: Boolean(remoteDeviceId),
+            }),
         );
       } finally {
         setEnableBusy(false);
@@ -3336,6 +3365,9 @@ export function CCAgentSessionView({
         !slashMatch && agentKind === 'pi' ? leadingSlashInvocation(message) : undefined;
       if (!slashMatch && !leading) return { handled: false, accepted: false, message };
       const cmdName = (slashMatch?.[1] ?? leading!.name).toLowerCase();
+      if (!CINDY_MAKE_ENABLED && (cmdName === 'cindy-make' || cmdName === 'cindy-make-doctor')) {
+        return { handled: true, accepted: false, message };
+      }
       const args = slashMatch?.[2] ?? '';
       const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
       const workingDir = options?.workingDirOverride ?? session?.workingDir;
@@ -3413,6 +3445,7 @@ export function CCAgentSessionView({
           return { handled: true, accepted: true, message };
         } catch (err) {
           const ipcError = extractIpcError(err);
+          if (ipcError?.code === 'MUTATION_CANCELLED') return { handled: true, accepted: false, message };
           toast.error(
             ipcError
               ? t('review.toast.failed')
@@ -3755,6 +3788,7 @@ export function CCAgentSessionView({
     ) => {
       if (readOnly) return false;
       if (cindyMakeInputLocked) return false;
+      invalidateHistoryRecoveryNavigation();
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
       const navigationRequestVersion =
@@ -4024,6 +4058,7 @@ export function CCAgentSessionView({
     [
       maybeDispatchDesktopSlashCommand,
       maybeShowContextUsage,
+      invalidateHistoryRecoveryNavigation,
       folderPickerOpen,
       isCodex,
       canNavigateSession,
@@ -4229,12 +4264,14 @@ export function CCAgentSessionView({
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
+    if (isHistoryRecoveryPending()) return;
+    invalidateHistoryRecoveryNavigation();
     void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
       .then(() => retryLastError())
       .catch((error) => {
         log.warn('retryLastError failed', error);
       });
-  }, [errorReason, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
+  }, [errorReason, invalidateHistoryRecoveryNavigation, isHistoryRecoveryPending, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
@@ -4320,20 +4357,22 @@ export function CCAgentSessionView({
   }, [clearError, sessionId]);
 
   const handleForkStripEncrypted = useCallback(async () => {
-    if (!sessionId || session?.agentKind !== 'codex') return;
+    if (!sessionId || session?.agentKind !== 'codex' ||
+      isSharedTaskPeer(getSessionDeviceId(sessionId))) return;
     if (!canNavigateSession) {
       log.info('encrypted-session fork ignored by embedded sidebar view', { sessionId });
       return;
     }
+    const recovery = beginHistoryRecovery();
+    if (!recovery) return;
     const forkStripNavigationVersion = ++sessionNavigationVersionRef.current;
-    setForkStripEncryptedRunning(true);
     try {
       const newSession = await sessionService.forkStripEncrypted(sessionId);
       await refreshServerSession();
       // 远程会话:新会话在被控端,先重拉该设备会话列表注册新 sessionId 再 navigate(否则 404)。
       const deviceId = getSessionDeviceId(sessionId);
       if (deviceId) await refreshRemoteDeviceSessions(deviceId);
-      if (sessionNavigationVersionRef.current !== forkStripNavigationVersion) return;
+      if (sessionNavigationVersionRef.current !== forkStripNavigationVersion || !recovery.isCurrent()) return;
       onSessionNavigate?.(newSession.id, newSession.id);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
@@ -4347,10 +4386,11 @@ export function CCAgentSessionView({
             : detail,
       );
     } finally {
-      setForkStripEncryptedRunning(false);
+      recovery.release();
     }
   }, [
     canNavigateSession,
+    beginHistoryRecovery,
     navigate,
     onSessionNavigate,
     refreshServerSession,
@@ -4763,6 +4803,10 @@ export function CCAgentSessionView({
   //   - /clear 之后留在空 ChatView 已经在用,体验没问题,本来就跟"空 session"等价
   // 现在所有空消息流/有消息流都走同一套布局(全高 scroll container + sticky bottom
   // overlay),自然消除 view 翻转带来的 layout shift。
+  if (!CINDY_MAKE_ENABLED && isCindyMakeSource(session?.source)) {
+    return <Navigate to="/cc-agent" replace />;
+  }
+
   const composerDir = composerWorkingDirPath({
     workingDir: session?.workingDir,
     liveWorktree,
@@ -4992,7 +5036,7 @@ export function CCAgentSessionView({
           // 意识面板拖来的产物(cindy-ghost:// 媒体地址,不带 files):落在聊天区
           // 任意位置都算数,与 ChatInput 自己的 onDrop 同一条引渡链路——
           // main 验归属后图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
-          const ghostMediaUri = getGhostMediaUriFromDataTransfer(e.dataTransfer);
+          const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(e.dataTransfer);
           if (ghostMediaUri) {
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;
@@ -5132,27 +5176,7 @@ export function CCAgentSessionView({
               className="mx-auto grid grid-cols-1 grid-rows-1 items-center"
               style={{ width: inputWidth }}
             >
-              {botChatIdentity ? (
-                <BotWorkingStatus
-                  key={sessionId}
-                  sessionId={sessionId ?? undefined}
-                  remote={remoteDeviceId ? { deviceId: remoteDeviceId, botId: botChatIdentity.id } : undefined}
-                  visible={composerRuntimeVisible}
-                  status={
-                    pendingPermission ? 'Waiting on approval'
-                      : pendingAskUser ? 'Waiting on input'
-                        : composerStatus
-                  }
-                  messages={messages}
-                  startedAt={agentStatus.startedAt}
-                  foregroundRunning={agentStatus.isRunning || isStreaming}
-                  backgroundWorkActive={
-                    backgroundTasksActive || runningWorkflow !== null || Boolean(agentStatus.sideTaskRunning)
-                  }
-                  avatar={botAssistantAvatar}
-                  inputWidth={inputWidth}
-                />
-              ) : !pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
+              {!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
                 <RunningStatusBar
                   key={sessionId}
                   sessionKey={sessionId ?? null}
@@ -5162,6 +5186,7 @@ export function CCAgentSessionView({
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
+                  tokenSpeed={agentStatus.tokenSpeed}
                   startedAt={agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
@@ -5220,7 +5245,8 @@ export function CCAgentSessionView({
                       pendingIssueConfirm ||
                       pendingRenameSessionsConfirm ||
                       pendingGhostGrantConfirm ||
-                      pendingRemoteDesktopConfirmation
+                      pendingRemoteDesktopConfirmation ||
+                      pendingInputHandoff
                     )
                   }
                   className="mb-0"
@@ -5284,6 +5310,7 @@ export function CCAgentSessionView({
               ) : (
                 <ErrorTailErrorBanner
                   errorText={errorTailText}
+                  dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
                   onContinue={handleErrorTailContinue}
@@ -5292,6 +5319,7 @@ export function CCAgentSessionView({
                   agentKind={session?.agentKind}
                   remoteHostId={session?.remoteHostId ?? undefined}
                   deviceLinkDeviceId={remoteDeviceId}
+                agentDeviceId={session?.agentDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
                   sessionSource={session?.source}
@@ -5302,7 +5330,7 @@ export function CCAgentSessionView({
                   }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={
-                    !readOnly && canNavigateSession ? handleForkStripEncrypted : undefined
+                    !readOnly && canNavigateSession && !isSharedTaskPeer(remoteDeviceId) ? handleForkStripEncrypted : undefined
                   }
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
                   style={{ width: inputWidth }}
@@ -5355,6 +5383,7 @@ export function CCAgentSessionView({
             }) && (
               <ErrorBanner
                 error={error}
+                dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 toolLoop={toolLoop}
                 isRecoverable={errorIsRecoverable}
@@ -5368,6 +5397,7 @@ export function CCAgentSessionView({
                 agentKind={session?.agentKind}
                 remoteHostId={session?.remoteHostId ?? undefined}
                 deviceLinkDeviceId={remoteDeviceId}
+                agentDeviceId={session?.agentDeviceId}
                 modelId={session?.model}
                 providerId={session?.providerId}
                 sessionSource={session?.source}
@@ -5378,7 +5408,7 @@ export function CCAgentSessionView({
                 errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={
-                  !readOnly && canNavigateSession ? handleForkStripEncrypted : undefined
+                  !readOnly && canNavigateSession && !isSharedTaskPeer(remoteDeviceId) ? handleForkStripEncrypted : undefined
                 }
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
                 style={{ width: inputWidth }}
@@ -5442,7 +5472,8 @@ export function CCAgentSessionView({
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
                     pendingGhostGrantConfirm ||
-                    pendingRemoteDesktopConfirmation
+                    pendingRemoteDesktopConfirmation ||
+                    pendingInputHandoff
                   )
                 }
                 placeholder={
@@ -5520,6 +5551,13 @@ export function CCAgentSessionView({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
+                ) : pendingInputHandoff && sessionId && !isSharedTaskPeer(remoteDeviceId ?? '') ? (
+                  <InputHandoffCard
+                    key={pendingInputHandoff.requestId}
+                    sessionId={sessionId}
+                    snapshot={pendingInputHandoff}
+                    remote={!!remoteDeviceId}
+                  />
                 ) : pendingRemoteDesktopConfirmation ? (
                   <RemoteDesktopConfirmationNotice
                     key={pendingRemoteDesktopConfirmation.requestId}
@@ -5596,9 +5634,9 @@ export function CCAgentSessionView({
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
                   runtimeEffective={session?.runtimeEffective}
                   runtimePending={session?.runtimePending}
-                  // 协同会话不参与跨引擎切换；session 未加载时保留 undefined 未知态，
-                  // 仅在完整元数据确认非 Orca 后传 null 开放入口。
+                  // session 未加载时保留 undefined 未知态；Orca 原地切换与换电脑分别门控。
                   sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}
+                  sessionOrcaRemoteWorker={!!session?.orcaRemoteLead}
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
@@ -5917,14 +5955,16 @@ export function CCAgentSessionView({
         </div>
 
         {/* TopRightChipStack:聊天视图右上 chip 浮层。
-          Windows 固定侧栏入口由 MainLayout 承载；当入口位于右侧时在本栈第一行
-          保留等尺寸占位，让消息跳转等 portal chip 自然落到下一行。
+          Windows 固定侧栏入口与远程桌面入口由 MainLayout 承载；任一入口位于右侧时
+          在本栈第一行保留等尺寸占位，面板展开后也不遮住消息跳转等 portal chip。
           MessageStream 内部的 PrevMessageJumpChip 通过 portal 挂入同一栈,自然落到下一行。
           "本次会话改动文件列表"已迁移到 RSB review tab,不再保留浮动按钮 + 滑入抽屉。 */}
         <TopRightChipStack>
           {!isMac &&
             (ownsRoute || showRsbToggle) &&
-            rightSidebarCollapsed &&
+            (rightSidebarCollapsed ||
+              (rightSidebarDeviceLinkDeviceId &&
+                !isSharedTaskPeer(rightSidebarDeviceLinkDeviceId))) &&
             rightSidebarSide === 'right' && <div aria-hidden className="h-7 w-7 shrink-0" />}
         </TopRightChipStack>
       </section>
@@ -5970,6 +6010,14 @@ export function CCAgentSessionView({
         // openai-chat 桥接 Codex 只挂在本地 proxy),与 main 侧 remote-worker
         // guard 同规则(codex review R28)。
         sshRemote={!!session?.remoteHostId}
+        // 首个 Worker 也可放到另一台电脑：仅本机 Lead(非 SSH、Agent 也在本机)。
+        executionDevicesEnabled={
+          !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+        }
+        // Worker 的 Agent 默认跟 Lead 的 Agent 所在电脑(远程供应商)，模型目录也先按那台读；
+        // 面板里列出与输入框同一份其他电脑 / 分享的供应商，可以换到本机或别处。
+        leadAgentDeviceId={agentDeviceId ?? controlledAgentDeviceId ?? null}
+        remoteAgentDevices={remoteAgentDevices}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，
@@ -5980,6 +6028,20 @@ export function CCAgentSessionView({
           type="button"
           onClick={() => navigate('/cc-agent/scheduled')}
           aria-label={t('ccAgent.layout.backToAutomations')}
+          className={cn(
+            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
+          )}
+        >
+          <ArrowLeft size={18} strokeWidth={2} />
+        </button>
+      )}
+      {ownsWindowRoute && !cameFromAutomations && reviewSourceSessionId && (
+        <button
+          type="button"
+          onClick={() => navigate(`/cc-agent/${reviewSourceSessionId}`)}
+          aria-label={t('ccAgent.layout.backToReviewSource')}
+          title={t('ccAgent.layout.backToReviewSource')}
           className={cn(
             'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
@@ -6056,6 +6118,7 @@ function RunningStatusBar({
   outputTokens = 0,
   generationDurationMs = 0,
   generationReliable = true,
+  tokenSpeed,
   startedAt,
   visible,
   inputWidth,
@@ -6077,6 +6140,8 @@ function RunningStatusBar({
   outputTokens?: number;
   generationDurationMs?: number;
   generationReliable?: boolean;
+  /** Host-measured live tok/s; replaces the usage-counter estimate when present. */
+  tokenSpeed?: TokenSpeedSnapshot;
   startedAt: number | null;
   visible: boolean;
   inputWidth?: CSSProperties['width'];
@@ -6239,13 +6304,18 @@ function RunningStatusBar({
   const tokenCountText = t('chat.runningStatus.tokenCount', {
     tokens: formatRunningTokenCount(animatedTokens),
   });
+  // Host speed counts and times generation itself; usage counters stay the fallback.
+  const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
+  const rateDurationMs = tokenSpeed?.elapsedMs ?? generationDurationMs;
+  const rateReliable = tokenSpeed ? true : generationReliable;
   const rateHistory = useRunningTokenRateHistory({
     sessionKey,
     startedAt,
     outputTokens,
     generationDurationMs,
+    tokenSpeed,
     generationReliable:
-      generationReliable &&
+      rateReliable &&
       !reconnecting &&
       !sideTaskRunning &&
       !backgroundTasksRunning &&
@@ -6253,9 +6323,9 @@ function RunningStatusBar({
   });
   const latestRate = rateHistory.latestRate;
   const usageMeta = resolveRunningUsageMeta({
-    outputTokens,
-    generationDurationMs,
-    generationReliable,
+    outputTokens: rateOutputTokens,
+    generationDurationMs: rateDurationMs,
+    generationReliable: rateReliable,
     tokenUsage,
     latestRate,
   });
@@ -6368,7 +6438,7 @@ function RunningStatusBar({
                 }
                 isTokenCount={usageMeta.kind === 'tokens'}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
-                outputTokens={outputTokens}
+                outputTokens={rateOutputTokens}
                 history={rateHistory}
                 onPinnedChange={setRatePanelPinned}
               />

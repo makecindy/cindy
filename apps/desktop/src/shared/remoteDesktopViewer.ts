@@ -18,6 +18,7 @@ export const REMOTE_VIEWER = {
   INPUT_FOCUS: 'remote-desktop-viewer:input-focus',
   PREFERENCES: 'remote-desktop-viewer:preferences',
   SAFETY: 'remote-desktop-viewer:safety',
+  CLIPBOARD_SYNC: 'remote-desktop-viewer:clipboard-sync',
   CREDENTIAL: 'remote-desktop-viewer:credential',
   RESOLUTION: 'remote-desktop-viewer:resolution',
   CHANNEL_REQUEST: 'remote-desktop-viewer:channel-request',
@@ -27,6 +28,8 @@ export const REMOTE_VIEWER = {
 export interface RemoteViewerTarget {
   deviceId: string;
   name: string;
+  /** 代输入 live view: only the window this waiting request is about (the host picks it). */
+  handoff?: string;
 }
 export interface RemoteViewerState {
   target: RemoteViewerTarget | null;
@@ -52,6 +55,8 @@ export const DEFAULT_VIEWER_PREFERENCES: RemoteViewerPreferences = {
 export interface RemoteViewerSafety {
   privacyActive: boolean;
   notice: string | null;
+  /** New skipped/conflicting snapshot; idle polls keep the occurrence. Local IPC only. */
+  clipboardNoticeVersion?: number;
   clipboardProgress: number | null;
 }
 /**
@@ -71,9 +76,16 @@ export function parseRememberedViewerResolution(value: unknown): RememberedViewe
     return null;
   const width = v.width as number,
     height = v.height as number;
-  if (v.kind === 'mode' && typeof v.modeId === 'string' && v.modeId.length > 0 && v.modeId.length <= 256)
+  if (
+    v.kind === 'mode' &&
+    typeof v.modeId === 'string' &&
+    v.modeId.length > 0 &&
+    v.modeId.length <= 256
+  )
     return { kind: 'mode', modeId: v.modeId, width, height };
-  return v.kind === 'fit' && width <= 2560 && height <= 2560 ? { kind: 'fit', width, height } : null;
+  return v.kind === 'fit' && width <= 2560 && height <= 2560
+    ? { kind: 'fit', width, height }
+    : null;
 }
 
 /** A request Main asks the viewer window to send over its live media data channel. */
@@ -84,9 +96,7 @@ export interface RemoteViewerChannelRequest {
 }
 /** How a channel request ended; `relay` means it was never sent, so Main may use the relay. */
 export type RemoteViewerChannelOutcome =
-  | { kind: 'result'; value: unknown }
-  | { kind: 'relay' }
-  | { kind: 'error'; code: string };
+  { kind: 'result'; value: unknown } | { kind: 'relay' } | { kind: 'error'; code: string };
 
 export function parseRemoteViewerChannelOutcome(value: unknown): RemoteViewerChannelOutcome | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -130,6 +140,8 @@ export interface RemoteDesktopViewerApi {
     patch?: Partial<RemoteViewerPreferences>,
   ): Promise<RemoteViewerPreferences>;
   safety?(generation: number, retry?: boolean): Promise<RemoteViewerSafety>;
+  /** One clipboard sync pass now (copy/paste in the picture) instead of at the next poll. */
+  clipboardSync?(generation: number): Promise<RemoteViewerSafety>;
   /** Main routes channel-eligible requests through the window's media data channel. */
   onChannelRequest?(listener: (request: RemoteViewerChannelRequest) => void): () => void;
   channelReply?(generation: number, id: string, outcome: RemoteViewerChannelOutcome): Promise<void>;

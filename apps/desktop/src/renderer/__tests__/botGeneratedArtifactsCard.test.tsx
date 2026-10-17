@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatSessionFileProvider } from '../components/chat/ChatSessionFileContext';
-import { GeneratedFilesCard } from '../components/chat/GeneratedFilesCard';
+import { _clearLocalGeneratedFileStatCache, GeneratedFilesCard } from '../components/chat/GeneratedFilesCard';
 import { groupWorkRuns, type RenderItem } from '../components/chat/messageWorkGroups';
 import { simplifyBotRenderItems } from '../features/bots/botConversationPresentation';
 import { useBotGeneratedFileDeliveries } from '../features/bots/useBotGeneratedFileDeliveries';
@@ -39,6 +39,7 @@ vi.mock('../components/chat/useOpenWithMenu', () => ({
 vi.mock('../components/chat/useFileChipContextMenu', () => ({
   useFileChipContextMenu: () => ({
     onContextMenu: vi.fn(),
+    onActivate: (_event: unknown, openDefault: () => void) => openDefault(),
     openAt: vi.fn(),
     menu: null,
   }),
@@ -136,7 +137,15 @@ describe('伙伴成果卡', () => {
     });
   });
 
-  afterEach(cleanup);
+  // The module-level local-stat cache is shared process-wide. Several tests
+  // below reuse the same '/bot/workspace/result.pdf' path across different
+  // turn windows; without clearing it, a later test's fresh mount can get
+  // seeded from an earlier test's confirmed stat instead of starting from
+  // unknown visibility, making assertions timing-dependent on the real check.
+  afterEach(() => {
+    cleanup();
+    _clearLocalGeneratedFileStatCache();
+  });
 
   it('展示 SVG 缩略图与网页成品，默认收起 index 预览页和辅助文件', async () => {
     renderCard([
@@ -183,7 +192,7 @@ describe('伙伴成果卡', () => {
     expect(screen.getByTestId('bot-generated-artifacts')).toBeTruthy();
   });
 
-  it.each(['stop', 'error', 'history'])('omits the preamble and process entry once a real generated file is visible: %s', async (ending) => {
+  it.each(['stop', 'error', 'history'])('omits the preamble once a real generated file is visible, keeping only the work fold: %s', async (ending) => {
     let finish!: (value: FileStat) => void;
     const stat = vi.fn(() => new Promise<FileStat>((resolve) => { finish = resolve; }));
     window.electronAPI.fsBrowse.statPath = stat;
@@ -199,7 +208,8 @@ describe('伙伴成果卡', () => {
     await act(async () => finish({ kind: 'file', resolvedPath: '/bot/workspace/result.pdf', birthtimeMs: START + 100, mtimeMs: START + 100 }));
     expect(screen.getByText('result.pdf')).toBeTruthy();
     expect(screen.queryByTestId('main-prose')).toBeNull();
-    expect(screen.queryByTestId('public-process')).toBeNull();
+    // The tool run stays in the normal work fold; the preamble never resurfaces there.
+    expect(screen.getByTestId('public-process').textContent).toBe('');
     expect(screen.queryByText('Generating the report')).toBeNull();
     if (ending === 'error') expect(screen.getByTestId('error').textContent).toBe('Generation interrupted');
     expect(stat).toHaveBeenCalledTimes(1);

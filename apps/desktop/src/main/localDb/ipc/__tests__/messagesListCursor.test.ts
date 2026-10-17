@@ -3,6 +3,8 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import * as taskImages from '../../../cindy-media/taskImageDelivery';
+import * as currentDb from '../../client/current';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
 import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
 import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
@@ -446,6 +448,55 @@ describe('local-db:messages:list cursor', () => {
     const rows = await listHandler?.({}, 's1', { limit: 1, after: 'missing' });
 
     expect((rows as Array<{ id: string }>).map((row) => row.id)).toEqual(['row-new']);
+  });
+
+  it.each([
+    ['list', false],
+    ['around', false],
+    ['around-client-id', false],
+    ['around-client-id', true],
+  ] as const)('restores visible images before returning %s (capped=%s)', async (kind, capped) => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1', 500);
+    const original = 'Full original Markdown must reach restoration before truncation';
+    for (const [id, createdAt] of [
+      ['cleared', 100], ['before', 1000], ['anchor', 1000], ['after', 1000], ['rewound', 1100],
+    ] as const) insertMessage(sqlite, { id, createdAt, content: original });
+    sqlite.prepare('UPDATE messages SET rewind_at = 1200 WHERE id = ?').run('rewound');
+    const captured = currentDb.getDbClient();
+    const capture = vi.spyOn(currentDb, 'getDbClient').mockReturnValue(captured);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const restore = vi.spyOn(taskImages, 'restoreTaskImageRows').mockImplementation(async (db, rows) => {
+      expect(db).toBe(captured);
+      expect(rows.map((row) => row.id)).toEqual(
+        kind === 'list' ? ['after', 'anchor', 'before'] : ['before', 'anchor', 'after'],
+      );
+      expect(rows.every((row) => row.content === JSON.stringify(original))).toBe(true);
+      await pending;
+      return rows.map((row) => ({ ...row, content: JSON.stringify('restored-image') }));
+    });
+    try {
+      registerMessageIpc();
+      const handler = h.handlers.get(`local-db:messages:${kind}`)!;
+      let finished = false;
+      const response = Promise.resolve(kind === 'list'
+        ? handler({}, 's1', { limit: 10 })
+        : handler({}, 's1', 'anchor', { radius: 10, ...(capped ? { contentCharLimit: 5 } : {}) }))
+        .then((rows) => { finished = true; return rows as Array<{ content: string; rowid: number }>; });
+      await vi.waitFor(() => expect(restore).toHaveBeenCalledOnce());
+      expect(finished).toBe(false);
+      release();
+      const rows = await response;
+      expect(rows).toHaveLength(3);
+      expect(rows.every((row) => row.content === (capped ? '…mage' : 'restored-image'))).toBe(true);
+      expect(rows.map((row) => row.rowid)).toEqual(kind === 'list' ? [4, 3, 2] : [2, 3, 4]);
+    } finally {
+      release();
+      restore.mockRestore();
+      capture.mockRestore();
+      sqlite.close();
+    }
   });
 
   it('keeps around windows stable for same timestamp rows', async () => {

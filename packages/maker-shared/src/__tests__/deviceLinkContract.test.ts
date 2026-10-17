@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEVICE_LINK_MEDIA_FETCH_CHANNEL,
@@ -123,11 +124,23 @@ describe('device-link shared contract', () => {
   it('maps connection issue kinds to actionable copy', () => {
     expect(connectionIssueTitle('auth-failed')).toBe('登录已失效');
     expect(connectionIssueHint('auth-failed')).toContain('重新登录');
+    expect(connectionIssueTitle('device-removed')).toBe('设备已移除');
+    expect(connectionIssueHint('device-removed')).toBe('请退出后重新登录，以重新加入设备列表。');
     expect(connectionIssueTitle('replaced')).toContain('顶替');
     expect(connectionIssueHint('too-many-connections')).toContain('断开其它设备');
     expect(connectionIssueHint('version-mismatch')).toContain('升级到最新版本');
     expect(connectionIssueTitle('unstable')).toContain('反复断开');
     expect(connectionIssueHint('unstable')).toContain('本机');
+  });
+
+  it('keeps connection issue kinds aligned with the device-link source contract', () => {
+    const issueKinds = (path: string) => {
+      const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+      const union = source.match(/export type DeviceLinkConnectionIssueKind\s*=([^;]+);/);
+      expect(union).not.toBeNull();
+      return [...union![1].matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+    };
+    expect(issueKinds('../deviceLinkContract.ts')).toEqual(issueKinds('../../../device-link/src/client.ts'));
   });
 
   it('preserves structured remote error codes and access revoked classification', () => {

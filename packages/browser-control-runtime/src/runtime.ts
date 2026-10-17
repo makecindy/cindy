@@ -83,7 +83,11 @@ export function planDispatch(req: BrowserControlRequest): DispatchPlan {
         method: 'POST',
         path: '/tabs/open',
         query: withProfile(),
-        body: { url: req.url ?? req.targetUrl, label: req.label },
+        body: {
+          url: req.url ?? req.targetUrl,
+          label: req.label,
+          background: req.background ?? true,
+        },
       };
     case 'focus':
       return {

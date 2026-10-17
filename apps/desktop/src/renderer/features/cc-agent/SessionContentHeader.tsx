@@ -64,6 +64,8 @@ import {
 import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
+import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
+import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
@@ -190,8 +192,7 @@ export function SessionContentHeader({
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   const { confirm: confirmDialog } = useConfirmDialog();
-  const { runSessionAction, unarchiveSession, beginRemoteArchive, cancelRemoteArchive } =
-    useSessionLifecycleActions();
+  const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
   const isPinned = session.pinnedAt != null;
   const isArchived = session.status === 'archived';
@@ -479,11 +480,7 @@ export function SessionContentHeader({
     // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
     // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
     // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
-    // 远程任务的预检是一次完整隧道往返:先乐观隐藏行并跳离,预检干净则沿用同一叠加层
-    // 写库,需要确认时取消再让行回来(与 sidebar 同口径,见 handleActionClick)。
-    const remoteArchiveToken = session.deviceLinkDeviceId
-      ? beginRemoteArchive(session.id, session.deviceLinkDeviceId, session.id)
-      : null;
+    // 预检与确认期间保留当前任务，确定归档后再由 runSessionAction 隐藏并跳离。
     const preflight = await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId);
     // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
     // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
@@ -501,17 +498,13 @@ export function SessionContentHeader({
         cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
       });
       if (!ok) {
-        if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
         return;
       }
     }
     await runSessionAction(session.id, 'archive', {
       activeSessionId: session.id,
-      remoteArchiveToken,
     });
   }, [
-    beginRemoteArchive,
-    cancelRemoteArchive,
     confirmDialog,
     remoteWritesBlocked,
     runSessionAction,
@@ -651,6 +644,10 @@ export function SessionContentHeader({
           <TaskTagDots tags={session.tags} />
         </span>
       )}
+
+      {!isEditing && <OrcaRemoteLeadBadge session={session} />}
+
+      {!isEditing && <BotTaskOwnerChip session={session} />}
 
       {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少

@@ -217,8 +217,9 @@ function VideoMissingPlaceholder({ filename }: VideoMissingPlaceholderProps) {
       className={cn(
         'flex flex-col items-center justify-center gap-2',
         'rounded-xl border border-dashed',
-        'border-[var(--border)] bg-[var(--muted)]',
-        'p-4 text-[var(--muted-foreground)]',
+        // These tokens are HSL channels: `var(--border)` alone is invalid CSS and drew a black border.
+        'border-border bg-muted',
+        'p-4 text-muted-foreground',
       )}
       style={{ maxWidth: 280, minHeight: 140 }}
     >

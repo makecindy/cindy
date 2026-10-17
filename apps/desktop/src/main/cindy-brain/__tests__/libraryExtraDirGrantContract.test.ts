@@ -29,7 +29,7 @@ describe('library extraDirs grant wiring', () => {
 
   it('slot sync refuses to no-op-success when the opener is not library-capable', () => {
     expect(body).toContain('async function syncMivoLibraryExtraDirFromSlot(');
-    expect(body).toContain('if (root !== null && !isLibraryCapableGhost(findAvailableGhost(ghostId)))');
+    expect(body).toContain('if (root !== null && !isLibraryCapableGhost(findGhostForInstanceId(ghostId)))');
     expect(body).toContain('if (libraryExtraDirOwnerGhostId !== null && libraryExtraDirOwnerGhostId !== ghostId)');
     expect(body).toContain("if (result === 'granted') libraryExtraDirOwnerGhostId = ghostId;");
     expect(body).toContain('return result;');
@@ -42,7 +42,8 @@ describe('library extraDirs harness grant timing', () => {
     'utf8',
   ).replace(/\r\n/g, '\n');
   const grantStart = registerSource.indexOf('async function syncLibraryReadonlyExtraDir(');
-  const grantBody = registerSource.slice(grantStart, grantStart + 2200);
+  const grantEnd = registerSource.indexOf('\nlet agentInputCoordinatorHolder:', grantStart);
+  const grantBody = registerSource.slice(grantStart, grantEnd);
   const claudeSource = readFileSync(
     resolve(process.cwd(), '../../packages/maker-core/src/agents/claude-code/index.ts'),
     'utf8',
@@ -58,6 +59,7 @@ describe('library extraDirs harness grant timing', () => {
 
   it('register only marks granted from the applied library slot, not a requested root', () => {
     expect(grantStart).toBeGreaterThan(-1);
+    expect(grantEnd).toBeGreaterThan(grantStart);
     expect(grantBody).toContain('const applied = await applyLibraryReadonlyExtraDir(sessionId, nextRoot);');
     expect(grantBody).toContain('if (nextRoot && applied?.some(isLibraryExtraDirSlot)) granted = true;');
     expect(grantBody).toContain("if (grantRoot && !granted)");

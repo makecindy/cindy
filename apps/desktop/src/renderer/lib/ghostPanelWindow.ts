@@ -3,10 +3,10 @@
  *
  * 与 sidebarWindow.ts 同款:main 的窗口工厂在启动 URL 上带
  * `?ghostPanelWindow=<ghostId>`,renderer 启动时读一次;身份在窗口生命周期内
- * 不变。id 过校验(isValidGhostId)才算数,野值视同普通窗口。
+ * 不变。id 过校验(isValidPluginStoragePart)才算数,野值视同普通窗口。
  */
 
-import { isValidGhostId } from '../../shared/ghost';
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity';
 
 let cached: string | null | undefined;
 
@@ -14,7 +14,7 @@ let cached: string | null | undefined;
 export function getGhostPanelWindowGhostId(): string | null {
   if (cached === undefined) {
     const raw = new URLSearchParams(window.location.search).get('ghostPanelWindow');
-    cached = isValidGhostId(raw) ? raw : null;
+    cached = isValidPluginStoragePart(raw) ? raw : null;
   }
   return cached;
 }

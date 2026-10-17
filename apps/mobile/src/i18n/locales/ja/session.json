@@ -1,4 +1,13 @@
 {
+  "entry": {
+    "title": "タスクを開く",
+    "loading": "タスクを読み込み中…",
+    "failed": "タスク情報を読み込めませんでした。",
+    "missing": "このコンピューターからタスク情報が返されませんでした。",
+    "timedOut": "タスク情報の読み込みがタイムアウトしました。",
+    "retry": "タスクを再読み込み",
+    "back": "戻る"
+  },
   "failedScheduleNotice": {
     "text": "自動実行に失敗した記録があります。",
     "precheck": "自動チェックが一時的に停止しています。",
@@ -7,6 +16,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} はオフになっています。送信する前に、有効なモデルを選んでください。",
+    "modelUnavailableReselect": "{{model}} はこのコンピューターでは利用できなくなりました。送信する前に、別のモデルを選んでください。",
     "cancel": "キャンセル",
     "dismissRecommendation": "おすすめを閉じる",
     "delete": "削除",
@@ -30,7 +40,12 @@
     "openMicPermission": "マイクの権限設定を開く",
     "maxAttachments": "添付は最大 {{max}} 件までです。",
     "voiceStopRecording": "録音を停止",
-    "capabilitiesUnsupported": "パソコンからコマンドとリソースの一覧を読み込めませんでした。パソコンの Cindy を更新してから再試行してください"
+    "capabilitiesUnsupported": "パソコンからコマンドとリソースの一覧を読み込めませんでした。パソコンの Cindy を更新してから再試行してください",
+    "plugins": "プラグイン",
+    "pluginsChooseDevice": "デバイスを選択",
+    "pluginsLoading": "プラグインを読み込み中…",
+    "pluginsEmpty": "インストール済みプラグインなし",
+    "pluginsReload": "プラグインを再読み込み"
   },
   "presentation": {
     "collaboration": {
@@ -200,6 +215,7 @@
     "retry": "再試行",
     "firstMessageNotSent": "最初のメッセージは送信されませんでした。内容は入力欄に復元されました。",
     "attachmentsNotCarriedBack": "{{count}} 件の添付は復元できませんでした。もう一度追加してください。",
+    "pendingAttachmentsNotCarriedBack": "選択中またはアップロード中の添付は復元できませんでした。もう一度追加してください。",
     "localStorageFull": "このスマートフォン上の Cindy のローカルストレージがいっぱいのため、メッセージを保存できませんでした。もう一度お試しください。",
     "commandWaitsForSession": "セッションの作成中です。このコマンドはセッションの準備が必要なため、少し待ってから送信してください。",
     "locateMessageNotFound": "移動先のメッセージが見つかりませんでした。",
@@ -221,6 +237,7 @@
     "sessionNotSyncedRetry": "セッションの同期がまだ完了していません。しばらくしてから再試行してください。",
     "savingPreviousQueueEdit": "直前のキュー内メッセージの変更を保存中です。完了してから編集してください。",
     "attachmentsUploadingBeforeEdit": "添付ファイルをアップロード中です。完了してからキュー内メッセージを編集してください。",
+    "goalCommandAttachments": "添付ファイルなしで /goal を送信してください。下書きと添付ファイルは保持されています。",
     "goalAlreadyActive": "このセッションには進行中のゴールがあります。先にこちらで対応してください。",
     "resetReconfirmTitle": "再確認してください",
     "resetOfferExpired": "リセット用の認証が期限切れです。更新後のクォータ情報を確認してください。",
@@ -236,6 +253,7 @@
     "deleteMessageTitle": "このメッセージを削除しますか？",
     "deleteMessageBody": "ユーザーメッセージはこの1件のみ削除されます。AI メッセージの場合は、直前のユーザー入力以降に生成されたターン全体が削除されます。以降の会話は保持されます。次回の送信時に、残った記録から AI のコンテキストが再構築されます。",
     "deleteMessageAction": "このメッセージを削除",
+    "deleteMessageBusy": "現在の応答が終わってからメッセージを削除してください。",
     "readingCapabilities": "{{agent}} の実行機能を読み込み中…",
     "editingQueueMessageNumbered": "キュー内メッセージ {{index}} 件目を編集中",
     "editingQueueMessage": "キュー内メッセージを編集中",
@@ -280,6 +298,7 @@
     "shareMessage": "このメッセージを共有"
   },
   "new": {
+    "goalCommandNeedsSession": "目標を解除するには既存のセッションを開いてください。",
     "selectDevice": "デバイスを選択",
     "workspaceDialogue": "会話",
     "workspaceProject": "プロジェクト",
@@ -301,6 +320,7 @@
     "selectDeviceError": "デバイスを選択してください。",
     "enterProjectPath": "パソコン側のプロジェクトパスを入力してください。",
     "enterModel": "モデルを入力してください。",
+    "modelLoading": "モデルを読み込み中…",
     "enterFirstMessageOrAttachment": "最初のメッセージを入力するか、添付を追加してください。",
     "noSessionIdReturned": "リモートのパソコンで新しいセッションが作成されたか確認できません。再同期して確認してください。",
     "sessionIdNotAdopted": "リモートのパソコンの Cindy は互換性のないバージョンです。更新してから再試行してください。",
@@ -351,7 +371,6 @@
     "worktreeBranchesLoading": "ブランチを読み込み中…",
     "worktreeBranchSaving": "選択したブランチを同期中…",
     "worktreeBranchSyncFailed": "保存済みのソースブランチを確認できません。ブランチを再選択してください",
-    "worktreeSettingsSaving": "worktree 設定を同期中…",
     "worktreeSettingsSyncFailed": "worktree の既定設定を保存できませんでした。現在の選択で続行できます。",
     "worktreeBranchesRetry": "ブランチを読み込めません。タップして再試行",
     "worktreeDetecting": "環境を検出中…",
@@ -484,6 +503,8 @@
     "deleteOne": "このメッセージを削除"
   },
   "tail": {
+    "readableHistoryRecovery": "読み取れる履歴から新しいタスクを作成",
+    "readableHistoryRecoveryDescription": "再試行しても失敗する場合は、読み取れる履歴から新しいタスクを作成できます。内部の暗号化情報は省略されます。元のタスクは保持され、失敗したメッセージは自動で再送信されません。",
     "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
     "replyFailed": "返信を完了できませんでした。原因を確認するには、エラーの詳細をご覧ください。",
     "showErrorDetails": "エラーの詳細を表示",
@@ -506,10 +527,6 @@
     "moreOptions": "その他のオプション",
     "archiveConversation": "セッションをアーカイブ",
     "closeActionMenu": "セッション操作メニューを閉じる",
-    "referenceAroundAnchor": "リンク付近",
-    "referenceRecent": "最近のメッセージ",
-    "referenceCount": "{{num}} 件",
-    "referenceTruncated": "切り詰め済み",
     "pinnedSection": "ピン留め",
     "extraDirsSummary": "追加ディレクトリ {{num}} 件",
     "noExtraDirsSummary": "追加ディレクトリはありません",
@@ -528,6 +545,7 @@
     "taskAlreadyCreated": "このセッションはコンピューターに作成済みです。保存されたメッセージは元のセッションで送信を再開します。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "プロバイダーグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。パソコンでこのプロバイダーの「リモートと共有」ページを確認してください。",
     "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
     "AUTO_REVIEW_UNAVAILABLE": "自動承認が判断できませんでした。承認が必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このセッションを「フルアクセス」に切り替えてください。リスクはより高くなります。",
@@ -555,6 +573,8 @@
     "REMOTE_AGENT_EXPIRED": "このセッションは Agent を実行しているパソコンですでに終了しています。もう一度送信してください。",
     "REMOTE_AGENT_NOT_FOUND": "このセッションは Agent を実行しているパソコンですでに終了しています。もう一度送信してください。",
     "REMOTE_AGENT_BUSY": "相手のパソコンで実行中のセッションが多すぎます。いくつか終了してからもう一度お試しください。",
+    "REMOTE_AGENT_DEVICE_LIMIT": "このデバイスのリモートセッション数が上限に達しました。不要なセッションをアーカイブするか、提供者に「リモートと共有」で上限の変更を依頼してください。",
+    "REMOTE_AGENT_TOTAL_LIMIT": "提供者のパソコンのリモートセッション総数が上限に達しました。提供者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。",
     "REMOTE_AGENT_UNSUPPORTED": "相手のパソコンではこの Agent を使えません。そのパソコンでインストールまたはサインインするか、別の Agent を選んでください。",
     "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
@@ -570,6 +590,19 @@
     "enableSubmit": "コラボレーションを開始",
     "createWorkerTitle": "新しい Worker",
     "createWorkerSubmit": "Worker を作成",
+    "executionDeviceLabel": "実行デバイス",
+    "leadComputer": "Lead のコンピューター",
+    "deviceOnline": "オンライン",
+    "deviceNeedsUpdate": "更新が必要",
+    "deviceUnavailable": "実行デバイスを利用できません",
+    "executionDeviceHint": "Lead のコンピューターから操作できる、同じアカウントのオンラインのコンピューターのみ表示されます。",
+    "remoteDirLabel": "実行デバイスの作業ディレクトリ",
+    "remoteDirChat": "対話",
+    "remoteDirPath": "ディレクトリを指定",
+    "remoteDirPlaceholder": "実行デバイスの絶対パス",
+    "remoteDirChatHint": "実行デバイスにプロジェクトと紐付けない対話タスクを作成します。",
+    "remoteDirPathHint": "実行デバイスでディレクトリを確認します。存在しない場合はエラーになり、Lead のディレクトリには切り替わりません。",
+    "remoteDirInvalid": "実行デバイスの絶対パスを入力してください。",
     "roleLabel": "ロール名",
     "roleHint": "複数の協力者を見分けるための名前で、能力は変わりません",
     "customRole": "カスタム",
@@ -590,6 +623,9 @@
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",
     "noWorkers": "Worker はまだありません",
+    "otherComputer": "別のコンピューター",
+    "deviceUnreachable": "状態を取得できません",
+    "archiveRemoteConfirmDesc": "この協同から外し、{{device}} で進行中のラウンドを停止します。{{device}} 上のタスク、履歴、ファイルは保持され「協同は終了しました」と表示されます。",
     "manageGroup": "管理",
     "hardLimitHint": "上限 {{limit}} 件に達しました · Worker をアーカイブすると作成できます",
     "softLimitHint": "目安の {{limit}} 件を超えています · Worker が多いとメモリ使用量が増えます",
@@ -622,6 +658,7 @@
     "errors": {
       "unsupported": "コンピューターのバージョンが古いため、コラボレーションに対応していません",
       "loadFailed": "Worker を読み込めませんでした。",
+      "loadExecutionDevices": "実行デバイスを読み込めませんでした。",
       "startFailed": "コラボレーションを開始できませんでした。",
       "createFailed": "Worker を作成できませんでした。",
       "archiveFailed": "Worker をアーカイブできませんでした。",

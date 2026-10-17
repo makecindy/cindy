@@ -77,6 +77,11 @@
     "planDoneGeneric": "역할 분담을 마쳤습니다",
     "olderOnComputer": "이전 메시지는 컴퓨터에서 확인하세요"
   },
+  "quote": {
+    "label": "{{name}} 인용: {{summary}}",
+    "deleted": "원본 메시지가 삭제되었습니다",
+    "attachments": "{{name}} 등 {{total}}개"
+  },
   "notice": {
     "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
     "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
@@ -87,7 +92,19 @@
     "workdirUnavailable": "{{name}} 님이 작업 디렉터리를 찾지 못했습니다",
     "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
     "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
-    "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다"
+    "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
+    "runtimeFailure": {
+      "IMAGE_INPUT_UNSUPPORTED": "{{name}}이(가) 답변하지 못했습니다. 현재 모델은 이미지를 지원하지 않습니다.\n이미지 지원 모델로 전환하거나 설정 → 개인화 → 비전 브리지에서 비전 모델을 활성화하고 설정한 뒤 메시지를 다시 보내세요.",
+      "MODEL_UNAVAILABLE": "{{name}}이(가) 답변하지 못했습니다. 사용 가능한 모델이 없습니다.\n동료 설정에서 연결된 사용 가능한 모델을 선택한 뒤 메시지를 다시 보내세요.",
+      "AUTH_REQUIRED": "{{name}}이(가) 답변하지 못했습니다. 모델 연결에 재인증이 필요합니다.\n설정에서 모델 제공자에 다시 연결한 뒤 메시지를 다시 보내세요.",
+      "RATE_LIMITED": "{{name}}이(가) 답변하지 못했습니다. 모델 요청이 너무 많습니다.\n잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
+      "UPSTREAM_OVERLOADED": "{{name}}이(가) 답변할 수 없습니다. 모델 서비스가 일시적으로 혼잡합니다.\n잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택해 주세요.",
+      "QUOTA_EXCEEDED": "{{name}}이(가) 답변하지 못했습니다. 모델 사용량 한도에 도달했습니다.\n제공자의 할당량을 확인하거나 다른 사용 가능한 모델을 선택하세요.",
+      "NETWORK_ERROR": "{{name}}이(가) 답변하지 못했습니다. 네트워크 연결에 실패했습니다.\n네트워크나 프록시를 확인한 뒤 메시지를 다시 보내세요.",
+      "RUNTIME_TIMEOUT": "{{name}}의 답변 시간이 초과되었습니다.\n메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
+      "RUNTIME_ERROR": "{{name}}이(가) 이번에는 답변하지 못했습니다.\n메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
+    },
+    "runtimeFailureSetupHint": "모델이나 설정을 변경하려면 이 동료가 실행되는 컴퓨터에서 변경하세요."
   },
   "plan": {
     "intro_one": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
@@ -123,8 +140,21 @@
     "planning": "역할을 나누는 중…",
     "step": "작업 중…"
   },
+  "task": {
+    "state": {
+      "started": "진행 중",
+      "waiting": "확인 대기 중",
+      "completed": "완료",
+      "failed": "실패",
+      "cancelled": "취소됨",
+      "timed-out": "시간 초과"
+    }
+  },
   "files": {
-    "onComputer": "파일은 컴퓨터에 있습니다. 컴퓨터에서 열어 주세요"
+    "onComputer": "파일은 컴퓨터에 있습니다. 컴퓨터에서 열어 주세요",
+    "loading": "불러오는 중…",
+    "unavailable": "지금 불러올 수 없음",
+    "untitled": "첨부 파일"
   },
   "settings": {
     "open": "그룹 설정",
@@ -135,7 +165,7 @@
     "minMembers": "그룹 채팅에는 동료가 {{min}}명 이상 있어야 합니다",
     "maxMembers": "최대 {{max}}명",
     "noMoreBots": "추가할 수 있는 다른 동료가 없습니다",
-    "nameSaveFailed": "그룹 이름을 저장하지 못해 이전 이름으로 되돌렸습니다",
+    "nameSaveFailed": "그룹 이름을 저장하지 못했습니다. 입력 내용은 유지됩니다. 다시 시도해 주세요.",
     "membersSaveFailed": "멤버를 업데이트하지 못했습니다. 다시 시도하세요",
     "replyMode": "아무도 @멘션되지 않았을 때",
     "replyModeAll": "누구나 답할 수 있음",
@@ -149,7 +179,7 @@
     "speakingMode": "발언 순서",
     "speakingModeAuto": "자동",
     "speakingModeSequential": "항상 차례대로",
-    "speakingModeAutoNote": "멘션이 없거나 @모두일 때는 첫 순서에서 모두 동시에 생각하고, 이후에는 차례대로 이어서 말합니다. 멘션한 동료는 멘션한 순서대로 답합니다.",
+    "speakingModeAutoNote": "멘션이 없거나 @모두이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
     "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
     "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
     "setOrganizer": "담당자로 지정",
@@ -161,15 +191,46 @@
     "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
     "add": "동료 추가",
     "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다",
-    "memberActions": "{{name}} 작업"
+    "memberActions": "{{name}} 작업",
+    "managementComputer": "관리 컴퓨터",
+    "retry": "다시 시도",
+    "reconnect": "재연결",
+    "conflict": "그룹 설정이 변경되었습니다. 확인한 후 다시 저장해 주세요. 입력 내용은 유지됩니다.",
+    "archive": "그룹 채팅 보관",
+    "archiveConfirmTitle": "“{{name}}” 그룹을 보관할까요?",
+    "archiveNote": "그룹 소유자만 보관할 수 있습니다. 새 메시지를 보낼 수 없게 되지만 기록은 유지됩니다.",
+    "managementStatus": {
+      "ready": "연결됨",
+      "loading": "연결 중…",
+      "noHost": "연결 끊김",
+      "permission": "읽기 전용",
+      "upgrade": "업데이트 필요",
+      "unavailable": "설정을 읽을 수 없음"
+    }
   },
   "errors": {
     "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
     "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+    "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
     "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
     "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
     "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
-    "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다"
+    "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다",
+    "invalidAttachment": "첨부 파일을 읽을 수 없어요. 다시 선택한 후 보내 주세요.",
+    "attachmentUnavailable": "휴대폰에서 첨부 파일을 가져오지 못했어요. 기기 연결을 확인하고 다시 시도해 주세요.",
+    "attachmentTooLarge": "첨부 파일이 100 MB를 초과해요. 더 작은 파일을 선택해 주세요.",
+    "mediaUploadFailed": "채팅 서비스에 첨부 파일을 업로드하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "authRequired": "로그인이 만료되었어요. 컴퓨터에서 다시 로그인해 주세요.",
+    "chatUnavailable": "채팅 서비스에 연결할 수 없어요. 네트워크를 확인하고 다시 시도해 주세요.",
+    "importPending": "그룹 기록을 동기화하고 있어요. 잠시 후 다시 시도해 주세요.",
+    "requestTimeout": "아직 작업 결과를 확인하지 못했어요. 새로고침하여 확인한 후 다시 시도해 주세요.",
+    "permissionDenied": "이 그룹을 관리할 권한이 없어요.",
+    "serviceError": "채팅 서비스에서 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "groupArchived": "보관된 그룹에서는 이 작업을 수행할 수 없어요.",
+    "quoteUnavailable": "인용한 메시지가 삭제되었거나 더 이상 볼 수 없습니다. 인용을 해제했으니 다시 보내세요.",
+    "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
+    "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
+    "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
   },
   "followUp": {
     "next": "분담 · 다음 단계",
@@ -182,5 +243,17 @@
     "attachmentFailed": "첨부 파일을 열지 못했습니다. 다시 시도해 주세요.",
     "previewUnavailable": "미리보기를 불러올 수 없습니다",
     "endpointUnavailable": "그룹 채팅 서비스 설정을 사용할 수 없습니다. 다시 시도해 주세요."
+  },
+  "lifecycle": {
+    "dissolve": "그룹 해산",
+    "dissolveNote": "이 작업은 되돌릴 수 없습니다. 모든 멤버의 메시지 전송이 중단되고 진행 중인 작업이 멈추며 초대가 만료됩니다. 멤버는 기존에 열람할 수 있었던 기록을 계속 볼 수 있습니다.",
+    "hide": "내 목록에서 제거",
+    "hideNote": "내 모든 기기의 목록에서 이 채팅을 제거합니다. 멤버 자격, 기록, 진행 중인 작업 및 다른 멤버에게 영향을 주지 않습니다.",
+    "leave": "그룹 나가기",
+    "leaveNote": "나와 내 동료가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
+    "unavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
+    "dissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
+    "failed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
+    "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
   }
 }

@@ -11,9 +11,18 @@ import {
   effectiveInstallOrigin,
   type GhostInstallReceipt,
   GhostInstallReceiptStore,
+  isValidGhostSourceStateArchiveId,
 } from '../ghostInstallReceipt';
 
 describe('GhostInstallReceiptStore cleanup', () => {
+  it('accepts only a canonical random archive namespace destination', () => {
+    expect(isValidGhostSourceStateArchiveId('_ns__cindy-archive-00000000-0000-4000-8000-000000000002__hello')).toBe(true);
+    for (const value of ['hello', '../hello', '_ns__acme__hello',
+      'cindy-source-00000000-0000-4000-8000-000000000002',
+      '_ns__cindy-archive-not-random__hello']) {
+      expect(isValidGhostSourceStateArchiveId(value)).toBe(false);
+    }
+  });
   let workDir: string;
   let stateRoot: string;
   let store: GhostInstallReceiptStore;
@@ -31,6 +40,32 @@ describe('GhostInstallReceiptStore cleanup', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await fs.promises.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('lists legacy, root and organization journals together', async () => {
+    const ids = ['hello', '_ns/_root/hello', '_ns/acme/hello'];
+    for (const id of ids) await store.writePendingMutation(id, { kind: 'uninstall' });
+    expect(store.listPendingMutationIdsSync()).toEqual({ state: 'ok', ids: expect.arrayContaining(ids), blocked: false });
+  });
+
+  it.each(['_ns/_root', '_ns/acme'])('blocks cleanup for malformed journals under %s', async (parent) => {
+    await store.writePendingMutation(parent + '/hello', { kind: 'uninstall' });
+    await fs.promises.writeFile(path.join(stateRoot, parent, '.pending-BAD!.json'), '{}');
+    expect(store.listPendingMutationIdsSync()).toEqual({
+      state: 'ok', ids: [parent + '/hello'], blocked: true,
+    });
+  });
+
+  it.each(['_ns/_root', '_ns/acme'])('does not ignore journals when %s disappears during scanning', async (parent) => {
+    await store.writePendingMutation(parent + '/hello', { kind: 'uninstall' });
+    const readdir = fs.readdirSync;
+    vi.spyOn(fs, 'readdirSync').mockImplementation((...args) => {
+      if (String(args[0]) === path.join(stateRoot, parent)) {
+        throw Object.assign(new Error('journal parent disappeared'), { code: 'ENOENT' });
+      }
+      return readdir(...args);
+    });
+    expect(store.listPendingMutationIdsSync().state).toBe('unreadable');
   });
 
   function createSetupReceipt(): GhostInstallReceipt {

@@ -19,6 +19,79 @@ const CODEX_COMPUTER_USE_REPLACEMENT_ROUTE = {
   reason: 'Cindy owns desktop-control enablement, permissions, and execution.',
 } as const satisfies CapabilityRouteOverride;
 
+const HARNESS_OUTPUT_UNAVAILABLE_REASON =
+  'Its result is shown only in the vendor app, not in Cindy; Cindy delivers files, images, and pages itself.';
+
+function claudeSkillOutputOverride(
+  kind: 'harness-builtin' | 'harness-plugin',
+  id: string,
+) {
+  return {
+    capabilityId: 'output-delivery',
+    source: {
+      kind,
+      harness: 'claude-code',
+      surface: 'skill',
+      id,
+    },
+    invocation: 'disabled',
+    reason: HARNESS_OUTPUT_UNAVAILABLE_REASON,
+  } as const satisfies CapabilityRouteOverride;
+}
+
+/**
+ * Harness surfaces that deliver results to a vendor UI Cindy cannot show.
+ * Leaving them visible makes the model pick them over Cindy's own delivery
+ * (managed media, local file preview, Cindy plugins), and their long tool
+ * instructions also cost context on every request.
+ *
+ * Only names owned by the harness are listed here. Claude's generic `design`
+ * Skill is left alone: skill overrides match by name and would also disable a
+ * user's own `design` Skill.
+ */
+const HARNESS_OUTPUT_SURFACE_OVERRIDES = [
+  ...['SendUserFile', 'Artifact'].map((id) => ({
+    capabilityId: 'output-delivery',
+    source: {
+      kind: 'harness-builtin',
+      harness: 'claude-code',
+      surface: 'tool',
+      id,
+    },
+    invocation: 'disabled',
+    reason: HARNESS_OUTPUT_UNAVAILABLE_REASON,
+  } as const satisfies CapabilityRouteOverride)),
+  {
+    capabilityId: 'output-delivery',
+    source: {
+      kind: 'harness-builtin',
+      harness: 'claude-code',
+      surface: 'mcp',
+      // claude.ai account connector. Its instructions direct the model to the
+      // Artifact tool, so it is unusable once Artifact is disabled.
+      id: 'claude.ai Claude Docs',
+    },
+    invocation: 'disabled',
+    reason: HARNESS_OUTPUT_UNAVAILABLE_REASON,
+  },
+  ...['artifact-design', 'artifact-diagramming', 'artifact-capabilities'].map(
+    (id) => claudeSkillOutputOverride('harness-builtin', id),
+  ),
+  // Skill synced from the claude.ai account; it drives the Claude Docs connector.
+  claudeSkillOutputOverride('harness-plugin', 'anthropic-skills:docs'),
+  {
+    capabilityId: 'output-delivery',
+    source: {
+      kind: 'harness-plugin',
+      harness: 'codex',
+      surface: 'plugin',
+      id: 'visualize@openai-bundled',
+    },
+    invocation: 'disabled',
+    reason: HARNESS_OUTPUT_UNAVAILABLE_REASON,
+  },
+] as const satisfies CapabilityRoutingPolicy['overrides'];
+
 /**
  * Product-level arbitration for capability sources that collide inside Cindy.
  *
@@ -130,6 +203,7 @@ export const DESKTOP_CAPABILITY_ROUTING_POLICY = {
       invocation: 'disabled',
       reason: 'The bundled Skill requires node_repl, which is unavailable in Cindy.',
     },
+    ...HARNESS_OUTPUT_SURFACE_OVERRIDES,
   ],
 } as const satisfies CapabilityRoutingPolicy;
 

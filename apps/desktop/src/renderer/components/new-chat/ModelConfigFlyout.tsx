@@ -1,3 +1,4 @@
+import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Star, Zap } from 'lucide-react';
@@ -225,7 +226,12 @@ export function ModelConfigFlyout({
         onChange={onEngineChange}
       />
 
-      {price && (
+      {config.capability?.displayPricing && config.capability.currency && (
+        <div className="mt-2.5 max-h-72 overflow-y-auto border-t border-[var(--model-dropdown-border)] pt-2.5">
+          <DisplayPricingDetails model={config.capability} />
+        </div>
+      )}
+      {!config.capability?.displayPricing && price && (
         // 价格区(设计稿 v4 定稿):**紧凑两行**,不画删除线表格。
         //   第 1 行:每百万 token · 折扣中,较标准价省 X%(省 X% 绿色加粗)
         //   第 2 行:折后价单行排列 —— 输入 ¥32 · 输出 ¥162 · 缓存读取 ¥3.2

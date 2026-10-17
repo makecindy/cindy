@@ -80,6 +80,8 @@ export interface SubagentChildRun {
   awaitingApproval?: boolean;
   output?: string;
   outputTruncated?: boolean;
+  /** Final reply readiness, independent of commentary; absent on legacy hosts/runners. */
+  resultReady?: boolean;
   error?: string;
 }
 

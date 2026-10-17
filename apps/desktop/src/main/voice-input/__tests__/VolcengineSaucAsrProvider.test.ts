@@ -586,6 +586,60 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     }
   });
 
+  it.each([
+    ['proxy key, HTTP 401', 401, false, 1],
+    ['proxy key, HTTP 403', 403, false, 0],
+    ['managed connection ticket, HTTP 401', 401, true, 0],
+  ] as const)('reports the Cindy AI key on a rejected handshake only for the proxy key path (%s)', async (
+    _label,
+    status,
+    managed,
+    reports,
+  ) => {
+    const server = new WebSocketServer({
+      host: '127.0.0.1',
+      port: 0,
+      verifyClient(_info, done) {
+        done(false, status, 'Rejected');
+      },
+    });
+    let provider: VolcengineSaucAsrProvider | undefined;
+    const onAuthorizationRejected = vi.fn();
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const path = '/volcengine/api/v3/sauc/bigmodel_async';
+
+      provider = new VolcengineSaucAsrProvider({
+        ...(managed
+          ? {
+              connectionProvider: async () => ({
+                websocketUrl: `ws://127.0.0.1:${address.port}${path}`,
+                authorizationToken: 'voice-ticket',
+              }),
+            }
+          : {
+              proxyApiKey: 'gateway-key-sent',
+              baseUrl: `http://127.0.0.1:${address.port}`,
+              endpointPath: path,
+            }),
+        resourceId: 'volc.test',
+        connectTimeoutMs: 2_000,
+        onAuthorizationRejected,
+      });
+      provider.onEvent(() => {});
+
+      await expect(provider.start()).rejects.toThrow(`HTTP ${status}`);
+      expect(onAuthorizationRejected).toHaveBeenCalledTimes(reports);
+      if (reports > 0) expect(onAuthorizationRejected).toHaveBeenCalledWith('gateway-key-sent');
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('reports provider-native handshake failures without waiting for the connect timeout', async () => {
     const server = new WebSocketServer({
       host: '127.0.0.1',

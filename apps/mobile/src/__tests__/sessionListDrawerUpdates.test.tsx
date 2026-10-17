@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionListDrawer } from '@/session/SessionListDrawer';
 import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
-const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, mounts: 0, unmounts: 0, reduceMotion: true }));
+const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, mounts: 0, unmounts: 0, reduceMotion: true,
+  values: [] as { value: number }[], gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
   const { useEffect } = await import('react');
   return { MobileHome: (props: MobileHomeProps) => {
@@ -72,10 +73,14 @@ vi.mock("react-native-reanimated", async () => {
   const { View } = await import("react-native");
   return {
     default: { View },
-    useSharedValue: (value: number) => useRef({ value }).current,
+    useSharedValue: (value: number) => {
+      const ref = useRef({ value });
+      if (!native.values.includes(ref.current)) native.values.push(ref.current);
+      return ref.current;
+    },
     useAnimatedStyle: () => ({}),
     Easing: { bezier: () => undefined },
-    cancelAnimation() {},
+    cancelAnimation: native.cancel,
     runOnJS: (fn: unknown) => fn,
     withRepeat: (value: number) => value,
     withTiming: (value: number) => value,
@@ -90,8 +95,9 @@ vi.mock("@/platform/gestureHandler", () => ({
         activeOffsetX: () => chain,
         failOffsetX: () => chain,
         failOffsetY: () => chain,
-        onUpdate: () => chain,
-        onEnd: () => chain,
+        onStart: (callback: () => void) => { native.gesture.start = callback; return chain; },
+        onUpdate: (callback: (event: any) => void) => { native.gesture.update = callback; return chain; },
+        onEnd: (callback: (event: any) => void) => { native.gesture.end = callback; return chain; },
       };
       return chain;
     },
@@ -125,12 +131,63 @@ describe('shared Home drawer host', () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     native.home = null; native.mounts = 0; native.unmounts = 0;
+    native.values = []; native.gesture = {};
     native.reduceMotion = true;
     vi.clearAllMocks();
     vi.useFakeTimers();
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
+  it('takes over an unfinished rebound on horizontal activation and still closes a full left swipe', async () => {
+    native.reduceMotion = false;
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    const [progress, dragX] = native.values;
+    native.gesture.start!();
+    native.gesture.update!({ translationX: -40 });
+    native.gesture.end!({ translationX: -40, velocityX: 0 });
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(dragX!.value).toBe(0);
+    // The UI thread is halfway through that return when a second pan activates.
+    progress!.value = 0.9;
+    native.cancel.mockClear();
+    native.gesture.start!();
+    expect(native.cancel).toHaveBeenCalledWith(progress);
+    expect(native.cancel).toHaveBeenCalledWith(dragX);
+    expect(progress!.value).toBe(0.9);
+    native.gesture.update!({ translationX: -24 });
+    expect((progress!.value - 1) * props.width + dragX!.value).toBeCloseTo(-56);
+    native.gesture.end!({ translationX: -24, velocityX: 0 });
+    expect(progress!.value).toBe(1);
+    expect(dragX!.value).toBe(0);
+    expect(props.onClose).not.toHaveBeenCalled();
+    native.gesture.start!();
+    native.gesture.update!({ translationX: -160 });
+    native.gesture.end!({ translationX: -160, velocityX: 0 });
+    expect(props.onClose).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { translationX: -40, velocityX: 0, closes: true },
+    { translationX: -20, velocityX: 0, closes: false },
+    { translationX: -20, velocityX: -900, closes: true },
+  ])('uses the inherited rebound position when releasing a second swipe ($translationX, $velocityX)', async ({ translationX, velocityX, closes }) => {
+    native.reduceMotion = false;
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    const [progress, dragX] = native.values;
+    native.gesture.start!();
+    native.gesture.update!({ translationX: -100 });
+    native.gesture.end!({ translationX: -100, velocityX: 0 });
+    expect(props.onClose).not.toHaveBeenCalled();
+    // The first 100-point swipe is rebounding and still leaves 80 points hidden.
+    progress!.value = 0.75;
+    native.gesture.start!();
+    native.gesture.update!({ translationX });
+    native.gesture.end!({ translationX, velocityX });
+    expect(props.onClose).toHaveBeenCalledTimes(closes ? 1 : 0);
+    if (!closes) {
+      expect(progress!.value).toBe(1);
+      expect(dragX!.value).toBe(0);
+    }
+  });
   it('unmounts the invisible blocker even when the animation never calls completion', async () => {
     native.reduceMotion = false;
     await act(async () => root.render(<SessionListDrawer {...props} />));

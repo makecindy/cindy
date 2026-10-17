@@ -21,7 +21,9 @@ import {
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
 import { preparePackagedNodePty } from './forge-node-pty';
-import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { prunePackagedRuntime, prunePackagedMigrationSnapshots } from './forge-prune-runtime';
+import { copyRuntimeDependencyTrees as copyRuntimeTrees } from './forge-runtime-deps';
+import { packagedResourcesPath, stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import {
   swiftTargetTriple,
   swiftTargetTriplesForForgeArch,
@@ -249,6 +251,16 @@ function sharpPlatformPkgs(platform: string, arch: string): string[] {
   return pkgs;
 }
 
+/**
+ * sherpa-onnx-node 按 platform-arch 拆出预编译子包,Windows 子包名用 `win` 而非
+ * `win32`。子包里 sherpa-onnx.node 与 onnxruntime / sherpa-onnx-c-api 动态库并排,
+ * 必须整目录解包(见 packagerConfig.asar)。同上用 TARGET platform/arch。
+ */
+function sherpaOnnxRuntimePackages(platform: string, arch: string): string[] {
+  const platformName = platform === 'win32' ? 'win' : platform;
+  return ['sherpa-onnx-node', `sherpa-onnx-${platformName}-${arch}`];
+}
+
 // Locate a package's directory on disk. Some packages ship a strict `exports`
 // map that hides the obvious resolve targets:
 //   - `long` blocks `./package.json` but exposes a main entry → walk up from
@@ -312,40 +324,7 @@ function copyDiscordRuntimeDeps(destModules: string): void {
 }
 
 function copyRuntimeDependencyTrees(deps: readonly string[], destModules: string): void {
-  const seen = new Set<string>();
-  for (const dep of deps) {
-    copyDependencyTree(dep, destModules, undefined, seen);
-  }
-}
-
-function copyDependencyTree(
-  dep: string,
-  destModules: string,
-  fromDirs?: string[],
-  seen = new Set<string>(),
-): void {
-  const src = resolvePackageDir(dep, fromDirs);
-  const dst = path.join(destModules, dep);
-  const seenKey = `${dst}\0${src}`;
-  if (seen.has(seenKey)) return;
-  seen.add(seenKey);
-
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-  fs.rmSync(dst, { recursive: true, force: true });
-  fs.cpSync(src, dst, {
-    recursive: true,
-    dereference: true,
-    filter: (srcPath) => path.basename(srcPath) !== 'node_modules',
-  });
-  console.log(`[forge:afterCopy] bundled runtime dep tree: ${dep} <- ${src}`);
-
-  const pkg = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8')) as {
-    dependencies?: Record<string, string>;
-  };
-  const childDestModules = path.join(dst, 'node_modules');
-  for (const childDep of Object.keys(pkg.dependencies ?? {}).sort()) {
-    copyDependencyTree(childDep, childDestModules, [src], seen);
-  }
+  copyRuntimeTrees(deps, destModules, resolvePackageDir);
 }
 
 /**
@@ -386,6 +365,9 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     // 必须运行时按 __dirname 找 — 所以走 NATIVE_RUNTIME_DEPS 这条路, 不让 vite
     // bundle。Mac/Linux 完全不带, 避免拖入 execa 这条无用依赖链。
     ...(targetPlatform === 'win32' ? ['loudness'] : []),
+    // 语音「只识别我的声音」的推理库：JS 主包 + 目标平台的预编译子包
+    // (.node 与 onnxruntime 动态库同目录,整目录 asar.unpack)。
+    ...sherpaOnnxRuntimePackages(targetPlatform, targetArch),
   ];
   // node-addon-api 必须解析成 node-pty 实际依赖的那一版 (7.x, 有 `.targets`),
   // 不能让它退化到 root 可能 hoist 的 1.7.2。以 node-pty 目录为解析起点。
@@ -463,6 +445,7 @@ async function rebuildNativeDepsInPackage(
   }
 
   console.log(`[forge:afterCopy] rebuild ok: ${sqliteNative}, ${ptyNative}`);
+  prunePackagedRuntime(buildPath);
 }
 
 const isDev =
@@ -936,6 +919,8 @@ const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
 const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
+// Swift Charts and the macOS 14 SwiftUI animation APIs.
+const MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0';
 const MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET = 'macos10.15';
 
@@ -1154,8 +1139,11 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         if (location.error || location.status !== 0)
           throw new Error('Remote credentials output unavailable');
         outputs.push(path.join(location.stdout.trim(), 'cindy-macos-remote-credentials'));
-        fs.cpSync(path.join(location.stdout.trim(), 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
-          path.join(destDir, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'), { recursive: true });
+        fs.cpSync(
+          path.join(location.stdout.trim(), 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
+          path.join(destDir, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
+          { recursive: true },
+        );
       }
       const credential = path.join(destDir, 'cindy-macos-remote-credentials');
       if (outputs.length === 1) fs.copyFileSync(outputs[0], credential);
@@ -1627,6 +1615,45 @@ function buildMacSessionDragReleaseHelper(platform: ForgePlatform, arch: ForgeAr
   );
 }
 
+function buildMacMenubarHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const srcDir = path.join(__dirname, 'native', 'menubar');
+  const src = path.join(srcDir, 'macos-menubar-helper.swift');
+  const destDir = path.join(__dirname, 'resources', 'tools', 'menubar');
+  const dest = path.join(destDir, 'xdt-macos-menubar-helper');
+  const assets = [
+    'wordmark-light.png',
+    'wordmark-dark.png',
+    'BarlowCondensed-Light.ttf',
+    'BarlowCondensed-Medium.ttf',
+    'BarlowCondensed-SemiBold.ttf',
+  ];
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] macOS menu bar helper source missing at ${src}`);
+  }
+  for (const asset of assets) {
+    if (!fs.existsSync(path.join(srcDir, asset))) {
+      throw new Error(`[forge] macOS menu bar helper asset missing: ${asset}`);
+    }
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET,
+    // The helper uses @main, which requires library parsing mode.
+    ['-O', '-parse-as-library'],
+    'menu bar helper',
+  );
+  for (const asset of assets) fs.copyFileSync(path.join(srcDir, asset), path.join(destDir, asset));
+  fs.chmodSync(dest, 0o755);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(
+    `[forge:prePackage] macOS menu bar helper (${swiftArchLabel(arch, MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`,
+  );
+}
+
 // MakerNSIS is Windows-only (native dependency), conditionally require to
 // avoid import errors on macOS / Linux.
 const makers: ForgeConfig['makers'] = [
@@ -1749,9 +1776,11 @@ const config: ForgeConfig = {
     // node-pty 在 macOS/Linux 上会 posix_spawn 一个无扩展名的 spawn-helper、在
     // Windows 上也带 winpty-agent.exe / DLL 等非 .node 二进制；这些都必须 unpack
     // 到 asar 外才能被 spawn / 动态加载。AutoUnpackNativesPlugin 只 unpack .node,
-    // 所以这里显式覆盖 loudness / node-pty 整个目录。
+    // 所以这里显式覆盖 loudness / node-pty 整个目录。sherpa-onnx 平台子包同理:
+    // .node 依赖同目录的 onnxruntime 动态库,只解包 .node 会加载失败。
     asar: {
-      unpack: '**/{@img/{sharp-libvips-*,sharp-win32-*},loudness,native/sqlite-vec,node-pty}/**',
+      unpack:
+        '**/{@img/{sharp-libvips-*,sharp-win32-*},loudness,native/sqlite-vec,node-pty,sherpa-onnx-{darwin,win,linux}-*}/**',
     },
     // 打包名(out 目录 / mac .app 包名 / Helper 目录名 / 主 plist CFBundleName)
     // 按区域派生:cn/global 'Cindy'(2026-07-26 显示名统一,.app 撞名双装
@@ -1889,6 +1918,16 @@ const config: ForgeConfig = {
     // 避免 Win/Mac release 都回写 package.json 引发 git 冲突。
     // 未设置时由 electron-packager 回落到 package.json 里的占位版本(仅 dev 用)。
     ...(process.env.APP_VERSION ? { appVersion: process.env.APP_VERSION } : {}),
+    afterCopyExtraResources: [
+      (buildPath, _electronVersion, platform, _arch, callback) => {
+        try {
+          prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
+          callback();
+        } catch (err) {
+          callback(err as Error);
+        }
+      },
+    ],
     afterCopy: [
       (buildPath, electronVersion, platform, arch, callback) => {
         (async () => {
@@ -1938,6 +1977,7 @@ const config: ForgeConfig = {
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
       buildMacSessionDragReleaseHelper(platform, arch);
+      buildMacMenubarHelper(platform, arch);
       buildRemoteDesktopInput(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
@@ -2007,6 +2047,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/voice-input/speaker/speakerGateWorker.ts',
+          config: 'vite.speaker-gate-worker.config.ts',
+          // 声纹过滤的 ONNX 推理是同步 CPU 计算，隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
           config: 'vite.contacts-sync-codec-worker.config.ts',
           // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
@@ -2049,6 +2095,13 @@ const config: ForgeConfig = {
           config: 'vite.preload.config.ts',
           // 最终文档落盘绑定到已验证父目录的 cwd capability，避免 main 侧
           // realpath 与 write/rename 之间被 symlink 替换。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/skillhub/customizationScanProcess.ts',
+          config: 'vite.contacts-sync-codec-worker.config.ts',
+          // File approvals can stall native scandir indefinitely. Keep discovery
+          // in a killable utility process so Main can time out and recover.
           target: 'preload',
         },
         {

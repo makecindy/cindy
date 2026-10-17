@@ -71,8 +71,8 @@ const xdOption: OneshotPinOption = {
 };
 
 describe('OneshotModelPinPicker shared A adapter', () => {
-  const mount = (extra = {}) => render(<OneshotModelPinPicker defaultLabel="Automatic"
-    declaredLabel={null} options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
+  const mount = (extra = {}) => render(<OneshotModelPinPicker defaultOptionLabel="Automatic"
+    options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
 
   it('uses the shared picker with all host-approved routes, without a separate Agent step', () => {
     mount();
@@ -115,7 +115,7 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(onChange).toHaveBeenCalledWith(xdOption.id);
   });
 
-  it('preserves failure results, same-pin no-op, automatic clearing, and legacy labels', async () => {
+  it('preserves failure results, same-pin no-op, automatic clearing, and unknown-pin labels', async () => {
     const onChange = vi.fn(async () => false);
     const view = mount({ value: OPENROUTER_PIN, onChange });
     expect(await picker.onUnifiedSelect!({ providerId: 'openrouter', modelId: 'openai/gpt-5-mini',
@@ -126,8 +126,9 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(await picker.fallbackOption!.onSelect()).toBe(false);
     expect(onChange).toHaveBeenLastCalledWith(null);
     view.unmount();
-    mount({ value: 'legacy', legacyPinLabel: 'Budget tier' });
-    expect(picker.sourceDisconnected).toBe(false);
-    expect(picker.unknownModelLabel!('legacy')).toBe('Budget tier');
+    mount({ value: 'retired' });
+    expect(picker.sourceDisconnected).toBe(true);
+    expect(picker.unknownModelLabel!('retired')).toBe('retired');
+    expect(picker.fallbackOption?.label).toBe('Automatic');
   });
 });

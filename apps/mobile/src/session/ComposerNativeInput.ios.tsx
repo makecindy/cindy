@@ -150,6 +150,14 @@ export const ComposerNativeInput = forwardRef<
         true,
       );
     },
+    applyDocumentAndSetSelection(document, offset) {
+      rememberedSelection.current = null;
+      void native.current?.setDocument(
+        payload(document),
+        composerOffsetToNative(document, offset),
+        false,
+      );
+    },
     insertNode(node: ComposerNode) {
       void native.current?.insertNodes(
         nativeComposerNodes({ version: 1, nodes: [node] }),

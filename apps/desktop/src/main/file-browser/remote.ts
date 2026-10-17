@@ -121,15 +121,22 @@ export class RemoteFileBrowserManager {
   /**
    * 类型安全的远程调用入口。断链自动重建一次(仅幂等读方法);其余错误原样抛
    * FileServiceRpcError(caller 决定 throwIpcError 还是 {ok:false})。
+   * `beforeSend` 在建链等待之后、每次真正发出请求之前调用(可异步),抛错即不发送
+   * (共享任务访客用它在建链期间重新绑定任务目录,拦下撤权或移动后尚未发出的请求)。
    */
   async request<M extends keyof FsRpcMethods>(
     hostId: string,
     method: M,
     params: FsRpcMethods[M]['params'],
+    options?: { beforeSend?: () => void | Promise<void> },
   ): Promise<FsRpcMethods[M]['result']> {
     const generation = this.currentEndpointGeneration(hostId);
     const client = await this.getClient(hostId, generation);
     this.assertCurrentEndpointGeneration(hostId, generation);
+    if (options?.beforeSend) {
+      await options.beforeSend();
+      this.assertCurrentEndpointGeneration(hostId, generation);
+    }
     try {
       const result = await client.request(method, params);
       this.assertCurrentEndpointGeneration(hostId, generation);
@@ -148,6 +155,10 @@ export class RemoteFileBrowserManager {
         this.log.warn('file-service channel lost, rebuilding', { hostId, method });
         this.clients.delete(hostId);
         const rebuilt = await this.getClient(hostId, generation);
+        if (options?.beforeSend) {
+          await options.beforeSend();
+          this.assertCurrentEndpointGeneration(hostId, generation);
+        }
         const result = await rebuilt.request(method, params);
         this.assertCurrentEndpointGeneration(hostId, generation);
         return result;

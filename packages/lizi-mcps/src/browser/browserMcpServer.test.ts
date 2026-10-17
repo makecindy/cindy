@@ -814,4 +814,55 @@ describe('createBrowserMcpServer', () => {
     expect(parsed.truncated).toBe(true);
     await h.cleanup();
   });
+
+  it.each([true, false])('points the agent at 代输入 when a snapshot shows a password field (%s)', async (password) => {
+    const h = await makeHarness({}, (request) => request.action === 'act'
+      ? { result: { password, code: false } }
+      : { targetId: 't9', snapshot: '- textbox "Password" [ref=e3]' });
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'snapshot' } },
+    });
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    const parsed = JSON.parse(text) as { loginWall?: { fields: string[]; hint: string }; ok: boolean };
+    expect(parsed.ok).toBe(true);
+    if (password) {
+      expect(text.startsWith('{"loginWall"')).toBe(true);
+      expect(parsed.loginWall).toMatchObject({ fields: ['password'], hint: expect.stringContaining('request_input_handoff') });
+    } else {
+      expect(parsed.loginWall).toBeUndefined();
+    }
+    // The check runs on the tab the snapshot came from.
+    expect(h.calls[1]).toMatchObject({ action: 'act', targetId: 't9', request: { kind: 'evaluate' } });
+    await h.cleanup();
+  });
+
+  it('pauses page-state reads on a page where the owner just typed a secret', async () => {
+    let restricted = true;
+    const asked: unknown[] = [];
+    const h = await makeHarness({
+      pageReadsRestricted: async (target) => { asked.push(target); return restricted; },
+    });
+    const call = async (args: Record<string, unknown>) => JSON.parse(((await h.client.callTool({
+      name: 'call_tool', arguments: { name: 'browser', args },
+    })).content as Array<{ text: string }>)[0].text) as { ok: boolean; data?: { reason?: string } };
+    try {
+      for (const args of [
+        { action: 'act', targetId: 't1', request: { kind: 'evaluate', fn: '() => 1' } },
+        { action: 'requests', targetId: 't1' },
+        { action: 'console', targetId: 't1' },
+      ]) {
+        expect(await call(args)).toMatchObject({ ok: false, data: { reason: 'secret_entered' } });
+      }
+      expect(asked[0]).toEqual({ targetId: 't1' });
+      expect(h.calls).toEqual([]);
+      // Reading the page's structure and clicking stay available.
+      expect(await call({ action: 'act', targetId: 't1', request: { kind: 'click', ref: 'e1' } })).toMatchObject({ ok: true });
+      restricted = false;
+      expect(await call({ action: 'console', targetId: 't1' })).toMatchObject({ ok: true });
+    } finally {
+      await h.cleanup();
+    }
+  });
 });
+

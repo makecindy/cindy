@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSharedTaskApi, parseSharedTaskSnapshot, type SharedTaskDetail } from '@cindy/device-link';
 import type { SharedTaskJournalEntry } from '../../localDb/sharedTasks.js';
 import { SharedTaskHost, type SharedTaskHostOptions } from '../sharedTaskHost.js';
-import { executeSharedTaskHostCommand } from '../sharedTaskCommands.js';
+import { executeSharedTaskAccountCommand, executeSharedTaskHostCommand } from '../sharedTaskCommands.js';
 import { createIpcError } from '../../../shared/ipc-errors.js';
 
 const detail = (revision = 1): SharedTaskDetail => ({
@@ -54,6 +54,76 @@ beforeEach(() => {
   host = new SharedTaskHost(options);
 });
 describe('task host sharedTask lifecycle', () => {
+  it.each(['cindy-make', 'cindy-make-merge'])('closes an upgraded %s share and removes it from owner and guest directories', async (source) => {
+    records.set('sharedTask', { sharedTaskId: 'sharedTask', sessionId: 'session', terminal: false, snapshot: parseSharedTaskSnapshot(detail()) });
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source }));
+    api.close.mockImplementation(async () => { serverDetail = { ...detail(2), status: 'closed', guests: [] }; });
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(api.close).toHaveBeenCalledExactlyOnceWith('sharedTask');
+    expect(api.get).not.toHaveBeenCalled();
+    expect(canRead()).toBe(false);
+    expect(host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))).toBeNull();
+    await expect(executeSharedTaskAccountCommand({ action: 'owned' }, api, 'owner')).resolves.toEqual([]);
+    await expect(executeSharedTaskAccountCommand({ action: 'list' }, api, 'guest-a')).resolves.toEqual([]);
+    await expect(api.list()).resolves.toEqual([]);
+    await expect(host.open('session')).rejects.toThrow('unavailable');
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('closes an unjournaled legacy %s share without restoring access', async (source) => {
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source }));
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(api.close).toHaveBeenCalledExactlyOnceWith('sharedTask');
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it('revokes only a hidden share offline and retries server closure after restart', async () => {
+    await host.open('session');
+    const hiddenCapture = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;
+    const otherDetail = { ...detail(), sharedTaskId: 'other-share', sessionId: 'other-session' };
+    api.create.mockResolvedValueOnce({ sharedTaskId: 'other-share', revision: 1 });
+    api.get.mockResolvedValueOnce(otherDetail);
+    await host.open('other-session');
+    const otherCapture = host.capturePeer(sharedTaskGuestPeer('other-share', 'member-b', 'phone-b'))!;
+    api.list.mockResolvedValue([detail(), otherDetail]);
+    api.get.mockImplementation(async sharedTaskId => sharedTaskId === 'other-share' ? otherDetail : detail());
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source: id === 'session' ? 'cindy-make' : 'cc' }));
+    await host.restore(false);
+    expect(hiddenCapture.isCurrent()).toBe(false);
+    expect(otherCapture.isCurrent()).toBe(true);
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(records.get('other-share')?.terminal).toBe(false);
+    expect(api.close).not.toHaveBeenCalled();
+    api.close.mockRejectedValueOnce(new Error('offline'));
+    await expect(host.restore()).rejects.toThrow('offline');
+    expect(hiddenCapture.isCurrent()).toBe(false);
+    const restarted = new SharedTaskHost(options);
+    await restarted.restore();
+    expect(api.close.mock.calls).toEqual([['sharedTask'], ['sharedTask']]);
+    expect(records.get('other-share')?.terminal).toBe(false);
+    expect(restarted.capturePeer(sharedTaskGuestPeer('other-share', 'member-b', 'phone-b'))?.isCurrent()).toBe(true);
+    expect(restarted.authorize('sharedTask', { accountId: 'guest-a', deviceId: 'phone-a' }, 'session', 'history.read').allowed).toBe(false);
+  });
+
+  it('does not grant an already-shared hidden task through a direct refresh', async () => {
+    options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source: 'cindy-make' }));
+    await expect(host.refresh('sharedTask')).rejects.toThrow('unavailable');
+    expect(records.size).toBe(0);
+    expect(canRead()).toBe(false);
+  });
+
+  it('does not close a cold ordinary share offline when local metadata is still absent', async () => {
+    records.set('sharedTask', { sharedTaskId: 'sharedTask', sessionId: 'session', terminal: false, snapshot: parseSharedTaskSnapshot(detail()) });
+    options.readSession = vi.fn(async () => null);
+    await host.restore(false);
+    expect(records.get('sharedTask')?.terminal).toBe(false);
+    expect(api.close).not.toHaveBeenCalled();
+    expect(api.list).not.toHaveBeenCalled();
+    expect(options.revoke).not.toHaveBeenCalled();
+  });
+
   it('consumes another instance closure offline and invalidates captured access without touching another share', async () => {
     await host.open('session');
     const old = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;

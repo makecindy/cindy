@@ -13,7 +13,6 @@ import type { ReactNode } from 'react';
 import { Check, CircleAlert, CircleCheck, CircleDashed, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -34,7 +33,9 @@ import type {
   BotGroupPlanStepView,
   BotGroupPlanView,
 } from '../../../shared/botGroupChat';
+import { formatBotTimelineClock } from '@cindy/maker-shared/botTimeline';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupElapsed } from './BotGroupElapsed';
 import {
   botGroupPathBasename,
   botGroupPlanFilePath,
@@ -96,22 +97,33 @@ const STEP_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> 
   failed: 'bots.groupChat.plan.stepFailed',
 };
 
+/** Live facts for the step status: when the running step started, when done steps finished. */
+interface StepTiming {
+  runningSince: number | null;
+  /** Finish time per 1-based step, from its hand-off message. */
+  doneAt?: ReadonlyMap<number, number>;
+  locale: string;
+}
+
 function StepRowContent({
   plan,
   step,
   index,
   identity,
   muted,
+  timing,
 }: {
   plan: BotGroupPlanView;
   step: BotGroupPlanStepView;
   index: number;
   identity: AvatarIdentity;
   muted: boolean;
+  timing: StepTiming;
 }) {
   const { t } = useTranslation();
   const started = plan.status !== 'proposed' && plan.status !== 'superseded' && plan.status !== 'dismissed';
   const statusKey = started ? STEP_STATUS_KEYS[step.status] : undefined;
+  const doneAt = step.status === 'done' ? timing.doneAt?.get(index + 1) : undefined;
   return (
     <>
       <span className="flex w-4 shrink-0 justify-center">
@@ -127,11 +139,18 @@ function StepRowContent({
       {statusKey ? (
         <span
           className={cn(
-            'shrink-0 text-12',
+            'shrink-0 text-12 tabular-nums',
             step.status === 'running' ? 'text-[var(--status-bar-accent)]' : 'text-[var(--text-tertiary)]',
           )}
         >
           {t(statusKey)}
+          {step.status === 'running' && plan.status === 'running' && timing.runningSince !== null ? (
+            <>
+              {' · '}
+              <BotGroupElapsed since={timing.runningSince} />
+            </>
+          ) : null}
+          {doneAt !== undefined ? ` · ${formatBotTimelineClock(doneAt, timing.locale)}` : null}
         </span>
       ) : null}
     </>
@@ -150,6 +169,7 @@ function EditableStepRow({
   disabled,
   allowRemove,
   onEdit,
+  timing,
 }: {
   plan: BotGroupPlanView;
   step: BotGroupPlanStepView;
@@ -160,9 +180,10 @@ function EditableStepRow({
   /** Steps are removed only before 开始. */
   allowRemove: boolean;
   onEdit: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  timing: StepTiming;
 }) {
   const { t } = useTranslation();
-  const candidates = members.filter(isActiveBotGroupMember);
+  const candidates = members.filter(member => isActiveBotGroupMember(member) && (!member.actorKind || member.actorKind === 'bot'));
   const lastStep = plan.steps.length <= 1;
   return (
     <DropdownMenu>
@@ -175,7 +196,7 @@ function EditableStepRow({
             'outline-none transition-colors enabled:hover:bg-[var(--model-item-hover)] focus-visible:bg-[var(--model-item-hover)] data-[state=open]:bg-[var(--model-item-hover)] disabled:opacity-60',
           )}
         >
-          <StepRowContent plan={plan} step={step} index={index} identity={identity} muted={false} />
+          <StepRowContent plan={plan} step={step} index={index} identity={identity} muted={false} timing={timing} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
@@ -238,6 +259,9 @@ export function BotGroupPlanCard({
   actionable,
   reassignable = false,
   pending,
+  runningSince = null,
+  doneAt,
+  locale = 'en',
   onStart,
   onDismiss,
   onEditStep,
@@ -247,6 +271,11 @@ export function BotGroupPlanCard({
   actionable: boolean;
   reassignable?: boolean;
   pending: BotGroupPlanCardAction | null;
+  /** When the running step started (its Session's turn, else the plan's last change). */
+  runningSince?: number | null;
+  /** Finish time of each done step (1-based), from its hand-off message. */
+  doneAt?: ReadonlyMap<number, number>;
+  locale?: string;
   onStart: () => void;
   onDismiss: () => void;
   onEditStep: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
@@ -258,12 +287,15 @@ export function BotGroupPlanCard({
   const muted = plan.status === 'superseded' || plan.status === 'dismissed';
   const finalNote = FINAL_NOTE_KEYS[plan.status];
   const busy = pending !== null;
+  const timing: StepTiming = { runningSince, doneAt, locale };
+  const canReassign = reassignable && plan.steps.some((step) => step.status === 'pending' || step.status === 'failed');
+  const underWay = plan.status === 'running' || plan.status === 'waiting';
   return (
     <div data-testid="bot-group-plan" data-plan-status={plan.status} className="flex min-w-0 flex-col">
-      <p className={`min-w-0 text-[var(--msg-assistant-text)] ${CHAT_BODY_CLASS}`}>
+      <p className="min-w-0 text-14 font-normal leading-relaxed text-[var(--msg-assistant-text)]">
         {t('bots.groupChat.plan.intro', { count: plan.steps.length })}
       </p>
-      <div className="mt-1.5 w-full max-w-[440px] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      <div className="mt-1.5 w-full max-w-[520px] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
         <ol className="flex flex-col py-1.5">
           {plan.steps.map((step, index) => {
             const identity = stepIdentity(step, members);
@@ -281,10 +313,11 @@ export function BotGroupPlanCard({
                     disabled={busy}
                     allowRemove={actionable}
                     onEdit={onEditStep}
+                    timing={timing}
                   />
                 ) : (
                   <div data-testid="bot-group-plan-step" className={STEP_ROW_CLASS}>
-                    <StepRowContent plan={plan} step={step} index={index} identity={identity} muted={muted} />
+                    <StepRowContent plan={plan} step={step} index={index} identity={identity} muted={muted} timing={timing} />
                   </div>
                 )}
               </li>
@@ -292,7 +325,7 @@ export function BotGroupPlanCard({
           })}
         </ol>
         {actionable ? (
-          <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3 pt-1">
+          <div className="flex flex-wrap items-center gap-2 px-3.5 pb-1 pt-1">
             <Button
               type="button"
               variant="cta"
@@ -316,17 +349,19 @@ export function BotGroupPlanCard({
             >
               {t('bots.groupChat.plan.dismiss')}
             </Button>
-            <span className="ml-auto min-w-0 truncate text-12 text-[var(--text-tertiary)]">
-              {t('bots.groupChat.plan.editHint')}
-            </span>
+          </div>
+        ) : null}
+        {actionable || underWay ? (
+          // Card footer: how it runs on the left, what the steps offer on the right.
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-[var(--border-default)] px-3.5 py-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
+            <span className="min-w-0">{t('bots.groupChat.plan.pauseNote')}</span>
+            {actionable || canReassign ? (
+              <span className="ml-auto min-w-0 truncate">{t('bots.groupChat.plan.editHint')}</span>
+            ) : null}
           </div>
         ) : null}
       </div>
-      {actionable ? (
-        <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">{t('bots.groupChat.plan.pauseNote')}</p>
-      ) : finalNote ? (
-        <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">{t(finalNote)}</p>
-      ) : null}
+      {finalNote ? <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">{t(finalNote)}</p> : null}
     </div>
   );
 }

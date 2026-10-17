@@ -2,7 +2,7 @@
  * `cindy_exec` MCP 服务(控制端)：把执行器的 Claude Code 风格工具以 MCP(Streamable HTTP，
  * 无状态、请求-响应)提供给另一台电脑上的 Claude Code。请求经设备互联隧道到达这里。
  */
-import { executorCcToolDefinitions, type RemoteExecutor } from './executor';
+import type { RemoteExecutor } from './executor';
 
 export const CINDY_EXEC_MCP_SERVER = 'cindy_exec';
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -66,7 +66,7 @@ async function handleOne(
         jsonrpc: '2.0',
         id: request.id,
         result: {
-          tools: executorCcToolDefinitions().map((tool) => ({
+          tools: executor.toolDefinitions().map((tool) => ({
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,

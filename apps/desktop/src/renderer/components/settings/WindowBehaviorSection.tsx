@@ -3,6 +3,7 @@
  *
  * 应用设置:
  *  - 登录电脑后自动启动:Windows / macOS 的系统登录启动项,默认不注册。
+ *  - 菜单栏余量:macOS 14+ 的原生菜单栏项,默认开启。
  *  1. 「保持电脑唤醒」(keepAwake):main 用 powerSaveBlocker 防系统休眠、放行锁屏,
  *     让后台 agent / 定时任务持续运行。跨平台生效(mac/win/linux),故常驻显示。
  *  2. 「关闭主窗口时」:Windows 选择退出或收起到托盘,Linux 选择退出或最小化。
@@ -23,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
 import { useLoginItemSetting } from '@/hooks/useLoginItemSetting';
+import { useMenubarSetting } from '@/hooks/useMenubarSetting';
 import {
   isLinuxCloseBehavior,
   isWindowsCloseBehavior,
@@ -88,6 +90,7 @@ export function WindowBehaviorSection() {
   const { enabled, setEnabled } = useSwallowActivationClickSettings();
   const { keepAwake, setKeepAwake } = useKeepAwakeSetting();
   const loginItem = useLoginItemSetting();
+  const menubar = useMenubarSetting();
   const { t } = useTranslation();
   // macOS 上 acceptFirstMouse 是 Cocoa 级参数、只在 BrowserWindow 构造时读一次,
   // 用户切完开关下次启动才生效——单独渲染一行"需要重启应用"避免和主 hint 混在
@@ -173,6 +176,18 @@ export function WindowBehaviorSection() {
               ) : null}
             </div>
           }
+        />
+      )}
+
+      {menubar.available && (
+        <BehaviorCard
+          id="settings-search-menubar"
+          label={t('settings.windowBehavior.menubar.label')}
+          hint={t('settings.windowBehavior.menubar.hint')}
+          checked={menubar.state?.enabled === true}
+          disabled={menubar.busy}
+          onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
+          ariaLabel={t('settings.windowBehavior.menubar.label')}
         />
       )}
 

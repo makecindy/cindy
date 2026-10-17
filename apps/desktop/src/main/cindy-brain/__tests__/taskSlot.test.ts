@@ -108,6 +108,10 @@ it('exposes catalog and guarded model changes without accepting permission overr
   const request = { type: 'tasks-request', kind: 'setModel', taskId: 'own', expectedRevision: 1,
     route: { agentKind: 'codex', model: 'm', providerId: 'p', effort: '', fastMode: false } };
   expect(validPluginTaskRequest(request)).toBe(true);
+  expect(validPluginTaskRequest({ ...request, route: 'plugin-default' })).toBe(true);
+  expect(validPluginTaskRequest({ ...request, route: 'plugin-default', expectedRevision: undefined })).toBe(false);
+  expect(validPluginTaskRequest({ ...request, route: 'plugin-default', ghostId: 'other' })).toBe(false);
+  expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'one', title: 'Work', route: 'plugin-default' })).toBe(false);
   expect(validPluginTaskRequest({ ...request, expectedRevision: undefined })).toBe(false);
   expect(validPluginTaskRequest({ ...request, permissionMode: 'bypassPermissions' })).toBe(false);
 });
@@ -118,4 +122,58 @@ it('accepts bounded plugin-authored scope, never caller-supplied authority', () 
  expect(validPluginTaskRequest(request)).toBe(true);
  expect(validPluginTaskRequest({...request,plan:{...request.plan,ownerApproved:true}})).toBe(false);
  expect(validPluginTaskRequest({...request,plan:{...request.plan,items:[{...item,task:'x'.repeat(8001)}]}})).toBe(false);
+});
+
+describe('background tasks (agent.hiddenTasks)', () => {
+  const declared = { enabled: true, taskCapabilityApproved: true, approval: {state:'approved', revision:'r'},
+    manifest: { agent: { tasks: true, hiddenTasks: true } } } as InstalledGhost;
+  const undeclared = { ...declared, manifest: { agent: { tasks: true } } } as InstalledGhost;
+  const create = { type: 'tasks-request', kind: 'create', requestKey: 'one', title: 'Work' };
+
+  it('validates hidden on create and the setHidden operation shape', () => {
+    expect(validPluginTaskRequest({ ...create, hidden: true })).toBe(true);
+    expect(validPluginTaskRequest({ ...create, hidden: false })).toBe(true);
+    expect(validPluginTaskRequest({ ...create, hidden: 'yes' })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'setHidden', taskId: 'own', hidden: false })).toBe(true);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'setHidden', taskId: 'own' })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'setHidden', hidden: true })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'setHidden', taskId: 'own', hidden: true, sessionId: 'other' })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'get', taskId: 'own', hidden: true })).toBe(false);
+  });
+
+  it('denies hidden creation and setHidden without the declaration, before reaching the handler', async () => {
+    const handler = vi.fn(async () => ({ taskId: 't' }));
+    const deps = { getGhost: () => undeclared, handler, isCurrent: () => true };
+    for (const payload of [
+      { ...create, hidden: true },
+      { type: 'tasks-request', kind: 'setHidden', taskId: 't', hidden: true },
+      { type: 'tasks-request', kind: 'setHidden', taskId: 't', hidden: false },
+    ]) {
+      expect(await handlePluginTaskRequest('p', payload, deps)).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
+    }
+    expect(handler).not.toHaveBeenCalled();
+    // hidden:false is the default and remains available to every tasks plugin.
+    expect(await handlePluginTaskRequest('p', { ...create, hidden: false }, deps)).toMatchObject({ ok: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards declared requests and advertises the operation and declaration', async () => {
+    const handler = vi.fn(async () => ({ taskId: 't', hidden: true }));
+    const deps = { getGhost: () => declared, handler, isCurrent: () => true };
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'setHidden', taskId: 't', hidden: true }, deps))
+      .toEqual({ ok: true, data: { taskId: 't', hidden: true } });
+    const caps = await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps);
+    expect(caps).toMatchObject({ ok: true, data: { hiddenTasks: true } });
+    expect((caps as { data: { operations: string[] } }).data.operations).toContain('setHidden');
+    const plain = await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, { ...deps, getGhost: () => undeclared });
+    expect(plain).toMatchObject({ ok: true, data: { hiddenTasks: false } });
+  });
+
+  it('does not grant hidden tasks from an unpaired historical value', async () => {
+    const handler = vi.fn();
+    const legacy = { ...declared, manifest: { agent: { tasks: true, hiddenTasks: 'yes' } } } as unknown as InstalledGhost;
+    expect(await handlePluginTaskRequest('p', { ...create, hidden: true }, { getGhost: () => legacy, handler, isCurrent: () => true }))
+      .toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } });
+    expect(handler).not.toHaveBeenCalled();
+  });
 });

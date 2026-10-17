@@ -16,7 +16,7 @@
  * agentKind 归一到 maker-core 形态('cc' → 'claude-code');其余字段原样透传。
  */
 
-import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, reconcileInvocationEffort, type ProviderView } from '@cindy/model-providers';
 
 import type { Session, WorkspaceKind } from '@/lib/ccAgent.types';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
@@ -38,7 +38,7 @@ export interface DeviceLinkCreateParams {
    */
   id?: string;
   model: string;
-  effort: Effort;
+  effort: Effort | null;
   permissionMode: PermissionMode;
   fastMode: boolean;
   planModeEnabled?: boolean;
@@ -71,7 +71,7 @@ export interface DeviceLinkCreateArgs {
   /** 由 workingDir 派生 —— 有目录 'project',无目录 'dialogue'。归属一致的关键。 */
   workspaceKind: WorkspaceKind;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   permissionMode: PermissionMode;
   fastMode: boolean;
   planMode?: boolean;
@@ -96,7 +96,9 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(dir ? { workingDir: dir } : {}),
     workspaceKind: dir ? 'project' : 'dialogue',
     model: p.model,
-    effort: p.effort,
+    // Empty string is the wire representation for a model without an effort selector;
+    // the remote host's admission layer treats it as unspecified.
+    effort: p.effort ?? '',
     permissionMode: p.permissionMode,
     fastMode: p.fastMode,
     ...(p.planModeEnabled ? { planMode: true } : {}),
@@ -117,7 +119,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
  */
 export interface DeviceLinkSubmissionCandidate {
   model: string;
-  effort: Effort;
+  effort: Effort | null;
   permissionMode: PermissionMode;
   fastMode: boolean;
   planModeEnabled?: boolean;
@@ -169,12 +171,27 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     p.candidate.model,
     p.capabilityAgentKind,
   );
+  const routeProvider = providerId
+    ? p.deviceProviders.find((provider) => provider.id === providerId)
+    : undefined;
+  const routeModel = routeProvider
+    ? getModel(routeProvider, p.candidate.model, p.capabilityAgentKind)
+    : undefined;
+  const effort =
+    !routeModel || routeModel.effortsUnknown === true ||
+      (routeModel.efforts.length === 0 && routeModel.effortsUnknown !== false)
+      ? p.candidate.effort
+      : reconcileInvocationEffort({
+          requested: p.candidate.effort,
+          model: routeModel,
+          noEffortFallback: null,
+        });
   return buildDeviceLinkCreateArgs({
     agentKind: p.agentKind,
     id: p.id,
     workingDir: p.workingDir,
     model: p.candidate.model,
-    effort: p.candidate.effort,
+    effort,
     permissionMode: p.candidate.permissionMode,
     fastMode: p.candidate.fastMode,
     planModeEnabled: p.candidate.planModeEnabled,

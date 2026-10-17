@@ -137,6 +137,98 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 
+describe('network request installation binding', () => {
+  it.each(['redirect-credential', '401-response'] as const)('does not dispatch or invalidate after replacement during %s', async (phase) => {
+    for (const replaced of [false, true]) {
+      let current = true;
+      let credentialReads = 0;
+      let requestCount = 0;
+      const invalidate = vi.fn();
+      const fetchImpl = vi.fn(async () => {
+        requestCount += 1;
+        if (requestCount > 1) return fakeResponse();
+        if (phase === '401-response') current = !replaced;
+        return fakeResponse({ status: phase === '401-response' ? 401 : 302,
+          headers: { location: `${BRAVE_URL}&redirect=1` } });
+      });
+      const { slot } = makeSlot({
+        captureRequestGuard: () => () => { if (!current) throw new Error('installation changed'); },
+        getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'], secrets: [{
+          key: 'token', label: 'Token', source: 'oidc-token',
+          inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
+        }] } }),
+        connectionTokens: {
+          resolve: () => ({ membershipId: 'membership', audience: 'acme:web-search', allowedHosts: ['api.search.brave.com'] }),
+          getToken: async () => {
+            credentialReads += 1;
+            if (phase === 'redirect-credential' && credentialReads === 2) current = !replaced;
+            return 'token';
+          },
+          invalidate,
+        },
+        fetchImpl,
+      });
+      expect((await slot.handleFetchRequest('web-search', { url: BRAVE_URL })).ok).toBe(!replaced);
+      expect(fetchImpl).toHaveBeenCalledTimes(replaced ? 1 : 2);
+      expect(invalidate).toHaveBeenCalledTimes(phase === '401-response' && !replaced ? 1 : 0);
+    }
+  });
+
+  it.each([false, true])('rejects late media after target replacement (replaced=%s)', async (replaced) => {
+    let target = 'original';
+    let releaseResponse!: (response: Response) => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const writeSaveDeposit = vi.fn(async () => ({ fileName: 'old.png' }));
+    const { slot, saveGhostMedia } = makeSlot({
+      captureRequestGuard: () => {
+        const expected = target;
+        return () => { if (target !== expected) throw new Error('installation changed'); };
+      },
+      fetchImpl: async () => {
+        markStarted();
+        return new Promise<Response>((resolve) => { releaseResponse = resolve; });
+      },
+      writeSaveDeposit,
+    });
+    const fetching = slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    await started;
+    if (replaced) target = 'replacement';
+    releaseResponse(fakeResponse({ headers: { 'content-type': 'image/png' }, body: toArrayBuffer(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) }));
+    expect((await fetching).ok).toBe(!replaced);
+    expect(saveGhostMedia).toHaveBeenCalledTimes(replaced ? 0 : 1);
+    expect(writeSaveDeposit).not.toHaveBeenCalled();
+  });
+
+  it('includes asynchronous credential preparation in relocation idle checks', async () => {
+    let releaseCredential!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'], secrets: [{
+        key: 'token', label: 'Token', source: 'oidc-token',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.search.brave.com'] },
+      }] } }),
+      connectionTokens: {
+        resolve: () => ({ membershipId: 'membership', audience: 'acme:web-search', allowedHosts: ['api.search.brave.com'] }),
+        getToken: async () => {
+          markStarted();
+          await new Promise<void>((resolve) => { releaseCredential = resolve; });
+          return 'token';
+        },
+        invalidate: vi.fn(),
+      },
+    });
+    const fetchPreparing = slot.handleFetchRequest('web-search', { url: BRAVE_URL });
+    await started;
+    const busy = slot.hasInFlightRequests?.('web-search');
+    releaseCredential();
+    await fetchPreparing;
+    expect(busy).toBe(true);
+    expect(slot.hasInFlightRequests?.('web-search')).toBe(false);
+  });
+});
+
 describe('networkSlot · 载荷与 URL 校验', () => {
   it('url 缺失/非 https/带端口/内嵌凭证/不是绝对地址一律拒', async () => {
     const { slot } = makeSlot();
@@ -1558,6 +1650,21 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     expect(result.ok).toBe(false);
     expect(readGhCliToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
+    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }] as const) {
+      const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+      const { slot, fetchImpl } = makeGithubSlot({
+        getGhost: () => ({ ...fakeGhost({ id: 'cindy-github', network: githubNetwork,
+          trust: { level: 'cindy-official', publisherSigned: true, publisherVerified: true,
+            reviewed: true, publisherName: 'Cindy Plugin Market' } }), ...identity }),
+        readGhCliToken,
+      });
+      expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
+      expect(readGhCliToken).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
   });
 });
 

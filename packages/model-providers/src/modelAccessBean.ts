@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from './modelDisplayPricing.js';
 import type { BaseModel, ModelMetadata } from "./modelMetadataLayers.js";
 import type { LocalModelCatalog } from "./localModelCatalog.js";
 /**
@@ -273,6 +274,7 @@ interface ModelCatalogAgentOverride extends Omit<
 }
 
 interface ModelCatalogEntryBase extends ModelPricing {
+  displayPricing?: ModelDisplayPricing;
   id: string;
   mode?: string;
   /** Optional for compatibility with older Model Access responses. */

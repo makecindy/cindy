@@ -44,7 +44,7 @@ import {
   SUPPORTED_INTERVAL_MINUTES,
   type CodexScheduleConfig,
 } from '../lib/cronCodexPreset';
-import { getScheduleDefaultModel, type EffortValue } from '../hooks/useScheduleForm';
+import { getScheduleDefaultRoute, type EffortValue } from '../hooks/useScheduleForm';
 import {
   isFollowingSessionSelection,
   PENDING_SESSION_ID,
@@ -1114,7 +1114,7 @@ export function ModelEffortChip({
   // 触发器(trigger)展示用:仍按 openai-codex/ 与 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
-  const { providers } = useProviders();
+  const { providers, loading: providersLoading } = useProviders();
   const xdConnected = providers.some((p) => p.id === 'xd' && p.connected);
   const availableModels = caps.capabilities?.availableModels;
   const models = useMemo(
@@ -1134,9 +1134,15 @@ export function ModelEffortChip({
     effort: effortValue,
   });
   const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
-  const effectiveId = followsSessionModel ? '' : modelValue || getScheduleDefaultModel(agentKind);
+  // 模型留空时显示与表单回填同源的默认路由(模型与来源成对)。
+  const defaultRoute =
+    followsSessionModel || modelValue
+      ? null
+      : getScheduleDefaultRoute(agentKind, providersLoading ? undefined : providers, providerId);
+  const effectiveId = followsSessionModel ? '' : modelValue || defaultRoute?.model || '';
+  const effectiveProviderId = providerId || defaultRoute?.providerId || null;
   const current = models.find((m) => m.id === effectiveId);
-  const sourceId = effectiveSourceIdForModel(providers, providerId || null, effectiveId, agentKind);
+  const sourceId = effectiveSourceIdForModel(providers, effectiveProviderId, effectiveId, agentKind);
   const source = providers.find((provider) => provider.id === sourceId);
   const catalogModel = source ? getModel(source, effectiveId, agentKind) : undefined;
   const effectiveEffort = effortValue || catalogModel?.defaultEffort || current?.defaultEffort || '';
@@ -1162,9 +1168,9 @@ export function ModelEffortChip({
   const activeSourceId = useMemo(
     () =>
       effectiveId
-        ? effectiveSourceIdForModel(providers, providerId || null, effectiveId, agentKind)
+        ? effectiveSourceIdForModel(providers, effectiveProviderId, effectiveId, agentKind)
         : null,
-    [providers, providerId, effectiveId, agentKind],
+    [providers, effectiveProviderId, effectiveId, agentKind],
   );
   const activeProvider = providers.find((p) => p.id === activeSourceId);
 

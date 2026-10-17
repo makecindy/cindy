@@ -405,19 +405,27 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards']);
   const windows=workflow.jobs['windows-unit'];
   assert.equal(windows.name,'Windows unit tests');
-  assert.equal(windows.needs,'windows-unit-shards');
+  assert.deepEqual(windows.needs,['windows-unit-shards','windows-runner-checks']);
   assert.match(windows.if,/always\(\)/);
   for(const name of ['linux-unit-shards','windows-unit-shards']) {
     const job=workflow.jobs[name];
-    assert.deepEqual(job.strategy.matrix.shard,[1,2]);
+    const shards=job.strategy.matrix.shard;
+    assert.ok(shards.length>=2);
+    assert.deepEqual(shards,shards.map((_,i)=>i+1));
     assert.equal(job.strategy['fail-fast'],false);
     assert.ok(job.steps.some(s=>s.run==='pnpm run test:workspaces --tier unit'));
-    assert.ok(job.steps.some(s=>s.name==='Run companion database regressions' && s.if==='matrix.shard == 1'));
   }
+  // Companion DB regressions run once per OS: on Linux shard 1, and on Windows
+  // in the parallel one-off job instead of on a shard's critical path.
+  assert.ok(workflow.jobs['linux-unit-shards'].steps.some(s=>s.name==='Run companion database regressions' && s.if==='matrix.shard == 1'));
+  assert.ok(workflow.jobs['windows-runner-checks'].steps.some(s=>s.name==='Run companion database regressions' && s.if===undefined));
+  const gateVars=['$WINDOWS_UNIT_SHARDS_RESULT','$WINDOWS_RUNNER_CHECKS_RESULT'];
   for(const result of ['success','failure','cancelled','skipped']) {
-    const windowsScript = windows.steps[0].run.replaceAll('$WINDOWS_UNIT_SHARDS_RESULT', result);
-    const run=runBash(windowsScript);
-    if (!run) return t.skip('Git Bash is unavailable on this host');
-    assert.equal(run.status===0,result==='success');
+    for(const target of gateVars) {
+      const windowsScript=gateVars.reduce((script,name)=>script.replaceAll(name,name===target?result:'success'),windows.steps[0].run);
+      const run=runBash(windowsScript);
+      if (!run) return t.skip('Git Bash is unavailable on this host');
+      assert.equal(run.status===0,result==='success',`${target}=${result}`);
+    }
   }
 });

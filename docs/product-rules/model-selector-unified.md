@@ -23,6 +23,7 @@
 
 - **A 版是新旧用户唯一的模型选择面板**（2026-09-05）。删除 B 版与样式切换入口，不再读取历史 `xdt:modelPickerLayout:v1` 偏好，升级无需手动切换。仅在老被控端 capabilities-only 时保留兼容列表。固定引擎表单同样使用 A，候选锁定在该表单实际能保存的引擎。
 - 全局入口：聊天、新任务、定时任务、IM 默认、Hook 工作目录、Worker、Subagent、视觉桥、辅助模型与插件快问快答复用同一面板。只存模型的入口不开放深度 / Fast 配置；仅存单引擎配置的入口不能选择其他引擎。专用模型白名单不得因界面统一而扩大，远程模型与来源来自被控端目录，不能写入本机记忆。
+- 协同 Worker 的面板与新任务一样列出远程供应商（2026-10-10）：任务所在电脑的供应商之后接其他电脑与分享来的供应商，选中哪一行，Worker 的 Agent 就在哪台运行，默认选中 Lead 的位置。Desktop、Desktop 远程控制与 Mobile 同口径；远程那几行的档位记在本机为那台单独记的一份，不进本机 Worker 偏好。
 - 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
 - 结构:搜索框贴顶 → 左侧 rail(★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
 - 列表主体固定高 428px（指定可见行数的入口按其既有高度配置），不随供应商筛选、收藏、搜索或空结果改变高度；窗口空间不足时按可用高度收缩。模型列表与供应商侧栏分别内部滚动，搜索与底部操作保持可见。
@@ -65,7 +66,9 @@
 ### 1.5 收藏 = 配置副本
 
 - **远程收藏按被控电脑共享**：Desktop 与 Mobile 连接同一台电脑时读取和修改该电脑当前账号的既有收藏。各被控电脑独立，不将控制端的本机收藏套用或自动合并到远端。收藏以单条新增、条件编辑、条件删除同步，等持久化确认后反馈成功；并发修改同一副本时拒绝旧快照覆盖，重读后再编辑。断线、账号切换、旧版不支持时不得声称已同步；不自动重试写操作，也不影响会话和连接恢复。
+- **其他电脑上的模型照样收藏**（2026-10-13）：同账号另一台电脑开放了远程调用的模型，收藏、编辑、取消收藏与本机模型完全一样，用户不用关心模型在哪台电脑上运行。收藏仍存在被控电脑上，运行位置编进来源（`agent-device-favorite:["<电脑>","<供应商>"]`，见 `packages/device-link/src/modelFavorites.ts`），不另加字段——旧版解析会丢掉不认识的字段，把那台电脑的供应商当成被控电脑的同名供应商而派错地方；编进来源后旧版只把这条当作不认识的供应商藏起来。它与本机收藏排在同一个收藏区，说明行带电脑名以区分本机同名模型；选中即在那台电脑运行。同一模型在本机与那台电脑上的收藏互不匹配。那台电脑离线（包括只因任务的 Agent 在那台、靠缓存目录留在列表里）、关闭远程调用、供应商被收进供应商组，或那台电脑上已没有这个模型时先不显示，收藏本身保留；Desktop 在那台电脑仍在列表里、目录还在读取或读取失败时置灰显示，Mobile 等目录读到后再显示。Desktop 收藏区里这类条目不弹参数浮层，参数在那台电脑的视图里调；已建任务的 Agent 已在那台电脑上时，点它先切到那台电脑的视图，再点一次应用。Mobile 暂不支持收藏分享来的模型。
 
+- **Desktop 收藏视图不随浏览来源切换**（2026-10-13）：★ / 全部统一展示任务所在电脑收藏的本机、同账号远程与分享模型，保持收藏顺序；点任何供应商图标时，收藏区与模型区都只显示该连接的条目，同品牌不同电脑、不同分享互不混用。分享收藏沿用带分享与成员身份的既有存储键，仅在原授权可用且对应目录包含模型时解析；浏览分享时点 ★ 同样返回聚合收藏。远控任务的分享收藏也读写被控电脑，不能写入控制端收藏。侧栏仍为供应商图标，不增加设备标题；配置与选择交互沿用既有路径。实现及回归见 `UnifiedModelPanel.tsx`、`providerShareFavorites.ts` 与 `remoteAgentDeviceFavoritesPanel.test.tsx`。
 - Desktop 行/浮层的 ☆ 是**单向「添加副本」动作**:把当前生效配置(模型+引擎+深度+Fast)拷进收藏区,点亮 0.7s 反馈后恢复;源头行不持有收藏态。重复添加去重。
 - **Mobile 收藏与参数调整分开**（用户确认交互原型，2026-10-02）：按来源、模型、引擎、推理强度与 Fast 完整匹配已保存副本，展示当前配置摘要。空心星标对应「收藏此配置」，保存确认后保持实心星标并显示「已收藏 · 点击取消」；再次点击只删除匹配的副本，所有入口都保持当前配置与详情页，不触发恢复推荐。模型目录 ID 与同一条目的 wire ID 视为同一模型，不把已失效档位或不可用 Fast 自动降级后当成匹配。状态跟随被控端收藏快照，失败保留原状态并允许重试。
 - Mobile 从普通模型或收藏进入详情，普通参数调整均保存模型偏好；当前选中模型继续走完整配置应用与取消/失败回滚规则。原收藏不变，配置不再匹配时星标回到空心，并提示「参数已调整，原收藏保留」。再次收藏新增独立副本。从收藏打开时提供「编辑原收藏」，参数先留在编辑草稿，点击「保存收藏」才更新原条目，且不改变正在使用的配置。取消编辑不落库；保存失败保留编辑内容；原收藏被远端修改或删除时拒绝旧编辑覆盖，相同配置去重。实现与回归见 `UnifiedModelPickerSheet.tsx`、`unifiedMobilePicker.test.tsx`、`unifiedMobilePickerView.test.tsx`。
@@ -114,6 +117,7 @@
   显式空数组不回填。不能从 Claude Code/Codex 的发现清单猜测 Pi 路由；旧 Registry
   wire enum 仍不增加 pi。原生 SDK 名单不再是成员门槛；具体协议仍由客户端执行。
   缺项表示尚未配置，不能仅凭目录缺席显示“不支持”。
+- **Grok 默认 Pi**：Grok 行有可用 Pi 候选时优先推荐 Pi，包括 Responses 路由；Pi 不可用时沿用已有候选回落。此推荐不改变协议、原生底座排序或用户手动引擎覆盖。
 - **推荐依据缺失时默认 Pi（2026-09-11）**：模型没有可据以推导的原生协议或底座时，使用候选中的 Pi 兜底，适用于本地和自定义模型；已有协议、底座和用户手动选择仍按原规则生效。Pi 不可用时沿用已有候选回落，不按本地供应商身份强制指定 Harness。
 - **Google 原生协议优先（2026-09-05）**：Cindy 模型目录明确声明
   `nativeApi: google-generative-ai`，且 Pi 的实际协议匹配、在候选中时推荐 Pi。Claude Code / Codex 的
@@ -174,8 +178,8 @@
 
 | 情形 | 行为 |
 |---|---|
-| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-5.6-Sol / Codex / 模型目录默认深度；Anthropic 订阅→Claude Opus 5 / Claude Code / 模型目录默认深度；xAI 订阅→Grok 4.6 / Pi / 模型目录默认深度；CN / Global Cindy Gateway→原生多模态 GLM-5.3-Flash / Pi / 模型目录默认深度。Gateway 默认必须同时明确声明图片输入与 Pi 实时能力；Pi 不可用时不把该默认强塞进 Codex 或 Claude Code |
-| 多来源 | Gateway 的可用推荐组合优先于订阅（CN / Global 一致）；Gateway 未就绪或推荐组合不可用时回退订阅，多订阅稳定按 OpenAI→Anthropic→xAI。本机自动发现 ChatGPT 登录不改变此优先级。来源仍在加载、账号目录没有目标模型、或零来源时不编造组合，保留连接引导 |
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-6.1 Sol / Codex；Anthropic 订阅→Claude Opus 5.5 / Claude Code；Cindy AI→服务端下发的 Auto / Pi；之后保留 xAI 订阅→Grok / Pi 回退。深度沿用各模型目录默认值；来源、模型和引擎必须可用，不伪造 Auto，也不借旧 GLM 默认标记选固定型号 |
+| 多来源 | 未自定义时按 OpenAI→Anthropic→Cindy AI→xAI 选择可用组合（CN / Global 一致）；独立订阅账号按认证身份识别，保留真实账号 ID。用户手动选择保持优先；来源仍在加载、账号没有可用目标、或零来源时不编造组合 |
 | 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
 | 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
@@ -254,7 +258,7 @@
 ## 5. 验收与测试
 
 - 单测:M1 推导规则(含多来源/bridge/前缀归一)、M2 store(含 owner 分区/迁移空态)、滑杆档位色映射、收藏锚点语义。
-- 更新既有锁:`agentSelect`/`chatInputModelSelectorRouting`/`modelSelectorTriggerVariant`/`modelSelectorProviderGroups`/`newMakerCreateAgentVisualContract`/`draftModelCalibration`/`modelDefinitionsDefaults`/`deviceLinkModelMirror` 等——有意变更逐条在 PR「风险」说明。
+- 更新既有锁:`agentSelect`/`chatInputModelSelectorRouting`/`modelSelectorTriggerVariant`/`modelSelectorProviderGroups`/`draftModelCalibration`/`modelDefinitionsDefaults`/`deviceLinkModelMirror` 等——有意变更逐条在 PR「风险」说明。
 - 门禁:根 `pnpm test:unit` + `pnpm --filter desktop run typecheck` + `pnpm --filter @cindy/model-providers run --if-present typecheck`。
 - 实机:worktree `pnpm restart:desktop:remote --region=global --isolated=model-picker` 双模式目检;未能真实验证的面(如老版本 device-link 对端)在 PR 如实列出+用户验证步骤。
 

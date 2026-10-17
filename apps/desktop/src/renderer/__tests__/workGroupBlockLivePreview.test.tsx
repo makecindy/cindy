@@ -24,6 +24,8 @@ vi.mock('@/components/chat/AgentActionRow', () => ({
     status?: 'running' | 'done';
     toolResult?: string;
     intentOverride?: { action: string; target?: string };
+    descriptorOverride?: { kind: string };
+    onActivateOverride?: () => void;
   }) => {
     const toolInput = props.message.toolInput as { command?: unknown } | undefined;
     const command = typeof toolInput?.command === 'string'
@@ -37,7 +39,9 @@ vi.mock('@/components/chat/AgentActionRow', () => ({
         'data-result': props.toolResult,
         'data-intent': props.intentOverride?.action,
         'data-target': props.intentOverride?.target,
+        'data-descriptor': props.descriptorOverride?.kind,
         'aria-label': `chat.agentActionRow.status.${props.status ?? 'done'}`,
+        onClick: props.onActivateOverride,
       },
       command,
     );
@@ -641,5 +645,63 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
     expect(screen.getAllByLabelText('chat.agentActionRow.status.done')).toHaveLength(2);
     expect(screen.getAllByLabelText('chat.agentActionRow.status.running')).toHaveLength(1);
+  });
+});
+
+describe('WorkGroupBlock — Host-projected running lines', () => {
+  const deferred = (lines?: import('@cindy/maker-shared/message-window').HistoryWorkLine[]) => ({
+    owner: {}, key: 'work-remote', expanded: false, loading: false, failed: false,
+    toggle: vi.fn(), retry: vi.fn(), setVisible: vi.fn(), ...(lines ? { lines } : {}),
+  });
+  const placeholder = thinking({ ...mkThinking('placeholder', ''), thinkingRedacted: true });
+
+  it('renders Host lines without asking for the detail preview, and a line opens the group', () => {
+    const remote = deferred([
+      { kind: 'tool', key: 'c1', toolName: 'exec', status: 'done',
+        descriptor: { kind: 'command', toolName: 'exec', command: 'pnpm test', intent: { action: 'test' } } },
+      { kind: 'thinking', key: 'c2', text: 'Checking the failing case' },
+    ]);
+    const { container } = render(createElement(WorkGroupBlock, {
+      blockId: 'work:remote', isStreaming: true, childItems: [placeholder], deferred: remote,
+    }));
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
+    expect(screen.getByTestId('direct-tool').getAttribute('data-descriptor')).toBe('command');
+    expect(screen.getByText('Checking the failing case')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('direct-tool'));
+    expect(remote.setVisible).toHaveBeenLastCalledWith(true, false);
+  });
+
+  it('keeps the Host lines on screen after expanding until detail rows arrive', () => {
+    const lines = [{ kind: 'thinking' as const, key: 'c2', text: 'Checking the failing case' }];
+    const props = {
+      blockId: 'work:remote-hold', isStreaming: true,
+      childItems: [rendered('detail', 'Every detail row')],
+    };
+    const { container, rerender } = render(createElement(WorkGroupBlock, {
+      ...props, deferred: { ...deferred(lines), awaitingDetails: true },
+    }));
+    clickGroup('chat.workGroup.working');
+    expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
+    expect(screen.getByText('Checking the failing case')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-progress')).toBeNull();
+    // The detail body is already open, so the handoff below swaps rows without replaying its expansion.
+    const body = container.querySelector('.grid');
+    expect(body).not.toBeNull();
+
+    rerender(createElement(WorkGroupBlock, {
+      ...props, deferred: { ...deferred(lines), awaitingDetails: false },
+    }));
+    expect(container.querySelector('[data-live-work-preview]')).toBeNull();
+    expect(container.querySelector('.grid')).toBe(body);
+    expect(screen.getByTestId('assistant-progress').textContent).toBe('Every detail row');
+  });
+
+  it('keeps the detail preview for a Host that sends no lines', () => {
+    const remote = deferred();
+    render(createElement(WorkGroupBlock, {
+      blockId: 'work:remote-old', isStreaming: true, childItems: [placeholder], deferred: remote,
+    }));
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, true);
   });
 });

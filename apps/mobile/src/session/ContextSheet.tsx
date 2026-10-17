@@ -10,7 +10,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Pressable,
@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
+import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface ContextSheetProps {
@@ -275,6 +276,50 @@ export interface ContextSheetChoiceRowProps<T extends string> {
   onChange: (value: T) => void;
   disabled?: boolean;
   testID?: string;
+}
+
+export interface ContextSheetSelectRowProps {
+  label: string;
+  options: readonly { id: string; label: string; detail?: string; disabled?: boolean }[];
+  value: string;
+  onChange(value: string): void;
+  disabled?: boolean;
+  testID?: string;
+}
+
+/** 有界滚动的设备等长列表，不把选项平铺到表单里。iOS 复用原生 menu Picker。 */
+export function ContextSheetSelectRow(props: ContextSheetSelectRowProps) {
+  const { colors } = useTheme();
+  const row = (
+    <ContextSheetRow
+      icon={null}
+      disabled={props.disabled}
+      label={props.options.find((option) => option.id === props.value)?.label ?? props.label}
+      onPress={() => undefined}
+      trailing={<ChevronDown color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+    />
+  );
+  if (props.disabled) return row;
+  return (
+    <AnchoredPullDownMenu
+      accessibilityLabel={props.label}
+      actions={props.options.map((option) => ({
+        id: option.id,
+        title: option.label,
+        subtitle: option.detail,
+        disabled: props.disabled || option.disabled,
+        state: option.id === props.value ? 'on' : 'off',
+      }))}
+      onAction={(id) => {
+        if (!props.disabled && props.options.some((option) => option.id === id && !option.disabled)) {
+          props.onChange(id);
+        }
+      }}
+      testID={props.testID}
+    >
+      {row}
+    </AnchoredPullDownMenu>
+  );
 }
 
 /** 单选(pill 组;iOS 版为原生 Picker)。 */

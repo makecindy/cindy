@@ -58,6 +58,23 @@ describe('import discovery limits', () => {
 });
 
 describe('buildModelsFetchRequest', () => {
+  it('discovers ElevenLabs speech capabilities through the existing custom-header connection', async () => {
+    const result = await fetchProviderModels(spec({ agent: 'codex', apiKey: undefined,
+      baseUrl: 'https://api.elevenlabs.io/v1', headers: { 'xi-api-key': 'fake-elevenlabs-key' },
+    }), async (url, init) => {
+      expect(url).toBe('https://api.elevenlabs.io/v1/models');
+      expect(init?.headers).toEqual({ 'xi-api-key': 'fake-elevenlabs-key' });
+      return fakeResponse(200, JSON.stringify([
+        { model_id: 'eleven_multilingual_v2', name: 'Eleven Multilingual v2', can_do_text_to_speech: true },
+        { model_id: 'voice-conversion', can_do_text_to_speech: false, can_do_voice_conversion: true },
+      ]));
+    });
+    expect(result).toMatchObject({ ok: true, models: [
+      { id: 'eleven_multilingual_v2', discoveredMetadata: { mode: 'audio_speech' } },
+      { id: 'voice-conversion', discoveredMetadata: { mode: 'other' } },
+    ] });
+  });
+
   it('discovers Sub2API Codex capabilities at the backend path', async () => {
     const result = await fetchProviderModels(spec({ agent: 'codex',
       baseUrl: 'https://sub2api.example/backend-api/codex', wireProtocol: 'openai-responses',

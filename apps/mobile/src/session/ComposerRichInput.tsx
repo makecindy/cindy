@@ -33,6 +33,8 @@ export interface ComposerRichInputHandle {
   rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
   applyDocumentAndFocusSelection(document: ComposerDocument, offset: number): void;
+  /** Apply a document and place the caret where possible without opening the keyboard. */
+  applyDocumentAndSetSelection(document: ComposerDocument, offset: number): void;
   blur(): void;
   focus(): void;
   insertNode(node: ComposerNode): void;
@@ -220,6 +222,12 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         applyDocumentAndFocusSelection: (value, offset) => {
           webSignatureRef.current = JSON.stringify(value);
           applyDocument(value, true, composerCaretPosition(value, offset));
+        },
+        // Restores the caret only if the editor is already focused; otherwise
+        // getSelection keeps the remembered insertion point until the user taps it.
+        applyDocumentAndSetSelection: (value, offset) => {
+          webSignatureRef.current = JSON.stringify(value);
+          applyDocument(value, false, composerCaretPosition(value, offset));
         },
         blur: () => {
           pendingFocusRef.current = false;

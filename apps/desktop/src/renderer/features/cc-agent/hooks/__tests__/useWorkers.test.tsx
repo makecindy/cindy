@@ -34,6 +34,8 @@ import { clearWorkersCache, useWorkers } from '../useWorkers';
 import {
   __getWorkerProjectionOwnerCountForTest,
   __setWorkerProjectionCoalesceMsForTest,
+  getAllWorkerProjectionVersion,
+  listRetainedWorkerProjections,
   retainWorkerProjection,
   revalidateActiveWorkerSettings,
   revalidateActiveWorkersProjection,
@@ -131,6 +133,35 @@ describe('useWorkers / worker projection store', () => {
     vi.useRealTimers();
   });
 
+  it('projects the execution device of a worker running on another computer', async () => {
+    mocks.listWorkersByLeads.mockResolvedValue({
+      'lead-1': [
+        {
+          ...workerRecord('worker-a', 'proxy-a', true, 'running'),
+          executionDevice: {
+            deviceId: 'mac-mini',
+            remoteSessionId: 'remote-a',
+            deviceName: 'Mac mini',
+            reachable: false,
+            workingDir: '/Users/demo/Interviews',
+          },
+        },
+        { ...workerRecord('worker-b', 'session-b'), executionDevice: { deviceId: 'x' } },
+      ],
+    });
+    const hook = renderHook(() => useWorkers('lead-1'));
+    await waitFor(() => expect(hook.result.current.workers).toHaveLength(2));
+    expect(hook.result.current.workers[0]!.executionDevice).toEqual({
+      deviceId: 'mac-mini',
+      remoteSessionId: 'remote-a',
+      deviceName: 'Mac mini',
+      reachable: false,
+      workingDir: '/Users/demo/Interviews',
+    });
+    // 缺远端任务 id 的记录不当成远端 Worker。
+    expect(hook.result.current.workers[1]).not.toHaveProperty('executionDevice');
+  });
+
   it('hydrates local N lead projections through one batch IPC', async () => {
     const sessions = [leadSession('lead-1'), leadSession('lead-2')];
     const hook = renderHook(() => useOrcaLeadWorkerMap(sessions));
@@ -143,6 +174,21 @@ describe('useWorkers / worker projection store', () => {
     expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(1);
     expect(mocks.listWorkersByLeads).toHaveBeenCalledWith(['lead-1', 'lead-2']);
     expect(mocks.listWorkersByLead).not.toHaveBeenCalled();
+  });
+
+  it('lists only retained lead projections and broadcasts when the last owner releases', async () => {
+    const release = retainWorkerProjection('lead-retained');
+    await waitFor(() => {
+      expect(listRetainedWorkerProjections().map(([leadSessionId, snapshot]) => [
+        leadSessionId,
+        snapshot.workers.map((worker) => worker.sessionId),
+      ])).toEqual([['lead-retained', ['session-lead-retained']]]);
+    });
+    const versionBeforeRelease = getAllWorkerProjectionVersion();
+    act(() => release());
+    // 快照仍留在 store,但无人持有后不再作为派生依据,且整表视图要被通知收敛。
+    expect(listRetainedWorkerProjections()).toEqual([]);
+    expect(getAllWorkerProjectionVersion()).toBeGreaterThan(versionBeforeRelease);
   });
 
   it('keeps projection owners when the lead collection is only reordered', async () => {

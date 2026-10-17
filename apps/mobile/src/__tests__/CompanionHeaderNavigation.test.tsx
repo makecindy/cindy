@@ -9,8 +9,10 @@ import { useHostManagedSession } from '@/session/hostManagedSession';
 import type { RemoteResource } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
-  profile: {} as any, dismiss: vi.fn(), chooseMode: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
+  todos: {} as any, profile: {} as any, dismiss: vi.fn(), chooseMode: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
   auth: { accountGeneration: 1, user: null },
+  cloud: { supported: false, actors: [] as Array<{ kind: string; externalId: string; homeDeviceId: string | null }> },
+  homeSheet: {} as any,
 }));
 vi.mock('react-native', () => ({
   Keyboard: { dismiss: h.dismiss },
@@ -27,19 +29,23 @@ vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }), useThemedStyles: (fn: any) => fn(tokens.lightColors) };
 });
-vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null, ListTodo: () => null }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children, disabled }: any) =>
   createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children) }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: ({ active }: any) => active ? createElement('i', { 'data-testid': 'ring' }) : null }));
+vi.mock('@/session/CompanionTodos', () => ({ CompanionTodos: (props: unknown) => { h.todos = props; return null; } }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
 vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: h.chooseMode }) }));
+vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => h.cloud }));
+vi.mock('@/session/CloudHomeSwitchSheet', () => ({ CloudHomeSwitchSheet: (props: unknown) => { h.homeSheet = props; return null; } }));
 import { CompanionHeader } from '@/session/CompanionHeader';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let host: HTMLDivElement;
 const resource = { ref: { kind: 'bot', collectionId: 'bots', id: 'bot' }, display: { title: 'Cindy' } } as RemoteResource;
 const button = (id: string) => host.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
 beforeEach(() => {
-  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.screenOptions = [];
+  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.todos = {}; h.screenOptions = [];
+  h.cloud = { supported: false, actors: [] }; h.homeSheet = {};
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
@@ -84,7 +90,7 @@ const source = ts.createSourceFile('screen.tsx', readFileSync(
   resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const page = source.statements.find((n): n is ts.FunctionDeclaration =>
-  ts.isFunctionDeclaration(n) && n.name?.text === 'SessionScreen')!;
+  ts.isFunctionDeclaration(n) && n.name?.text === 'SessionScreenContent')!;
 const statements = page.body!.statements;
 const declaration = (name: string) => statements.findIndex(n => ts.isVariableStatement(n)
   && n.declarationList.declarations.some(d => d.name.getText(source) === name));
@@ -118,6 +124,7 @@ function PageHost({ bindings }) {
   const companionSettingsRequest = bindings.companionSettingsRequest;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
+  ${statements[declaration('companionHeaderShown')].getText(source)}
   ${relevantJsx(header)}
   return <div data-testid="page-route">{headerNode}</div>;
 }`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
@@ -167,3 +174,46 @@ it('opens learning links in the existing profile sheet on the requested page', a
     settingsRequest={{ page: 'capabilities', sequence: 2 }} />));
   expect(h.profile).toMatchObject({ visible: true, initialPage: 'capabilities' });
 });
+
+it('only opens Todo for an advertised host capability after entry validation and closes it on account change', async () => {
+  const props = { resource, deviceId: 'pc', deviceName: 'PC', online: true, onBack: vi.fn(), onSearch: vi.fn() };
+  await act(async () => root.render(<CompanionHeader {...props} />));
+  expect(button('companion.todos.open')).toBeNull();
+  const withTodos: RemoteResource = { ...resource, links: [{ rel: 'todos', label: 'Todo', target: { kind: 'resource', ref: { collectionId: 'teammates', kind: 'bot', id: 'todos:bot' } } }] };
+  await act(async () => root.render(<CompanionHeader {...props} resource={withTodos} controlsReady={false} />));
+  expect(button('companion.todos.open').disabled).toBe(true);
+  await act(async () => button('companion.todos.open').click());
+  expect(h.todos.visible).toBe(false);
+  await act(async () => root.render(<CompanionHeader {...props} resource={withTodos} />));
+  await act(async () => button('companion.todos.open').click());
+  expect(h.todos).toMatchObject({ visible: true, deviceId: 'pc', botId: 'bot', online: true });
+  expect(h.profile.visible).toBe(false);
+  await act(async () => h.todos.onClose());
+  expect(h.todos.visible).toBe(false);
+  await act(async () => button('companion.todos.open').click());
+  h.auth.accountGeneration++;
+  await act(async () => root.render(<CompanionHeader {...props} resource={withTodos} />));
+  expect(h.todos.visible).toBe(false);
+});
+
+it('names the main computer of a cloud companion and lets the profile change it', async () => {
+  h.cloud = { supported: true, actors: [{ kind: 'bot', externalId: 'bot', homeDeviceId: 'pc' }] };
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="Office iMac" online onBack={() => {}} onSearch={() => {}} />));
+  expect(host.textContent).toContain('devices.cloudCompanion.runsOn');
+  await act(async () => button('companion.settings').click());
+  await act(async () => h.profile.onOpenHome());
+  // Opens once the profile sheet has closed.
+  expect(h.homeSheet.visible).toBe(false);
+  await act(async () => h.profile.onClosed());
+  expect(h.homeSheet.visible).toBe(true);
+  expect(h.homeSheet).toMatchObject({ botId: 'bot', homeDeviceId: 'pc', homeName: 'Office iMac' });
+  await act(async () => h.homeSheet.onMoved({ deviceId: 'mac', name: 'Mac', online: true }));
+  expect(h.chooseMode).toHaveBeenCalledWith('teammates');
+});
+
+it('offers no computer change for a companion without a known main computer', async () => {
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}} />));
+  await act(async () => button('companion.settings').click());
+  expect(h.profile.onOpenHome).toBeUndefined();
+});
+

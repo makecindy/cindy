@@ -264,12 +264,26 @@ describe('Windows Git PATH PowerShell probes', () => {
         expect(coordinator.kill()).toBe(true);
         await coordinatorExit;
 
-        terminateWindowsPowerShellDescendants(powershell, coordinatorPid);
+        const cleanupWarnings: unknown[] = [];
+        const cleanupStarted = performance.now();
+        terminateWindowsPowerShellDescendants(powershell, coordinatorPid, {
+          warn: (...args: unknown[]) => {
+            cleanupWarnings.push(args);
+          },
+        });
+        const cleanupMs = Math.round(performance.now() - cleanupStarted);
 
         // EncodedCommand avoids Windows argv splitting of a multi-line -Command.
         // Poll until the orphaned child is gone; a live child after cleanup is a real leak.
         const livenessCommand = Buffer.from(
-          `if (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }`,
+          [
+            `$child = Get-Process -Id ${childPid} -ErrorAction SilentlyContinue`,
+            'if ($child) {',
+            '  $child | Select-Object Id, ProcessName, StartTime, HasExited | ConvertTo-Json -Compress',
+            '  exit 1',
+            '}',
+            'exit 0',
+          ].join('\n'),
           'utf16le',
         ).toString('base64');
         await vi.waitFor(
@@ -277,9 +291,20 @@ describe('Windows Git PATH PowerShell probes', () => {
             const liveness = spawnSync(
               powershell,
               ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', livenessCommand],
-              { stdio: 'ignore', timeout: 10_000, windowsHide: true },
+              { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, windowsHide: true },
             );
-            expect(liveness.status).toBe(0);
+            // Keep the real exit assertion, but report whether cleanup timed out,
+            // failed, or left a process alive instead of only "expected 1 to be 0".
+            expect(liveness.status, JSON.stringify({
+              coordinatorPid,
+              childPid,
+              cleanupMs,
+              cleanupWarnings,
+              livenessError: liveness.error?.message,
+              livenessSignal: liveness.signal,
+              livenessStdout: liveness.stdout,
+              livenessStderr: liveness.stderr,
+            })).toBe(0);
           },
           { timeout: 8_000, interval: 50 },
         );

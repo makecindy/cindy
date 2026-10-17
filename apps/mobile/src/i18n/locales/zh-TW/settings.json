@@ -31,7 +31,31 @@
       "light": "淺色",
       "dark": "深色"
     },
-    "saveFailed": "顯示模式沒有儲存成功，重新開啟後會恢復之前的設定"
+    "saveFailed": "顯示模式沒有儲存成功，重新開啟後會恢復之前的設定",
+    "userBubble": {
+      "title": "我的訊息氣泡顏色",
+      "presets": "顏色",
+      "default": "預設",
+      "peach": "初稿",
+      "yellow": "晨光",
+      "sage": "靈感",
+      "blue": "夢境",
+      "lavender": "夜貓",
+      "red": "項圈",
+      "custom": "自訂顏色",
+      "hue": "色相",
+      "preview": "訊息預覽",
+      "sampleUser": "幫我整理一下今天的靈感。",
+      "sampleAssistant": "好的，我們一起把想法梳理清楚。",
+      "hint": "顏色會依淺色和深色模式自動調整明暗，確保文字清晰。僅儲存在此裝置。",
+      "customHint": "左右拖曳色帶選擇顏色。顏色會依淺色和深色模式自動調整明暗，確保文字清晰。僅儲存在此裝置。",
+      "saveFailed": "顏色已在本次使用中生效，但未能儲存。",
+      "retry": "重試",
+      "cancel": "取消",
+      "reset": "恢復預設",
+      "apply": "套用",
+      "hex": "色碼"
+    }
   },
   "language": {
     "title": "語言",
@@ -191,6 +215,95 @@
     "readOnlyHint": "手機僅供檢視，新增或刪除詞條請到電腦操作",
     "offlineHint": "電腦不在線上，正在顯示上次同步的詞典",
     "noDesktops": "在電腦上登入同一帳號，即可同步詞典"
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "操作未能儲存，請重試。",
+    "title": "辨識我的聲音",
+    "sectionTitle": "聲紋過濾",
+    "label": "辨識我的聲音",
+    "entryHint": "語音輸入時將旁人的聲音靜音。聲紋只儲存在這支手機上。",
+    "openAccessibility": "開啟辨識我的聲音設定",
+    "on": "已開啟",
+    "off": "未開啟",
+    "hint": "語音輸入時將旁人的聲音靜音，只把你說的話送去辨識。需要先錄製聲紋；別人和你同時說話時無法完全濾掉。",
+    "unsupported": "目前安裝的版本不支援聲紋辨識，請更新到最新版本。",
+    "privacy": "聲紋只儲存在這支手機上並加密保存，不會上傳，也不會同步到其他裝置。",
+    "model": {
+      "title": "辨識模型",
+      "needed": "首次使用需要下載約 {{size}} 的辨識模型，建議連接 Wi-Fi。",
+      "download": "下載辨識模型",
+      "downloading": "正在下載（{{done}} / {{total}}）",
+      "cancel": "取消下載",
+      "retry": "重新下載",
+      "failed": {
+        "network": "辨識模型下載失敗，請檢查網路後重試。",
+        "disk": "辨識模型無法儲存，請檢查手機儲存空間後重試。",
+        "checksum": "下載的辨識模型驗證未通過，請重試。",
+        "unavailable": "暫時無法取得辨識模型，請稍後再試。"
+      }
+    },
+    "profile": {
+      "title": "聲紋",
+      "missing": "尚未錄製聲紋",
+      "missingHint": "錄入聲紋後才會生效。",
+      "enrolled": "已錄製聲紋",
+      "enrolledAt": "{{date}} 錄製",
+      "enroll": "錄製聲紋",
+      "reenroll": "重新錄製",
+      "delete": "刪除聲紋",
+      "deleteConfirm": {
+        "title": "刪除聲紋？",
+        "description": "刪除後語音輸入不再過濾旁人的聲音，直到你重新錄製。",
+        "confirm": "刪除",
+        "cancel": "取消"
+      }
+    },
+    "strictness": {
+      "label": "靈敏度",
+      "hint": "越嚴格越不容易放進旁人的聲音，但在吵雜環境中也更容易剪掉你自己的話。",
+      "restoreDefault": "恢復預設",
+      "options": {
+        "relaxed": "寬鬆",
+        "standard": "標準",
+        "strict": "嚴格"
+      }
+    },
+    "enroll": {
+      "description": "請用平常的語氣朗讀下面 {{clips}} 段文字。每段最多錄音 {{seconds}} 秒，讀完點選結束錄音。請在平時使用語音輸入的地方錄製，避免其他人同時說話。",
+      "step": "第 {{current}} / {{total}} 段",
+      "record": "開始朗讀",
+      "stop": "結束錄音",
+      "rerecord": "重錄這段",
+      "recording": "正在錄音…還剩 {{seconds}} 秒",
+      "saving": "正在產生聲紋…",
+      "submit": "完成錄製",
+      "cancel": "取消",
+      "passages": {
+        "p1": "今天上午我先整理一下這週的工作安排，下午再把需要討論的問題列出來，傳給大家提前看看。",
+        "p2": "如果明天天氣不錯，我們可以早點出發，路上順便買些水果和零食，中午就在公園裡吃飯。",
+        "p3": "請幫我把這段內容改得更簡潔一些，保留關鍵數字和結論，然後用三到五句話總結重點。"
+      },
+      "errors": {
+        "too_short": "第 {{index}} 段偵測到的語音不足，請重新錄製。",
+        "no_embedding": "第 {{index}} 段沒能辨識出聲紋，請重錄這段。",
+        "inconsistent": "第 {{index}} 段和其他幾段不像同一個人，可能混入了別人的聲音或噪音，請重錄這段。",
+        "models_missing": "辨識模型尚未下載完成，請稍後再試。",
+        "storage_unavailable": "系統鑰匙圈暫時無法使用，聲紋無法加密儲存，請稍後再試。",
+        "failed": "產生聲紋失敗，請重試。",
+        "microphone": "無法使用麥克風，請檢查麥克風權限後重試。",
+        "noAudio": "麥克風沒有傳來聲音，請檢查後重試。"
+      },
+      "stepChoice": "第 {{index}} 段，{{status}}",
+      "stepStatus": {
+        "pending": "待錄音",
+        "recorded": "已錄音",
+        "retry": "待重錄",
+        "recording": "錄音中"
+      },
+      "rerecordStep": "重錄第 {{index}} 段",
+      "readHint": "準備好後開始朗讀，讀完點選結束錄音。",
+      "otherClipsKept": "其他段錄音已保留。"
+    }
   },
   "deviceNameEditor": {
     "screenTitle": "裝置名稱",

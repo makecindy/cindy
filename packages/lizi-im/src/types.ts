@@ -66,7 +66,11 @@ export interface IMHost {
     run<T>(token: unknown, operation: () => Promise<T>): Promise<T>;
   };
 
-  /** Filesystem path config; hosts derive these from `app.getPath('userData')`. */
+  /**
+   * Filesystem path config; hosts derive these from `app.getPath('userData')`.
+   * 只读兼容: 新入站附件不再写这些目录(媒体走 `media`, 非媒体文件走 `files`),
+   * 仅供读取历史消息里已有的路径/地址。
+   */
   paths: {
     /** Root for downloaded feishu media (images / files). MUST equal the media root the host wires elsewhere (e.g. the xdt-image:// media service) so xdt-image:// URLs resolve consistently across contexts. */
     feishuMediaDir: string;
@@ -80,10 +84,17 @@ export interface IMHost {
 
   /**
    * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后入站图片及
-   * host 明确支持的其它媒体改走内容寻址仓;非媒体文件仍走
-   * `paths.*MediaDir`。包侧只摸字节和字符串,落盘/记账细节全在 host。
+   * host 明确支持的其它媒体改走内容寻址仓。包侧只摸字节和字符串,落盘/记账
+   * 细节全在 host。
    */
   media?: IMHostMediaCache;
+
+  /**
+   * 入站非媒体文件(PDF / docx / zip …)的 host 受控暂存。可选——未提供时 transport
+   * 把这类文件标为不支持, 不得写入 `paths.*MediaDir`(`cc-agent/*-media` 是冻结的
+   * 历史兼容层, 只读)。
+   */
+  files?: IMHostFileStaging;
 
   httpPostForm(url: string, form: URLSearchParams): Promise<{ status: number; body: unknown }>;
 
@@ -94,6 +105,20 @@ export interface IMHost {
 // ── Inbound events ────────────────────────────────────────────────────────────
 // p2p only — group_chat / topic_chat events are dropped at wsClient before
 // emitting, so handlers never see them.
+
+/**
+ * 入站非媒体文件暂存(见 IMHost.files)。暂存文件不属于任何任务; host 在消息
+ * 路由到任务后把它移入该任务的附件目录(随任务删除而清理), 未被任何任务领走的
+ * 暂存文件由 host 过期清理。
+ */
+export interface IMHostFileStaging {
+  stage(params: {
+    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    buffer: Uint8Array;
+    /** 平台给的原始文件名(不可信, host 负责消毒)。 */
+    fileName: string;
+  }): Promise<{ absPath: string; discard: () => Promise<void> }>;
+}
 
 /** host 托管媒体缓存回调组(见 IMHost.media)。 */
 export interface IMHostMediaCache {
@@ -106,7 +131,13 @@ export interface IMHostMediaCache {
     mimeType: string;
     /** Keep the blob reclaimable until the transport confirms account ownership after the write. */
     staging?: boolean;
-  }): Promise<{ absPath: string; url: string; discard?: () => Promise<void> }>;
+  }): Promise<{
+    absPath: string;
+    url: string;
+    /** host 按真实字节核验后的规范 MIME(调用方写进附件时以它为准, 不用自己推断的值)。 */
+    mimeType?: string;
+    discard?: () => Promise<void>;
+  }>;
   /**
    * 其它 Cindy 托管媒体入总仓。未提供时 transport 必须降级为 unsupported，
    * 不得新增写入冻结的 `cc-agent/*-media` 历史目录。
@@ -147,7 +178,7 @@ export interface IMHostMediaCache {
 
 export interface IMAttachment {
   kind: 'image' | 'file';
-  /** 下载副本的绝对路径:老目录(`host.paths.*MediaDir`)或 host 媒体总仓内(经 media.cacheImage 提升后)。 */
+  /** 下载副本的绝对路径: host 媒体总仓(cindy-media)或 host 文件暂存/任务附件目录; 历史消息可能仍指向老目录。 */
   absPath: string;
   /** Original filename from the IM platform. */
   originalName: string;
@@ -183,6 +214,8 @@ export interface IMMessageEvent {
   messageId: string;
   /** Plain-text payload. */
   text: string;
+  /** Explicit bot invocation survives mention stripping, even with no body. */
+  invoked?: boolean;
   /**
    * 群多人对话的发言人元数据(telegram 群 turn 提供; 其它渠道/DM 缺省)。
    * name 为平台显示名 — 不可信输入, 消费方注入 prompt 前必须消毒。
@@ -237,6 +270,8 @@ export interface IMMessageEvent {
     isBot?: boolean;
     /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
     attachmentCount?: number;
+    /** Referenced media that was not supplied to this turn. */
+    unavailableAttachments?: string[];
   };
   /** Native private topic metadata. Root message id and thread id are distinct. */
   replyThread?: { rootMessageId: string; threadId: string };

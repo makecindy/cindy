@@ -35,6 +35,7 @@ describe('maker:event hot path ordering', () => {
     const appliedContextWindowBudgets = new Map<string, number | null>([['departing-task', 300_000]]);
     const deps = {
       pendingCredentialSwitchHolder: null, deferredCodexRestartHolder: null,
+      gatewayCodexRestartHolder: { onSessionSettled: vi.fn() },
       agentInputCoordinatorHolder: null,
       refreshRemoteCodexMcpOnTurnSettledHolder: () => { throw new Error('App session is switching'); },
       gitSnapshotCoordinator: { onSessionClosed: vi.fn() },
@@ -49,6 +50,7 @@ describe('maker:event hot path ordering', () => {
     };
     const cleanup = new Function(...Object.keys(deps), `${js}; return cleanupClosedSessionRuntime;`)(...Object.values(deps));
     expect(() => cleanup({ id: 'departing-task' })).not.toThrow();
+    expect(deps.gatewayCodexRestartHolder.onSessionSettled).toHaveBeenCalledOnce();
     expect(cleared).toHaveBeenCalledWith('departing-task');
     // 关闭任务时必须把窗口预算的去重记账一起清掉，否则同 id 的替换实例会沿用旧值。
     expect(appliedContextWindowBudgets.has('departing-task')).toBe(false);
@@ -363,7 +365,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain(
       'deferredOrcaWorkerTerminal = autoResumeBookkeeping.stashOrcaSuppressedTerminal(',
     );
-    expect(source).toContain('finalizeOrcaSuppressedTerminal: (sessionId, payload) => {');
+    expect(source).toContain('finalizeOrcaSuppressedTerminal: settleDeferredOrcaWorkerTerminal,');
     expect(source).toContain('shouldSkipOrcaWorkerTerminal({');
     expect(source).toContain('stashedThisErrorEvent: deferredOrcaWorkerTerminal');
     expect(source).toContain('isPairedFailedTurnDone,');
@@ -375,6 +377,43 @@ describe('maker:event hot path ordering', () => {
     );
   });
   // only status/done/error paths request idle restore: covered by the executable sessionEventPipeline tests.
+
+  it('keeps the bound deferred Orca terminal behind worker start and forwards its original capture', async () => {
+    const binding = source.match(/finalizeOrcaSuppressedTerminal:\s*(\w+),/);
+    expect(binding).not.toBeNull();
+    const name = binding![1];
+    const start = source.indexOf(`function ${name}(`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = source.indexOf('\n/**', start);
+    expect(end).toBeGreaterThan(start);
+    const js = transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    let releaseStart!: () => void;
+    const started = new Promise<void>((resolve) => { releaseStart = resolve; });
+    const waitForStart = vi.fn(() => started);
+    const handleWorkerTerminalTurn = vi.fn(async (_terminal: { capture: unknown }) => undefined);
+    const finalize = new Function(
+      'workerTurnStartSequencer',
+      'orcaTeamServiceForEvents',
+      `${js}\nreturn ${name};`,
+    )({ waitForStart }, { handleWorkerTerminalTurn }) as (
+      sessionId: string,
+      payload: unknown,
+    ) => void;
+    const capture = { turnId: 'original-turn' };
+    const payload = {
+      status: 'error', finalText: 'original result', diagnostic: 'original failure', capture,
+    };
+
+    finalize('worker-session', payload);
+    expect(waitForStart).toHaveBeenCalledWith('worker-session');
+    expect(handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    releaseStart();
+    await vi.waitFor(() => expect(handleWorkerTerminalTurn).toHaveBeenCalledTimes(1));
+    expect(handleWorkerTerminalTurn).toHaveBeenCalledWith({ sessionId: 'worker-session', ...payload });
+    expect(handleWorkerTerminalTurn.mock.calls[0]?.[0].capture).toBe(capture);
+  });
 
   // does not persist remote Codex account snapshots into local account usage: covered by the executable sessionEventPipeline tests.
 
@@ -464,6 +503,21 @@ describe('maker:event hot path ordering', () => {
       closedBlock,
       'agentInputCoordinatorHolder?.onSessionClosed(session.id, options);',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
+    );
+  });
+
+  it('wakes queued input only for runtime self-closes, not direct product closes', () => {
+    const closedBlock = extractSessionCloseAdaptersSource();
+
+    // 'unexpected' only means no Maker reason was recorded; IM /new and archive
+    // sync close sessions directly and must not resurrect the old task's queue.
+    expect(closedBlock).toContain(
+      "wakeQueuedInput: context.closeReason === 'unexpected' && session.wasClosedByRuntime(),",
+    );
+    expectOrder(
+      closedBlock,
+      'wakeQueuedInput:',
+      'agentInputCoordinatorHolder?.onSessionClosed(session.id, options);',
     );
   });
 
@@ -651,7 +705,24 @@ describe('maker:event hot path ordering', () => {
     expect(resetSource).toContain('silentStopAutoResumeGuard.noteSessionReset(sessionId);');
     expect(resetSource).toContain('interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);');
     expect(resetSource).toContain('autoResumeBookkeeping.teardown(sessionId);');
-    expect(source).toContain('noteSessionReset: resetAutomaticRecoveryForExplicitStop,');
+    // 「全部停止」：先撤自动续跑与退避簿记，再作废供应商组进行中的换电脑(#5880，provider-groups.md §6.1)。
+    const stopAllStart = source.indexOf(
+      'registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {',
+    );
+    const stopAllEnd = source.indexOf('\n  });', stopAllStart);
+    const stopAllSource = source.slice(stopAllStart, stopAllEnd);
+    const stopAllResetStart = stopAllSource.indexOf('    noteSessionReset: (sessionId) => {');
+    const stopAllResetSource = stopAllSource.slice(
+      stopAllResetStart,
+      stopAllSource.indexOf('\n    notifyGoalStop:', stopAllResetStart),
+    );
+    expect(stopAllStart).toBeGreaterThanOrEqual(0);
+    expect(stopAllResetStart).toBeGreaterThanOrEqual(0);
+    expectOrder(
+      stopAllResetSource,
+      'resetAutomaticRecoveryForExplicitStop(sessionId);',
+      'providerGroupService?.noteUserAction(sessionId);',
+    );
     expect(source).toContain('resetAutomaticRecoveryForExplicitStop(sid);');
 
     expectOrder(

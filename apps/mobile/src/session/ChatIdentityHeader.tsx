@@ -1,21 +1,30 @@
 import type { ReactNode } from 'react';
 import { Keyboard, Pressable, StyleSheet, View } from 'react-native';
-import { ChevronLeft, Settings2 } from 'lucide-react-native';
+import { Settings2 } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton';
 import { fontWeight, iconSize, iconStroke, lineHeight, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 
 /** Identity mark size in chat headers: a 32pt avatar (1:1) or a 32pt two-member group mark. */
 export const CHAT_HEADER_MARK_SIZE = 32;
+/** 18pt trailing glyphs at ~1.65pt, level with the 20pt back chevron rather than thinner beside it. */
+export const CHAT_HEADER_GLYPH_STROKE = iconStroke.medium;
+/**
+ * The identity's subtitle runs to the header's lower edge, so the header blur stays solid across
+ * the whole header and feathers only below it.
+ */
+export const CHAT_HEADER_BLUR_FADE_INSIDE = 0;
 
 /**
  * 私聊与群聊共用的顶栏（C1 / G1）：返回 + 身份区（32 标记、标题 16/22 600、副标题 12/18 三级色）+
  * 设置。点身份区和设置按钮打开同一份资料 / 设置。
  */
 export function ChatIdentityHeader({
-  mark, title, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, settingsLabel, testIDPrefix, settingsTestID,
+  accessory, mark, title, subtitle, identityLabel, identityHint, controlsReady = true, onBack, onOpenSettings, settingsLabel, testIDPrefix, settingsTestID,
 }: {
+  accessory?: ReactNode;
   mark: ReactNode;
   title: string;
   /** A short line under the title: presence + computer name, or member names. */
@@ -24,8 +33,9 @@ export function ChatIdentityHeader({
   identityHint?: string;
   controlsReady?: boolean;
   onBack(): void;
-  onOpenSettings(): void;
-  settingsLabel: string;
+  /** Omitted when there is nothing to open (the identity is then plain, without a settings button). */
+  onOpenSettings?(): void;
+  settingsLabel?: string;
   testIDPrefix: string;
   /** Defaults to `${testIDPrefix}.settings`. */
   settingsTestID?: string;
@@ -33,23 +43,25 @@ export function ChatIdentityHeader({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const open = () => { if (controlsReady) { Keyboard.dismiss(); onOpenSettings(); } };
+  const settings = !!onOpenSettings;
+  const open = () => { if (controlsReady && onOpenSettings) { Keyboard.dismiss(); onOpenSettings(); } };
   return <View style={styles.header} testID={`${testIDPrefix}.header`}>
-    <HomeHeaderGlassButton testID={`${testIDPrefix}.back`} accessibilityLabel={t('shared.back')} onPress={() => { Keyboard.dismiss(); onBack(); }}>
-      <ChevronLeft size={iconSize.action} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
-    </HomeHeaderGlassButton>
-    <Pressable style={({ pressed }) => [styles.identity, pressed && styles.pressed]} accessibilityRole="button"
-      accessibilityLabel={identityLabel} accessibilityHint={identityHint} accessibilityState={{ disabled: !controlsReady }}
-      disabled={!controlsReady} onPress={open} testID={`${testIDPrefix}.identity`}>
+    {/* Same system back as the task header. */}
+    <NativeChromeBackButton testID={`${testIDPrefix}.back`} label={t('shared.back')} onPress={() => { Keyboard.dismiss(); onBack(); }} />
+    <Pressable style={({ pressed }) => [styles.identity, pressed && styles.pressed]} accessibilityRole={settings ? 'button' : 'header'}
+      accessibilityLabel={identityLabel} accessibilityHint={settings ? identityHint : undefined}
+      accessibilityState={settings ? { disabled: !controlsReady } : undefined}
+      disabled={!controlsReady || !settings} onPress={open} testID={`${testIDPrefix}.identity`}>
       <View style={styles.mark}>{mark}</View>
       <View style={styles.identityText}>
         <Text numberOfLines={1} style={styles.title}>{title}</Text>
         {typeof subtitle === 'string' ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : subtitle}
       </View>
     </Pressable>
-    <HomeHeaderGlassButton testID={settingsTestID ?? `${testIDPrefix}.settings`} disabled={!controlsReady} accessibilityLabel={settingsLabel} onPress={open}>
-      <Settings2 size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
-    </HomeHeaderGlassButton>
+    {accessory}
+    {settings ? <HomeHeaderGlassButton testID={settingsTestID ?? `${testIDPrefix}.settings`} disabled={!controlsReady} accessibilityLabel={settingsLabel ?? ''} onPress={open}>
+      <Settings2 size={iconSize.lg} strokeWidth={CHAT_HEADER_GLYPH_STROKE} color={colors.textPrimary} />
+    </HomeHeaderGlassButton> : null}
   </View>;
 }
 

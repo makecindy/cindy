@@ -40,6 +40,8 @@ interface SnapshotMeta {
   windowId: number;
   driverSnapshotId?: string;
   elements?: Map<string, number>;
+  /** Screen frames by element_index, to ask the OS what an action would land on. */
+  frames?: Map<number, ElementFrame>;
 }
 
 /** 保留的窗口数与历史快照数上限(FIFO 淘汰)。 */
@@ -138,11 +140,29 @@ export class WindowSnapshotTracker {
     const meta = this.metaById.get(snapshotId);
     if (!meta || !Array.isArray(elements)) return;
     meta.elements = new Map();
+    meta.frames = new Map();
     for (const element of elements.slice(0, 2000)) {
-      if (typeof element?.element_token === 'string' && typeof element?.element_index === 'number') {
-        meta.elements.set(element.element_token, element.element_index);
-      }
+      if (typeof element?.element_index !== 'number') continue;
+      if (typeof element.element_token === 'string') meta.elements.set(element.element_token, element.element_index);
+      const frame = readFrame(element.frame);
+      if (frame) meta.frames.set(element.element_index, frame);
     }
+  }
+
+  /** Screen frame of an element in the observation it came from (given, or the window's latest). */
+  elementFrame(
+    sessionId: string | undefined,
+    pid: number,
+    windowId: number | undefined,
+    index: number,
+    snapshotId?: string,
+  ): ElementFrame | undefined {
+    const key = sessionId ?? '';
+    const id = snapshotId !== undefined
+      ? this.aliasToId.get(this.aliasKey(key, snapshotId)) ?? snapshotId
+      : windowId !== undefined ? this.latestByWindow.get(this.windowKey(key, pid, windowId)) : undefined;
+    const meta = id === undefined ? undefined : this.metaById.get(id);
+    return meta?.sessionKey === key && meta.pid === pid ? meta.frames?.get(index) : undefined;
   }
 
   elementReference(sessionId: string | undefined, token: string, observationId?: string) {
@@ -189,4 +209,19 @@ export class WindowSnapshotTracker {
     }
     return { ok: true };
   }
+}
+
+export interface ElementFrame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function readFrame(raw: unknown): ElementFrame | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { x, y, w, h } = raw as Record<string, unknown>;
+  return [x, y, w, h].every((value) => typeof value === 'number' && Number.isFinite(value))
+    ? { x: x as number, y: y as number, w: w as number, h: h as number }
+    : undefined;
 }

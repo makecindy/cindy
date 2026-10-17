@@ -7,6 +7,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { READ_SHEET_RUNTIME_PACKAGES } from '../../../../../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
+import { prunePackagedRuntime } from '../../../../forge-prune-runtime';
+import { copyRuntimeDependencyTrees } from '../../../../forge-runtime-deps';
 
 const desktopRoot = path.resolve(process.cwd());
 const workspaceRequire = createRequire(import.meta.url);
@@ -16,7 +18,20 @@ function packageDirectory(name: string, fromDirs?: string[]): string {
   try {
     return path.dirname(workspaceRequire.resolve(`${name}/package.json`, options));
   } catch {
-    let current = path.dirname(workspaceRequire.resolve(name, options));
+    try {
+      return path.dirname(workspaceRequire.resolve(`${name}/package`, options));
+    } catch {
+      // Some packages export their manifest as ./package instead of ./package.json.
+    }
+    let entry: string;
+    try {
+      entry = workspaceRequire.resolve(name, options);
+    } catch {
+      const hoisted = path.resolve(desktopRoot, '../../node_modules', name);
+      if (fs.existsSync(path.join(hoisted, 'package.json'))) return hoisted;
+      throw new Error(`cannot resolve package directory: ${name}`);
+    }
+    let current = path.dirname(entry);
     while (current !== path.dirname(current)) {
       const packageJson = path.join(current, 'package.json');
       if (fs.existsSync(packageJson)) {
@@ -29,47 +44,25 @@ function packageDirectory(name: string, fromDirs?: string[]): string {
   }
 }
 
-function stageDependencyTree(
-  name: string,
-  destinationModules: string,
-  fromDirs?: string[],
-  seen = new Set<string>(),
-): void {
-  const source = packageDirectory(name, fromDirs);
-  const destination = path.join(destinationModules, name);
-  const key = `${destination}\0${source}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.cpSync(source, destination, {
-    recursive: true,
-    dereference: true,
-    filter: (sourcePath) => path.basename(sourcePath) !== 'node_modules',
-  });
-  const manifest = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8')) as {
-    dependencies?: Record<string, string>;
-  };
-  for (const dependency of Object.keys(manifest.dependencies ?? {}).sort()) {
-    stageDependencyTree(dependency, path.join(destination, 'node_modules'), [source], seen);
-  }
-}
-
 describe('read_sheet XLSX worker packaging contract', () => {
   it('copies the worker runtime dependency closures into packaged node_modules', () => {
     const forge = fs.readFileSync(path.join(desktopRoot, 'forge.config.ts'), 'utf8');
     expect(READ_SHEET_RUNTIME_PACKAGES).toEqual(['jszip', 'exceljs']);
     expect(forge).toContain('copyRuntimeDependencyTrees(READ_SHEET_RUNTIME_PACKAGES, destModules)');
-    expect(forge).toContain('copyDependencyTree(childDep, childDestModules, [src], seen)');
+    expect(forge).toContain('copyRuntimeTrees(deps, destModules, resolvePackageDir)');
   });
 
   it('loads ExcelJS and JSZip from an isolated staged dependency tree', () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-read-sheet-package-'));
     try {
       const stagedModules = path.join(temp, 'node_modules');
-      const seen = new Set<string>();
-      for (const runtimePackage of READ_SHEET_RUNTIME_PACKAGES) {
-        stageDependencyTree(runtimePackage, stagedModules, undefined, seen);
-      }
+      copyRuntimeDependencyTrees(
+        [...READ_SHEET_RUNTIME_PACKAGES, 'discord.js'],
+        stagedModules,
+        packageDirectory,
+      );
+      prunePackagedRuntime(temp);
+      expect(fs.existsSync(path.join(stagedModules, 'exceljs', 'dist'))).toBe(false);
       const probeRequirePath = path.join(temp, 'probe.cjs');
       const probe = spawnSync(
         process.execPath,
@@ -79,7 +72,11 @@ describe('read_sheet XLSX worker packaging contract', () => {
 const stagedRequire = createRequire(${JSON.stringify(probeRequirePath)});
 const ExcelJS = stagedRequire('exceljs');
 const JSZip = stagedRequire('jszip');
+const { Client, GatewayIntentBits, EmbedBuilder } = stagedRequire('discord.js');
 (async () => {
+  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  if (new EmbedBuilder().setTitle('ok').toJSON().title !== 'ok') throw Error('Discord builder');
+  await client.destroy();
   const workbook = new ExcelJS.Workbook();
   workbook.addWorksheet('Sheet1').addRow(['ok']);
   const bytes = await workbook.xlsx.writeBuffer();

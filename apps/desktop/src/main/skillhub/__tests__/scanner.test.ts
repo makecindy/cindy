@@ -11,6 +11,11 @@ vi.mock('../registry', () => ({
   },
 }));
 
+vi.mock('../customizationScanHost', async () => {
+  const { buildSkillList } = await import('../skillListProjection');
+  return { projectSkillList: vi.fn(async (input) => buildSkillList(input)) };
+});
+
 import {
   isExistingSkillPathGranted,
   listSkillFolderChildren,

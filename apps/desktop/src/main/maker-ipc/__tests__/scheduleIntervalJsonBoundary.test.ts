@@ -212,4 +212,17 @@ describe('scheduled model selection IPC compatibility', () => {
       providerId: 'pi-source', effort: 'high', fastMode,
     }));
   });
+
+  it.skipIf(process.platform === 'win32')('rejects a template override whose pre-run hook has a shell syntax error', async () => {
+    const create = vi.fn(async (input: CreateScheduleInput) => input);
+    setSchedulerReady({ create } as never, {} as never);
+    registerScheduleHandlers();
+    const wire = JSON.parse(JSON.stringify({
+      templateId: BUILTIN_TEMPLATES[0]!.id,
+      overrides: { preRunHook: { command: `node '/a b/x.mjs'//'` } },
+    }));
+    await expect(handlers.get('maker:schedule:create-from-template')!(null, wire))
+      .rejects.toThrow(/shell syntax error/);
+    expect(create).not.toHaveBeenCalled();
+  });
 });

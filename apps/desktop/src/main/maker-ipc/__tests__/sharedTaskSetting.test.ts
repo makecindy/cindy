@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { authorizeSharedTaskOperation } from '@cindy/device-link';
 import { createSharedTaskSettingGuard } from '../sharedTaskSetting.js';
 import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
 import { commitRuntimeAxisAfterPersistence } from '../runtimeSelectionAxes.js';
@@ -13,6 +14,31 @@ function harness() {
   return { guard, transaction, revoke() { current = false; } };
 }
 describe('sharedTask setting admission', () => {
+  it('rejects an active guest at the model mutation boundary using the real permission policy', async () => {
+    const transaction = { admitted: false };
+    const guard = createSharedTaskSettingGuard({
+      author: { sharedTaskId: 'sharedTask', sessionId: 'task', memberId: 'guest', accountId: 'account', displayName: 'Guest' },
+      isCurrent: () => true,
+      authorize: (operation) => authorizeSharedTaskOperation({
+        sharedTaskId: 'sharedTask', sessionId: 'task', ownerAccountId: 'owner', hostDeviceId: 'host',
+        status: 'active', revision: 1,
+        guests: [{ memberId: 'guest', accountId: 'account', version: 1, deviceIds: ['phone'] }],
+      }, { accountId: 'account', deviceId: 'phone' }, 'task', operation).allowed,
+    }, 'task', transaction);
+    const setModel = vi.fn();
+    const closeSession = vi.fn();
+    const session = { agentKind: 'claude-code' as const, model: 'host-model', setModel };
+
+    await expect(applyRuntimeSetModelChange({
+      maker: { getSession: () => session, listActiveSessions: () => [], closeSession },
+      sessionId: 'task', model: 'guest-model', admit: guard.admit,
+    })).rejects.toThrow('PERMISSION_DENIED');
+
+    expect(transaction.admitted).toBe(false);
+    expect(setModel).not.toHaveBeenCalled();
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(session.model).toBe('host-model');
+  });
   it('rechecks membership after async model preflight, before any runtime change', async () => {
     const h = harness();
     const setModel = vi.fn();

@@ -69,11 +69,16 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
   const { isMac } = useMacFullscreen();
 
   // Both installed and market detail surfaces share this escape hatch. Let
-  // nested dialogs and editable controls consume Escape first.
+  // nested dialogs and editable controls consume Escape first. Listen on
+  // document so the detail page settles Escape before the enclosing Settings
+  // page's window listener, regardless of which mounted first. A held key's
+  // auto-repeat is not a new press: after the first keydown closes a nested
+  // layer, repeats must not also go back to the list.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.key !== 'Escape' ||
+        event.repeat ||
         event.defaultPrevented ||
         event.isComposing ||
         event.altKey ||
@@ -87,8 +92,8 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
       event.preventDefault();
       onBack();
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, [onBack]);
 
   return (

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createIpcError } from '../../../shared/ipc-errors';
 import {
+  classifyColdPiRehydrationOutcome,
   createColdPiRehydrationForWindowVerification,
   type ColdPiRehydrationDeps,
 } from '../coldPiRehydration';
@@ -184,5 +185,28 @@ describe('cold Pi rehydration for window verification (#5508)', () => {
     expect(fields.category).toBe('working-dir-probe-failed');
     expect(fields.reason).toContain(LOCAL_PATH);
     expect(fields.detail).toBe('Error EACCES');
+  });
+});
+
+describe('classifyColdPiRehydrationOutcome', () => {
+  it('降级继续：恢复失败且没有活会话（存量路由死掉，切模不能被拒绝）', () => {
+    expect(
+      classifyColdPiRehydrationOutcome({ rehydrationFailed: true, liveAfterBootstrap: false }),
+    ).toBe('degraded');
+  });
+
+  it('保留 fail-closed：bootstrap 声称成功却没有活会话，且没有降级过', () => {
+    expect(
+      classifyColdPiRehydrationOutcome({ rehydrationFailed: false, liveAfterBootstrap: false }),
+    ).toBe('fail-closed');
+  });
+
+  it('有活会话就核实：恢复成功（或竞态中别处已拉起）时拿 live 读数刷新窗口', () => {
+    expect(
+      classifyColdPiRehydrationOutcome({ rehydrationFailed: false, liveAfterBootstrap: true }),
+    ).toBe('verified');
+    expect(
+      classifyColdPiRehydrationOutcome({ rehydrationFailed: true, liveAfterBootstrap: true }),
+    ).toBe('verified');
   });
 });

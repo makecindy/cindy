@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
-import { AppServerClient } from './client.js';
+import { AppServerClient, type RequestProgressDeadline } from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
 import type { Transport } from './transport.js';
 import {
@@ -895,11 +895,12 @@ export class AppServerHost {
    * `opts.timeoutMs` 按需传入: 裸 RPC 默认**无超时** (协议上 response 可能任意晚),
    * 但 turn/start 这类「daemon 失联就永远挂住」的关键路径应显式给上限 —
    * 超时 reject 后上层按 turn 启动失败收口, 而不是让 UI 无限 generating。
+   * `extendWhileProgress` 只顺延请求本身的等待, startup 仍按 timeoutMs 计。
    */
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number; beforeDispatch?: () => void },
+    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它

@@ -51,6 +51,10 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('Math.max(1, width + insets.left)');
     // 手势位移并回 progress:关闭动画从当前视觉位置继续,不跳帧。
     expect(text).toContain('progress.value + dragX.value / panelWidth');
+    // A cancelled left swipe must animate the merged visual position back to
+    // the fully open state, even if a render/layout update interrupts dragX.
+    expect(text).toContain('const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));');
+    expect(text).toContain('progress.value = withTiming(1, {');
     // 拖拽关闭只认「向左」意图:右拖 16pt 判失败,纵向 16pt 先到滚动优先(review #1328)。
     expect(text).toContain('.activeOffsetX(-16)');
     expect(text).toContain('.failOffsetX(16)');

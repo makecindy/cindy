@@ -10,14 +10,7 @@ import {
 } from "react-native";
 import { useIsFocused } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import * as Clipboard from "expo-clipboard";
-import * as SecureStore from "expo-secure-store";
-import { pinMobilePluginIdentity } from "./pluginOauthPins";
-import { accountVaultKey } from "@cindy/auth-client";
-import {
-  PLUGIN_OAUTH_CHANNEL,
-  parsePluginOauthPeerIdentity,
-} from "@cindy/device-link";
+import { PLUGIN_OAUTH_CHANNEL } from "@cindy/device-link";
 import { useTranslation } from "react-i18next";
 import { Text, TextInput } from "@/components/AppText";
 import { useAuth } from "@/auth/AuthContext";
@@ -38,8 +31,10 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { type MobilePluginSetupAction } from "./pluginSetupActions";
-import { authenticateMobilePluginOauth } from "./pluginOauthClient";
+import type { authenticateMobilePluginOauth } from "./pluginOauthClient";
+import { openMobilePluginOauthSession } from "./pluginOauthSession";
 import { pluginOauthPlatformCrypto } from "./pluginOauthPlatformCrypto";
+import { createCopiedCodeClipboard } from "./copiedCodeClipboard";
 import { runMobilePluginAuthorization } from "./pluginAuthorizationController";
 
 export default function PluginSetupNativeForm({
@@ -67,8 +62,8 @@ export default function PluginSetupNativeForm({
   const owner = useRef(getMobileAuthOwner()).current,
     alive = useRef(true),
     lock = useRef(false),
-    operation = useRef(0),
-    copiedCode = useRef<string | undefined>(undefined);
+    operation = useRef(0);
+  const [codeClipboard] = useState(createCopiedCodeClipboard);
   const live = useRef({ focused, epoch: link.connectionEpoch });
   live.current = { focused, epoch: link.connectionEpoch };
   const [selected, setSelected] = useState<MobilePluginSetupAction | undefined>(
@@ -82,16 +77,10 @@ export default function PluginSetupNativeForm({
     () => () => {
       alive.current = false;
       operation.current++;
-      void clearCopiedCode();
+      void codeClipboard.clear();
     },
     [],
   );
-  const clearCopiedCode = async () => {
-    const code = copiedCode.current;
-    copiedCode.current = undefined;
-    if (code && (await Clipboard.getStringAsync().catch(() => "")) === code)
-      await Clipboard.setStringAsync("").catch(() => {});
-  };
   const clear = () => {
     setSecret("");
     setHost("");
@@ -101,7 +90,7 @@ export default function PluginSetupNativeForm({
     clear();
     setSelected(undefined);
     setBrowser(undefined);
-    void clearCopiedCode();
+    void codeClipboard.clear();
     onClosed();
   };
   useEffect(() => {
@@ -152,38 +141,14 @@ export default function PluginSetupNativeForm({
     let client:
       Awaited<ReturnType<typeof authenticateMobilePluginOauth>> | undefined;
     try {
-      const target = parsePluginOauthPeerIdentity(
-        await invoke({ op: "identity", version: 3 }),
-      );
-      assertCurrent();
-      if (
-        target.deviceId !== deviceId ||
-        target.membershipId !== owner.accountId ||
-        accountVaultKey(target.realm, target.membershipId) !== owner.accountKey
-      )
-        throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
-      client = await authenticateMobilePluginOauth({
-        crypto: pluginOauthPlatformCrypto,
-        target,
+      client = await openMobilePluginOauthSession({
+        deviceId,
         peer: auth.deviceId,
+        owner,
         ghostId: action.ghostId,
         action: action.action,
-        assertCurrent,
         invoke,
-        trustIdentity: (identity, check) =>
-          pinMobilePluginIdentity(
-            {
-              get: (key) => SecureStore.getItemAsync(key),
-              set: (key, value) =>
-                SecureStore.setItemAsync(key, value, {
-                  keychainAccessible:
-                    SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-                }),
-            },
-            identity,
-            auth.deviceId!,
-            check,
-          ),
+        assertCurrent,
       });
       await runMobilePluginAuthorization({
         crypto: pluginOauthPlatformCrypto,
@@ -264,7 +229,7 @@ export default function PluginSetupNativeForm({
       }
     } finally {
       client?.dispose();
-      void clearCopiedCode();
+      void codeClipboard.clear();
       lock.current = false;
       if (alive.current) {
         setBusy(false);
@@ -363,13 +328,7 @@ export default function PluginSetupNativeForm({
                     style={styles.row}
                     accessibilityRole="button"
                     onPress={() => {
-                      const code = browser.code!;
-                      void Clipboard.setStringAsync(code)
-                        .then(() => {
-                          copiedCode.current = code;
-                          if (!alive.current) void clearCopiedCode();
-                        })
-                        .catch(() => {});
+                      void codeClipboard.copy(browser.code!).catch(() => {});
                     }}
                   >
                     <Text style={styles.body}>

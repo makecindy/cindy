@@ -335,4 +335,71 @@ describe('provider rail weekly remaining bars', () => {
     expect(reads.codex).not.toHaveBeenCalled();
     expect(reads.remoteCodex).not.toHaveBeenCalled();
   });
+
+  it.each(['openai', 'anthropic', 'xai', 'account-b'])(
+    'keeps %s quotas with the task host while browsing another device and switching hosts',
+    (id) => {
+      const usedOn = (deviceId: string | null) =>
+        deviceId === 'host' ? 25 : deviceId === 'other' ? 80 : 10;
+      const claude = (used: number) => ({ sevenDay: { utilization: used } });
+      const xai = (used: number) => ({
+        creditUsagePercent: used,
+        updatedAt: Date.now(),
+        resetsAt: Date.now() / 1000 + 3600,
+      });
+      reads.codex.mockImplementation((enabled) => ({ snapshot: enabled ? snapshot(10) : null }));
+      reads.claude.mockImplementation((enabled) => (enabled ? claude(10) : null));
+      reads.xai.mockImplementation((enabled) => (enabled ? xai(10) : null));
+      reads.remoteCodex.mockImplementation((deviceId) =>
+        deviceId ? { secondary: { usedPercent: usedOn(deviceId), windowMinutes: 10080 } } : null,
+      );
+      reads.remoteClaude.mockImplementation((deviceId) =>
+        deviceId ? claude(usedOn(deviceId)) : null,
+      );
+      reads.remoteXai.mockImplementation((deviceId) => (deviceId ? xai(usedOn(deviceId)) : null));
+      const providers = [
+        provider(
+          id,
+          id === 'account-b' ? { source: 'user', auth: { method: 'oauth', native: 'codex' } } : {},
+        ),
+      ];
+      const props = {
+        items: [
+          { kind: 'provider' as const, providerId: id },
+          { kind: 'remote-provider' as const, deviceId: 'other', providerId: id },
+        ],
+        active: { kind: 'remote-provider' as const, deviceId: 'other', providerId: id },
+        providers,
+        providerLabel: () => 'Browsing other',
+        providerUsage: { deviceId: 'other' },
+        onSelect: vi.fn(),
+        remoteSources: {
+          localProviders: providers,
+          localUsageDeviceId: 'host' as string | null,
+          localProviderLabel: () => 'Task host',
+          providersOf: () => providers,
+          labelOf: () => 'Other device',
+        },
+      };
+      const { rerender } = render(<UnifiedModelRail {...props} />);
+      const remaining = (name: string) =>
+        screen
+          .getByRole('button', { name })
+          .querySelector('[data-weekly-remaining]')
+          ?.getAttribute('data-weekly-remaining');
+      expect(remaining('Task host')).toBe('75');
+      expect(remaining('Other device')).toBe('20');
+      for (const read of [reads.codex, reads.claude, reads.xai])
+        expect(read.mock.calls.some(([enabled]) => enabled)).toBe(false);
+
+      rerender(
+        <UnifiedModelRail
+          {...props}
+          remoteSources={{ ...props.remoteSources, localUsageDeviceId: null }}
+        />,
+      );
+      expect(remaining('Task host')).toBe('90');
+      expect(remaining('Other device')).toBe('20');
+    },
+  );
 });

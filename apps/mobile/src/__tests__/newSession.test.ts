@@ -9,9 +9,12 @@ import {
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
   canResolveStoredAgentRuntime,
+  assertSubmitModelResolved,
+  isNewSessionRuntimePending,
   isStoredAgentRestorePending,
   nextStoredAgentRestoreStep,
   type StoredAgentRestoreState,
+  type NewSessionRuntime,
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
   applyRemoteAgentPick,
@@ -26,7 +29,8 @@ import {
   parseExtraDirsInput,
   pickAgentDefaultRuntime,
   pickInitialNewSessionWorkspace,
-  pickMostRecentSessionRuntime,
+  hostDraftRuntimeFromDefaults,
+  isHostDraftDefaultsReady,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   resolveRecentModelAndProvider,
@@ -48,6 +52,13 @@ import type { RemoteSession } from '@/session/types';
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
+
+// Existing source contracts follow the extracted hooks; load their text once.
+const newSessionSources = [
+  'app/sessions/new.tsx',
+  'src/session/useNewSessionDefaultSelection.ts',
+  'src/session/useNewSessionHostDefaults.ts',
+].map(path => readTextLf(resolve(process.cwd(), path), 'utf8')).join('\n');
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -102,63 +113,46 @@ const deferred = <T,>() => {
   return { promise, resolve, reject };
 };
 
-describe('pickMostRecentSessionRuntime', () => {
-  it('picks the most recent session runtime (agent+model+effort), cc → claude-code', () => {
-    const runtime = pickMostRecentSessionRuntime([
-      remoteSession('old', { model: 'claude-opus-4-8', effort: 'high', userSendAt: '2026-01-01T00:00:01.000Z' }),
-      remoteSession('new', { model: 'gpt-5.4', effort: 'low', agentKind: 'codex', userSendAt: '2026-01-02T00:00:00.000Z' }),
-    ]);
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: null });
+function hostRuntime(
+  agentKind: NewSessionRuntime['agentKind'],
+  model: string,
+  patch: Partial<Omit<NewSessionRuntime, 'agentKind' | 'model'>> = {},
+): NewSessionRuntime {
+  return { agentKind, model, effort: 'medium', providerId: null, ...patch };
+}
+
+describe('hostDraftRuntimeFromDefaults', () => {
+  it('reads the host new-task default (model + effort + source) for the agent', () => {
+    expect(hostDraftRuntimeFromDefaults(
+      { model: 'claude-opus-5-5', effort: 'high', providerId: 'anthropic', modelChosenByUser: true, worktreeEnabled: false },
+      'claude-code',
+    )).toEqual({ agentKind: 'claude-code', model: 'claude-opus-5-5', effort: 'high', providerId: 'anthropic' });
+    // providerId 缺省 / 空串 = 跟随被控端默认来源;旧端不回 modelChosenByUser 时保守采用其 model。
+    expect(hostDraftRuntimeFromDefaults({ model: 'gpt-6-astra', providerId: '' }, 'codex'))
+      .toEqual({ agentKind: 'codex', model: 'gpt-6-astra', effort: '', providerId: null });
   });
 
-  it('carries the recent session providerId (null = default route when unset)', () => {
-    const runtime = pickMostRecentSessionRuntime([
-      remoteSession('bound', { model: 'deepseek-v4-flash', providerId: 'deepseek', userSendAt: '2026-01-02T00:00:00.000Z' }),
-      remoteSession('unbound', { model: 'gpt-5.4', agentKind: 'codex', userSendAt: '2026-01-01T00:00:00.000Z' }),
-    ]);
-    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'deepseek-v4-flash', effort: 'medium', providerId: 'deepseek' });
+  it('returns null for old hosts, malformed payloads and empty drafts', () => {
+    expect(hostDraftRuntimeFromDefaults({}, 'claude-code')).toBeNull();
+    expect(hostDraftRuntimeFromDefaults({ worktreeEnabled: true }, 'claude-code')).toBeNull();
+    expect(hostDraftRuntimeFromDefaults(null, 'claude-code')).toBeNull();
+    expect(hostDraftRuntimeFromDefaults('claude-opus-5-5', 'claude-code')).toBeNull();
+    expect(hostDraftRuntimeFromDefaults({ model: '  ' }, 'claude-code')).toBeNull();
   });
 
-  it('maps cc agentKind to claude-code', () => {
-    const runtime = pickMostRecentSessionRuntime([remoteSession('a', { agentKind: 'cc', model: 'claude-sonnet-4-6' })]);
-    expect(runtime?.agentKind).toBe('claude-code');
+  it('treats a snapshot without worktreeEnabled as not ready yet (host renderer cache not pushed)', () => {
+    expect(isHostDraftDefaultsReady({})).toBe(false);
+    expect(isHostDraftDefaultsReady({ providerModelMemory: {} })).toBe(false);
+    expect(isHostDraftDefaultsReady(null)).toBe(false);
+    expect(isHostDraftDefaultsReady({ worktreeEnabled: false })).toBe(true);
+    expect(isHostDraftDefaultsReady({ worktreeEnabled: true, model: 'm' })).toBe(true);
   });
 
-  it('sorts by activity time = userSendAt ?? updatedAt ?? createdAt (desc)', () => {
-    const runtime = pickMostRecentSessionRuntime([
-      remoteSession('viaUpdated', { model: 'm-updated', userSendAt: null, updatedAt: '2026-01-03T00:00:00.000Z' }),
-      remoteSession('viaSend', { model: 'm-send', userSendAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }),
-    ]);
-    expect(runtime?.model).toBe('m-updated'); // updatedAt 2026-01-03 > userSendAt 2026-01-02
-  });
-
-  it('excludes deleted sessions and sessions without a model', () => {
-    expect(pickMostRecentSessionRuntime([
-      remoteSession('del', { status: 'deleted', model: 'x', userSendAt: '2026-09-09T00:00:00.000Z' }),
-      remoteSession('nomodel', { model: '   ', userSendAt: '2026-09-09T00:00:00.000Z' }),
-      remoteSession('ok', { model: 'kept', userSendAt: '2026-01-01T00:00:00.000Z' }),
-    ])?.model).toBe('kept');
-  });
-
-  it('filters by deviceId (only sessions on the target device; sessions without deviceId are not excluded)', () => {
-    const sessions = [
-      remoteSession('other', { model: 'other-dev', deviceLinkDeviceId: 'devB', userSendAt: '2026-05-05T00:00:00.000Z' }),
-      remoteSession('target', { model: 'target-dev', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' }),
-    ];
-    expect(pickMostRecentSessionRuntime(sessions, { deviceId: 'devA' })?.model).toBe('target-dev');
-  });
-
-  it('filters by agentKind', () => {
-    const sessions = [
-      remoteSession('cc1', { model: 'claude-x', agentKind: 'cc', userSendAt: '2026-05-05T00:00:00.000Z' }),
-      remoteSession('codex1', { model: 'gpt-x', agentKind: 'codex', userSendAt: '2026-01-01T00:00:00.000Z' }),
-    ];
-    expect(pickMostRecentSessionRuntime(sessions, { agentKind: 'codex' })?.model).toBe('gpt-x');
-  });
-
-  it('returns null when no session matches', () => {
-    expect(pickMostRecentSessionRuntime([])).toBeNull();
-    expect(pickMostRecentSessionRuntime([remoteSession('del', { status: 'deleted' })])).toBeNull();
+  it('leaves a never-chosen host seed to the catalog regional default, like the desktop controller', () => {
+    expect(hostDraftRuntimeFromDefaults({ model: 'seed', modelChosenByUser: false, providerId: null }, 'pi')).toBeNull();
+    // 选过来源即视为明确选择。
+    expect(hostDraftRuntimeFromDefaults({ model: 'seed', modelChosenByUser: false, providerId: 'xd' }, 'pi'))
+      .toEqual({ agentKind: 'pi', model: 'seed', effort: '', providerId: 'xd' });
   });
 });
 
@@ -330,61 +324,49 @@ describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全
 });
 
 describe('stored agent restore gating', () => {
-  const recentOpus = remoteSession('recent', {
-    deviceLinkDeviceId: 'mac',
-    model: 'claude-opus-5-5',
-    effort: 'high',
+  it('waits for the host new-task defaults before resolving a model', () => {
+    // 被控电脑的默认还没读完:即使目录已就绪也不落定,否则会先落目录默认、读到的默认再也用不上。
+    expect(canResolveStoredAgentRuntime({
+      deviceId: 'mac',
+      hostDefaultsSettled: false,
+      hostRuntime: null,
+      catalogReady: true,
+      providersUnsupported: false,
+    })).toBe(false);
   });
 
-  it('waits while neither the catalog nor a recent task for the agent is available', () => {
-    // 冷启动:目录未就绪、任务列表还没到 —— 此刻恢复只能落到内置 Sonnet 4.6。
+  it('waits while neither the catalog nor a host default for the agent is available', () => {
     expect(canResolveStoredAgentRuntime({
-      agentKind: 'claude-code',
-      sessions: [],
       deviceId: 'mac',
+      hostDefaultsSettled: true,
+      hostRuntime: null,
       catalogReady: false,
       providersUnsupported: false,
     })).toBe(false);
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [],
+      hostRuntime: null,
       modelRows: [],
       currentEffort: 'medium',
-      deviceId: 'mac',
       catalogReady: false,
-    })).toMatchObject({ model: 'claude-sonnet-4-6', effort: 'medium' });
+    })).toMatchObject({ model: '', effort: 'medium' });
   });
 
-  it('proceeds once a recent task of the stored agent exists on the device', () => {
+  it('proceeds once the host gives a default for the agent', () => {
     expect(canResolveStoredAgentRuntime({
-      agentKind: 'claude-code',
-      sessions: [recentOpus],
       deviceId: 'mac',
+      hostDefaultsSettled: true,
+      hostRuntime: hostRuntime('claude-code', 'claude-opus-5-5', { effort: 'high' }),
       catalogReady: false,
       providersUnsupported: false,
     })).toBe(true);
-    // 其他设备或其他 agent 的任务不算。
-    expect(canResolveStoredAgentRuntime({
-      agentKind: 'codex',
-      sessions: [recentOpus],
-      deviceId: 'mac',
-      catalogReady: false,
-      providersUnsupported: false,
-    })).toBe(false);
-    expect(canResolveStoredAgentRuntime({
-      agentKind: 'claude-code',
-      sessions: [recentOpus],
-      deviceId: 'studio',
-      catalogReady: false,
-      providersUnsupported: false,
-    })).toBe(false);
   });
 
   it('proceeds once the catalog is ready or explicitly unsupported, or without a device', () => {
-    const base = { agentKind: 'claude-code' as const, sessions: [], deviceId: 'mac' };
+    const base = { deviceId: 'mac', hostDefaultsSettled: true, hostRuntime: null };
     expect(canResolveStoredAgentRuntime({ ...base, catalogReady: true, providersUnsupported: false })).toBe(true);
     expect(canResolveStoredAgentRuntime({ ...base, catalogReady: false, providersUnsupported: true })).toBe(true);
-    expect(canResolveStoredAgentRuntime({ ...base, deviceId: '', catalogReady: false, providersUnsupported: false })).toBe(true);
+    expect(canResolveStoredAgentRuntime({ ...base, deviceId: '', hostDefaultsSettled: false, catalogReady: false, providersUnsupported: false })).toBe(true);
   });
 
   it('reports a pending restore only for an unapplied stored agent on the target device', () => {
@@ -433,10 +415,10 @@ describe('stored agent restore gating', () => {
   });
 
   it('gates the stored agent restore on real data and leaves the auto-default unblocked', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const source = newSessionSources;
     const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
     const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
-    const storedSource = source.slice(storedStart, source.indexOf('storedAgentRestoreRef.current = {', storedStart));
+    const storedSource = source.slice(storedStart, source.indexOf('storedAgentRestoreRef.current = restoreState', storedStart));
     const autoGuardSource = source.slice(source.lastIndexOf('useEffect(() => {', autoStart), autoStart);
     expect(storedSource).toContain('isStoredAgentRestorePending({');
     expect(storedSource).toContain('canResolveStoredAgentRuntime({');
@@ -446,19 +428,143 @@ describe('stored agent restore gating', () => {
     expect(modelStep).not.toContain('permissionMode');
     expect(modelStep).toContain('current.agentKind === storedAgentKind');
     expect(storedSource).not.toContain('deviceProviders.loading');
-    // 恢复待落定时不阻断「跟随最近任务」(Greptile P1)。
+    // 恢复待落定时不阻断自动默认(Greptile P1)。
     expect(autoGuardSource).not.toContain('isStoredAgentRestorePending(');
+  });
+
+  it('reads and writes the host new-task defaults instead of inferring from task history', () => {
+    const source = newSessionSources;
+    // 读:与桌面远程新建同一读源,三个 agent 一次读齐。
+    expect(source).toContain('return maker.getNewMakerDefaults(agentKind);');
+    expect(source).toContain('return hostDraftRuntimeFromDefaults(defaults, agentKind);');
+    // 写:本页的模型选择写回被控电脑;远程 Agent 的模型属于另一台电脑,不写回。
+    expect(source).toMatch(/active: true,\s+markModelChoice: hostChoiceRequest\.markModelChoice,/);
+    expect(source).toContain('if (!selectedDeviceId || remoteAgentChoice || !draft.model) return;');
+    expect(source).not.toContain('pickMostRecentSessionRuntime');
+    // 三个本机选择入口(供应商行 / 统一面板 / 旧端扁平列表)都写回。
+    for (const name of ['selectProviderModelRow', 'selectUnifiedModel', 'selectFlatModel']) {
+      const start = source.indexOf(`const ${name} = useCallback(`);
+      const body = source.slice(start, source.indexOf('\n  }, [', start));
+      expect(body, name).toContain('requestHostChoiceWrite(true);');
+    }
+    // 被控端刚启动回 {} 时有限次重读,不当成「从未选过模型」(Codex P1)。
+    expect(source).toContain('if (defaults === undefined || isHostDraftDefaultsReady(defaults) || attempt >= 2) {');
+    // 本页写回的选择优先于读取结果,晚到的旧读取不能把它覆盖(Codex P1)。
+    const runtimeForStart = source.indexOf('const hostRuntimeFor = useCallback(');
+    const runtimeForBody = source.slice(runtimeForStart, source.indexOf('\n  );', runtimeForStart));
+    expect(runtimeForBody.indexOf('hostChoiceOverridesRef.current.get(deviceId)')).toBeLessThan(runtimeForBody.indexOf('current.byAgent[agentKind]'));
+    // 切 agent 先等被控电脑默认读完再选模型,不把目录默认当成最终选择(Greptile P1)。
+    const switchStart = source.indexOf('const switchAgent = useCallback(');
+    const switchBody = source.slice(switchStart, source.indexOf('\n  }, [', switchStart));
+    const waitAt = switchBody.indexOf('await waitHostDraftDefaults(selectedDeviceId, nextKind);');
+    expect(waitAt).toBeGreaterThan(-1);
+    expect(waitAt).toBeLessThan(switchBody.indexOf('pickAgentDefaultRuntime({'));
+  });
+});
+
+describe('pickAgentDefaultRuntime on hosts without provider:list', () => {
+  const flat = (id: string, marked: boolean): MobileModelOption => ({
+    id, label: id, efforts: ['low', 'high'], effortDisplayNames: {}, defaultEffort: 'high', supportsFastMode: false,
+    ...(marked ? { newSessionDefault: ['claude-code'] } : {}),
+  } as MobileModelOption);
+
+  it('uses the advertised capabilities model instead of settling an empty one', () => {
+    const base = { agentKind: 'claude-code' as const, hostRuntime: null, modelRows: [], currentEffort: 'medium', catalogReady: false };
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [flat('a', false), flat('b', true)] }))
+      .toMatchObject({ model: 'b', providerId: null, effort: 'high' });
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [flat('a', false)] })).toMatchObject({ model: 'a', providerId: null });
+    // 能力表也没有时才留空。
+    expect(pickAgentDefaultRuntime({ ...base, flatModels: [] })).toMatchObject({ model: '' });
+    expect(pickAgentDefaultRuntime(base)).toMatchObject({ model: '' });
+  });
+
+  it('passes capabilities models only for unsupported hosts, on both stored-agent restore and agent switch', () => {
+    const source = newSessionSources;
+    expect(source).toContain('flatModels: flatModelsForUnsupportedHost(selectedDeviceId, storedAgentKind, deviceProvidersRef.current.unsupported),');
+    expect(source).toContain('flatModels: flatModelsForUnsupportedHost(selectedDeviceId, nextKind, deviceProvidersRef.current.unsupported),');
+    expect(source).toContain('if (!providersUnsupported || !deviceId) return undefined;');
+  });
+});
+
+describe('isNewSessionRuntimePending', () => {
+  const base = {
+    settled: false,
+    userTouched: false,
+    remoteAgentPicked: false,
+    selectedDeviceId: 'mac-studio',
+    catalogReady: false,
+    catalogFailed: false,
+    modelRowCount: 0,
+  };
+
+  it('keeps the placeholder model pending until real data settles it', () => {
+    expect(isNewSessionRuntimePending(base)).toBe(true);
+    // 目录就绪但自动默认 / 恢复还没写入:仍是占位。
+    expect(isNewSessionRuntimePending({ ...base, catalogReady: true, modelRowCount: 3 })).toBe(true);
+    expect(isNewSessionRuntimePending({ ...base, settled: true })).toBe(false);
+  });
+
+  it('never blocks a choice the user made', () => {
+    expect(isNewSessionRuntimePending({ ...base, userTouched: true })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, remoteAgentPicked: true })).toBe(false);
+  });
+
+  it('falls back to the built-in model when no more data will arrive', () => {
+    expect(isNewSessionRuntimePending({ ...base, selectedDeviceId: '' })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, catalogFailed: true })).toBe(false);
+    expect(isNewSessionRuntimePending({ ...base, catalogReady: true, modelRowCount: 0 })).toBe(false);
+  });
+
+  it('rolls back the restore marker and device lock when an automatic write is dropped', () => {
+    const source = newSessionSources;
+    const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
+    const storedEffect = source.slice(storedStart, source.indexOf('}, [', storedStart));
+    expect(storedEffect).toContain('if (storedAgentRestoreRef.current === restoreState) storedAgentRestoreRef.current = previousRestore;');
+    expect(storedEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
+    const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
+    const autoEffect = source.slice(autoStart, source.indexOf('}, [', autoStart));
+    expect(autoEffect).toContain('autoDefaultDeviceRef.current = previousAutoDefaultDevice;');
+  });
+
+  it('binds the settled model to the computer it was settled for', () => {
+    const source = newSessionSources;
+    // 切到另一台电脑后重新等待,不能沿用上一台电脑落定的模型直接创建。
+    expect(source).toContain('settled: !!selectedDeviceId && runtimeSettledDeviceId === selectedDeviceId,');
+    expect(source).toContain("settleRuntime('stored-agent', deviceAtTrigger);");
+    expect(source).toContain("settleRuntime('stored-agent-model', selectedDeviceId);");
+    expect(source).toContain('result.appliedDeviceId);');
+  });
+
+  it('drops the previous computer\'s auto-picked model on device switch and gates goal creation too', () => {
+    const source = newSessionSources;
+    const selectStart = source.indexOf('const selectDevice = useCallback(');
+    const selectDevice = source.slice(selectStart, source.indexOf('const handleBack = useCallback(', selectStart));
+    // 用户没手动选过模型时清掉旧电脑的自动选择并重新等待;手动选过的保留。
+    expect(selectDevice).toContain('option.deviceId !== selectedDeviceIdRef.current && !userTouchedRuntimeRef.current');
+    expect(selectDevice).toContain('autoDefaultDeviceRef.current = null;');
+    expect(selectDevice).toContain('setRuntimeSettledDeviceId(null);');
+    expect(selectDevice).toContain("...(clearAutoRuntime ? { model: '', providerId: null, fastMode: false } : {}),");
+    // 目标模式是独立创建入口:表单禁用 + 函数内兜底。
+    const goalStart = source.indexOf('const createGoalSession = useCallback(');
+    expect(source.slice(goalStart, goalStart + 400)).toContain('if (runtimePendingRef.current) return;');
+    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending}');
+  });
+
+  it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {
+    expect(() => assertSubmitModelResolved({ model: 'claude-opus-5-5' }, 'claude-opus-5-5')).not.toThrow();
+    expect(() => assertSubmitModelResolved({ model: '' }, 'delisted-model'))
+      .toThrow('delisted-model 在这台电脑上已不可用，请重新选择模型后再发送。');
+    // 三处提交终检(创建前两处 + 鉴权后重验)都要经过这道拦截。
+    const source = newSessionSources;
+    expect(source.split('assertSubmitModelResolved(resolved, effectiveDraft.model);').length - 1).toBe(3);
   });
 });
 
 describe('pickAgentDefaultRuntime', () => {
-  it('follows the target agent\'s most recent session model + effort (reconciled)', () => {
+  it('follows the host new-task default of the target agent (model + effort reconciled)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [
-        remoteSession('cc', { agentKind: 'cc', model: 'claude-opus-4-8', userSendAt: '2026-02-02T00:00:00.000Z' }),
-        remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', effort: 'high', userSendAt: '2026-01-01T00:00:00.000Z' }),
-      ],
+      hostRuntime: hostRuntime('codex', 'gpt-5.4', { effort: 'high' }),
       modelRows: [modelRow('gpt-5.4', ['low', 'medium', 'high'], 'medium')],
       currentEffort: 'medium',
       catalogReady: true,
@@ -470,7 +576,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('reconciles the recent effort down to the model default when unsupported', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', effort: 'xhigh', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('codex', 'gpt-5.4', { effort: 'xhigh' }),
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
       catalogReady: true,
@@ -482,7 +588,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('omits the effort when the catalog is ready but the model has no row (delisted → omit, codex P2)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-legacy', effort: 'high', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('codex', 'gpt-legacy', { effort: 'high' }),
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
       catalogReady: true,
@@ -494,7 +600,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('keeps the recent effort while the catalog is not ready (no authoritative section model yet)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-legacy', effort: 'high', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('codex', 'gpt-legacy', { effort: 'high' }),
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: false,
@@ -506,7 +612,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('inherits the recent session providerId when that provider still offers the model (#1898)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-deepseek-v4-flash', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { providerId: 'prov-deepseek-v4-flash' }),
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')],
       currentEffort: 'medium',
       catalogReady: true,
@@ -517,7 +623,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('reroutes to another connected provider offering the same model when the recent provider is gone (codex P1)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { providerId: 'prov-deleted' }),
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')],
       currentEffort: 'medium',
       catalogReady: true,
@@ -569,7 +675,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('falls back to the catalog top row (with its provider) when no provider offers the recent model', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'delisted-model', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'delisted-model', { providerId: 'prov-deleted' }),
       modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low'), modelRow('claude-haiku', ['low'], 'low')],
       currentEffort: 'high',
       catalogReady: true,
@@ -577,22 +683,22 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: 'medium', providerId: 'prov-claude-sonnet-4-6' });
   });
 
-  it('falls back to DEFAULT_MODELS + default route when the catalog is ready but empty and the provider is gone', () => {
+  it('leaves the model empty with the default route when the catalog is ready but empty and the provider is gone', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [remoteSession('ds', { agentKind: 'codex', model: 'delisted-model', providerId: 'prov-deleted', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('codex', 'delisted-model', { providerId: 'prov-deleted' }),
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: true,
     });
     // 回退内置默认且目录为空 → 省略 effort(codex P2:旧自定义档位对内置模型无效)
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'codex', model: '', effort: '', providerId: null });
   });
 
   it('trusts the recent providerId while modelRows are still loading (empty)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'deepseek', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { providerId: 'deepseek' }),
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: false,
@@ -603,14 +709,14 @@ describe('pickAgentDefaultRuntime', () => {
   it('falls back the model together when the catalog is ready but empty (loaded ≠ loading, codex P1)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'deepseek', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { providerId: 'deepseek' }),
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: true,
     });
     // 目录就绪但为空:来源失效且无人能提供该模型 → model 一并回退内置默认(不留裸模型)
     // + 省略 effort(codex P2:旧自定义档位对内置模型无效)
-    expect(runtime).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'claude-code', model: '', effort: '', providerId: null });
   });
 
   it('reconciles effort with the exact (providerId, modelId) row when multiple providers offer the same model (Copilot)', () => {
@@ -626,7 +732,7 @@ describe('pickAgentDefaultRuntime', () => {
     });
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('s', { agentKind: 'cc', model: 'shared-model', providerId: 'provB', effort: 'xhigh', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'shared-model', { effort: 'xhigh', providerId: 'provB' }),
       modelRows: [shared('provA', ['low'], 'low'), shared('provB', ['high', 'xhigh'], 'high')],
       currentEffort: 'medium',
       catalogReady: true,
@@ -648,7 +754,7 @@ describe('pickAgentDefaultRuntime', () => {
     });
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [remoteSession('s', { agentKind: 'cc', model: 'shared-model', providerId: 'provB', effort: 'xhigh', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'shared-model', { effort: 'xhigh', providerId: 'provB' }),
       // 目录未就绪时的残留行:只有 provA 提供同 modelId,provB 不在其中
       modelRows: [shared('provA', ['low'], 'low')],
       currentEffort: 'medium',
@@ -658,10 +764,10 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'xhigh', providerId: 'provB' });
   });
 
-  it('falls back to the top of the target agent\'s model list when it has no recent session', () => {
+  it('falls back to the top of the target agent\'s model list when the host default belongs to another agent', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [remoteSession('cc', { agentKind: 'cc', model: 'claude-opus-4-8', userSendAt: '2026-02-02T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'claude-opus-4-8'),
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low'), modelRow('gpt-mini', ['low'], 'low')],
       currentEffort: 'high', // 不被目标模型支持 → reconcile 到默认 'low'
       catalogReady: true,
@@ -678,14 +784,14 @@ describe('pickAgentDefaultRuntime', () => {
     // 区域默认来自 provider 行 → 携带该行 provider(#1898 语义,merge main 后适配)
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [],
+      hostRuntime: null,
       modelRows: rows,
       currentEffort: 'high',
       catalogReady: true,
     })).toEqual({ agentKind: 'claude-code', model: 'cc-regional', effort: 'medium', providerId: 'prov-cc-regional' });
     expect(pickAgentDefaultRuntime({
       agentKind: 'pi',
-      sessions: [],
+      hostRuntime: null,
       modelRows: rows,
       currentEffort: 'high',
       catalogReady: true,
@@ -695,7 +801,7 @@ describe('pickAgentDefaultRuntime', () => {
   it('uses only the explicit Pi regional default marker', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'pi',
-      sessions: [],
+      hostRuntime: null,
       modelRows: [
         modelRow('top', ['low'], 'low'),
         modelRow('pi-regional', ['high'], 'high', ['pi']),
@@ -725,7 +831,7 @@ describe('pickAgentDefaultRuntime', () => {
     // [A/foo(无标记), B/foo(标记)]:必须在行层面选中 B,携带 B 的来源并按其档位表校准
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [],
+      hostRuntime: null,
       modelRows: [shared('provA', false, ['low'], 'low'), shared('provB', true, ['high', 'xhigh'], 'high')],
       currentEffort: 'high',
       catalogReady: true,
@@ -733,65 +839,34 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'claude-code', model: 'shared-model', effort: 'high', providerId: 'provB' });
   });
 
-  it('falls back to DEFAULT_MODELS and omits effort when the catalog is ready but empty (codex P2)', () => {
+  it('leaves the model empty and omits effort when the catalog is ready but empty (codex P2)', () => {
     expect(pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [],
+      hostRuntime: null,
       modelRows: [],
       currentEffort: 'medium',
       catalogReady: true,
-    })).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: '', providerId: null });
+    })).toEqual({ agentKind: 'codex', model: '', effort: '', providerId: null });
     expect(pickAgentDefaultRuntime({
       agentKind: 'claude-code',
-      sessions: [],
+      hostRuntime: null,
       modelRows: [],
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'claude-code', model: 'claude-sonnet-4-6', effort: '', providerId: null });
+    })).toEqual({ agentKind: 'claude-code', model: '', effort: '', providerId: null });
   });
 
   it('skips the top-row branch while the catalog is not ready (stale rows from the previous device, codex P1)', () => {
     const runtime = pickAgentDefaultRuntime({
       agentKind: 'codex',
-      sessions: [],
+      hostRuntime: null,
       modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
       currentEffort: 'medium',
       catalogReady: false,
     });
     // 目录未就绪 → 不抄残留目录的首项,落内置默认 + 默认路由
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: null });
+    expect(runtime).toEqual({ agentKind: 'codex', model: '', effort: 'medium', providerId: null });
     expect(runtime.providerId).toBeNull();
-  });
-
-  it('scopes the recent lookup to the selected device', () => {
-    const runtime = pickAgentDefaultRuntime({
-      agentKind: 'codex',
-      sessions: [
-        remoteSession('other', { agentKind: 'codex', model: 'gpt-other', deviceLinkDeviceId: 'devB', userSendAt: '2026-05-05T00:00:00.000Z' }),
-        remoteSession('target', { agentKind: 'codex', model: 'gpt-5.4', effort: 'low', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' }),
-      ],
-      modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
-      currentEffort: 'medium',
-      deviceId: 'devA',
-      catalogReady: true,
-    });
-    // 历史坏数据自愈(copilot P2):providerId 空但目录有同名行 → 补全为该行 provider
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
-  });
-
-  it('never inherits a provider across devices (device filter wins before provider carry)', () => {
-    const runtime = pickAgentDefaultRuntime({
-      agentKind: 'codex',
-      sessions: [
-        remoteSession('onB', { agentKind: 'codex', model: 'gpt-5.4', providerId: 'prov-b', deviceLinkDeviceId: 'devB', userSendAt: '2026-05-05T00:00:00.000Z' }),
-      ],
-      modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'low')],
-      currentEffort: 'medium',
-      deviceId: 'devA',
-      catalogReady: true,
-    });
-    // devB 的会话被设备过滤排除 → 落到列表首项分支,来源取该行的 provider,不串 devB 的 prov-b
-    expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'medium', providerId: 'prov-gpt-5.4' });
   });
 
   it('resolves the default source by agent rule for a null providerId offered by multiple sources (codex review P2)', () => {
@@ -840,7 +915,8 @@ describe('resolveNewSessionAutoDefault', () => {
     userTouched: false,
     appliedDeviceId: null as string | null,
     selectedDeviceId: 'devA',
-    sessions: [] as RemoteSession[],
+    hostDefaultsSettled: true,
+    hostRuntime: null as NewSessionRuntime | null,
     modelRows: [] as ProviderModelRow[],
     rowsAgentKind: 'claude-code' as const,
     catalogReady: true,
@@ -848,41 +924,62 @@ describe('resolveNewSessionAutoDefault', () => {
     currentEffort: 'medium',
   };
 
-  it('intent ①: follows the most recent session as a whole runtime (agent+model+effort reconciled)', () => {
+  it('intent ⓪: waits until the host new-task defaults are read (no premature catalog default)', () => {
+    expect(resolveNewSessionAutoDefault({
+      ...baseInput,
+      hostDefaultsSettled: false,
+      modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low')],
+    })).toBeNull();
+  });
+
+  it('intent ①: follows the host new-task default of the current agent (model + effort reconciled, agent untouched)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', effort: 'high', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      rowsAgentKind: 'codex',
+      hostRuntime: hostRuntime('codex', 'gpt-5.4', { effort: 'high' }),
       modelRows: [modelRow('gpt-5.4', ['low', 'medium', 'high'], 'medium')],
     });
+    // 历史坏数据自愈(copilot P2):providerId 空但目录有同名行 → 补全为该行 provider
     expect(result).toEqual({
       appliedDeviceId: 'devA',
+      source: 'host-default',
       patch: {
-        agentKind: 'codex',
         model: 'gpt-5.4',
         effort: 'high',
-        permissionMode: 'auto',
-        providerId: null,
+        providerId: 'prov-gpt-5.4',
       },
     });
   });
 
-  it('intent ①+: inherits the recent session providerId when the provider still offers the model (#1898)', () => {
+  it('intent ①a: a host default is the only default — task history no longer steers it', () => {
+    // 回归:自动化 / 测试任务(从未由用户发消息)曾因更新时间最新被当成「最近使用」,
+    // 把新建任务默认带成 Haiku。现在没有被控电脑默认时只看目录区域默认。
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-deepseek-v4-flash', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      modelRows: [
+        modelRow('claude-haiku-4-5', ['high'], 'high'),
+        modelRow('claude-opus-5-5', ['high'], 'high', ['claude-code']),
+      ],
+    });
+    expect(result).toMatchObject({ source: 'catalog-default', patch: { model: 'claude-opus-5-5' } });
+  });
+
+  it('intent ①+: inherits the host default providerId when the provider still offers the model (#1898)', () => {
+    const result = resolveNewSessionAutoDefault({
+      ...baseInput,
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { providerId: 'prov-deepseek-v4-flash' }),
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium', 'high'], 'medium')],
     });
     expect(result?.patch).toMatchObject({
-      agentKind: 'claude-code',
       model: 'deepseek-v4-flash',
       providerId: 'prov-deepseek-v4-flash',
     });
   });
 
-  it('intent ①-: reroutes to another provider offering the same model when the recent provider is gone (codex P1)', () => {
+  it('intent ①-: reroutes to another provider offering the same model when the host default provider is gone (codex P1)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', providerId: 'prov-gone', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { providerId: 'prov-gone' }),
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium', 'high'], 'medium')],
     });
     expect(result?.patch).toMatchObject({
@@ -891,10 +988,10 @@ describe('resolveNewSessionAutoDefault', () => {
     });
   });
 
-  it('intent ①-fallback: falls back to the catalog top row when no provider offers the recent model', () => {
+  it('intent ①-fallback: falls back to the catalog top row when no provider offers the host default model', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'delisted-model', providerId: 'prov-gone', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'delisted-model', { providerId: 'prov-gone' }),
       modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'low')],
     });
     expect(result?.patch).toMatchObject({
@@ -903,70 +1000,30 @@ describe('resolveNewSessionAutoDefault', () => {
     });
   });
 
-  it('intent ①x: trusts the recent providerId when it belongs to a different agent than the rows (codex P1)', () => {
-    // 目录按 claude-code 构建,最近会话是 codex —— 目录不一致时不做校验,合法来源不被误清
+  it('intent ①z: ignores a host default that belongs to another agent than the rows', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
       rowsAgentKind: 'claude-code',
-      catalogReady: true,
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', providerId: 'prov-codex-only', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('codex', 'gpt-5.4', { effort: 'xhigh', providerId: 'prov-codex-only' }),
       modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'medium')],
     });
-    expect(result?.patch).toMatchObject({
-      agentKind: 'codex',
-      model: 'gpt-5.4',
-      providerId: 'prov-codex-only',
-    });
+    expect(result).toMatchObject({ source: 'catalog-default', patch: { model: 'claude-sonnet-4-6' } });
   });
 
-  it('intent ①b: keeps the recent effort when the recent model is not in modelRows (cross-agent / delisted)', () => {
+  it('intent ①r: reconciles the host default effort against the matched row ladder', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-legacy', effort: 'high', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
-      modelRows: [modelRow('claude-sonnet-4-6', ['low', 'medium'], 'medium')],
-    });
-    expect(result?.patch).toEqual({
-      agentKind: 'codex',
-      model: 'gpt-legacy',
-      effort: 'high',
-      permissionMode: 'auto',
-      providerId: null,
-    });
-  });
-
-  it('intent ①y: cross-agent follow keeps recent effort verbatim — rows belong to another agent and have no authority over its effort ladder (reviewer P2)', () => {
-    // 目录按 claude-code 构建,最近会话是 codex(gpt-5.4 + xhigh);cc 目录里恰好也有
-    // 同名 gpt-5.4 但档位表不含 xhigh —— 修复前命中该行,effort 被错 reconcile 成
-    // cc 默认档 'medium',随后渲染目录按 codex 重建而 effort 不再复核,错档一路带进创建。
-    const result = resolveNewSessionAutoDefault({
-      ...baseInput,
-      rowsAgentKind: 'claude-code',
-      sessions: [remoteSession('cx', { agentKind: 'codex', model: 'gpt-5.4', effort: 'xhigh', providerId: 'prov-codex-only', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
-      modelRows: [modelRow('gpt-5.4', ['low', 'medium'], 'medium')],
-    });
-    expect(result?.patch).toMatchObject({
-      agentKind: 'codex',
-      model: 'gpt-5.4',
-      effort: 'xhigh',
-      providerId: 'prov-codex-only',
-    });
-  });
-
-  it('intent ①r: same-agent follow still reconciles effort against the matched row ladder', () => {
-    const result = resolveNewSessionAutoDefault({
-      ...baseInput,
-      sessions: [remoteSession('ds', { agentKind: 'cc', model: 'deepseek-v4-flash', effort: 'xhigh', providerId: 'prov-deepseek-v4-flash', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'deepseek-v4-flash', { effort: 'xhigh', providerId: 'prov-deepseek-v4-flash' }),
       modelRows: [modelRow('deepseek-v4-flash', ['low', 'medium'], 'medium')],
     });
     expect(result?.patch).toMatchObject({
-      agentKind: 'claude-code',
       model: 'deepseek-v4-flash',
       effort: 'medium', // xhigh 不在该 agent 目录档位表 → reconcile 到模型默认档
       providerId: 'prov-deepseek-v4-flash',
     });
   });
 
-  it('intent ②: no recent session → top of the model list (model + reconciled effort + row provider, agentKind untouched)', () => {
+  it('intent ②: no host default → top of the model list (model + reconciled effort + row provider, agentKind untouched)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
       currentEffort: 'high', // 不被首个模型支持 → reconcile 到默认 'low'
@@ -974,6 +1031,7 @@ describe('resolveNewSessionAutoDefault', () => {
     });
     expect(result).toEqual({
       appliedDeviceId: 'devA',
+      source: 'catalog-default',
       patch: { model: 'claude-sonnet-4-6', effort: 'low', providerId: 'prov-claude-sonnet-4-6' },
     });
     expect(result?.patch).not.toHaveProperty('agentKind');
@@ -988,7 +1046,7 @@ describe('resolveNewSessionAutoDefault', () => {
     expect(result).toBeNull();
   });
 
-  it('intent ②a: no recent session → regional default before the top row (upstream main 移植)', () => {
+  it('intent ②a: no host default → regional default before the top row (upstream main 移植)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
       currentEffort: 'high',
@@ -1044,12 +1102,8 @@ describe('resolveNewSessionAutoDefault', () => {
   });
 
   it('intent ③: switching device (not manually touched) recomputes for the new device', () => {
-    const sessions = [
-      remoteSession('onA', { model: 'model-A', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' }),
-      remoteSession('onB', { model: 'model-B', deviceLinkDeviceId: 'devB', userSendAt: '2026-02-02T00:00:00.000Z' }),
-    ];
     expect(resolveNewSessionAutoDefault({
-      ...baseInput, sessions, appliedDeviceId: 'devA', selectedDeviceId: 'devB',
+      ...baseInput, hostRuntime: hostRuntime('claude-code', 'model-B'), appliedDeviceId: 'devA', selectedDeviceId: 'devB',
       modelRows: [modelRow('model-B', ['low'], 'low')],
     })?.patch).toMatchObject({ model: 'model-B' });
   });
@@ -1058,19 +1112,19 @@ describe('resolveNewSessionAutoDefault', () => {
     expect(resolveNewSessionAutoDefault({
       ...baseInput,
       userTouched: true,
-      sessions: [remoteSession('cx', { model: 'gpt-5.4', deviceLinkDeviceId: 'devA', userSendAt: '2026-01-01T00:00:00.000Z' })],
+      hostRuntime: hostRuntime('claude-code', 'gpt-5.4'),
       modelRows: [modelRow('gpt-5.4', ['low'], 'low')],
     })).toBeNull();
   });
 
-  it('returns null when modelRows are not ready yet and there is no recent session (no premature set)', () => {
-    expect(resolveNewSessionAutoDefault({ ...baseInput, sessions: [], modelRows: [] })).toBeNull();
+  it('returns null when modelRows are not ready yet and there is no host default (no premature set)', () => {
+    expect(resolveNewSessionAutoDefault({ ...baseInput, modelRows: [] })).toBeNull();
   });
 
   it('applies the capabilities flat default when the catalog is explicitly unavailable (old host without provider:list, codex P2)', () => {
     const result = resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [],
+      hostRuntime: null,
       modelRows: [],
       catalogReady: false,
       providersUnsupported: true,
@@ -1089,6 +1143,7 @@ describe('resolveNewSessionAutoDefault', () => {
     // 目录明确不可用(旧被控端)→ 放行 capabilities 扁平回退;扁平列表无 provider 结构 → 默认路由
     expect(result).toEqual({
       appliedDeviceId: 'devA',
+      source: 'catalog-default',
       patch: {
         model: 'flat-default',
         effort: 'medium',
@@ -1100,7 +1155,7 @@ describe('resolveNewSessionAutoDefault', () => {
   it('does not fall back to flat defaults while the catalog is merely loading (error is empty, codex P2)', () => {
     expect(resolveNewSessionAutoDefault({
       ...baseInput,
-      sessions: [],
+      hostRuntime: null,
       modelRows: [],
       catalogReady: false,
       providersUnsupported: false,
@@ -1170,13 +1225,15 @@ describe('new session default device follows the home device filter', () => {
   });
 
   it('treats the deviceExplicit route flag as an explicit device on the new-session screen', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     expect(newSource).toContain('deviceExplicit?: string;');
     expect(newSource).toContain("readRouteString(params.deviceExplicit) === '1'");
   });
 });
 
 describe('new session model', () => {
+  const DRAFT_WITH_MODEL = { ...DEFAULT_NEW_SESSION_DRAFT, model: 'claude-sonnet-4-6' };
+
   it('hides dot directories by default and restores them when enabled', () => {
     const entries = [
       { name: '.config', kind: 'dir' as const, path: '/Users/cindy/.config' },
@@ -1225,7 +1282,7 @@ describe('new session model', () => {
       { seq: 3, deviceId: '' },
     )).toBe(false);
 
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     expect(newSource).toContain('browseSeqRef.current += 1');
     expect(newSource).toContain('selectedDeviceIdRef.current = option.deviceId');
     expect(newSource).toContain('isCurrentRemoteBrowseRequest');
@@ -1238,13 +1295,13 @@ describe('new session model', () => {
     expect(shouldRetryRemoteBrowseDrives(false, 0)).toBe(false);
     expect(shouldRetryRemoteBrowseDrives(undefined, 0)).toBe(false);
 
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     expect(newSource).toContain('shouldRetryRemoteBrowseDrives');
     expect(newSource).toContain('result.drivesPending');
   });
 
   it('keeps the Android drive pill at 34pt and wraps it in a 44pt hit target', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     expect(newSource).toContain('styles.browseDriveHit');
     expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minHeight:\s*44/);
     expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minWidth:\s*44/);
@@ -1252,7 +1309,7 @@ describe('new session model', () => {
 
   it('builds device-link create-session args with desktop remote-project semantics', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: ' /repo/xdt-maker ',
       firstMessage: 'hello',
       extraDirs: [' /repo/docs ', '/repo/docs', ''],
@@ -1269,7 +1326,7 @@ describe('new session model', () => {
   });
 
   it('runs the Agent on the picked remote computer or share', () => {
-    const draft = { ...DEFAULT_NEW_SESSION_DRAFT, workingDir: '/repo/app', firstMessage: 'hi' };
+    const draft = { ...DRAFT_WITH_MODEL, workingDir: '/repo/app', firstMessage: 'hi' };
     expect(applyRemoteAgentPick(draft, null)).toBe(draft);
     const remote = applyRemoteAgentPick(draft, {
       deviceId: 'share:s1', agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', effort: 'high', fastMode: true,
@@ -1289,7 +1346,7 @@ describe('new session model', () => {
 
   it('builds folderless dialogue create-session args for controlled-side cwd allocation', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
       workingDir: ' /repo/should-not-leak ',
       firstMessage: 'hello',
@@ -1306,7 +1363,7 @@ describe('new session model', () => {
 
   it('omits effort from create-session args when the selected model has no effort control', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: 'hello',
       model: 'claude-haiku-4-6',
@@ -1323,7 +1380,7 @@ describe('new session model', () => {
 
   it('preserves a Codex Auto-review draft when creating the session', () => {
     expect(buildRemoteCreateSessionOptions({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       agentKind: 'codex',
       model: 'gpt-5.4',
       permissionMode: 'auto',
@@ -1335,17 +1392,17 @@ describe('new session model', () => {
   });
 
   it('switches agent defaults without carrying a Claude model into Codex', () => {
-    const codex = withAgentDefaults(DEFAULT_NEW_SESSION_DRAFT, 'codex');
+    const codex = withAgentDefaults(DRAFT_WITH_MODEL, 'codex');
     expect(codex).toMatchObject({
       agentKind: 'codex',
-      model: 'gpt-5.4',
+      model: '',
       permissionMode: 'auto',
     });
 
     const claude = withAgentDefaults({ ...codex, fastMode: true }, 'claude-code');
     expect(claude).toMatchObject({
       agentKind: 'claude-code',
-      model: 'claude-sonnet-4-6',
+      model: '',
       permissionMode: 'auto',
       fastMode: false,
     });
@@ -1355,8 +1412,8 @@ describe('new session model', () => {
     expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
       'claude-code', 'codex', 'pi',
     ]);
-    const pi = withAgentDefaults({ ...DEFAULT_NEW_SESSION_DRAFT, fastMode: true }, 'pi');
-    expect(pi).toMatchObject({ agentKind: 'pi', model: 'gpt-5.4', fastMode: true });
+    const pi = withAgentDefaults({ ...DRAFT_WITH_MODEL, fastMode: true }, 'pi');
+    expect(pi).toMatchObject({ agentKind: 'pi', model: '', fastMode: true });
     expect(buildRemoteCreateSessionOptions({
       ...pi,
       workingDir: '/repo/xdt-maker',
@@ -1380,7 +1437,7 @@ describe('new session model', () => {
   });
 
   it('wires the new-session screen to gate agents by list-available-agents and coerce off unavailable', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     // 拉被控端 runtime 注册集合,渲染按可用集过滤,选中不可用时 coerce。
     expect(newSource).toContain('maker.listAvailableAgents()');
     expect(newSource).toContain('onAgentsChanged');
@@ -1404,27 +1461,29 @@ describe('new session model', () => {
 
   it('validates required path, model and first-message payload', () => {
     expect(validateNewSessionDraft(DEFAULT_NEW_SESSION_DRAFT)).toBe('请输入电脑端项目路径。');
+    // 草稿初值不写死模型:由最近任务 / 目录落定,拿不到时留空让用户选。
+    expect(DEFAULT_NEW_SESSION_DRAFT.model).toBe('');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
     })).toBe('请输入首条消息或添加附件。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       model: '',
     })).toBe('请输入模型。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: '',
     })).toBe('请输入首条消息或添加附件。');
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: 'run tests',
     })).toBeNull();
     expect(validateNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo',
       firstMessage: '',
     }, { attachmentCount: 1 })).toBeNull();
@@ -1432,7 +1491,7 @@ describe('new session model', () => {
 
   it('summarizes the mobile create-session draft for the top overview strip', () => {
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '',
       firstMessage: '',
     })).toMatchObject({
@@ -1445,7 +1504,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: 'run tests',
       extraDirs: ['/repo/docs', '/repo/docs', ''],
@@ -1456,7 +1515,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: '',
     }, { attachmentCount: 2 })).toMatchObject({
@@ -1465,7 +1524,7 @@ describe('new session model', () => {
     });
 
     expect(summarizeNewSessionDraft({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       agentKind: 'codex',
       workspaceKind: 'dialogue',
       workingDir: '',
@@ -1483,7 +1542,7 @@ describe('new session model', () => {
 
   it('builds a final mobile create preview before sending to the controlled computer', () => {
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '',
       firstMessage: '',
     }, 'Carol Mac')).toMatchObject({
@@ -1498,7 +1557,7 @@ describe('new session model', () => {
     });
 
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workspaceKind: 'dialogue',
       workingDir: '',
       firstMessage: '请帮我总结这个项目，并给出下一步建议。',
@@ -1515,7 +1574,7 @@ describe('new session model', () => {
     });
 
     expect(buildNewSessionCreatePreview({
-      ...DEFAULT_NEW_SESSION_DRAFT,
+      ...DRAFT_WITH_MODEL,
       workingDir: '/repo/xdt-maker',
       firstMessage: '',
     }, 'Carol Mac', { attachmentCount: 2 })).toMatchObject({
@@ -1561,7 +1620,7 @@ describe('new session model', () => {
   });
 
   it('keeps the recent-project list nested-scrollable with a visible scroll indicator (#5013)', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const source = newSessionSources;
     // Scope the guard to this list: the remote directory FlatList already has
     // these props, so checking the whole page would miss the Android regression.
     // Native gesture dispatch still needs Android emulator/device verification.
@@ -1676,6 +1735,48 @@ describe('new session model', () => {
         lastActivityAt: '2026-01-01T00:01:00.000Z',
       },
     ]);
+  });
+
+  // Remote path strings deliberately model the host OS, not the test runner's filesystem.
+  it.each([
+    ['slash direction', 'D:\\projects\\cindy', 'D:/projects/cindy'],
+    ['letter case', 'D:/projects/cindy', 'd:/PROJECTS/Cindy'],
+    ['trailing separator', 'D:\\projects\\cindy', 'D:\\projects\\cindy\\'],
+    ['combined variants', 'D:\\projects\\cindy', 'd:/PROJECTS/cindy/'],
+    ['drive root', 'D:\\', 'd:/'],
+    ['UNC share', '\\\\Server\\Share\\cindy', '//server/share/CINDY/'],
+    ['worktree', 'D:\\projects\\cindy', 'd:/PROJECTS/cindy/.cindy-worktrees/branch'],
+  ])('deduplicates equivalent remote Windows %s before sorting and limiting', (_name, original, variant) => {
+    const options = buildRecentWorkspaceOptions([
+      remoteSession('original', { workingDir: original, deviceLinkDeviceId: 'pc' }),
+      remoteSession('variant', {
+        workingDir: variant, deviceLinkDeviceId: 'pc', userSendAt: '2026-01-01T00:06:00.000Z',
+      }),
+      remoteSession('other', {
+        workingDir: 'D:/projects/other', deviceLinkDeviceId: 'pc', userSendAt: '2026-01-01T00:05:00.000Z',
+      }),
+      remoteSession('another-host', {
+        workingDir: variant, deviceLinkDeviceId: 'another-pc', userSendAt: '2026-01-01T00:07:00.000Z',
+      }),
+    ], 'pc', 2);
+
+    expect(options).toHaveLength(2);
+    expect(options[0]).toMatchObject({
+      workingDir: original, sessionCount: 2, lastActivityAt: '2026-01-01T00:06:00.000Z',
+    });
+    expect(options[1]).toMatchObject({ workingDir: 'D:/projects/other', sessionCount: 1 });
+  });
+
+  it('preserves remote POSIX case and literal backslashes while ignoring trailing slashes', () => {
+    const paths = ['/repo/App', '/repo/app', '/repo/app/', '/repo/weird\\name', '/repo/weird/name'];
+    const options = buildRecentWorkspaceOptions(paths.map((workingDir, index) =>
+      remoteSession(String(index), { workingDir }),
+    ));
+    expect(options).toHaveLength(4);
+    expect(options.find((option) => option.workingDir === '/repo/app')?.sessionCount).toBe(2);
+    expect(options.map((option) => option.workingDir)).toEqual(expect.arrayContaining([
+      '/repo/App', '/repo/weird\\name', '/repo/weird/name',
+    ]));
   });
 
   it('excludes worker-only directories before limiting recent workspace picks', () => {
@@ -1864,7 +1965,7 @@ describe('new session model', () => {
 
 describe('new session composer surface', () => {
   it('keeps the controlled caret at the end after palette insertion and draft restore', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     const slashStart = newSource.indexOf('const selectSlashCommand = useCallback');
     const slashEnd = newSource.indexOf('const selectAtResource = useCallback', slashStart);
     const slashSource = newSource.slice(slashStart, slashEnd);
@@ -1890,7 +1991,7 @@ describe('new session composer surface', () => {
   });
 
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
 
     expect(newSource).toContain(
       "const NEW_SESSION_SCREEN_TOP_PADDING = Platform.OS === 'android' ? 0 : spacing.xl;",
@@ -1899,7 +2000,7 @@ describe('new session composer surface', () => {
   });
 
   it('uses the shared platform keyboard avoidance rule for the new-session composer', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     const normalizedNewSource = newSource.replace(/\r\n/g, '\n');
 
     expect(newSource).toContain("import { keyboardAvoidingBehaviorForPlatform } from '@/session/mobileNativeShellLayout';");
@@ -1910,7 +2011,7 @@ describe('new session composer surface', () => {
   });
 
   it('uses the shared mobile composer row rather than a separate input implementation', () => {
-    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const newSource = newSessionSources;
     const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
     const newComposerStart = newSource.indexOf('<MobileComposerInputRow');
@@ -1959,9 +2060,18 @@ describe('new session composer surface', () => {
     const browseHiddenToggleStyleStart = newSource.indexOf('browseHiddenToggle: {');
     const browseHiddenToggleStyleEnd = newSource.indexOf('browseCheckbox: {', browseHiddenToggleStyleStart);
     const browseHiddenToggleStyle = newSource.slice(browseHiddenToggleStyleStart, browseHiddenToggleStyleEnd);
-    const createStart = newSource.indexOf('const create = useCallback(async () => {');
-    const createEnd = newSource.indexOf('return (', createStart);
+    const createStart = newSource.indexOf('const createMessageSession = useCallback(async () => {');
+    const createEnd = newSource.indexOf('const createGoalSession = useCallback', createStart);
+    expect(createStart).toBeGreaterThan(-1);
+    expect(createEnd).toBeGreaterThan(createStart);
     const createSource = newSource.slice(createStart, createEnd);
+    const dispatchStart = newSource.indexOf('const create = useCallback(async () => {', createEnd);
+    expect(dispatchStart).toBeGreaterThan(createEnd);
+    const dispatchEnd = newSource.indexOf('const goalDraftCommand', dispatchStart);
+    expect(dispatchEnd).toBeGreaterThan(dispatchStart);
+    const dispatchSource = newSource.slice(dispatchStart, dispatchEnd);
+    expect(dispatchSource).toContain("if (parsed?.name !== 'goal' || pendingGoalSkillRef.current === 'goal')");
+    expect(dispatchSource).toContain('await createMessageSession();');
 
     expect(newSource).toContain("MobileComposerInputRow,");
     expect(sessionSource).toContain("MobileComposerInputRow,");
@@ -2225,7 +2335,7 @@ describe('new session worktree wiring (source locks)', () => {
   //  - 两步共用同一预生成 sessionId(工作端 close-session 按绑定回收 worktree);
   //  - 成功后以 meta.path 替换 effectiveDraft.workingDir 再进管线;
   //  - 失败(业务 {ok:false} / invoke 抛错)早退留在表单,不建会话。
-  const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+  const newSource = newSessionSources;
 
   it('runs worktree:create before the optimistic pipeline with the same preset sessionId', () => {
     const requestIdx = newSource.indexOf('const createRequest = buildWorktreeCreateRequest({');
@@ -2447,7 +2557,7 @@ describe('submit guard catalog wiring (source locks)', () => {
   //    deviceAtCreate 捕获 + ensureDeviceAlive/abortIfDeviceSwitched,handoff
   //    (startNewSessionCreation / maker.createSession / goal.set)前必复核;
   //    已 precreate 后失配必须走 ledger 补偿(forgetPendingPrecreatedWorktree)。
-  const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+  const newSource = newSessionSources;
 
   it('both submit guards resolve catalog trust via the generation-safe helper', () => {
     const guardCalls = newSource.match(/resolveSubmitGuardCatalog\(\{/g) ?? [];
@@ -2480,10 +2590,11 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(newSource.match(/parseAck: parseDiscardPrecreatedAck,/g) ?? []).toHaveLength(2);
     // 真局部 slice(独立 review round-22 Standards P1:全文件 indexOf 命中 create 首个
     // 检查,Goal 检查删掉也照样绿)
-    const createSlice = newSource.slice(
-      newSource.indexOf('const create = useCallback'),
-      newSource.indexOf('const createGoalSession = useCallback'),
-    );
+    const createStart = newSource.indexOf('const createMessageSession = useCallback');
+    const goalStart = newSource.indexOf('const createGoalSession = useCallback');
+    expect(createStart).toBeGreaterThan(-1);
+    expect(goalStart).toBeGreaterThan(createStart);
+    const createSlice = newSource.slice(createStart, goalStart);
     const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
     // 入口设备检查先于加锁(round-20 Standards P1 busy 泄漏):goal 的 setGoalBusy(true)
     // 前必须有该 return(create() 的检查在 try 内,finally 兜底,不要求此序)。
@@ -2707,7 +2818,7 @@ describe('fast memory restore wiring (source locks)', () => {
   //  - 必须存在延迟恢复 effect:目标 caps 就绪后按 (agent, 来源, 模型) 记忆重评,
   //    通过才打开 fastMode——「永久清除合法记忆」与「恢复出目标不支持的 fast」
   //    两个故障形态都靠这对接线闭合。
-  const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+  const newSource = newSessionSources;
 
   it('both restore sites gate on target-agent cached capabilities, never the closure state', () => {
     const gated = newSource.match(/isFastRestorable\(next\.agentKind, next\.providerId, next\.model, rowsNow, targetAgentHasFast\(selectedDeviceId, next\.agentKind\)\)/g) ?? [];
@@ -2892,13 +3003,13 @@ describe('closed saved model requires reselection', () => {
   const selected = { model: 'closed', providerId: 'prov-closed' };
   const visibilityOverrides = { 'codex:prov-closed:closed': false };
   const rows = [modelRow('replacement', ['medium'], 'medium')];
-  const sessions = [remoteSession('saved', { ...selected, agentKind: 'codex', effort: 'high', deviceLinkDeviceId: 'devA' })];
+  const saved = hostRuntime('codex', selected.model, { providerId: selected.providerId, effort: 'high' });
   it('preserves the hidden pair during catalog reconciliation and remembered-agent restoration', () => {
     expect(resolveRecentModelAndProvider(rows, selected, 'codex', true, visibilityOverrides)).toEqual(selected);
-    expect(pickAgentDefaultRuntime({ agentKind: 'codex', sessions, modelRows: rows,
+    expect(pickAgentDefaultRuntime({ agentKind: 'codex', hostRuntime: saved, modelRows: rows,
       currentEffort: 'medium', catalogReady: true, visibilityOverrides })).toMatchObject({ ...selected, effort: 'high' });
     expect(resolveNewSessionAutoDefault({ userTouched: false, appliedDeviceId: null, selectedDeviceId: 'devA',
-      sessions, modelRows: rows, rowsAgentKind: 'codex', catalogReady: true, visibilityOverrides,
+      hostDefaultsSettled: true, hostRuntime: saved, modelRows: rows, rowsAgentKind: 'codex', catalogReady: true, visibilityOverrides,
       currentEffort: 'medium' })?.patch).toMatchObject(selected);
   });
   it('carries fresh visibility with its rows through the submit guard', async () => {

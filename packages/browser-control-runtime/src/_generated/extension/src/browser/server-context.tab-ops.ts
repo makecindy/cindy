@@ -49,7 +49,7 @@ type TabOpsDeps = {
 
 type ProfileTabOps = {
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
+  openTab: (url: string, opts?: { label?: string; background?: boolean }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
 };
 
@@ -297,7 +297,10 @@ export function createProfileTabOps({
     });
   };
 
-  const openTab = async (url: string, opts?: { label?: string }): Promise<BrowserTab> => {
+  const openTab = async (
+    url: string,
+    opts?: { label?: string; background?: boolean },
+  ): Promise<BrowserTab> => {
     const ssrfPolicyOpts = getNavigationPolicy();
 
     if (capabilities.usesChromeMcp) {
@@ -346,6 +349,8 @@ export function createProfileTabOps({
     const createTargetOpts: Parameters<typeof createTargetViaCdp>[0] = {
       cdpUrl: profile.cdpUrl,
       url,
+      background: opts?.background,
+      navigationPolicy: ssrfPolicyOpts,
       ssrfPolicy: getCdpControlPolicy(),
     };
     if (cdpActionTimeouts) {
@@ -353,7 +358,12 @@ export function createProfileTabOps({
     }
     const createdViaCdp = await createTargetViaCdp(createTargetOpts)
       .then((r) => r.targetId)
-      .catch(() => null);
+      .catch((err: unknown) => {
+        if (opts?.background === true) {
+          throw err;
+        }
+        return null;
+      });
 
     if (createdViaCdp) {
       const profileState = getProfileState();

@@ -92,7 +92,7 @@ export interface TodoCardPresentation {
 
 export type MessageActionBarAlignment = 'left' | 'right';
 
-export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'streaming' | 'time';
+export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'time';
 
 export interface MessageActionBarPresentationInput {
   align: 'agent' | 'user';
@@ -359,11 +359,12 @@ export function buildMessageActionBarPresentation(
   input: MessageActionBarPresentationInput,
 ): MessageActionBarPresentation {
   if (input.isStreaming) {
+    // Match desktop: streaming replies have no action row or status placeholder.
     return {
       align: 'left',
       buttonSize: 24,
       iconSize: 14,
-      items: ['streaming'],
+      items: [],
     };
   }
 
@@ -670,6 +671,12 @@ export function isToolErrorLike(
   const text = [tool.body, secondary].filter(Boolean).join('\n');
   return /\b(error|failed|failure|exception|traceback|stderr|non-zero|denied|timed out|timeout)\b|exit code [1-9]|错误|失败|异常|拒绝|超时/i
     .test(text);
+}
+
+/** Same failure decision as a tool row, for a Host that only holds the descriptor and result text. */
+export function isToolResultFailureLike(descriptor: ToolUseDescriptor, result: string): boolean {
+  const tool = { body: '', secondaryBody: result };
+  return isContentOutputDescriptor(descriptor) ? isContentToolFailureLike(tool) : isToolErrorLike(tool);
 }
 
 /** 结果正文是「内容」的工具(读文件 / 搜索 / 网页):对其输出跑全文错误关键词匹配没有意义。 */

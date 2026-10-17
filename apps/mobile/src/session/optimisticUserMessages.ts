@@ -82,13 +82,21 @@ export function projectOptimisticUserMessages(
 ): readonly RemoteMessage[] {
   if (optimistic.length === 0) return messages;
   const result = [...messages];
-  for (const entry of optimistic) {
+  for (let index = 0; index < optimistic.length; index++) {
+    const entry = optimistic[index];
+    const nextSend = optimistic[index + 1];
     const echo = result.findIndex((message) => message.clientId === entry.message.clientId);
     const message = echo < 0 ? entry.message : result.splice(echo, 1)[0];
     let after = -1;
     for (let index = 0; index < result.length; index++) {
       if (entry.precedingClientIds.has(result[index].clientId)) after = index;
     }
+    // Switching is applied after enqueue but before this send. Its boundary
+    // belongs before the reserved bubble; never cross ordinary turn activity.
+    // A boundary not observed by the next send belongs to that later send,
+    // even when this row already has a DB echo and no reply has arrived yet.
+    while (result[after + 1]?.role === 'agent_switch'
+      && (!nextSend || nextSend.precedingClientIds.has(result[after + 1].clientId))) after++;
     result.splice(after + 1, 0, message);
   }
   return result;

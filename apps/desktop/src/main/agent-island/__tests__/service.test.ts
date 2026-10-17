@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { ScriptTarget, transpileModule } from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
@@ -9,6 +11,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { computeAgentIslandWindowBounds, type AgentIslandLayoutPreference } from '../geometry.js';
 import {
+  AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
@@ -87,6 +90,12 @@ const mocks = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
   readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
+  assertTrustedAppRendererEvent: vi.fn(),
+}));
+
+vi.mock('../../security/trustedAppRenderer.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../security/trustedAppRenderer.js')>()),
+  assertTrustedAppRendererEvent: mocks.assertTrustedAppRendererEvent,
 }));
 
 // 受保护目录引导会由 Main 亲自 readdir 核实一次;只替换这一个 API,其余 fs/promises
@@ -154,6 +163,7 @@ beforeEach(() => {
   mocks.getPreferredSystemLanguages.mockReset();
   mocks.getLocale.mockReset();
   mocks.ipcHandle.mockReset();
+  mocks.assertTrustedAppRendererEvent.mockReset();
   mocks.browserWindowFromWebContents.mockReset();
   mocks.browserWindowFromWebContents.mockReturnValue(null);
   mocks.browserWindowGetAllWindows.mockReset();
@@ -2079,7 +2089,12 @@ describe('AgentIslandService native publishing', () => {
     expect(send).not.toHaveBeenCalled();
     expect(mainWindow.show).toHaveBeenCalled();
     expect(mainWindow.focus).toHaveBeenCalled();
-    expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'completed-session' });
+    // The click on an unread card also carries its click id for disposal on landing.
+    expect(takePendingDeepLink()).toEqual({
+      type: 'session',
+      id: 'completed-session',
+      islandEntryId: expect.any(String),
+    });
     expect(takePendingDeepLink()).toBeNull();
 
     service.setAppFocused(true);
@@ -4007,6 +4022,61 @@ describe('AgentIslandService native publishing', () => {
       expect(lastState?.totalCount).toBe(1);
       vi.runOnlyPendingTimers();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])('keeps scheduled completions silent on source and remote devices (oldUnread=%s)', async oldUnread => {
+    vi.useFakeTimers();
+    const { AgentIslandService } = await import('../service.js');
+    const sourcePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const sourceSound = vi.fn(() => true);
+    const remotePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const remoteSound = vi.fn(() => true);
+    const desktopEvent = vi.fn();
+    const source = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: sourcePublish, playSound: sourceSound }, isCompletionHandledByTeammate: async () => false });
+    const remote = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: remotePublish, playSound: remoteSound } });
+    const desktop = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: () => false }, onDeviceSessionEvent: desktopEvent });
+    try {
+      syncEnabledForTest(source, sourcePublish);
+      syncEnabledForTest(remote, remotePublish);
+      for (const service of [source, remote]) service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav') } });
+      mocks.tapWindowBroadcast.mockImplementation((channel, raw) => {
+        if (channel !== SESSION_ACTIVITY_CHANNEL) return;
+        const p = raw as { sessionId: string; phase: 'running' | 'needs-interaction' | 'completed' | 'error'; compactDetail: string; attention: boolean; completionNotification?: 'pending' | 'teammate' | 'silent' };
+        const keep = p.phase === 'running' || p.phase === 'needs-interaction' || p.attention;
+        const inputs = keep ? [{ sessionId: p.sessionId, deviceId: 'source', deviceName: 'Source', title: 'Task', workingDir: null, workspaceKind: 'conversation' as const, agentKind: 'cc' as const, phase: p.phase, detail: p.compactDetail, completionNotification: p.completionNotification }] : [];
+        remote.setDeviceSessions(inputs);
+        desktop.setDeviceSessions(inputs);
+      });
+      const meta = { sessionId: 'scheduled-silent', agentKind: 'codex' };
+      if (oldUnread) {
+        source.handleUserPrompt(meta, 'Earlier manual task');
+        source.handleAgentEvent(meta, doneEvent());
+        await vi.advanceTimersByTimeAsync(2000);
+      }
+      source.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId });
+      source.handleUserPrompt(meta, 'Scheduled check');
+      await vi.advanceTimersByTimeAsync(2000);
+      sourceSound.mockClear(); remoteSound.mockClear(); desktopEvent.mockClear();
+      source.handleAgentEvent(meta, doneEvent());
+      source.handleScheduleEvent({ type: 'completed', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId, silenced: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sourceSound).not.toHaveBeenCalled();
+      expect(desktopEvent).not.toHaveBeenCalled();
+      expect(remoteSound).not.toHaveBeenCalled();
+      expect(remotePublish.mock.calls.at(-1)?.[0].pillSnapshot.unreadCompletedCount).toBe(oldUnread ? 1 : 0);
+
+      source.handleUserPrompt(meta, 'Manual follow-up');
+      await vi.advanceTimersByTimeAsync(2000);
+      source.handleAgentEvent(meta, doneEvent());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sourceSound).toHaveBeenCalledWith(customSound('complete.wav'));
+      expect(remoteSound).toHaveBeenCalledWith(customSound('complete.wav'));
+      expect(desktopEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'done' }));
+    } finally {
+      source.resetRuntimeState(); remote.resetRuntimeState(); desktop.resetRuntimeState();
+      mocks.tapWindowBroadcast.mockReset();
       vi.useRealTimers();
     }
   });
@@ -6022,6 +6092,263 @@ describe('AgentIslandService session attention cleared bridge (error read semant
     // 显式清除(renderer 确认报错 UI 真实展示):生效并重新 publish。
     service.handleSessionAttentionCleared('s-err', 'explicit');
     expect(publishSpy.mock.calls.length).toBeGreaterThan(publishCountAfterError);
+  });
+});
+
+// 群专线 / 只读历史 / 不可用的伙伴任务没有报错横幅:灵动岛点击落地后由 renderer 请求
+// 处置,main 只处置被点的那一张卡(点击时记下的身份),不碰之后出现的新提醒。
+describe('AgentIslandService island-entry alert disposal', () => {
+  async function setup() {
+    const { AgentIslandService } = await import('../service.js');
+    const { initAppBadgeService, clearAllSessionAttention } = await import('../../appBadgeService.js');
+    clearAllSessionAttention();
+    const mainWindow = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => false,
+      isFocused: () => true,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      moveTop: vi.fn(),
+      webContents: { send: vi.fn(), isLoading: () => true },
+    } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(mainWindow);
+    const publish = vi.fn((state: AgentIslandDisplayState) => {
+      void state;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish },
+    });
+    initAppBadgeService({
+      getWindow: () => null,
+      onSessionAttentionCleared: (sessionId, intent) => service.handleSessionAttentionCleared(sessionId, intent),
+    });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    /** A real island click; returns the click id main put into the deep link (null = none). */
+    const click = (sessionId: string): string | null => {
+      (service as unknown as { focusSession(id: string): void }).focusSession(sessionId);
+      const payload = takePendingDeepLink() as { type: string; id?: string; islandEntryId?: string } | null;
+      expect(payload).toMatchObject({ type: 'session', id: sessionId });
+      return payload?.islandEntryId ?? null;
+    };
+    const consume = (sessionId: unknown, entryId: unknown, sender: unknown = mainWindow.webContents) =>
+      registeredIpcHandler(AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL)({ sender }, sessionId, entryId) as {
+        ok: true;
+        consumed: boolean;
+      };
+    const shown = () => (publish.mock.calls.at(-1)?.[0]?.sessions ?? []).map((session) => session.sessionId);
+    const island = (service as unknown as {
+      state: { sessions: Map<string, { phase: string; unread: boolean; pendingInteractionIds: Set<string> }> };
+    }).state;
+    return { service, click, consume, shown, island, mainWindow };
+  }
+  const lane = { sessionId: 'lane', agentKind: 'codex' as const };
+  const other = { sessionId: 'other-err', agentKind: 'codex' as const };
+
+  it('disposes only the clicked card for that click, once', async () => {
+    const { service, click, consume, shown, island } = await setup();
+    service.handleAgentEvent(lane, terminalErrorEvent('400 invalid_request_error'));
+    service.handleAgentEvent(other, terminalErrorEvent('boom'));
+    service.handleUserPrompt({ sessionId: 'done', agentKind: 'codex' }, 'run');
+    service.handleAgentEvent({ sessionId: 'done', agentKind: 'codex' }, doneEvent());
+    service.handleUserPrompt({ sessionId: 'running', agentKind: 'codex' }, 'run');
+    handleInteractionRequestForTest(service, { sessionId: 'ask', agentKind: 'codex' }, {
+      kind: 'permission',
+      requestId: 'ask-r1',
+      toolName: 'Bash',
+      input: { command: 'pnpm test' },
+    } as InteractionRequest);
+
+    // URL-only entries carry no click id; a guessed one is not a click either.
+    expect(consume('lane', '1')).toEqual({ ok: true, consumed: false });
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+
+    const entryId = click('lane');
+    expect(entryId).toEqual(expect.any(String));
+    expect(consume('lane', entryId)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('lane')).toBe(false);
+    expect(shown()).not.toContain('lane');
+    expect(shown()).toEqual(expect.arrayContaining(['other-err', 'done', 'running', 'ask']));
+    expect(island.sessions.get('other-err')).toMatchObject({ phase: 'error', unread: true });
+    expect(island.sessions.get('ask')?.pendingInteractionIds.has('ask-r1')).toBe(true);
+    // The same click cannot dispose twice; clicking a card that is gone records nothing.
+    expect(consume('lane', entryId)).toEqual({ ok: true, consumed: false });
+    expect(click('lane')).toBeNull();
+    // App badge / pending-alert re-marking the same old error cannot revive the card.
+    service.handleSessionAttentionMarked('lane');
+    expect(island.sessions.has('lane')).toBe(false);
+  });
+
+  it('a newer click on another card supersedes the earlier one, including a later manual visit', async () => {
+    const { service, click, consume, island } = await setup();
+    service.handleAgentEvent(lane, terminalErrorEvent('lane failure'));
+    service.handleAgentEvent(other, terminalErrorEvent('other failure'));
+    const laneEntry = click('lane');
+    const otherEntry = click('other-err');
+    // The unavailable page / any late request for A, inside the TTL, after B was clicked.
+    expect(consume('lane', laneEntry)).toEqual({ ok: true, consumed: false });
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    // A stale request for A does not cancel B's own disposal.
+    expect(consume('other-err', otherEntry)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+  });
+
+  it('two clicks on the same card: a late first request never takes the second click', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('first failure'));
+      const first = click('lane');
+      vi.setSystemTime(1_000_500);
+      service.handleUserPrompt(lane, 'try again');
+      vi.setSystemTime(1_001_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('second failure'));
+      const second = click('lane');
+      expect(first).not.toEqual(second);
+      // The first click's navigation lands after the second click was recorded.
+      expect(consume('lane', first)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+      expect(consume('lane', second)).toEqual({ ok: true, consumed: true });
+      expect(island.sessions.has('lane')).toBe(false);
+
+      // Unchanged card clicked twice: only the latest click disposes it.
+      vi.setSystemTime(1_002_000);
+      service.handleUserPrompt(lane, 'again');
+      service.handleAgentEvent(lane, terminalErrorEvent('third failure'));
+      const third = click('lane');
+      const fourth = click('lane');
+      expect(consume('lane', third)).toEqual({ ok: true, consumed: false });
+      expect(consume('lane', fourth)).toEqual({ ok: true, consumed: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a failure that arrived after the click, and alerts on it normally', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('first failure'));
+      const first = click('lane');
+      vi.setSystemTime(1_000_500);
+      service.handleUserPrompt(lane, 'try again');
+      // Still running when the stale click lands: the old card is no longer what it showed.
+      expect(consume('lane', first)).toEqual({ ok: true, consumed: false });
+      vi.setSystemTime(1_001_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('second failure'));
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+
+      const second = click('lane');
+      vi.setSystemTime(1_001_500);
+      service.handleAgentEvent(lane, terminalErrorEvent('third failure'));
+      expect(consume('lane', second)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review P1:重试在同一毫秒内又落新终态时,毫秒时间戳的身份会撞上,旧点击会误处置
+  // 新提醒。卡片身份用无碰撞的活动代数后,新报错卡必须留下。
+  it('a same-millisecond terminal after the click never gets consumed by the old click', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('first failure'));
+      const entryId = click('lane');
+      // 同一毫秒内重试并再次失败:新的报错卡是新的提醒。
+      service.handleUserPrompt(lane, 'try again');
+      service.handleAgentEvent(lane, terminalErrorEvent('second failure'));
+      expect(consume('lane', entryId)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review P1 后续:失败 turn 的收尾记账 done 保留同一张错误卡(completeAgentIslandSession
+  // 主动 early-return),不得驱逐被点击的那张,否则迟到的处置会失败、卡留着。
+  it('a trailing bookkeeping done keeps the clicked error card disposable', async () => {
+    const { service, click, consume, island } = await setup();
+    service.handleAgentEvent(lane, terminalErrorEvent('boom'));
+    const entryId = click('lane');
+    // 配对的收尾 done 不换卡(未获准替换报错)。
+    service.handleAgentEvent(lane, doneEvent());
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    expect(consume('lane', entryId)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('lane')).toBe(false);
+  });
+
+  // The read-only history page reports its session as visible; a click on that card
+  // must still reach the renderer, whose navigator disposes it on the open target.
+  it('delivers the click id even when the target is the visible, focused session', async () => {
+    const { service, click, consume, island, mainWindow } = await setup();
+    const history = { sessionId: 'history', agentKind: 'codex' as const };
+    service.handleAgentEvent(history, terminalErrorEvent('history failure'));
+    service.setAppFocused(true);
+    mocks.browserWindowFromWebContents.mockReturnValue(mainWindow);
+    await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)({ sender: mainWindow.webContents }, 'history');
+    // Passive visibility never clears an unread error.
+    expect(island.sessions.get('history')).toMatchObject({ phase: 'error', unread: true });
+    const entryId = click('history');
+    expect(entryId).toEqual(expect.any(String));
+    expect(consume('history', entryId)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('history')).toBe(false);
+  });
+
+  // Run the production preload bridge source against the real registered handler, so
+  // the renderer → main argument order (sessionId, islandEntryId) cannot drift.
+  it('the production preload bridge reaches the handler with this click id', async () => {
+    const preloadSource = readFileSync(new URL('../../../preload/preload.ts', import.meta.url), 'utf8');
+    const start = preloadSource.indexOf('    consumeEntryAlert: (');
+    const end = preloadSource.indexOf('\n', preloadSource.indexOf('AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL, sessionId', start));
+    expect(start).toBeGreaterThan(0);
+    const compiled = transpileModule(`const bridge = {${preloadSource.slice(start, end)}};`, {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    const { service, click, island, mainWindow } = await setup();
+    const ipcRenderer = {
+      invoke: (channel: string, ...args: unknown[]) =>
+        Promise.resolve(registeredIpcHandler(channel)({ sender: mainWindow.webContents }, ...args)),
+    };
+    const bridge = new Function('ipcRenderer', 'AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL', `${compiled}; return bridge;`)(
+      ipcRenderer,
+      AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
+    ) as { consumeEntryAlert(sessionId: string, islandEntryId: string): Promise<{ ok: true; consumed: boolean }> };
+    service.handleAgentEvent(lane, terminalErrorEvent('lane failure'));
+    const entryId = click('lane');
+    await expect(bridge.consumeEntryAlert('lane', 'not-this-click')).resolves.toEqual({ ok: true, consumed: false });
+    await expect(bridge.consumeEntryAlert('lane', entryId!)).resolves.toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('lane')).toBe(false);
+  });
+
+  it('expires an unconsumed click and rejects senders other than the main window', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('boom'));
+      const entryId = click('lane');
+      expect(consume('lane', entryId, { other: true })).toEqual({ ok: true, consumed: false });
+      vi.setSystemTime(2_000_000 + 60_001);
+      expect(consume('lane', entryId)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+      expect(() => consume('', entryId)).toThrow();
+      expect(() => consume('x'.repeat(129), entryId)).toThrow();
+      expect(() => consume('lane', undefined)).toThrow();
+      expect(() => consume('lane', 'x'.repeat(33))).toThrow();
+      expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

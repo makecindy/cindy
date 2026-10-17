@@ -224,6 +224,22 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-luna')?.providers[0]?.models['claude-code']?.[0]?.defaultEffort).toBe('medium');
   });
 
+  it.each([undefined, true, false])('preserves provider effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
+    const mod = await import('@/hooks/useDeviceProviders');
+    const base = providerWithModel('remote');
+    const model = {
+      ...base.models['claude-code'][0],
+      efforts: [],
+      defaultEffort: null,
+      ...(effortsUnknown === undefined ? {} : { effortsUnknown }),
+    };
+    const result = mod.parseDeviceProvidersPayload({ providers: [{
+      ...base, models: { 'claude-code': [model] },
+    }] });
+
+    expect(result.providers[0]?.models['claude-code']?.[0]?.effortsUnknown).toBe(effortsUnknown);
+  });
+
   it('preserves explicit no-thinking and rejects malformed remote defaults', async () => {
     const mod = await import('@/hooks/useDeviceProviders');
     const base = providerWithModel('remote');

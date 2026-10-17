@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { VoiceInputController } from '../VoiceInputController.js';
 import { VoiceTimelineLogger } from '../VoiceTimelineLogger.js';
+import type { AudioGate } from '../SpeakerGate.js';
 import type {
   AsrEvent,
+  AudioTrace,
   AsrProvider,
   EditableRange,
   SpeechSegment,
@@ -69,6 +71,33 @@ function pcmChunk(amplitude: number): ArrayBuffer {
 }
 
 describe('VoiceInputController', () => {
+  it('does not flush or stop a new run after cancellation during gate finish', async () => {
+    let release!: () => void;
+    const asr = new FakeAsrProvider();
+    const flush = vi.spyOn(asr, 'flushAudio');
+    const stop = vi.spyOn(asr, 'stop');
+    const controller = new VoiceInputController({
+      asr,
+      audioGate: {
+        begin: () => {}, push: () => {}, abort: () => {},
+        finish: () => new Promise<void>((resolve) => { release = resolve; }),
+      },
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      callbacks: { onDraftChanged: () => {}, onSubmitted: () => undefined },
+    });
+    await controller.start();
+    const stopping = controller.stop();
+    await controller.cancel();
+    await controller.start();
+    release();
+    await stopping;
+    expect(flush).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(controller.currentState).toBe('listening');
+    await controller.cancel();
+  });
+
   it('starts without a global crypto implementation', async () => {
     const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
     Object.defineProperty(globalThis, 'crypto', {
@@ -249,6 +278,59 @@ describe('VoiceInputController', () => {
 
     expect(controller.currentState).toBe('done');
     expect(states.at(-1)).toBe('done');
+    expect(outcomes.at(-1)).toBe('no_speech');
+    expect(errors).toEqual([]);
+  });
+
+  it('treats a run the audio gate fully muted as no speech', async () => {
+    const asr = new FakeAsrProvider();
+    const outcomes: string[] = [];
+    const errors: string[] = [];
+    let emit: ((chunk: ArrayBuffer, trace?: AudioTrace) => void) | null = null;
+    const held: Array<{ chunk: ArrayBuffer; trace?: AudioTrace }> = [];
+    const audioGate: AudioGate = {
+      begin: (next) => {
+        emit = next;
+      },
+      push: (chunk, trace) => {
+        held.push({ chunk: new Int16Array(chunk.byteLength / 2).buffer, trace });
+      },
+      // Releases only while stop() awaits it, like the speaker gate's flush.
+      finish: async () => {
+        held.splice(0).forEach(({ chunk, trace }) => emit?.(chunk, trace));
+      },
+      abort: () => {
+        held.length = 0;
+      },
+    };
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      audioGate,
+      callbacks: {
+        onStateChanged: (_state, outcome) => {
+          if (outcome) outcomes.push(outcome);
+        },
+        onDraftChanged: () => {},
+        onSubmitted: () => undefined,
+        onError: (message) => errors.push(message),
+      },
+    });
+
+    await controller.start();
+    controller.appendAudio(pcmChunk(1_000), {
+      capturedAt: 0,
+      convertedAt: 0,
+      chunkIndex: 0,
+      sampleRate: 16_000,
+      durationMs: 10,
+    });
+    expect(asr.appended).toBe(0);
+    await controller.stop();
+
+    expect(asr.appended).toBe(1);
+    expect(controller.currentState).toBe('done');
     expect(outcomes.at(-1)).toBe('no_speech');
     expect(errors).toEqual([]);
   });

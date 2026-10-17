@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   CODEX_HISTORY_CONTINUE_MESSAGE,
+  canContinueContextRecovery,
   createContextOverflowRollover,
   effectiveContextWindow,
   effectivePiContextWindow,
@@ -18,6 +19,8 @@ import {
   shouldRebuildPiNativeSession,
   type OverflowSourceMessage,
   withReplaySourceNotes,
+  BOT_IDLE_GAP_REBUILD_MS,
+  measureIdleGap,
 } from '../contextOverflowRollover';
 import { buildHandoffText } from '../agentHandoff';
 
@@ -311,6 +314,7 @@ describe('createContextOverflowRollover', () => {
         async (): Promise<{
           status: string;
           source?: string;
+          botRole?: string | null;
           agentKind: string;
           remoteHostId: string | null;
           clearedAt: number | null;
@@ -339,6 +343,7 @@ describe('createContextOverflowRollover', () => {
       getLiveSession: vi.fn(
         (): {
           isTurnRunning(): boolean;
+          listBackgroundTasks?(): ReadonlyArray<unknown>;
           getUsageSnapshot?: () => {
             contextTokens: number;
             contextWindow: number;
@@ -360,6 +365,310 @@ describe('createContextOverflowRollover', () => {
       log: { info: vi.fn(), warn: vi.fn() },
     };
   }
+
+  it.each(['cc', 'codex', 'pi'])('checkpoints a pressured %s companion before send, retaining outcomes without replay', async (agentKind) => {
+    const deps = makeDeps([
+      msg('user', 'Keep the game keyboard accessible', 'u1'),
+      { ...msg('tool_use', { toolName: 'Write', input: { file_path: '/game/index.html' } }, 't1'), toolUseId: 'write-1' },
+      { ...msg('tool_result', { fullText: 'Saved index.html; keyboard test passed' }, 'r1'), toolUseId: 'write-1' },
+      msg('assistant', 'Keyboard controls are ready. Next: add touch controls.', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind, source: 'bot', botRole: 'canonical', contextTokens: 180_000 });
+    const withOwn = { ...deps, listCompanionSessionIds: vi.fn(async () => ({ sessionIds: ['s1', 's-old', 's-bg'], chatsTruncated: false })) };
+    const rollover = createContextOverflowRollover(withOwn);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    const handoff = deps.setPendingHandoff.mock.calls[0]![1] as string;
+    expect(handoff).toContain('Keep the game keyboard accessible');
+    expect(handoff).toContain('Saved index.html; keyboard test passed');
+    expect(handoff).toContain('Next: add touch controls');
+    // 伙伴主对话用"按需回忆"口径:宿主把自有会话 id 写进指引,第一步按 session_ids 限定。
+    expect(withOwn.listCompanionSessionIds).toHaveBeenCalledWith('s1');
+    expect(handoff).toContain('== Recalling earlier history (use when needed) ==');
+    expect(handoff).toContain('{"query":"<keywords>","limit":10,"session_ids":["s1","s-old","s-bg"]}');
+    expect(handoff).not.toContain('could list only your newest');
+    expect(handoff.length).toBeLessThanOrEqual(16_000);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    // Persisted reset prevents another checkpoint after a cold restart.
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), sdkSessionId: null, contextTokens: 0 });
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.commitRebuild).toHaveBeenCalledTimes(1);
+  });
+
+  describe('idle-gap refresh (one rule for the companion chat and its IM lanes)', () => {
+    const HOUR = 60 * 60 * 1000;
+    const botRow = async (deps: ReturnType<typeof makeDeps>, botRole: string) =>
+      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole, contextTokens: 20_000 });
+
+    it.each(['canonical', 'channel', 'group'])('rebuilds a %s bot chat whose last activity is older than the idle gap', async (botRole) => {
+      const old = Date.now() - 2 * BOT_IDLE_GAP_REBUILD_MS - 3 * HOUR;
+      const deps = makeDeps([
+        msg('user', 'Plan the Friday dinner', 'u1', old - HOUR),
+        msg('assistant', 'Booked the table for 7pm.', 'a1', old),
+      ]);
+      await botRow(deps, botRole);
+      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect((deps.commitRebuild.mock.calls[0] as unknown[])[2]).toMatchObject({ reason: 'idle-gap', sourceUserClientId: 'u1' });
+      const handoff = deps.setPendingHandoff.mock.calls[0]![1] as string;
+      expect(handoff).toContain('idle for about 1 day 3 hours');
+      expect(handoff).toContain('Treat the user\'s new message as the current topic');
+      expect(handoff).toContain('Booked the table for 7pm.');
+      expect(handoff).toContain('== Recalling earlier history (use when needed) ==');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('measures the gap up to the already-persisted pending user message and does not count it as activity', async () => {
+      const now = Date.now();
+      const deps = makeDeps([
+        msg('user', 'Earlier question', 'u1', now - 30 * HOUR),
+        msg('assistant', 'Earlier answer', 'a1', now - 29 * HOUR),
+        // Group lanes persist the inbound message before dispatch; it is the message being sent now.
+        msg('user', 'New question after a day', 'u2', now - 1000),
+      ]);
+      await botRow(deps, 'channel');
+      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
+      expect((deps.commitRebuild.mock.calls[0] as unknown[])[2]).toMatchObject({ reason: 'idle-gap', sourceUserClientId: 'u2' });
+      const handoff = deps.setPendingHandoff.mock.calls[0]![1] as string;
+      expect(handoff).toContain('Earlier answer');
+      expect(handoff).not.toContain('New question after a day');
+    });
+
+    it('does not rebuild when the chat was active within the idle gap, is not a bot chat, or has no usable timestamps', async () => {
+      const now = Date.now();
+      const recent = makeDeps([msg('user', 'hi', 'u1', now - 3 * HOUR), msg('assistant', 'hello', 'a1', now - 2 * HOUR)]);
+      await botRow(recent, 'canonical');
+      await expect(createContextOverflowRollover(recent).prepareUnhealthySession('s1')).resolves.toBe(false);
+
+      const desktop = makeDeps([msg('user', 'hi', 'u1', now - 40 * HOUR), msg('assistant', 'hello', 'a1', now - 39 * HOUR)]);
+      await expect(createContextOverflowRollover(desktop).prepareUnhealthySession('s1')).resolves.toBe(false);
+
+      const delegation = makeDeps([msg('user', 'hi', 'u1', now - 40 * HOUR), msg('assistant', 'hello', 'a1', now - 39 * HOUR)]);
+      await botRow(delegation, 'delegation');
+      await expect(createContextOverflowRollover(delegation).prepareUnhealthySession('s1')).resolves.toBe(false);
+
+      const untimed = makeDeps([msg('user', 'hi', 'u1'), msg('assistant', 'hello', 'a1')]);
+      await botRow(untimed, 'canonical');
+      await expect(createContextOverflowRollover(untimed).prepareUnhealthySession('s1')).resolves.toBe(false);
+      for (const deps of [recent, desktop, delegation, untimed]) expect(deps.closeSession).not.toHaveBeenCalled();
+    });
+
+    it('does not rebuild twice for the same pending message when the previous send failed after an idle-gap rebuild', async () => {
+      const now = Date.now();
+      const deps = {
+        ...makeDeps([
+          msg('user', 'Earlier question', 'u1', now - 30 * HOUR),
+          msg('assistant', 'Earlier answer', 'a1', now - 29 * HOUR),
+          msg('user', 'Retry me', 'u2', now - 5000),
+          msg('error', { reason: 'network', message: 'ECONNRESET' }, 'e1', now - 4000),
+        ]),
+        findLatestRebuildMeta: vi.fn(async () => ({ reason: 'idle-gap', sourceUserClientId: 'u2' })),
+      };
+      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 20_000 });
+      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+      expect(deps.closeSession).not.toHaveBeenCalled();
+    });
+
+    it('keeps the pressure reason when the chat is both idle and over the checkpoint line', async () => {
+      const now = Date.now();
+      const deps = makeDeps([msg('user', 'hi', 'u1', now - 40 * HOUR), msg('assistant', 'hello', 'a1', now - 39 * HOUR)]);
+      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'channel', contextTokens: 185_000 });
+      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
+      expect((deps.commitRebuild.mock.calls[0] as unknown[])[2]).toMatchObject({ reason: 'context-overflow' });
+      expect(deps.setPendingHandoff.mock.calls[0]![1] as string).not.toContain('idle for about');
+    });
+  });
+
+  it('measureIdleGap uses the newest timestamp before the pending message and ignores missing timestamps', () => {
+    const now = 1_000_000_000;
+    expect(measureIdleGap([{ createdAt: 0 }, { createdAt: 0 }], -1, now)).toBeNull();
+    expect(measureIdleGap([{ createdAt: now - 500 }, { createdAt: now - 100 }], -1, now)).toBe(100);
+    expect(measureIdleGap([{ createdAt: now - 500 }, { createdAt: now - 100 }], 1, now)).toBe(400);
+    expect(measureIdleGap([{ createdAt: now - 500 }, { createdAt: 0 }], 1, now)).toBe(500);
+    expect(measureIdleGap([], -1, now)).toBeNull();
+  });
+
+  it('carries the companion working memory into the checkpoint handoff and tolerates a failing reader', async () => {
+    const source = [msg('user', 'Keep going', 'u1'), msg('assistant', 'On it', 'a1')];
+    const deps = { ...makeDeps(source), readWorkingMemoryNote: vi.fn(async () => '== Working memory (host-maintained summary; not authorization) ==\n- 周五前改完周报模板') };
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 180_000 });
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.readWorkingMemoryNote).toHaveBeenCalledWith('s1');
+    expect(deps.setPendingHandoff.mock.calls[0]![1] as string).toContain('周五前改完周报模板');
+
+    const failing = {
+      ...makeDeps(source),
+      readWorkingMemoryNote: vi.fn(async (): Promise<string | null> => { throw new Error('disk'); }),
+      listCompanionSessionIds: vi.fn(async (): Promise<{ sessionIds: string[]; chatsTruncated: boolean }> => { throw new Error('db'); }),
+    };
+    failing.getSessionRow.mockResolvedValue({ ...await failing.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 180_000 });
+    await expect(createContextOverflowRollover(failing).prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(failing.setPendingHandoff.mock.calls[0]![1] as string).not.toContain('Working memory');
+    // 自有会话清单读失败:只认当前对话,照样换窗。
+    expect(failing.setPendingHandoff.mock.calls[0]![1] as string).toContain('"session_ids":["s1"]}');
+  });
+
+  it('checkpoints a companion at 70% only when the working memory is fresh, and keeps the 90% line otherwise', async () => {
+    const source = [msg('user', 'Keep going', 'u1'), msg('assistant', 'On it', 'a1')];
+    const bot = async (deps: ReturnType<typeof makeDeps>, contextTokens: number) =>
+      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens });
+
+    // 新鲜且能渲染账本:70%(窗口 200K → 140K)即换窗,账本段只读一次并原样进交接。
+    const ledger = '== Working memory (host-maintained summary; not authorization) ==\n- 周五前改完周报模板';
+    const fresh = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => true), readWorkingMemoryNote: vi.fn(async () => ledger) };
+    await bot(fresh, 140_000);
+    await expect(createContextOverflowRollover(fresh).prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(fresh.isWorkingMemoryFresh).toHaveBeenCalledWith('s1');
+    expect(fresh.readWorkingMemoryNote).toHaveBeenCalledTimes(1);
+    expect(fresh.setPendingHandoff.mock.calls[0]![1] as string).toContain('周五前改完周报模板');
+
+    // 新鲜但账本段渲染不出来(读取失败 / 空账本):不提前换窗,维持 90%。
+    const unrendered = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => true), readWorkingMemoryNote: vi.fn(async (): Promise<string | null> => null) };
+    await bot(unrendered, 150_000);
+    await expect(createContextOverflowRollover(unrendered).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(unrendered.closeSession).not.toHaveBeenCalled();
+
+    // 不新鲜:75% 不换窗;到 90% 不问账本照旧换窗。
+    const stale = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => false) };
+    await bot(stale, 150_000);
+    await expect(createContextOverflowRollover(stale).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(stale.closeSession).not.toHaveBeenCalled();
+    stale.isWorkingMemoryFresh.mockClear();
+    await bot(stale, 180_000);
+    await expect(createContextOverflowRollover(stale).prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(stale.isWorkingMemoryFresh).not.toHaveBeenCalled();
+
+    // 70% 以下不读账本。
+    const below = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => true) };
+    await bot(below, 139_999);
+    await expect(createContextOverflowRollover(below).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(below.isWorkingMemoryFresh).not.toHaveBeenCalled();
+
+    // 判据抛错按不新鲜;没接判据的调用方维持 90%。
+    const failing = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async (): Promise<boolean> => { throw new Error('disk'); }) };
+    await bot(failing, 150_000);
+    await expect(createContextOverflowRollover(failing).prepareUnhealthySession('s1')).resolves.toBe(false);
+    const legacy = makeDeps(source);
+    await bot(legacy, 150_000);
+    await expect(createContextOverflowRollover(legacy).prepareUnhealthySession('s1')).resolves.toBe(false);
+  });
+
+  it.each([
+    ['desktop', null, 180_000], ['bot', 'delegation', 180_000], ['bot', 'history', 180_000],
+    ['bot', null, 180_000], ['bot', 'canonical', 179_999], ['bot', 'channel', 179_999],
+    ['bot', 'group', 179_999], ['bot', 'canonical', 0],
+  ] as const)('leaves healthy / non-chat bot contexts alone: %s %s %s', async (source, botRole, contextTokens) => {
+    const deps = makeDeps([msg('user', 'hello', 'u1'), msg('assistant', 'hello', 'a1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source, botRole, contextTokens });
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Error running remote compact task: summarization produced empty response', true],
+    ['Error running remote compact task: invalid_request_error', true],
+    ['Error during compaction: invalid-argument', true],
+    ['Error running remote compact task: connection timed out', false],
+    ['Error running remote compact task: HTTP 401 unauthorized', false],
+    ['Error running remote compact task: HTTP 429 usage limit exceeded', false],
+    ['summarization produced empty response', false],
+    ['invalid_request_error', false],
+  ])('new companion input handles only proven compact failures: %s', async (message, expected) => {
+    const deps = makeDeps([msg('user', 'save the game', 'u1'), msg('assistant', 'Saved', 'a1'), msg('error', { message }, 'e1')]);
+    const row = { ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', agentKind: 'codex' };
+    deps.getSessionRow.mockResolvedValue(row);
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(expected);
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    // The new policy is scoped to companions, not all ordinary/manual compaction.
+    deps.getSessionRow.mockResolvedValue({ ...row, source: 'desktop', botRole: null });
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+  });
+
+  it.each(['healthy', 'unknown', 'oversized'] as const)('checks companion image bytes before an error: %s', async (health) => {
+    const deps = makeDeps([msg('user', 'continue the game', 'u1'), msg('assistant', 'ready', 'a1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', agentKind: 'codex' });
+    const classifyCodexHistory = vi.fn(async () => health);
+    await expect(createContextOverflowRollover({ ...deps, classifyCodexHistory }).prepareUnhealthySession('s1')).resolves.toBe(health === 'oversized');
+    expect(classifyCodexHistory).toHaveBeenCalledOnce();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('continues a direct companion image failure once without replaying a completed tool', async () => {
+    const deps = makeDeps([
+      msg('user', 'save the game and then test it', 'u1'),
+      { ...msg('tool_result', { fullText: 'Game saved successfully' }, 'r1'), toolUseId: 'write-1' },
+    ]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', agentKind: 'codex' });
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(true);
+    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', CODEX_HISTORY_CONTINUE_MESSAGE, undefined,
+      expect.objectContaining({ continueFromHistory: true, sourceUserClientId: 'u1' }));
+    expect(deps.setPendingHandoff.mock.calls[0]![1]).toContain('Game saved successfully');
+    await expect(rollover.tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(false);
+    expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['group', 'delegation', null])('does not take over noncanonical Bot recovery: %s', async (botRole) => {
+    const deps = makeDeps([msg('user', 'continue', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole, agentKind: 'codex' });
+    expect(canContinueContextRecovery(await deps.getSessionRow())).toBe(false);
+    await expect(createContextOverflowRollover(deps).tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps a companion external-dispatch turn with its original owner', async () => {
+    const deps = makeDeps([{ ...msg('user', 'scheduled work', 'u1'), agentMeta: { origin: { kind: 'scheduler' } } }]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', agentKind: 'codex' });
+    await expect(createContextOverflowRollover(deps).tryRecover('s1', { reason: 'codex_history_oversized' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not checkpoint while native background execution is still active', async () => {
+    const deps = makeDeps([msg('user', 'continue', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 190_000 });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{ id: 'active' }] });
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['history', 'close'])('stopping companion preparation during %s forbids a late rebuild', async (stage) => {
+    const deps = makeDeps([msg('user', 'continue', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 190_000 });
+    const rollover = createContextOverflowRollover(deps);
+    if (stage === 'history') deps.listMessages.mockImplementation(async () => { rollover.cancelRecovery('s1'); return [msg('user', 'continue', 'u1')]; });
+    else deps.closeSession.mockImplementation(async () => { rollover.cancelRecovery('s1'); });
+    await expect(rollover.prepareUnhealthySession('s1')).rejects.toThrow();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    if (stage === 'history') expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('manual restart retains tool outcomes and strips image bodies even after a partial reply', async () => {
+    const deps = makeDeps([
+      msg('user', 'create the game', 'u1'),
+      { ...msg('tool_result', { content: [{ type: 'text', text: 'Build completed; preview ready' }, { type: 'image', data: 'IMAGE_BYTES' }] }, 'r1'), toolUseId: 'build-1' },
+      msg('assistant', 'Checking the preview next', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical' });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', null, vi.fn());
+    const handoff = deps.setPendingHandoff.mock.calls[0]![1];
+    expect(handoff).toContain('Build completed; preview ready');
+    expect(handoff).not.toContain('IMAGE_BYTES');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // 「消息平台」页对 IM 专线点「重新开始」走同一条显式重启: 交接要按伙伴对话口径(与空闲间隔
+  // 刷新一致)带按需回忆指引, 不能像普通任务那样退化成无回忆的交接。
+  it('explicit restart of an IM channel lane writes the companion handoff with recall guidance', async () => {
+    const deps = makeDeps([msg('user', 'group asked about the release', 'u1', 1), msg('assistant', 'Release is Friday', 'a1', 2)]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'channel' });
+    const withOwn = { ...deps, listCompanionSessionIds: vi.fn(async () => ({ sessionIds: ['s1', 's-main'], chatsTruncated: false })) };
+    await createContextOverflowRollover(withOwn).prepareNativeSessionRecovery('s1', null, vi.fn());
+    const handoff = deps.setPendingHandoff.mock.calls[0]![1] as string;
+    expect(handoff).toContain('Release is Friday');
+    expect(handoff).toContain('== Recalling earlier history (use when needed) ==');
+    expect(handoff).toContain('"session_ids":["s1","s-main"]');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
 
   it.each(['cc', 'codex', 'pi'] as const)('explicit Bot restart replaces a running %s context without replay', async (agentKind) => {
     const deps = makeDeps([msg('user', 'keep my request', 'u1', 1)]);
@@ -1250,6 +1559,7 @@ describe('createContextOverflowRollover', () => {
       's1',
       expect.any(String),
       expect.objectContaining({ reason: 'pi-prompt-timeout' }),
+      expect.any(AbortSignal),
     );
   });
 
@@ -1343,6 +1653,7 @@ describe('createContextOverflowRollover', () => {
       's1',
       expect.any(String),
       expect.objectContaining({ sourceUserClientId: 'u-old' }),
+      expect.any(AbortSignal),
     );
   });
 
@@ -1676,7 +1987,7 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.stringContaining('Saved revision 42'),
-      expect.objectContaining({ sourceUserClientId: 'u1' }));
+      expect.objectContaining({ sourceUserClientId: 'u1' }), expect.any(AbortSignal));
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 });

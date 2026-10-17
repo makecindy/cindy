@@ -174,13 +174,6 @@ export async function removeReleasedWechatFiles(filePaths: readonly string[]): P
   );
 }
 
-export async function removeWechatSessionAttachmentDir(sessionId: string): Promise<void> {
-  const root = path.resolve(ownerScopedImUserDataPath('im-attachments', 'wechat', 'sessions'));
-  const target = path.resolve(root, sessionId);
-  if (!target.startsWith(`${root}${path.sep}`)) return;
-  await fs.rm(target, { recursive: true, force: true });
-}
-
 interface DetectedMedia {
   attachmentKind: IMAttachment['kind'];
   fileName: string;

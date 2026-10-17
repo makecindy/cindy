@@ -3,6 +3,7 @@ import type { ScheduleEventProjection } from '@cindy/maker-shared/schedule-event
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { loadSharedSessionScheduleIndex } from '@/session/scheduleIndex';
+import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 
 /**
  * 会话维度的自动化 run「已读」编排(对齐桌面端 CCAgentSidebarUpper 的「激活即已读」语义)。
@@ -32,7 +33,8 @@ export async function markSessionScheduleRunsRead(
   const index = await loadSharedSessionScheduleIndex(deviceId, maker, isActive);
   if (!isActive()) return [];
   options.onIndex?.(index);
-  const unreadRunIds = index.get(sessionId)?.unreadRunIds ?? [];
+  const info = index.get(sessionId);
+  const unreadRunIds = info?.unreadRunIds ?? [];
   if (unreadRunIds.length === 0) return [];
   // 单个永久失败不阻塞其它 run;瞬态失败需要抛出,让外层 retry 重新探测并补标。
   // allSettled 后按原 unreadRunIds 顺序收集成功项,返回值保序。
@@ -43,7 +45,12 @@ export async function markSessionScheduleRunsRead(
     (result): result is PromiseRejectedResult => result.status === 'rejected' && isTransientRemoteError(result.reason),
   )?.reason;
   if (transientError) throw transientError;
-  return unreadRunIds.filter((_, i) => results[i].status === 'fulfilled');
+  const marked = unreadRunIds.filter((_, i) => results[i].status === 'fulfilled');
+  // The host does not broadcast `read` when the run was already read elsewhere (no-op). Apply
+  // the same event locally so the shared index cache drops its stale unread runs and Home
+  // refreshes (or, while covered, records) this device's badges either way.
+  if (marked.length > 0 && info) remoteScheduleEventStore.apply(deviceId, { type: 'read', scheduleId: info.scheduleId });
+  return marked;
 }
 
 /**

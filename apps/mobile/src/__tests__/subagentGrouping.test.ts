@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildMessageRenderItems } from '@cindy/maker-shared/message-render';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import {
   buildMobileMessageRenderItems,
@@ -75,6 +76,63 @@ function collectSourceIds(items: readonly MobileMessageRenderItem[]): string[] {
 }
 
 describe('subagent grouping (buildMobileMessageRenderItems)', () => {
+  it.each([
+    { streaming: false, autoResume: false },
+    { streaming: true, autoResume: false },
+    { streaming: false, autoResume: true },
+    { streaming: true, autoResume: true },
+  ])('folds progress across Agent segments on recovery (%j)', ({ streaming, autoResume }) => {
+    seq = 0;
+    const messages = [
+      msg({ id: 'u', role: 'user', content: 'go' }),
+      msg({ id: 'progress', role: 'assistant', content: 'Starting research' }),
+      agentToolUse('A1'),
+      msg({ id: 'between', role: 'assistant', content: 'Checking another source', agentMeta: { turnCompleted: true } }),
+      agentToolUse('A2'),
+      msg({ id: 'error', role: 'error', content: 'Interrupted' }),
+      msg({ id: 'resume', role: 'user', content: CONTINUE_AFTER_ERROR_PROMPT, agentMeta: autoResume ? { autoResume: true } : null }),
+      msg({ id: 'active', role: 'assistant', content: 'Continuing' }),
+    ].map((message, index) => ({ ...message, createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString() }));
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: streaming });
+    expect(items.map(item => item.type)).toEqual([
+      'message', 'work_group', 'subagent_group', 'work_group', 'subagent_group', 'message', 'message',
+      ...(autoResume ? ['message'] : []),
+    ]);
+    for (const [index, id] of [[1, 'progress'], [3, 'between']] as const) {
+      const item = items[index];
+      expect(item.type).toBe('work_group');
+      if (item.type !== 'work_group') throw new Error('Expected folded progress');
+      expect(item.isStreaming).toBe(false);
+      expect(collectSourceIds(item.children)).toEqual([id]);
+    }
+    expect(collectSourceIds(items)).toEqual(['u', 'progress', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
+
+    const steer = msg({ id: 'steer', role: 'user', content: 'Check this too', agentMeta: { delivery: 'steer' }, createdAt: '2026-01-01T00:00:02.500Z' });
+    const withSteer = [...messages.slice(0, 3), steer, ...messages.slice(3)];
+    const steered = buildMobileMessageRenderItems(withSteer, { isSessionStreaming: streaming });
+    expect(steered.map(item => item.type)).toEqual([
+      'message', 'work_group', 'subagent_group', 'message', 'work_group', 'subagent_group', 'message',
+      ...(autoResume ? ['message'] : []), 'message',
+    ]);
+    expect(collectSourceIds(steered)).toEqual(['u', 'progress', 'steer', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
+
+    // A borrowed recovery must not reach an earlier disconnected history window.
+    const gapped = messages.map((message, index) => index < 2 ? message : {
+      ...message, createdAt: new Date(Date.parse(message.createdAt!) + 48 * 60 * 60_000).toISOString(),
+    });
+    const afterGap = buildMobileMessageRenderItems(gapped, { isSessionStreaming: streaming });
+    expect(afterGap[1].type).toBe('message');
+    expect(afterGap[3].type).toBe('work_group');
+    expect(collectSourceIds(afterGap)).toEqual(collectSourceIds(items));
+
+    // A real user turn blocks recovery from affecting earlier Agent segments.
+    const ordinaryBoundary = msg({ id: 'other', role: 'user', content: 'Another request', createdAt: '2026-01-01T00:00:02.500Z' });
+    messages.splice(3, 0, ordinaryBoundary);
+    const separated = buildMobileMessageRenderItems(messages, { isSessionStreaming: streaming });
+    expect(separated[1].type).toBe('message');
+    expect(collectSourceIds(separated).filter(id => id === 'progress')).toEqual(['progress']);
+  });
+
   it.each([1, 2, 7])('preserves history paragraph order through %s nesting levels and fallback', (depth) => {
     const parents = Array.from({ length: depth }, (_, index) => agentToolUse(`order-A${index}`, {
       parentUuid: index === 0 ? undefined : `order-A${index - 1}`,

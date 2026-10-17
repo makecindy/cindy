@@ -22,6 +22,9 @@ export interface RateHistory {
   peak: number;
   latestRate: number | null;
   latestSampleAt?: number;
+  /** Host speed mode: chart x-offset of the current turn and its last elapsed time. */
+  speedOffsetMs?: number;
+  speedElapsedMs?: number;
 }
 
 export function emptyRateHistory(startedAt: number | null): RateHistory {
@@ -66,6 +69,8 @@ export function recordRunningTokenRate(
         baseline: null,
         lastReport: null,
         latestRate: null,
+        speedOffsetMs: undefined,
+        speedElapsedMs: undefined,
       }
     : history;
   if (
@@ -162,4 +167,64 @@ export function saveCachedRateHistory(
 /** 整体清空；供测试与将来的登出/数据清理流程使用。 */
 export function clearRateHistoryCache(): void {
   rateHistoryBySession.clear();
+}
+
+/**
+ * Host-measured tok/s (usage intervals or streaming estimates, see maker-core
+ * `token-speed.ts`). Optional additive status field: old hosts omit it and the
+ * counter-based history above stays in charge.
+ */
+export interface TokenSpeedSnapshot {
+  /** Sliding-window rate while streaming; final average once the turn ended. */
+  rate: number;
+  /** Tokens / elapsed generation time (snapped to real output at turn end). */
+  average: number;
+  tokens: number;
+  /** Generation time excluding tool pauses. */
+  elapsedMs: number;
+  streaming: boolean;
+}
+
+export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const speed = value as Partial<TokenSpeedSnapshot>;
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+  if (!finite(speed.rate) || !finite(speed.average) || !finite(speed.tokens) ||
+    !finite(speed.elapsedMs) || typeof speed.streaming !== 'boolean') return undefined;
+  return { rate: speed.rate, average: speed.average, tokens: speed.tokens,
+    elapsedMs: speed.elapsedMs, streaming: speed.streaming };
+}
+
+/** Record a host speed snapshot into the same chart model as counter samples. */
+export function recordTokenSpeed(
+  history: RateHistory,
+  input: { startedAt: number | null; speed: TokenSpeedSnapshot; now?: number },
+): RateHistory {
+  const { speed } = input;
+  const startedAt = input.startedAt ?? history.startedAt;
+  // A new turn restarts the host clock; keep earlier points and continue the axis after them.
+  const reset = history.startedAt !== startedAt || history.speedOffsetMs === undefined ||
+    speed.elapsedMs < (history.speedElapsedMs ?? 0);
+  const offset = reset ? (history.samples.at(-1)?.durationMs ?? 0) : (history.speedOffsetMs ?? 0);
+  const next: RateHistory = {
+    ...history,
+    startedAt,
+    baseline: null,
+    lastReport: null,
+    speedOffsetMs: offset,
+    speedElapsedMs: speed.elapsedMs,
+    // The final average has its own UI field. It is not a new recent-speed sample.
+    // Without a live reading this turn, keep showing the token count.
+    latestRate: speed.streaming && speed.rate > 0 ? speed.rate : (reset ? null : history.latestRate),
+    latestSampleAt: speed.streaming && speed.rate > 0
+      ? (input.now ?? Date.now()) : (reset ? undefined : history.latestSampleAt),
+  };
+  const at = offset + speed.elapsedMs;
+  const lastAt = reset ? offset : (history.samples.at(-1)?.durationMs ?? offset);
+  if (!speed.streaming || speed.rate <= 0 || at - lastAt < MIN_SAMPLE_DURATION_MS) return next;
+  const samples = [
+    ...history.samples.slice(-(MAX_RATE_SAMPLES - 1)),
+    { durationMs: at, outputTokens: speed.tokens, rate: speed.rate },
+  ];
+  return { ...next, samples, peak: Math.max(...samples.map((sample) => sample.rate)) };
 }

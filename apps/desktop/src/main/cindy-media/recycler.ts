@@ -1,7 +1,8 @@
 /**
  * recycler.ts — 媒体总仓回收器。
  * ---------------------------------------------------------------------------
- * 两条清理线,全部**手动触发、先报数后动手**(v1 无任何自动删除):
+ * 两条清理线默认手动触发、先报数后动手。远程文件缓存的例外仅自动清理
+ * remote-file 独占的可再生缓存，调用方必须带 integration 作用域和 owner 闸：
  *   - 零引用回收:账本无引用 + 缓冲期已过 + 不在活引用集 → 删账(条件 SQL
  *     复查)→ 复查无并发重录 → 删字节;
  *   - cache 瘦身:isCache=true 总量超上限时按 LRU 逐出(可再生,清错也会
@@ -173,15 +174,18 @@ export interface CacheScan {
 
 /** 扫描 cache 用量与逐出候选(LRU 头部起,凑够超限量为止;活引用集剔除)。 */
 export async function scanCache(
-  params: { live: Set<string>; limitBytes?: number },
+  params: { live: Set<string>; limitBytes?: number; integration?: string },
   db?: LedgerDb,
 ): Promise<CacheScan> {
   const limitBytes = params.limitBytes ?? CACHE_LIMIT_BYTES;
-  const rows = await ledger.listCacheBlobsByLru(db);
-  const totalBytes = rows.reduce((sum, r) => sum + r.bytes, 0);
+  const rows = await ledger.listCacheBlobsByLru(db, params.integration);
+  // Integration scoping restricts eviction, not the shared warehouse budget.
+  const { cacheBytes: totalBytes, cacheCount: count } = params.integration
+    ? await ledger.getStorageStats(db)
+    : { cacheBytes: rows.reduce((sum, r) => sum + r.bytes, 0), cacheCount: rows.length };
   const scan: CacheScan = {
     totalBytes,
-    count: rows.length,
+    count,
     limitBytes,
     excessBytes: totalBytes - limitBytes,
     evictable: [],
@@ -199,12 +203,13 @@ export async function scanCache(
 
 /** 执行 cache 逐出(条件删账 deleteCacheBlobRecord 复查 pin 与引用,同款安全顺序)。 */
 export async function evictCacheBlobs(
-  params: { hashes: string[]; live: Set<string> },
+  params: { hashes: string[]; live: Set<string>; integration?: string; assertStillValid?: () => void },
   db?: LedgerDb,
 ): Promise<DeleteResult> {
   const result: DeleteResult = { deleted: 0, freedBytes: 0, skipped: 0 };
   for (const hash of params.hashes) {
     try {
+      params.assertStillValid?.();
       if (params.live.has(hash)) {
         result.skipped++;
         continue;
@@ -214,7 +219,7 @@ export async function evictCacheBlobs(
         result.skipped++;
         continue;
       }
-      const removed = await ledger.deleteCacheBlobRecord(hash, db);
+      const removed = await ledger.deleteCacheBlobRecord(hash, db, params.integration);
       if (!removed) {
         result.skipped++;
         continue;
@@ -223,6 +228,7 @@ export async function evictCacheBlobs(
         result.skipped++;
         continue;
       }
+      params.assertStillValid?.();
       await blobStore.deleteBlobFile(hash, info.ext);
       result.deleted++;
       result.freedBytes += info.bytes;

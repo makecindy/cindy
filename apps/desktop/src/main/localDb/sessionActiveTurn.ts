@@ -59,7 +59,7 @@ import {
 } from './sessionInterruptionBoot';
 import { messages, sessions } from './schema';
 import { createLogger } from '../logger';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
 
 const log = createLogger('session-active-turn');
@@ -387,7 +387,9 @@ export async function listInterruptedPendingRows(): Promise<
         eq(sessions.status, 'active'),
         // 只统计桌面 sidebar 可见来源(含 feishu/slack 等 IM 渠道)——
         // 不可见来源的红点无处展示也无法清除。
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+        // 插件后台隐藏任务不在侧栏展示，红点无处展示也无法清除。
+        isNull(sessions.hiddenAt),
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`),
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.clearedAt}, 0)`),
         // 只认「开始于本进程启动之前」的 turn —— 排除正在跑的(见 _bootAtMs 注释)。
@@ -446,7 +448,8 @@ export async function listErrorTailPendingRows(): Promise<
     .where(
       and(
         eq(sessions.status, 'active'),
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+        isNull(sessions.hiddenAt),
         eq(messages.role, 'error'),
         isNull(messages.rewindAt),
         // /clear 可见性边界(见上方 ⚠️ 3):clear 之前的行在视图里已不可见,不能算告警。

@@ -3,6 +3,7 @@ import type { RemoteMessage } from './types';
 
 export interface PluginInvocation {
   id: string;
+  namespace?: string | null;
   name: string;
   tools: string[];
   hasPendingCalls: boolean;
@@ -11,6 +12,10 @@ export interface PluginInvocation {
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const text = (value: unknown) => typeof value === 'string' && value.length <= 256 ? value : undefined;
+const pluginNamespace = (value: unknown): string | null | undefined =>
+  value === null ? null : typeof value === 'string' && value.length <= 128 ? value : undefined;
+const identityKey = (id: string, namespace: string | null | undefined) =>
+  JSON.stringify([id, namespace === undefined ? false : namespace]);
 
 /** Read only the documented MCP text envelope, never arbitrary nested plugin data. */
 function infoName(raw: string | undefined, id: string): string | undefined {
@@ -45,11 +50,12 @@ export function collectPluginInvocations(
   for (const message of messages) {
     if (message.role !== 'tool_use') continue;
     const tool = parseMessageToolUse(message);
-    const id = text(record(tool.input)?.ghost_id);
+    const input = record(tool.input);
+    const id = text(input?.ghost_id);
     if (!id || !/(?:^|:|__)ghost_info$/.test(tool.toolName)) continue;
     const raw = pairing.resultContentFor(message, tool);
     const name = infoName(raw, id);
-    if (name) names.set(id, name);
+    if (name) names.set(identityKey(id, pluginNamespace(input?.namespace)), name);
   }
   const turns = new Map<string, PluginInvocation[]>();
   let owner: string | undefined;
@@ -64,9 +70,13 @@ export function collectPluginInvocations(
     const input = record(tool.input);
     const id = text(input?.ghost_id);
     if (!id || input?.grant_only === true) continue;
+    const namespace = pluginNamespace(input?.namespace);
     const calls = turns.get(owner) ?? [];
-    let plugin = calls.find((call) => call.id === id);
-    if (!plugin) { plugin = { id, name: names.get(id) ?? id, tools: [], hasPendingCalls: false }; calls.push(plugin); }
+    let plugin = calls.find((call) => call.id === id && call.namespace === namespace);
+    if (!plugin) {
+      plugin = { id, ...(namespace !== undefined ? { namespace } : {}), name: names.get(identityKey(id, namespace)) ?? id, tools: [], hasPendingCalls: false };
+      calls.push(plugin);
+    }
     // Known IDs must pair exactly: an adjacent result may belong to another
     // concurrent plugin. Legacy ID-less calls retain the existing pairing fallback.
     const settled = tool.toolUseId

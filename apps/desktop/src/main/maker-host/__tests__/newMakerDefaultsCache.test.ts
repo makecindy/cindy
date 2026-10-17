@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  getNewTaskDraftSelection,
   getSelectedNewMakerRoute,
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
@@ -170,6 +171,19 @@ it('does not reuse the selected default route across owners or older snapshots',
   expect(getSelectedNewMakerRoute('owner-a')).toBeUndefined();
 });
 
+it('scopes the headless new-task draft selection to the owner that pushed it', () => {
+  setNewMakerDraftCache({
+    lastByVendor: { cc: { model: 'claude-opus-5-5', providerId: 'anthropic' } },
+    modelChosenByVendor: { cc: true },
+    effortByModel: {},
+    fastModeByModel: {},
+  }, 'owner-a');
+  expect(getNewTaskDraftSelection('owner-a', 'claude-code')).toEqual({
+    model: 'claude-opus-5-5', providerId: 'anthropic', chosenByUser: true,
+  });
+  // 切账号后新 renderer 还没推快照的窗口:不拿上一个账号的偏好。
+  expect(getNewTaskDraftSelection('owner-b', 'claude-code')).toBeNull();
+});
 
 describe('owner-fenced new task and Bot default mirror', () => {
   const owner = { dataOwnerId: 'B', ownerGeneration: 3 };
@@ -195,7 +209,7 @@ describe('owner-fenced new task and Bot default mirror', () => {
   });
 });
 
-it('reads remembered tuning only from the matching owner snapshot, with source/engine and legacy fallbacks', () => {
+it('reads remembered tuning only from the matching owner snapshot, with preset-first and source fallbacks', () => {
   const payload = { ownerStamp: { dataOwnerId: 'A', ownerGeneration: 4 }, lastByVendor: {},
     effortByModel: { target: 'medium', old: 'low' }, fastModeByModel: { target: true, old: true },
     providerModelMemory: {
@@ -204,8 +218,11 @@ it('reads remembered tuning only from the matching owner snapshot, with source/e
       'pi:provider': { effortByModel: { target: 'minimal' }, fastByModel: {} },
     } };
   expect(syncNewMakerDraftCache(payload, payload.ownerStamp, 'A:4', false)).toBe(true);
-  expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'target')).toEqual({ effort: 'low', fastMode: false });
+  // 权威 `${agent}:*` 优先:同一个模型换个来源(provider → other)仍然是同一档,
+  // 不会被 provider 槽的旧副本拽回旧档位(那就是「推理强度自己变低」在 main 侧的形态)。
+  expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'target')).toEqual({ effort: 'high', fastMode: true });
   expect(getNewMakerModelTuning('A:4', 'codex', 'other', 'target')).toEqual({ effort: 'high', fastMode: true });
+  // 该 agent 没有 `*` 槽 → 回落 provider 槽;fast 该槽没记过 → 再回落 newMakerDraft 根表。
   expect(getNewMakerModelTuning('A:4', 'pi', 'provider', 'target').effort).toBe('minimal');
   expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'old')).toEqual({ effort: 'low', fastMode: true });
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});

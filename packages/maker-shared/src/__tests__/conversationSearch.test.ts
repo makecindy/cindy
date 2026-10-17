@@ -1,16 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   conversationSearchResultKey,
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   filterResultsByWorkingDirs,
   mergeConversationSearchFanout,
+  remoteConversationSearchRequest,
   remoteIndexedSearchIgnoredWorkingDirs,
   remoteResultsFromFanoutPages,
   stampRemoteSearchResponse,
+  type ConversationSearchRequest,
   type ConversationSearchResponse,
   type ConversationSearchResultItem,
 } from '../conversationSearch.js';
+
+const feature = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../cindyMakeFeature.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../cindyMakeFeature.js')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
 
 function result(
   id: string,
@@ -50,7 +58,63 @@ function response(results: ConversationSearchResultItem[]): ConversationSearchRe
   };
 }
 
+describe('remoteConversationSearchRequest', () => {
+  afterEach(() => { feature.enabled = false; });
+
+  it.each([undefined, 1, 3, 24, 50, 100])('uses the bounded remote candidate pool for limit %s', (limit) => {
+    const request = { query: 'needle', limit };
+    expect(remoteConversationSearchRequest(request)).toEqual({ query: 'needle', limit: 50 });
+    expect(request.limit).toBe(limit);
+  });
+
+  it('preserves origin filters and search options without mutating the caller', () => {
+    const request = Object.freeze<ConversationSearchRequest>({
+      query: 'needle',
+      limit: 3,
+      sortBy: 'activityDesc',
+      semanticMode: 'keyword',
+      includeArchived: true,
+      unnamedLabel: 'Untitled',
+      filters: { sessionIds: ['ordinary'], workingDirs: ['/repo'], agentKind: 'pi', status: 'archived', lastActivity: '7d' },
+    });
+    const remoteRequest = remoteConversationSearchRequest(request);
+    expect(remoteRequest).toEqual({ ...request, limit: 50 });
+    expect(remoteRequest.filters).toBe(request.filters);
+    expect(request.limit).toBe(3);
+  });
+
+  it('returns ordinary hits after an older host truncates the expanded request', () => {
+    const request = { query: 'needle', limit: 1 };
+    const candidates = [
+      result('make', 100, { source: 'cindy-make', deviceLinkDeviceId: 'dev-a' }),
+      result('merge', 99, { source: 'cindy-make-merge', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary', 2, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary-next', 1, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+    ];
+    const remoteRequest = remoteConversationSearchRequest(request);
+    const page = response(candidates.slice(0, remoteRequest.limit));
+    expect(mergeConversationSearchFanout([page], request.limit).results.map((item) => item.session.id)).toEqual(['ordinary']);
+    expect(remoteResultsFromFanoutPages([page]).map((item) => item.session.id)).toEqual(['ordinary', 'ordinary-next']);
+  });
+
+  it('leaves the original request unchanged when Cindy Make is enabled', () => {
+    feature.enabled = true;
+    const request = { query: 'needle', limit: 3 };
+    expect(remoteConversationSearchRequest(request)).toBe(request);
+  });
+});
+
 describe('merge and stamp', () => {
+  it('excludes hidden Make sources before limiting indexed or reused remote hits', () => {
+    const page = response([
+      result('make', 100, { source: 'cindy-make', deviceLinkDeviceId: 'dev-a' }),
+      result('merge', 99, { source: 'cindy-make-merge', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary', 1, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+    ]);
+    expect(mergeConversationSearchFanout([page], 1).results.map(item => item.session.id)).toEqual(['ordinary']);
+    expect(remoteResultsFromFanoutPages([page]).map(item => item.session.id)).toEqual(['ordinary']);
+    expect(filterResultsByRequestFilters(page, {}).results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('keeps same-id hits from different devices and stamps origin', () => {
     const remote = stampRemoteSearchResponse(response([result('same', 10)]), {
       deviceId: 'dev-a',

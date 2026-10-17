@@ -150,7 +150,9 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(workdirBrowseRouteSource).toContain('if (!isAgentIslandSupported()) return;');
     expect(workdirBrowseRouteSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(agentIslandVisibleSessionId)');
     expect(orcaWorkerPanelSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds)');
-    expect(orcaWorkerPanelSource).toContain('viewVisible && workerSessionId && workerSessionId !== leadSessionId');
+    expect(orcaWorkerPanelSource).toContain(
+      'workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId',
+    );
   });
 
   it('acknowledges notification focus navigation to collapse Agent Island after jumping', () => {

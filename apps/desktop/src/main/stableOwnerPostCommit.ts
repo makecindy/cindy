@@ -1,8 +1,4 @@
-export type StableOwnerPostCommitOutcome =
-  | 'completed'
-  | 'deferred'
-  | 'failed'
-  | 'not-applicable';
+export type StableOwnerPostCommitOutcome = 'completed' | 'deferred' | 'failed' | 'not-applicable';
 
 export interface StableOwnerPostCommitContext {
   reason: string;
@@ -30,6 +26,83 @@ interface StableOwnerPostCommitCoordinatorOptions {
 }
 
 const DEFAULT_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000] as const;
+
+/**
+ * Bounds a background provisioning stage without pretending to cancel a disk
+ * transaction. A timed-out operation keeps its slot until it actually settles:
+ * retries and another owner cannot start a second writer behind its back.
+ * Other stages may continue, and late failures are always observed.
+ */
+export class StableOwnerPostCommitStep {
+  private inFlight: {
+    scopeKey: string;
+    result: Promise<Exclude<StableOwnerPostCommitOutcome, 'not-applicable'>>;
+  } | null = null;
+
+  constructor(
+    private readonly options: {
+      name: string;
+      timeoutMs: number;
+      warn: (message: string, meta: Record<string, unknown>) => void;
+    },
+  ) {}
+
+  run(
+    scopeKey: string,
+    task: () => Promise<Exclude<StableOwnerPostCommitOutcome, 'not-applicable'>>,
+  ): Promise<Exclude<StableOwnerPostCommitOutcome, 'not-applicable'>> {
+    if (this.inFlight) {
+      return this.inFlight.scopeKey === scopeKey
+        ? this.inFlight.result
+        : Promise.resolve('deferred');
+    }
+    let finish!: (outcome: Exclude<StableOwnerPostCommitOutcome, 'not-applicable'>) => void;
+    const result = new Promise<Exclude<StableOwnerPostCommitOutcome, 'not-applicable'>>(
+      (resolve) => {
+        finish = resolve;
+      },
+    );
+    const flight = { scopeKey, result };
+    this.inFlight = flight;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      this.options.warn('owner background stage timed out; operation remains in flight', {
+        stage: this.options.name,
+        timeoutMs: this.options.timeoutMs,
+      });
+      finish('failed');
+    }, this.options.timeoutMs);
+    timer.unref?.();
+    // Observe synchronous throws too. No retry timer releases the actual writer.
+    void Promise.resolve()
+      .then(task)
+      .then(
+        (outcome) => {
+          clearTimeout(timer);
+          if (this.inFlight === flight) this.inFlight = null;
+          if (timedOut) {
+            this.options.warn('owner background stage settled after timeout', {
+              stage: this.options.name,
+              outcome,
+            });
+          }
+          finish(outcome);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          if (this.inFlight === flight) this.inFlight = null;
+          this.options.warn('owner background stage failed', {
+            stage: this.options.name,
+            timedOut,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          finish('failed');
+        },
+      );
+    return result;
+  }
+}
 
 /**
  * Serializes the work that must run after the durable Ghost projection

@@ -4,9 +4,11 @@ export interface AgentIslandSessionPatch {
   title?: unknown;
   workingDir?: unknown;
   workspaceKind?: unknown;
+  /** 插件后台隐藏时刻；非空 = 任务转入后台，灵动岛与菜单栏收起该任务。 */
+  hiddenAt?: unknown;
 }
 
-/** 把本地 session 归档/删除和 metadata 更新同步给 Agent Island。 */
+/** 把本地 session 归档/删除/转入后台和 metadata 更新同步给 Agent Island。 */
 export function notifyAgentIslandSessionPatch(
   sessionId: string,
   patch: AgentIslandSessionPatch,
@@ -15,7 +17,11 @@ export function notifyAgentIslandSessionPatch(
     .then(({ getAgentIslandService }) => {
       const service = getAgentIslandService();
       if (!service) return;
-      if (patch.status === 'archived' || patch.status === 'deleted') {
+      if (
+        patch.status === 'archived' ||
+        patch.status === 'deleted' ||
+        (patch.hiddenAt !== undefined && patch.hiddenAt !== null)
+      ) {
         service.handleSessionClosed(sessionId);
         return;
       }

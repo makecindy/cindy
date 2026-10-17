@@ -66,7 +66,38 @@ export function browserViewportScript(viewport: BrowserViewport): string {
       try { Object.defineProperty(window, 'cindyViewport', { configurable: true, get: () => value }); } catch {}
       window.dispatchEvent(new CustomEvent('cindyviewportchange', { detail: value }));
     };
-    const schedule = () => { if (!pending) pending = requestAnimationFrame(publish); };
+    // The native view's backing would become the canvas of pages that set no background
+    // (white text on white, or black on a dark theme). Like Safari, paint the canvas from the
+    // page's own used color scheme; any page-defined html/body background wins.
+    // A background image (gradients included) counts as a page background too. The color goes on
+    // body: with html transparent it propagates to the whole canvas, and Canvas then resolves with
+    // body's own color-scheme (inherited from html unless body declares one).
+    const painted = Symbol.for('cindy.browserViewport.canvas');
+    const paintCanvas = () => {
+      const root = document.documentElement;
+      const body = document.body;
+      if (!root || !body || body[painted]) return;
+      // Computed colors keep the channels of a transparent color (rgba(255, 0, 0, 0)); read alpha.
+      const zeroAlpha = color => {
+        if (color === 'transparent') return true;
+        const open = color.indexOf('(');
+        const close = color.lastIndexOf(')');
+        if (open < 0 || close < open) return false;
+        const channels = color.slice(open + 1, close);
+        const slash = channels.lastIndexOf('/');
+        const commas = channels.split(',');
+        const alpha = slash >= 0 ? channels.slice(slash + 1) : commas.length === 4 ? commas[3] : null;
+        return alpha !== null && parseFloat(alpha) === 0;
+      };
+      const bare = element => {
+        const style = getComputedStyle(element);
+        return zeroAlpha(style.backgroundColor) && style.backgroundImage === 'none';
+      };
+      if (!bare(root) || !bare(body)) return;
+      body.style.backgroundColor = 'Canvas';
+      body[painted] = true;
+    };
+    const schedule = () => { if (!pending) pending = requestAnimationFrame(() => { paintCanvas(); publish(); }); };
     window.addEventListener('resize', schedule);
     window.addEventListener('pageshow', schedule);
     window.addEventListener('cindy:viewport-scroll', schedule);
@@ -80,6 +111,7 @@ export function browserViewportScript(viewport: BrowserViewport): string {
       document.removeEventListener('DOMContentLoaded', schedule);
       window.visualViewport?.removeEventListener('resize', schedule);
     };
+    paintCanvas();
     publish();
   })(); true;`;
 }

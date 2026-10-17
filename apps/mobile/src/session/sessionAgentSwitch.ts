@@ -53,14 +53,13 @@ export function sessionAgentKind(session: Pick<RemoteSession, 'agentKind'>): Mob
     : 'claude-code';
 }
 
-/** 手机是否应展示 Agent 分段；远程 SSH / Orca 会话继续保持单 Agent。 */
+/** 手机是否应展示 Agent 分段；远程 SSH 仍由被控端能力限制。 */
 export function supportsMobileSessionAgentSwitch(
   session: Pick<RemoteSession, 'remoteHostId' | 'orcaRole'>,
   capabilities: MobileAgentCapabilities | null,
 ): boolean {
   return capabilities?.supportsSessionAgentSwitch === true
-    && !session.remoteHostId
-    && !session.orcaRole;
+    && !session.remoteHostId;
 }
 
 export function mobileAgentLabel(agentKind: MobileSessionAgentKind): string {

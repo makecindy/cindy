@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/acda3a49c9907075859872bce4297dd4fe5f737e8ffa940a088b21574e4ac10a",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/1aa3beb5f04714ee0de43092e6c4066c5f3ac01fa5e18c5352fbd79cdc95fa63",
   "creationInfo": {
-    "created": "2026-10-06T01:25:03Z",
+    "created": "2026-10-16T03:37:01Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -32,6 +32,26 @@
       "copyrightText": "NOASSERTION"
     },
     {
+      "name": "3D-Speaker CAM++ zh-en advanced (runtime-downloaded model)",
+      "SPDXID": "SPDXRef-Package-2eb4a603ce39b403",
+      "versionInfo": "sha256:aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+      "downloadLocation": "https://modelscope.cn/models/iic/speech_campplus_sv_zh_en_16k-common_advanced",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Barlow Condensed fonts",
+      "SPDXID": "SPDXRef-Package-b0a00c4d6ffa6d66",
+      "versionInfo": "bundled",
+      "downloadLocation": "https://github.com/jpt/barlow",
+      "filesAnalyzed": false,
+      "licenseConcluded": "OFL-1.1",
+      "licenseDeclared": "OFL-1.1",
+      "copyrightText": "NOASSERTION"
+    },
+    {
       "name": "Code Island NotchPanelShape & mascot parameters (adapted)",
       "SPDXID": "SPDXRef-Package-19432fe60a02f6f2",
       "versionInfo": "adapted",
@@ -53,8 +73,8 @@
     },
     {
       "name": "Electron (bundled runtime)",
-      "SPDXID": "SPDXRef-Package-e57785feb130dc56",
-      "versionInfo": "41.10.3",
+      "SPDXID": "SPDXRef-Package-bf1afe61354bc40a",
+      "versionInfo": "42.11.12",
       "downloadLocation": "https://github.com/electron/electron",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -96,6 +116,16 @@
       "SPDXID": "SPDXRef-Package-42f340d5003334bd",
       "versionInfo": "326d24bd40d9858e24e1036ae739c27c72eeb543",
       "downloadLocation": "https://github.com/can1357/oh-my-pi/tree/326d24bd40d9858e24e1036ae739c27c72eeb543",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ONNX Runtime (native inference library)",
+      "SPDXID": "SPDXRef-Package-4e0ad65af2083a00",
+      "versionInfo": "bundled with sherpa-onnx-node 1.13.8",
+      "downloadLocation": "https://github.com/microsoft/onnxruntime",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -169,6 +199,16 @@
       "filesAnalyzed": false,
       "licenseConcluded": "MIT OR Unlicense",
       "licenseDeclared": "MIT OR Unlicense",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Silero VAD (runtime-downloaded model)",
+      "SPDXID": "SPDXRef-Package-1d15b57c9978e089",
+      "versionInfo": "sha256:9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "downloadLocation": "https://github.com/snakers4/silero-vad",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
       "copyrightText": "NOASSERTION"
     },
     {
@@ -2116,6 +2156,23 @@
       ]
     },
     {
+      "name": "@modelcontextprotocol/ext-apps",
+      "SPDXID": "SPDXRef-Package-9e0306ad8a98ba5b",
+      "versionInfo": "1.7.5",
+      "downloadLocation": "https://github.com/modelcontextprotocol/ext-apps",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40modelcontextprotocol/ext-apps@1.7.5"
+        }
+      ]
+    },
+    {
       "name": "@modelcontextprotocol/sdk",
       "SPDXID": "SPDXRef-Package-5d5fbd6fc6e1950f",
       "versionInfo": "1.29.0",
@@ -3353,6 +3410,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40smithy/util-utf8@2.3.0"
+        }
+      ]
+    },
+    {
+      "name": "@standard-schema/spec",
+      "SPDXID": "SPDXRef-Package-e38b4bfcbb9b79f3",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "https://github.com/standard-schema/standard-schema",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40standard-schema/spec@1.1.0"
         }
       ]
     },
@@ -13948,6 +14022,57 @@
       ]
     },
     {
+      "name": "sherpa-onnx-darwin-arm64",
+      "SPDXID": "SPDXRef-Package-158e910b72798972",
+      "versionInfo": "1.13.8",
+      "downloadLocation": "https://github.com/csukuangfj/sherpa-onnx",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/sherpa-onnx-darwin-arm64@1.13.8"
+        }
+      ]
+    },
+    {
+      "name": "sherpa-onnx-darwin-x64",
+      "SPDXID": "SPDXRef-Package-98e8dc28219f638f",
+      "versionInfo": "1.13.8",
+      "downloadLocation": "https://github.com/csukuangfj/sherpa-onnx",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/sherpa-onnx-darwin-x64@1.13.8"
+        }
+      ]
+    },
+    {
+      "name": "sherpa-onnx-node",
+      "SPDXID": "SPDXRef-Package-5a79f55f36b8ec3a",
+      "versionInfo": "1.13.8",
+      "downloadLocation": "https://github.com/csukuangfj/sherpa-onnx",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/sherpa-onnx-node@1.13.8"
+        }
+      ]
+    },
+    {
       "name": "side-channel",
       "SPDXID": "SPDXRef-Package-b92f70c0533794b9",
       "versionInfo": "1.1.1",
@@ -15679,6 +15804,16 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-2eb4a603ce39b403"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-b0a00c4d6ffa6d66"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-19432fe60a02f6f2"
     },
     {
@@ -15689,7 +15824,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e57785feb130dc56"
+      "relatedSpdxElement": "SPDXRef-Package-bf1afe61354bc40a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -15710,6 +15845,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-42f340d5003334bd"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4e0ad65af2083a00"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -15745,6 +15885,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-616963e2fc3a9428"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-1d15b57c9978e089"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16329,6 +16474,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-9e0306ad8a98ba5b"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5d5fbd6fc6e1950f"
     },
     {
@@ -16690,6 +16840,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-1bdd35301f7ae8c9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e38b4bfcbb9b79f3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -19805,6 +19960,21 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-9905b9d4e1f2b3aa"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-158e910b72798972"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-98e8dc28219f638f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5a79f55f36b8ec3a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

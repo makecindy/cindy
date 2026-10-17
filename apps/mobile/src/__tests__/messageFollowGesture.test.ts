@@ -6,6 +6,7 @@ import * as scrollModel from '@/session/messageScroll';
 import { createMobileTailFollower } from '@/session/messageTailFollower';
 import { RichContentRuntime } from '@/session/richContentRuntime';
 import { mobileDebugEnabled, mobileDebugLog, setMobileDebugSink } from '@/debug/mobileDebugLog';
+import { createScrollDebugSampler } from '@/debug/scrollDebugSampler';
 
 // Execute the production callbacks without mounting Markdown/media/native views. Unlike source
 // assertions, this harness interleaves touch, native scroll, content-size, timers and frame delivery.
@@ -83,6 +84,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     getCurrentHistoryTopOffsetAdjustment: vi.fn(() => 0),
     resolveMobileMessageHistoryAnchorOffset: vi.fn(() => 600),
     ...scrollModel, ...state, createMobileTailFollower, mobileDebugEnabled, mobileDebugLog,
+    sampleScrollDebug: createScrollDebugSampler(),
     initialRevealProgress: { setValue: vi.fn() }, setListRevealed: vi.fn(),
     listRef: ref({
       getState: () => ({ scrollLength: 800, scroll: state.scrollMetricsRef.current.offsetY,

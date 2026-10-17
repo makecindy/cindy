@@ -20,9 +20,10 @@ import { usageHistoryAgentColor, usageHistoryModelColor } from './usageHistoryCo
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
-const TH_CLASS =
+// 表格样式、色块与占比格也给「远程与分享」页的用量表复用(provider-groups.md §7)，两处保持同一套。
+export const TH_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-12 font-medium text-[var(--text-secondary)]';
-const TD_CLASS =
+export const TD_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-13 tabular-nums';
 
 /**
@@ -31,9 +32,9 @@ const TD_CLASS =
  * 其余列分完后剩下的空间, 内层的 truncate 由此生效 (见 #3393 的同一段分析)。
  * pl-3 是列间距, 否则相邻两列的数字会贴到一起; 首列自身取 pl-0。
  */
-const FIRST_COL_CLASS = 'w-full max-w-0 pl-0';
+export const FIRST_COL_CLASS = 'w-full max-w-0 pl-0';
 
-function Swatch({ color }: { color: string }): React.JSX.Element {
+export function Swatch({ color }: { color: string }): React.JSX.Element {
   return <span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />;
 }
 
@@ -41,7 +42,7 @@ function HitRateCell({ value }: { value: number | null }): React.JSX.Element {
   return <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>;
 }
 
-function ShareCell({ share, color }: { share: number; color: string }): React.JSX.Element {
+export function ShareCell({ share, color }: { share: number; color: string }): React.JSX.Element {
   return (
     <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
       <span

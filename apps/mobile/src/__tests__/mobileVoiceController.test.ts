@@ -1225,6 +1225,7 @@ describe('mobileVoiceController', () => {
 
   it('ends a silent recording at stop without waiting for the pending ASR handshake', async () => {
     const asr = new GatedStartAsrProvider();
+    const onError = vi.fn();
     const states: string[] = [];
     const order: string[] = [];
     let micStopped = false;
@@ -1233,6 +1234,7 @@ describe('mobileVoiceController', () => {
       initialDraft: 'prefix',
       asr,
       refiner: null,
+      onError,
       startAudio: async ({ onChunk }) => {
         // Digital silence plus a noise floor well under the sound threshold.
         onChunk({ pcm16: new Int16Array(320).buffer, trace: { capturedAt: 0, convertedAt: 0, chunkIndex: 0, sampleRate: 16_000, durationMs: 20 } });
@@ -1258,6 +1260,7 @@ describe('mobileVoiceController', () => {
     // A handshake failing after the silent end is not an error for the caller.
     asr.failStart(new Error('late connect failure'));
     await expect(startPromise).resolves.toBeUndefined();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('submits a ready pause refinement and keeps the raw transcript for dictionary learning', async () => {

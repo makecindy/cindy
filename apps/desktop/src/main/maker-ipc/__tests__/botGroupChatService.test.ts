@@ -290,7 +290,14 @@ describe('botGroupChatService', () => {
       });
     }
     const group = await waitForIdle(harness, groupId);
-    expect(group.lastReplyAt).toBe(Math.max(...group.messages.filter(m => m.authorKind === 'bot' && m.kind === 'message').map(m => m.createdAt)));
+    expect(group.lastReplyAt).toBe(Math.max(...group.messages.filter(m => m.authorKind === 'bot' && (m.kind === 'message' || m.kind === 'plan')).map(m => m.createdAt)));
+    // Incoming times are the Bots' messages, oldest first, without the owner's own or notices.
+    const incoming = group.messages.filter(m => m.authorKind === 'bot' && (m.kind === 'message' || m.kind === 'plan'))
+      .sort((a, b) => a.sequence - b.sequence).map(m => new Date(m.createdAt).toISOString());
+    expect(incoming.length).toBeGreaterThan(0);
+    expect(group.incomingMessageTimes).toEqual(incoming);
+    const listed = await harness.service.listGroups();
+    expect(listed.ok && listed.groups.find(g => g.id === groupId)?.incomingMessageTimes).toEqual(incoming);
     // Second circle takes turns and sees the whole first circle.
     expect(harness.dispatches.slice(3).map((call) => call.botId)).toEqual(['xiaoman', 'abu', 'mimi']);
     expect(harness.dispatches[3]!.prompt).toContain('咪咪的看法');
@@ -395,6 +402,37 @@ describe('botGroupChatService', () => {
       .toEqual([['member-failed', '咪咪']]);
   });
 
+  it('preserves a safe dispatch failure category for a local-only group', async () => {
+    const harness = createHarness(() => null, {
+      dispatch: async () => ({ ok: false, errorCode: 'INTERNAL', message: 'authentication_failed private credential' }),
+    });
+    const groupId = await createGroup(harness, ['mimi', 'abu']);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'rejected-input' });
+    const group = await waitForIdle(harness, groupId);
+    expect(group.messages.filter(message => message.kind === 'notice')).toEqual([
+      expect.objectContaining({ noticeCode: 'member-failed', runtimeFailureCode: 'AUTH_REQUIRED' }),
+    ]);
+    expect(JSON.stringify(group.messages)).not.toContain('private credential');
+  });
+
+  it.each([
+    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
+    ['MEMBER_UNAVAILABLE', undefined],
+  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode) => {
+    const harness = createHarness(() => null, {
+      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+    });
+    const groupId = await createGroup(harness, ['mimi', 'abu']);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'no-lane' });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toEqual([]);
+    expect(group.round.speakers).toEqual([]);
+    expect(group.messages.filter(message => message.kind === 'notice')).toEqual([
+      expect.objectContaining({ noticeCode: 'member-unavailable', runtimeFailureCode: failureCode }),
+    ]);
+    expect(JSON.stringify(group.messages)).not.toContain('private preparation details');
+  });
+
   it('a round superseded while a member prepares never dispatches and never steals the new waiter', async () => {
     let releaseSync!: () => void;
     const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
@@ -450,6 +488,7 @@ describe('botGroupChatService', () => {
     expect(harness.abortLane).toHaveBeenCalledWith('lane-mimi');
     expect(group.messages.filter((m) => m.kind === 'notice').map((m) => [m.noticeCode, m.authorName]))
       .toEqual([['member-timeout', '咪咪']]);
+    expect(group.messages.find((m) => m.kind === 'notice')?.runtimeFailureCode).toBe('RUNTIME_TIMEOUT');
     expect(harness.dispatches.map((call) => call.botId)).toEqual(['mimi', 'xiaoman', 'abu']);
   });
 
@@ -615,6 +654,13 @@ describe('botGroupChatService 分工', () => {
     const plan = await proposePlan(harness, groupId);
     const group = await detailOf(harness, groupId);
 
+    // The plan card is the newest incoming item: the read position seeded from lastReplyAt
+    // covers it, and the unread list counts it (bot-group-chat.md §5 未读).
+    const planMessage = group.messages.filter(m => m.authorKind === 'bot').sort((a, b) => b.sequence - a.sequence)[0]!;
+    expect(planMessage.kind).toBe('plan');
+    expect(group.lastReplyAt).toBe(planMessage.createdAt);
+    expect(group.incomingMessageTimes?.at(-1)).toBe(new Date(planMessage.createdAt).toISOString());
+
     expect(decidePlan).toHaveBeenCalledTimes(1);
     expect(decidePlan.mock.calls[0]![0]).toMatchObject({
       mode: 'auto',
@@ -703,6 +749,40 @@ describe('botGroupChatService 分工', () => {
     expect(second.steps.map((step) => step.botName)).toEqual(['小满', '阿布']);
     expect(h.sqlite!.prepare('SELECT request_text AS text FROM bot_group_plans WHERE id = ?').get(second.id))
       .toEqual({ text: '帮我给官网做一个介绍页' });
+  });
+
+  it('preserves the timeout category when a local plan step times out', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(), stepTurnTimeoutMs: 1_000 });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await vi.waitFor(() => expect(harness.dispatches.at(-1)?.sessionId).toBe('plan-mimi'));
+    await vi.advanceTimersByTimeAsync(1_100);
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.abortLane).toHaveBeenCalledWith('plan-mimi');
+    expect(openPlan(group).steps[0].status).toBe('failed');
+    expect(group.messages.find((message) => message.kind === 'notice' && message.planId === plan.id))
+      .toMatchObject({ noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT', content: '' });
+  });
+
+  it.each([
+    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
+    ['MEMBER_UNAVAILABLE', undefined],
+  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode) => {
+    const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(),
+      ensureLane: async () => ({ ok: false, errorCode, message: 'private preparation details' }),
+    });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toEqual([]);
+    expect(openPlan(group).status).toBe('waiting');
+    expect(openPlan(group).steps[0].status).toBe('failed');
+    expect(group.messages.find(message => message.kind === 'notice' && message.planId === plan.id))
+      .toMatchObject({ noticeCode: 'member-unavailable', runtimeFailureCode: failureCode, content: '' });
+    expect(JSON.stringify(group.messages)).not.toContain('private preparation details');
   });
 
   it('runs the steps one at a time in the plan work directory and stops after each', async () => {

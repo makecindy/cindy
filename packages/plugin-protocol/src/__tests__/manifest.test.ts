@@ -1865,3 +1865,15 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
     }
   });
 });
+
+describe('agent.hiddenTasks declaration', () => {
+  const v3 = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'bg-tasks', name: 'Background', version: '1.0.0', entry: 'main.js' };
+  it('accepts it only together with agent.tasks', () => {
+    const ok = validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: true } });
+    expect(ok.ok && ok.manifest.agent).toEqual({ tasks: true, hiddenTasks: true });
+    expect(validateGhostManifest({ ...v3, agent: { hiddenTasks: true } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: 'yes' } }).ok).toBe(false);
+    const visible = validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: false } });
+    expect(visible.ok && visible.manifest.agent).toEqual({ tasks: true });
+  });
+});

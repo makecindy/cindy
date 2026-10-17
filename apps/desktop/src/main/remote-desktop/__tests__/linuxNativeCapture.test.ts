@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
@@ -78,7 +79,10 @@ it('times out a stalled child and rejects unsupported display requests', async (
   expect(h.binary).not.toHaveBeenCalled();
   vi.useFakeTimers();
   const pending = owner.frame('wayland-portal');
+  // A starting helper keeps the cold-start budget instead of the steady-state bound.
   await vi.advanceTimersByTimeAsync(3000);
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(REMOTE_DESKTOP_OFFER_BUDGET.captureReadyMs - 3000);
   await expect(pending).resolves.toBeNull();
   expect(child.kill).toHaveBeenCalledOnce();
 });

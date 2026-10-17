@@ -31,6 +31,7 @@ vi.mock('original-fs', async () => {
 
 import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
 
+import { Session as RealSession } from '@cindy/maker-core';
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
@@ -54,6 +55,13 @@ const mocks = vi.hoisted(() => ({
   hydrateSessionProvider: vi.fn(),
   setSessionFastMode: vi.fn(),
   setSessionEffort: vi.fn(),
+  executePreRunHook: vi.fn(),
+}));
+
+// 只有声明了 preRunHook 的用例会走到这里；其它用例不调用。
+vi.mock('../pre-run-hook', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../pre-run-hook')>()),
+  executePreRunHook: mocks.executePreRunHook,
 }));
 
 vi.mock('../../maker-host/session-provider-store.js', () => ({
@@ -1977,7 +1985,12 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const queue = createQueueHarness({ busy: false });
     const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
     const fire = runner.fire(
-      heartbeatSchedule({ targetSessionId: fresh ? undefined : SESSION_ID, workingDir: '/work' }),
+      heartbeatSchedule({
+        targetSessionId: fresh ? undefined : SESSION_ID,
+        workingDir: '/work',
+        // 新建会话的任务没接默认模型解析;显式给模型,本用例只关心 Stop 收口。
+        ...(fresh ? { model: 'claude-opus-5-5' } : {}),
+      }),
       createFireContext(),
     );
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
@@ -2670,4 +2683,377 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
+});
+
+/**
+ * 2026-10-13 真机：伙伴后台任务会话按发起时的 Auto 落库，但首次派发经 lazy-resume 以
+ * bypass 启动。绑定它的 PR 心跳在排队受理时读到「落库 Auto ≠ 运行态 Full access」，
+ * 每轮按 routine-dispatch-invalidated 顺延并撤销派发，9 个心跳共顺延四千余次。
+ * 运行态权限用真实 maker-core Session 的稳定快照，库内值与排队项沿用生产形态。
+ */
+describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
+  const persisted = { permissionMode: 'auto', planModeEnabled: false } as const;
+  const queuedFromRow = { permissionMode: 'auto', planMode: false } as const;
+
+  function withRuntimePermission(
+    harness: FakeSessionHarness,
+    startedWith: 'auto' | 'bypassPermissions',
+  ) {
+    const logger = {
+      trace() {},
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+      fatal() {},
+      child() {
+        return logger;
+      },
+    };
+    let planMode = false;
+    const runtime = new RealSession({
+      id: SESSION_ID,
+      agentKind: 'claude-code',
+      workDir: '/tmp/bound',
+      permissionMode: startedWith,
+      turnStallMs: 0,
+      handle: {
+        setInteractionResolver() {},
+        setPermissionMode: async () => undefined,
+        setPlanMode: async (enabled: boolean) => {
+          planMode = enabled;
+        },
+        getPlanMode: () => planMode,
+        getExecutionPlanMode: () => planMode,
+        close: async () => undefined,
+      } as never,
+      capabilities: {
+        permissionModes: [{ id: 'ask' }, { id: 'auto' }, { id: 'bypassPermissions' }],
+        setPermissionModeMidSession: { supported: true },
+        planMode: { supported: true },
+      } as never,
+      logger,
+    });
+    Object.defineProperty(harness.session, 'stablePermissionModeState', {
+      get: () => runtime.stablePermissionModeState,
+    });
+    Object.defineProperty(harness.session, 'stablePlanModeState', {
+      get: () => runtime.stablePlanModeState,
+    });
+    return runtime;
+  }
+
+  beforeEach(() => {
+    mocks.getSessionFsSnapshot.mockResolvedValue(persisted);
+  });
+
+  /** 触发一次排队心跳并按落库值受理；返回 fire 的结局（resolve 值或 reject 原因）。 */
+  async function fireAndAccept(
+    runner: MakerScheduleRunner,
+    queue: QueueHarness,
+    ctx = createFireContext(),
+    schedule = heartbeatSchedule(),
+  ) {
+    const before = queue.enqueueCalls.length;
+    const fire = runner.fire(schedule, ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(before + 1));
+    await queue.accept(queuedFromRow);
+    return fire.then(
+      (result) => ({ result, error: undefined as Error | undefined, ctx }),
+      (error: Error) => ({ result: undefined, error, ctx }),
+    );
+  }
+
+  it('surfaces a settled mismatch as one deduplicable failure instead of silently deferring forever', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const runtime = withRuntimePermission(harness, 'bypassPermissions');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier, logger } = createRunnerHarness(harness.session, queue.deps);
+
+    // 前两次可能只是落库与运行态之间的先后差：照旧静默顺延。
+    for (let round = 1; round <= 2; round += 1) {
+      const { result, ctx } = await fireAndAccept(runner, queue);
+      expect(result).toMatchObject({ sessionId: SESSION_ID, deferred: true });
+      expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    }
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[runner] queued heartbeat permission check failed before dispatch',
+      expect.objectContaining({
+        saved: { permissionMode: 'auto', planMode: false },
+        running: { permissionMode: 'bypassPermissions', planMode: false },
+        queued: queuedFromRow,
+        sessionReplaced: false,
+        settledMismatch: true,
+      }),
+    );
+
+    // 第三次起：可见失败，走既有失败通知；文案逐次一致，通知侧才能去重。
+    const third = await fireAndAccept(runner, queue);
+    const fourth = await fireAndAccept(runner, queue);
+    for (const { error, ctx } of [third, fourth]) {
+      expect(error?.message).toContain('[SCHEDULED_TASK_PERMISSION_MISMATCH]');
+      expect(error?.message).toContain('saved as auto, Plan off');
+      expect(error?.message).toContain('uses bypassPermissions, Plan off');
+      expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    }
+    expect(third.error?.message).toBe(fourth.error?.message);
+    expect(third.error?.message).not.toContain('run-q1');
+    expect(notifier.notify).toHaveBeenCalledTimes(2);
+    expect(latestNotifiedRun(notifier)).toMatchObject({
+      status: 'failed',
+      errorMsg: fourth.error?.message,
+    });
+    // 每次都在 vendor dispatch 前取消，从未真正执行。
+    expect(harness.session.abort).toHaveBeenCalledTimes(4);
+    expect(harness.listenerCount()).toBe(0);
+    expect(runtimeMode(runtime)).toBe('bypassPermissions');
+  });
+
+  it('clears the streak once the running session matches the saved setting again', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const runtime = withRuntimePermission(harness, 'bypassPermissions');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier, logger } = createRunnerHarness(harness.session, queue.deps);
+
+    for (let round = 1; round <= 3; round += 1) await fireAndAccept(runner, queue);
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+
+    // 真实恢复：运行态被改回落库的 Auto（等同按保存档位重建后的会话）。
+    await runtime.setPermissionMode('auto');
+    const ctx = createFireContext();
+    const fire = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(4));
+    await queue.accept(queuedFromRow);
+    expect(ctx.onTurnActive).toHaveBeenCalledWith(SESSION_ID);
+    harness.emit({
+      type: 'text',
+      data: { text: 'recovered', isFinal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    expect(await fire).toMatchObject({ resultText: 'recovered' });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
+    expect(logger.info).toHaveBeenCalledWith(
+      '[runner] queued heartbeat permissions match again',
+      expect.objectContaining({ scheduleId: 'schedule-hb', previousConsecutiveMismatches: 3 }),
+    );
+
+    // 再次失配从头计数：重新出现的第一次仍是静默顺延。
+    await runtime.setPermissionMode('bypassPermissions');
+    expect((await fireAndAccept(runner, queue)).result).toMatchObject({ deferred: true });
+    expect(notifier.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('hands the notifier the same passed gate result the run row records', async () => {
+    const gate = {
+      status: 'passed',
+      decision: 'run',
+      exitCode: 0,
+      timedOut: false,
+      spawnError: undefined,
+      durationMs: 5,
+      stdout: 'CINDY_PRECHECK_OK',
+      stderr: 'gate warning on stderr',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      aborted: false,
+    };
+    mocks.executePreRunHook.mockResolvedValue(gate);
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    withRuntimePermission(harness, 'bypassPermissions');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    const schedule = heartbeatSchedule({ preRunHook: { command: 'node gate.mjs' } } as never);
+    const recorded: unknown[] = [];
+
+    for (let round = 1; round <= 3; round += 1) {
+      const ctx = createFireContext();
+      (ctx as { onPreRunHookCompleted?: (r: unknown) => void }).onPreRunHookCompleted = (r) => {
+        recorded.push(r);
+      };
+      await fireAndAccept(runner, queue, ctx, schedule);
+    }
+    expect(notifier.notify).toHaveBeenCalledOnce();
+    // 引擎写进 run 行的就是 onPreRunHookCompleted 收到的对象；通知带的必须是同一份。
+    expect(latestNotifiedRun(notifier).preRunHookResult).toBe(recorded.at(-1));
+    expect(latestNotifiedRun(notifier).preRunHookResult).toMatchObject({
+      stderr: 'gate warning on stderr',
+    });
+  });
+
+  // 「连续」只算同一运行实例上、同一组落库 / 运行态取值的稳定失配；中间夹着别的结论就重新计数。
+  it('restarts the count when a transient invalidation interrupts the streak', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    withRuntimePermission(harness, 'bypassPermissions');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    const stable = Object.getOwnPropertyDescriptor(harness.session, 'stablePermissionModeState')!;
+
+    for (let round = 1; round <= 2; round += 1) await fireAndAccept(runner, queue);
+    // 一次切换在途：读不到稳定快照，不是同一个失配结论。
+    Object.defineProperty(harness.session, 'stablePermissionModeState', { get: () => null });
+    expect((await fireAndAccept(runner, queue)).result).toMatchObject({ deferred: true });
+    Object.defineProperty(harness.session, 'stablePermissionModeState', stable);
+
+    for (let round = 1; round <= 2; round += 1) {
+      expect((await fireAndAccept(runner, queue)).result).toMatchObject({ deferred: true });
+    }
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect((await fireAndAccept(runner, queue)).error?.message).toContain(
+      '[SCHEDULED_TASK_PERMISSION_MISMATCH]',
+    );
+    expect(notifier.notify).toHaveBeenCalledOnce();
+  });
+
+  it('restarts the count on a replacement runtime instance', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    withRuntimePermission(harness, 'bypassPermissions');
+    Object.assign(harness.session, { instanceId: 'instance-a' });
+    const queue = createQueueHarness({ busy: true });
+    const f = createRunnerHarness(harness.session, queue.deps);
+
+    for (let round = 1; round <= 2; round += 1) await fireAndAccept(f.runner, queue);
+    const replacement = createSessionHarness(async () => ({ accepted: true }));
+    withRuntimePermission(replacement, 'bypassPermissions');
+    Object.assign(replacement.session, { instanceId: 'instance-b' });
+    f.replaceLiveSession(replacement.session);
+
+    for (let round = 1; round <= 2; round += 1) {
+      expect((await fireAndAccept(f.runner, queue)).result).toMatchObject({ deferred: true });
+    }
+    expect(f.notifier.notify).not.toHaveBeenCalled();
+    expect((await fireAndAccept(f.runner, queue)).error).toBeDefined();
+  });
+
+  it('restarts the count when the mismatched values change', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const runtime = withRuntimePermission(harness, 'bypassPermissions');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+
+    for (let round = 1; round <= 2; round += 1) await fireAndAccept(runner, queue);
+    await runtime.setPermissionMode('ask');
+    for (let round = 1; round <= 2; round += 1) {
+      expect((await fireAndAccept(runner, queue)).result).toMatchObject({ deferred: true });
+    }
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect((await fireAndAccept(runner, queue)).error?.message).toContain('uses ask, Plan off');
+  });
+
+  it('never escalates an in-flight permission switch, however long it lasts', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    withRuntimePermission(harness, 'auto');
+    // 切换在途：会话给不出稳定快照，属于会自行收敛的临时状态。
+    Object.defineProperty(harness.session, 'stablePermissionModeState', { get: () => null });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+
+    for (let round = 1; round <= 5; round += 1) {
+      expect((await fireAndAccept(runner, queue)).result).toMatchObject({ deferred: true });
+    }
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps RoutineEngine-owned retries as deferrals', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    withRuntimePermission(harness, 'bypassPermissions');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+
+    for (let round = 1; round <= 4; round += 1) {
+      const ctx = { ...createFireContext(), deferToCaller: true };
+      const { result } = await fireAndAccept(
+        runner,
+        queue,
+        ctx,
+        heartbeatSchedule({ source: 'bot', manual: true }),
+      );
+      expect(result).toMatchObject({ deferred: true });
+    }
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('runs the queued heartbeat to completion once the runtime uses the persisted mode', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const runtime = withRuntimePermission(harness, 'auto');
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+
+    const fire = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept(queuedFromRow);
+    expect(harness.session.abort).not.toHaveBeenCalled();
+    expect(ctx.onTurnActive).toHaveBeenCalledWith(SESSION_ID);
+    await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
+    harness.emit({
+      type: 'text',
+      data: { text: 'PR checks green; nothing to do', isFinal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+    const result = await fire;
+    expect(result).toMatchObject({
+      sessionId: SESSION_ID,
+      resultText: 'PR checks green; nothing to do',
+    });
+    expect(result.deferred).toBeUndefined();
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
+    expect(harness.listenerCount()).toBe(0);
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(runtimeMode(runtime)).toBe('auto');
+  });
+
+  // 修复只让「本来一致」的任务能派发；排队期间真实发生的变化仍必须在 vendor dispatch 前拦下。
+  it.each([
+    'runtime-widened',
+    'durable-narrowed',
+    'plan-enabled',
+    'plan-durable-only',
+    'instance-replaced',
+  ] as const)('still cancels the queued dispatch after a real %s change', async (change) => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const runtime = withRuntimePermission(harness, 'auto');
+    const queue = createQueueHarness({ busy: true });
+    const f = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+
+    const fire = f.runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    if (change === 'runtime-widened') await runtime.setPermissionMode('bypassPermissions');
+    if (change === 'durable-narrowed') {
+      await runtime.setPermissionMode('ask');
+      mocks.getSessionFsSnapshot.mockResolvedValue({ ...persisted, permissionMode: 'ask' });
+    }
+    if (change === 'plan-enabled') {
+      await runtime.setPlanMode(true);
+      mocks.getSessionFsSnapshot.mockResolvedValue({ ...persisted, planModeEnabled: true });
+    }
+    if (change === 'plan-durable-only') {
+      mocks.getSessionFsSnapshot.mockResolvedValue({ ...persisted, planModeEnabled: true });
+    }
+    if (change === 'instance-replaced') {
+      // 受理途中（读取权限快照时）Maker 换了运行实例：本次受理拿到的旧实例不能再派发。
+      const replacement = createSessionHarness(async () => ({ accepted: true }));
+      withRuntimePermission(replacement, 'auto');
+      mocks.getSessionFsSnapshot.mockImplementationOnce(async () => {
+        f.replaceLiveSession(replacement.session);
+        return persisted;
+      });
+    }
+    // 排队项仍是入队时从库里读出的 auto / false。
+    await queue.accept(queuedFromRow);
+
+    expect(await fire).toMatchObject({ sessionId: SESSION_ID, deferred: true });
+    expect(harness.session.abort).toHaveBeenCalledOnce();
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(f.notifier.notify).not.toHaveBeenCalled();
+    expect(harness.listenerCount()).toBe(0);
+  });
+
+  function runtimeMode(runtime: RealSession) {
+    return runtime.stablePermissionModeState?.mode ?? null;
+  }
 });

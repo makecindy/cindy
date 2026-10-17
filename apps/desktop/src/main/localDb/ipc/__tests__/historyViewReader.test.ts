@@ -56,6 +56,26 @@ describe('host history view', () => {
     expect(seen.sort((a, b) => Number(a) - Number(b))).toEqual(source.map((message) => message.id));
   });
 
+  it('keeps an interrupted turn folded when its cost-stamped answer starts the newer page', async () => {
+    let n = 0;
+    const say = (content: string, agentMeta?: object) => ({ ...row(n++, 'assistant'), content, ...(agentMeta ? { agentMeta } : {}) });
+    const source: HistoryMessageSource[] = [row(n++, 'user')];
+    for (let i = 0; i < 30; i++) source.push(say(`Still building ${i}`), row(n++));
+    source.push({ ...row(n++, 'user'), agentMeta: { delivery: 'steer' } }, row(n++));
+    const answer = say('Checking CI', { turnCompleted: false, turnCost: { amount: 5, currency: 'USD' } });
+    source.push(answer, row(n++));
+    for (let i = 0; i < 9; i++) source.push(row(n++, 'user'), say('Done', { turnCompleted: true }));
+    const { api } = reader(source);
+    const latest = await api.page('s');
+    expect(latest.items).toHaveLength(20);
+    expect(latest.nextCursor).toBe(answer.id);
+    const older = await api.page('s', latest.nextCursor!);
+    // One fold for the whole run before the steer, instead of a page of progress lines.
+    expect(older.items.map((item) => item.type === 'work' ? 'work' : item.messages[0].role))
+      .toEqual(['user', 'work', 'user', 'work']);
+    expect(older.hasMore).toBe(false);
+  });
+
   it('recovers every in-flight block and automatically continues across their byte boundary', async () => {
     const stored = [row(0, 'user')];
     const live = [1, 2].map((n) => ({ ...row(n), id: `history-live:c${n}`, content: 'x'.repeat(200000) }));

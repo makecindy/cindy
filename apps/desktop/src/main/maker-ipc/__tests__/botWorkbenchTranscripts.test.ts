@@ -174,6 +174,12 @@ describe('listExternalSessionsForProjects', () => {
     expect(byKey.get(`codex:${uuid}`)!.digest).toMatchObject({ purpose: '修 CI' });
     expect(byKey.get('pi:p1')).toMatchObject({ title: '写文档', cwd: project });
 
+    const metadata = await listExternalSessionsForProjects({
+      roots: { claude: [claudeRoot], codex: [codexRoot], codexAccounts: [accountsRoot], pi: [piRoot] },
+      projectDirs: [project], caseInsensitive: false, since: now - 30 * DAY, now, metadataOnly: true,
+    });
+    expect(metadata.sessions.every(item => item.digest === null && item.title === item.id)).toBe(true);
+
     const capped = await listExternalSessionsForProjects({
       roots: { claude: [claudeRoot], codex: [codexRoot], codexAccounts: [accountsRoot], pi: [piRoot] },
       projectDirs: [project],

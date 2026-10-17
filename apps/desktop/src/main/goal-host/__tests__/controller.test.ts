@@ -18,6 +18,7 @@ import {
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
+import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -70,7 +71,9 @@ function productionSteer(session: FakeSession, deliver: () => Promise<void>, rej
     },
     MAIN_OWNED_SEND_CONTEXT: Symbol(), AUTO_REVIEW_SOURCE_CONTENT: Symbol(),
     AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
+    MCP_APP_MESSAGE_GUARD,
     publishUiSessionIntervention,
+    noteInteractionRouteSteer: () => {},
     summarizeIpcUserMessage: () => ({}),
     log: { info: () => {}, warn: () => {}, debug: () => {} },
     throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
@@ -106,11 +109,19 @@ function outcome(partial: Partial<TurnOutcome>): TurnOutcome {
 }
 
 describe('decideNextGoalState', () => {
-  it('pauses when a non-goal (user) turn finishes', () => {
-    const d = decideNextGoalState(BASE, outcome({ origin: 'other' }));
-    expect(d.status).toBe('paused');
-    expect(d.shouldFire).toBe(false);
-    expect(d.turnsUsed).toBe(0); // user turn does not count toward goal turns
+  it('continues after ordinary input without consuming Goal counters', () => {
+    const d = decideNextGoalState(BASE, outcome({ origin: 'other', tokensThisTurn: 999,
+      verdict: { status: 'complete', reason: 'unrelated' } }));
+    expect(d).toMatchObject({ status: 'active', shouldFire: true, turnsUsed: 0, tokensUsed: 0, noProgressStreak: 0 });
+  });
+
+  it.each([
+    { errorMessage: 'boom', status: 'blocked' },
+    { errorMessage: 'AbortError: aborted', status: 'paused' },
+    { errorKind: 'usage_limit', status: 'usageLimited' },
+  ] as const)('keeps errors of ordinary turns on the existing stop path: $status', (error) => {
+    const d = decideNextGoalState(BASE, outcome({ origin: 'other', errored: true, ...error }));
+    expect(d).toMatchObject({ status: error.status, shouldFire: false, turnsUsed: 0, tokensUsed: 0 });
   });
 
   it('blocks on a terminal error', () => {
@@ -2100,7 +2111,7 @@ describe('GoalController', () => {
   );
 
   it.each(['same-turn steer', 'new turn'] as const)(
-    'still pauses for a new user message after Goal creation (%s)', async (delivery) => {
+    'continues after a new user message after Goal creation (%s)', async (delivery) => {
       await h.controller.pauseGoal('s1');
       h.session.generation = 7;
       h.session.running = true;
@@ -2109,9 +2120,9 @@ describe('GoalController', () => {
       else h.session.generation = 8;
       h.session.running = false;
       h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
-      await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
-      expect((await h.storage.get('s1'))?.lastReason).toBe('paused: user sent a message during the goal');
-      expect(h.session.sends).toHaveLength(0);
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
       await h.controller.dispose();
     },
   );
@@ -2139,8 +2150,9 @@ describe('GoalController', () => {
     } else {
       await steer('s1', 'new direction');
       expect(deliver).toHaveBeenCalledOnce();
-      await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
-      expect(h.session.sends).toHaveLength(0);
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
     }
     await h.controller.dispose();
   });
@@ -2158,8 +2170,9 @@ describe('GoalController', () => {
       await startGoal(h);
       h.session.running = false;
       h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
-      await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
-      expect(h.session.sends).toHaveLength(0);
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
       await h.controller.dispose();
     },
   );
@@ -2179,8 +2192,8 @@ describe('GoalController', () => {
     await startGoal(local);
     replacement.running = false;
     replacement.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
-    await vi.waitFor(async () => expect((await local.storage.get('s1'))?.status).toBe('paused'));
-    expect(replacement.sends).toHaveLength(0);
+    await vi.waitFor(() => expect(replacement.sends).toHaveLength(1));
+    expect((await local.storage.get('s1'))?.status).toBe('active');
     await local.controller.dispose();
   });
 
@@ -2949,14 +2962,8 @@ describe('GoalController', () => {
     expect(local.session.sends).toHaveLength(1);
     local.session.running = false;
     local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: local.session.generation });
-    if (intervention === 'none') {
-      await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
-      expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
-    } else {
-      await vi.waitFor(async () => expect((await local.storage.get('s1'))?.status).toBe('paused'));
-      expect(local.session.sends).toHaveLength(1);
-      expect((await local.storage.get('s1'))?.lastReason).toBe('paused: user sent a message during the goal');
-    }
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
     await local.controller.dispose();
   });
 
@@ -3662,12 +3669,80 @@ describe('GoalController', () => {
     expect(h.session.sends.length).toBe(afterPause);
   });
 
-  it('pauses when a user-origin turn finishes mid-goal', async () => {
-    await startGoal(h);
-    h.session.emitGoalTurn({ origin: 'user', toolUse: true, verdictJson: '' });
+  it('reports an input restoration failure without sending or silently staying active', async () => {
+    const local = makeController({ ensureInputReady: async () => { throw new Error('queue read failed'); } });
+    await expect(startGoal(local)).rejects.toThrow('queue read failed');
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'blocked', lastReason: 'turn dispatch failed: unable to restore input queue' });
+    expect(local.session.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('yields to input arriving during the final pre-dispatch await, then sends once', async () => {
+    let inputBlocked = false;
+    let yielded = false;
+    const rollback = vi.fn();
+    const local = makeController({
+      ensureInputReady: async () => !inputBlocked, isInputBlocked: () => inputBlocked,
+      beforeDispatchUserTurn: async () => { if (!yielded) { inputBlocked = true; yielded = true; } }, onUndispatchedUserTurn: rollback,
+    });
+    await startGoal(local);
+    expect(local.session.sends).toHaveLength(0);
+    expect(rollback).toHaveBeenCalledOnce();
+    inputBlocked = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.dispose();
+  });
+
+  it('continues after queued ordinary input and counts only the Goal turn', async () => {
+    let inputBlocked = false;
+    const local = makeController({ ensureInputReady: async () => !inputBlocked, isInputBlocked: () => inputBlocked });
+    await startGoal(local);
+    inputBlocked = true;
+    local.session.emitGoalTurn({ toolUse: true, tokens: 10 });
     await tick();
-    expect((await h.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(1);
+    local.session.emitGoalTurn({ origin: 'user', toolUse: true, tokens: 900 });
+    await tick();
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 1, tokensUsed: 10 });
+    expect(local.session.sends).toHaveLength(1);
+    inputBlocked = false;
+    await Promise.all([local.controller.maybeContinueActiveGoal('s1'), local.controller.maybeContinueActiveGoal('s1')]);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    await tick();
+    expect(local.session.sends).toHaveLength(2);
+    await local.controller.dispose();
+  });
+
+  it.each(['pause', 'clear'] as const)('does not resume from a late queue release after %s', async action => {
+    let inputBlocked = true;
+    const ensureInputReady = vi.fn(async () => !inputBlocked);
+    const local = makeController({ ensureInputReady, isInputBlocked: () => inputBlocked });
+    await startGoal(local);
+    const attempts = ensureInputReady.mock.calls.length;
+    await tick();
+    expect(ensureInputReady).toHaveBeenCalledTimes(attempts); // no blocked-boundary polling
+    expect(local.session.sends).toHaveLength(0);
+    if (action === 'pause') await local.controller.pauseGoal('s1');
+    else await local.controller.clearGoal('s1');
+    inputBlocked = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    local.session.emit({ type: 'done', data: {}, turnOrigin: { kind: 'user' } });
+    await tick();
+    expect(local.session.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('ignores background output and terminal tails instead of treating them as input or Goal work', async () => {
+    await startGoal(h);
+    h.session.emit({ type: 'text', turnScope: 'background', data: { text: '{"goal_status":"complete"}', isFinal: true } });
+    h.session.emit({ type: 'done', turnScope: 'background', data: {} });
+    await tick();
     expect(h.session.sends).toHaveLength(1);
+    expect(h.completions).toHaveLength(0);
+    h.session.emitGoalTurn({ toolUse: true, tokens: 15 });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 1, tokensUsed: 15 });
   });
 
   // ── applyClarificationAnswer(Option B:答完卡片即时改写目标)──

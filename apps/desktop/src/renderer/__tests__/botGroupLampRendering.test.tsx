@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from 'react';
+import Sortable, { type SortableEvent } from 'sortablejs';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStartingSessionIds, markSessionStarting, resetSessionStartingStoreForTests, useStartingSessionIds } from '@/lib/sessionStartingStore';
@@ -23,7 +24,6 @@ vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
   useRemoteHostProjectOrders: () => ({ orders: new Map() }),
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
-vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: () => null }));
 // main 633e27c76 起设备段头包了远程桌面快捷入口(挂 device-link presence 订阅,需要
 // preload 桥);本文件只验证段头灯语与折叠豁免,段头壳层直接透传子节点。
 vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
@@ -83,6 +83,48 @@ const phases = ['running', 'needs-interaction', 'error', 'completed'] as const;
 function activity(phase: typeof phases[number]) {
   applyRemoteSessionActivity('remote', { sessionId: 'lit', phase, attention: true, compactDetail: '' });
 }
+
+// PR #6196 / manualProjectSortDrag: the historical handle/filter overlap made
+// every project header reject drag start. Existing lamp tests use activity order,
+// so they never mount SortableList. Reuse this real ProjectsSection/ProjectNode
+// unit harness with two projects in custom order; selectors come from the actual
+// SortableJS instance, and its real onEnd must persist the reordered projects.
+describe('Manual project sorting', () => {
+  it('leaves the real project header draggable and persists a completed reorder', () => {
+    const p = props(false);
+    p.bots = [];
+    p.projects = ['First', 'Second'].map((name) => ({
+      projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
+      scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
+      remoteHostId: null, deviceLinkDeviceId: null,
+      deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+    }));
+    p.allProjectKeysForOrder = p.projects.map((project) => project.projectKey);
+    p.filter.projectOrder = 'custom';
+    p.filter.manualProjectOrder = [...p.allProjectKeysForOrder];
+    render(<ProjectsSection {...p} />);
+
+    const header = screen.getByText('First').closest<HTMLElement>('[data-project-header]')!;
+    const moved = header.closest<HTMLElement>('[data-sortable-id]')!;
+    const list = moved.parentElement!;
+    const sortable = Sortable.get(list)!;
+    expect(sortable.option('disabled')).toBe(false);
+    expect(header.matches(sortable.option('handle') as string)).toBe(true);
+    expect(header.closest(sortable.option('filter') as string)).toBeNull();
+
+    // Sortable owns pointer geometry; replay its drop boundary against the real
+    // list and DOM move rather than copying its reorder or persistence logic.
+    list.append(moved);
+    act(() => {
+      sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
+        item: moved, from: list, oldIndex: 0, newIndex: 1,
+      }) as SortableEvent);
+    });
+    expect(p.filter.setManualProjectOrder).toHaveBeenCalledWith(
+      ['local:/Second', 'local:/First'], p.allProjectKeysForOrder,
+    );
+  });
+});
 
 describe.each([false, true])('Bot groups with device grouping %s', (groupDevice) => {
   it.each(phases)('renders the collapsed Bot header lamp for remote %s', (phase) => {

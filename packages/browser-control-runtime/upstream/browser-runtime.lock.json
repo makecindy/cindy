@@ -15,12 +15,20 @@
   ],
   "patches": [
     {
+      "file": "extension/src/browser/cdp.ts",
+      "desc": "let callers create automation-only tabs without activating the headed browser window"
+    },
+    {
       "file": "extension/src/browser/chrome.executables.ts",
       "desc": "detect macOS Google Chrome Beta after stable Chromium-family browsers"
     },
     {
       "file": "extension/src/browser/chrome.executables.ts",
       "desc": "classify macOS Google Chrome Beta within the Chrome-only fallback"
+    },
+    {
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "start headed automation Chrome without an empty foreground window"
     },
     {
       "file": "extension/src/browser/chrome.ts",
@@ -75,12 +83,28 @@
       "desc": "carry the effective browser proxy mode through interaction navigation guards"
     },
     {
+      "file": "extension/src/browser/routes/tabs.ts",
+      "desc": "carry the background-open intent from the neutral runtime into tab creation"
+    },
+    {
+      "file": "extension/src/browser/server-context.selection.ts",
+      "desc": "keep the implicit first tab used by agent navigation in the background"
+    },
+    {
+      "file": "extension/src/browser/server-context.tab-ops.ts",
+      "desc": "propagate background tab creation to the managed Chrome CDP target"
+    },
+    {
+      "file": "extension/src/browser/server-context.types.ts",
+      "desc": "type the host-only background option on profile tab operations"
+    },
+    {
       "file": "extension/src/browser/ssrf-policy-helpers.ts",
       "desc": "one-off hostname grants must also pass a strict hostnameAllowlist (else the loopback CDP endpoint is blocked by proxyAllowedHostnames and every proxied navigation fails)"
     }
   ],
   "fileCount": 335,
-  "contentHash": "e159bab01eeb636292361f6755439f4826e447c3f1fe2a22e452d078ecfd8e4c",
+  "contentHash": "8aac31b28f77b2d9ea66ff460bb674fbab7a0bedb8200aa253f3d579f816f948",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

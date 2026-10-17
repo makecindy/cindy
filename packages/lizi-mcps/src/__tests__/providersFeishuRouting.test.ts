@@ -22,8 +22,9 @@ describe('Feishu notification session attribution', () => {
     await Promise.all(['session-a', 'session-b'].map((sessionId) => runWithLiziMcpSessionContext(
       { agentKind: 'codex', workingDir: '/tmp/task', sessionId }, call,
     )));
-    expect(sendMessage).toHaveBeenCalledWith('ou_owner', 'hello', 'session-a');
-    expect(sendMessage).toHaveBeenCalledWith('ou_owner', 'hello', 'session-b');
+    // 第 4 个参数是当前 tool-call 的 session ctx(宿主据此选出站 bot)。
+    expect(sendMessage).toHaveBeenCalledWith('ou_owner', 'hello', 'session-a', expect.objectContaining({ sessionId: 'session-a' }));
+    expect(sendMessage).toHaveBeenCalledWith('ou_owner', 'hello', 'session-b', expect.objectContaining({ sessionId: 'session-b' }));
   });
 
   it('keeps an explicit Feishu conversation out of owner notification routing', async () => {
@@ -32,12 +33,12 @@ describe('Feishu notification session attribution', () => {
       agentKind: 'codex', workingDir: '/tmp/task', sessionId: 'group-session',
       vendorOptions: { feishuChatId: 'oc_group' },
     }, call);
-    expect(sendMessage).toHaveBeenCalledWith('oc_group', 'hello', undefined);
+    expect(sendMessage).toHaveBeenCalledWith('oc_group', 'hello', undefined, expect.objectContaining({ sessionId: 'group-session' }));
   });
 
   it('leaves messages unattributed when no trusted caller is available', async () => {
     const { sendMessage, call } = setup();
     await call();
-    expect(sendMessage).toHaveBeenCalledWith('ou_owner', 'hello', undefined);
+    expect(sendMessage).toHaveBeenCalledWith('ou_owner', 'hello', undefined, expect.objectContaining({ agentKind: 'codex' }));
   });
 });

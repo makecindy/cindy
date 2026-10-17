@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
+import { PluginSharedUsage } from './PluginSharedUsage';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
@@ -69,14 +70,15 @@ export function MarketPluginDetailView({
               onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
               size="detail"
             />
-            <div className="min-w-0">
+            <div className="plugin-detail-heading min-w-0">
               <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
+              <div className="plugin-detail-metadata mt-1.5 flex min-w-0 flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
                 <span>{t(`settings.ghosts.market.scope.${presentationOrigin}`)}</span>
                 <span aria-hidden="true">·</span>
                 <span>v{detail.version}</span>
+                <PluginSharedUsage detail={detail} />
                 {detail.author ? (
                   <>
                     <span aria-hidden="true">·</span>
@@ -97,7 +99,7 @@ export function MarketPluginDetailView({
                 aria-label={t(actionKey)}
                 aria-busy={busy || undefined}
                 aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
-                className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
+                className="plugin-detail-actions plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
               >
                 <Download size={15} aria-hidden="true" />
                 {t(actionKey)}

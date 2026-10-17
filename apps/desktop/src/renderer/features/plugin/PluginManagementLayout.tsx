@@ -203,6 +203,10 @@ export function PluginManagementHeader({
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) return;
                 if (event.key !== 'Escape') return;
+                // 认领这一下 Esc：外层（设置页）不再接着失焦或退出。
+                event.preventDefault();
+                // 按住不放的自动连发不算新的一下：清空后不能接着失焦。
+                if (event.repeat) return;
                 if (query) {
                   onQueryChange('');
                 } else {

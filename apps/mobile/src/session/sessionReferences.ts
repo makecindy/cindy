@@ -2,11 +2,11 @@ import {
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
-import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   createSessionLinkPattern,
   parseSessionDeepLinkUrl,
+  resolveSessionLinkDeviceId,
   trimSessionLinkMatch,
 } from '@/session/sessionLinks';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
@@ -131,19 +131,6 @@ export function mobileSessionReferenceMetadataKey(
   return `${sessionId}\u0000${messageClientId ?? ''}`;
 }
 
-/** 格式化展示安全的范围摘要（文案经 i18n 本地化）。 */
-export function formatMobileSessionReferenceMetadata(
-  metadata: MobilePersistedSessionReferenceMetadata,
-): string {
-  return [
-    metadata.range === 'around-anchor'
-      ? i18n.t('session.row.referenceAroundAnchor')
-      : i18n.t('session.row.referenceRecent'),
-    i18n.t('session.row.referenceCount', { num: metadata.messageCount }),
-    ...(metadata.truncated ? [i18n.t('session.row.referenceTruncated')] : []),
-  ].join(' · ');
-}
-
 /** Extract visible session links and bind each one to the mobile store's source device. */
 export function extractMobileSessionReferences(
   text: string,
@@ -172,11 +159,12 @@ export function extractMobileSessionReferences(
     const key = mobileSessionReferenceMetadataKey(target.sessionId, target.messageClientId);
     if (seen.has(key)) continue;
     seen.add(key);
-    // 深链里冻结的 `?device=`(生成时刻的会话归属)优先——与桌面端
-    // reconcileSessionRefsForText 同口径;会话归属不会迁移,冻结值不受
-    // 发送时刻 store 状态(设备离线 / 列表未同步)影响。
-    const deviceId = target.deviceId
-      ?? deviceIdForSession(target.sessionId)
+    // 与打开链接使用同一顺序:重新连接后的设备或共享任务本地句柄优先,
+    // 未同步的归档任务仍用链接冻结值,最后保留队列里的来源提示。
+    const deviceId = resolveSessionLinkDeviceId({
+      listedDeviceId: deviceIdForSession(target.sessionId),
+      linkedDeviceId: target.deviceId,
+    })
       ?? previousDeviceIds.get(key)
       ?? previousDeviceIdsBySession.get(target.sessionId);
     refs.push({

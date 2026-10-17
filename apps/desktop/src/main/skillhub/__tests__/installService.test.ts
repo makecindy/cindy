@@ -144,7 +144,8 @@ async function setupInstallDownload(skillName: string, zipBuf: Uint8Array) {
 
 describe('skillhub/installService', () => {
   beforeEach(async () => {
-    vi.resetModules();
+    // Keep the module graph warm: each case owns TEST_ROOT and resets every mock below.
+    // The restart-specific cases call resetModules() at the exact boundary they exercise.
     vi.resetAllMocks();
     removeTestRoot();
     fs.mkdirSync(TEST_ROOT, { recursive: true });
@@ -463,6 +464,8 @@ describe('skillhub/installService', () => {
         unlink.mockRestore();
       }
       if (!result.success || !result.cleanupToken) throw new Error('expected unfinished cleanup');
+      // Simulate an app restart: the pending lease/journal modules own process state that
+      // clearAllMocks() cannot reset, so re-importing is part of this recovery contract.
       vi.resetModules();
       const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
       for (const name of ['old-source', 'reinstalled-alias', 'different-alias']) {
@@ -562,6 +565,8 @@ describe('skillhub/installService', () => {
         return;
       }
       if (!result.success || !result.cleanupToken) throw new Error('expected durable receipt');
+      // Simulate an app restart so the durable cleanup receipt is reconstructed by the
+      // module-level journal/lease state; mock reset alone cannot exercise that boundary.
       vi.resetModules();
       const { retryUninstallCleanup } = await import('../installService');
       const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
@@ -2072,6 +2077,8 @@ describe('skillhub/installService', () => {
       });
       const { uninstall } = await import('../installService');
       expect(await uninstall(source, target)).toEqual({ success: true });
+      // Auto-sync preferences are module-scoped and this case verifies their cross-restart
+      // persistence; only resetModules() gives the next import a fresh in-memory store.
       vi.resetModules();
       const { listIgnoredAutoSyncSkills, clearIgnoredAutoSyncSkill } =
         await import('../autoSyncPreferences');

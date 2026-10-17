@@ -373,6 +373,33 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
     });
   });
 
+  it("GHOST_AMBIGUOUS 带回 candidates 且把 namespace 传给 host", async () => {
+    const getAwakeGhost = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: "GHOST_AMBIGUOUS" as const,
+      message: "插件 helper 存在多个实例",
+      candidates: [
+        { ghostId: "helper", namespace: null },
+        { ghostId: "helper", namespace: "acme" },
+      ],
+    }));
+    const result = await handleGhostInfo(
+      fakeDeps({ getAwakeGhost }),
+      { ghost_id: "helper", namespace: "acme" },
+    );
+    expect(getAwakeGhost).toHaveBeenCalledWith("helper", "acme");
+    expect(result.isError).toBe(true);
+    expect(parsePayload(result)).toEqual({
+      ok: false,
+      errorCode: "GHOST_AMBIGUOUS",
+      message: "插件 helper 存在多个实例",
+      candidates: [
+        { ghostId: "helper", namespace: null },
+        { ghostId: "helper", namespace: "acme" },
+      ],
+    });
+  });
+
   it.each([
     ["GHOST_ASLEEP", "目标插件未启用"],
     ["GHOST_DISABLED_IN_WORKDIR", "当前工作目录已停用"],
@@ -1239,14 +1266,14 @@ describe("cindy_ghosts · server 构建", () => {
     expect(infoDescription).toContain("完全没有目标线索时才用 ghost_list");
     expect(infoDescription).toContain("不要缓存");
     expect(infoDescription).toContain(
-      "GHOST_NOT_FOUND(不存在、已卸载、当前账号不可用或未提供工具和手册)",
+      "GHOST_AMBIGUOUS",
     );
     expect(infoDescription).toContain("GHOST_DISABLED_IN_WORKDIR");
-    expect(infoDescription).toContain("INTERNAL(内部查询失败)");
+    expect(infoDescription).toContain("INTERNAL");
     const manualDescription =
       server._registeredTools.ghost_manual?.description ?? "";
     expect(server._registeredTools.ghost_list?.description).toContain(
-      "manual 轻量索引",
+      "namespace",
     );
     expect(server._registeredTools.ghost_info?.description).toContain(
       "需要长文时用 ghost_manual",
@@ -1764,6 +1791,17 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
 const GHOST_ROSTER_CACHE_PREFIX_BUDGET_CHARS = 8_000;
 
 describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
+  it('preserves root and organization identities in both prompt and tool roster', async () => {
+    const { buildGhostRosterPrompt, formatGhostRoster } = await import('../ghost/mcpServer');
+    const items = [
+      { id: 'helper', namespace: null, name: 'Root' },
+      { id: 'helper', namespace: 'acme', name: 'Organization' },
+    ];
+    for (const roster of [formatGhostRoster(items), buildGhostRosterPrompt(items)]) {
+      expect(roster).toContain('"namespace":null');
+      expect(roster).toContain('"namespace":"acme"');
+    }
+  });
   it("固定字段序列化;折叠/截断/空清单/条数/预算", async () => {
     const { formatGhostRoster } = await import("../ghost/mcpServer");
     expect(formatGhostRoster([])).toBe("");
@@ -2111,6 +2149,8 @@ describe('Cindy market MCP transport', () => {
       await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
       await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art' } });
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined }, expect.any(AbortSignal));
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art', namespace: null } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', namespace: null, reauthorize: undefined }, expect.any(AbortSignal));
       expect(callGhostTool).not.toHaveBeenCalled();
       // Host authorization continuation retries the original work through the same gateway.
       await client.callTool({ name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', args: {} } });

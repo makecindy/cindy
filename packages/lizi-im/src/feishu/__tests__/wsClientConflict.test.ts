@@ -82,7 +82,8 @@ vi.doMock('../storage.js', () => ({
   readOwnerOpenId: mocks.readOwnerOpenId,
 }));
 
-vi.doMock('../moduleScope.js', () => ({
+vi.doMock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getLog: () => mocks.log,
 }));
 

@@ -28,8 +28,11 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
+import { PluginUsageCard } from './PluginUsageCard';
+import { PluginSharedUsage } from './PluginSharedUsage';
+import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
+import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -45,7 +48,9 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
-  isOfficialGhostId,
+  ghostDeclaresHiddenTasks,
+  ghostTrustLabelKey,
+  isUserInstallReservedGhostId,
   type GhostPermissionItem,
   type GhostToolDecl,
   type InstalledGhost,
@@ -61,9 +66,12 @@ import './plugin-motion.css';
 interface GhostPluginDetailViewProps {
   ghost: InstalledGhost | null;
   detail: GhostPluginDetail;
+  marketItem?: PluginMarketItem | null;
   panelStatus: string | null;
   enabledOverride?: boolean;
   onBack: () => void;
+  usageOwnerKey?: string;
+  confirmClearUsage?: () => Promise<boolean>;
   onToggle: (enabled: boolean) => void;
   /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
   onUse: () => void;
@@ -107,6 +115,9 @@ export function GhostPluginDetailView({
   onBack,
   onToggle,
   onUse,
+  marketItem,
+  usageOwnerKey,
+  confirmClearUsage,
   mainViewSidebarVisible = true,
   onMainViewSidebarVisibleChange,
   onUpdate,
@@ -136,11 +147,10 @@ export function GhostPluginDetailView({
     enabled &&
     (primaryAction === 'panel' ||
       (primaryAction === 'command' && detail.canUse));
-  const cindyCapabilities = detail.cindyCapabilities;
   // Local imports with the same id cannot use the host gh credential. Match the
   // official receipt before advertising that connection in this plugin's UI.
   const hasGithubConnection =
-    detail.id === 'cindy-github' &&
+    detail.ghostId === 'cindy-github' &&
     Boolean(ghost) &&
     ghost?.trust?.level === 'cindy-official' &&
     ghost.trust.publisherSigned &&
@@ -151,11 +161,10 @@ export function GhostPluginDetailView({
     hasGithubConnection ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
-    cindyCapabilities.length > 0 ||
     detail.hasTaskPreferences;
   const summary = hasGithubConnection
     ? t('ccAgent.gitContext.pr.setup.account.summary')
-    : ghostPluginSummary(detail.description, detail.id);
+    : ghostPluginSummary(detail.description, detail.ghostId);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
    * 构建**上会被 Main 的用户装入通道以 GHOST_ID_RESERVED 直接拒绝(见
@@ -167,7 +176,7 @@ export function GhostPluginDetailView({
    * 会多隐藏一次入口——方向保守(少一个入口 vs 给用户一个必失败按钮),可接受。
    * 普通第三方插件不受影响。
    */
-  const localUpdateAvailable = import.meta.env.DEV || !isOfficialGhostId(detail.id);
+  const localUpdateAvailable = import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
 
   useLayoutEffect(() => {
@@ -232,11 +241,11 @@ export function GhostPluginDetailView({
               size="detail"
               onIconLoadError={onIconLoadError}
             />
-            <div className="min-w-0">
+            <div className="plugin-detail-heading min-w-0">
               <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
-              <GhostPluginMetadata author={detail.author} version={detail.version} />
+              <GhostPluginMetadata author={detail.author} version={detail.version} marketItem={marketItem} />
             </div>
 
             <div
@@ -419,6 +428,14 @@ export function GhostPluginDetailView({
           ) : null}
         </header>
 
+        {ghost ? (
+          <PluginUsageCard
+            key={`${usageOwnerKey ?? 'local'}:${detail.id}`}
+            ghostId={detail.id}
+            confirmClear={confirmClearUsage}
+          />
+        ) : null}
+
         {hasConfiguration ? (
           <section
             className={hasGithubConnection ? 'mt-6' : DETAIL_SECTION_CLASS}
@@ -511,20 +528,20 @@ export function GhostPluginDetailView({
                   {t('routines.pluginCapability')}
                 </p>
               ) : null}
-              {cindyCapabilities.length > 0 ? (
-                <CindyCapabilityPrefs
-                  ghostId={detail.id}
-                  capabilities={cindyCapabilities}
-                  appearance="plugin"
-                />
-              ) : null}
               {detail.hasTaskPreferences ? (
                 <PluginTaskPrefs ghostId={detail.id} appearance="plugin"
+                  showTaskRows={detail.hasPluginTasks}
                   legacyDefault={ghost?.manifest.agent?.errand === true && !ghost.manifest.agent?.tasks && !ghost.manifest.workspace} />
               ) : null}
             </div>
           </section>
         ) : null}
+
+        <PluginBackgroundTasksSection
+          ghostId={detail.id}
+          installed={ghost !== null}
+          hiddenTasksDeclared={ghostDeclaresHiddenTasks(ghost?.manifest)}
+        />
 
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
@@ -570,13 +587,15 @@ export function OauthScopeStaleBadge() {
 export function GhostPluginMetadata({
   author,
   version,
+  marketItem,
 }: {
   author?: string | null;
   version: string;
+  marketItem?: PluginMarketItem | null;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden whitespace-nowrap text-13 leading-5 text-[var(--text-tertiary)]">
+    <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-5 text-[var(--text-tertiary)]">
       {author ? (
         <>
           <span className="min-w-0 truncate">
@@ -586,6 +605,7 @@ export function GhostPluginMetadata({
         </>
       ) : null}
       <span className="shrink-0">v{version}</span>
+      {marketItem ? <PluginSharedUsage detail={marketItem} /> : null}
     </div>
   );
 }
@@ -808,16 +828,7 @@ export function DetailsSection({
   panelStatus: string | null;
 }) {
   const { t } = useTranslation();
-  const trustLabelKey =
-    detail.trust.level === 'cindy-official'
-      ? 'official'
-      : detail.trust.level === 'reviewed'
-        ? 'reviewed'
-        : detail.trust.level === 'verified-publisher'
-          ? 'verifiedPublisher'
-          : detail.trust.publisherSigned
-            ? 'signedUnverified'
-            : 'unsigned';
+  const trustLabelKey = ghostTrustLabelKey(detail.trust);
   const facts: Array<{
     key: string;
     label: string;
@@ -850,7 +861,7 @@ export function DetailsSection({
     {
       key: 'identifier',
       label: t('settings.ghosts.detail.infoId'),
-      value: detail.id,
+      value: detail.ghostId,
       monospace: true,
     },
     ...(detail.contents.length > 0

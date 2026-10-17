@@ -2,19 +2,19 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ invoke: vi.fn(), submit: vi.fn(), openLink: vi.fn(), created: vi.fn(), uuid: vi.fn(() => 'fixture-request-12345') }));
+const h = vi.hoisted(() => ({ sheet: {} as any, invoke: vi.fn(), submit: vi.fn(), openLink: vi.fn(), created: vi.fn(), uuid: vi.fn(() => 'fixture-request-12345') }));
 vi.mock('react-native', () => ({
   StyleSheet: { create: (v: unknown) => v }, View: ({ children }: any) => createElement('div', {}, children), ScrollView: ({ children }: any) => createElement('div', {}, children),
   Pressable: ({ onPress, children }: any) => createElement('button', { onClick: onPress }, children),
   Switch: ({ accessibilityLabel, value, disabled, onValueChange }: any) => createElement('input', { type: 'checkbox', 'aria-label': accessibilityLabel, checked: value, disabled, onChange: (e: any) => onValueChange(e.target.checked) }),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, string>) => options ? `${key} ${Object.values(options).join(' ')}` : key, i18n: { language: 'en' } }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => h.uuid() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
 vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (...args: unknown[]) => h.submit(...args) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => createElement('span', {}, children), TextInput: ({ value, editable, onChangeText }: any) => createElement('input', { value, disabled: !editable, onInput: (e: any) => onChangeText(e.target.value), onChange() {} }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => createElement('button', { onClick: action.onPress, disabled: action.disabled }, action.label) }));
-vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: ({ children }: any) => children }));
+vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (props: any) => { h.sheet = props; return props.children; } }));
 vi.mock('@/session/CompanionPortraitPicker', () => ({ randomCompanionPortrait: async () => 'original-portrait', CompanionPortraitPicker: ({ onChange }: any) => createElement('button', { onClick: () => onChange('chosen-existing-portrait') }, 'existing portrait picker') }));
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useThemedStyles: () => ({}) }));
 import { CompanionImportSheet } from '@/session/CompanionImportSheet';
@@ -35,6 +35,7 @@ it('uses the existing portrait picker and sends only the remaining selections th
   h.submit.mockImplementation(async () => { imported = true; return { effects: [] }; });
   const container = document.createElement('div'); root = createRoot(container);
   await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  expect(h.sheet.contentScrolls).toBe(true);
   const click = async (text: string) => { await act(async () => { const button = [...container.querySelectorAll('button')].find(button => button.textContent === text); expect(button).toBeDefined(); button!.click(); }); };
   await click('Ada · Hermes');
   await click('existing portrait picker');
@@ -225,4 +226,28 @@ it('submits sparse 100,000-entry choices using bounded actions with the original
     text += request.input.selectionChunk.text;
   }
   expect(JSON.parse(text)).toMatchObject({ entryIds: [], entryRanges: entries.filter(entry => entry.selected).map(entry => { const index = Number(entry.id.slice(6)); return [index, index]; }), deferSetup: true });
+});
+
+it('advertises the bots category and shows bots with the handover note, owner alternatives and source-disabled bots', async () => {
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'openclaw' }] } : id.startsWith('preview:') ? { preview: { id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'openclaw' }, entries: [
+      { id: 'owner-a', name: 'Ada', category: 'bots', platform: 'discord', owner: '111111111111111111', selected: false, exclusiveWith: ['owner-b'] },
+      { id: 'owner-b', name: 'Ada', category: 'bots', platform: 'discord', owner: '222222222222222222', selected: false, exclusiveWith: ['owner-a'] },
+      { id: 'lark', name: 'Work', category: 'bots', platform: 'feishu', owner: 'ou_fixture', selected: false, enabled: false },
+    ] } } : { result: null } }] };
+  });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  expect(h.invoke.mock.calls[0]![2][0].client.primitives).toContain('companion-import-bots-v1');
+  const click = async (text: string) => { await act(async () => { const button = [...container.querySelectorAll('button')].find(button => button.textContent?.startsWith(text)); expect(button).toBeDefined(); button!.click(); }); };
+  await click('Ada · OpenClaw');
+  expect(container.textContent).toContain('devices.companionImport.botsNote OpenClaw');
+  await click('devices.companionImport.bots');
+  // A short list needs no search field.
+  expect(container.querySelector('input:not([type="checkbox"])')).toBeNull();
+  expect(container.textContent).toContain('devices.companionImport.botOwner 222222222222222222');
+  expect(container.textContent).not.toContain('devices.companionImport.botOwner ou_fixture');
+  expect(container.textContent).toContain('devices.companionImport.sourceDisabled');
+  expect(container.querySelector('[aria-label="message.renderer.imPlatform.feishu · Work"]')).not.toBeNull();
 });

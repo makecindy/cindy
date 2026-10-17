@@ -51,8 +51,23 @@ describe('parseIncoming', () => {
     expect(r.unsupported).toEqual([{ type: 'audio', label: '语音消息' }]);
   });
 
-  it('media (short video) → unsupported with file_name', () => {
+  it('media (short video) with file_key → video file attachment', () => {
     const r = parseIncoming('media', JSON.stringify({ file_key: 'k', file_name: 'demo.mp4' }));
+    expect(r).toEqual({
+      text: '',
+      attachments: [{ kind: 'file', fileKey: 'k', fileName: 'demo.mp4', video: true }],
+      unsupported: [],
+    });
+  });
+
+  it('media without file_name → default 视频.mp4', () => {
+    const r = parseIncoming('media', JSON.stringify({ file_key: 'k' }));
+    expect(r.attachments).toEqual([{ kind: 'file', fileKey: 'k', fileName: '视频.mp4', video: true }]);
+  });
+
+  it('media without file_key → still unsupported', () => {
+    const r = parseIncoming('media', JSON.stringify({ file_name: 'demo.mp4' }));
+    expect(r.attachments).toEqual([]);
     expect(r.unsupported).toEqual([{ type: 'media', label: '视频文件 demo.mp4' }]);
   });
 
@@ -73,7 +88,7 @@ describe('parseIncoming', () => {
     ]);
   });
 
-  it('post: title + paragraphs flatten into text, img → image, media → unsupported', () => {
+  it('post: title + paragraphs flatten into text, img → image, media → video file attachment', () => {
     const post = {
       title: '本周进度',
       content: [
@@ -89,7 +104,20 @@ describe('parseIncoming', () => {
     };
     const r = parseIncoming('post', JSON.stringify(post));
     expect(r.text).toBe('本周进度\n完成了 需求文档 的编写\n 来确认下');
-    expect(r.attachments).toEqual([{ kind: 'image', imageKey: 'img_p1' }]);
+    expect(r.attachments).toEqual([
+      { kind: 'image', imageKey: 'img_p1' },
+      { kind: 'file', fileKey: 'mk', fileName: 'demo.mp4', video: true },
+    ]);
+    expect(r.unsupported).toEqual([]);
+  });
+
+  it('post: media node without file_key → unsupported', () => {
+    const post = {
+      title: '',
+      content: [[{ tag: 'media', file_name: 'demo.mp4' }], [{ tag: 'media', file_key: 'mk2' }]],
+    };
+    const r = parseIncoming('post', JSON.stringify(post));
+    expect(r.attachments).toEqual([{ kind: 'file', fileKey: 'mk2', fileName: '视频.mp4', video: true }]);
     expect(r.unsupported).toEqual([{ type: 'post.media', label: '视频文件 demo.mp4' }]);
   });
 

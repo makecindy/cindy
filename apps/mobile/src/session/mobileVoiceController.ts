@@ -5,6 +5,7 @@ import {
   VoiceInputController,
   VoiceTimelineLogger,
   type AsrProvider,
+  type AudioGate,
   type AudioTrace,
   type DictationRefinementContext,
   type EditableRange,
@@ -33,6 +34,7 @@ import {
   type MobileVoiceDraftInsertion,
 } from '@/session/mobileVoiceInput';
 import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import { MobileVoiceAudioLevels } from '@/session/mobileVoiceAudioLevels';
 import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
 import {
   classifyMobileVoiceFailure,
@@ -107,6 +109,11 @@ type MobileVoiceControllerOptions = {
     end: number;
   }) => void;
   onTimelineEvent?: (event: VoiceTimelineEvent) => void;
+  /**
+   * Optional filter between the microphone and the ASR ("recognize my voice").
+   * Undefined keeps the unfiltered behavior.
+   */
+  audioGate?: AudioGate;
 };
 
 type MobileVoiceInputHistorySource = readonly string[] | (() => readonly string[] | undefined);
@@ -209,6 +216,7 @@ export function createMobileVoiceControllerSession(
   // recognition or refinement. Deliberately conservative: any plausible sound
   // (including background noise) keeps the normal path.
   let soundDetected = false;
+  let audioLevels = new MobileVoiceAudioLevels();
   let runStartedAt = Date.now();
   const runTag = (): string => shortRunId(controller.id);
   const recordTimeline = createMobileVoiceTimelineRecorder({ provider: options.credential.asr.provider });
@@ -390,6 +398,7 @@ export function createMobileVoiceControllerSession(
     // A reconnect allocates another managed session and can hit the account
     // limit; report that instead of the generic "stopped receiving" failure.
     recoveryErrorMessage: mobileVoiceRateLimitMessage,
+    audioGate: options.audioGate,
     logger: new VoiceTimelineLogger((event) => {
       recordTimeline(event);
       options.onTimelineEvent?.(event);
@@ -476,6 +485,7 @@ export function createMobileVoiceControllerSession(
       captureLive = false;
       listeningPendingCaptureLive = false;
       soundDetected = false;
+      audioLevels = new MobileVoiceAudioLevels();
       runStartedAt = Date.now();
       // A fresh start() begins a new run from ANY previous phase — in particular
       // 'failed': a mic interruption must not poison the next recording on the
@@ -512,6 +522,7 @@ export function createMobileVoiceControllerSession(
             // early stop that waits for the in-flight handshake can't buffer and
             // later flush post-stop speech/noise.
             if (captureTornDown()) return;
+            audioLevels.append(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
             if (!soundDetected && hasPcmSound(chunk.pcm16)) soundDetected = true;
             markCaptureLive();
             controller.appendAudio(chunk.pcm16, chunk.trace);
@@ -594,6 +605,7 @@ export function createMobileVoiceControllerSession(
         elapsedMs: stopRequestedAt - runStartedAt,
         captureLive,
         soundDetected,
+        ...audioLevels.summary(),
         hasTranscript: Boolean(voiceInsertion),
       });
       if (stopAudio) {

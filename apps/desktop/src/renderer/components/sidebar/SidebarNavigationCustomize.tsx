@@ -50,8 +50,8 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   const { dataOwnerId } = useAuth();
   const prefs = useSidebarNavigationPrefs(dataOwnerId);
   const { sidebarVisible } = useGhostMainViews();
-  const appIds = sidebarVisible.map((item) => item.ghostId);
-  const apps = new Map(sidebarVisible.map((item) => [item.ghostId, item]));
+  const appIds = sidebarVisible.map((item) => item.instanceId);
+  const apps = new Map(sidebarVisible.map((item) => [item.instanceId, item]));
   const [initial] = useState<CustomizeDraft>(() => ({
     order: resolveSidebarNavigationOrder(prefs.order, appIds),
     visible: new Set(prefs.visible),

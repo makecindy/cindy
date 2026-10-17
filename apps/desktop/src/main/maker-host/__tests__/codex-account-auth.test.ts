@@ -37,6 +37,10 @@ vi.mock('../codex-global-rules.js', () => ({ prepareCodexGlobalRulesCopy: vi.fn(
 vi.mock('../codex-global-plugins.js', () => ({
   prepareCodexGlobalPluginsBridge: async () => ({ routingFailures: [] }),
 }));
+vi.mock('../../usageBroadcaster.js', () => ({
+  broadcastCodexAccountAuthStarted: vi.fn(),
+  broadcastCodexAccountAuthReady: vi.fn(),
+}));
 vi.mock('../codex-auth-state.js', () => ({
   terminateCodexLoginProcess: (child: EventEmitter) => child.emit('exit', 1),
 }));
@@ -70,6 +74,7 @@ import {
   prepareCodexAccountHome,
   setCodexAccountRetirement,
 } from '../codex-account-auth';
+import { broadcastCodexAccountAuthReady, broadcastCodexAccountAuthStarted } from '../../usageBroadcaster.js';
 
 function credential(subject: string, account = 'workspace') {
   const claims = Buffer.from(
@@ -97,6 +102,14 @@ afterEach(() => {
 });
 
 describe('native Codex account credentials', () => {
+  it('signals explicit auth replacement before retirement and readiness immediately after commit', async () => {
+    const result = await loginCodexAccount('account-a', () => true);
+    expect(result.ok).toBe(true);
+    expect(broadcastCodexAccountAuthStarted).toHaveBeenCalledExactlyOnceWith('account-a');
+    expect(broadcastCodexAccountAuthReady).toHaveBeenCalledExactlyOnceWith('account-a');
+    expect(codexAccountState('account-a').authenticated).toBe(true);
+  });
+
   it('mounts private built-in and plugin skills in every independent account home', async () => {
     const real = await vi.importActual<typeof import('../codex-global-skills.js')>('../codex-global-skills.js');
     vi.mocked(prepareCodexGlobalSkillsLinks).mockImplementationOnce((home, options) =>
@@ -254,6 +267,8 @@ describe('native Codex account credentials', () => {
     });
     expect(codexAccountState('account-a').authenticated).toBe(false);
     expect(fs.existsSync(path.join(codexAccountHome('account-a'), 'auth.json'))).toBe(false);
+    expect(broadcastCodexAccountAuthStarted).toHaveBeenLastCalledWith('account-a');
+    expect(broadcastCodexAccountAuthReady).toHaveBeenLastCalledWith('account-a');
   });
   it('rolls back a committed login when its IPC owner cancels', async () => {
     const result = await loginCodexAccount('account-a', () => true);

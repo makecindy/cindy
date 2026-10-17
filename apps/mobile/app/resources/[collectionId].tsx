@@ -1,7 +1,7 @@
 import { useRemoteResourceList } from '@/session/useRemoteResourceList';
 import { isRemoteResourceUnread } from '@/device-link/remoteResourceCache';
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useMemo } from 'react';
+import { Redirect, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -19,7 +19,7 @@ import {
 
 import { Text } from '@/components/AppText';
 import { useTeammateNavigation } from '@/session/useTeammateNavigation';
-import { TeammateList } from '@/session/TeammateList';
+import { TEAMMATE_COLLECTION_ID } from '@/session/useTeammateRoster';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { MainWindowActionButton, MainWindowEmptyState, RemoteListSyncingPlaceholder, StatusDot } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
@@ -51,7 +51,17 @@ export default function RemoteCollectionScreen() {
   const params = useLocalSearchParams<{ collectionId?: string | string[] }>();
   const collectionId = Array.isArray(params.collectionId) ? params.collectionId[0] ?? '' : params.collectionId ?? '';
   if (!isMobileRemoteCollectionSupported(collectionId)) return <Redirect href="/devices" />;
+  if (collectionId === TEAMMATE_COLLECTION_ID) return <LegacyTeammatesHomeRedirect />;
   return <RemoteCollectionScreenContent />;
+}
+
+function LegacyTeammatesHomeRedirect() {
+  const navigation = useTeammateNavigation();
+  const focused = useIsFocused();
+  useEffect(() => {
+    if (focused && navigation.hydrated) void navigation.chooseMode('teammates');
+  }, [focused, navigation.hydrated, navigation.chooseMode]);
+  return null;
 }
 
 function RemoteCollectionScreenContent() {
@@ -60,7 +70,6 @@ function RemoteCollectionScreenContent() {
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const guardedPush = useGuardedPush();
-  const teammates = useTeammateNavigation();
   const params = useLocalSearchParams<{
     collectionId?: string;
     title?: string;
@@ -72,13 +81,12 @@ function RemoteCollectionScreenContent() {
   const title = Array.isArray(params.title) ? params.title[0] : params.title;
   const targets = useMemo(() => parseRemoteResourceTargets(params.targets), [params.targets]);
   const list = useRemoteResourceList(collectionId, targets);
-  const { items, loading, refreshing, error, isOnline, connectionState } = list;
+  const { items, loading, refreshing, error, isOnline } = list;
   const load = list.refresh;
   const { user } = useAuth();
 
   const openItem = useCallback((hosted: HostedResourceItem) => {
     if (!isOnline(hosted.host)) return;
-    if (hosted.item.ref.kind === 'bot') { void teammates.openTeammate(hosted); return; }
     guardedPush({
       pathname: '/resources/[collectionId]/[resourceId]',
       params: {
@@ -90,7 +98,7 @@ function RemoteCollectionScreenContent() {
         title: resolveRemoteText(hosted.item.display.title, i18n.language),
       },
     });
-  }, [collectionId, guardedPush, i18n.language, isOnline, teammates.openTeammate]);
+  }, [collectionId, guardedPush, i18n.language, isOnline]);
 
   return (
     <SafeAreaView
@@ -102,15 +110,11 @@ function RemoteCollectionScreenContent() {
         scrollEdge
         backTestID="remoteResources.backButton"
         onBack={() => goBackGuarded(router)}
-        subtitle={collectionId === 'teammates' ? undefined : targets.length > 1 ? t('devices.resources.hostCount', { count: targets.length }) : targets[0]?.deviceName}
+        subtitle={targets.length > 1 ? t('devices.resources.hostCount', { count: targets.length }) : targets[0]?.deviceName}
         title={title || t('devices.resources.titleFallback')}
         titleTestID="remoteResources.title"
       />
-      {collectionId === 'teammates' ? <TeammateList
-        items={items} loading={loading} refreshing={refreshing} error={error}
-        connectionState={connectionState}
-        isOnline={isOnline}
-        onRefresh={() => void load(true)} onSelect={openItem} scrollInsetProps={simpleScrollInsetProps} /> : loading && items.length === 0 ? (
+      {loading && items.length === 0 ? (
         <View style={styles.center}>
           <RemoteListSyncingPlaceholder testID="remoteResources.loading" />
         </View>

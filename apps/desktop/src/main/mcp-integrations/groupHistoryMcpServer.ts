@@ -7,7 +7,7 @@ import {
   readGroupHistoryAccess,
   type GroupHistoryAccessScope,
 } from '../im/shared/groupHistoryAccess';
-import { createFenceNeutralizer } from '../im/shared/groupWindowCore';
+import { createFenceNeutralizer, formatImHistoryDateTime } from '../im/shared/groupWindowCore';
 import {
   searchGroupHistory,
   type GroupHistorySearchHit,
@@ -115,6 +115,8 @@ function presentHits(hits: GroupHistorySearchHit[]) {
       author: neutralizeHistoryFence(hit.author),
       isBot: hit.isBot,
       sentAt: hit.sentAt,
+      // 模型换算 epoch 毫秒不可靠 — 附本机时区的可读时间, 与群上下文同一口径。
+      sentAtLocal: formatImHistoryDateTime(hit.sentAt),
       excerpt: neutralizeHistoryFence(hit.snippet),
       // 预算耗尽后正文降级为空串, snippet 仍在 — 命中列表完整、正文受闸。
       text: neutralizeHistoryFence(text),

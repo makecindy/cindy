@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import {
   RoutineEngine,
+  rewriteRoutinePluginSource,
   type Routine,
   type RoutineRun,
   type RoutineInput,
@@ -22,9 +23,11 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createLogger } from '../logger.js';
 import { RoutineFileStore } from './store.js';
+import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles } from '../localDb/schema.js';
+import { isCompanionShadowed } from '../companion-cloud/homes.js';
 
 /** Bootstrap supplies live getters without a service -> scheduler -> IPC dependency cycle. */
 export interface RoutineHostDeps {
@@ -49,6 +52,8 @@ function getRoutineHost(): RoutineHostDeps {
 }
 
 const log = createLogger('routines');
+/** Logged once per demoted teammate until it runs here again. */
+const shadowedRoutineBots = new Set<string>();
 let current:
   { scope: string; engine: RoutineEngine; timer: ReturnType<typeof setInterval> } | undefined;
 let starting: Promise<RoutineEngine> | undefined;
@@ -98,6 +103,15 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   if (signal.aborted) throw new Error('Routine cancelled');
   if (bot.status !== 'active' || !bot.canonicalSessionId)
     throw new Error('The teammate is unavailable');
+  // Its home moved to another computer (cloud-companions.md §3): routines run only there.
+  if (isCompanionShadowed(routine.botId)) {
+    if (!shadowedRoutineBots.has(routine.botId)) {
+      shadowedRoutineBots.add(routine.botId);
+      log.info('routine skipped: teammate runs on another computer', { botId: routine.botId });
+    }
+    return { skipped: true };
+  }
+  shadowedRoutineBots.delete(routine.botId);
   if (!canDispatch()) return { deferred: true };
   const root = ownerScopedUserDataPath();
   const imported = await getRoutineHost().prepareImportedAutomation?.(root, routine, run.id, signal, () => assertScope(scope));
@@ -412,16 +426,23 @@ async function withBot<T>(
 }
 
 /** Single management boundary used by desktop, remote resources and all MCP harnesses. */
+/** routine_save、伙伴设置与远程资源共用的保存边界:与调度器保存同一套前置检查语法预检。 */
+async function assertRoutineHookSyntax(input: RoutineInput): Promise<void> {
+  if (input.preRunHook?.command?.trim()) await assertPreRunHookCommandSyntax(input.preRunHook.command);
+}
+
 export const routineTools = {
   list: (botId: string) => withBot(botId, (engine) => engine.list(botId)),
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {
+      await assertRoutineHookSyntax(input);
       if (input.enabled) await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, creationId, () => assertScope(scope), { input });
       assertScope(scope);
       return engine.createOnce(botId, input, creationId);
     }),
   save: (botId: string, input: RoutineInput, id?: string, expectedRevision?: number) =>
     withBot(botId, async (engine, scope) => {
+      await assertRoutineHookSyntax(input);
       if (id && input.enabled) {
         const recoveredRevision = await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, id, () => assertScope(scope), { input, expectedRevision });
         if (recoveredRevision !== undefined) expectedRevision = recoveredRevision;
@@ -453,4 +474,56 @@ export function disconnectRoutineSource(pluginId: string): void {
   if (current?.scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
     current.engine.removeSource(`plugin:${pluginId}`);
   }
+}
+
+/** Follow an archived plugin so the replacement does not inherit its event routines. */
+export async function relocateRoutinePluginSource(fromPart: string, toPart: string): Promise<void> {
+  if (fromPart === toPart) return;
+  const scope = activeOwnerScopeKey();
+  if (current?.scope === scope && !isAppSessionBoundaryPending()) {
+    await current.engine.relocatePluginSource(fromPart, toPart);
+    return;
+  }
+  const store = new RoutineFileStore(ownerScopedUserDataPath());
+  const state = await store.load();
+  if (!state) return;
+  const next = rewriteRoutinePluginSource(state, fromPart, toPart);
+  if (next !== state) await store.save(next);
+}
+
+/** A routine as it travels with its companion (cloud-companions.md §2); run history stays behind. */
+export interface CompanionRoutineValue {
+  id: string;
+  input: RoutineInput;
+  /** The computer the definition was saved on: its check command may only work there. */
+  originDeviceId: string | null;
+}
+
+export async function listCompanionRoutines(botId: string, selfDeviceId: string | null): Promise<CompanionRoutineValue[]> {
+  return (await routineTools.list(botId)).map((routine) => ({
+    id: routine.id,
+    input: { name: routine.name, prompt: routine.prompt, enabled: routine.enabled, triggers: routine.triggers,
+      ...(routine.silentWhenIdle !== undefined ? { silentWhenIdle: routine.silentWhenIdle } : {}),
+      ...(routine.preRunHook !== undefined ? { preRunHook: routine.preRunHook } : {}) },
+    originDeviceId: selfDeviceId,
+  }));
+}
+
+/**
+ * The companion moved here: its routines from the cloud are created or updated with their ids;
+ * `remove` ids are deleted. Timers start from now (nothing missed is replayed). A routine whose
+ * check command came from another computer, or whose one-time trigger has passed, arrives turned
+ * off so it never runs a command this computer may not have.
+ */
+export async function importCompanionRoutines(botId: string, routines: CompanionRoutineValue[], remove: string[], selfDeviceId: string | null): Promise<void> {
+  const existing = new Set((await routineTools.list(botId)).map((routine) => routine.id));
+  const now = Date.now();
+  for (const routine of routines) {
+    const foreignHook = !!routine.input.preRunHook?.command?.trim() && routine.originDeviceId !== selfDeviceId;
+    const passed = routine.input.triggers.some((trigger) => trigger.kind === 'once' && trigger.at <= now);
+    const input: RoutineInput = { ...routine.input, enabled: routine.input.enabled && !foreignHook && !passed };
+    if (existing.has(routine.id)) await routineTools.save(botId, input, routine.id);
+    else await routineTools.createOnce(botId, input, routine.id);
+  }
+  for (const id of remove) if (existing.has(id)) await routineTools.remove(botId, id);
 }

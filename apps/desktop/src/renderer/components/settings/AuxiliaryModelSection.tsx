@@ -274,8 +274,6 @@ export function AuxiliaryModelSection() {
                           surfacing Harness or a thinking-depth control. */}
                       <OneshotModelPinPicker
                         value={pin ?? undefined}
-                        defaultLabel=""
-                        declaredLabel={null}
                         options={slotOptions}
                         onChange={(next) => applySlot(index, next)}
                         ariaLabel={t(`settings.auxiliaryModels.${slotKey}.ariaLabel`)}

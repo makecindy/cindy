@@ -53,6 +53,7 @@ import {
   readSessionDigest,
   readSessionTranscript,
 } from './botWorkbenchTranscripts.js';
+import { readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from './botTaskResponsibility.js';
 import { workbenchSessionRoots } from './botWorkbenchSessionRoots.js';
 import { checkHandoverDirectory, findHandedProject } from './botWorkbenchHandover.js';
 import { createBriefCache, type WorkbenchBriefGithubItem } from './botWorkbenchBrief.js';
@@ -67,7 +68,7 @@ import {
 } from './botWorkbenchAccess.js';
 
 /** 伙伴主任务才能用工作台;远端、归档、非主任务一律拒绝。 */
-async function resolveWorkbenchCaller(callerSessionId: string): Promise<WorkbenchCallerResult> {
+export async function resolveWorkbenchCaller(callerSessionId: string): Promise<WorkbenchCallerResult> {
   const db = getDbClient().drizzle;
   const [row] = await db
     .select({
@@ -139,7 +140,7 @@ async function listWorkbenchProjectTasks(
   const prefixes = projectDirs
     .map((dir) => normalizeWorkingDirForGrouping(dir))
     .filter((dir): dir is string => Boolean(dir));
-  if (prefixes.length === 0) return [];
+  if (prefixes.length === 0 && alwaysInclude.size === 0) return [];
   const db = getDbClient().drizzle;
   const hiddenIds = db.select({ id: botSessionLinks.sessionId }).from(botSessionLinks);
   const rows = await db
@@ -152,25 +153,30 @@ async function listWorkbenchProjectTasks(
       orcaRole: sessions.orcaRole,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
-      listPreview: sessions.listPreview,
+      hasPreview: isNotNull(sessions.listPreview),
     })
     .from(sessions)
     .where(
       and(
         eq(sessions.status, 'active'),
         isNull(sessions.remoteHostId),
-        isNotNull(sessions.workingDir),
         or(isNull(sessions.source), inArray(sessions.source, ['desktop', 'plugin'])),
         or(isNull(sessions.orcaRole), eq(sessions.orcaRole, 'lead')),
-        or(...prefixes.map((prefix) => like(sessions.workingDir, `${prefix}%`))),
+        or(
+          ...prefixes.map((prefix) => like(sessions.workingDir, `${prefix}%`)),
+          ...(alwaysInclude.size ? [inArray(sessions.id, [...alwaysInclude])] : []),
+        ),
       ),
     )
-    .orderBy(desc(sessions.updatedAt))
-    .limit(500);
+    .orderBy(
+      ...(alwaysInclude.size ? [desc(inArray(sessions.id, [...alwaysInclude]))] : []),
+      desc(sessions.updatedAt),
+    )
+    .limit(Math.max(500, alwaysInclude.size));
   const hidden = new Set((await hiddenIds).map((row) => row.id));
   const kept = rows
     .filter((row) => !hidden.has(row.id))
-    .filter((row) => row.userSendAt != null || row.listPreview != null || alwaysInclude.has(row.id));
+    .filter((row) => row.userSendAt != null || row.hasPreview || alwaysInclude.has(row.id));
   const messageCounts = new Map<string, number>();
   if (kept.length > 0) {
     const counted = await db
@@ -190,7 +196,7 @@ async function listWorkbenchProjectTasks(
       title: row.title,
       workingDir: row.workingDir ?? null,
       agentKind: row.agentKind ?? null,
-      summary: row.listPreview ?? null,
+      summary: null,
       // 与渲染层同一口径:主人发消息与任务本身的最近更新取较晚的那个。
       lastActiveAt: Math.max(row.userSendAt ?? 0, row.updatedAt ?? 0) || null,
       messageCount: messageCounts.get(row.id) ?? null,
@@ -218,6 +224,50 @@ async function listBotDelegationChildren(botId: string): Promise<Map<string, Wor
     out.set(row.childSessionId, status);
   }
   return out;
+}
+
+/** Exact responsibility IDs, including archived children, without reading messages. */
+export async function readBotResponsibleSessionIds(userDataDir: string, botId: string): Promise<string[]> {
+  return responsibleSessionIds(
+    (await listBotDelegationChildren(botId)).keys(),
+    await readTaskResponsibilities(userDataDir, botId),
+  );
+}
+
+/**
+ * The same responsibility, split: `delegatedSessionIds` are the background tasks this Bot
+ * started itself (delegation children); `sessionIds` adds the ordinary tasks it explicitly
+ * took over. The owner chip reads the first, the sidebar follow mark the second.
+ */
+export async function readBotResponsibilityScope(
+  userDataDir: string, botId: string,
+): Promise<{ sessionIds: string[]; delegatedSessionIds: string[] }> {
+  const delegated = [...(await listBotDelegationChildren(botId)).keys()].sort();
+  return {
+    sessionIds: responsibleSessionIds(delegated, await readTaskResponsibilities(userDataDir, botId)),
+    delegatedSessionIds: delegated,
+  };
+}
+
+/** Capture the creator before a generic create-mode handoff crosses async boundaries. */
+export async function captureBotCreatedTaskResponsibility(callerSessionId?: string) {
+  if (!callerSessionId || isAppSessionBoundaryPending()) return null;
+  const scope = activeOwnerScopeKey();
+  const root = ownerScopedUserDataPath();
+  const caller = await resolveWorkbenchCaller(callerSessionId);
+  if (!caller.ok) return null;
+  const assertCurrent = () => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) throw new Error('OWNER_SCOPE_CHANGED');
+  };
+  assertCurrent();
+  return async (sessionId: string) => {
+    assertCurrent();
+    const target = await readWorkbenchTarget(sessionId);
+    if (!target || target.status !== 'active' || target.botLinked || target.remoteHostId || target.orcaRole === 'worker') return;
+    assertCurrent();
+    await setTaskResponsibility(root, caller.botId, sessionId, true, assertCurrent);
+    broadcastBotWorkbenchChanged(caller.botId);
+  };
 }
 
 async function listBotRoutines(botId: string) {
@@ -266,7 +316,7 @@ function appPath(name: 'appData' | 'userData'): string | null {
 
 /**
  * 已接手项目里近期的本机 Claude Code / Codex / Pi 会话。根目录见 `workbenchSessionRoots`
- * (含其它 Cindy profile 的 codex-home 与 pi-agent-home),按 cwd 过滤,只读近期转录的头尾。
+ * (含其它 Cindy profile 的 codex-home 与 pi-agent-home),按 cwd 元数据过滤,不预读消息摘要。
  */
 async function listExternalCandidates(projectDirs: readonly string[]) {
   const now = Date.now();
@@ -283,6 +333,7 @@ async function listExternalCandidates(projectDirs: readonly string[]) {
     }),
     projectDirs,
     caseInsensitive: isCaseInsensitivePlatform(process.platform),
+    metadataOnly: true,
     since: now - WORKBENCH_RECENT_WINDOW_MS,
     now,
   });
@@ -402,6 +453,12 @@ function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): BotWorkben
     rekeyJudgment: (botId, from, to) => rekeyBotWorkbenchJudgment(userDataDir, botId, from, to),
     notifyChanged: broadcastBotWorkbenchChanged,
     listDelegations: listBotDelegationChildren,
+    readResponsibleSessionIds: (botId) => readBotResponsibleSessionIds(userDataDir, botId),
+    saveResponsibility: (botId, sessionId, responsible) => setTaskResponsibility(
+      userDataDir, botId, sessionId, responsible, () => {
+        if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) throw new Error('OWNER_SCOPE_CHANGED');
+      },
+    ),
     readActivityPhase: async (sessionId) => (await readCanonicalSessionActivity(sessionId)).phase,
     listRoutines: listBotRoutines,
     listSchedules: listProjectSchedules,
@@ -499,7 +556,8 @@ export function removeBotWorkbenchProjectForCaller(params: { callerSessionId: st
     const userDataDir = ownerScopedUserDataPath();
     const caller = await resolveWorkbenchCaller(params.callerSessionId);
     if (!caller.ok) return caller;
-    const before = await readBotWorkbenchDirectoryPaths(userDataDir, caller.botId);
+    // A path names a folder on this computer; folders on other computers are removed from their row.
+    const before = (await readBotWorkbenchState(userDataDir, caller.botId)).directories;
     const matched = await findHandedProject(params.path, before, {
       homeDir: os.homedir(),
       caseInsensitive: process.platform === 'darwin' || isCaseInsensitivePlatform(process.platform),

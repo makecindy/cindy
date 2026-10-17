@@ -13,8 +13,9 @@ export interface ChatSocket {
 export function subscribeChatServer(options: {
   baseUrl: string; token(): Promise<string | null>; current(): boolean;
   socket(url: string): ChatSocket;
-  ready(actorId: string): Promise<{ scope: string; cursor: string }>;
-  changed(): void; unavailable(): void; available?(): void;
+  ready(actorId: string): Promise<{ scope: string; cursor: string } | Array<{ scope: string; cursor: string }>>;
+  changed(changes?: Array<{ type: string; data: unknown }>): void; unavailable(): void; available?(): void;
+  reset?(): Promise<void>;
 }) {
   let stopped = false;
   let socket: ChatSocket | undefined;
@@ -32,7 +33,7 @@ export function subscribeChatServer(options: {
       const ws = options.socket(url.href); socket = ws;
       deadline = setTimeout(() => ws.close(), 15000);
       ws.onopen = () => { if (current(ws)) ws.send(JSON.stringify({ type: 'auth', token })); else ws.close(); };
-      let scope: string | undefined;
+      const scopes = new Set<string>();
       ws.onmessage = event => {
         if (!current(ws)) return;
         void (async () => {
@@ -41,18 +42,23 @@ export function subscribeChatServer(options: {
             clearTimeout(deadline);
             const subscription = await options.ready(chatId(value.actorId));
             if (current(ws) && ws.readyState === 1) {
-              scope = subscription.scope; delay = 1000;
-              ws.send(JSON.stringify({ type: 'subscribe', scope, after: chatCursor(subscription.cursor) }));
+              delay = 1000;
+              for (const entry of Array.isArray(subscription) ? subscription : [subscription]) {
+                scopes.add(entry.scope);
+                ws.send(JSON.stringify({ type: 'subscribe', scope: entry.scope, after: chatCursor(entry.cursor) }));
+              }
               options.available?.();
             }
-          } else if (value.type === 'changes' && scope && value.scope === scope) {
-            options.changed();
+          } else if (value.type === 'changes' && scopes.has(value.scope)) {
+            options.changed(value.changes);
             ws.send(JSON.stringify({ type: 'ack', scope: value.scope, cursor: chatCursor(value.cursor) }));
-          } else if (value.type === 'scope_error' && scope && value.scope === scope) {
+          } else if (value.type === 'scope_error' && scopes.has(value.scope)) {
             // A full authenticated reload clears removed membership and resets expired cursors.
-            options.changed();
+            options.changed(value.changes);
             if (value.error?.code === 'RESET_REQUIRED' && value.error?.details?.head) {
-              ws.send(JSON.stringify({ type: 'subscribe', scope: value.scope, after: chatCursor(value.error.details.head) }));
+              const head = chatCursor(value.error.details.head);
+              await options.reset?.();
+              if (current(ws) && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', scope: value.scope, after: head }));
             } else { stopped = true; options.unavailable(); ws.close(); }
           } else if (value.type === 'error') ws.close();
         })().catch(() => { if (current(ws)) ws.close(); });

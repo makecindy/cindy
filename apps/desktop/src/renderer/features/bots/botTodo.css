@@ -1,0 +1,210 @@
+/* 伙伴待办:工作台单列里的一组(标题行同任务分组,一行标题 + 一行「到期 · 来源」)。 */
+.todo-panel {
+  padding: 0 20px 8px;
+  color: var(--text-primary);
+}
+.todo-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  margin: 14px 0 2px;
+}
+.todo-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-12);
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.todo-count {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.todo-header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+.todo-icon,
+.todo-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  transition:
+    background-color var(--motion-instant),
+    color var(--motion-instant);
+}
+.todo-icon:hover,
+.todo-more:hover,
+.todo-icon[aria-pressed='true'],
+.todo-icon[data-active],
+.todo-more[data-state='open'] {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.todo-search {
+  margin: 4px 0 6px;
+}
+.todo-search input,
+.todo-field input,
+.todo-field textarea {
+  width: 100%;
+  min-width: 0;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: var(--text-13);
+  line-height: 1.54;
+}
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0 -8px;
+  min-width: 0;
+  border-radius: 8px;
+}
+.todo-row:hover {
+  background: var(--surface-hover);
+}
+.todo-heading {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0 6px 8px;
+  text-align: left;
+  border-radius: 8px;
+}
+.todo-lead {
+  display: flex;
+  width: 16px;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--card-status-done);
+}
+.todo-circle {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--text-tertiary);
+}
+.todo-circle-hidden {
+  border-style: dashed;
+}
+.todo-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.todo-title,
+.todo-meta {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-title {
+  font-size: var(--text-13);
+  line-height: 1.54;
+}
+.todo-meta {
+  font-size: var(--text-12);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.todo-overdue {
+  color: var(--text-danger);
+}
+.todo-row .todo-more {
+  margin: 4px 6px 0 0;
+}
+.todo-done-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  margin-top: 10px;
+  font-size: var(--text-12);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  border-radius: 8px;
+}
+.todo-done-toggle:hover {
+  color: var(--text-primary);
+}
+.todo-done-toggle svg {
+  color: var(--text-tertiary);
+  transition: transform var(--motion-fast);
+}
+.todo-done-toggle .todo-chevron-open {
+  transform: rotate(90deg);
+}
+.todo-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-12);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.todo-empty,
+.todo-panel > p[role='status'] {
+  padding: 4px 0;
+  font-size: var(--text-12);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.todo-error {
+  font-size: var(--text-13);
+  line-height: 1.54;
+  color: var(--text-danger);
+  overflow-wrap: anywhere;
+}
+.todo-detail {
+  display: grid;
+  gap: 12px;
+  font-size: var(--text-14);
+  line-height: 1.57;
+  overflow-wrap: anywhere;
+}
+.todo-detail h3 {
+  font-size: var(--text-13);
+  line-height: 1.54;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.todo-detail a {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+.todo-field {
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-13);
+  line-height: 1.54;
+}
+.todo-panel :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}

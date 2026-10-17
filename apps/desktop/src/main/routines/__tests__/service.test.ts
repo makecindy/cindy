@@ -42,7 +42,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: vi.fn() }));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../localDb/client/current.js', () => ({
   getCurrentDbClientSnapshot: () => mock.dbReady ? {
     userId: mock.dbOwner ?? mock.scope,
@@ -58,6 +58,7 @@ vi.mock('../store.js', () => ({
 import { configureRoutineHost, getRoutineEngine, routineTools, stopRoutines, updateBotRoutineLifecycle } from '../service.js';
 import { handleRoutineRequest } from '../../cindy-brain/routineSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { companionHomes } from '../../companion-cloud/homes.js';
 beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profiles); });
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot,
@@ -99,6 +100,48 @@ it('dispatches into the current canonical task through the existing silent runne
     }),
   );
   expect((await routineTools.history('bot', routine.id))[0].resultText).toBe('Reviewed PR');
+});
+
+it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {
+  companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['bot'],
+    actors: [{ id: 'actor', externalId: 'bot', name: 'Bot', avatar: null, homeDeviceId: 'laptop' }] });
+  try {
+    const routine = await routineTools.save('bot', { name: 'Review', prompt: 'Check', enabled: true,
+      triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+    await routineTools.runNow('bot', routine.id);
+    await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('skipped'));
+    expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+    expect(mock.storage.insert).not.toHaveBeenCalled();
+    expect((await routineTools.list('bot'))[0]).toMatchObject({ id: routine.id, enabled: true, prompt: 'Check' });
+  } finally {
+    companionHomes.reset();
+  }
+});
+
+it('keeps skipping a demoted teammate\'s routine from the persisted list while the server is unreachable', async () => {
+  companionHomes.setPersistedShadows(['bot']);
+  try {
+    const routine = await routineTools.save('bot', { name: 'Offline', prompt: 'Check', enabled: true,
+      triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+    await routineTools.runNow('bot', routine.id);
+    await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('skipped'));
+    expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  } finally {
+    companionHomes.reset();
+  }
+});
+
+it.skipIf(process.platform === 'win32')('rejects saving a pre-run hook command with a shell syntax error', async () => {
+  const input = {
+    name: 'Broken check',
+    prompt: 'Check',
+    enabled: false,
+    triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }],
+    preRunHook: { command: `node '/a b/x.mjs'//'` },
+  };
+  await expect(routineTools.save('bot', input)).rejects.toThrow(/shell syntax error/);
+  await expect(routineTools.createOnce('bot', input, 'broken-hook-12345')).rejects.toThrow(/shell syntax error/);
+  expect(await routineTools.list('bot')).toEqual([]);
 });
 
 it('blocks enabling and manual runs until imported handover is ready while retaining disabled edits', async () => {

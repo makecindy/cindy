@@ -20,6 +20,8 @@ export interface BotWorkbenchDirectory {
   name: string;
   addedAt: string;
   exists: boolean;
+  /** On another computer (the companion moved here and the folder stayed there); never local. */
+  deviceId?: string;
 }
 
 /**
@@ -45,6 +47,8 @@ export interface WorkbenchTaskJudgment {
 export const WORKBENCH_REF_MAX = 2_000;
 
 export interface BotWorkbench {
+  /** Verified creation plus explicit take/release. Older hosts omit it; never infer from directories. */
+  responsibleSessionIds?: string[];
   directories: BotWorkbenchDirectory[];
   /** 按 task_id 记录的伙伴判断。 */
   tasks: Record<string, WorkbenchTaskJudgment>;

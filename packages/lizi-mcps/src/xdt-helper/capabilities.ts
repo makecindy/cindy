@@ -50,6 +50,20 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     ].join(' '),
   },
   {
+    key: 'self-management',
+    title: '自我管理(Agent 管理用户自己的任务 / 定时任务 / 项目 / 伙伴)',
+    oneLiner:
+      '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
+    detail: [
+      '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
+      '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
+      '【定时任务】cindy_scheduler：schedule_list / get / list_runs(device=local|all|<deviceId>，list 可用 query 做文本筛选)与 schedule_update / pause / resume / delete / run_now(device=<deviceId>)可跨电脑；schedule_create、schedule_set_pre_run_hook、当前运行的通知设置仅本机。',
+      '【伙伴】cindy_helper bots 类(仅伙伴任务可见)：list_agents / send_to_agent 可跨电脑(deviceId::botId)；get_teammate_home / move_teammate_home 查看与更换任一伙伴的主力电脑(跨电脑，更换按权限档)；资料、能力、工作台、待办、后台任务仅本机。',
+      '【跨电脑的前提】对方电脑在线、同一账号、已开启远程控制。离线、未开启、版本不支持或超时会按电脑写明原因，结果里的 partial=true 表示有电脑没查到。',
+      '【尚无工具】在另一台电脑上新建任务或定时任务、管理另一台电脑上的任务(改名 / 停止 / 队列)与项目；这些用户可在远程控制里手动完成。',
+    ].join(' '),
+  },
+  {
     key: 'ai-chat',
     title: 'AI 对话',
     oneLiner: '与 Claude Code / Codex agent 实时对话,支持代码执行、工具调用、多模态输入。',
@@ -91,8 +105,9 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【是什么】get_current_session_id(cindy_helper 自省类)+ send_to_worker(cindy_orca team 工具)/ send_to_session(cindy_helper handoff 类, 走 call_tool)配合使用。前者返回当前 ${BRAND_NAME} session 的 business id / agent_kind / working_dir, 后两者把一条控制层消息投递到指定 session;目标不在内存时会自动 resume, 投递成功即返回。`,
       '【典型场景】自动化 skill 首次处理某个外部业务对象(issue / jira / pr / 任意自定义 key)时, 先调 get_current_session_id 拿 session_id 并把它和外部 key 做持久化绑定;后续二次处理同一对象时, 调 send_to_worker(team 内 worker)或 send_to_session(任意已知 session)把增量信息 handoff 回那个 session, 保留原始上下文、决策链和历史工具调用。',
       '【skill 端伪代码】first_seen -> sid = get_current_session_id(); store(key, sid.session_id); later -> sid = load(key); if sid then send_to_worker / send_to_session({ target_session_id: sid, message: "...增量..." }) else fallback normal flow。',
+      '【跨电脑】target_session_id 传 deviceId::sessionId(list_sessions 用 device 参数查到的 id)可发给另一台电脑上的既有任务,对方电脑需在线并开启远程控制;不能在另一台电脑新建任务。',
       '【硬规则】send_to_session 要发给已有任务时 target_session_id 必传;不知道 id 先用 history 类目的 list_sessions 查。完全省略该参数不会报错,而是 create:静默新建一个专属任务、把消息当首条输入并立刻跑一轮,返回 wake_kind=created 和 note。只有明确要为业务对象新建专属任务时才省略;拿到 created 不等于已投给既有任务。',
-      '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档,skill 自己决定是否回退或等待未来的 unarchive 能力; 传了 id 但目标不存在只会返 NOT_FOUND,绝不自动新建。jump 撞上目标正在跑 turn 时不再返 BUSY,而是入队并成功返回 wake_kind=queued(可用 update/cancel_session_queued_message 管理);BUSY 仅是 create 模式的罕见兜底。',
+      '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档，在已有恢复授权时可先用 control/unarchive_sessions 恢复，再发送新消息，不能自行推翻用户归档意图; 传了 id 但目标不存在只会返 NOT_FOUND,绝不自动新建。jump 撞上目标正在跑 turn 时不再返 BUSY,而是入队并成功返回 wake_kind=queued(可用 update/cancel_session_queued_message 管理);BUSY 仅是 create 模式的罕见兜底。',
       '【边界】它不是普通聊天入口,而是 session 间 handoff 的控制层能力;不会自动关闭当前 dispatcher session,也不会替 skill 管理绑定键的存储语义。',
     ].join(' '),
   },
@@ -100,7 +115,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     key: 'session-control',
     title: '会话控制面(队列 / 插话 / 停止 / 运行探针)',
     oneLiner:
-      'agent 可观察任意本机会话队列与运行状态，并控制自己投递的队列消息、same-turn 插话或请求优雅停止。',
+      'agent 可观察本机任务的队列与运行状态，并控制自己投递的队列消息、same-turn 插话或请求优雅停止(仅本机任务)。',
     detail: [
       '【入口】cindy_helper 的 history 类 list_sessions / list_session_queue 提供 queuedCount、队列位置、来源、入队时间、正文摘要与 consuming 状态；control 类提供 update_session_queued_message、cancel_session_queued_message、steer_session_queued_message、move_session_queued_message、steer_session、stop_session_turn、get_session_runtime。',
       '【伙伴入口】伙伴不挂载通用 control 类。只管理自己拥有的后台任务：message_session_task 的 queue / steer / resume 分别表示排队、同轮插话、恢复暂停；stop_session_task 的 cancel / request-stop / pause 分别表示取消任务、请求当前轮停止、保留任务与队列的可恢复暂停。check_session_task 的 control 区分 pausing / paused；requested 或 unconfirmed 不能当作已停。不支持的引擎明确返回失败。',
@@ -118,8 +133,9 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '会话列表带搜索、按时间和工程目录组织。',
       'Fork:在任意历史消息处分裂出新会话,继承到该点为止的全部上文。',
       'Rewind:在当前会话回到历史点,改写发送内容后重新运行,原分支被替换。',
-      'agent 批量整理:control 类工具 rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换)。',
-      '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档当前正在运行的会话。',
+      'agent 批量整理:control 类工具 rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换；跨电脑传 deviceId::sessionId，单次限定一台电脑)。',
+      '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档当前正在运行的会话。恢复不启动执行、不发旧消息、不恢复暂停自动化；之后可用 send_to_session 发送新消息。',
+      '本机批次原子写入；远程逐项执行，失败即停并返回已完成、失败与未执行项，不保证跨项事务；回执未知时先查状态再决定重试。',
       '以上操作都不破坏原数据,可放心试错。',
     ].join(' '),
   },
@@ -160,11 +176,12 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
     key: 'scheduler',
     title: '自动化调度',
-    oneLiner: '按 cron 规则自动跑任务(定期分析、工单分拣等),含执行历史,agent 也能通过 MCP 工具自助管理。',
+    oneLiner: '按 cron 规则自动跑任务(定期分析、工单分拣等),含执行历史,agent 也能通过 MCP 工具自助管理,包括其它电脑上的定时任务。',
     detail: [
       '基于 cron 表达式创建定时任务,常见用法是每天定时跑 AI 工单分拣或周报生成。',
       'GUI 展示任务列表、上次执行结果、失败原因。已执行项可加黑名单防重复。',
       'agent 也能通过 MCP 工具(schedule_create / list / get / update / pause / resume / run_now / delete / list_runs)自助创建和管理调度,GUI 与 MCP 看到同一份数据。',
+      '定时任务保存在各自的电脑上,工具默认只作用于本机:schedule_list / get / list_runs 传 device="all" 或某台电脑的 deviceId 可查其它在线且已开启远程控制的电脑(结果按电脑分组,没查到的电脑写明原因),update / pause / resume / delete / run_now 传 device=<deviceId> 可管理那台电脑上的任务;新建只在本机。',
       '后端 SQLite 存储,有独立 Scheduler Host 进程管理生命周期。',
     ].join(' '),
   },
@@ -174,7 +191,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     oneLiner: 'agent 可发现、列出和搜索本机与在线已授权电脑的聊天历史，并按任务读取内容。',
     detail: [
       `【是什么】${BRAND_NAME} 的对话历史保存在各电脑的本地 SQLite。cindy_helper 的 history 类提供只读查询入口，让 agent 按宿主授予的范围读取历史，协助用户组织 memory / 知识库。`,
-      '【六个工具】(1)list_workdirs: 列出所有出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据，并附当前 queuedCount; (3)list_session_queue: 按 session_id 查看尚未消费消息的位置、来源、入队时间、正文摘要与投递状态; (4)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (5)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口; (6)list_history_devices: 发现本机与在线已授权电脑。',
+      '【六个工具】(1)list_workdirs: 列出本机出现过的工作目录 + session 数 / 首末活动时间; (2)list_sessions: 按 workdir / 时间段 / agent_kind 过滤 session 元数据，并附当前 queuedCount; (3)list_session_queue: 按 session_id 查看尚未消费消息的位置、来源、入队时间、正文摘要与投递状态; (4)get_chat_history: 按 session_ids / workdir / 时间段 / role "按元数据精确捞"原始消息(content / agentMeta JSON 解析后透传); (5)search_chat_history: 跨 session "按内容语义找"——自然语言 query, FTS5 全文(全量、永远可用)+ 向量语义(开启"聊天记录语义索引"后生效)RRF 融合, 返回命中 + 上下文窗口; (6)list_history_devices: 发现本机与在线已授权电脑。',
       '【典型用法】"帮我总结这周和 agent 的讨论, 写成 memory 条目" → list_sessions({from: 周一 ISO}) 拿 sessionId 列表 → get_chat_history({session_ids: [...]}) 拿对话 → LLM 提炼成 memory。"我之前聊过 X / 上次怎么解决那个 bug"(只记得内容、不知道在哪) → search_chat_history({query}) 直接语义召回。"我在 xxx 项目里都聊过啥" → list_sessions({workdir}) → get_chat_history。',
       '【跨设备】list_history_devices 发现设备；list_sessions / search_chat_history 传 device="all" 查询本机与在线已授权电脑，或 device=<设备 ID> 指定电脑。结果按设备分组，每组独立翻页，partial 表示有设备未查到。远程任务 ID 带 deviceId:: 前缀，可直接传给 get_chat_history；不读取离线缓存，旧端不支持会明确报告。默认 device="local" 保持原本机查询。',
       '【向量是增益不是依赖】search_chat_history 在用户没开 embedding / sqlite-vec 不可用时静默退化为纯 FTS, 搜索照常工作; 响应里 vector_used 标明向量是否生效。',

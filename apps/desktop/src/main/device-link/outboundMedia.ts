@@ -15,9 +15,10 @@ import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 type PeerUpload = (source: string | Buffer, mimeType?: string) => Promise<string | null>;
-const peerUploadContext = new AsyncLocalStorage<PeerUpload>();
-export function withPeerAttachmentUpload<T>(upload: PeerUpload, operation: () => Promise<T>) {
-  return peerUploadContext.run(upload, operation);
+type RetainSentImage = (source: string | Buffer, ref: string) => Promise<void>;
+const peerUploadContext = new AsyncLocalStorage<{ upload: PeerUpload; retain?: RetainSentImage }>();
+export function withPeerAttachmentUpload<T>(upload: PeerUpload, operation: () => Promise<T>, retain?: RetainSentImage) {
+  return peerUploadContext.run({ upload, retain }, operation);
 }
 
 import { createLogger } from '../logger';
@@ -100,14 +101,20 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
     const context = peerUploadContext.getStore();
     if (!context || sharedTaskMediaId()) return null;
     const effectiveMime = contentType ?? mimeOf(typeof source === 'string' ? path.extname(source).slice(1).toLowerCase() : 'bin');
-    const result = await context(source, effectiveMime);
+    const result = await context.upload(source, effectiveMime);
     const parsed = result && parsePeerAttachmentRef(result);
     return parsed ? buildPeerAttachmentRef({ ...parsed, originalName }) : null;
   };
-  const bufferRef = async (bytes: Buffer, options: Parameters<typeof uploadBuffer>[1]) =>
-    await direct(bytes, options?.contentType) ?? buildUploadedAttachmentRef(await uploadBuffer(bytes, options), originalName);
-  const fileRef = async (file: string, options: Parameters<typeof uploadLocalFile>[1]) =>
-    await direct(file, options?.contentType) ?? buildUploadedAttachmentRef(await uploadLocalFile(file, options), originalName);
+  const retain = async (source: string | Buffer, ref: string) => {
+    // The compressed bytes may have a different content address from the local draft.
+    // Save before returning so history can immediately resolve its final address offline.
+    await peerUploadContext.getStore()?.retain?.(source, ref).catch(() => undefined);
+    return ref;
+  };
+  const bufferRef = async (bytes: Buffer, options: Parameters<typeof uploadBuffer>[1]) => retain(bytes,
+    await direct(bytes, options?.contentType) ?? buildUploadedAttachmentRef(await uploadBuffer(bytes, options), originalName));
+  const fileRef = async (file: string, options: Parameters<typeof uploadLocalFile>[1]) => retain(file,
+    await direct(file, options?.contentType) ?? buildUploadedAttachmentRef(await uploadLocalFile(file, options), originalName));
 
   // 1) 内存 base64(剪贴板/截图,视觉上下文语义)→ 压缩 → uploadBuffer(不把字节内联进 relay)
   if (typeof src.base64 === 'string' && src.base64) {

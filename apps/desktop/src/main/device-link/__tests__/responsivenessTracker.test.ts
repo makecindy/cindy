@@ -69,6 +69,21 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  it('local socket queue expiry neither opens the peer circuit nor starts link recovery', async () => {
+    const recoverLink = vi.fn(async () => undefined);
+    const h = harness({ recoverLink });
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD + 2; i++) {
+      await expect(h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () =>
+        Promise.reject(new DeviceLinkError('BACKPRESSURE', 'request expired before socket write')),
+      )).rejects.toMatchObject({ code: 'BACKPRESSURE' });
+      h.advance(1_100);
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    expect(recoverLink).not.toHaveBeenCalled();
+    await expect(h.tracker.guardInvoke(OTHER_DEV, 'local-db:sessions:list', async () => ['healthy']))
+      .resolves.toEqual(['healthy']);
+  });
+
   it('late probe timeout cannot recover a newly opened lifecycle', async () => {
     const recoverLink = vi.fn(async () => {});
     const h = harness({ recoverLink });

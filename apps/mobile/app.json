@@ -65,12 +65,17 @@
       [
         "expo-build-properties",
         {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          },
           "ios": {
             "buildReactNativeFromSource": true,
             "enableSceneSupport": true
           }
         }
       ],
+      "./plugins/with-android-release-optimization",
       [
         "expo-splash-screen",
         {

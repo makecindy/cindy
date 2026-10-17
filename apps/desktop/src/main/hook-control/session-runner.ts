@@ -32,6 +32,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
+import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
+import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -44,6 +46,7 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
+  providerOffersModel,
   type ProviderView,
   visibleModelUnion,
 } from '@cindy/model-providers';
@@ -54,6 +57,7 @@ import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
+  acquirePendingAgentSwitchForImSend,
   beginTurnChangeSetAtDispatch,
   prepareUnhealthySessionForSend,
   wireSessionToIpc,
@@ -98,7 +102,9 @@ import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
-import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
+import { isImDefaultPermissionMode } from '../../shared/imDefaultSettings.js';
+import { readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
+import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
   getWorkspacePref,
   isWorkspacePrefsMigrated,
@@ -109,6 +115,7 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
+import { bindInputHandoffChannelNotice } from '../im/shared/inputHandoffChannelNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
 import {
   captureChannelAccount,
@@ -117,12 +124,19 @@ import {
 } from '../im/shared/openChannelSession.js';
 import { describeInteractionSource } from '../im/shared/interactionSource';
 import { hookAutoReviewReferences } from '../im/shared/autoReviewReferences.js';
+import { isQuotaExhaustionFailure, terminalErrorText } from '../im/shared/turnRetryNotice.js';
+import { resolveSessionErrorContext } from '../im/shared/sessionProviderLabel.js';
+import { fingerprintImDefaultSettings } from '../im/shared/channelDefaultRoute.js';
+import { createDefaultRouteFollower } from '../im/shared/channelDefaultRouteSync.js';
+import { isHookDefaultRouteRow, writeHookDefaultRouteRecord } from './defaultRouteFollow.js';
 import { groupLaneOf } from './groupWindow';
 
-import type {
-  HookContinuationWatchRequest,
-  HookRunOutcome,
-  HookSessionRunner,
+import {
+  HOOK_ROUTE_UNAVAILABLE_PREFIX,
+  type HookContinuationWatchRequest,
+  type HookRunOutcome,
+  type HookRunRequest,
+  type HookSessionRunner,
 } from './dispatcher.js';
 import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defaults.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
@@ -156,33 +170,27 @@ function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin
   }
 }
 
-/**
- * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
- * (dispatch options)优先, 缺省落桌面端 IM 新会话默认值(草稿, 建 session 那
- * 一刻实时读; 权限无草稿概念, 缺省 bypassPermissions; 来源无 override 通道,
- * 草稿默认仅作优先值, 最终收敛到已连接来源)—— 与桌面端/IM 新开会话同一
- * 数据源, 取代旧版的硬编码兜底模型。
- */
-async function resolveNewSessionConfig(
-  overrides: {
-    agentKind: string | null;
-    model: string | null;
-    effort: string | null;
-    permissionMode: string | null;
-  },
-  log: { warn(msg: string): void },
-  sourceIm?: string | null,
-  workspaceCtx?: { alias: string | undefined; teamId: string | null },
-): Promise<ResolvedHookSessionConfig> {
-  let providers: ProviderView[] | null = null;
-  try {
-    providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
-  } catch (err) {
-    log.warn(
-      `hook provider catalog unavailable; falling back to maker capabilities: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+/** 路由不可用时附在错误后的恢复指引(渠道回帖与 request ledger 都看得到)。 */
+const ROUTE_RESELECT_HINT = '。请在 设置 → IM 机器人 中为这个渠道的工作目录重新选择模型。';
 
+type HookDispatchOverrides = {
+  agentKind: string | null;
+  model: string | null;
+  effort: string | null;
+  permissionMode: string | null;
+};
+type HookWorkspaceCtx = { alias: string | undefined; teamId: string | null };
+
+/**
+ * 新任务路由取值链的全部输入(同步读本机文件, 不碰供应商目录): 目录偏好合并后的
+ * 显式值、目录来源偏好、IM 默认设置。resolveNewSessionConfig 与「跟随默认」的指纹
+ * 共用这一份, 免得两边对「默认由什么决定」各说各话。
+ */
+function hookDefaultInputs(
+  overrides: HookDispatchOverrides,
+  sourceIm: string | null | undefined,
+  workspaceCtx: HookWorkspaceCtx | undefined,
+) {
   const prefsChannel: HookPrefsChannel | null =
     sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' ? sourceIm : null;
   const workspaceAlias = workspaceCtx?.alias;
@@ -195,14 +203,88 @@ async function resolveNewSessionConfig(
     overrides,
     prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
   );
+  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
+  const workdirRoute =
+    prefsChannel !== null && workspaceAlias
+      ? getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      : null;
+  const workdirProviderId = workdirRoute?.providerId ?? null;
+  // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
+  // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
+  // 改写另一入口的新会话路由。
+  const imDefaults = readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined);
+  return { channel: prefsChannel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults };
+}
+
+/**
+ * 官方 hook 任务的「默认设置指纹」: 取值链输入任一变化(目录偏好、目录来源、IM 默认)
+ * 才需要重新解析。权限档不在内 —— 它不跟随(与个人渠道同口径)。
+ */
+function hookDefaultsFingerprint(inputs: ReturnType<typeof hookDefaultInputs>): string {
+  const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
+  return JSON.stringify(['hook', channel, mergedOverrides.agentKind, mergedOverrides.model,
+    mergedOverrides.effort, workdirProviderId, fingerprintImDefaultSettings(imDefaults),
+    ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : [])]);
+}
+
+/**
+ * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
+ * (dispatch options)优先, 缺省落桌面端 IM 新会话默认值(草稿, 建 session 那
+ * 一刻实时读; 权限无草稿概念, 缺省 bypassPermissions; 来源无 override 通道,
+ * 草稿默认仅作优先值, 最终收敛到已连接来源)—— 与桌面端/IM 新开会话同一
+ * 数据源, 取代旧版的硬编码兜底模型。
+ */
+async function resolveNewSessionConfig(
+  overrides: HookDispatchOverrides,
+  log: { warn(msg: string): void },
+  sourceIm?: string | null,
+  workspaceCtx?: HookWorkspaceCtx,
+  providerSnapshot?: ProviderView[],
+): Promise<ResolvedHookSessionConfig & { fingerprint: string }> {
+  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx);
+  const fingerprint = hookDefaultsFingerprint(inputs);
+  let providers: ProviderView[] | null = null;
+  try {
+    providers = providerSnapshot ?? await getDesktopProviderService().listProviders({ allowSideEffects: true });
+  } catch (err) {
+    log.warn(
+      `hook provider catalog unavailable; falling back to maker capabilities: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
+  const defaults = imDefaults;
+  const requestedAgent = mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
+    ? mergedOverrides.agentKind : defaults.agentKind;
+  const defaultRoute = defaults.agents[requestedAgent];
+  const agentDeviceId = workdirRoute ? workdirRoute.agentDeviceId : defaultRoute.agentDeviceId;
+  if (agentDeviceId) {
+    const providerId = workdirRoute?.providerId ?? defaultRoute.providerId;
+    const requestedModel = mergedOverrides.model ?? defaultRoute.model;
+    const { model } = await readImRemoteProviderRoute({ agentDeviceId, agentKind: requestedAgent, providerId, model: requestedModel });
+    const permissionModes = mergedOverrides.permissionMode !== null
+      ? await readImRemotePermissionModes(agentDeviceId, requestedAgent) : [];
+    // 远端能力只用于确认支持，不是权限强弱的权威。不能把对方的首项当作“最严档”，
+    // 也不能让未知档位进入本机执行器；显式选择必须原样保留，否则拒绝启动。
+    const requestedPermissionMode = mergedOverrides.permissionMode;
+    if (requestedPermissionMode !== null && (
+      !isImDefaultPermissionMode(requestedPermissionMode) ||
+      !permissionModes.includes(requestedPermissionMode)
+    )) {
+      throw new Error('Selected permission mode is unavailable for the remote agent' + ROUTE_RESELECT_HINT);
+    }
+    const remote = resolveHookSessionConfig({
+      readDefaults: () => defaults,
+      getModels: () => [model],
+      getPermissionModes: () => requestedPermissionMode === null ? [] : [requestedPermissionMode],
+      log,
+    }, { ...mergedOverrides, agentKind: requestedAgent, model: requestedModel });
+    return { ...remote, agentDeviceId, providerId, fingerprint };
+  }
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () =>
-        // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
-        // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
-        // 改写另一入口的新会话路由。
-        readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined),
+      readDefaults: () => imDefaults,
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
@@ -220,27 +302,37 @@ async function resolveNewSessionConfig(
     mergedOverrides,
   );
 
-  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
-  const channel =
-    sourceIm === 'telegram'
-      ? ('telegram' as const)
-      : sourceIm === 'x'
-        ? ('x' as const)
-        : sourceIm === 'slack'
-          ? ('slack' as const)
-          : null;
-  const workdirProviderId =
-    channel !== null && workspaceCtx?.alias
-      ? getWorkspaceProviderSource(channel, workspaceCtx.teamId, workspaceCtx.alias)
-      : null;
-  const preferredProviderId = workdirProviderId ?? resolved.providerId;
+  // 目录来源是和目录模型一起选的(issue #5912)。目录模型为空、改为继承 IM 默认时,
+  // 残留来源若账号仍可用、只是目录里根本没有这个继承来的模型,它已不再描述用户可见的
+  // 选择 —— 设置页显示的就是继承模型 —— 按 IM 默认自己的来源路由。来源账号断开 /
+  // 停用,或它提供该模型但模型 / 运行路径被停用、退役时不在此放行,仍走下方「显式来源
+  // 失效不换账号」。
+  const workdirSource =
+    providers !== null && workdirProviderId !== null && mergedOverrides.model === null
+      ? providers.find((p) => p.id === workdirProviderId)
+      : undefined;
+  const staleWorkdirSource =
+    workdirSource !== undefined &&
+    workdirSource.connected === true &&
+    !workdirSource.suspended &&
+    !providerOffersModel(workdirSource, resolved.model, resolved.agentKind);
+  if (staleWorkdirSource) {
+    log.warn(
+      `hook workspace provider source ignored: provider=${workdirProviderId} cannot serve inherited model=${resolved.model} channel=${channel}`,
+    );
+  }
+  const preferredProviderId = staleWorkdirSource
+    ? resolved.providerId
+    : (workdirProviderId ?? resolved.providerId);
 
   // 显式连接失效时不能将 null 再解释为默认账号；未指定连接才可选择默认来源。
   const providerId = providers
     ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
     : preferredProviderId;
   if (providers && preferredProviderId && !providerId) {
-    throw new Error(`hook session route unavailable: selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"`);
+    throw new Error(
+      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"${ROUTE_RESELECT_HINT}`,
+    );
   }
   // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
   //   · 目录读取失败:冻结的 availableModels 不带停用标志、saved provider 未经校验,
@@ -254,17 +346,19 @@ async function resolveNewSessionConfig(
     ? resolveLenientRoute(providers, resolved.agentKind, resolved.model, providerId ?? null)
     : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
   if (preferredProviderId && lenient.providerId !== preferredProviderId) {
-    throw new Error(`hook session route unavailable: selected provider "${preferredProviderId}" is unavailable`);
+    throw new Error(
+      `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected provider "${preferredProviderId}" is unavailable${ROUTE_RESELECT_HINT}`,
+    );
   }
   if (!lenient.model) {
-    throw new Error('hook session route unavailable: model disabled in settings');
+    throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} model disabled in settings${ROUTE_RESELECT_HINT}`);
   }
   if (lenient.degraded) {
     log.warn(
       `hook saved route degraded (disabled in settings): model=${resolved.model} providerId=${providerId ?? 'null'} catalog=${providers ? 'ok' : 'outage'}`,
     );
   }
-  return { ...resolved, model: lenient.model, providerId: lenient.providerId };
+  return { ...resolved, model: lenient.model, providerId: lenient.providerId, fingerprint };
 }
 
 /**
@@ -447,6 +541,7 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
  * 贴在被折叠工作过程里的图和文件会随着正文投影一起被丢掉(PR #1272 review)。
  */
 async function collectOutboundForFinalText(
+  sessionId: string,
   texts: HookTurnTexts,
   extraImageAbsPaths: string[],
   allowedFileRoots: string[],
@@ -455,17 +550,26 @@ async function collectOutboundForFinalText(
   // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
-  const publicText = stripInternalWebCitations(texts.publicText);
-  const wholeTurn = stripInternalWebCitations(texts.wholeTurn);
   // Remote runtimes do not grant access to this host's files or media cache.
-  // The attachment collector's managed-image path is independent of file roots.
-  if (allowedFileRoots.length === 0) return { finalText: publicText };
+  // Still run the shared caption/warning projection without granting local IO.
+  const canReadLocal = allowedFileRoots.length > 0;
+  // The public projection is drawn from this whole turn. Import its image URLs
+  // once so a temporary source changing cannot split the body from its attachment.
+  const scanText = stripInternalWebCitations(texts.wholeTurn);
+  const materialized = canReadLocal
+    ? await materializeTaskImageTextResult(sessionId, scanText)
+    : { text: scanText, replacements: new Map<string, string>() };
+  const wholeTurn = materialized.text;
+  const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
+    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
   try {
-    const collected = await collectOutboundAttachments(publicText, extraImageAbsPaths, {
-      resolveImageUrl: resolveRenderableImageUrl,
+    const collected = await collectOutboundAttachments(publicText, canReadLocal ? extraImageAbsPaths : [], {
+      resolveImageUrl: canReadLocal ? resolveRenderableImageUrl : () => {
+        throw new Error('Remote media is not available on this host');
+      },
       allowedFileRoots,
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       log,
@@ -490,7 +594,7 @@ export function createMakerHookSessionRunner(deps: {
 }): HookSessionRunner {
   const { log } = deps;
 
-  return {
+  const runner = {
     isBusy: (sessionId) => isSessionInTurn(sessionId),
 
     async inspect(sessionId) {
@@ -510,7 +614,7 @@ export function createMakerHookSessionRunner(deps: {
       return { workingDir, usable };
     },
 
-    async run(req) {
+    async run(req: HookRunRequest, releaseSendLock = (): void => {}) {
       const startedAt = Date.now();
       const maker = getMaker();
       // 新任务的账号代次从读取偏好 / 默认配置之前算起(与个人 IM 同一判据): 中途换账号时
@@ -540,6 +644,13 @@ export function createMakerHookSessionRunner(deps: {
             { alias: req.workspaceAlias, teamId: req.source?.teamId ?? null },
           )
         : null;
+      const recordNewTaskDefaultRoute = async (sessionId: string): Promise<void> => {
+        if (!resolved || !['telegram', 'slack', 'x'].includes(req.source?.im ?? '')) return;
+        assertAccount?.();
+        await writeHookDefaultRouteRecord(sessionId, resolved.fingerprint).catch((err) => {
+          log.warn(`hook default route record failed: ${String(err)}`);
+        });
+      };
       let workingDir = req.workingDir;
       let model: string | undefined = resolved?.model;
       let effort = resolved?.effort;
@@ -552,6 +663,7 @@ export function createMakerHookSessionRunner(deps: {
       // 复用/接管路径的持久化来源(sessions.provider_id, 用户在聊天里切过的
       // 来源以它为权威); 新建路径恒 null, 由下方草稿默认解析
       let rowProviderId: string | null = null;
+      let agentDeviceId = resolved?.agentDeviceId ?? null;
       if (!req.isNew) {
         // 复用/接管: session 自己的 meta 是权威(workDir/model/agentKind/
         // permissionMode), sdkSessionId 用于冷 resume; effort 不覆盖、权限档
@@ -569,6 +681,7 @@ export function createMakerHookSessionRunner(deps: {
         effort = undefined;
         permissionMode = meta?.permissionMode ?? 'bypassPermissions';
         rowProviderId = row?.providerId ?? null;
+        agentDeviceId = row?.agentDeviceId ?? meta?.agentDeviceId ?? null;
       }
 
       const fail = (msg: string, finalText = ''): HookRunOutcome => ({
@@ -645,6 +758,7 @@ export function createMakerHookSessionRunner(deps: {
         agentKind: effectiveAgentKind,
         workingDir,
         model: effectiveModel,
+        ...(agentDeviceId ? { agentDeviceId } : {}),
         ...(providerId !== null ? { providerId } : {}),
         ...(effort !== undefined ? { effort } : {}),
         permissionMode,
@@ -681,6 +795,7 @@ export function createMakerHookSessionRunner(deps: {
       // 校验, docs/dev-rules/im-turn-flow.md 批次 2); 建行本身仍是下面各自既有的路径。
       // 准入可能规范化来源 / 推理强度, 新任务用准入后的路由。复用 / 接管不经过这里。
       const newSessionRoute: ChannelSessionRoute = {
+        agentDeviceId,
         agentKind: effectiveAgentKind,
         model: effectiveModel,
         providerId,
@@ -710,6 +825,7 @@ export function createMakerHookSessionRunner(deps: {
                 workDir: workingDir,
                 title: req.title ?? 'New task',
                 model: admitted.model,
+                ...(agentDeviceId ? { agentDeviceId } : {}),
                 ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
                 ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
                 permissionMode,
@@ -729,6 +845,8 @@ export function createMakerHookSessionRunner(deps: {
             assertAccount?.();
             await setSessionSourceInDb(req.sessionId, req.source.im);
           }
+          assertAccount?.();
+          await recordNewTaskDefaultRoute(req.sessionId);
           assertAccount?.();
           await touchUserSendInDb(req.sessionId).catch((err) => {
             log.warn(
@@ -952,6 +1070,7 @@ export function createMakerHookSessionRunner(deps: {
         if ((req.source?.im === 'telegram' || req.source?.im === 'x') && accountStillCurrent()) {
           await setSessionSourceInDb(session.id, req.source.im);
         }
+        if (accountStillCurrent()) await recordNewTaskDefaultRoute(session.id);
         if (accountStillCurrent()) broadcastSessionCreated(session.id);
       }
       // worktree 场景补写 sessions.worktree_path(同 send_to_session 做法):
@@ -1210,10 +1329,11 @@ export function createMakerHookSessionRunner(deps: {
         : sendContentBase;
       // 落库形态: 有附件用 {text, images, files} 对象(createMessage safeStringify
       // 存 JSON, 读回 parseUserContent 提取 images/files); 无附件纯文本 string。
+      const userText = req.userText ?? req.source?.userText ?? req.prompt;
       const userMessageContent =
         imageRefs.length > 0 || fileRefs.length > 0
-          ? { text: req.prompt, images: imageRefs, files: fileRefs }
-          : req.prompt;
+          ? { text: userText, images: imageRefs, files: fileRefs }
+          : userText;
 
       const turnChangeAnchorClientId = randomUUID();
       let turnChangeSetStarted = false;
@@ -1271,7 +1391,7 @@ export function createMakerHookSessionRunner(deps: {
                   // clean channel message used for deterministic managed Pi
                   // package commands; only older servers that omit the field
                   // fall back to the decorated prompt.
-                  rawChannelText: req.source?.userText ?? req.prompt,
+                  rawChannelText: userText,
                   ...(autoReviewReferences ? { autoReviewReferences } : {}),
                 },
               }
@@ -1288,6 +1408,11 @@ export function createMakerHookSessionRunner(deps: {
               if (getMaker().getSession(session.id) !== session) return false;
               return req.onRuntimeRecovery!(text);
             }, log);
+            // 代输入: the same independent channel send carries the fixed pointer.
+            if (req.onRuntimeRecovery) bindInputHandoffChannelNotice(session, async (text) => {
+              if (getMaker().getSession(session.id) !== session) return false;
+              return req.onRuntimeRecovery!(text);
+            });
             if (req.groupHistoryAccess) {
               releaseGroupHistoryAccess = beginGroupHistoryAccess({
                 sessionId: session.id,
@@ -1308,7 +1433,7 @@ export function createMakerHookSessionRunner(deps: {
                 sourceDescription: describeInteractionSource({
                   channelName: req.source?.im ?? req.origin.connectionName,
                   chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',
-                  text: req.source?.userText ?? '',
+                  text: req.userText ?? req.source?.userText ?? '',
                   interactionSource: {
                     senderName: req.source?.threadContext?.find((message) =>
                       message.messageId === req.source?.triggerMessageId && !!message.messageId)?.author,
@@ -1353,6 +1478,7 @@ export function createMakerHookSessionRunner(deps: {
                   ? {
                       hookSource: {
                         ...req.source,
+                        ...(req.source.userText !== undefined ? { contentFormat: 'user-text' } : {}),
                         // New messages only persist producer-supplied context.
                         // Legacy prompt projection belongs to the read path.
                         contextSnapshot: req.contextSnapshot ?? {},
@@ -1404,6 +1530,9 @@ export function createMakerHookSessionRunner(deps: {
         releaseTelegramGroupTurn();
         releaseGroupHistory();
         return fail(err instanceof Error ? err.message : String(err));
+      } finally {
+        // 与个人 IM 一样，锁只保护切换到 send 完成，不跨整轮等待。
+        releaseSendLock();
       }
 
       // turn 不设时长上限(见常量注释): 收口全靠 observer, 兜底在 maker-core
@@ -1412,12 +1541,20 @@ export function createMakerHookSessionRunner(deps: {
         await observer.finished;
       } catch (err) {
         observer.stop();
-        return fail(
-          err instanceof Error ? err.message : String(err),
-          observer.errorReason === 'output-limit'
-            ? stripInternalWebCitations(observer.finalText())
-            : '',
-        );
+        const collected = observer.errorReason === 'output-limit'
+          ? await collectOutboundForFinalText(
+            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log,
+          )
+          : { finalText: '' };
+        // 额度类失败要说清是哪个供应商: 名字只在这里按需读一次(读不到退回「当前供应商」)。
+        const message = isQuotaExhaustionFailure(observer.errorData)
+          ? terminalErrorText(observer.errorData, {
+            ...await resolveSessionErrorContext(session.id),
+            botLabel: req.source?.im === 'telegram' ? 'Telegram 官方 bot' : req.origin.connectionName,
+            surface: 'official',
+          })
+          : err instanceof Error ? err.message : String(err);
+        return { ...fail(message), ...collected };
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -1433,6 +1570,7 @@ export function createMakerHookSessionRunner(deps: {
       // 出站附件: 文本引用 / 旁路图存在时才收集(读盘 + base64 只在需要时
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
+        session.id,
         turnTextsFor(observer),
         extraImageAbsPaths,
         allowedFileRoots,
@@ -1469,6 +1607,46 @@ export function createMakerHookSessionRunner(deps: {
         return () => undefined;
       }
       return beginContinuationWatch(session, req, log);
+    },
+  } satisfies HookSessionRunner;
+
+  return {
+    ...runner,
+    async run(req) {
+      if (req.isNew) return runner.run(req);
+      // 切换可能重建引擎，必须先应用选择，再读 meta、建会话和挂观察器。
+      // 与创建任务共用取值链：迁移前保留 server 偏好，迁移后由本机正本忽略旧便签。
+      const overrides: HookDispatchOverrides = {
+        agentKind: req.agentKind, model: req.model,
+        effort: req.effort, permissionMode: req.permissionMode,
+      };
+      const workspace = { alias: req.workspaceAlias, teamId: req.source?.teamId ?? null };
+      const follower = createDefaultRouteFollower({
+        label: 'hook',
+        // 找不到任务实际目录对应的别名时，不能把未知目录默认当成已清空。
+        ownsRow: (row) => workspace.alias !== undefined && isHookDefaultRouteRow(row),
+        fingerprint: () => hookDefaultsFingerprint(hookDefaultInputs(overrides, req.source?.im, workspace)),
+        resolveTarget: async (providers) => {
+          const resolved = await resolveNewSessionConfig(overrides, log, req.source?.im, workspace, providers);
+          return { ...resolved, effort: resolved.effort ?? null };
+        },
+        // 新任务配置解析已校验来源和模型可用性。
+        isRouteUsable: async () => true,
+      });
+      let release: (() => void) | undefined = await acquirePendingAgentSwitchForImSend(
+        req.sessionId, () => follower.syncUnderLock(req.sessionId),
+      );
+      const releaseOnce = (): void => {
+        const unlock = release;
+        release = undefined;
+        unlock?.();
+      };
+      try {
+        return await runner.run(req, releaseOnce);
+      } finally {
+        // 建会话、目录检查等在 send 前提前退出时也释放。
+        releaseOnce();
+      }
     },
   };
 }
@@ -1536,13 +1714,11 @@ function beginContinuationWatch(
       req.onAbandon();
       return;
     }
-    if (errorMessage !== null) {
+    if (errorMessage !== null && observer.errorReason !== 'output-limit') {
       // 与 run() 一致：只有确定的输出上限失败携带已累计正文。
       req.onEnd({
         status: 'error',
-        finalText: observer.errorReason === 'output-limit'
-          ? stripInternalWebCitations(observer.finalText())
-          : '',
+        finalText: '',
         errorMessage,
         durationMs: Date.now() - startedAt,
       });
@@ -1552,15 +1728,16 @@ function beginContinuationWatch(
       // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
       // isDirAuthorized 用 session.workDir 复核同理。
       const collected = await collectOutboundForFinalText(
+        session.id,
         turnTextsFor(observer),
         extraImageAbsPaths,
         allowedFileRoots,
         log,
       );
       req.onEnd({
-        status: 'ok',
+        status: errorMessage === null ? 'ok' : 'error',
         finalText: collected.finalText,
-        errorMessage: null,
+        errorMessage,
         durationMs: Date.now() - startedAt,
         ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
       });

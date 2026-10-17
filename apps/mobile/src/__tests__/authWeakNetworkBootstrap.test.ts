@@ -1,3 +1,4 @@
+// guard: credentials-and-local-storage.md: restored credentials, account generations and realm activation must remain owned by the initiating account; static call-site contract.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -254,5 +255,23 @@ describe('auth weak-network bootstrap', () => {
     expect(bootstrap).toContain('deleteSecureItem(LEGACY_REFRESH_TOKEN_KEY)');
     expect(bootstrap).toContain('deleteSecureItem(LEGACY_PENDING_OAUTH_KEY)');
     expect(bootstrap).toContain('deleteSecureItem(LEGACY_USER_PROFILE_KEY)');
+  });
+});
+
+// guard: Credential owner generation: account rollback must re-register the restored identity.
+describe("pushNotificationsRealm.test.ts call-site contracts", () => {
+it('re-registers the restored owner after an account-switch rollback', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/notifications/PushNotificationsBridge.tsx'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const registrationStart = source.indexOf('// 登录态就绪后同步注册状态');
+    const registrationBody = source.slice(
+      registrationStart,
+      source.indexOf('// APNs token 轮换', registrationStart),
+    );
+
+    expect(registrationBody).toContain('auth.accountGeneration');
+    expect(registrationBody).toContain('syncPushRegistration(');
   });
 });

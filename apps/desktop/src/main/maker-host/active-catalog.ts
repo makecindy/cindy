@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels,
   isCustomRoutedProvider,
@@ -184,6 +185,8 @@ export interface XdGatewayAgentOverride {
  * 能力字段已由服务端一次归一化,客户端不再二次转换(见 model-access/index.ts)。
  */
 export interface XdGatewayModelInfo {
+  displayPricing?: ModelDisplayPricing;
+  currency?: 'USD' | 'CNY';
   id: string;
   availability?: 'available' | 'requires_payment';
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
@@ -1094,17 +1097,30 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
     // A sibling Harness discovers membership, not Pi-specific thinking tiers.
     // Keep portable tiers as a fallback for unknown models; known models inherit
     // the Registry, and Codex-only labels cannot become Pi capabilities.
-    const { efforts: _efforts, defaultEffort: _defaultEffort, ...metadata } =
-      model.discoveredMetadata ?? catalogModelMetadata(model);
+    const metadata = { ...(model.discoveredMetadata ?? catalogModelMetadata(model)) };
+    delete metadata.efforts;
+    delete metadata.defaultEffort;
+    // Stored Codex runtime settings are not Pi user overrides. Reapplying them
+    // after projection would replace Pi's resolved tiers and defaults.
+    const discoveredModel = { ...model };
+    delete discoveredModel.userModelConfig;
     const efforts = model.efforts.filter(effort => PI_REASONING_EFFORTS.some(level => level === effort));
     byId.set(id, {
-      ...model, id, piApi, efforts,
+      ...discoveredModel, id, piApi, efforts,
       defaultEffort: efforts.length === 0 ? null
         : (clampEffortToSupported(model.defaultEffort, efforts) as Effort | null),
       discoveredMetadata: metadata,
     });
   }
   return [...byId.values()];
+}
+
+function gatewayDisplayPricing(model: XdGatewayModelInfo): Pick<CatalogModel, 'displayPricing' | 'currency' | 'costDiscount'> {
+  return model.displayPricing && model.currency ? {
+    displayPricing: model.displayPricing,
+    currency: model.currency,
+    ...(model.costDiscount !== undefined ? { costDiscount: model.costDiscount } : {}),
+  } : {};
 }
 
 function projectXdGatewayMediaModels(
@@ -1116,6 +1132,7 @@ function projectXdGatewayMediaModels(
     .filter((model) => model.mode === 'image_generation')
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       discoveredMetadata: pickModelMetadata(model),
@@ -1126,6 +1143,7 @@ function projectXdGatewayMediaModels(
     .filter((model) => model.mode === 'video_generation')
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       discoveredMetadata: pickModelMetadata(model),
@@ -1139,6 +1157,7 @@ function projectXdGatewayMediaModels(
     .filter((model) => model.mode === 'embedding' && model.availability === 'available')
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       discoveredMetadata: pickModelMetadata(model),
@@ -1151,6 +1170,7 @@ function projectXdGatewayMediaModels(
     )
     .map((model) => ({
       ...pickModelMetadata(model),
+      ...gatewayDisplayPricing(model),
       id: model.id,
       name: model.name ?? model.id,
       mode: model.mode,
@@ -1380,8 +1400,9 @@ function computeMerged(): Catalog {
             projected.models['claude-code'] ?? [],
           ),
           pi: alignOpenAiPiWithAccount(
-            declaredPiModels('openai', p.id === 'openai'
-              ? discoveredCodex : discoveredByProvider.get(p.id)?.codex ?? []),
+            // Restored native accounts keep their discovered members in models.codex.
+            // Use the same account snapshot as the root, before Codex-only overlays.
+            declaredPiModels('openai', accountCodex),
             accountCodex,
             (base ?? BUNDLED_CATALOG).modelRegistry,
           ),
@@ -1562,6 +1583,7 @@ function computeMerged(): Catalog {
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
+          ...gatewayDisplayPricing(gm),
           id: gm.id,
           discoveredMetadata: { ...pickModelMetadata(gm), ...pickModelMetadata(ov) },
           ...(nativeApi !== undefined ? { nativeApi } : {}),

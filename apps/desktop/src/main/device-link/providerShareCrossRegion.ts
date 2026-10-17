@@ -66,9 +66,12 @@ interface RegionState {
   shares: ProviderShareReceived[];
   client: DeviceLinkClient | null;
   refreshing: Promise<void> | null;
+  refreshingRevision: number;
   timer: ReturnType<typeof setTimeout> | null;
   /** 连续失败次数，用于退避重试(网络或对方区域暂时不可用时不让分享整段消失)。 */
   failures: number;
+  loaded: boolean;
+  requestRevision: number;
 }
 
 interface Runtime {
@@ -80,6 +83,7 @@ interface Runtime {
 
 let runtime: Runtime | null = null;
 let userDataDir: string | null = null;
+let markerWrites: Promise<void> = Promise.resolve();
 
 function peerRegion(): Region {
   return getActiveAuthRealm() === 'cn' ? 'global' : 'cn';
@@ -100,14 +104,14 @@ function markerPath(): string | null {
   return userDataDir ? path.join(userDataDir, 'remote-agent', MARKER_FILE) : null;
 }
 
-function readMarkers(): Record<string, Region[]> {
-  const file = markerPath();
+function readMarkers(field: 'accounts' | 'emptyAccounts' = 'accounts', file = markerPath()): Record<string, Region[]> {
   if (!file) return {};
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: unknown; accounts?: unknown };
-    if (parsed.version !== 1 || !parsed.accounts || typeof parsed.accounts !== 'object') return {};
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: unknown; accounts?: unknown; emptyAccounts?: unknown };
+    const records = parsed[field];
+    if (parsed.version !== 1 || !records || typeof records !== 'object') return {};
     const out: Record<string, Region[]> = {};
-    for (const [key, value] of Object.entries(parsed.accounts as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(records as Record<string, unknown>)) {
       if (!/^[a-f0-9]{64}$/.test(key) || !Array.isArray(value)) continue;
       out[key] = value.filter((item): item is Region => item === 'cn' || item === 'global');
     }
@@ -117,10 +121,25 @@ function readMarkers(): Record<string, Region[]> {
   }
 }
 
-async function writeMarker(account: string, region: Region, present: boolean): Promise<void> {
+function writeMarker(account: string, region: Region, present: boolean, confirmedEmpty = false, isCurrent = () => true): Promise<void> {
   const file = markerPath();
-  if (!file) return;
-  const markers = readMarkers();
+  if (!file) return Promise.resolve();
+  // 整份文件共享一条写链；读取也必须在队列内，失败不能阻塞后续账号/区域的更新。
+  const write = markerWrites.then(() => writeMarkerFile(file, account, region, present, confirmedEmpty, isCurrent));
+  markerWrites = write.catch(() => undefined);
+  return write;
+}
+
+async function writeMarkerFile(file: string, account: string, region: Region, present: boolean, confirmedEmpty: boolean, isCurrent: () => boolean): Promise<void> {
+  if (!isCurrent()) return;
+  const markers = readMarkers('accounts', file);
+  // 服务端确认的空名单只供本地收藏清理，绝不授予跨区联网能力。新申请使旧结论失效。
+  const emptyAccounts = readMarkers('emptyAccounts', file);
+  const emptyRegions = new Set(emptyAccounts[account] ?? []);
+  if (confirmedEmpty && !present) emptyRegions.add(region);
+  else emptyRegions.delete(region);
+  if (emptyRegions.size > 0) emptyAccounts[account] = [...emptyRegions];
+  else delete emptyAccounts[account];
   const regions = new Set(markers[account] ?? []);
   if (present) regions.add(region);
   else regions.delete(region);
@@ -129,8 +148,8 @@ async function writeMarker(account: string, region: Region, present: boolean): P
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   await fsp.mkdir(path.dirname(file), { recursive: true });
   try {
-    await fsp.writeFile(tmp, JSON.stringify({ version: 1, accounts: markers }), { encoding: 'utf8', mode: 0o600 });
-    await fsp.rename(tmp, file);
+    await fsp.writeFile(tmp, JSON.stringify({ version: 1, accounts: markers, emptyAccounts }), { encoding: 'utf8', mode: 0o600 });
+    if (isCurrent()) await fsp.rename(tmp, file);
   } finally {
     await fsp.rm(tmp, { force: true }).catch(() => undefined);
   }
@@ -211,6 +230,15 @@ export async function crossRegionSendRequest(region: Region, invitation: string)
   const identityCard = await fetchIdentityCard('share-request', sha256Hex(invitation));
   const value = await peerRequest(base, '/requests', { invitation, identityCard });
   const result = { state: providerShareParsers.requestState(value), requestToken: providerShareParsers.secret(value.requestToken) };
+  const rt = runtime;
+  if (rt && current(rt) && rt.account === account) {
+    const state = rt.regions.get(region);
+    if (state) {
+      // 先使在途旧名单失效，再排队落盘；旧空名单不能清理新申请对应的收藏。
+      state.requestRevision += 1;
+      if (state.shares.length === 0) state.loaded = false;
+    }
+  }
   // 记下「这个账号在对方区域有往来」，之后才会去对方区域拉分享。
   await writeMarker(account, region, true).catch((error) => log.warn('cross-region marker write failed', { error: String(error) }));
   return result;
@@ -271,15 +299,28 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
   (state.timer as { unref?: () => void }).unref?.();
 }
 
+function initialRegionState(region: Region, loaded = false): RegionState {
+  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, requestRevision: 0 };
+}
+
 /** 用新名片换取这台电脑在对方区域的分享列表与连接凭证。 */
 function refreshRegion(rt: Runtime, region: Region): Promise<void> {
   let state = rt.regions.get(region);
-  if (state?.refreshing) return state.refreshing;
+  if (state?.refreshing) {
+    // 新申请获批后的刷新不能仅等待旧一轮；排在旧请求后补读，不提前查询待审批申请。
+    return state.refreshingRevision === state.requestRevision ? state.refreshing
+      : state.refreshing.then(() => current(rt) ? refreshRegion(rt, region) : undefined);
+  }
   if (!state) {
-    state = { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, timer: null, failures: 0 };
+    state = initialRegionState(region);
     rt.regions.set(region, state);
   }
   const target = state;
+  if (target.timer) clearTimeout(target.timer);
+  target.timer = null;
+  const revision = target.requestRevision;
+  target.refreshingRevision = revision;
+  const isCurrent = () => current(rt) && target.requestRevision === revision;
   const run = (async () => {
     try {
       const deviceId = getDeviceId();
@@ -292,7 +333,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
         deviceName: deviceName(),
         platform: process.platform,
       });
-      if (!current(rt)) return;
+      if (!isCurrent()) return;
       const shares = providerShareParsers.receivedList(value);
       const credential = value.credential === null || value.credential === undefined ? null : providerShareParsers.secret(value.credential);
       const expiresAt = credential ? Date.parse(providerShareParsers.timestamp(value.expiresAt)) : 0;
@@ -302,17 +343,21 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.credential = credential;
       state.expiresAt = expiresAt;
       state.shares = shares;
+      state.loaded = true;
       if (shares.length === 0 || !credential) {
         state.client?.stop();
         state.client = null;
-        await writeMarker(rt.account, region, false).catch(() => undefined);
-      } else if (!state.client) {
+      }
+      await writeMarker(rt.account, region, shares.length > 0 && !!credential, shares.length === 0, isCurrent).catch((error) =>
+        log.warn('cross-region marker write failed', { error: String(error) }));
+      if (!isCurrent()) return;
+      if (shares.length > 0 && credential && !state.client) {
         state.client = createClient(rt, state);
       }
       scheduleRefresh(rt, state);
       rt.events.changed();
     } catch (error) {
-      if (current(rt)) {
+      if (isCurrent()) {
         log.warn('cross-region session refresh failed', { region, error: error instanceof Error ? error.message : String(error) });
         // 退避重试：1 → 2 → 4 … 最多 30 分钟；关闭跨区开关等确定性错误同样按退避慢慢重试。
         target.failures += 1;
@@ -322,6 +367,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       }
     } finally {
       target.refreshing = null;
+      if (current(rt) && target.requestRevision !== revision) scheduleRefresh(rt, target);
     }
   })();
   target.refreshing = run;
@@ -335,8 +381,13 @@ export function startProviderShareCrossRegion(events: CrossRegionEvents, options
   if (!account) return;
   const rt: Runtime = { events, account, regions: new Map(), stopped: false };
   runtime = rt;
+  const activeRegions = readMarkers()[account] ?? [];
+  // 清理失败或未完成就退出时，下次只恢复本地空名单，不向对方区域发送身份。
+  for (const region of readMarkers('emptyAccounts')[account] ?? []) {
+    if (region === peerRegion() && !activeRegions.includes(region)) rt.regions.set(region, initialRegionState(region, true));
+  }
   // 只联系标记过的区域(本账号在那里发过申请或加入过分享)。
-  for (const region of readMarkers()[account] ?? []) {
+  for (const region of activeRegions) {
     if (region !== peerRegion()) continue;
     void refreshRegion(rt, region);
   }
@@ -363,6 +414,44 @@ export function refreshProviderShareCrossRegion(region: Region): Promise<void> {
 
 export function getCrossRegionReceived(): ProviderShareReceived[] {
   return runtime ? [...runtime.regions.values()].flatMap((state) => state.shares) : [];
+}
+
+/** 收藏不能恢复已撤销的跨区联网资格；已确认空名单由启动路径在本地恢复。 */
+export function ensureCrossRegionReceivedForFavorites(regions: readonly Region[]): void {
+  const rt = runtime;
+  const region = peerRegion();
+  if (!rt || !current(rt) || !regions.includes(region)) return;
+  if (!readMarkers()[rt.account]?.includes(region)) return;
+  const state = rt.regions.get(region);
+  if (!state?.loaded && !state?.refreshing && !state?.timer) void refreshRegion(rt, region);
+}
+
+/**
+ * 对方区域里本账号可能有的分享都已确认：标记过的对方区域(本账号在那里申请或加入过分享)名单都已成功返回。
+ * 没有标记的区域本来就没有分享。运行时没起来或已换账号时为 false(说不准)。
+ */
+export function isCrossRegionReceivedComplete(): boolean {
+  const rt = runtime;
+  if (!rt || !current(rt)) return false;
+  const marked = (readMarkers()[rt.account] ?? []).filter((region) => region === peerRegion());
+  return marked.every((region) => rt.regions.get(region)?.loaded === true);
+}
+
+/** 只确认已成功返回名单的区域，失败区域不能阻塞其它区域的收藏。 */
+export function getConfirmedCrossRegionReceivedRegions(): Region[] {
+  const rt = runtime;
+  return rt && current(rt) ? [...rt.regions.values()].filter((state) => state.loaded).map((state) => state.region) : [];
+}
+
+/** 被启用的跨区标记对应的首次分享列表是否已完成。 */
+export function isCrossRegionReceivedReady(): boolean {
+  const rt = runtime;
+  // 未启动跨区 runtime 时，当前进程没有跨区分享需要等待。
+  if (!rt) return true;
+  if (!current(rt)) return false;
+  const region = peerRegion();
+  if (!readMarkers()[rt.account]?.includes(region)) return true;
+  return rt.regions.get(region)?.loaded === true;
 }
 
 function stateForShare(shareId: string): RegionState | null {

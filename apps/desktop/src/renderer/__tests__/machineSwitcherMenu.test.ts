@@ -455,10 +455,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarUpperSource).toContain('hasSettledOnlineDeviceSection(');
     expect(projectsSectionSource).toContain('hasRemoteDevices={deviceGroupingAvailable}');
     expect(projectsSectionSource).not.toContain('hasRemoteMachines');
-    expect(sidebarUpperSource).toContain("if (device.status === 'rejected') continue;");
-    expect(sidebarUpperSource).toContain(
-      "if (device.status === 'connecting' && isRemoteDeviceMarkedDisconnected(device.deviceId))",
-    );
+    expect(sidebarUpperSource).toContain('buildSidebarDeviceIndex(switcherDevices)');
+    expect(sidebarUpperSource).not.toContain('isRemoteDeviceMarkedDisconnected');
   });
 
   // (侧边栏重设计 D 期:按日期分组段已删除,其 MachineSwitcherMenu / 空态 /
@@ -578,7 +576,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
     expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
     expect(menuSource).toMatch(
-      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
+      /<span className="truncate">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
     );
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
   });

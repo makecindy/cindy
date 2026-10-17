@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
+import { Session } from '@cindy/maker-core';
 import {
   createPluginTaskService,
   isPluginTaskPermissionAllowed,
@@ -58,6 +60,13 @@ function fixture() {
   const tasks = new Map<string, PluginTaskView>();
   const copy = <T>(v: T): T => structuredClone(v);
   const store: PluginTaskStore = {
+    relocatePlugin: async (from, to) => {
+      if (from === to) return;
+      for (const row of rows.values()) if (row.pluginId === from) {
+        row.pluginId = to;
+        row.revision++;
+      }
+    },
     revokePlugin: async pluginId => {
       for (const row of rows.values()) if (row.pluginId === pluginId && row.operation === 'create') {
         row.payload = JSON.stringify({...JSON.parse(row.payload),ownershipRevoked:true});
@@ -107,9 +116,11 @@ function fixture() {
     fastMode: false,
   };
   const execution = { instanceId: 'native', generation: 1 };
+  const live = { instanceId: execution.instanceId, stablePlanModeState: { enabled: false, generation: 0 } };
   const deps: PluginTaskServiceDeps = {
     store,
     readPermissionMode: () => 'auto',
+    readModelPreference: () => route,
     assertAuthorized: () => {
       if (!current) throw new Error('Owner changed');
     },
@@ -124,6 +135,7 @@ function fixture() {
       tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active', permissionMode: 'plan' });
     }),
     readSession: async (id) => copy(tasks.get(id) ?? null),
+    readLiveSession: () => live,
     dispatch: vi.fn(async () => ({ ok: true })),
     inspect: vi.fn(async () => ({ execution: null, pending: [] })),
     cancel: vi.fn(async () => 'cancelled' as const),
@@ -153,6 +165,117 @@ function fixture() {
     },
   };
 }
+
+describe('plugin dispatch uses live Plan execution authority', () => {
+  it.each(['send', 'accept'] as const)('%s rejects consumed Pi intent while execution is active, unknown or switching', async entry => {
+    const f = fixture(), task = await f.create();
+    Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto', planModeEnabled: false });
+    let executionPlan: boolean | null = false;
+    let releaseEvents!: () => void, releaseSwitch!: () => void;
+    const eventsClosed = new Promise<void>(resolve => { releaseEvents = resolve; });
+    const switching = new Promise<void>(resolve => { releaseSwitch = resolve; });
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: task.taskId, sessionInstanceId: f.execution.instanceId,
+      agentKind: 'pi', workDir: '/answer', permissionMode: 'auto', logger,
+      capabilities: { planMode: { supported: true } } as never,
+      handle: { id: 'pi', agentKind: 'pi', model: 'test',
+        async *events() { await eventsClosed; }, async close() { releaseEvents(); }, setInteractionResolver() {},
+        getPlanMode: () => false, getExecutionPlanMode: () => executionPlan,
+        setPlanMode: async () => { await switching; },
+      } as never,
+    });
+    f.deps.readLiveSession = () => session;
+    const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'live-plan', text: 'continue' };
+    const queued = entry === 'accept' ? await f.service.send('p', request) : undefined;
+    vi.mocked(f.deps.dispatch).mockClear();
+    const invoke = () => entry === 'send' ? f.service.send('p', request)
+      : f.service.accept(task.taskId, { clientId: queued!.inputMessageId }, f.execution);
+    try {
+      for (const value of [true, null]) {
+        executionPlan = value;
+        expect(session.getPlanMode()).toBe(false);
+        await expect(invoke()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      }
+      executionPlan = false;
+      const pending = session.setPlanMode(true);
+      expect(session.stablePlanModeState).toBeNull();
+      await expect(invoke()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(f.deps.dispatch).not.toHaveBeenCalled();
+      releaseSwitch();
+      await pending;
+      // Native/Host recovery to a stable non-plan state restores the same API.
+      if (entry === 'send') await expect(invoke()).resolves.toMatchObject({ status: 'queued' });
+      else await expect(invoke()).resolves.toBeUndefined();
+    } finally {
+      releaseSwitch();
+      await session.close();
+    }
+  });
+
+  it.each(['send', 'accept'] as const)('%s rechecks the same live session after async route and receipt work', async entry => {
+    for (const point of ['route', 'receipt', 'instance', 'generation']) {
+      const f = fixture(), task = await f.create();
+      Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto', planModeEnabled: false });
+      let live = { instanceId: f.execution.instanceId, stablePlanModeState: { enabled: false, generation: 0 } };
+      f.deps.readLiveSession = () => live;
+      const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'async-plan', text: 'continue' };
+      const queued = entry === 'accept' ? await f.service.send('p', request) : undefined;
+      vi.mocked(f.deps.dispatch).mockClear();
+      const change = () => {
+        if (point === 'instance') live = { ...live };
+        else if (point === 'generation') live.stablePlanModeState.generation++;
+        else live.stablePlanModeState.enabled = true;
+      };
+      if (point === 'receipt') {
+        const method = entry === 'send' ? 'insert' : 'save';
+        const original = f.deps.store[method];
+        f.deps.store[method] = async row => { await original(row); change(); };
+      } else f.deps.resolveRoute = async () => { change(); return f.route; };
+      const result = entry === 'send' ? f.service.send('p', request)
+        : f.service.accept(task.taskId, { clientId: queued!.inputMessageId }, f.execution);
+      if (entry === 'send' && point === 'receipt') await expect(result).resolves.toMatchObject({ status: 'failed' });
+      else await expect(result).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(f.deps.dispatch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('allows cold tasks to queue but requires the accepting live instance', async () => {
+    const f = fixture();
+    f.deps.readLiveSession = () => undefined;
+    const run = await f.send();
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    f.deps.readLiveSession = () => ({ instanceId: 'replacement', stablePlanModeState: { enabled: false, generation: 0 } });
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    const live = { instanceId: f.execution.instanceId, stablePlanModeState: { enabled: false, generation: 0 } };
+    f.deps.readLiveSession = () => live;
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution)).resolves.toBeUndefined();
+  });
+});
+
+it('serializes source archival behind creation and keeps old tasks inaccessible to the replacement', async () => {
+  const fixtureState = fixture();
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  fixtureState.deps.resolveRoute = async () => { started(); await gate; return fixtureState.route; };
+  const move = vi.spyOn(fixtureState.deps.store, 'relocatePlugin');
+  const creating = fixtureState.create();
+  await entered;
+  const archiving = fixtureState.service.relocatePlugin('p', 'archive');
+  expect(move).not.toHaveBeenCalled();
+  finish();
+  const task = await creating;
+  await archiving;
+  expect(move).toHaveBeenCalledWith('p', 'archive');
+  expect((await fixtureState.service.list('p')).items).toEqual([]);
+  await expect(fixtureState.service.get('p', task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  expect(fixtureState.tasks.has(task.taskId)).toBe(true);
+  const replacement = await fixtureState.create();
+  expect(replacement.taskId).not.toBe(task.taskId);
+});
 
 it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a newly persisted %s terminal over stale inspection for getRun and listRuns', async status => {
   for (const kind of ['getRun','listRuns'] as const) {
@@ -918,6 +1041,169 @@ it('does not apply a model after the task changes while route admission is pendi
   expect(f.deps.setModel).not.toHaveBeenCalled();
 });
 
+it('rechecks plugin defaults for the same task on every request without resetting unchanged tasks', async () => {
+  const f = fixture();
+  let preference = { ...f.route, model: 'grok' };
+  f.deps.readModelPreference = () => preference;
+  f.deps.resolveRoute = vi.fn(async (_plugin, requested) => requested ?? { ...preference });
+  // First install: creation already respects the saved preference.
+  let task = await f.create();
+  expect(task.resolvedConfig.model).toBe('grok');
+  f.deps.setModel = vi.fn(async (id, route, assertCurrent) => {
+    await assertCurrent();
+    const stored = f.tasks.get(id)!;
+    f.tasks.set(id, { ...stored, revision: stored.revision + 1, resolvedConfig: route });
+    return { status: 'applied' };
+  });
+  const sync = async () => {
+    const result = await f.service.setModel('p', {taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default'});
+    task = result.task;
+    return result.status;
+  };
+  expect(await sync()).toBe('unchanged');
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  for (const model of ['astra', 'grok']) {
+    preference = {...preference, model};
+    expect(await sync()).toBe('applied');
+    const run = await f.service.send('p', {taskId:task.taskId, expectedRevision:task.revision, requestKey:model, text:'translate'});
+    expect(run.acceptedConfig.model).toBe(model);
+  }
+  expect(f.tasks.size).toBe(1);
+  expect(f.deps.setModel).toHaveBeenCalledTimes(2);
+  expect(await sync()).toBe('unchanged');
+  preference = {...preference, effort:'low', fastMode:true, providerId:'other-source'};
+  expect(await sync()).toBe('applied');
+  expect(task.resolvedConfig).toEqual(preference);
+  f.deps.resolveRoute = async () => {throw new PluginTaskError('ROUTE_UNAVAILABLE', 'Unavailable selection');};
+  await expect(sync()).rejects.toMatchObject({code:'ROUTE_UNAVAILABLE'});
+  expect(f.deps.setModel).toHaveBeenCalledTimes(3);
+});
+
+it.each([
+  { model: 'new-model' }, { providerId: 'new-provider' },
+  { agentKind: 'pi' as const }, { effort: 'low' }, { fastMode: true },
+])('rejects preferences changed during async route admission: %j', async patch => {
+  const f = fixture(), task = await f.create();
+  const preference = { ...f.route };
+  f.deps.readModelPreference = () => preference;
+  let entered!: () => void, finish!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  f.deps.resolveRoute = async () => { const captured = { ...preference }; entered(); await gate; return captured; };
+  f.deps.setModel = vi.fn(async (id, route, assertCurrent) => {
+    await assertCurrent();
+    const stored = f.tasks.get(id)!;
+    f.tasks.set(id, { ...stored, revision: stored.revision + 1, resolvedConfig: route });
+    return { status: 'applied' };
+  });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default' as const };
+  const pending = f.service.setModel('p', request);
+  await started;
+  Object.assign(preference, patch);
+  const rejected = expect(pending).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  finish(); await rejected;
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  expect((await f.service.get('p', task.taskId)).revision).toBe(task.revision);
+  // No stale input was accepted; retry resolves and applies the newly saved choice.
+  f.deps.resolveRoute = async () => ({ ...preference });
+  const next = await f.service.setModel('p', request);
+  expect(next.task.resolvedConfig).toEqual(preference);
+});
+
+it('rechecks saved preferences at the runtime mutation boundary', async () => {
+  const f = fixture(), task = await f.create();
+  let preference = { ...f.route, model: 'chosen' };
+  f.deps.readModelPreference = () => preference;
+  f.deps.resolveRoute = async () => ({ ...preference });
+  const apply = vi.fn();
+  f.deps.setModel = async (_id, _route, assertCurrent) => {
+    preference = { ...preference, model: 'newer' };
+    await assertCurrent(); apply(); return { status: 'applied' };
+  };
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default' }))
+    .rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(apply).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['provider', 'reset'], ['provider', 'partial'],
+  ['mutation', 'reset'], ['mutation', 'partial'],
+  ['provider', 'explicit'],
+] as const)('checks inherited defaults through production adapters during %s (%s)', async (phase, mode) => {
+  const f = fixture(), task = await f.create();
+  const config = mode === 'explicit' ? { ...f.route, model: 'next' }
+    : mode === 'partial' ? { effort: 'high' } : {};
+  const selected = { harness: 'codex' as const, model: 'next', providerId: f.route.providerId,
+    effort: 'high' as const, fastMode: false };
+  let entered!: () => void, finish!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  let waited = false;
+  const wait = async (point: string) => {
+    if (phase === point && !waited) { waited = true; entered(); await gate; }
+  };
+  const resolver = createSessionExecutionResolver({
+    captureOwner: () => () => {}, readCaller: async () => { throw Error('unexpected caller'); },
+    readDefault: () => ({ agentKind: selected.harness, model: selected.model,
+      providerId: selected.providerId, effort: selected.effort, fastMode: selected.fastMode }),
+    availableAgents: () => ['codex'],
+    availableModels: () => ['model', 'next', 'latest'].map(id => ({ id, efforts: ['high'] })),
+    hasCindyAiApiKey: () => true,
+    readProviderRouting: async () => {
+      await wait('provider');
+      return { availability: { 'claude-code': [], pi: [],
+        codex: [{ id: f.route.providerId, name: 'provider', models: ['model', 'next', 'latest'] }] },
+        resolveDefaultProviderIdForModel: () => f.route.providerId };
+    },
+  });
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const preferenceStart = source.indexOf('      readModelPreference:');
+  const preference = source.slice(preferenceStart, source.indexOf('      readPermissionMode:', preferenceStart));
+  const resolveStart = source.indexOf('    const resolveRoute = async');
+  const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
+  const deps = { readPluginTaskConfig: () => config, getSelectedNewMakerRoute: () => selected,
+    activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => undefined,
+    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); } };
+  const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const adapter = new Function(...Object.keys(deps), js)(...Object.values(deps));
+  f.deps.readModelPreference = adapter.readModelPreference;
+  f.deps.resolveRoute = adapter.resolveRoute;
+  const write = vi.fn();
+  f.deps.setModel = async (id, route, assertCurrent) => {
+    await wait('mutation');
+    await assertCurrent();
+    write(route);
+    f.tasks.set(id, { ...f.tasks.get(id)!, revision: task.revision + 1, resolvedConfig: route });
+    return { status: 'applied' };
+  };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, route: 'plugin-default' as const };
+  const result = f.service.setModel('p', request);
+  const assertion = mode === 'explicit'
+    ? expect(result).resolves.toMatchObject({ status: 'applied', task: { resolvedConfig: { model: 'next' } } })
+    : expect(result).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  await started;
+  selected.model = 'latest';
+  finish();
+  await assertion;
+  if (mode !== 'explicit') {
+    expect(write).not.toHaveBeenCalled();
+    expect((await f.service.get('p', task.taskId)).revision).toBe(task.revision);
+    const retry = await f.service.setModel('p', request);
+    expect(retry.task.resolvedConfig.model).toBe('latest');
+    expect(write).toHaveBeenCalledOnce();
+  }
+});
+
+it('does not reject explicit routes when unrelated plugin preferences change', async () => {
+  const f = fixture(), task = await f.create();
+  f.deps.readModelPreference = () => { throw Error('Explicit route must not read preferences'); };
+  f.deps.setModel = vi.fn(async (_id, _route, assertCurrent) => { await assertCurrent(); return { status: 'applied' }; });
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route: f.route }))
+    .resolves.toMatchObject({ status: 'applied' });
+});
+
 it('keeps taskless plans immutable instead of retroactively granting scope', async () => {
  const f=fixture(),task=await f.create();
  const old={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};
@@ -947,4 +1233,80 @@ it('registers a complete scope once and permits only identical replays', async (
  await f.service.setTeamPlan('p',task.taskId,plan);
  await expect(f.service.setTeamPlan('p',task.taskId,{...plan,task:'Publish'})).rejects.toThrow('immutable');
  await expect(f.service.setTeamPlan('p',task.taskId,{...plan,items:[{...plan.items[0]!,task:'Publish'}]})).rejects.toThrow('immutable');
+});
+
+describe('background tasks', () => {
+  const declaredFixture = () => {
+    const f = fixture();
+    let declared = true;
+    f.deps.assertHiddenTasksAllowed = () => {
+      if (!declared) throw new PluginTaskError('PERMISSION_DENIED', 'Background tasks require agent.hiddenTasks');
+    };
+    f.deps.createSession = vi.fn(async (_p, taskId, title, resolvedConfig, _isolated, _requested, onPersistenceStarted, _callId, hidden) => {
+      onPersistenceStarted();
+      f.tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active', permissionMode: 'plan', hidden: hidden === true });
+    });
+    f.deps.setHidden = vi.fn(async (taskId: string, hidden: boolean, assertAllowed: () => void) => {
+      assertAllowed();
+      f.tasks.set(taskId, { ...f.tasks.get(taskId)!, hidden });
+    });
+    return { ...f, undeclare: () => { declared = false; } };
+  };
+
+  it('creates a hidden task in the same creation call and reports hidden in get/list snapshots', async () => {
+    const f = declaredFixture();
+    const task = await f.service.create('p', { requestKey: 'bg', title: 'Background', hidden: true });
+    expect(task.hidden).toBe(true);
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Background', f.route, undefined, undefined, expect.any(Function), undefined, true);
+    expect((await f.service.get('p', task.taskId)).hidden).toBe(true);
+    expect((await f.service.list('p')).items.map(item => item.hidden)).toEqual([true]);
+    // Exact replay reads the same task; the hidden flag is part of the request fingerprint.
+    expect((await f.service.create('p', { requestKey: 'bg', title: 'Background', hidden: true })).taskId).toBe(task.taskId);
+    await expect(f.service.create('p', { requestKey: 'bg', title: 'Background' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('keeps visible creation unchanged: hidden=false snapshot and the legacy fingerprint', async () => {
+    const f = declaredFixture();
+    const task = await f.service.create('p', { requestKey: 'plain', title: 'Plain', hidden: false });
+    expect(task.hidden).toBe(false);
+    expect((await f.service.create('p', { requestKey: 'plain', title: 'Plain' })).taskId).toBe(task.taskId);
+    // Views without the field (older readers) are normalized to a boolean.
+    const legacy = fixture();
+    expect((await legacy.create()).hidden).toBe(false);
+  });
+
+  it('switches only its own task, rechecks the declaration and skips no-op writes', async () => {
+    const f = declaredFixture();
+    const task = await f.service.create('p', { requestKey: 'own', title: 'Own' });
+    expect((await f.service.setHidden('p', { taskId: task.taskId, hidden: true })).hidden).toBe(true);
+    expect((await f.service.setHidden('p', { taskId: task.taskId, hidden: true })).hidden).toBe(true);
+    expect(f.deps.setHidden).toHaveBeenCalledTimes(1);
+    expect((await f.service.setHidden('p', { taskId: task.taskId, hidden: false })).hidden).toBe(false);
+    await expect(f.service.setHidden('other', { taskId: task.taskId, hidden: true })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    await expect(f.service.setHidden('p', { taskId: 'missing', hidden: true })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    f.undeclare();
+    await expect(f.service.setHidden('p', { taskId: task.taskId, hidden: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(f.service.create('p', { requestKey: 'later', title: 'Later', hidden: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(f.deps.setHidden).toHaveBeenCalledTimes(2);
+  });
+
+  it('denies background tasks when the host has no declaration check wired', async () => {
+    const f = fixture();
+    await expect(f.service.create('p', { requestKey: 'bg', title: 'Background', hidden: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(f.deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it('reveals background tasks before revoking ownership on uninstall, and aborts when reveal fails', async () => {
+    const f = declaredFixture();
+    const order: string[] = [];
+    f.deps.revealPluginTasks = vi.fn(async () => { order.push('reveal'); });
+    const revoke = vi.spyOn(f.deps.store, 'revokePlugin').mockImplementation(async () => { order.push('revoke'); });
+    await f.service.withUninstall('p', async () => { order.push('remove'); });
+    expect(order).toEqual(['reveal', 'revoke', 'remove']);
+    f.deps.revealPluginTasks = vi.fn(async () => { throw new Error('db'); });
+    const remove = vi.fn(async () => {});
+    await expect(f.service.withUninstall('p', remove)).rejects.toThrow('db');
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
+  });
 });

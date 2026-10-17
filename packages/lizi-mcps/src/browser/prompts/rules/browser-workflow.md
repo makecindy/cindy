@@ -25,6 +25,7 @@
 
 2. **用稳定的标签页句柄**
    - 打开重要页面用 `action: "open"` 时带上 `label`(如 `label: "checkout"`),后续靠 label 复用。
+   - `open` 默认在后台创建页面,供自动读取时**不要**紧接着调用 `focus`;只有遇到登录、授权、验证码、2FA、其他必须由用户完成的交互,或用户明确要求查看页面时才 `focus`。
    - `targetId` 优先用 `tabs` / `open` 返回的 `suggestedTargetId` / `tabId` / `label`,**不要**把裸序号(`"2"`)当 `targetId` 传。
    - 开新页前先 `tabs`;按 label 或 URL 命中已有页就复用,不重复开。
 

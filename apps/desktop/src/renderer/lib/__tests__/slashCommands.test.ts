@@ -176,6 +176,22 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
+    const prefixed = Array.from({ length: 30 }, (_, i) => ({
+      kind: 'desktop' as const, name: `draw-${i}`, description: '',
+    }));
+    const shared = [
+      { kind: 'desktop' as const, name: 'draw/@root', description: '', label: 'draw' },
+      { kind: 'desktop' as const, name: 'draw/acme', description: '', label: 'draw', meta: '团队共享' },
+    ];
+    const commands = [...prefixed, ...shared];
+
+    expect(filterSlashCommands(commands, 'draw').slice(0, 2).map((command) => command.name))
+      .toEqual(['draw/@root', 'draw/acme']);
+    // The full qualified token still matches what will be inserted.
+    expect(filterSlashCommands(commands, 'draw/acme').map((command) => command.name)).toEqual(['draw/acme']);
+  });
+
   it('places Cindy official entries before ordinary commands in the initial palette', () => {
     const commands = [
       { kind: 'desktop' as const, name: 'help', description: 'Help' },

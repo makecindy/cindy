@@ -235,7 +235,7 @@ async function resetWorktree(
   // 5. 重新拷贝 .claude/.sivi（被 git clean 删掉了，池化路径跳过 stageCheckout 所以必须成功）
   await copyClaudeSiviDirs(baseRepo, worktreePath);
 
-  // 6. 重新拷贝 .xdtworktreeinclude 文件
+  // 6. 重新拷贝 .xdtworktreeinclude / .worktreeinclude 选中的文件
   try {
     await applyWorktreeIncludeFile(baseRepo, worktreePath);
   } catch (err) {

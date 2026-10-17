@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type HostRecord = {
-  options: { creationState: unknown; isCurrent(): boolean; revoke(sharedTaskId: string, memberId?: string): void };
+  options: { creationState: unknown; isCurrent(): boolean; revoke(sharedTaskId: string, memberId?: string): void;
+    readSession(sessionId: string): Promise<{ id: string; source?: string | null } | null> };
   restore: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   closeLocallyForBoundary: ReturnType<typeof vi.fn>;
@@ -78,6 +79,16 @@ afterEach(async () => {
 });
 
 describe('shared runtime stable owner recommit', () => {
+  it('preserves the raw task source for shared-task restoration without changing the database', async () => {
+    const session = { id: 'session', title: 'Legacy Make', status: 'active', source: 'cindy-make-merge' };
+    state.db.client.query.mockResolvedValue([session]);
+    start();
+    await expect(state.hosts[0].options.readSession('session')).resolves.toEqual(session);
+    expect(state.db.client.query).toHaveBeenCalledExactlyOnceWith(
+      'SELECT id, title, status, source FROM sessions WHERE id = ? LIMIT 1', ['session']);
+    expect(state.db.client.exec).not.toHaveBeenCalled();
+  });
+
   it('prepares and rolls back a terminal journal only in the captured profile database', async () => {
     const db = state.db.client;
     const prepared = await prepareSharedTaskClosureForTask('session', db);

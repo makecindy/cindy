@@ -136,7 +136,7 @@ export interface UseSidebarFilterReturn {
   groupBy: FilterGroupBy;
   /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
   groupDialogue: boolean;
-  /** 「按设备分组」开关(E 期):默认 true;仅有远程设备连接时可见/生效。 */
+  /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
   sortBy: FilterSortBy;

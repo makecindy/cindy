@@ -1,3 +1,4 @@
+import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
@@ -41,7 +42,12 @@ import {
   botGroupsSetMembers,
   botGroupsSettleStep,
 } from './botGroupsTx.js';
-import type { BotGroupsCreateLaneArgs, BotGroupsCreateLaneResult } from '../../client/tx/types.js';
+import type {
+  BotGroupsCreateLaneArgs,
+  BotGroupsCreateLaneResult,
+  BotsArchiveChannelLanesArgs,
+  BotsCreateChannelLaneArgs,
+} from '../../client/tx/types.js';
 
 const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -106,6 +112,7 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return recentWorkdirsMergeWindowsIdentity(db, txArgs);
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
+    case 'pluginUsage.execute': return runPluginUsageTransaction(db, txArgs);
     case 'taskTags.execute':
       return runTaskTagsTransaction(db, txArgs);
     case 'projectAliases.replaceIdentity':
@@ -167,6 +174,10 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsPersistSessionPermission(db, txArgs);
     case 'bots.createGroupLane':
       return botsCreateGroupLane(db, txArgs as BotGroupsCreateLaneArgs);
+    case 'bots.createChannelLane':
+      return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs);
+    case 'bots.archiveChannelLanes':
+      return botsArchiveChannelLanes(db, txArgs as BotsArchiveChannelLanesArgs);
     case 'botGroups.create':
       return botGroupsCreate(db, txArgs as Parameters<typeof botGroupsCreate>[1]);
     case 'botGroups.setMembers':
@@ -418,19 +429,21 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
         VALUES (?, ?, ?, ?, ?, ?)`)
         .run(`${id}:v${nextVersion}`, id, nextVersion, expectString(p.identitySource, 'identitySource'),
           expectString(p.capabilitiesJson, 'capabilitiesJson'), now);
-      // Hermes capability epoch: the permanent canonical Chat and the Bot's
-      // group-chat lanes follow the latest Profile on their next runtime
-      // bootstrap. Route/worker links remain pinned to their creation version.
+      // Hermes capability epoch: the permanent canonical Chat, the Bot's
+      // group-chat lanes and its IM channel lanes follow the latest Profile on
+      // their next runtime bootstrap. Route/worker links remain pinned to their
+      // creation version.
       db.prepare(`UPDATE bot_session_links SET profile_version = ?
-        WHERE bot_id = ? AND role IN ('canonical', 'group') AND archived_at IS NULL`)
+        WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel') AND archived_at IS NULL`)
         .run(nextVersion, id);
     }
     if (p.canonicalPermissionMode !== undefined) {
       const mode = expectString(p.canonicalPermissionMode, 'canonicalPermissionMode');
       if (!['ask', 'auto', 'bypassPermissions'].includes(mode)) throw new Error('Invalid canonical permission mode');
-      // Group lanes run under the same permission profile as the Bot's canonical Chat.
+      // Group and IM channel lanes run under the same permission profile as the
+      // Bot's canonical Chat (per-turn group policies still apply on top).
       db.prepare(`UPDATE sessions SET permission_mode = ? WHERE id IN
-        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'group') AND archived_at IS NULL)`)
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel') AND archived_at IS NULL)`)
         .run(mode, id);
     }
     return { currentVersion: nextVersion };
@@ -816,6 +829,73 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
   })();
 }
 
+/**
+ * One hidden IM channel lane per (Bot, route key); reuses an active lane instead
+ * of creating a second. Unlike group lanes there is no member table: the
+ * connection binding (owner-scoped setting) is the authority, checked by Main.
+ */
+function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLaneArgs): BotGroupsCreateLaneResult {
+  const p = asRecord(args, 'bots.createChannelLane args');
+  const botId = expectString(p.botId, 'botId');
+  const routeKey = expectString(p.routeKey, 'routeKey');
+  if (!routeKey.startsWith('im:')) throw new Error('Channel lane route key must start with im:');
+  const s = asRecord(p.session, 'session');
+  const sessionId = expectString(s.id, 'session.id');
+  const createdAt = expectNumber(s.createdAt, 'session.createdAt');
+  if (expectString(s.source, 'session.source') !== 'bot') throw new Error('Channel lane must be a Bot session');
+  return db.transaction(() => {
+    const profile = db.prepare('SELECT status, current_version AS version FROM bot_profiles WHERE id = ?')
+      .get(botId) as { status: string; version: number } | undefined;
+    if (!profile || profile.status !== 'active') {
+      throw Object.assign(new Error('伙伴当前不可用'), { code: 'BOT_UNAVAILABLE' });
+    }
+    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+      INNER JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = 'channel' AND l.route_key = ? AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
+    if (existing) return { sessionId: existing.sessionId, created: false };
+    insertBotSession(db, s);
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'channel', ?, ?, NULL)`)
+      .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
+    return { sessionId, created: true };
+  })();
+}
+
+/** Archive IM channel lanes (link + session) by exact route key or connection prefix. */
+function botsArchiveChannelLanes(
+  db: Database.Database,
+  args: BotsArchiveChannelLanesArgs,
+): { archivedSessionIds: string[] } {
+  const p = asRecord(args, 'bots.archiveChannelLanes args');
+  const routeKey = nullableString(p.routeKey);
+  const routeKeyPrefix = nullableString(p.routeKeyPrefix);
+  const exceptBotId = nullableString(p.exceptBotId);
+  const now = expectNumber(p.now, 'now');
+  if ((routeKey === null) === (routeKeyPrefix === null)) {
+    throw new Error('Exactly one of routeKey / routeKeyPrefix is required');
+  }
+  const scope = routeKey ?? routeKeyPrefix!;
+  if (!scope.startsWith('im:')) throw new Error('Channel lane route key must start with im:');
+  return db.transaction(() => {
+    const rows = db.prepare(`SELECT bot_id AS botId, session_id AS sessionId FROM bot_session_links
+      WHERE role = 'channel' AND archived_at IS NULL
+        AND (route_key = ? OR (? IS NOT NULL AND substr(route_key, 1, length(?)) = ?))`)
+      .all(routeKey, routeKeyPrefix, routeKeyPrefix, routeKeyPrefix) as Array<{ botId: string; sessionId: string }>;
+    const targets = exceptBotId ? rows.filter((row) => row.botId !== exceptBotId) : rows;
+    const archiveLink = db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?');
+    const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+      WHERE id = ? AND status = 'active'`);
+    for (const row of targets) {
+      archiveLink.run(now, row.sessionId);
+      archiveSession.run(now, row.sessionId);
+    }
+    return { archivedSessionIds: targets.map((row) => row.sessionId) };
+  })();
+}
+
 function botsFinishDelegation(
   db: Database.Database,
   args: unknown,
@@ -855,8 +935,11 @@ function botsFinishDelegation(
       db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
         WHERE id = ? AND status = 'active'`)
         .run(completedAt, row.childSessionId);
+      // 保留 route_key('delegation:<id>')作为来源标记:bot_delegations 行会随发起伙伴
+      // 的删除级联消失,之后只有它能证明这段 history 是"别人派给我的",不是自己的私聊
+      // (botHistoryScope.listBotRecallSessionIds)。route_key 的其它读者都只认 group 键。
       db.prepare(`UPDATE bot_session_links SET role = 'history',
-        route_key = NULL, archived_at = ? WHERE session_id = ?`)
+        archived_at = ? WHERE session_id = ?`)
         .run(completedAt, row.childSessionId);
     }
     return row;
@@ -1220,18 +1303,19 @@ function botsDeleteProfile(
         new Error('只能分离属于该 Bot 的任务'),
         { code: 'PRECONDITION_FAILED' },
       );
-      // Group-chat lanes hold only hidden group turns; they are never kept as
-      // standalone task history. The group's own timeline keeps what was said.
+      // Group-chat lanes and IM channel lanes hold only hidden channel turns;
+      // they are never kept as standalone task history. The group / IM chat
+      // keeps what was said.
       const hasLinkRoles = tableColumns(db, 'bot_session_links').has('role');
       if (hasLinkRoles) {
         db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
           WHERE source = 'bot' AND id IN (${placeholders}) AND id IN
-            (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'group')`)
+            (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))`)
           .run(at, ...sessionIds, botId);
       }
       db.prepare(`UPDATE sessions SET source = 'desktop', status = ?, updated_at = ?
         WHERE source = 'bot' AND id IN (${placeholders})${hasLinkRoles ? ` AND id NOT IN
-          (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'group')` : ''}`)
+          (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))` : ''}`)
         .run(status, at, ...sessionIds, ...(hasLinkRoles ? [botId] : []));
     }
 
@@ -2206,8 +2290,8 @@ function imRotateSession(
     `INSERT INTO sessions (
       id, title, working_dir, workspace_kind, model, effort, permission_mode,
       fast_mode, status, agent_kind, provider_id, source, im_bot_context_id,
-      im_user_id, im_default_route, created_at, updated_at, user_send_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      im_user_id, im_default_route, agent_device_id, created_at, updated_at, user_send_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const retirePrevious = db.prepare(
     `UPDATE sessions
@@ -2241,6 +2325,7 @@ function imRotateSession(
       expectString(session.imBotContextId, 'session.imBotContextId'),
       expectString(session.imUserId, 'session.imUserId'),
       nullableString(session.imDefaultRoute),
+      nullableString(session.agentDeviceId),
       now,
       now,
       now,
@@ -3288,13 +3373,18 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = db.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
   const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
-    const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
+    const row = selectWorker.get(workerId) as { sessionId: string; deviceId: string | null; releasedAt: number | null } | undefined;
     if (!row) return null;
-    deleteWorker.run(workerId);
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      db.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
   });
@@ -3394,9 +3484,31 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
     if (!activeTeam) {
       throw new Error(`Orca team ${teamId} is no longer active`);
     }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), proxy.fastMode === true ? 1 : 0,
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+        );
+      }
+    }
     if (payload.focused === true) {
       db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      db.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      db.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      db.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = db.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id) as Record<string, unknown> | undefined;
     if (existing) {
       db.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -3411,6 +3523,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = db.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId) as Record<string, unknown> | undefined;
@@ -3426,6 +3539,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     db.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -3441,6 +3555,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 

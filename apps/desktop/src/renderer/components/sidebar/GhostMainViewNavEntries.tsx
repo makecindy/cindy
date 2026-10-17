@@ -44,7 +44,7 @@ export const MAIN_VIEW_ICONS: Record<GhostMainViewIcon, LucideIcon> = {
 export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }) {
   const { sidebarVisible } = useGhostMainViews();
   return sidebarVisible.map((item) => (
-    <GhostMainViewNavEntry key={item.ghostId} item={item} variant={variant} />
+    <GhostMainViewNavEntry key={item.instanceId} item={item} variant={variant} />
   ));
 }
 
@@ -59,7 +59,7 @@ export function GhostMainViewNavEntry({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const activeMatch = useMatch('/apps/:ghostId');
-  const active = activeMatch?.params.ghostId === item.ghostId;
+  const active = activeMatch?.params.ghostId === item.instanceId;
   const Icon = MAIN_VIEW_ICONS[item.icon];
   const icon = (
     <Icon
@@ -69,9 +69,9 @@ export function GhostMainViewNavEntry({
       className="shrink-0"
     />
   );
-  const open = () => navigate(`/apps/${encodeURIComponent(item.ghostId)}`);
+  const open = () => navigate(`/apps/${encodeURIComponent(item.instanceId)}`);
   const openDetails = () =>
-    navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(item.ghostId)}`);
+    navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(item.instanceId)}`);
 
   if (variant === 'rail') {
     return (

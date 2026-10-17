@@ -255,10 +255,15 @@ export function normalizeConversationContentPreview(
 }
 
 export function visibleMessageTextForConversationSearch(role: string, content: unknown): string {
+  return visibleMessageText(role, content).replace(/\s+/g, ' ').trim();
+}
+
+/** Full visible content for result rendering; only search previews flatten Markdown. */
+export function visibleMessageText(role: string, content: unknown): string {
   const parsed = typeof content === 'string' ? tryParseJsonLike(content) : content;
   const rawText = roleVisibleText(role, parsed);
   const text = role === 'assistant' ? stripInternalWebCitations(rawText) : rawText;
-  return text.replace(/\s+/g, ' ').trim();
+  return text.trim();
 }
 
 function roleVisibleText(role: string, content: unknown): string {

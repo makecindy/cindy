@@ -31,6 +31,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -404,6 +405,10 @@ export function RightSidebarShell({
 
   const handleAdd = useCallback(
     (kind: TabKindId) => {
+      if (kind === 'cindy-make' && !CINDY_MAKE_ENABLED) {
+        log.warn('handleAdd ignored: Cindy Make is disabled');
+        return;
+      }
       if (!sessionId) {
         log.warn('handleAdd ignored: sessionId is null', { kind });
         return;

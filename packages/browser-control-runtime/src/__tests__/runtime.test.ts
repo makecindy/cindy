@@ -30,6 +30,23 @@ describe('createBrowserControlRuntime — request planning + dispatch', () => {
     expect(plan.query).toMatchObject({ targetId: 't1', maxChars: 500, timeoutMs: 9000 });
   });
 
+  it('opens agent pages in the background unless the host marks them user-initiated', () => {
+    expect(planDispatch({ action: 'open', url: 'https://example.com' }).body).toEqual({
+      url: 'https://example.com',
+      label: undefined,
+      background: true,
+    });
+    expect(planDispatch({
+      action: 'open',
+      url: 'about:blank',
+      background: false,
+    }).body).toEqual({
+      url: 'about:blank',
+      label: undefined,
+      background: false,
+    });
+  });
+
   it('accepts proxyServer only for start and does not forward it to the vendored route', () => {
     expect(planDispatch({ action: 'start', proxyServer: 'http://proxy.test:8080' })).toEqual({
       method: 'POST',

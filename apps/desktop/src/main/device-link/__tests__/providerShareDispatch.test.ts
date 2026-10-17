@@ -2,7 +2,7 @@
  * 被控端对供应商分享受邀者(另一个账号)的入口：只建后台链路、只放行远程 Agent 与过滤后的供应商列表，
  * 订阅与其他通道一律拒绝；撤权后迟到的结果不再带出数据；撤权只会命中受邀者对端。
  */
-import { providerShareGuestPeer, PROVIDER_SHARE_RELAY_CAPABILITY, type DeviceLinkClient } from '@cindy/device-link';
+import { providerShareGuestPeer, PROVIDER_SHARE_RELAY_CAPABILITY, type DeviceLinkClient, type ProviderShareGroupState } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ access: null as null | { shareId: string; memberId: string; providerId: string } }));
@@ -27,6 +27,7 @@ import {
   providerShareActiveControllers,
   revokeProviderShareControllers,
   runInvoke,
+  setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
 } from '../dispatch';
@@ -198,6 +199,153 @@ describe('provider share invoke', () => {
     }, 'openai-2') as { providers: Array<Record<string, unknown>> };
     expect(projected.providers[0]).toEqual({ id: 'openai-2', name: 'OpenAI', remoteInvocationEnabled: true });
     expect(JSON.stringify(projected)).not.toContain('alice@corp.com');
+  });
+
+  it('never shows the guest which computers are in a provider group', () => {
+    const projected = __testing.projectProviderListForShare({
+      providers: [{
+        id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true,
+        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+      }],
+    }, 'anthropic') as { providers: Array<Record<string, unknown>> };
+    expect(projected.providers[0]).not.toHaveProperty('group');
+    expect(JSON.stringify(projected)).not.toContain('Mini');
+  });
+
+  it('tells the guest only how many computers the group has', () => {
+    const sharedGroupSize = vi.fn((providerId: string) => (providerId === 'anthropic' ? 3 : null));
+    setProviderGroupRemoteHandler({ handle: vi.fn(), decorateProviderList: (result) => result, sharedGroupSize });
+    const projected = __testing.projectProviderListForShare({
+      providers: [{
+        id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, groupSize: 99,
+        group: { strategy: 'least', autoSwitch: true, members: [{ key: 'device:mini:a', kind: 'device', agentDeviceId: 'mini', providerId: 'a', label: 'Mini' }] },
+      }],
+    }, 'anthropic') as { providers: Array<Record<string, unknown>> };
+    // 台数只来自本机的组设置，目录里原有的值不算；组内电脑名单照旧不给。
+    expect(projected.providers[0]).toEqual({ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, groupSize: 3 });
+    expect(sharedGroupSize).toHaveBeenCalledWith('anthropic');
+
+    const ungrouped = __testing.projectProviderListForShare({
+      providers: [{ id: 'openai', name: 'OpenAI', remoteInvocationEnabled: true, groupSize: 2 }],
+    }, 'openai') as { providers: Array<Record<string, unknown>> };
+    expect(ungrouped.providers[0]).not.toHaveProperty('groupSize');
+  });
+
+  it('tells the guest only its own running tasks on this share', async () => {
+    state.access = ACCESS;
+    const otherDevice = providerShareGuestPeer('share-1', 'member-1', 'desktop');
+    setRemoteAgentHandler({
+      handle: vi.fn(),
+      abortAll: vi.fn(),
+      // 同一成员两台电脑各一个在跑；其他受邀者、其他分享与分享者本人(同账号)的都不算。
+      turnRunningControllers: () => [
+        GUEST,
+        otherDevice,
+        providerShareGuestPeer('share-1', 'member-2', 'laptop'),
+        providerShareGuestPeer('share-2', 'member-1', 'laptop'),
+        'same-account-mac',
+      ],
+    });
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    registry.register('maker:provider:list', async () => ({
+      providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, guestRunning: 99 }],
+    }));
+    try {
+      const listed = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] }) as { ok: true; result: { providers: Array<Record<string, unknown>> } };
+      expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', guestRunning: 2 });
+
+      // 远程 Agent 服务较旧、给不出时不带这个字段(目录里原有的值也去掉)。
+      setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn() });
+      const old = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] }) as { ok: true; result: { providers: Array<Record<string, unknown>> } };
+      expect(old.result.providers[0]).not.toHaveProperty('guestRunning');
+    } finally {
+      registry.reset();
+    }
+  });
+
+  it('only reads anonymous group status on explicit requests, scoped to the authorized provider', async () => {
+    state.access = ACCESS;
+    const sharedGroupStatus = vi.fn(async (): Promise<ProviderShareGroupState[] | null> => ['busy', 'needs-update']);
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), sharedGroupStatus });
+    setProviderGroupRemoteHandler({ handle: vi.fn(), decorateProviderList: (value) => value, sharedGroupSize: () => 2 });
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    const provider = { id: 'anthropic', remoteInvocationEnabled: true, groupSize: 2, groupStatus: ['available', 'available'] };
+    registry.register('maker:provider:list', async () => ({ providers: [provider, { id: 'private-provider', remoteInvocationEnabled: true }] }));
+    try {
+      // Normal directory reads must not recursively query groups or trust injected status.
+      const normal = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] });
+      expect(normal).toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', groupSize: 2 }] } });
+      expect(JSON.stringify(normal)).not.toContain('groupStatus');
+      expect(sharedGroupStatus).not.toHaveBeenCalled();
+      const explicit = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [{ includeSharedGroupStatus: true, providerId: 'private-provider' }] });
+      expect(explicit).toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', groupStatus: ['busy', 'needs-update'] }] } });
+      // 带上读状态的受邀者：分享来的组内电脑按它的主人是否同意过这个人显示(转分享，provider-sharing.md §4.3)。
+      expect(sharedGroupStatus).toHaveBeenCalledWith('anthropic', GUEST);
+      expect(JSON.stringify(explicit)).not.toContain('private-provider');
+
+      // An old host or failed status read still supplies its ordinary model catalog.
+      sharedGroupStatus.mockRejectedValueOnce(new Error('status read failed'));
+      const failed = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [{ includeSharedGroupStatus: true }] });
+      expect(failed.ok).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('groupStatus');
+      setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn() });
+      const old = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [{ includeSharedGroupStatus: true }] });
+      expect(old.ok).toBe(true);
+      expect(JSON.stringify(old)).not.toContain('groupStatus');
+      setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), sharedGroupStatus });
+
+      sharedGroupStatus.mockImplementation(async () => { state.access = null; return ['available', 'busy']; });
+      const revoked = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [{ includeSharedGroupStatus: true }] });
+      expect(revoked.ok).toBe(false);
+      expect(JSON.stringify(revoked)).not.toContain('groupStatus');
+    } finally {
+      registry.reset();
+    }
+  });
+});
+
+describe('provider group channel', () => {
+  it('serves same-account computers only', async () => {
+    const handle = vi.fn(async () => ({ kind: 'none' }));
+    setProviderGroupRemoteHandler({ handle, decorateProviderList: (result) => result, sharedGroupSize: () => null });
+    await expect(runInvoke('same-account-mac', { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'anthropic' }] }))
+      .resolves.toEqual({ ok: true, result: { kind: 'none' } });
+    expect(handle).toHaveBeenCalledWith('same-account-mac', { action: 'view', providerId: 'anthropic' });
+
+    state.access = ACCESS;
+    handle.mockClear();
+    await expect(runInvoke(GUEST, { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'anthropic' }] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('gives this computer’s running counts to same-account computers only', async () => {
+    const decorateProviderList = vi.fn(async (result: unknown) => {
+      const value = result as { providers: Array<Record<string, unknown>> };
+      return { ...value, providers: value.providers.map((p) => ({ ...p, runningTurns: 2 })) };
+    });
+    setProviderGroupRemoteHandler({ handle: vi.fn(), decorateProviderList, sharedGroupSize: () => null });
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    registry.register('maker:provider:list', async () => ({
+      providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true, runningTurns: 9 }],
+    }));
+    try {
+      const listed = await runInvoke('same-account-mac', { channel: 'maker:provider:list', args: [] }) as { ok: true; result: { providers: Array<Record<string, unknown>> } };
+      expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', runningTurns: 2 });
+
+      // 受邀者看不到分享者电脑上的总运行数(含分享者本人与其他受邀者的任务)。
+      state.access = ACCESS;
+      decorateProviderList.mockClear();
+      const guest = await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] }) as { ok: true; result: { providers: Array<Record<string, unknown>> } };
+      expect(guest.result.providers[0]).toMatchObject({ id: 'anthropic' });
+      expect(guest.result.providers[0]).not.toHaveProperty('runningTurns');
+      expect(decorateProviderList).not.toHaveBeenCalled();
+    } finally {
+      registry.reset();
+    }
   });
 });
 

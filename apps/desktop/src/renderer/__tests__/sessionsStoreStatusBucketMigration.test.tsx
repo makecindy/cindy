@@ -30,6 +30,7 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useWorkbenchSessionPages } from '@/features/bots/useWorkbenchSessionPages';
 import { emitAutoTitlePreview } from '@/lib/sessionsBus';
 import { sessionsStore } from '@/lib/sessionsStore';
 import type { ListStatusFilter } from '@/lib/sessionService';
@@ -70,6 +71,90 @@ describe('sessionsStore status bucket migration', () => {
   afterEach(() => {
     cleanup();
     sessionsStore.reset();
+  });
+
+  it('updates the workbench when the original sidebar archives and restores the same session', async () => {
+    const row = session('sidebar-task');
+    mocks.list.mockImplementation(async (_limit: number, filter: string) => filter === 'active' ? [row] : []);
+    await sessionsStore.ensureByFilter('active');
+    const { result } = renderHook(() => useWorkbenchSessionPages('bot', 'archived', true));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.rows).toEqual([]);
+    let token!: NonNullable<ReturnType<typeof sessionsStore.beginStatusTransition>>;
+    act(() => { token = sessionsStore.beginStatusTransition(row.id, { status: 'archived', updatedAt: '2026-10-09T00:00:00.000Z' })!; });
+    expect(result.current.rows).toEqual([expect.objectContaining({ id: row.id, status: 'archived', title: row.title })]);
+    act(() => { sessionsStore.rollbackStatusTransition(token); });
+    expect(result.current.rows).toEqual([]);
+  });
+
+  it('publishes original list mutations with the preserved row, including deletion outside cached windows', async () => {
+    const row = session('task');
+    mocks.list.mockResolvedValueOnce([row]);
+    await sessionsStore.ensureByFilter('active');
+    const patched = vi.fn();
+    const off = sessionsStore.subscribePatches(patched);
+    try {
+      sessionsStore.patchLocal('task', { status: 'deleted' });
+      expect(sessionsStore.findById('task')).toBeNull();
+      expect(patched).toHaveBeenLastCalledWith('task', { status: 'deleted' },
+        expect.objectContaining({ id: 'task', title: row.title, status: 'deleted' }));
+      sessionsStore.patchLocal('outside-window', { status: 'deleted' });
+      expect(patched).toHaveBeenLastCalledWith('outside-window', { status: 'deleted' }, null);
+    } finally { off(); }
+    sessionsStore.patchLocal('another', { status: 'deleted' });
+    expect(patched).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes a task moved to the background from every bucket and refetches the loaded buckets', async () => {
+    const hidden = session('plugin-task');
+    const keep = session('keep');
+    mocks.list.mockImplementation(async () => [hidden, keep]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('all');
+    mocks.list.mockReset();
+    mocks.list.mockImplementation(async () => [keep]);
+    const patched = vi.fn();
+    const off = sessionsStore.subscribePatches(patched);
+    const snapshots: string[][] = [];
+    const offStore = sessionsStore.subscribe(() => {
+      const active = sessionsStore.getByFilter('active');
+      if (active) snapshots.push(active.map((row) => row.id));
+    });
+    try {
+      sessionsStore.patchLocal('plugin-task', { hiddenAt: '2026-10-15T00:00:00.000Z' });
+      // The first notification already removed the row in place, before any refetch.
+      expect(snapshots[0]).toEqual(['keep']);
+      expect(sessionsStore.findById('plugin-task')).toBeNull();
+      expect(patched).toHaveBeenCalledWith('plugin-task', { hiddenAt: '2026-10-15T00:00:00.000Z' },
+        expect.objectContaining({ id: 'plugin-task', hiddenAt: '2026-10-15T00:00:00.000Z' }));
+      await waitFor(() => expect(requestedFilters().sort()).toEqual(['active', 'all']));
+      await waitFor(() => expect(sessionsStore.getByFilter('active')?.map((row) => row.id)).toEqual(['keep']));
+      expect(sessionsStore.getByFilter('all')?.map((row) => row.id)).toEqual(['keep']);
+      // A reveal patch alone does not insert a row; the created push refetches instead.
+      sessionsStore.patchLocal('plugin-task', { hiddenAt: null });
+      expect(sessionsStore.findById('plugin-task')).toBeNull();
+    } finally { off(); offStore(); }
+  });
+
+  it('keeps a task hidden when the hide push beats an in-flight list response', async () => {
+    const pending = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(pending.promise);
+    const loading = sessionsStore.ensureByFilter('active');
+    // Hidden before the first list response lands: nothing is cached yet.
+    sessionsStore.patchLocal('plugin-task', { hiddenAt: '2026-10-15T00:00:00.000Z' });
+    expect(sessionsStore.getByFilter('active')).toBeNull();
+    pending.resolve([session('keep'), session('plugin-task')]);
+    await loading;
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['keep']);
+    // Local optimistic inserts do not bring it back either.
+    sessionsStore.prependCreated(session('plugin-task'));
+    expect(sessionsStore.findById('plugin-task')).toBeNull();
+
+    // Revealed: later list responses may include it again.
+    sessionsStore.patchLocal('plugin-task', { hiddenAt: null, updatedAt: '2026-10-15T00:01:00.000Z' });
+    mocks.list.mockResolvedValueOnce([session('plugin-task'), session('keep')]);
+    await sessionsStore.forceRefresh('active');
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['plugin-task', 'keep']);
   });
 
   it('moves a row with an authoritative timestamp into archived and all without querying', async () => {

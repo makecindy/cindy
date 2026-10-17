@@ -339,7 +339,10 @@ function PiDurableDetailView({
   const selectedChildActive = !selectedChild
     || selectedChild.status === 'running'
     || selectedChild.status === 'queued';
-  const selectedChildHasCompletedOutput = Boolean(selectedChild?.output?.trim());
+  // Commentary can populate output while tools are still running. Only older
+  // hosts/runners without explicit readiness need the output-based fallback.
+  const selectedChildResultReady = selectedChild?.resultReady
+    ?? Boolean(selectedChild?.output?.trim());
   // The composer works like the session's: one box, one send, and the same
   // keystrokes. While running, plain send queues a follow-up and the modifier
   // send interjects (steer) — exactly the main composer's Enter / ⌘+Enter
@@ -352,7 +355,7 @@ function PiDurableDetailView({
       return detail.capabilities.resume ? 'resume' : undefined;
     }
     if (!detail.capabilities.steer || !selectedChildActive) return undefined;
-    if (intent === 'steer' && !selectedChildHasCompletedOutput) return 'steer';
+    if (intent === 'steer' && !selectedChildResultReady) return 'steer';
     return 'follow_up';
   };
   const defaultComposerAction = composerActionForIntent('queue');

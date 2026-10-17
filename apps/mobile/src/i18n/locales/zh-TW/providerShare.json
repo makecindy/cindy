@@ -1,6 +1,7 @@
 {
   "picker": {
-    "deviceName": "{{device}} · 來自 {{owner}} 的分享",
+    "shareName": "來自 {{owner}} 的分享",
+    "numbered": "{{name}} ({{index}})",
     "unavailable": "已無法使用的分享"
   },
   "link": {

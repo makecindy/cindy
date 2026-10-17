@@ -3754,6 +3754,8 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
       await ensureRuntime();
       return callComputerDriverTool(name, args, context);
     },
+    // Loaded on use: the 代输入 driver brings the native input helpers with it.
+    isSecureTarget: async (target) => (await import('../input-handoff/macDriver.js')).isSecureInputTarget(target),
     logger,
   };
 }

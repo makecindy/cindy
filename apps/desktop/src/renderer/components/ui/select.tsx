@@ -23,6 +23,8 @@ export interface SelectProps {
   onOpenChange?(open: boolean): void;
   disabled?: boolean;
   className?: string;
+  /** Size a compact trigger's menu independently; ordinary fields keep equal width. */
+  contentClassName?: string;
   'aria-describedby'?: string;
   'aria-invalid'?: AriaAttributes['aria-invalid'];
   'aria-required'?: AriaAttributes['aria-required'];
@@ -44,6 +46,7 @@ export function Select({
   onOpenChange,
   disabled,
   className,
+  contentClassName,
   'aria-describedby': describedBy,
   'aria-invalid': invalid,
   'aria-required': required,
@@ -91,7 +94,10 @@ export function Select({
           align="end"
           sideOffset={4}
           collisionPadding={8}
-          className="z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]"
+          className={cn(
+            'z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+            contentClassName,
+          )}
         >
           <SelectPrimitive.ScrollUpButton className="flex h-6 items-center justify-center">
             <ChevronUp size={14} aria-hidden="true" />

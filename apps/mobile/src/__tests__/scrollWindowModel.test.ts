@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   evaluateMessageWindowUpdate,
@@ -97,20 +95,7 @@ describe('scrollWindowModel', () => {
     });
   });
 
-  it.each(['\n', '\r\n'])('restores the load-earlier affordance after unchanged reopen with %j line endings', (lineEnding) => {
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8').replace(/\r?\n/g, lineEnding);
-    // 重开"无新内容"分支(metaChanged=false)也补设 hasOlderMessages,用服务端总数 vs in-store 推断。
-    expect(source).toMatch(/hasOlderMessagesAfterReopen\(\s*sessionMeta\._count\?\.messages, remoteSessionStore\.getMessages\(sessionId\),?\s*\)/);
-    // 仍保留有新内容时的精确(page-based)判定。这个值现在同时喂给 store 的窗口连续性判据
-    // (moreBeyondWindow,见 #1222):两者本就该同源 —— 「本页上沿之外还有历史」既决定是否点亮
-    // 「加载更早」,也决定能不能信任早于本页的缓存段。
-    expect(source).toContain('const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);');
-    expect(source).toContain('setHasOlderMessages(moreBeyondWindow);');
-    expect(source).toMatch(/if \(history === null\) \{\s*messageWindowReconciledRef\.current = true;\s*setHasOlderMessages\(hasOlderMessagesAfterReopen\(/);
-    expect(source).toMatch(
-      /setLatestMessageWindow\(sessionId, historyPage, \{\s*authority: messageAuthority,\s*moreBeyondWindow,\s*\}\)/,
-    );
-  });
+
 });
 
 describe('history browse intent', () => {

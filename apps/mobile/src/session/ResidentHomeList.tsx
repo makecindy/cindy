@@ -1,7 +1,8 @@
 import { useHomeMode } from './useHomeMode';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
-import Animated from 'react-native-reanimated';
+import { Platform, StyleSheet, View } from 'react-native';
+import Animated, { useAnimatedStyle } from 'react-native-reanimated';
+import { HomeModeProgressContext, useHomeModeProgress } from './HomeModeTransition';
 import { useSegments } from 'expo-router';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
@@ -41,10 +42,18 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   const geometry = useAdaptiveWindow();
   const enabled = sessionPaneLayout(geometry).persistent;
   const segments = useSegments() as string[];
-  const { mode } = useHomeMode();
-  // The retained task list must not overlay the teammate home pane.
-  const visible = enabled && ((mode === 'tasks' && (segments.length === 0 || segments[0] === 'index' || (segments[0] === 'devices' && (segments.length === 1 || segments[1] === 'index'))))
+  const { mode, hydrated } = useHomeMode();
+  const homeRoute = segments.length === 0 || segments[0] === 'index'
+    || (segments[0] === 'devices' && (segments.length === 1 || segments[1] === 'index'));
+  // Android pages draw their own bar inside each pane, so sliding them would move it; they switch in place.
+  const progress = useHomeModeProgress(mode, homeRoute && Platform.OS === 'ios', hydrated);
+  // Keep the outgoing resident list drawn during the slide, but never interactive over the new tab.
+  const visible = enabled && ((mode === 'tasks' && homeRoute)
     || (segments[0] === 'sessions' && segments[1] === '[sessionId]'));
+  const slide = useAnimatedStyle(() => ({
+    opacity: homeRoute ? (progress.value < 1 ? 1 : 0) : (visible ? 1 : 0),
+    transform: [{ translateX: homeRoute ? -progress.value * geometry.width : 0 }],
+  }));
   const host = useRef<View>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
@@ -55,21 +64,20 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
     mounted.current = enabled && !!entry;
     if (!enabled) setEntry(null);
   }, [enabled, entry]);
-  return <Context.Provider value={context}>
+  return <HomeModeProgressContext.Provider value={progress}><Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
       {entry ? <Animated.View pointerEvents={visible ? 'box-none' : 'none'}
         accessibilityElementsHidden={!visible}
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
         style={[styles.host, entry.frame, {
-          opacity: visible ? 1 : 0,
           transitionProperty: ['left', 'top', 'width', 'height'],
           transitionDuration: reduceMotion === false ? motionDuration.fast : 0,
-        }]}>
+        }, slide]}>
         <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
       </Animated.View> : null}
     </View>
-  </Context.Provider>;
+  </Context.Provider></HomeModeProgressContext.Provider>;
 }
 
 /** A route supplies a measuring slot, not another native list. Its header stays
@@ -86,9 +94,11 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   const measure = useCallback(() => {
     const revision = ++measureRevision.current;
     if (!context?.enabled || !latest.current.focused || !context.host.current) return;
-    anchor.current?.measureLayout(context.host.current, (x, y, width, height) => {
-      if (revision !== measureRevision.current || !latest.current.focused || width <= 0 || height <= 0) return;
-      context.publish({ owner, frame: { left: x, top: y, width, height }, children: latest.current.children });
+    anchor.current?.measureInWindow((x, y, width, height) => {
+      context.host.current?.measureInWindow((hostX, hostY) => {
+        if (revision !== measureRevision.current || !latest.current.focused || width <= 0 || height <= 0) return;
+        context.publish({ owner, frame: { left: x - hostX, top: y - hostY, width, height }, children: latest.current.children });
+      });
     });
   }, [context, owner]);
   useLayoutEffect(() => {

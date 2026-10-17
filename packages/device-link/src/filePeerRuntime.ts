@@ -1,8 +1,12 @@
 /// <reference lib="dom" />
 
 export interface FilePeerRuntimeBridge {
+  /** Local lifecycle event, never a wire message. */
+  closed?(connection: string): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
+  /** Local bridge capability only; coalesces already-arrived frames up to 256 KiB. */
+  writeBatch?(sink: string, offset: number, base64: string): Promise<void>;
   /** `body` carries a request's binary payload (see RPC_BODY_MAX_BYTES). */
   invoke?(
     connection: string,
@@ -271,6 +275,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     peers.delete(id);
     p?.dc?.close();
     p?.pc.close();
+    if (p) bridge.closed?.(id);
   }
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
@@ -278,7 +283,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     const p: PeerState = { pc, dc: null, busy: false };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
-      if (["failed", "closed", "disconnected"].includes(pc.connectionState))
+      if (peers.get(id) === p && ["failed", "closed", "disconnected"].includes(pc.connectionState))
         close(id);
     };
     return p;
@@ -534,7 +539,8 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           let granted = Math.min(64, blocks);
           let ended = false,
             settled = false;
-          let writes = Promise.resolve();
+          const writeQueue: Uint8Array[] = [];
+          let writing = false;
           const progress: ReceiveProgress = {
             size,
             startedAt: Date.now(),
@@ -564,6 +570,45 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           function closed() {
             done(new Error("FILE_PEER_CLOSED"));
           }
+          async function flush() {
+            if (writing || settled) return;
+            writing = true;
+            try {
+              while (writeQueue.length && !settled) {
+                if (writeQueue[0].length === 0) {
+                  writeQueue.shift(); queued--; progress.queued = queued; done(); return;
+                }
+                const count = Math.min(bridge.writeBatch ? 16 : 1,
+                  writeQueue.findIndex((part) => !part.length) < 0 ? writeQueue.length : writeQueue.length - 1);
+                const parts = writeQueue.splice(0, count);
+                const length = parts.reduce((sum, part) => sum + part.length, 0);
+                const writeStartedAt = Date.now();
+                // Bounded spreads avoid one concatenation per byte and the engine's argument limit.
+                let binary = '';
+                for (const part of parts) {
+                  for (let offset = 0; offset < part.length; offset += 8192)
+                    binary += String.fromCharCode(...part.subarray(offset, offset + 8192));
+                }
+                await (bridge.writeBatch ?? bridge.write)(sink, written, btoa(binary));
+                if (settled) return;
+                if (peers.get(id) !== p) throw new Error('FILE_PEER_CLOSED');
+                written += length; queued -= count;
+                const writeMs = Date.now() - writeStartedAt;
+                progress.writes++; progress.writeMs += writeMs;
+                progress.writeMaxMs = Math.max(progress.writeMaxMs, writeMs);
+                progress.written = written; progress.queued = queued;
+                clearTimeout(timer);
+                timer = setTimeout(() => done(new Error('FILE_PEER_TIMEOUT')), 60000);
+                replenished += count;
+                if (replenished >= 32 && granted < blocks) {
+                  const credit = Math.min(32, blocks - granted);
+                  dc!.send(JSON.stringify({ credit }));
+                  granted += credit; progress.granted = granted; replenished -= 32;
+                }
+              }
+            } catch (error) { done(error instanceof Error ? error : new Error('FILE_PEER_WRITE')); }
+            finally { writing = false; }
+          }
           function message(event: MessageEvent) {
             if (
               ended ||
@@ -584,46 +629,8 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
             progress.queued = queued;
             progress.queuedMax = Math.max(progress.queuedMax, queued);
             progress.lastDataAt = Date.now();
-            writes = writes
-              .then(async () => {
-                if (settled) return;
-                if (!bytes.length) {
-                  // The zero-byte EOF block leaves the queue like any other block,
-                  // so a completed receive reports no pending writes.
-                  queued--;
-                  progress.queued = queued;
-                  done();
-                  return;
-                }
-                const writeStartedAt = Date.now();
-                let binary = "";
-                for (const byte of bytes) binary += String.fromCharCode(byte);
-                await bridge.write(sink, written, btoa(binary));
-                if (settled) return;
-                if (peers.get(id) !== p) throw new Error("FILE_PEER_CLOSED");
-                written += bytes.length;
-                queued--;
-                const writeMs = Date.now() - writeStartedAt;
-                progress.writes++;
-                progress.writeMs += writeMs;
-                progress.writeMaxMs = Math.max(progress.writeMaxMs, writeMs);
-                progress.written = written;
-                progress.queued = queued;
-                clearTimeout(timer);
-                timer = setTimeout(
-                  () => done(new Error("FILE_PEER_TIMEOUT")),
-                  60000,
-                );
-                // Count EOF in the window; never send late credit after it was sent.
-                if (++replenished === 32 && granted < blocks) {
-                  const credit = Math.min(32, blocks - granted);
-                  dc!.send(JSON.stringify({ credit }));
-                  granted += credit;
-                  progress.granted = granted;
-                  replenished = 0;
-                }
-              })
-              .catch((error) => done(error));
+            writeQueue.push(bytes);
+            void flush();
           }
           dc.addEventListener("message", message);
           dc.addEventListener("close", closed);

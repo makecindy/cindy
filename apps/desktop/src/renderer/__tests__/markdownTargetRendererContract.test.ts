@@ -148,4 +148,27 @@ describe('Markdown target rendering contract', () => {
       'scroller.scrollTop = targetRect.top - scrollerRect.top + scroller.scrollTop',
     );
   });
+
+  it('has the session bubbles honour the boundary they are handed', () => {
+    // SubagentsBody component tests verify the boundary at the panel seam.
+    // This guard retains propagation through the real session bubble sources.
+    const chatDir = resolve(__dirname, '../components/chat');
+    const assistant = readFileSync(resolve(chatDir, 'AssistantMessage.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    // Defaulting to true is what keeps every local caller unchanged, and is
+    // also what made the omission invisible.
+    expect(assistant).toContain('allowPrivilegedLinks = true');
+    // Both bodies: the streamed one and the settled one.
+    expect([...assistant.matchAll(/allowPrivilegedLinks=\{allowPrivilegedLinks\}/g)].length)
+      .toBeGreaterThanOrEqual(3);
+
+    const user = readFileSync(resolve(chatDir, 'UserMessage.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(user).toContain('allowPrivilegedLinks = true');
+    // A remote author's @-chip must not resolve against this filesystem: the
+    // click handler is withheld, which is the inert chip shape the component
+    // already uses for a collapsed long message.
+    expect(user).toContain('longMessageCollapsed || !allowPrivilegedLinks');
+    expect(user).toContain('allowPrivilegedLinks\n                                ? async (abs, name, chip)');
+  });
 });

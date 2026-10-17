@@ -29,6 +29,11 @@ export type RealtimeAsrWebSocketProviderOptions = {
   errorFallbackMessage?: string;
   /** Replace upstream application error text with errorFallbackMessage. */
   redactUpstreamErrors?: boolean;
+  /**
+   * Called with the token from accessTokenProvider when the WebSocket handshake is
+   * rejected with HTTP 401. Only the Cindy AI key (gateway proxy) path passes it.
+   */
+  onAuthorizationRejected?: (accessToken: string) => void;
 };
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
@@ -627,6 +632,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly missingCredentialMessage: string;
   private readonly errorFallbackMessage: string;
   private readonly redactUpstreamErrors: boolean;
+  private readonly onAuthorizationRejected?: (accessToken: string) => void;
   private socket?: WebSocket;
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
@@ -685,6 +691,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   constructor(options: RealtimeAsrWebSocketProviderOptions) {
     this.accessTokenProvider = options.accessTokenProvider;
     this.connectionProvider = options.connectionProvider;
+    this.onAuthorizationRejected = options.onAuthorizationRejected;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
     this.model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
     this.pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
@@ -772,6 +779,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.socket = socket;
     this.attachSocketHandlers(socket);
 
+    const onAuthorizationRejected = this.onAuthorizationRejected;
     await this.waitForSessionReady(socket, () => {
       socket.once('open', () => {
         this.connected = true;
@@ -779,7 +787,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         this.startHealthLog();
         this.sendSessionUpdate();
       });
-    });
+    }, dynamicConnection || !onAuthorizationRejected
+      ? undefined
+      : () => onAuthorizationRejected(accessToken));
   }
 
   private attachSocketHandlers(socket: WebSocket): void {
@@ -839,7 +849,11 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     });
   }
 
-  private async waitForSessionReady(socket: WebSocket, begin: () => void): Promise<void> {
+  private async waitForSessionReady(
+    socket: WebSocket,
+    begin: () => void,
+    onUnauthorized?: () => void,
+  ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const cleanup = (): void => {
@@ -882,6 +896,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
         response.resume();
         const statusCode = response.statusCode ?? 'unknown';
+        if (statusCode === 401) onUnauthorized?.();
         if (this.redactUpstreamErrors) {
           const statusSuffix = typeof statusCode === 'number' ? ` (HTTP ${statusCode})` : '';
           fail(new Error(`${this.errorFallbackMessage}${statusSuffix}`), true);

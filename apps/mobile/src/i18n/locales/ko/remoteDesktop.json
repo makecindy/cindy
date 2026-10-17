@@ -160,5 +160,8 @@
   "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 컴퓨터 상태를 확인해 주세요.",
   "hostMute": "원격 컴퓨터 음소거",
   "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
-  "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다"
+  "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다",
+  "handoffEnded": "이 대리 입력은 이미 끝나서 표시할 창이 없습니다.",
+  "handoffUnavailable": "이 컴퓨터에서는 이 창만 표시할 수 없습니다. 해당 컴퓨터에서 Cindy를 업데이트하거나 원격 데스크톱을 켜세요.",
+  "handoffWindow": "대리 입력 · {{app}}"
 }

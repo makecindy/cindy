@@ -7,8 +7,19 @@
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
-import { Session, type AgentEvent, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
+import {
+  Session,
+  type AgentEvent,
+  type AgentSessionHandle,
+  type Capabilities,
+  type TurnContinuationState,
+} from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver';
+import {
+  onChannelTurn,
+  publishChannelTurn,
+  publishProviderInitiatedTurn,
+} from '../../maker-ipc/channelTurnSignal';
 import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
 import { setMainLocale } from '../../i18n';
 
@@ -251,6 +262,48 @@ function makeDispatcher(overrides?: {
   return { d, bindings, fr };
 }
 
+describe('任务失败原因进主日志(issue #5912)', () => {
+  it('runner 抛出路由不可用: 主日志记 requestId / 渠道 / 原因, turn.end 带同一 errorMessage', async () => {
+    const message =
+      'hook session route unavailable: selected provider "openai" cannot serve model "claude-test"。请在 设置 → IM 机器人 中为这个渠道的工作目录重新选择模型。';
+    const runner: HookSessionRunner = {
+      isBusy: () => false,
+      inspect: async () => null,
+      run: async () => {
+        throw new Error(message);
+      },
+    };
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId: 'req-route', source: { im: 'x' } }), c.send);
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      `hook task req-route failed: im=x via=throw reason=${message}`,
+    );
+    expect(c.last('turn.end')?.payload).toMatchObject({ status: 'error', errorMessage: message });
+    d.dispose();
+  });
+
+  it('其它失败原因不原样进日志, 只记类别', async () => {
+    const fr = fakeRunner();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner: fr.runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId: 'req-other' }), c.send);
+    await tick();
+    fr.finish({ status: 'error', finalText: '', errorMessage: 'ENOENT /Users/someone/secret/path' });
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith('hook task req-other failed: im=none via=outcome reason=unclassified');
+    expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/someone');
+    d.dispose();
+  });
+});
+
 describe('background results during normal turn delivery', () => {
   it.each(['telegram:dm:bot:user:g0', 'slack:T:C:1.2'])('%s observes the next turn before the previous run returns', async (externalKey) => {
     let signal!: Parameters<NonNullable<HookDispatcherDeps['subscribeChannelTurn']>>[0];
@@ -271,14 +324,161 @@ describe('background results during normal turn delivery', () => {
     signal(req.sessionId, req.workingDir, 'starting');
     expect(watches).toHaveLength(0);
     req.onTurnTerminal?.();
-    signal(req.sessionId, req.workingDir, 'starting');
+    signal(req.sessionId, req.workingDir, 'starting', 'other-task');
     expect(watches).toHaveLength(1);
+    watches[0]!.onSettling?.();
     watches[0]!.onEnd({ status: 'ok', finalText: 'next result', errorMessage: null, durationMs: 1 });
     fr.finish({ finalText: 'original result' });
     await tick();
     expect(c.ofType('turn.end').map((frame) => [frame.payload.background, frame.payload.finalText]))
       .toEqual([[true, 'next result'], [undefined, 'original result']]);
     d.dispose();
+  });
+});
+
+describe('harness wake-ups of an IM-bound task (real Session)', () => {
+  /** Claude-like handle: the test pushes provider events, including turns no send started. */
+  function wakeableSession(id: string) {
+    const queue: Array<AgentEvent | null> = [];
+    let waiter: ((event: AgentEvent | null) => void) | null = null;
+    let running = false;
+    const continuations = new Map<number, TurnContinuationState>();
+    const push = (event: AgentEvent | null) => {
+      if (!waiter) { queue.push(event); return; }
+      const deliver = waiter;
+      waiter = null;
+      deliver(event);
+    };
+    const handle = {
+      id: 'claude', agentKind: 'claude-code', model: 'm',
+      send: vi.fn(async () => { running = true; }),
+      steer: vi.fn(async () => {}),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => { running = false; push(null); }),
+      isTurnRunning: () => running,
+      setInteractionResolver() {},
+      beginTurnContinuationWait: (continuationId?: number) =>
+        continuationId === undefined ? null : continuations.get(continuationId) ?? null,
+      async *events() {
+        for (;;) {
+          const next = queue.length > 0
+            ? queue.shift() ?? null
+            : await new Promise<AgentEvent | null>((resolve) => { waiter = resolve; });
+          if (next === null) return;
+          yield next;
+        }
+      },
+    } as unknown as AgentSessionHandle;
+    const logger = { ...noopLog, debug() {}, trace() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id, agentKind: 'claude-code', workDir: WS_DIR,
+      handle, capabilities: {} as Capabilities, logger, turnStallMs: 0 });
+    // Production wiring: maker-ipc/sessionTurnObserver.ts.
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: () => publishChannelTurn(session, 'starting'),
+      onUndispatched: () => publishChannelTurn(session, 'undispatched'),
+      onTerminal: () => undefined,
+      onProviderInitiatedTurn: () => { void publishProviderInitiatedTurn(session); },
+    });
+    return {
+      session,
+      continuations,
+      /** One provider event; a terminal `done` without keepRunning flips the handle idle. */
+      async emit(event: Partial<AgentEvent>, opts: { keepRunning?: boolean } = {}) {
+        if (event.type !== 'done' || opts.keepRunning) running = true;
+        else running = false;
+        push({ source: 'claude-code', data: {}, ...event } as AgentEvent);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+    };
+  }
+
+  function hookSessionObserver(session: Session, onTurnTerminal?: () => void) {
+    return observeHookTurn(session, {
+      ...(onTurnTerminal ? { onTurnTerminal } : {}),
+      onSilentStopSettled: () => () => {},
+      log: noopLog,
+    });
+  }
+
+  it('relays each wake-up after the hook turn once, never desktop turns or subagent output', async () => {
+    const externalKey = 'telegram:group:bot:-100200:user-7:g1';
+    let live: ReturnType<typeof wakeableSession> | undefined;
+    const run = vi.fn(async (req: HookRunRequest): Promise<HookRunOutcome> => {
+      live = wakeableSession(req.sessionId);
+      const observer = hookSessionObserver(live.session, req.onTurnTerminal);
+      await live.session.send(req.prompt);
+      await observer.finished;
+      return { status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 };
+    });
+    // Same shape as session-runner's watchContinuation: observe from the claim, settle on the turn end.
+    const watchContinuation = vi.fn((req: HookContinuationWatchRequest) => {
+      const observer = hookSessionObserver(live!.session, () => req.onSettling?.());
+      req.onClaim();
+      void observer.finished.then(
+        () => req.onEnd({ status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 }),
+        (error: unknown) => req.onEnd({ status: 'error', finalText: '', errorMessage: String(error), durationMs: 1 }),
+      );
+      return () => observer.stop();
+    });
+    const bindings = memoryBindings();
+    bindings.findBySession = (sessionId) => bindings.get('conn-1', externalKey) === sessionId
+      ? [{ connectionId: 'conn-1', externalKey }] : [];
+    let signal!: Parameters<NonNullable<HookDispatcherDeps['subscribeChannelTurn']>>[0];
+    const { d } = makeDispatcher({
+      runner: { isBusy: () => false, inspect: async () => null, run, watchContinuation },
+      bindings,
+      // Production wiring: hook-control/ipc.ts.
+      subscribeChannelTurn: (listener) => {
+        signal = listener;
+        return onChannelTurn((session, phase, source) => listener(session.id, session.workDir, phase, source));
+      },
+    });
+    expect(signal).toBeDefined();
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_SESSION_RESULT]);
+    const turnEnds = () => c.ofType('turn.end').map((frame) => [frame.payload.background ?? false, frame.payload.finalText]);
+    try {
+      d.handleDispatch('conn-1', dispatch({ externalKey }), c.send);
+      await vi.waitFor(() => expect(live).toBeDefined());
+      const h = live!;
+      // The hook turn launches background agents and replies; the wake task claim keeps it open,
+      // so the first wake-up belongs to the hook turn and is not sent a second time.
+      await h.emit({ type: 'text', data: { text: 'Still working.', isFinal: true } }, { keepRunning: true });
+      h.continuations.set(1, 'awaiting');
+      await h.emit({ type: 'done', turnContinuationId: 1 }, { keepRunning: true });
+      h.continuations.set(1, 'active');
+      await h.emit({ type: 'text', data: { text: 'Agent A finished.', isFinal: true } }, { keepRunning: true });
+      await h.emit({ type: 'done' });
+      await vi.waitFor(() => expect(turnEnds()).toHaveLength(1));
+      expect(turnEnds()[0]![0]).toBe(false);
+      expect(turnEnds()[0]![1]).toContain('Agent A finished.');
+
+      // Background subagent output while the task is idle is not a turn.
+      await h.emit({ type: 'text', data: { text: 'subagent notes' }, agentMeta: { parentUuid: 'toolu_b' } });
+      expect(watchContinuation).not.toHaveBeenCalled();
+
+      // Claude wakes the session itself for each later task notification: no send, no hook request.
+      for (const report of ['Agent B finished.', 'Final report.']) {
+        await h.emit({ type: 'thinking', data: { text: 'task notification' } }, { keepRunning: true });
+        await h.emit({ type: 'text', data: { text: report, isFinal: true } }, { keepRunning: true });
+        await h.emit({ type: 'done' });
+        await vi.waitFor(() => expect(turnEnds().at(-1)).toEqual([true, report]));
+      }
+
+      // Typed on the desktop: Session.send without other-task stamp stays in the app.
+      await h.session.send('desktop question');
+      await h.emit({ type: 'text', data: { text: 'desktop answer', isFinal: true } }, { keepRunning: true });
+      await h.emit({ type: 'done' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(turnEnds()).toHaveLength(3);
+      expect(run).toHaveBeenCalledOnce();
+      expect(c.ofType('turn.end').filter((frame) => frame.payload.background).every(
+        (frame) => frame.payload.externalKey === externalKey && frame.payload.sessionId === h.session.id,
+      )).toBe(true);
+    } finally {
+      d.dispose();
+      await live?.session.close();
+    }
   });
 });
 
@@ -506,6 +706,7 @@ describe('normalizeTaskSource', () => {
 
     expect(fr.calls[0]?.source?.channelName).toHaveLength(160);
     expect(fr.calls[0]?.source?.userText).toHaveLength(20_000);
+    expect(fr.calls[0]?.userText).toBe('u'.repeat(20_100));
     fr.finish();
   });
 
@@ -1154,7 +1355,9 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-2' }), c.send);
     await tick();
     expect(c.last('task.ack')!.payload).toMatchObject({ result: 'accepted', sessionId: first });
-    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workingDir: INSIDE });
+    expect(fr.calls[1]).toMatchObject({
+      isNew: false, sessionId: first, workingDir: INSIDE, workspaceAlias: 'xdmaker',
+    });
 
     fr.finish({ finalText: '在子目录里跑完了' });
     await tick();

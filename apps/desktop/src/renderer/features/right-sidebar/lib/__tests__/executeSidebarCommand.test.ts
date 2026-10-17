@@ -22,6 +22,10 @@ vi.mock('../openInSidebarFileBrowser', () => ({
 vi.mock('../openSubagentsTab', () => ({
   openSubagentsTab: vi.fn(async () => undefined),
 }));
+vi.mock('../openBotWorkbenchTab', () => ({
+  ensureBotWorkbenchTab: vi.fn(async () => undefined),
+  openBotWorkbenchTab: vi.fn(async () => undefined),
+}));
 vi.mock('../../plugins/orca-workers/actions', () => ({
   ensureOrcaWorkersTab: vi.fn(async () => undefined),
   closeOrcaWorkersTabAfterTeamEnd: vi.fn(async () => undefined),
@@ -40,9 +44,19 @@ import {
 } from '../openInSidebarFileBrowser';
 import { openUrlInSidebarBrowser } from '../openInSidebarBrowser';
 import { openSubagentsTab } from '../openSubagentsTab';
+import { ensureBotWorkbenchTab, openBotWorkbenchTab } from '../openBotWorkbenchTab';
 
 describe('executeSidebarCommand', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('distinguishes a detached passive restore from an explicit workbench click', async () => {
+    await executeSidebarCommand({ type: 'open-bot-workbench-tab', sessionId: 's1', botId: 'bot-1' });
+    expect(ensureBotWorkbenchTab).toHaveBeenCalledWith('s1', 'bot-1');
+    expect(openBotWorkbenchTab).not.toHaveBeenCalled();
+    await executeSidebarCommand({ type: 'open-bot-workbench-tab', sessionId: 's1', botId: 'bot-1', focusTab: true });
+    expect(openBotWorkbenchTab).toHaveBeenCalledWith('s1', 'bot-1');
+    expect(ensureBotWorkbenchTab).toHaveBeenCalledOnce();
+  });
 
   it('dispatches every command kind to the current renderer host implementation', async () => {
     const searchJump = {

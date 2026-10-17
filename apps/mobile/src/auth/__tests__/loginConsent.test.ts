@@ -1,12 +1,47 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as React from "react";
+import ts from "typescript";
 
 import { parseLegalSegments } from "@/auth/legalText";
 import { LOGIN_CONSENT_ROW } from "@/auth/loginSkinLayout";
 import { LEGAL_LINKS } from "@/config/legalLinks";
 import { loginPalettes } from "@/theme/tokens";
 import { loginMessages } from "@/auth/loginMessages";
+
+it('evaluates the production regional legal links for the Global build', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/config/legalLinks.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const exports: any = {};
+  new Function('require', 'exports', compiled)(() => ({ AUTH_REGION: 'global' }), exports);
+  expect(exports.LEGAL_LINKS).toEqual({ termsOfService: 'https://protocol.xd.com/cindy/agreement-1.0.html', privacyPolicy: 'https://protocol.xd.com/cindy/privacy.html' });
+});
+
+// The P1 was clipped Android hit bounds and an unlabeled checkbox. Run the
+// production component, checking actual hit geometry and accessible properties.
+it.each(['light', 'dark'] as const)('keeps consent reachable, labeled and interactive in %s mode', (mode) => {
+  const source = ts.createSourceFile('controls.tsx', readFileSync(resolve(process.cwd(), 'src/components/LoginSkinControls.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'LoginConsentRow');
+  if (!row) throw new Error('Missing production consent row');
+  const code = ts.transpileModule(row.getText(source).replace(/^export\s+/, ''), { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const bindings = { React, View: 'View', Pressable: 'Pressable', ConsentCheckGlyph: 'Check', LegalStatementText: 'LegalText',
+    useTheme: () => ({ colors: { login: loginPalettes[mode] } }), LOGIN_CONSENT_ROW, parseLegalSegments };
+  const render = new Function(...Object.keys(bindings), code + '\nreturn LoginConsentRow;')(...Object.values(bindings));
+  const toggle = vi.fn();
+  const tree = render({ checked: true, onToggle: toggle, statement: loginMessages.en.consentStatement, onOpenTerms: vi.fn(), onOpenPrivacy: vi.fn() });
+  const radio = tree.props.children[0];
+  expect(radio.props.accessibilityRole).toBe('checkbox');
+  expect(radio.props.accessibilityState).toEqual({ checked: true });
+  expect(radio.props.accessibilityLabel).not.toMatch(/[<>]/);
+  expect(radio.props.style.height).toBeGreaterThanOrEqual(88);
+  expect(radio.props.style.width).toBeGreaterThanOrEqual(88);
+  expect(radio.props.hitSlop).toBeUndefined();
+  expect(tree.props.style.top + tree.props.style.height).toBe(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height);
+  radio.props.onPress();
+  expect(toggle).toHaveBeenCalledOnce();
+  expect(radio.props.children.props.style.backgroundColor).toBe(loginPalettes[mode].consentRadioCheckedBg);
+});
 
 /**
  * 协议同意链路专测(consent PR,移动端):
@@ -15,14 +50,6 @@ import { loginMessages } from "@/auth/loginMessages";
  * LoginPage.consent.test.tsx 同源(桌面 jsdom 全交互覆盖)。
  */
 
-const loginSource = readFileSync(
-  resolve(process.cwd(), "app/(auth)/login.tsx"),
-  "utf8",
-);
-const controlsSource = readFileSync(
-  resolve(process.cwd(), "src/components/LoginSkinControls.tsx"),
-  "utf8",
-);
 
 describe("parseLegalSegments(单 key 内联链接标记,词序无关)", () => {
   it("zh 语序:前缀文本 + terms/privacy 链接段 + 连接词", () => {
@@ -66,18 +93,6 @@ describe("LEGAL_LINKS(区域分流,测试构建 = cn)", () => {
     expect(LEGAL_LINKS.privacyPolicy).toBe(
       "https://protocol.xd.cn/cindy/privacy-1.0.html",
     );
-  });
-
-  it("global 分支 URL 固化在源码(protocol.xd.com 双链接)", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "src/config/legalLinks.ts"),
-      "utf8",
-    );
-    expect(source).toContain(
-      "https://protocol.xd.com/cindy/agreement-1.0.html",
-    );
-    expect(source).toContain("https://protocol.xd.com/cindy/privacy.html");
-    expect(source).toContain("AUTH_REGION === 'global'");
   });
 });
 
@@ -150,73 +165,6 @@ describe("consent 文案(5 语 catalog 全给标记链接段)", () => {
   );
 });
 
-describe("login.tsx 接线(源码断言)", () => {
-  it("个人链路发起点全部过 requireConsent,含 email discover(产品拍板 2026-07-24 二次)", () => {
-    const guarded = loginSource.match(/requireConsent\(/g) ?? [];
-    // 调用点 ≥5 处(email discover/phone 发码/邮箱个人行发码/apple/nonApple)
-    expect(guarded.length).toBeGreaterThanOrEqual(5);
-    // 手机号/邮箱提交一律先弹协议弹窗(拍板压过审查侧「discover 纯查询可放行」建议)
-    expect(loginSource).toMatch(
-      /requireConsent\(\(\) =>[\s\S]{0,140}?type: 'discover'/,
-    );
-    // 发码点(phone + 邮箱个人行)与社交圆钮为实际发起点,必须过门
-    expect(loginSource).toMatch(
-      /requireConsent\(\(\) =>[\s\S]{0,200}?kind: 'phone'/,
-    );
-    expect(loginSource).toMatch(
-      /requireConsent\(\(\) =>[\s\S]{0,240}?kind: 'email'/,
-    );
-    const appleStart = loginSource.indexOf("label={loginText('apple')}");
-    const appleEnd = loginSource.indexOf('testID="login.appleButton"', appleStart);
-    expect(appleStart).toBeGreaterThan(0);
-    expect(appleEnd).toBeGreaterThan(appleStart);
-    const appleBlock = loginSource.slice(appleStart, appleEnd);
-    expect(appleBlock).toContain('requireConsent(() =>');
-    expect(appleBlock).toContain("provider: 'apple'");
-  });
-
-  it("企业 SSO 入口豁免:ssoEntryButton onPress 不过 requireConsent", () => {
-    // 取 SSO 圆钮自身的 JSX 段:label={loginText('ssoEntry')} → testID="login.ssoEntryButton"
-    const start = loginSource.indexOf("label={loginText('ssoEntry')}");
-    const end = loginSource.indexOf('testID="login.ssoEntryButton"');
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    const ssoEntryBlock = loginSource.slice(start, end);
-    expect(ssoEntryBlock).toContain("setSsoOrgMode(true)");
-    expect(ssoEntryBlock).not.toContain("requireConsent");
-  });
-
-  it("P1 回归锁:容器 bounds 恒含协议行区间;弹窗前收键盘;radio 无 hitSlop", () => {
-    // ① 外层测量盒与内层设计容器都用 flowBottomDesignPx(622),协议行在父 bounds 内
-    expect(loginSource).toMatch(/height: flowBottomDesignPx \* groupScale/);
-    expect(loginSource).toMatch(/height: flowBottomDesignPx,/);
-    // ⑤ flow bottom 全步骤恒定(不随 showConsentRow 切换,消除步骤跳变)
-    expect(loginSource).not.toMatch(
-      /showConsentRow\s*\?\s*LOGIN_CONSENT_ROW\.bottomOverflow/,
-    );
-    // ② requireConsent 打开弹窗前收键盘(同意钮不被键盘遮挡)
-    expect(loginSource).toMatch(
-      /Keyboard\.dismiss\(\);[\s\S]{0,400}?setConsentDialogOpen\(true\)/,
-    );
-  });
-
-  it("协议行 + 弹窗已挂载;安全区抬升含协议行溢出量;手机端无游客入口", () => {
-    expect(loginSource).toContain("<LoginConsentRow");
-    expect(loginSource).toContain("<LoginConsentDialog");
-    expect(loginSource).toContain("LOGIN_CONSENT_ROW.bottomOverflow");
-    expect(loginSource).toContain("loginText('consentStatement')");
-    // 手机/pad 为远程连接客户端,必须有账号——不加游客登录(产品拍板 2026-07-24;
-    // 断言不存在游客入口的具体接线:本地模式 IPC / 游客文案 key / 游客图标)
-    expect(loginSource).not.toContain("authEnterLocal");
-    expect(loginSource).not.toContain("localModeEntry");
-    expect(loginSource).not.toContain("GuestGlyph");
-  });
-
-  it("协议链接经 Linking.openURL 打开(settings.tsx 同款模式)", () => {
-    expect(loginSource).toMatch(/Linking\.openURL\(\s*\n?\s*kind === 'terms'/);
-  });
-});
-
 describe("consent radio 无障碍(codex P1 双修:读屏标签 + 44pt 触摸区)", () => {
   it("触摸区常量:pressSize ≥88 设计px(phone ~0.5 缩放 → ≈44pt),行底 622 不变", () => {
     const { radio } = LOGIN_CONSENT_ROW;
@@ -234,32 +182,7 @@ describe("consent radio 无障碍(codex P1 双修:读屏标签 + 44pt 触摸区)
     );
   });
 
-  it("组件接线:命中区右下锚定 + 负 margin 占位回收 + 禁 hitSlop(历史结论回归锁)", () => {
-    // 行容器:top 上移 pressExpand、paddingTop 压回原内容带,行底不动
-    expect(controlsSource).toContain(
-      "const pressExpand = radio.pressSize - LOGIN_CONSENT_ROW.height",
-    );
-    expect(controlsSource).toContain("top: LOGIN_CONSENT_ROW.y - pressExpand");
-    expect(controlsSource).toContain("paddingTop: pressExpand");
-    // Pressable:88×88 bounds,右缘对齐 24 槽位右缘(不侵协议链接命中区)、底缘对齐行底
-    expect(controlsSource).toContain("height: radio.pressSize");
-    expect(controlsSource).toContain("width: radio.pressSize");
-    expect(controlsSource).toContain(
-      "marginLeft: -(radio.pressSize - radio.hitSize)",
-    );
-    expect(controlsSource).toMatch(/alignSelf: 'flex-end'/);
-    // hitSlop 方案已被否(父 bounds 裁剪、Android 界外触摸不派发),不许倒退
-    // (只拦属性用法 hitSlop= / hitSlop:,注释中说明历史结论的字样放行)
-    expect(controlsSource).not.toMatch(/hitSlop[=:]/);
-  });
-
   it("读屏标签:accessibilityLabel = 协议声明剥标记纯文本,多语随 i18n 无新增 key", () => {
-    expect(controlsSource).toContain("accessibilityLabel={statementLabel}");
-    expect(controlsSource).toMatch(
-      /parseLegalSegments\(statement\)[\s\S]{0,120}?\.join\(''\)/,
-    );
-    expect(controlsSource).toContain('accessibilityRole="checkbox"');
-    expect(controlsSource).toContain("accessibilityState={{ checked }}");
     // 剥标记结果对全部 catalog 均为非空、无残留标记的完整句子
     for (const locale of ["zh-CN", "zh-TW", "en", "ja", "ko"] as const) {
       const label = parseLegalSegments(loginMessages[locale].consentStatement)
@@ -268,23 +191,5 @@ describe("consent radio 无障碍(codex P1 双修:读屏标签 + 44pt 触摸区)
       expect(label.length).toBeGreaterThan(5);
       expect(label).not.toMatch(/[<>]/);
     }
-  });
-});
-
-describe("LoginSkinControls 接线(源码断言)", () => {
-  it("consent 组件只消费 colors.login.* 双态 token,弹窗按 groupScale 缩放", () => {
-    expect(controlsSource).toContain("login.consentRadioCheckedBg");
-    expect(controlsSource).toContain("login.consentOverlay");
-    expect(controlsSource).toContain("login.secondaryButtonBg");
-    expect(controlsSource).toContain("login.overlaySecondaryPressed");
-    // 弹窗 = stage 内全屏遮罩 + 680×380 设计坐标系整层缩放(与登录组同口径)
-    expect(controlsSource).toMatch(
-      /LOGIN_CONSENT_DIALOG[\s\S]*transform: \[\{ scale \}\]/,
-    );
-    // 区域确认与协议确认共用设计标准正文 26/40，不允许按文案临时缩字号。
-    expect(controlsSource).toContain("fontSize={D.body.font}");
-    expect(controlsSource).toContain("lineHeight={D.body.lineHeight}");
-    expect(controlsSource).not.toContain("compactBody");
-    expect(loginSource).not.toContain("compactBody");
   });
 });

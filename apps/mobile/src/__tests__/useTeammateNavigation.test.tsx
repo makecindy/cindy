@@ -4,20 +4,22 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobileUser } from '@/auth/AuthContext';
 const h = vi.hoisted(() => ({
-  disk: new Map<string, string>(), push: vi.fn(), dismissTo: vi.fn(), dismiss: vi.fn(), accountGeneration: 1,
+  disk: new Map<string, string>(), push: vi.fn(), dismissTo: vi.fn(), dismiss: vi.fn(), reset: vi.fn(), accountGeneration: 1,
   user: { id: 'account', passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser,
-  get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
+  sessions: [] as import('@/session/types').RemoteSession[], upsert: vi.fn(), get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss }), useNavigation: () => ({ getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss }), useNavigation: () => ({ reset: h.reset, getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
 vi.mock('react-native', () => ({ Keyboard: { dismiss() {} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration }) }));
 vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: h.get, setItem: h.set } }));
+vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { getSessions: () => h.sessions, getSessionDeviceId: () => undefined, upsertDeviceSession: h.upsert } }));
 import { useTeammateNavigation } from '@/session/useTeammateNavigation';
 import { homeNavigationOwner } from '@/session/useHomeMode';
 import { readHomeNavigationPreferences, saveHomeNavigationPreferences } from '@/session/homeViewPreferenceStore';
 import { teammateIdentity } from '@/session/teammateNavigation';
+import { StackRouter, StackActions } from 'expo-router/build/react-navigation/routers/StackRouter';
 const teammate = { key: 'mac:writer', host: { deviceId: 'mac', deviceName: 'My Mac' }, item: {
   ref: { collectionId: 'teammates', kind: 'bot', id: 'writer' }, revision: '1', display: { title: 'Writer' }, links: [],
 } };
@@ -28,7 +30,7 @@ function Probe() { result = useTeammateNavigation(); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 let serial = 0;
 beforeEach(() => {
-  vi.clearAllMocks(); h.routes = []; h.disk.clear(); h.accountGeneration = ++serial;
+  vi.clearAllMocks(); h.sessions = []; h.routes = []; h.disk.clear(); h.accountGeneration = ++serial;
   h.user = { id: `account-${serial}`, passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser;
   h.get.mockImplementation(async (key: string) => h.disk.get(key) ?? null);
   h.set.mockImplementation(async (key: string, value: string) => { h.disk.set(key, value); });
@@ -135,12 +137,40 @@ describe('header/home shared navigation', () => {
 it.each([
   { routes: [{ name: 'index' }, { name: 'sessions/[sessionId]' }], href: '/' },
   { routes: [{ name: 'devices/index' }, { name: 'sessions/[sessionId]' }], href: '/devices' },
-  { routes: [{ name: 'resources/[collectionId]', params: { collectionId: 'teammates' } }, { name: 'sessions/[sessionId]' }], href: '/resources/teammates' },
 ])('returns to the mounted list at $href instead of replacing the chat with a new home', async ({ routes, href }) => {
   h.routes = routes;
   await render();
   await act(async () => result.chooseMode('teammates'));
   expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(1);
+  expect(h.dismissTo).not.toHaveBeenCalled();
+  expect(h.reset).not.toHaveBeenCalled();
+});
+it.each(['tasks', 'teammates'] as const)('removes the retired stack before returning to %s', async mode => {
+  const router = StackRouter({ initialRouteName: 'resources/[collectionId]' });
+  const options = { routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'],
+    routeParamList: { 'resources/[collectionId]': { collectionId: 'teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
+  let state = router.getInitialState(options);
+  state = router.getStateForAction(state, StackActions.push('sessions/[sessionId]'), options)! as typeof state;
+  h.routes = state.routes;
+  h.reset.mockImplementationOnce(next => { state = router.getRehydratedState({ ...next, stale: true }, options) as typeof state; });
+  await render();
+  await act(async () => result.chooseMode(mode));
+  expect(h.dismiss).not.toHaveBeenCalled();
+  expect(h.dismissTo).not.toHaveBeenCalled();
+  expect(state.routes.map(route => route.name)).toEqual(['devices/index']);
+  expect(router.getStateForAction(state, StackActions.pop(), options)).toBeNull();
+});
+it('preserves earlier unrelated routes when removing multiple retired entries', async () => {
+  const prior = { name: 'resources/[collectionId]', params: { collectionId: 'tools', targets: 'hosts' } };
+  h.routes = [prior,
+    { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+    { name: 'sessions/[sessionId]' },
+    { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+    { name: 'sessions/[sessionId]' },
+  ];
+  await render();
+  await act(async () => result.chooseMode('tasks'));
+  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [prior, { name: 'devices/index' }] });
   expect(h.dismissTo).not.toHaveBeenCalled();
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {
@@ -152,4 +182,18 @@ it('opens a known conversation directly and seeds its first-frame identity', asy
     sessionId: 'chat', deviceId: 'mac', deviceName: 'My Mac', resourceCollectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot',
   } });
   expect(readRemoteCollectionCache(`${h.user.id}:${h.accountGeneration}`, 'teammates')[0]).toBe(linked);
+});
+
+it('opens a disk-cached canonical chat without a task row, seeds presentation once, and preserves real metadata', async () => {
+  const linked = { ...teammate, item: { ...teammate.item, links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 'canonical' } }] } };
+  h.upsert.mockImplementation((_device, _name, session) => { h.sessions.push(session); });
+  await render();
+  await act(async () => Promise.all([result.openTeammate(linked), result.openTeammate(linked)]));
+  expect(h.push).toHaveBeenCalledTimes(1);
+  expect(h.upsert).toHaveBeenCalledExactlyOnceWith('mac', 'My Mac', expect.objectContaining({ id: 'canonical', source: 'bot', cacheSeeded: true, workingDir: null }));
+  expect(h.push.mock.calls[0][0].pathname).toBe('/sessions/[sessionId]');
+  h.sessions[0] = { ...h.sessions[0], cacheSeeded: undefined, model: 'real-model', workingDir: '/real' };
+  await act(async () => result.openTeammate(linked));
+  expect(h.upsert).toHaveBeenCalledTimes(1);
+  expect(h.sessions[0].model).toBe('real-model');
 });

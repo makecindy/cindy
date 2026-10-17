@@ -106,4 +106,16 @@ describe('confirmAgentLocationForPick (remote Agent)', () => {
     }, showAlert)).resolves.toBeNull();
     expect(showAlert).not.toHaveBeenCalled();
   });
+
+  it('keeps an immovable remote Agent on its current computer, even with a stale relocation intent', async () => {
+    const showAlert = vi.fn();
+    const fixed = { ...base, movable: false, session: { agentDeviceId: 'device-studio-mac' },
+      intent: { targetAgentKind: 'codex' as const, model: 'm', providerId: null, agentDeviceId: 'other' } };
+    await expect(confirmAgentLocationForPick({ ...fixed, catalogDeviceId: 'device-studio-mac' }, showAlert))
+      .resolves.toEqual({});
+    for (const catalogDeviceId of [null, 'other']) {
+      await expect(confirmAgentLocationForPick({ ...fixed, catalogDeviceId }, showAlert)).resolves.toBeNull();
+    }
+    expect(showAlert).not.toHaveBeenCalled();
+  });
 });

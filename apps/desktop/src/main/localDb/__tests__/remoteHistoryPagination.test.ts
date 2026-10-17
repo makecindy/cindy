@@ -45,7 +45,7 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT DEFAULT '', working_dir TEXT,
       agent_kind TEXT DEFAULT 'codex', workspace_kind TEXT DEFAULT 'project', model TEXT DEFAULT '',
       status TEXT DEFAULT 'active', source TEXT DEFAULT 'desktop', orca_role TEXT,
-      parent_session_id TEXT, created_at INTEGER, updated_at INTEGER, user_send_at INTEGER);
+      parent_session_id TEXT, created_at INTEGER, updated_at INTEGER, user_send_at INTEGER, hidden_at INTEGER);
     CREATE TABLE messages (id TEXT PRIMARY KEY, client_id TEXT, session_id TEXT, role TEXT,
       content TEXT, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER, rewind_at INTEGER);
     CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content);

@@ -55,6 +55,20 @@ function setup(opts?: { now?: () => number; loadFails?: boolean }) {
 }
 
 describe('GhostRuntime · 状态机', () => {
+  it('does not start an instance the host holds stopped until restart', async () => {
+    const handles: FakeHandle[] = [];
+    let blocked: string | null = 'restart Cindy';
+    const runtime = new GhostRuntime({
+      adapter: { create: () => { const handle = new FakeHandle(); handles.push(handle); return handle; } },
+      startBlockedReason: (id) => (id === 'demo' ? blocked : null),
+    });
+    await expect(runtime.spawn(chipGhost())).resolves.toEqual({ ok: false, reason: 'restart Cindy' });
+    expect(handles).toHaveLength(0);
+    expect(runtime.stateOf('demo')).toBe('off');
+    blocked = null;
+    await expect(runtime.spawn(chipGhost())).resolves.toMatchObject({ ok: true });
+  });
+
   it('spawn → running;stop → off,沙箱被销毁', async () => {
     const { runtime, handles } = setup();
     const ghost = chipGhost();
@@ -164,5 +178,23 @@ describe('GhostRuntime · 状态机', () => {
     expect(handles.every((h) => h.destroyed)).toBe(true);
     expect(runtime.stateOf('a')).toBe('off');
     expect(runtime.stateOf('b')).toBe('off');
+  });
+
+  it('同 ghostId 的 root 与企业实例可同时 running', async () => {
+    const { runtime, handles } = setup();
+    const root = chipGhost('helper');
+    const enterprise: InstalledGhost = {
+      ...chipGhost('helper'),
+      namespace: 'acme',
+      dir: '/fake/brain/_ns/acme/helper',
+    };
+    expect((await runtime.spawn(root)).ok).toBe(true);
+    expect((await runtime.spawn(enterprise)).ok).toBe(true);
+    expect(handles.length).toBe(2);
+    expect(runtime.stateOf('helper')).toBe('running');
+    expect(runtime.stateOf('_ns__acme__helper')).toBe('running');
+    runtime.stop('helper');
+    expect(runtime.stateOf('helper')).toBe('off');
+    expect(runtime.stateOf('_ns__acme__helper')).toBe('running');
   });
 });

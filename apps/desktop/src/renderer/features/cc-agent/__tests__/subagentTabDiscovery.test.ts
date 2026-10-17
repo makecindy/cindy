@@ -434,8 +434,8 @@ describe('startSubagentTabDiscovery', () => {
    * The module above is where the decision lives; this is the wiring that feeds
    * it. `CCAgentSessionView` is far too heavy to mount here (it pulls in the
    * whole session runtime), so the two invariants that were wrong are checked
-   * on its source — the same approach `orcaWorkflowRoute.test.ts` uses for that
-   * component's private contracts.
+   * on its source — the same approach used by the route component's private
+   * contract checks.
    */
   describe('CCAgentSessionView wiring', () => {
     const source = readFileSync(

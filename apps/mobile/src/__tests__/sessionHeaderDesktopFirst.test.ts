@@ -40,8 +40,12 @@ describe('mobile session header desktop-first surface', () => {
 
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const gate = readTextLf(resolve(process.cwd(), 'src/session/CindyMakeSessionGate.tsx'), 'utf8');
 
-    expect(source).toMatch(
+    expect(source).toMatch(/<CindyMakeSessionGate\b[^>]*\bownsSessionSubscription[\s>]/);
+    expect(gate).toContain('useEffect(() => () => {');
+    expect(gate).toContain('if (!ownsSessionSubscription || !deviceId || !sessionId) return;');
+    expect(gate).toMatch(
       /unsubscribe\(`session:\$\{sessionId\}`, deviceId, \['sessions', `session:\$\{sessionId\}`\]\)/,
     );
   });
@@ -95,7 +99,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('<View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />');
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
-    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && { backgroundColor: colors.surface }]}>');
+    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
     // 临时任务列表抽屉在树内,盖不住 iOS 系统栏:抽屉存续期间收起系统栏,内容区沿用打开前的顶栏高度。
     expect(source).toContain(']), sessionListDrawerOverlayMounted);');
     expect(source).toContain('systemBarHidden={sessionListDrawerOverlayMounted}');

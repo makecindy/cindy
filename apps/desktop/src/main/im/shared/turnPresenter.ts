@@ -40,6 +40,7 @@ import {
 } from '@cindy/maker-shared/message-render';
 
 import {
+  applyStatusTokenRate,
   createTurnActivity,
   markActivityWriting,
   pushThinkingStep,
@@ -329,6 +330,8 @@ export interface TurnPresenter {
   applyThinking(ev: AgentEvent): boolean;
   /** 非终止重试 error → 单行状态说明。返回状态行是否变化。 */
   applyRetryNotice(ev: AgentEvent): boolean;
+  /** status 事件: 更新头部 tok/s(只改状态, 由 ticker 带出)。返回头部是否变化。 */
+  applyStatus(ev: AgentEvent): boolean;
   /** done: 封存本轮尾段(segments); buffer 无操作。 */
   seal(): void;
   /** 新交互请求边界(segments); buffer 无操作。 */
@@ -716,6 +719,9 @@ export function createTurnPresenter(options: TurnPresenterOptions): TurnPresente
       const notice = turnRetryNotice(ev.data, { channel: options.channel });
       if (notice === null) return false;
       return setActivityNotice(activity, notice);
+    },
+    applyStatus(ev: AgentEvent): boolean {
+      return applyStatusTokenRate(activity, ev.data);
     },
     seal(): void {
       body.seal();

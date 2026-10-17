@@ -1,107 +1,49 @@
 /**
- * cindyPrefsStore —— cindy 槽"意识专属后端覆盖"的持久化(解析表第②层)。
+ * cindyPrefsStore —— cindy 槽的用户级隐藏配置(在途并发上限)。
  *
  * File: <userData>/ghost-cindy-prefs.json
  *
- * 形态:{ overrides: { <ghostId>: { "image.generate": "<白名单模型>", … } },
- *        inflightLimits: { <ghostId>: <正整数并发上限> } }
- * - 没写 = 跟随默认(出厂 = 自带 proxy 基座;规则 20:override 与默认值
- *   分开记,清除即重新跟随当下默认);
- * - inflightLimits:该意识同时能跑几单 cindy 代办(隐藏配置层级,无
+ * 形态:{ inflightLimits: { <ghostId>: <正整数并发上限> } }
+ * - inflightLimits:该插件同时能跑几单 cindy 代办(隐藏配置层级,无
  *   Settings UI,直接改文件或让 agent 改);缺项 = 不限并发(系统默认);
- * - 抽离意识**不**清覆盖——与布局位置"重新注入原位复活"同语义,重装回来
- *   钉的后端还在;
- * - 已确认的一对一模型 rename 在读取 normalize 时兼容映射,保留用户显式
- *   override;真正失效的值仍由消费方(cindySlot)校验,静默落回默认并留日志。
+ * - 抽离插件**不**清配置——与布局位置"重新注入原位复活"同语义。
+ *
+ * 旧版这里还有 `overrides`(插件详情「Cindy 能力」逐项钉的模型)。2026-10 起
+ * 插件只有一个「模型」字段,存在 pluginTaskPrefsStore;旧 `overrides` 只留给
+ * 一次性迁移读取(见 readLegacyOneshotPins / clearLegacyOverrides),迁移后
+ * 从文件里删掉该键。旧版本回退读到缺键视为无覆盖,不会判损坏。
  */
 
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 
 const log = desktopMakerLogger.child('cindy-prefs-store');
 
-/** cindy 槽能力键(类目.动作;与身份卡详单同一词汇表,当前包含 video)。 */
-// text.oneshot(快问快答)与图像/视频同表:每项覆盖记的都是一组供应商×模型。
-// 文本类的取值是轻量任务模型链的档位键(codex-gpt-5.4-mini 等),不是媒体目录模型 id。
-export const CINDY_CAPABILITY_KEYS = [
-  'image.generate',
-  'image.edit',
-  'video.generate',
-  'video.edit',
-  'text.oneshot',
-  // 向量类的取值是 embedding catalog 的 model id(与媒体同为"一组供应商×模型",
-  // 不同于 text.oneshot 那种轻量链档位键)。
-  'embed.text',
-] as const;
-export type CindyCapabilityKey = (typeof CINDY_CAPABILITY_KEYS)[number];
+export const GHOST_CINDY_PREFS_FILE = 'ghost-cindy-prefs.json';
 
-/** 覆盖值的取值域来自哪份清单(写入校验按此选白名单)。 */
-export type CindyCapabilityValueDomain = 'image' | 'video' | 'embed' | 'utilityChain';
-
-/**
- * 能力键 → 取值域。
- *
- * 写成**穷举 switch** 而不是前缀 if/else 链:新增能力类目时 TS 会在这里报缺分支,
- * 而不是让它悄悄落进某个兜底分支、被别的类目的白名单拒掉。这个坑已经踩过两次
- * (PR #1707 review):
- *   - `embed.*` 落进图像白名单 —— 设置里下拉能选,一选就回滚成一句通用 toast;
- *   - `text.oneshot` 同样落在那里,而它的取值是轻量链档位键(codex-gpt-5.4-mini 等),
- *     跟图像目录的 model id 根本不是一个词汇表,所以钉快问快答后端一直是必然失败。
- * 两者都属于"界面看起来正常、一操作就静默回滚"的类型,不写死映射就还会再来一次。
- */
-export function cindyCapabilityValueDomain(
-  capability: CindyCapabilityKey,
-): CindyCapabilityValueDomain {
-  switch (capability) {
-    case 'image.generate':
-    case 'image.edit':
-      return 'image';
-    case 'video.generate':
-    case 'video.edit':
-      return 'video';
-    case 'embed.text':
-      return 'embed';
-    case 'text.oneshot':
-      return 'utilityChain';
-  }
+export async function relocateGhostCindyPrefs(from: string, to: string): Promise<void> {
+  // 尚未迁移的旧 overrides 跟着一起搬,迁移时才能落到正确的插件身份上。
+  await relocateGhostPreferenceMaps(GHOST_CINDY_PREFS_FILE, ['overrides', 'inflightLimits'], from, to, () => {
+    store = createStore();
+  });
 }
 
-export interface GhostCindyPrefs {
-  /** ghostId → 能力键 → 白名单模型 id(缺项 = 跟随默认)。 */
-  overrides: Record<string, Partial<Record<CindyCapabilityKey, string>>>;
+interface GhostCindyPrefs {
   /** ghostId → 在途代办并发上限(正整数;缺项 = 不限并发)。 */
   inflightLimits: Record<string, number>;
+  /**
+   * 旧版逐能力钉档里的快问快答钉值(ghostId → 原始字符串),只供一次性迁移;
+   * 其它能力键(图像/视频/向量)不再有消费者,读取时直接忽略。
+   */
+  overrides?: Record<string, { 'text.oneshot'?: string }>;
 }
 
-const DEFAULTS: GhostCindyPrefs = { overrides: {}, inflightLimits: {} };
-
-/** 已确认的一对一图片模型 rename；旧 override 代表明确的用户选择，可无歧义迁移。 */
-const LEGACY_IMAGE_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  'gemini-3-pro-image-preview': 'gemini-3-pro-image',
-  'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image',
-};
-
-function normalizeModelOverride(capability: CindyCapabilityKey, model: string): string {
-  if (capability !== 'image.generate' && capability !== 'image.edit') return model;
-  return LEGACY_IMAGE_MODEL_ALIASES[model] ?? model;
-}
+const DEFAULTS: GhostCindyPrefs = { inflightLimits: {} };
 
 function normalize(raw: unknown): GhostCindyPrefs {
-  if (!raw || typeof raw !== 'object') return { overrides: {}, inflightLimits: {} };
-  const overridesRaw = (raw as { overrides?: unknown }).overrides;
-  const overrides: GhostCindyPrefs['overrides'] = {};
-  if (overridesRaw && typeof overridesRaw === 'object') {
-    for (const [ghostId, capsRaw] of Object.entries(overridesRaw as Record<string, unknown>)) {
-      if (!capsRaw || typeof capsRaw !== 'object') continue;
-      const caps: Partial<Record<CindyCapabilityKey, string>> = {};
-      for (const key of CINDY_CAPABILITY_KEYS) {
-        const v = (capsRaw as Record<string, unknown>)[key];
-        if (typeof v === 'string' && v.length > 0) caps[key] = normalizeModelOverride(key, v);
-      }
-      if (Object.keys(caps).length > 0) overrides[ghostId] = caps;
-    }
-  }
+  if (!raw || typeof raw !== 'object') return { inflightLimits: {} };
   // 并发上限:只收正整数,其它形态(0/负数/小数/字符串)一律丢弃 = 回到不限。
   const limitsRaw = (raw as { inflightLimits?: unknown }).inflightLimits;
   const inflightLimits: GhostCindyPrefs['inflightLimits'] = {};
@@ -110,62 +52,48 @@ function normalize(raw: unknown): GhostCindyPrefs {
       if (typeof v === 'number' && Number.isInteger(v) && v >= 1) inflightLimits[ghostId] = v;
     }
   }
-  return { overrides, inflightLimits };
+  const overridesRaw = (raw as { overrides?: unknown }).overrides;
+  if (!overridesRaw || typeof overridesRaw !== 'object') return { inflightLimits };
+  const overrides: NonNullable<GhostCindyPrefs['overrides']> = {};
+  for (const [ghostId, capsRaw] of Object.entries(overridesRaw as Record<string, unknown>)) {
+    if (!capsRaw || typeof capsRaw !== 'object') continue;
+    const pin = (capsRaw as Record<string, unknown>)['text.oneshot'];
+    overrides[ghostId] = typeof pin === 'string' && pin.length > 0 ? { 'text.oneshot': pin } : {};
+  }
+  return { inflightLimits, overrides };
 }
 
-const store = createOverrideSettingsFile<GhostCindyPrefs>({
-  filePath: () => ownerScopedUserDataPath('ghost-cindy-prefs.json'),
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'ghost-cindy-prefs',
-});
-
-/** 读某意识的全部覆盖(缺省空对象 = 全跟随默认)。 */
-export function readGhostCindyOverrides(ghostId: string): Partial<Record<CindyCapabilityKey, string>> {
-  // 本文件是"直接改文件也算配置入口"的隐藏配置(inflightLimits 无 UI),
-  // 读前做 mtime 守卫失效:文件没变零开销,手改后下一单即生效。
-  store.invalidateIfChanged();
-  return store.read().overrides[ghostId] ?? {};
+function createStore() {
+  return createOverrideSettingsFile<GhostCindyPrefs>({
+    filePath: () => ownerScopedUserDataPath(GHOST_CINDY_PREFS_FILE),
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'ghost-cindy-prefs',
+    preserveUnreadableFile: true,
+  });
 }
 
-/**
- * 写/清一项覆盖:model 为 null 即清除(恢复跟随默认,规则 20 语义)。
- * 白名单校验由 IPC 层做(存储层不感知模型清单)。
- */
-export function writeGhostCindyOverride(
-  ghostId: string,
-  capability: CindyCapabilityKey,
-  model: string | null,
-): Partial<Record<CindyCapabilityKey, string>> {
-  // 写前同样失效缓存:避免把用户刚手改的文件内容用旧缓存整体覆写掉。
-  store.invalidateIfChanged();
-  const overrides = { ...store.read().overrides };
-  const caps = { ...(overrides[ghostId] ?? {}) };
-  if (model === null) delete caps[capability];
-  else caps[capability] = model;
-  if (Object.keys(caps).length === 0) delete overrides[ghostId];
-  else overrides[ghostId] = caps;
-  store.writePatch({ overrides });
-  log.info('ghost cindy override written', { ghostId, capability, model });
-  return caps;
-}
+let store = createStore();
 
-/** 读某意识的在途并发上限;null = 未配置 = 不限并发。 */
+/** 读某插件的在途并发上限;null = 未配置 = 不限并发。 */
 export function readGhostCindyInflightLimit(ghostId: string): number | null {
-  // 同上:mtime 守卫现读,手改 ghost-cindy-prefs.json 后下一单即按新上限判。
+  // 本文件是"直接改文件也算配置入口"的隐藏配置(无 UI),读前做 mtime 守卫
+  // 失效:文件没变零开销,手改后下一单即按新上限判。
   store.invalidateIfChanged();
   return store.read().inflightLimits[ghostId] ?? null;
 }
 
 /**
- * 写/清某意识的在途并发上限:limit 为 null 即清除(恢复不限,规则 20 语义)。
+ * 写/清某插件的在途并发上限:limit 为 null 即清除(恢复不限,规则 20 语义)。
  * 只收正整数,非法值直接抛(调用方应在入口校验,这里是最后防线)。
  */
 export function writeGhostCindyInflightLimit(ghostId: string, limit: number | null): void {
+  assertGhostPrefsWritable(GHOST_CINDY_PREFS_FILE);
   if (limit !== null && (!Number.isInteger(limit) || limit < 1)) {
     throw new Error(`inflight limit 必须是正整数或 null,收到:${String(limit)}`);
   }
+  // 写前失效缓存:避免把用户刚手改的文件内容用旧缓存整体覆写掉。
   store.invalidateIfChanged();
   const inflightLimits = { ...store.read().inflightLimits };
   if (limit === null) delete inflightLimits[ghostId];
@@ -174,4 +102,31 @@ export function writeGhostCindyInflightLimit(ghostId: string, limit: number | nu
   log.info('ghost cindy inflight limit written', { ghostId, limit });
 }
 
-export const __testing = { normalize };
+/**
+ * 旧布局迁移专用:文件里仍有 `overrides` 键时返回 ghostId → 旧快问快答钉值
+ * (没有钉快问快答的插件值为 null);已迁移 / 从未有过覆盖 / 文件不可读返回 null。
+ */
+export function readLegacyOneshotPins(): Record<string, string | null> | null {
+  store.invalidateIfChanged();
+  const overrides = store.read().overrides;
+  if (!overrides) return null;
+  return Object.fromEntries(
+    Object.entries(overrides).map(([ghostId, caps]) => [ghostId, caps['text.oneshot'] ?? null]),
+  );
+}
+
+/** 迁移完成后删除旧 `overrides` 键(保留其它键;文件随之为空则整份删除)。 */
+export function clearLegacyOverrides(): void {
+  assertGhostPrefsWritable(GHOST_CINDY_PREFS_FILE);
+  store.invalidateIfChanged();
+  if (!store.read().overrides) return;
+  store.writePatch({ overrides: undefined });
+  log.info('legacy ghost cindy overrides removed after migration');
+}
+
+export const __testing = {
+  normalize,
+  resetStore: () => {
+    store = createStore();
+  },
+};

@@ -1,3 +1,5 @@
+import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
+import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 /** Cindy Bots 的 main-side 权威数据边界。
  *
  * Bot profile 与 Session 归属只在这里写入 SQLite；renderer 只读取投影，
@@ -63,16 +65,18 @@ import {
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
+import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
 import {
   addBotWorkbenchDirectory,
   broadcastBotWorkbenchChanged,
   readBotWorkbench,
-  readBotWorkbenchDirectoryPaths,
   removeBotWorkbenchDirectory,
 } from '../../maker-ipc/botWorkbenchService.js';
 import {
   listBotWorkbenchCandidatesForOwner,
   readBotWorkbenchTaskForOwner,
+  readBotResponsibilityScope,
+  readBotResponsibleSessionIds,
 } from '../../maker-ipc/botWorkbenchTools.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
@@ -104,7 +108,7 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
-import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -406,6 +410,146 @@ export async function ensureBotGroupLaneSession(input: {
   });
   owner.assertCurrent();
   return { ok: true, sessionId: result.sessionId, created: result.created };
+}
+
+export type EnsureBotChannelLaneResult =
+  | { ok: true; sessionId: string; created: boolean }
+  | { ok: false; errorCode: 'BOT_UNAVAILABLE' | 'NO_MODEL'; message: string };
+
+/** Read-only lookup of an active IM channel lane (`role = 'channel'`). */
+export async function findBotChannelLaneSession(botId: string, routeKey: string): Promise<string | null> {
+  const [existing] = await getDbClient()
+    .drizzle.select({ sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks)
+    .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+    .where(and(
+      eq(botSessionLinks.botId, botId),
+      eq(botSessionLinks.role, 'channel'),
+      eq(botSessionLinks.routeKey, routeKey),
+      isNull(botSessionLinks.archivedAt),
+      eq(sessions.source, 'bot'),
+      eq(sessions.status, 'active'),
+    ))
+    .limit(1);
+  return existing?.sessionId ?? null;
+}
+
+/**
+ * The Bot's hidden lane for one personal-IM group / topic (or an admitted guest
+ * DM) once the whole connection is handed to the Bot. Same Profile, Home
+ * workspace, model chain and permission profile as the canonical Chat; never a
+ * second canonical Session and never visible in the task list. Route keys:
+ * `im:<channel>:<botContextId>:g:<chatId>[:t:<threadId>]` / `…:dm:<userId>`.
+ */
+export async function ensureBotChannelLaneSession(input: {
+  botId: string;
+  routeKey: string;
+  title: string;
+}): Promise<EnsureBotChannelLaneResult> {
+  const owner = captureBotOperationOwner();
+  const client = getDbClient();
+  const db = client.drizzle;
+  const existing = await findBotChannelLaneSession(input.botId, input.routeKey);
+  if (existing) return { ok: true, sessionId: existing, created: false };
+  const [profile] = await db.select().from(botProfiles).where(eq(botProfiles.id, input.botId)).limit(1);
+  if (!profile || profile.status !== 'active') {
+    return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴当前不可用' };
+  }
+  const [profileVersion] = await db
+    .select()
+    .from(botProfileVersions)
+    .where(and(
+      eq(botProfileVersions.botId, input.botId),
+      eq(botProfileVersions.version, profile.currentVersion),
+    ))
+    .limit(1);
+  if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
+  const config = parseJson(profileVersion.capabilitiesJson);
+  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
+  if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
+  const workspaceKind = 'dialogue' as const;
+  const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const now = Date.now();
+  const sessionId = resolveBusinessSessionId(undefined);
+  const row = {
+    ...sessionCreateToRow(
+      sessionId,
+      {
+        workspaceKind,
+        workingDir,
+        ...botSessionRouteFields(config, primaryRoute),
+        remoteHostId: undefined,
+        source: 'bot',
+      },
+      now,
+    ),
+    title: input.title,
+  };
+  const gitSafety = readGitSafetySettings();
+  await ensureProjectGitInitialized({
+    workingDir,
+    workspaceKind,
+    remoteHostId: null,
+    sessionId,
+    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+    autoInitProjectGit: gitSafety.autoInitProjectGit,
+    source: 'local-db:bots:create-channel-lane',
+  });
+  owner.assertCurrent();
+  let result: BotGroupsCreateLaneResult;
+  try {
+    result = await client.tx<BotGroupsCreateLaneResult>('bots.createChannelLane', {
+      botId: input.botId,
+      routeKey: input.routeKey,
+      session: {
+        id: row.id,
+        title: row.title,
+        workingDir: row.workingDir ?? null,
+        workspaceKind: row.workspaceKind,
+        model: row.model,
+        effort: row.effort,
+        fastMode: row.fastMode,
+        permissionMode: row.permissionMode,
+        agentKind: row.agentKind,
+        remoteHostId: null,
+        providerId: row.providerId ?? null,
+        extraDirs: row.extraDirs,
+        source: row.source,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      },
+    });
+  } catch (cause) {
+    if ((cause as { code?: unknown } | null)?.code === 'BOT_UNAVAILABLE'
+      || (cause instanceof Error && cause.message.includes('伙伴当前不可用'))) {
+      return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴当前不可用' };
+    }
+    throw cause;
+  }
+  owner.assertCurrent();
+  return { ok: true, sessionId: result.sessionId, created: result.created };
+}
+
+/**
+ * Archive IM channel lanes: one lane (`routeKey`, e.g. `/new` in a group) or a
+ * whole connection (`routeKeyPrefix = im:<channel>:<botContextId>:`), optionally
+ * keeping one Bot's lanes. Returns the archived Session ids so the caller can
+ * release their live runtimes.
+ */
+export async function archiveBotChannelLanes(input: {
+  routeKey?: string;
+  routeKeyPrefix?: string;
+  exceptBotId?: string | null;
+}): Promise<string[]> {
+  const owner = captureBotOperationOwner();
+  const result = await getDbClient().tx<{ archivedSessionIds: string[] }>('bots.archiveChannelLanes', {
+    routeKey: input.routeKey ?? null,
+    routeKeyPrefix: input.routeKeyPrefix ?? null,
+    exceptBotId: input.exceptBotId ?? null,
+    now: Date.now(),
+  });
+  owner.assertCurrent();
+  return result.archivedSessionIds;
 }
 
 /**
@@ -909,6 +1053,7 @@ async function readProfile(
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
       if (!row) return [];
+      const groupId = link.role === 'group' ? parseBotGroupIdFromRouteKey(link.routeKey) : null;
       return [
         {
           id: row.id,
@@ -920,10 +1065,14 @@ async function readProfile(
                 ? 'worker'
                 : link.role === 'group'
                   ? 'group'
-                  : 'history',
+                  : link.role === 'channel'
+                    ? 'channel'
+                    : 'history',
           updatedAt: row.updatedAt,
           status: row.status,
           role: link.role,
+          // 群专线没有自己的页面:通知 / 灵动岛入口要据此回到它所在的群。
+          ...(groupId ? { groupId } : {}),
           profileVersion: link.profileVersion,
           runtimeSnapshot: runtimeBySession.has(row.id)
             ? (() => {
@@ -1544,6 +1693,16 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     else delete nextConfig.gender;
   }
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
+  // Legacy chain-only profiles gain mirrored fields during normalization.
+  // Compare the same representation so unrelated edits do not validate stale routes.
+  if (botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig)) {
+    const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
+    owner.assertCurrent();
+    if (!primary || !await validateTaskModel(primary)) {
+      throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+    }
+    owner.assertCurrent();
+  }
   if (JSON.stringify(previous.taskModelOverride ?? null) !== JSON.stringify(normalizedNextConfig.taskModelOverride ?? null)) {
     const taskModel = readBotTaskModelOverride(normalizedNextConfig.taskModelOverride);
     if (taskModel && !await validateTaskModel(taskModel)) {
@@ -1806,11 +1965,16 @@ export function registerBotIpc(): void {
       .where(eq(botProfiles.id, botId))
       .limit(1);
     if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    // Group lanes only hold hidden group turns; the group chat itself is the user's record.
+    // Group / IM channel lanes only hold hidden channel turns; the group chat or
+    // the IM conversation itself is the user's record.
     const links = await db
       .select({ sessionId: botSessionLinks.sessionId })
       .from(botSessionLinks)
-      .where(and(eq(botSessionLinks.botId, botId), ne(botSessionLinks.role, 'group')));
+      .where(and(
+        eq(botSessionLinks.botId, botId),
+        ne(botSessionLinks.role, 'group'),
+        ne(botSessionLinks.role, 'channel'),
+      ));
     return searchConversations(
       {
         query,
@@ -1830,6 +1994,17 @@ export function registerBotIpc(): void {
 
   ipcMain.handle('local-db:bots:create', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
+    const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    if (body.prepareInvitation === true) {
+      const owner = captureBotOperationOwner();
+      const capabilities = body.capabilities && typeof body.capabilities === 'object' && !Array.isArray(body.capabilities)
+        ? body.capabilities as Record<string, unknown> : {};
+      const [primary] = await readEffectiveBotModelChain(capabilities);
+      owner.assertCurrent();
+      const available = primary && await validateTaskModel(primary);
+      owner.assertCurrent();
+      if (!available) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+    }
     return createBotProfile(raw);
   });
 
@@ -2120,8 +2295,21 @@ export function registerBotIpc(): void {
     const owner = captureBotOperationOwner();
     const workbench = await readBotWorkbench(owner.userDataDir, botId);
     owner.assertCurrent();
-    return workbench;
+    const responsibleSessionIds = await readBotResponsibleSessionIds(owner.userDataDir, botId);
+    owner.assertCurrent();
+    return { ...workbench, responsibleSessionIds };
   });
+  for (const operation of ['list', 'update', 'act'] as const) {
+    ipcMain.handle(`local-db:bots:todos:${operation}`, async (event, rawBotId: unknown, input: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const owner = captureBotOperationOwner();
+      const access = await todoAccess(readText(rawBotId, 'botId', 128, true));
+      owner.assertCurrent();
+      const result = operation === 'list' ? await access.list() : operation === 'update' ? await access.patch(input as TodoPatch)
+        : await access.act((input as {id:string}).id, (input as {revision:number}).revision, (input as {requestId:string}).requestId,(input as {locale?:string}).locale);
+      owner.assertCurrent();return result;
+    });
+  }
   ipcMain.handle('local-db:bots:workbench:add-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
     assertTrustedAppRendererEvent(event);
     const botId = readText(rawBotId, 'botId', 128, true);
@@ -2132,8 +2320,7 @@ export function registerBotIpc(): void {
     if (result.ok) broadcastBotWorkbenchChanged(botId);
     return result;
   });
-  // 侧栏「<伙伴>在跟进」:每个在用的本机伙伴接手了哪些项目。只给路径列表,不做文件系统探测,
-  // 也不带判断与会话内容;渲染层按任务的工作目录自己匹配。
+  // Exact per-task responsibility IDs from the current owner, without message bodies.
   ipcMain.handle('local-db:bots:workbench:follow-scopes', async (event) => {
     assertTrustedAppRendererEvent(event);
     const owner = captureBotOperationOwner();
@@ -2141,12 +2328,13 @@ export function registerBotIpc(): void {
       .select({ id: botProfiles.id })
       .from(botProfiles)
       .where(eq(botProfiles.status, 'active'));
-    const scopes = await Promise.all(bots.map(async (bot) => ({
-      botId: bot.id,
-      directories: await readBotWorkbenchDirectoryPaths(owner.userDataDir, bot.id),
-    })));
+    // Older renderers receive empty directories rather than claiming projects.
+    const scopes = await collectTaskResponsibilityScopes(
+      bots.map((bot) => bot.id),
+      (botId) => readBotResponsibilityScope(owner.userDataDir, botId),
+    );
     owner.assertCurrent();
-    return scopes.filter((scope) => scope.directories.length > 0);
+    return scopes;
   });
   // 工作台详情视图:只读一件任务的最近内容(有界)。范围限于该伙伴已接手的项目,
   // 外部会话只读转录尾部,不写库、不导入。
@@ -2168,12 +2356,14 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return result;
   });
-  ipcMain.handle('local-db:bots:workbench:remove-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
+  ipcMain.handle('local-db:bots:workbench:remove-directory', async (event, rawBotId: unknown, rawPath: unknown, rawDeviceId: unknown) => {
     assertTrustedAppRendererEvent(event);
     const botId = readText(rawBotId, 'botId', 128, true);
     const dirPath = readText(rawPath, 'path', 4096, true);
+    // A folder on another computer (cloud companions) is named by that computer too.
+    const deviceId = readText(rawDeviceId, 'deviceId', 200) || undefined;
     const owner = captureBotOperationOwner();
-    await removeBotWorkbenchDirectory(owner.userDataDir, botId, dirPath);
+    await removeBotWorkbenchDirectory(owner.userDataDir, botId, dirPath, deviceId);
     owner.assertCurrent();
     broadcastBotWorkbenchChanged(botId);
   });

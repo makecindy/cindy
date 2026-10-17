@@ -205,6 +205,8 @@ export interface MobileCodexRateLimitAccount {
 
 /** Display-safe metadata for one banked reset credit; its opaque backend id stays on desktop. */
 export interface MobileCodexRateLimitResetCredit {
+  /** Optional per-credit offer; older hosts/clients keep using the account-level offer. */
+  resetOffer?: MobileCodexRateLimitResetOffer | null;
   status: 'available' | 'redeeming' | 'redeemed' | 'unknown';
   resetType: 'codexRateLimits' | 'unknown';
   grantedAt: number;
@@ -215,6 +217,8 @@ export interface MobileCodexRateLimitResetCredit {
 
 /** Desktop-issued, account-bound reset offer used as the idempotency key for one attempt. */
 export interface MobileCodexRateLimitResetOffer {
+  /** Only retry the existing attempt; do not consume another credit. */
+  retryOnly?: boolean;
   idempotencyKey: string;
   /** Unix epoch seconds for the selected banked credit, when details are available. */
   expiresAt: number | null;
@@ -263,6 +267,7 @@ export interface MobileSessionAgentSwitchResult {
 }
 
 export const MOBILE_REMOTE_INVOKE_CHANNELS = [
+  'ghosts:composer-list',
   'maker:create-session',
   'maker:get-capabilities',
   'maker:provider:list',
@@ -344,6 +349,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:goal:resume',
   'maker:goal:update',
   'maker:fork',
+  'maker:fork-strip-encrypted',
   'maker:get-session-tree',
   'maker:navigate-session-tree',
   'maker:rewind:preview',
@@ -358,6 +364,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:session:enable-orca',
   'maker:session:disable-orca',
   'maker:worker:create',
+  // 只读 Lead 所在电脑视角下的运行设备；旧端拒绝时保留本机 Worker 创建。
+  'maker:orca:execution-devices',
   'maker:worker:switch-focus',
   'maker:worker:acknowledge-done',
   'maker:worker:archive',
@@ -492,10 +500,11 @@ export function relayStatusHint(status: DeviceLinkRelayStatus, lastSyncedAt: num
 /**
  * 镜像 @cindy/device-link 的 DeviceLinkConnectionIssueKind。
  * maker-shared 保持零运行时依赖(与 DeviceLinkRelayStatus 同款处理),两边字面量
- * 必须一致;drift 会被 desktop/mobile 消费处的 TS 赋值检查拦下。
+ * 必须一致;deviceLinkContract.test.ts 校验两处字面量，避免消费端迁移后静默漂移。
  */
 export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
+  | 'device-removed'
   | 'replaced'
   | 'too-many-connections'
   | 'version-mismatch'
@@ -506,6 +515,8 @@ export function connectionIssueTitle(kind: DeviceLinkConnectionIssueKind): strin
   switch (kind) {
     case 'auth-failed':
       return '登录已失效';
+    case 'device-removed':
+      return '设备已移除';
     case 'replaced':
       return '连接被顶替';
     case 'too-many-connections':
@@ -522,6 +533,8 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
   switch (kind) {
     case 'auth-failed':
       return '登录状态已过期，请退出后重新登录。';
+    case 'device-removed':
+      return '请退出后重新登录，以重新加入设备列表。';
     case 'replaced':
       return '本设备的连接被另一处相同设备顶替，正在重新连接。';
     case 'too-many-connections':

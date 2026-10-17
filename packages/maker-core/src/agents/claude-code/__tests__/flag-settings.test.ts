@@ -89,6 +89,31 @@ describe('buildClaudeFlagSettings', () => {
     });
   });
 
+  it('denies disabled downstream MCP servers from the host routing policy', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      capabilityRouting: {
+        overrides: [
+          {
+            capabilityId: 'output-delivery',
+            source: {
+              kind: 'harness-builtin',
+              harness: 'claude-code',
+              surface: 'mcp',
+              id: 'claude.ai Claude Docs',
+            },
+            invocation: 'disabled',
+          },
+        ],
+      },
+    });
+
+    expect(settings.deniedMcpServers).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
+    expect(buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: false }))
+      .not.toHaveProperty('deniedMcpServers');
+  });
+
   it('enforces a Bot Skill allowlist with native Claude skill overrides', () => {
     const settings = buildClaudeFlagSettings({
       showThinkingSummaries: false,

@@ -55,6 +55,10 @@ export const USAGE_TODAY_SPEND_CHANGED = 'usage:today-spend-changed';
 export const USAGE_TODAY_TOKENS_CHANGED = 'usage:today-tokens-changed';
 /** IPC channel: main → renderer 推 Codex 账号订阅用量变化。 */
 export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
+/** Provider-scoped signal emitted when an independent Codex account is about to be replaced. */
+export const USAGE_CODEX_ACCOUNT_AUTH_STARTED = 'usage:codex-account-auth-started';
+/** Provider-scoped signal emitted when the current Codex account credentials are safe to reread. */
+export const USAGE_CODEX_ACCOUNT_AUTH_READY = 'usage:codex-account-auth-ready';
 /** IPC channel: main → renderer 推 xAI(SuperGrok bridge)上游限流快照变化。 */
 export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
 /** 独立 xAI 账号(providerId ≠ 'xai')的限流头推送:{ providerId, snapshot },与本机 hook 同形。 */
@@ -555,6 +559,20 @@ export function recordCodexAccountUsageSnapshot(snapshot: unknown, providerId?: 
 }
 export function clearCodexAccountUsageSnapshot(providerId?: string): Promise<void> {
   return codexUsageStore(providerId).clear();
+}
+/** Notify the matching renderer after the replacement Codex credentials are committed. */
+export function broadcastCodexAccountAuthReady(providerId: string): void {
+  const payload = { providerId };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(USAGE_CODEX_ACCOUNT_AUTH_READY, payload);
+  }
+}
+/** Mark only explicit account replacement as a reason to pause quota reads. */
+export function broadcastCodexAccountAuthStarted(providerId: string): void {
+  const payload = { providerId };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(USAGE_CODEX_ACCOUNT_AUTH_STARTED, payload);
+  }
 }
 export function readCodexAccountUsageSnapshot(providerId?: string): Promise<CodexAccountUsagePayload | null> {
   return codexUsageStore(providerId).read();
@@ -1169,7 +1187,29 @@ export async function readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptio
 
 // ── 内部广播 ─────────────────────────────────────────────────────────────────
 
+/** What changed, for in-process observers such as the macOS menu bar. */
+export type UsageChangeKind = 'spend' | 'tokens' | 'codex' | 'claude' | 'xai' | 'subscription';
+
+const usageChangeObservers = new Set<(kind: UsageChangeKind) => void>();
+
+/** Observes every usage broadcast in main; returns an unsubscribe function. */
+export function observeUsageChanges(listener: (kind: UsageChangeKind) => void): () => void {
+  usageChangeObservers.add(listener);
+  return () => usageChangeObservers.delete(listener);
+}
+
+function notifyUsageObservers(kind: UsageChangeKind): void {
+  for (const listener of usageChangeObservers) {
+    try {
+      listener(kind);
+    } catch (err) {
+      log.warn('usage change observer failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+}
+
 function broadcastTodaySpend(payload: TodaySpendPayload): void {
+  notifyUsageObservers('spend');
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload);
@@ -1178,6 +1218,7 @@ function broadcastTodaySpend(payload: TodaySpendPayload): void {
 }
 
 function broadcastCodexTokens(payload: CodexTokenSnapshot): void {
+  notifyUsageObservers('tokens');
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload);
@@ -1186,6 +1227,7 @@ function broadcastCodexTokens(payload: CodexTokenSnapshot): void {
 }
 
 function broadcastCodexAccountUsage(payload: RateLimitSnapshot | null, providerId = 'openai'): void {
+  notifyUsageObservers('codex');
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       if (providerId === 'openai') win.webContents.send(USAGE_CODEX_ACCOUNT_CHANGED, payload);
@@ -1199,6 +1241,7 @@ function broadcastCodexAccountUsage(payload: RateLimitSnapshot | null, providerI
 }
 
 function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapshot | null): void {
+  notifyUsageObservers('claude');
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
@@ -1210,6 +1253,7 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
 }
 
 export function broadcastSubscriptionAccountUsage(providerId: string, snapshot: ClaudeSubscriptionUsageSnapshot | XaiSubscriptionUsageSnapshot | null): void {
+  notifyUsageObservers('subscription');
   for (const win of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppRendererWindow(win)) continue;
     win.webContents.send('usage:subscription-provider-account-changed', { providerId, snapshot });
@@ -1218,6 +1262,7 @@ export function broadcastSubscriptionAccountUsage(providerId: string, snapshot: 
 }
 
 function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | null): void {
+  notifyUsageObservers('xai');
   for (const win of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppRendererWindow(win)) continue;
     win.webContents.send(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);

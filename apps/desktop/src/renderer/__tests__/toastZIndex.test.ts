@@ -9,8 +9,7 @@
  * even when Modals + Lightboxes are stacked in document.body via Portals,
  * ToastContainer is above the z-[10000] Radix Dialog layer at 10100.
  *
- * Static-source scanning (matches the project convention used by
- * textLightbox.test.ts and imageLightboxCloseAnywhere.test.ts).
+ * Static-source scanning follows the existing renderer contract-test convention.
  */
 
 import { describe, it, expect } from 'vitest';

@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { COMPANION_IMPORT_CHUNK_PRIMITIVE, type CompanionImportSelection, type CompanionImportSubmission } from '@cindy/maker-shared/companion-import';
+import { COMPANION_IMPORT_BOTS_PRIMITIVE, COMPANION_IMPORT_CHUNK_PRIMITIVE, type CompanionImportSelection, type CompanionImportSubmission } from '@cindy/maker-shared/companion-import';
 import { remoteResourceRegistry, RemoteResourceRegistryError } from '../device-link/remoteResourceRegistry.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, readRemoteCompanionImport, submitRemoteCompanionImport } from './host.js';
@@ -30,7 +30,7 @@ export function registerCompanionImport(): void {
       try {
         const id = request.ref.id;
         const data = await readRemoteCompanionImport(id, context.controllerDeviceId,
-          request.client.primitives.includes(COMPANION_IMPORT_CHUNK_PRIMITIVE));
+          request.client.primitives.includes(COMPANION_IMPORT_CHUNK_PRIMITIVE), request.client.primitives.includes(COMPANION_IMPORT_BOTS_PRIMITIVE));
         return { ref: request.ref, revision: '1', display: { title: 'Import' }, links: [],
           blocks: [{ id: 'import', primitive: 'companion-import', fallbackMarkdown: 'Hermes / OpenClaw', data }],
           actions: id.startsWith('preview:') ? [{ id: 'import', label: 'Import' }] : [] };

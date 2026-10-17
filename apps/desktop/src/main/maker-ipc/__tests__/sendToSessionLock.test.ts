@@ -5,6 +5,7 @@ import {
   hasSendToSessionLock,
   trackSendToSessionLockRun,
   withSendToSessionLock,
+  withSessionRestartLock,
 } from '../sendToSessionLock';
 
 const h = vi.hoisted(() => ({
@@ -132,6 +133,7 @@ describe('sendToSessionLock', () => {
     const order: string[] = [];
     const a = withSendToSessionLock('s6', async () => {
       order.push('a:start');
+      // real-wait: keep the first lock holder active while the queued call observes serialization.
       await new Promise((r) => setTimeout(r, 100));
       order.push('a:end');
     });
@@ -224,5 +226,126 @@ describe('sendToSessionLock', () => {
     await third;
     await vi.advanceTimersByTimeAsync(0);
     expect(hasSendToSessionLock('queued-watchdogs')).toBe(false);
+  });
+
+  it('same-chain reentry runs the nested task without deadlocking (reentrancy fix)', async () => {
+    let innerRan = false;
+    const result = await withSendToSessionLock('s-reentry', async () => {
+      // 同链内再取同一把锁：修复前这里会等到 300s bail，修复后直接放行。
+      const nested = await withSendToSessionLock('s-reentry', async () => {
+        innerRan = true;
+        return 'inner-ok';
+      });
+      expect(nested).toBe('inner-ok');
+      expect(innerRan).toBe(true);
+      return 'outer-ok';
+    });
+    expect(result).toBe('outer-ok');
+    expect(innerRan).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock('s-reentry')).toBe(false);
+    // 重入走静默放行（同 ghostInstallLock 惯例）：不应产生任何 bail 类警告。
+    expect(warnMock.mock.calls.some((call) => String(call[0]).includes('bailed out'))).toBe(false);
+  });
+
+  it('a detached background send spawned inside the critical section re-queues after the outer release', async () => {
+    // 模拟 enqueueQueuedMessage 的未等待后台任务：继承 ALS 上下文，但在外层
+    // 释放后才取锁；此时另一个请求已持有同一会话锁，它必须排队而非绕过。
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let bgDone = false;
+    let bgFinished!: Promise<void>;
+    await withSendToSessionLock('s-bg', async () => {
+      bgFinished = gate.then(() =>
+        withSendToSessionLock('s-bg', async () => {
+          bgDone = true;
+        }),
+      );
+    });
+
+    let releaseOther!: () => void;
+    const otherHolding = new Promise<void>((resolve) => {
+      releaseOther = resolve;
+    });
+    const other = withSendToSessionLock('s-bg', () => otherHolding);
+
+    openGate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bgDone).toBe(false);
+
+    releaseOther();
+    await other;
+    await bgFinished;
+    expect(bgDone).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock('s-bg')).toBe(false);
+  });
+
+  it('same-chain reentry still passes when another acquisition is queued behind the holder', async () => {
+    // sendToSessionLocks 存的是队尾：持锁期间到达的另一个请求会立即把自己的
+    // 条目装成队尾。归属判定不能读锁表，否则持锁者的嵌套调用会被排到这个
+    // 等待者之后，重新变成自锁（外层等嵌套、等待者等外层 → 300s bail）。
+    let innerRan = false;
+    let queuedAcquired = false;
+    let releaseQueued!: () => void;
+    const queuedHolding = new Promise<void>((resolve) => {
+      releaseQueued = resolve;
+    });
+    let queuedDone!: Promise<void>;
+
+    await withSendToSessionLock('s-queue', async () => {
+      // 另一个请求（lease 形态，不参与重入放行）在持锁期间开始排队。
+      queuedDone = (async () => {
+        const release = await acquireSendToSessionLock('s-queue');
+        queuedAcquired = true;
+        await queuedHolding;
+        release();
+      })();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(queuedAcquired).toBe(false);
+
+      // 持锁者的同链嵌套必须立即执行，不能排到已排队的请求之后。
+      await withSendToSessionLock('s-queue', async () => {
+        innerRan = true;
+      });
+      expect(innerRan).toBe(true);
+    });
+
+    // 外层释放后，排队请求才取得锁。
+    releaseQueued();
+    await queuedDone;
+    expect(innerRan).toBe(true);
+    expect(queuedAcquired).toBe(true);
+  });
+
+  it('same-chain reentry is refused once a session restart is queued', async () => {
+    // withSessionRestartLock 先登记重启标记再排队；“重启已在等待”与持锁无关，
+    // 重入放行必须继续守栅栏，否则嵌套发送会在重启开始后执行。
+    let nestedRan = false;
+    let releaseRestart!: () => void;
+    const restartHolding = new Promise<void>((resolve) => {
+      releaseRestart = resolve;
+    });
+    let restartDone!: Promise<void>;
+
+    await withSendToSessionLock('s-restart', async () => {
+      restartDone = (async () => {
+        const result = await withSessionRestartLock('s-restart', () => restartHolding);
+        return result;
+      })();
+      // 重启在排队等外层释放，标记已登记。
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(withSendToSessionLock('s-restart', async () => {
+        nestedRan = true;
+      })).rejects.toThrow('Session restart is still in progress');
+      expect(nestedRan).toBe(false);
+    });
+
+    releaseRestart();
+    await restartDone;
+    expect(nestedRan).toBe(false);
   });
 });

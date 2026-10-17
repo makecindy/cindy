@@ -17,12 +17,6 @@ type Registry = {
   readonly size: number;
 };
 
-// 每个用例都经 freshCodexProxyHost() 的 vi.resetModules() + 动态 import 重新加载
-// 整条 SUT 模块链(maker-core / compat-proxy / bridges)。首个用例还要承担全部
-// 依赖的首次编译加载，满载 CI 上会超出 vitest 默认 5s。只放宽本文件的预算，
-// 断言与流程不变。
-vi.setConfig({ testTimeout: 20_000 });
-
 const mockState = vi.hoisted(() => {
   let capturedRegistry: Registry | null = null;
   const state = {
@@ -163,8 +157,19 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
   createResponsesAnthropicHandler: mockState.createResponsesAnthropicHandler,
 }));
 
+// The SUT module graph is loaded once. Each case starts from the production
+// shutdown path (disposeCodexProxy clears session maps, proxy handles and
+// generations) plus the boot-time injections a case may have overridden.
+// Re-importing the whole graph per case instead cost 105s for this file versus
+// ~7s (2026-10-16), and order-shuffled runs confirm cases stay independent.
 async function freshCodexProxyHost() {
-  vi.resetModules();
+  const host = await import('../codex-proxy-host.js');
+  await host.disposeCodexProxy();
+  host.resetCodexThreadUpstreamForTest();
+  host.clearCodexProxyAuthInjection();
+  host.setCodexProxyGatewayKeyReader(() => null);
+  host.setCodexAppliedCustomProviderRoutes([]);
+  for (const fn of Object.values(mockState.logger)) fn.mockClear();
   mockState.createAnthropicCompatProxy.mockReset();
   mockState.createResponsesChatHandler.mockClear();
   mockState.createResponsesAnthropicHandler.mockClear();
@@ -175,15 +180,14 @@ async function freshCodexProxyHost() {
   mockState.stripNonAnthropicFields.mockReturnValue(null);
   mockState.logLevel = 'debug';
   mockState.resetCapturedRegistry();
-  return import('../codex-proxy-host.js');
+  return host;
 }
 
 // CI 忙时本文件首次 import SUT 要付 Vitest transform 整个模块图的冷启动钱:Linux 分片
 // 实测超默认 5s,Windows 分片超 15s。满载 Windows shard 2/2 曾在 60s 文件级 hook
 // 上超时(本文件不 import maker-host/index,与产品改动无关)。这笔成本属于环境
 // 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计;
-// Windows 给 120s,其它平台仍 60s),之后各用例里 resetModules + import 只剩模块
-// 求值开销,回到默认超时内。
+// Windows 给 120s,其它平台仍 60s),之后各用例复用已加载的模块。
 beforeAll(async () => {
   await import('../codex-proxy-host.js');
 }, process.platform === 'win32' ? 120_000 : 60_000);
@@ -466,6 +470,38 @@ describe('codex gateway config', () => {
 });
 
 describe('createCrossProviderCompactionCompatTransform', () => {
+  it('preserves child ciphertext on GPT API routes even when recorded under a subscription parent', async () => {
+    const host = await freshCodexProxyHost();
+    const legacy = 'OLD_SUBSCRIPTION_COLLAB';
+    const oldPart = { type: 'encrypted_content', encrypted_content: legacy };
+    const freshPart = { type: 'encrypted_content', encrypted_content: 'NEW_API_COLLAB' };
+    const readable = { type: 'input_text', text: 'readable result' };
+    const mixed = { type: 'agent_message', id: 'amsg_old', author: 'worker', recipient: 'parent', content: [readable, oldPart, freshPart] };
+    const opaque = { type: 'agent_message', content: [oldPart] };
+    const reasoning = { type: 'reasoning', encrypted_content: legacy };
+    const compaction = { type: 'compaction', encrypted_content: legacy };
+    const tool = { type: 'function_call_output', call_id: 'call_1', output: JSON.stringify(opaque) };
+    const body = { model: 'openai/gpt-6-luna', input: [mixed, opaque, reasoning, compaction, tool] };
+    const before = structuredClone(body);
+    host.registerComposed('legacy-session', 'legacy-thread', 'PRODUCT_PROMPT');
+    const transform = host.createCrossProviderCompactionCompatTransform();
+    const ctx = { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1', headers: { 'thread-id': 'legacy-thread' } };
+    expect(transform(body, ctx)).toBeNull();
+    expect(body).toEqual(before);
+    expect(transform(body, { ...ctx, upstreamBase: 'https://chatgpt.com/backend-api/codex' })).toBeNull();
+    expect(transform(body, { ...ctx, headers: { 'thread-id': 'unrelated-thread' } })).toBeNull();
+    expect(host.registerChildThread('legacy-thread', 'child-thread')).toBe(true);
+    expect(transform(body, { ...ctx, headers: { 'thread-id': 'child-thread' } })).toBeNull();
+    const onlyNew = { model: body.model, input: [{ ...mixed, content: [freshPart] }] };
+    expect(transform(onlyNew, ctx)).toBeNull();
+    expect(transform(onlyNew, { ...ctx, headers: { 'thread-id': 'child-thread' } })).toBeNull();
+    host.unregister('legacy-session');
+    expect(transform(body, ctx)).toBeNull();
+    expect(transform(body, { ...ctx, headers: { 'thread-id': 'child-thread' } })).toBeNull();
+    host.registerComposed('new-session', 'legacy-thread', 'PRODUCT_PROMPT');
+    expect(transform(body, ctx)).toBeNull();
+    host.unregister('new-session');
+  });
   const CTX_BASE = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 't-1' } };
   const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
   const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
@@ -1582,7 +1618,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         },
       };
       const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-      const forcedRouteTransform = transforms[3];
+      const forcedRouteTransform = transforms[4];
       if (!forcedRouteTransform) throw new Error('expected locked Subagent route transform');
       mockState.injectionTransform.mockImplementationOnce((body) => {
         // 首个 collab_spawn 请求必须先懒登记血缘，同一轮 instructions transform 才能
@@ -1672,7 +1708,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         },
       )).toBeNull();
 
-      const execGuardTransform = transforms[5];
+      const execGuardTransform = transforms[6];
       if (!execGuardTransform) throw new Error('expected locked Subagent exec guard transform');
       const guarded = execGuardTransform({
         model: 'deepseek/deepseek-v4-flash',
@@ -1769,7 +1805,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         },
       };
       const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-      const forcedRouteTransform = transforms[3];
+      const forcedRouteTransform = transforms[4];
       if (!forcedRouteTransform) throw new Error('expected smart Subagent route transform');
       expect(forcedRouteTransform({
         model: 'smart/model-cheap',
@@ -2693,7 +2729,7 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
@@ -2701,6 +2737,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), // frozen custom-provider effort
+          expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3512,8 +3549,8 @@ describe('codex proxy host', () => {
     setSessionProvider('session-openai-review', 'openai');
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    // active strips ×2, then provider-aware Guardian rewrite。
-    const reviewerTransform = transforms[2];
+    // armed HTTP recovery strip, active strips ×2, then provider-aware Guardian rewrite。
+    const reviewerTransform = transforms[3];
     if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
     const body = { model: 'codex-auto-review', input: [{ role: 'user', content: 'review' }] };
     const guardianHeaders = (parentThreadId: string) => ({
@@ -3580,7 +3617,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    const reviewerTransform = transforms[2];
+    const reviewerTransform = transforms[3];
     if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
     expect(reviewerTransform(
       { model: 'codex-auto-review', input: [] },
@@ -4135,6 +4172,66 @@ describe('codex proxy host', () => {
       model: 'codex/gpt-5.6-sol',
       tools: [{ type: 'web_search', external_web_access: false }],
     });
+  });
+
+  it.each(['search', 'open_page', 'find_in_page'])(
+    'replays GPT-6.1 Sol %s history with native web_search on the Gateway route only',
+    async (actionType) => {
+      const host = await freshCodexProxyHost();
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const input = [
+        { type: 'web_search_call', status: 'completed', action: { type: actionType } },
+        { role: 'user', content: 'Continue' },
+      ];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'search-history-thread' } };
+      const apply = (request: unknown): unknown => {
+        let current = request;
+        for (const transform of transforms) {
+          const next = transform(current, ctx);
+          if (next !== null && next !== undefined) current = next;
+        }
+        return current;
+      };
+
+      expect(apply({ model: 'openai-codex/gpt-6.1-sol', input, tools: [{ type: 'function', name: 'read_file' }] }))
+        .toMatchObject({ input, tools: [{ type: 'function', name: 'read_file' }, { type: 'web_search' }] });
+      expect(apply({ model: 'openai-codex/gpt-6.1-sol', input, tools: [{ type: 'web_search', external_web_access: false }] }))
+        .toMatchObject({ input, tools: [{ type: 'web_search', external_web_access: false }] });
+      expect(apply({ model: 'openai-codex/gpt-6.1-sol', input: [{ role: 'user', content: 'Hello' }] }))
+        .not.toHaveProperty('tools');
+      for (const status of ['in_progress', 'failed']) {
+        expect(apply({
+          model: 'openai-codex/gpt-6.1-sol',
+          input: [{ type: 'web_search_call', status, action: { type: actionType } }],
+        })).not.toHaveProperty('tools');
+      }
+      expect(apply({ model: 'openai-codex/gpt-6.1-luna', input })).not.toHaveProperty('tools');
+    },
+  );
+
+  it('does not add GPT-6.1 search declaration to the subscription OAuth route', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'gpt-6.1-sol',
+      input: [{ type: 'web_search_call', status: 'completed', action: { type: 'search' } }],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'oauth-search-history-thread' } };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+    expect(current).not.toHaveProperty('tools');
   });
 
   it('keeps the codex/ budget prefix on the wire for an explicit Gateway session (no silent tier rewrite)', async () => {
@@ -6756,7 +6853,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(26); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(27); // ordinary transforms + dump + frozen custom-provider effort
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

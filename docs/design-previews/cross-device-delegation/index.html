@@ -1,0 +1,1903 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>Cindy · 协同 Worker 跨设备运行原型</title>
+    <style>
+      /* Standalone preview aliases: DESIGN.md §§2–5, 10, 14. No application wiring. */
+      :root {
+        color-scheme: light;
+        --surface: #f8f8f6;
+        --surface-elevated: #fff;
+        --surface-chip: #e5e5e5;
+        --border-default: #d7d7d4;
+        --text-primary: #262626;
+        --text-secondary: #737373;
+        --text-tertiary: #a3a3a3;
+        --status-running: #bc570e;
+        --status-success: #258147;
+        --status-error: #c72c40;
+        --focus-ring: #417cdd;
+        --overlay: rgb(38 38 38 / 0.22);
+      }
+      [data-theme="dark"] {
+        color-scheme: dark;
+        --surface: #1f1f1e;
+        --surface-elevated: #2c2c2a;
+        --surface-chip: #3c3c3a;
+        --border-default: #3c3c3a;
+        --text-primary: #d4d4d4;
+        --text-secondary: #a3a3a3;
+        --text-tertiary: #858581;
+        --status-running: #f49a52;
+        --status-success: #78c18d;
+        --status-error: #f18c97;
+        --overlay: rgb(0 0 0 / 0.45);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          14px/1.6 Inter,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "Microsoft YaHei",
+          sans-serif;
+        color: var(--text-primary);
+        background: var(--surface);
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      button,
+      select {
+        cursor: pointer;
+      }
+      button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 32px;
+        border: 1px solid var(--border-default);
+        border-radius: 9999px;
+        padding: 4px 13px;
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 22px;
+        background: var(--surface-elevated);
+        transition: background 150ms;
+      }
+      button:hover:not(:disabled) {
+        background: color-mix(
+          in srgb,
+          var(--surface-elevated),
+          var(--text-primary) 8%
+        );
+      }
+      button:active:not(:disabled) {
+        background: color-mix(
+          in srgb,
+          var(--surface-elevated),
+          var(--text-primary) 16%
+        );
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      button.primary {
+        background: var(--surface-chip);
+        border-color: var(--surface-chip);
+      }
+      button.primary:hover:not(:disabled) {
+        background: color-mix(
+          in srgb,
+          var(--surface-chip),
+          var(--text-primary) 8%
+        );
+      }
+      button.ghost {
+        background: transparent;
+        border-color: transparent;
+      }
+      button.small {
+        min-height: 28px;
+        padding: 2px 10px;
+        font-size: 12px;
+        line-height: 20px;
+      }
+      .icon-button {
+        padding: 0;
+        width: 32px;
+        height: 32px;
+        flex-shrink: 0;
+      }
+      .icon-button.small {
+        width: 28px;
+        height: 28px;
+        min-height: 28px;
+        padding: 0;
+      }
+      :focus-visible {
+        outline: 2px solid var(--focus-ring);
+        outline-offset: 3px;
+      }
+      svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        flex-shrink: 0;
+        vertical-align: middle;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1,
+      h2,
+      h3 {
+        font-weight: 500;
+      }
+      .muted {
+        color: var(--text-secondary);
+      }
+      .micro {
+        font-size: 12px;
+        line-height: 20px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      .ellipsis {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        background: var(--surface-chip);
+        border-radius: 4px;
+        padding: 1px 5px;
+        overflow-wrap: anywhere;
+      }
+      /* ---------- prototype bar ---------- */
+      .prototype {
+        min-height: 56px;
+        padding: 8px 20px;
+        border-bottom: 1px solid var(--border-default);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        background: var(--surface-elevated);
+      }
+      .prototype-title {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .prototype-note {
+        font-size: 11px;
+        color: var(--text-secondary);
+      }
+      .prototype-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      select,
+      input[type="text"] {
+        height: 34px;
+        border: 1px solid var(--border-default);
+        background: var(--surface-elevated);
+        border-radius: 9999px;
+        padding: 5px 12px;
+        font-size: 13px;
+        max-width: 100%;
+      }
+      .prototype select {
+        height: 32px;
+        width: 210px;
+      }
+      .scene-help {
+        min-height: 40px;
+        border-top: 1px solid var(--border-default);
+        padding: 9px 20px;
+        background: var(--surface-elevated);
+        font-size: 12px;
+        line-height: 20px;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      /* ---------- app frame ---------- */
+      .app {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr) minmax(380px, 460px);
+        height: calc(100dvh - 96px);
+        min-height: 620px;
+      }
+      .sidebar {
+        padding: 18px 12px 12px;
+        border-right: 1px solid var(--border-default);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .brand {
+        font-size: 20px;
+        font-weight: 500;
+        letter-spacing: -0.8px;
+        padding: 0 12px 18px;
+      }
+      .brand small {
+        font-size: 11px;
+        letter-spacing: 0;
+        margin-left: 8px;
+        color: var(--text-secondary);
+        font-weight: 400;
+      }
+      .nav-label {
+        margin: 20px 12px 6px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+      .nav-item {
+        width: 100%;
+        justify-content: flex-start;
+        text-align: left;
+        min-height: 36px;
+        background: transparent;
+        border: 0;
+        padding: 7px 12px;
+        font-weight: 400;
+        border-radius: 10px;
+      }
+      .nav-item.selected {
+        background: var(--surface-chip);
+        font-weight: 500;
+      }
+      .nav-sub {
+        padding: 0 12px 4px 36px;
+        font-size: 11px;
+        line-height: 18px;
+        color: var(--text-secondary);
+      }
+      .nav-spacer {
+        flex: 1;
+        min-height: 30px;
+      }
+      .device-row {
+        padding: 6px 12px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 12px;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--status-success);
+        flex-shrink: 0;
+      }
+      .dot.off {
+        background: var(--text-tertiary);
+      }
+      .dot.run {
+        background: var(--status-running);
+      }
+      .dot.err {
+        background: var(--status-error);
+      }
+      .pane {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane-header {
+        min-height: 56px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 24px;
+        border-bottom: 1px solid var(--border-default);
+      }
+      .pane-header h1 {
+        font-size: 14px;
+        line-height: 22px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        line-height: 18px;
+        color: var(--text-secondary);
+      }
+      .chip svg {
+        width: 13px;
+        height: 13px;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        line-height: 18px;
+        padding: 0 7px;
+        border-radius: 9999px;
+        background: var(--surface-chip);
+        color: var(--text-secondary);
+        white-space: nowrap;
+      }
+      .tag svg {
+        width: 12px;
+        height: 12px;
+      }
+      .messages {
+        flex: 1;
+        overflow: auto;
+        padding: 26px 28px 18px;
+        scrollbar-gutter: stable;
+      }
+      .thread {
+        width: min(100%, 700px);
+        margin: 0 auto;
+      }
+      .time-divider {
+        text-align: center;
+        font-size: 11px;
+        color: var(--text-secondary);
+        margin-bottom: 22px;
+      }
+      .user-message {
+        margin: 0 0 24px auto;
+        max-width: 560px;
+        width: fit-content;
+        border-radius: 12px;
+        background: var(--surface-chip);
+        padding: 11px 15px;
+        font-size: 14px;
+        line-height: 24px;
+        overflow-wrap: anywhere;
+      }
+      .msg-source {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        line-height: 18px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+      }
+      .msg-source svg {
+        width: 12px;
+        height: 12px;
+      }
+      .assistant-label {
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        margin-bottom: 8px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .assistant-label svg {
+        width: 14px;
+        height: 14px;
+      }
+      .assistant-text {
+        line-height: 25px;
+        margin-bottom: 14px;
+        overflow-wrap: anywhere;
+      }
+      .tool {
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        background: var(--surface-elevated);
+        padding: 9px 12px;
+        margin: 0 0 12px;
+        font-size: 12px;
+        line-height: 20px;
+      }
+      .tool-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .tool-head svg {
+        width: 14px;
+        height: 14px;
+      }
+      .tool-body {
+        margin-top: 4px;
+        color: var(--text-secondary);
+        overflow-wrap: anywhere;
+      }
+      .tool.error .tool-state {
+        color: var(--status-error);
+      }
+      .tool.ok .tool-state {
+        color: var(--status-success);
+      }
+      .report {
+        border-left: 2px solid var(--border-default);
+        padding: 2px 0 2px 14px;
+        margin: 6px 0 18px;
+      }
+      .report-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        font-size: 12px;
+        line-height: 20px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+      }
+      .report-head b {
+        color: var(--text-primary);
+        font-weight: 500;
+      }
+      .notice {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        font-size: 12px;
+        line-height: 20px;
+        color: var(--text-secondary);
+        margin: 0 0 16px;
+      }
+      .notice svg {
+        width: 14px;
+        height: 14px;
+        margin-top: 3px;
+      }
+      .notice.warn {
+        color: var(--status-running);
+      }
+      .notice.error {
+        color: var(--status-error);
+      }
+      .composer-wrap {
+        padding: 10px 24px 16px;
+      }
+      .composer {
+        background: var(--surface-elevated);
+        border: 1px solid var(--border-default);
+        border-radius: 12px;
+        padding: 8px 10px;
+        width: min(100%, 720px);
+        margin: 0 auto;
+      }
+      .composer textarea {
+        width: 100%;
+        min-height: 40px;
+        max-height: 120px;
+        border: 0;
+        padding: 4px;
+        background: transparent;
+        resize: none;
+        font-size: 14px;
+        line-height: 22px;
+        outline: none;
+      }
+      .composer-tools {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      .composer-note {
+        text-align: center;
+        font-size: 11px;
+        line-height: 18px;
+        color: var(--text-secondary);
+        margin-top: 6px;
+      }
+      /* ---------- collab panel ---------- */
+      .collab {
+        border-left: 1px solid var(--border-default);
+        background: color-mix(
+          in srgb,
+          var(--surface),
+          var(--surface-elevated) 40%
+        );
+      }
+      .rsb-tabs {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 0 10px;
+        border-bottom: 1px solid var(--border-default);
+        font-size: 12px;
+      }
+      .rsb-tabs span {
+        padding: 3px 10px;
+        border-radius: 9999px;
+        color: var(--text-secondary);
+      }
+      .rsb-tabs span.on {
+        background: var(--surface-chip);
+        color: var(--text-primary);
+        font-weight: 500;
+      }
+      .worker-strip {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 40px;
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--border-default);
+        overflow-x: auto;
+      }
+      .worker-tab {
+        min-height: 30px;
+        padding: 2px 10px;
+        font-size: 12px;
+        font-weight: 400;
+        border-color: transparent;
+        background: transparent;
+        white-space: nowrap;
+        gap: 6px;
+      }
+      .worker-tab[aria-selected="true"] {
+        background: var(--surface-chip);
+        font-weight: 500;
+      }
+      .worker-tab svg {
+        width: 13px;
+        height: 13px;
+      }
+      .worker-tab .where {
+        color: var(--text-secondary);
+        font-weight: 400;
+      }
+      .worker-tab.archived {
+        text-decoration: line-through;
+        color: var(--text-tertiary);
+      }
+      .worker-info {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-default);
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        line-height: 20px;
+      }
+      .worker-info .row {
+        flex-wrap: wrap;
+        gap: 6px 10px;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+        color: var(--text-secondary);
+      }
+      .status.running,
+      .status.waiting {
+        color: var(--status-running);
+      }
+      .status.done {
+        color: var(--status-success);
+      }
+      .status.error {
+        color: var(--status-error);
+      }
+      .status .dot {
+        background: currentColor;
+      }
+      .collab .messages {
+        padding: 18px 16px 12px;
+      }
+      .collab .user-message {
+        font-size: 13px;
+        line-height: 22px;
+        max-width: 92%;
+      }
+      .collab .assistant-text {
+        font-size: 13px;
+        line-height: 23px;
+      }
+      .collab .composer-wrap {
+        padding: 8px 12px 12px;
+      }
+      .approval {
+        border: 1px solid var(--status-running);
+        border-radius: 12px;
+        background: var(--surface-elevated);
+        padding: 12px 14px;
+        margin: 0 0 14px;
+        font-size: 13px;
+        line-height: 22px;
+      }
+      .approval .actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .empty {
+        height: 100%;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        padding: 24px;
+        color: var(--text-secondary);
+        font-size: 13px;
+      }
+      /* ---------- dialog ---------- */
+      dialog {
+        color: var(--text-primary);
+        background: var(--surface-elevated);
+        border: 1px solid var(--border-default);
+        border-radius: 16px;
+        padding: 0;
+        max-height: 90dvh;
+        width: min(500px, calc(100vw - 24px));
+        overflow: auto;
+      }
+      dialog::backdrop {
+        background: var(--overlay);
+      }
+      .dialog-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px 20px 6px;
+      }
+      .dialog-header h2 {
+        font-size: 15px;
+      }
+      .dialog-content {
+        padding: 6px 20px 8px;
+        display: grid;
+        gap: 16px;
+      }
+      .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 8px 20px 18px;
+      }
+      .field-label {
+        font-size: 12px;
+        line-height: 20px;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .pills button {
+        min-height: 28px;
+        padding: 2px 12px;
+        font-size: 12px;
+        font-weight: 400;
+      }
+      .pills button[aria-checked="true"] {
+        background: var(--surface-chip);
+        border-color: var(--surface-chip);
+        font-weight: 500;
+      }
+      .device-list {
+        display: grid;
+        gap: 4px;
+      }
+      .device-option {
+        width: 100%;
+        justify-content: flex-start;
+        border-radius: 10px;
+        border-color: var(--border-default);
+        padding: 7px 12px;
+        font-weight: 400;
+        gap: 10px;
+        text-align: left;
+      }
+      .device-option[aria-checked="true"] {
+        border-color: var(--text-secondary);
+        background: var(--surface-chip);
+        font-weight: 500;
+      }
+      .device-option small {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text-secondary);
+        font-weight: 400;
+        white-space: nowrap;
+      }
+      .hint {
+        font-size: 11px;
+        line-height: 18px;
+        color: var(--text-secondary);
+        margin-top: 6px;
+      }
+      .field-error {
+        font-size: 12px;
+        line-height: 20px;
+        color: var(--status-error);
+        margin-top: 6px;
+      }
+      .dialog-content select,
+      .dialog-content input[type="text"] {
+        width: 100%;
+        color: var(--text-primary);
+      }
+      .dialog-content textarea {
+        width: 100%;
+        height: 92px;
+        resize: none;
+        border: 1px solid var(--border-default);
+        border-radius: 12px;
+        background: transparent;
+        padding: 9px 13px;
+        font-size: 13px;
+        line-height: 21px;
+        color: var(--text-primary);
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--border-default);
+        border-radius: 9999px;
+        padding: 2px;
+        gap: 2px;
+      }
+      .seg button {
+        min-height: 26px;
+        border: 0;
+        padding: 1px 12px;
+        font-size: 12px;
+        font-weight: 400;
+        background: transparent;
+      }
+      .seg button[aria-checked="true"] {
+        background: var(--surface-chip);
+        font-weight: 500;
+      }
+      .toast {
+        position: fixed;
+        bottom: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 9px 16px;
+        border: 1px solid var(--border-default);
+        border-radius: 12px;
+        background: var(--surface-elevated);
+        font-size: 13px;
+        z-index: 5;
+        max-width: 90vw;
+      }
+      .mobile-switch {
+        display: none;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 1100px) {
+        .app {
+          grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+        }
+        .sidebar {
+          display: none;
+        }
+      }
+      @media (max-width: 760px) {
+        .app {
+          grid-template-columns: 1fr;
+          height: calc(100dvh - 176px);
+        }
+        .app[data-view="lead"] .collab,
+        .app[data-view="collab"] .lead {
+          display: none;
+        }
+        .collab {
+          border-left: 0;
+        }
+        .mobile-switch {
+          display: flex;
+          justify-content: center;
+          padding: 8px 14px;
+          border-bottom: 1px solid var(--border-default);
+        }
+        .prototype {
+          flex-wrap: wrap;
+          padding: 8px 14px;
+          gap: 8px;
+        }
+        .prototype-note {
+          display: none;
+        }
+        .prototype-controls {
+          width: 100%;
+        }
+        .prototype select {
+          flex: 1;
+          min-width: 0;
+          width: auto;
+        }
+        .pane-header {
+          padding: 10px 16px;
+        }
+        .messages {
+          padding: 18px 14px;
+        }
+        .composer-wrap {
+          padding: 8px 14px 12px;
+        }
+        .scene-help {
+          padding: 8px 14px;
+          align-items: flex-start;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="prototype">
+      <div>
+        <div class="prototype-title">
+          协同 · Worker 跨设备运行
+          <span class="muted">/ 交互原型 03</span>
+        </div>
+        <div class="prototype-note">
+          演示数据，不连接设备。Lead 在 XD-PC，Worker「转写」在 Mac mini 运行
+        </div>
+      </div>
+      <div class="prototype-controls">
+        <select id="scene" aria-label="演示场景">
+          <option value="create">01 · 创建 Worker：选运行设备</option>
+          <option value="running" selected>02 · 远端 Worker 运行中</option>
+          <option value="approval">03 · 远端需要授权确认</option>
+          <option value="offline">04 · Mac mini 断线</option>
+          <option value="reconnected">05 · 重新连上，补发回报</option>
+          <option value="reported">06 · 回报送达，Lead 继续</option>
+          <option value="interject">07 · 在 Mac mini 上插话</option>
+          <option value="dispatchFail">08 · 派活时 Mac mini 离线</option>
+          <option value="leadStopped">09 · Lead 已停止，回报保留</option>
+          <option value="archived">10 · 归档远端 Worker</option>
+          <option value="targetView">11 · Mac mini 上看到的样子</option>
+        </select>
+        <button
+          id="theme"
+          class="icon-button"
+          aria-label="切换深色模式"
+          title="切换深色模式"
+        ></button>
+        <button
+          id="reset"
+          class="icon-button"
+          aria-label="重置演示"
+          title="重置演示"
+        ></button>
+      </div>
+    </header>
+    <div class="mobile-switch" id="mobile-switch">
+      <div class="seg" role="radiogroup" aria-label="显示区域">
+        <button role="radio" data-mobile="lead" aria-checked="false">
+          Lead</button
+        ><button role="radio" data-mobile="collab" aria-checked="true">
+          协同
+        </button>
+      </div>
+    </div>
+    <div class="app" id="app" data-view="collab">
+      <aside class="sidebar" aria-label="任务列表" id="sidebar"></aside>
+      <main class="pane lead" id="lead"></main>
+      <aside class="pane collab" id="collab" aria-label="协同"></aside>
+    </div>
+    <footer class="scene-help">
+      <span data-icon="info"></span><span id="scene-help"></span>
+    </footer>
+
+    <dialog id="create" aria-labelledby="create-title">
+      <header class="dialog-header">
+        <h2 id="create-title">创建新 Worker</h2>
+        <button
+          class="icon-button ghost small"
+          data-close="create"
+          aria-label="关闭创建 Worker 弹窗"
+          title="关闭"
+        >
+          ×
+        </button>
+      </header>
+      <div class="dialog-content" id="create-content"></div>
+      <div class="dialog-actions">
+        <button data-close="create">取消</button>
+        <button class="primary" id="create-submit">创建 Worker</button>
+      </div>
+    </dialog>
+
+    <dialog id="archive" aria-labelledby="archive-title">
+      <header class="dialog-header">
+        <h2 id="archive-title">归档 Worker 转写？</h2>
+      </header>
+      <div class="dialog-content">
+        <p class="micro">
+          它会从这个协同里移除，并停止 Mac mini 上正在进行的这一轮。Mac mini
+          上的任务、记录和文件都会保留，标注「协同已结束」，可以在那台继续查看。
+        </p>
+      </div>
+      <div class="dialog-actions">
+        <button data-close="archive">取消</button>
+        <button id="archive-confirm">归档 Worker</button>
+      </div>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const paths = {
+        info: "M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+        moon: "M20 15A9 9 0 0 1 9 3a9 9 0 1 0 11 12",
+        sun: "M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
+        reset: "M3 10a9 9 0 1 1 1 7M3 4v6h6",
+        spark: "M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z",
+        monitor: "M4 3h16v12H4zM8 21h8M12 15v6",
+        laptop: "M5 4h14v12H5zM2 20h20l-3-4H5z",
+        message:
+          "M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3v-3H3V6a2 2 0 0 1 2-2Z",
+        plus: "M12 5v14M5 12h14",
+        up: "M12 19V5M5 12l7-7 7 7",
+        tool: "M14 6l4 4M4 20l7-7M15 3l6 6-9 9-6-6z",
+        folder: "M3 7V4h6l3 3h9v13H3z",
+        shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+        link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+        offline:
+          "M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5-2.7M19 12.9a10 10 0 0 0-2.3-1.6M12 20h.01",
+        reply: "M9 14 4 9l5-5M4 9h11a5 5 0 0 1 5 5v6",
+        stop: "M7 7h10v10H7z",
+        archive: "M3 4h18v4H3zM5 8v12h14V8M10 12h4",
+        users:
+          "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 12 0v1M16 3.1a4 4 0 0 1 0 7.8M22 21v-1a6 6 0 0 0-4-5.7",
+      };
+      const icon = (n) =>
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' +
+        (paths[n] || paths.info) +
+        '"/></svg>';
+      const esc = (v) =>
+        String(v).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      document
+        .querySelectorAll("[data-icon]")
+        .forEach((el) => (el.innerHTML = icon(el.dataset.icon)));
+      $("#theme").innerHTML = icon("moon");
+      $("#reset").innerHTML = icon("reset");
+
+      const HERE = "XD-PC";
+      const DEVICES = [
+        { id: "local", name: "这台电脑", detail: "XD-PC", icon: "laptop" },
+        { id: "macmini", name: "Mac mini", detail: "在线", icon: "monitor" },
+        { id: "office", name: "工作电脑", detail: "在线", icon: "monitor" },
+        {
+          id: "old",
+          name: "旧笔记本",
+          detail: "版本过旧，需更新",
+          icon: "monitor",
+          disabled: true,
+        },
+      ];
+      const MODELS = {
+        local: ["Claude Sonnet 5", "Claude Opus 5.5"],
+        macmini: [
+          "Claude Opus 5.5 · Mac mini 的订阅",
+          "Claude Sonnet 5 · Mac mini 的订阅",
+        ],
+        office: ["GPT-5.5 · 工作电脑的 API key"],
+      };
+      const deviceName = (id) =>
+        id === "local" ? HERE : DEVICES.find((d) => d.id === id).name;
+
+      const STATUS = {
+        running: ["运行中", "running"],
+        waiting: ["待确认", "waiting"],
+        unreachable: ["无法获取状态", ""],
+        done: ["已回报", "done"],
+        idle: ["空闲", ""],
+        archived: ["已归档", ""],
+      };
+      const TASK =
+        "转写 ~/Interviews/2026-10-09.mp4，区分说话人 A / B，生成完整逐字稿和带时间点的摘要，两份 Markdown 放在同目录。完成后告诉我文件路径和摘要要点。";
+
+      const HELP = {
+        create:
+          "运行设备默认「这台电脑」。只列出同账号、在线、开启了「允许远程控制」的电脑；版本过旧的不可选。选其他电脑后，模型按那台可用的列出，工作目录也指那台上的目录。",
+        running:
+          "Worker 的任务、目录、命令都在 Mac mini。标签上标出设备；点开看到的是 Mac mini 上的任务，可以直接发消息。",
+        approval:
+          "远端的授权确认在这里也能处理，Mac mini 上同样可见，先处理的生效。Lead 的标签上出现待处理提醒。",
+        offline: "断线不判失败、不重派。保留最后已知状态，等重新连上后核对。",
+        reconnected:
+          "重连后读取 Mac mini 上任务的真实状态：断线期间已完成的那一轮，补发回报给 Lead，只发一次。",
+        reported:
+          "回报沿用现有协同自动回报：取 Worker 这一轮的最后回复，送进 Lead 队列，Lead 被唤起后继续。",
+        interject:
+          "在 Mac mini 上直接给这个任务发的消息按插话处理：Worker 照常回复，但不算 Lead 派活，不会回报给 Lead。",
+        dispatchFail:
+          "派活时目标电脑离线，直接失败并告诉 Lead，不排队等对方上线，避免 Lead 误以为已经派出。",
+        leadStopped:
+          "Lead 停止后，远端 Worker 不受影响；回报保留在 Lead 队列里，不会自动启动 Lead。",
+        archived:
+          "归档只把 Worker 移出协同并停止当前一轮；Mac mini 上的任务和文件保留，标注协同已结束。",
+        targetView:
+          "Mac mini 上，这个任务出现在侧栏，标注来自 XD-PC 的协同，显示实际权限档；不能在这里再开启协同或复制到其他电脑。",
+      };
+
+      const fresh = () => ({
+        scene: "running",
+        focused: "transcribe",
+        workers: [
+          {
+            id: "frontend",
+            name: "前端",
+            device: "local",
+            status: "running",
+            agent: "Codex",
+            model: "GPT-5.5",
+            perm: "自动审批",
+            dir: "D:/projects/report-site",
+          },
+          {
+            id: "transcribe",
+            name: "转写",
+            device: "macmini",
+            status: "running",
+            agent: "Claude Code",
+            model: "Claude Opus 5.5 · Mac mini 的订阅",
+            perm: "自动审批",
+            dir: "/Users/demo/Interviews",
+          },
+        ],
+        leadStopped: false,
+        form: null,
+        sent: [],
+      });
+      let state = fresh();
+      let toastTimer;
+      function toast(t) {
+        clearTimeout(toastTimer);
+        $("#toast").textContent = t;
+        $("#toast").hidden = false;
+        toastTimer = setTimeout(() => ($("#toast").hidden = true), 3200);
+      }
+      const W = (id) => state.workers.find((w) => w.id === id);
+      const sceneIs = (...s) => s.includes(state.scene);
+
+      function applyScene(s) {
+        state = fresh();
+        state.scene = s;
+        const t = W("transcribe");
+        if (s === "approval") t.status = "waiting";
+        if (s === "offline" || s === "dispatchFail") t.status = "unreachable";
+        if (s === "reconnected" || s === "reported" || s === "leadStopped")
+          t.status = "done";
+        if (s === "interject") t.status = "running";
+        if (s === "leadStopped") state.leadStopped = true;
+        if (s === "archived") t.status = "archived";
+        if (s === "create") {
+          state.workers = state.workers.filter((w) => w.id !== "transcribe");
+          state.focused = "frontend";
+        }
+        render();
+        if (s === "create") openCreate();
+      }
+
+      /* ---------- sidebar ---------- */
+      function renderSidebar() {
+        const target = state.scene === "targetView";
+        $("#sidebar").innerHTML =
+          '<div class="brand">Cindy <small>' +
+          (target ? "Mac mini" : HERE) +
+          "</small></div>" +
+          '<div class="nav-label">任务</div>' +
+          (target
+            ? '<button class="nav-item">' +
+              icon("message") +
+              '<span class="ellipsis">整理家庭照片</span></button>' +
+              '<button class="nav-item selected">' +
+              icon("users") +
+              '<span class="ellipsis">Worker · 转写</span></button>' +
+              '<div class="nav-sub">来自 XD-PC 的协同</div>'
+            : '<button class="nav-item selected">' +
+              icon("message") +
+              '<span class="ellipsis">整理产品访谈报告</span></button>' +
+              '<div class="nav-sub">协同 · ' +
+              state.workers.filter((w) => w.status !== "archived").length +
+              " 个 Worker</div>" +
+              '<button class="nav-item">' +
+              icon("message") +
+              '<span class="ellipsis">周报</span></button>') +
+          '<div class="nav-spacer"></div><div class="nav-label">已连接的电脑</div>' +
+          '<div class="device-row">' +
+          icon(target ? "monitor" : "laptop") +
+          '<span class="grow">' +
+          (target ? "Mac mini" : HERE) +
+          '</span><span class="muted">本机</span></div>' +
+          '<div class="device-row">' +
+          icon(target ? "laptop" : "monitor") +
+          '<span class="grow">' +
+          (target ? HERE : "Mac mini") +
+          '</span><span class="dot' +
+          (sceneIs("offline", "dispatchFail") ? " off" : "") +
+          '"></span></div>' +
+          '<div class="device-row">' +
+          icon("monitor") +
+          '<span class="grow">工作电脑</span><span class="dot"></span></div>';
+      }
+
+      /* ---------- lead pane ---------- */
+      function toolCard(name, body, stateText, cls = "ok") {
+        return (
+          '<div class="tool ' +
+          cls +
+          '"><div class="tool-head">' +
+          icon("tool") +
+          "<code>" +
+          esc(name) +
+          '</code><span class="grow"></span><span class="tool-state">' +
+          esc(stateText) +
+          '</span></div><div class="tool-body">' +
+          body +
+          "</div></div>"
+        );
+      }
+      function cindy(text) {
+        return (
+          '<div class="assistant-label">' +
+          icon("spark") +
+          'Cindy · Lead</div><p class="assistant-text">' +
+          text +
+          "</p>"
+        );
+      }
+      function reportBlock(extra = "") {
+        return (
+          '<div class="report"><div class="report-head">' +
+          icon("reply") +
+          '<b>Worker 转写</b><span class="tag">' +
+          icon("monitor") +
+          "Mac mini</span><span>回报</span>" +
+          extra +
+          '</div><p class="micro">已生成 <code>~/Interviews/2026-10-09-逐字稿.md</code> 和 <code>~/Interviews/2026-10-09-摘要.md</code>。摘要要点：多设备交接成本高；希望交出后不必盯着另一台电脑；需要清楚的状态。</p></div>'
+        );
+      }
+      function renderLead() {
+        const s = state.scene;
+        if (s === "targetView") {
+          renderTargetMain();
+          return;
+        }
+        let html =
+          '<div class="time-divider">今天 · 10:20</div><div class="user-message">把今天的产品访谈整理成报告页面。录音在 Mac mini 的 ~/Interviews 里，转写放在 Mac mini 上跑；页面在这台电脑上先搭起来。</div>';
+        if (s === "create") {
+          html +=
+            cindy(
+              "好。我先在这台电脑上建前端 Worker 搭页面。转写需要放到 Mac mini 上，你可以在右侧「协同」里创建，或者让我来建。",
+            ) +
+            toolCard(
+              "create_worker",
+              "前端 · 运行设备：这台电脑 · Codex",
+              "已创建",
+            );
+        } else {
+          html +=
+            cindy(
+              "好，分给两个 Worker：转写在 Mac mini 上跑，前端在这台电脑上搭页面。",
+            ) +
+            toolCard(
+              "create_worker",
+              "转写 · 运行设备：<b>Mac mini</b> · 目录 <code>/Users/demo/Interviews</code> · Claude Code",
+              "已创建",
+            ) +
+            toolCard(
+              "create_worker",
+              "前端 · 运行设备：这台电脑 · Codex",
+              "已创建",
+            ) +
+            '<p class="assistant-text">两个 Worker 都已派活，等它们回报。</p>';
+        }
+        if (s === "approval")
+          html +=
+            '<div class="notice warn">' +
+            icon("shield") +
+            "<span>Worker 转写（Mac mini）在等待授权确认，可在右侧「协同」里处理。</span></div>";
+        if (s === "offline")
+          html +=
+            '<div class="notice">' +
+            icon("offline") +
+            "<span>暂时无法获取 Mac mini 的状态。Worker 转写保留最后已知状态「运行中」，重新连上后核对。</span></div>";
+        if (s === "reconnected")
+          html +=
+            '<div class="notice">' +
+            icon("link") +
+            "<span>已重新连上 Mac mini。断线期间 Worker 转写已完成一轮，补发回报 1 条。</span></div>" +
+            reportBlock('<span class="muted">· 断线期间完成</span>') +
+            cindy(
+              "逐字稿收到了。我先对照摘要列出报告的章节，再交给前端 Worker 填页面。",
+            );
+        if (s === "reported")
+          html +=
+            reportBlock() +
+            cindy(
+              "逐字稿收到了。我先对照摘要列出报告的章节，再交给前端 Worker 填页面。",
+            ) +
+            toolCard(
+              "send_to_worker",
+              "→ 前端：按 5 个章节搭页面骨架，引用摘要里的三个要点。",
+              "已派活",
+            );
+        if (s === "interject")
+          html +=
+            '<p class="micro muted" style="margin-bottom:16px">你在 Mac mini 上给 Worker 转写发了消息。按插话处理，不会回报到这里。</p>';
+        if (s === "dispatchFail")
+          html +=
+            '<div class="user-message">让转写也把受访者提到的产品名单独列出来。</div>' +
+            toolCard(
+              "send_to_worker",
+              "→ 转写：补充要求「把受访者提到的产品名单独列出来」<br>Mac mini 不可达（离线），消息没有发出。",
+              "失败",
+              "error",
+            ) +
+            cindy(
+              "Mac mini 现在离线，这条补充要求没有发出去。等它重新连上后，你再让我发一次，或者先改由这台电脑上的 Worker 处理。",
+            );
+        if (s === "leadStopped")
+          html +=
+            '<div class="notice">' +
+            icon("stop") +
+            "<span>Lead 已停止。Worker 转写（Mac mini）的回报已保留在队列里，恢复 Lead 后再处理，不会自动开始。</span></div>";
+        if (s === "archived")
+          html +=
+            '<div class="notice">' +
+            icon("archive") +
+            "<span>Worker 转写已归档。Mac mini 上的任务和文件仍保留。</span></div>";
+        state.sent
+          .filter((m) => m.to === "lead")
+          .forEach(
+            (m) =>
+              (html += '<div class="user-message">' + esc(m.text) + "</div>"),
+          );
+
+        const stopped = state.leadStopped;
+        $("#lead").innerHTML =
+          '<header class="pane-header"><div class="grow"><h1>整理产品访谈报告</h1><span class="chip">' +
+          icon("laptop") +
+          HERE +
+          " · Lead</span></div>" +
+          '<span class="status ' +
+          (stopped ? "" : "running") +
+          '"><span class="dot"></span>' +
+          (stopped
+            ? "已停止"
+            : sceneIs("reported", "reconnected")
+              ? "运行中"
+              : "等待 Worker 回报") +
+          "</span></header>" +
+          '<section class="messages" aria-label="Lead 消息"><div class="thread">' +
+          html +
+          "</div></section>" +
+          '<div class="composer-wrap"><div class="composer"><textarea id="lead-input" aria-label="发给 Lead" placeholder="给 Lead 发消息…"></textarea><div class="composer-tools"><span class="chip">Claude Code · Claude Sonnet 5 · 协同</span><div class="row">' +
+          (stopped
+            ? '<button class="small" data-action="resume-lead">恢复 Lead</button>'
+            : "") +
+          '<button class="primary icon-button small" data-send="lead" aria-label="发送">' +
+          icon("up") +
+          "</button></div></div></div></div>";
+      }
+
+      /* ---------- collab pane ---------- */
+      function workerTab(w) {
+        const [label, tone] = STATUS[w.status];
+        const remote = w.device !== "local";
+        return (
+          '<button role="tab" class="worker-tab' +
+          (w.status === "archived" ? " archived" : "") +
+          '" data-focus="' +
+          w.id +
+          '" aria-selected="' +
+          (state.focused === w.id) +
+          '" aria-label="Worker ' +
+          esc(w.name) +
+          "，" +
+          esc(deviceName(w.device)) +
+          "，" +
+          label +
+          '">' +
+          '<span class="dot ' +
+          (tone === "running" || tone === "waiting"
+            ? "run"
+            : tone === "done"
+              ? ""
+              : tone === "error"
+                ? "err"
+                : "off") +
+          '"></span>' +
+          esc(w.name) +
+          (remote
+            ? '<span class="where">' +
+              icon("monitor") +
+              esc(deviceName(w.device)) +
+              "</span>"
+            : "") +
+          "</button>"
+        );
+      }
+      function workerThread(w) {
+        if (w.id === "frontend")
+          return (
+            '<div class="user-message"><div class="msg-source">' +
+            icon("reply") +
+            "来自 Lead</div>在 D:/projects/report-site 搭报告页面骨架：标题区、章节导航、引用卡片。</div>" +
+            '<div class="assistant-label">' +
+            icon("spark") +
+            'Worker 前端</div><p class="assistant-text">已建好页面骨架和三个组件，正在接入示例数据。</p>'
+          );
+        const s = state.scene;
+        let h =
+          '<div class="user-message"><div class="msg-source">' +
+          icon("reply") +
+          "来自 Lead（XD-PC）</div>" +
+          esc(TASK) +
+          "</div>" +
+          '<div class="assistant-label">' +
+          icon("spark") +
+          "Worker 转写</div>" +
+          '<p class="assistant-text">先确认录音格式，再分段转写。</p>' +
+          toolCard(
+            "Bash",
+            "<code>ffprobe ~/Interviews/2026-10-09.mp4</code> · 在 Mac mini 上运行",
+            "完成",
+          );
+        if (s === "approval") {
+          h +=
+            '<div class="approval" role="group" aria-label="授权确认"><div class="row">' +
+            icon("shield") +
+            '<b class="grow">需要确认</b><span class="tag">' +
+            icon("monitor") +
+            "Mac mini</span></div>" +
+            '<p style="margin-top:6px">Worker 转写想在 Mac mini 上运行：</p><p><code>pip install --user faster-whisper</code></p>' +
+            '<p class="micro muted" style="margin-top:6px">在这里或 Mac mini 上处理都可以，先处理的生效。</p>' +
+            '<div class="actions"><button class="primary small" data-action="approve">允许一次</button><button class="small" data-action="deny">拒绝</button></div></div>';
+          return h;
+        }
+        h += toolCard(
+          "Bash",
+          "<code>whisper-run --diarize ~/Interviews/2026-10-09.mp4</code> · 在 Mac mini 上运行",
+          sceneIs("running", "offline", "interject", "dispatchFail")
+            ? "运行中"
+            : "完成",
+          sceneIs("running", "offline", "interject", "dispatchFail")
+            ? ""
+            : "ok",
+        );
+        if (s === "interject")
+          h +=
+            '<div class="user-message"><div class="msg-source">' +
+            icon("monitor") +
+            "你在 Mac mini 上发送 · 插话，不回报给 Lead</div>顺便把背景噪音大的片段标出来。</div>" +
+            '<div class="assistant-label">' +
+            icon("spark") +
+            'Worker 转写</div><p class="assistant-text">好，转写时会把噪音较大的片段标为「[听不清]」并附时间点。</p>';
+        if (sceneIs("reconnected", "reported", "leadStopped", "archived"))
+          h +=
+            '<div class="assistant-label">' +
+            icon("spark") +
+            'Worker 转写</div><p class="assistant-text">完成。逐字稿和摘要已写到 <code>~/Interviews/</code>：<br>· 2026-10-09-逐字稿.md<br>· 2026-10-09-摘要.md<br>摘要要点：多设备交接成本高；希望交出后不必盯着另一台电脑；需要清楚的状态。</p>' +
+            (s === "archived"
+              ? ""
+              : '<p class="micro muted">' +
+                icon("reply") +
+                " 已作为回报送给 Lead" +
+                (s === "leadStopped" ? "（Lead 已停止，排队中）" : "") +
+                "</p>");
+        state.sent
+          .filter((m) => m.to === w.id)
+          .forEach((m) => {
+            h +=
+              '<div class="user-message"><div class="msg-source">' +
+              icon("laptop") +
+              "你在 XD-PC 上发送 · 插话，不回报给 Lead</div>" +
+              esc(m.text) +
+              "</div>";
+          });
+        return h;
+      }
+      function renderCollab() {
+        if (state.scene === "targetView") {
+          $("#collab").innerHTML =
+            '<div class="rsb-tabs"><span class="on">任务信息</span><span>文件</span></div>' +
+            '<div class="worker-info"><div class="row"><span class="tag">' +
+            icon("users") +
+            "来自 XD-PC 的协同</span></div>" +
+            '<dl style="margin:6px 0 0;display:grid;grid-template-columns:72px 1fr;gap:6px 10px">' +
+            '<dt class="muted">Lead</dt><dd style="margin:0">XD-PC · 整理产品访谈报告</dd>' +
+            '<dt class="muted">权限</dt><dd style="margin:0">自动审批<br><span class="muted">沿用 XD-PC 的 Worker 创建偏好</span></dd>' +
+            '<dt class="muted">目录</dt><dd style="margin:0"><code>/Users/demo/Interviews</code></dd>' +
+            '<dt class="muted">回报</dt><dd style="margin:0">Lead 派的活完成后自动回报给 XD-PC；你在这里发的消息不回报</dd></dl>' +
+            '<div class="row" style="margin-top:8px"><button class="small" disabled title="这是协同里的 Worker，不能再开启协同">开启协同</button><button class="small" disabled title="协同 Worker 不能复制到其他电脑">复制到其他电脑</button></div></div>';
+          return;
+        }
+        const w = W(state.focused);
+        const remote = w && w.device !== "local";
+        let info = "";
+        if (w) {
+          const [label, tone] = STATUS[w.status];
+          info =
+            '<div class="worker-info"><div class="row"><span class="status ' +
+            tone +
+            '"><span class="dot"></span>' +
+            label +
+            "</span>" +
+            '<span class="tag">' +
+            icon(remote ? "monitor" : "laptop") +
+            (remote
+              ? "在 " + esc(deviceName(w.device)) + " 上运行"
+              : "这台电脑") +
+            "</span>" +
+            '<span class="grow"></span>' +
+            (w.status !== "archived"
+              ? '<button class="ghost icon-button small" data-action="stop-worker" aria-label="停止 Worker 当前一轮" title="停止当前一轮">' +
+                icon("stop") +
+                '</button><button class="ghost icon-button small" data-action="archive-worker" aria-label="归档 Worker" title="归档 Worker">' +
+                icon("archive") +
+                "</button>"
+              : "") +
+            '</div><div class="row muted"><span>' +
+            icon("folder") +
+            " <code>" +
+            esc(w.dir) +
+            "</code></span><span>" +
+            esc(w.agent) +
+            " · " +
+            esc(w.model) +
+            "</span><span>" +
+            icon("shield") +
+            " " +
+            esc(w.perm) +
+            "</span></div>" +
+            (w.status === "unreachable"
+              ? '<div class="notice" style="margin:4px 0 0">' +
+                icon("offline") +
+                "<span>Mac mini 已断线。最后已知状态：运行中。不会判为失败，也不会重派。</span></div>"
+              : "") +
+            (w.status === "archived"
+              ? '<div class="notice" style="margin:4px 0 0">' +
+                icon("archive") +
+                "<span>已从协同归档。Mac mini 上的任务和文件保留。</span></div>"
+              : "") +
+            "</div>";
+        }
+        const offline = w && w.status === "unreachable";
+        const inactive = !w || w.status === "archived";
+        $("#collab").innerHTML =
+          '<div class="rsb-tabs"><span>文件</span><span class="on">协同</span><span>浏览器</span></div>' +
+          '<div class="worker-strip" role="tablist" aria-label="Workers">' +
+          state.workers.map(workerTab).join("") +
+          '<button class="ghost icon-button small" data-action="open-create" aria-label="创建新 Worker" title="创建新 Worker">' +
+          icon("plus") +
+          "</button></div>" +
+          info +
+          '<section class="messages" aria-label="Worker 消息"><div class="thread">' +
+          (w ? workerThread(w) : '<div class="empty">等待 Worker</div>') +
+          "</div></section>" +
+          '<div class="composer-wrap"><div class="composer"><textarea id="worker-input" aria-label="发给 Worker" ' +
+          (offline || inactive ? "disabled " : "") +
+          'placeholder="' +
+          (inactive
+            ? "Worker 已归档"
+            : offline
+              ? "Mac mini 离线，暂时无法发送"
+              : "给 " +
+                esc(w.name) +
+                " 发消息" +
+                (remote
+                  ? "（在 " + esc(deviceName(w.device)) + " 上执行）"
+                  : "") +
+                "…") +
+          '"></textarea><div class="composer-tools"><span class="chip">' +
+          (w ? esc(w.agent) : "") +
+          '</span><button class="primary icon-button small" data-send="worker" aria-label="发送" ' +
+          (offline || inactive ? "disabled" : "") +
+          ">" +
+          icon("up") +
+          "</button></div></div>" +
+          '<p class="composer-note">直接发给 Worker 的消息按插话处理，不会回报给 Lead。</p></div>';
+      }
+      function renderTargetMain() {
+        const w = W("transcribe");
+        $("#lead").innerHTML =
+          '<header class="pane-header"><div class="grow"><h1>Worker · 转写</h1><span class="chip">' +
+          icon("monitor") +
+          'Mac mini · 来自 XD-PC 的协同</span></div><span class="status running"><span class="dot"></span>运行中</span></header>' +
+          '<section class="messages"><div class="thread">' +
+          workerThread(w) +
+          "</div></section>" +
+          '<div class="composer-wrap"><div class="composer"><textarea aria-label="发给 Worker" placeholder="在这里直接发消息…"></textarea><div class="composer-tools"><span class="chip">Claude Code · Claude Opus 5.5 · 自动审批</span><button class="primary icon-button small" aria-label="发送" data-send="target">' +
+          icon("up") +
+          '</button></div></div><p class="composer-note">在这里发的消息按插话处理，不会回报给 XD-PC 上的 Lead。</p></div>';
+      }
+
+      /* ---------- create dialog ---------- */
+      function openCreate() {
+        state.form = {
+          role: "转写",
+          custom: "",
+          device: "macmini",
+          agent: "Claude Code",
+          model: MODELS.macmini[0],
+          perm: "自动审批",
+          dirMode: "auto",
+          dir: "/Users/demo/Interviews",
+          task: TASK,
+          error: "",
+        };
+        renderCreate();
+        if (!$("#create").open) $("#create").showModal();
+      }
+      function renderCreate() {
+        const f = state.form;
+        const remote = f.device !== "local";
+        const dn = deviceName(f.device);
+        $("#create-content").innerHTML =
+          '<div><div class="field-label">角色名</div><div class="pills" role="radiogroup" aria-label="角色名">' +
+          ["开发", "审查", "测试", "转写"]
+            .map(
+              (r) =>
+                '<button role="radio" data-role="' +
+                r +
+                '" aria-checked="' +
+                (f.role === r) +
+                '">' +
+                r +
+                "</button>",
+            )
+            .join("") +
+          "</div></div>" +
+          '<div><div class="field-label">运行设备</div><div class="device-list" role="radiogroup" aria-label="运行设备">' +
+          DEVICES.map(
+            (d) =>
+              '<button role="radio" class="device-option" data-device="' +
+              d.id +
+              '" aria-checked="' +
+              (f.device === d.id) +
+              '"' +
+              (d.disabled ? " disabled" : "") +
+              ">" +
+              icon(d.icon) +
+              "<span>" +
+              esc(d.name) +
+              "</span><small>" +
+              esc(d.detail) +
+              "</small></button>",
+          ).join("") +
+          '</div><p class="hint">离线或未开启「允许远程控制」的电脑不显示。' +
+          (remote ? "Worker 的任务、目录和命令都在 " + esc(dn) + "。" : "") +
+          "</p></div>" +
+          (remote
+            ? '<div><div class="field-label">' +
+              esc(dn) +
+              ' 上的工作目录</div><div class="seg" role="radiogroup" aria-label="工作目录"><button role="radio" data-dirmode="auto" aria-checked="' +
+              (f.dirMode === "auto") +
+              '">自动分配</button><button role="radio" data-dirmode="path" aria-checked="' +
+              (f.dirMode === "path") +
+              '">指定目录</button></div>' +
+              (f.dirMode === "path"
+                ? '<input type="text" id="f-dir" style="margin-top:8px" value="' +
+                  esc(f.dir) +
+                  '" placeholder="/Users/…/project" aria-label="' +
+                  esc(dn) +
+                  ' 上的目录" />'
+                : "") +
+              '<p class="hint">' +
+              (f.dirMode === "auto"
+                ? "由 " + esc(dn) + " 按自己的设置分配任务目录。"
+                : "在 " +
+                  esc(dn) +
+                  " 上检查；不存在时报错，不会换成这台电脑的目录。") +
+              "</p></div>"
+            : "") +
+          '<div><div class="field-label">Agent</div><div class="seg" role="radiogroup" aria-label="Agent">' +
+          ["Claude Code", "Codex", "Pi"]
+            .map(
+              (a) =>
+                '<button role="radio" data-agent="' +
+                a +
+                '" aria-checked="' +
+                (f.agent === a) +
+                '">' +
+                a +
+                "</button>",
+            )
+            .join("") +
+          "</div></div>" +
+          '<div><label class="field-label" for="f-model">模型</label><select id="f-model">' +
+          MODELS[f.device]
+            .map(
+              (m) =>
+                "<option" +
+                (m === f.model ? " selected" : "") +
+                ">" +
+                esc(m) +
+                "</option>",
+            )
+            .join("") +
+          "</select>" +
+          (remote
+            ? '<p class="hint">按 ' +
+              esc(dn) +
+              " 上已连接的模型列出，使用那台的登录和供应商。</p>"
+            : "") +
+          "</div>" +
+          '<div><label class="field-label" for="f-perm">权限模式</label><select id="f-perm"><option' +
+          (f.perm === "自动审批" ? " selected" : "") +
+          ">自动审批</option><option" +
+          (f.perm === "完全访问" ? " selected" : "") +
+          ">完全访问</option></select>" +
+          (remote
+            ? '<p class="hint">沿用这台电脑的 Worker 创建偏好；' +
+              esc(dn) +
+              " 上会显示实际权限。</p>"
+            : "") +
+          "</div>" +
+          '<div><label class="field-label" for="f-task">初始任务 <span class="muted">（可选）</span></label><textarea id="f-task" placeholder="给这个 Worker 的可选第一条任务">' +
+          esc(f.task) +
+          "</textarea>" +
+          (remote
+            ? '<p class="hint">原样发到 ' + esc(dn) + " 上的 Worker 任务。</p>"
+            : "") +
+          "</div>" +
+          (f.error
+            ? '<p class="field-error" role="alert">' + esc(f.error) + "</p>"
+            : "");
+        $("#create-submit").textContent = remote
+          ? "在 " + dn + " 上创建"
+          : "创建 Worker";
+      }
+      function submitCreate() {
+        const f = state.form;
+        f.task = $("#f-task").value;
+        if ($("#f-dir")) f.dir = $("#f-dir").value.trim();
+        const remote = f.device !== "local";
+        if (remote && f.dirMode === "path") {
+          if (!/^(\/|~\/|[a-zA-Z]:[\\/])/.test(f.dir))
+            f.error = "请输入 " + deviceName(f.device) + " 上的绝对路径。";
+          else if (/missing|不存在/i.test(f.dir))
+            f.error =
+              deviceName(f.device) +
+              " 上找不到这个目录：" +
+              f.dir +
+              "。Worker 未创建。";
+          else f.error = "";
+          if (f.error) {
+            renderCreate();
+            return;
+          }
+        }
+        const id = "w" + Date.now();
+        state.workers.push({
+          id,
+          name: f.role,
+          device: f.device,
+          status: "running",
+          agent: f.agent,
+          model: f.model,
+          perm: f.perm,
+          dir: remote
+            ? f.dirMode === "auto"
+              ? "~/Cindy/对话/2026-10-09/" + f.role
+              : f.dir
+            : "D:/projects/report-site",
+        });
+        if (f.role === "转写" && !W("transcribe"))
+          state.workers[state.workers.length - 1].id = "transcribe";
+        state.focused = state.workers[state.workers.length - 1].id;
+        $("#create").close();
+        render();
+        toast(
+          remote
+            ? "已在 " +
+                deviceName(f.device) +
+                " 上创建 Worker「" +
+                f.role +
+                "」"
+            : "已创建 Worker「" + f.role + "」",
+        );
+      }
+
+      function render() {
+        $("#scene").value = state.scene;
+        $("#scene-help").textContent = "演示说明 · " + HELP[state.scene];
+        const target = state.scene === "targetView";
+        $('[data-mobile="lead"]').textContent = target ? "任务" : "Lead";
+        $('[data-mobile="collab"]').textContent = target ? "任务信息" : "协同";
+        renderSidebar();
+        renderLead();
+        renderCollab();
+      }
+
+      /* ---------- events ---------- */
+      document.addEventListener("click", (e) => {
+        const c = e.target.closest("[data-close]");
+        if (c) return $("#" + c.dataset.close).close();
+        const f = e.target.closest("[data-focus]");
+        if (f) {
+          state.focused = f.dataset.focus;
+          return renderCollab();
+        }
+        const m = e.target.closest("[data-mobile]");
+        if (m) {
+          $("#app").dataset.view = m.dataset.mobile;
+          document
+            .querySelectorAll("[data-mobile][role=radio]")
+            .forEach((b) => b.setAttribute("aria-checked", String(b === m)));
+          return;
+        }
+        if (state.form && $("#create").open) {
+          const r = e.target.closest("[data-role]");
+          const d = e.target.closest("[data-device]");
+          const a = e.target.closest("[data-agent]");
+          const dm = e.target.closest("[data-dirmode]");
+          if (r) state.form.role = r.dataset.role;
+          if (d && !d.disabled) {
+            state.form.device = d.dataset.device;
+            state.form.model = MODELS[d.dataset.device][0];
+            state.form.error = "";
+          }
+          if (a) state.form.agent = a.dataset.agent;
+          if (dm) state.form.dirMode = dm.dataset.dirmode;
+          if (r || d || a || dm) {
+            state.form.task = $("#f-task").value;
+            if ($("#f-dir")) state.form.dir = $("#f-dir").value;
+            return renderCreate();
+          }
+        }
+        const s = e.target.closest("[data-send]");
+        if (s) {
+          const box =
+            s.dataset.send === "lead"
+              ? $("#lead-input")
+              : s.dataset.send === "worker"
+                ? $("#worker-input")
+                : $("#lead textarea");
+          const text = box.value.trim();
+          if (!text) return box.focus();
+          if (s.dataset.send === "target") {
+            toast("演示：在 Mac mini 上发送，按插话处理，不回报给 Lead。");
+            box.value = "";
+            return;
+          }
+          state.sent.push({
+            to: s.dataset.send === "lead" ? "lead" : state.focused,
+            text,
+          });
+          render();
+          if (s.dataset.send === "worker")
+            toast("已发给 Worker，按插话处理，不会回报给 Lead。");
+          return;
+        }
+        const el = e.target.closest("[data-action]");
+        if (!el) return;
+        const act = el.dataset.action;
+        if (act === "open-create") openCreate();
+        if (act === "approve" || act === "deny") {
+          W("transcribe").status = "running";
+          state.scene = "running";
+          render();
+          toast(
+            act === "approve"
+              ? "已允许，Mac mini 上继续执行。"
+              : "已拒绝，Worker 会换一种方式继续。",
+          );
+        }
+        if (act === "stop-worker") {
+          const w = W(state.focused);
+          if (w.status === "unreachable")
+            return toast("Mac mini 离线，停止请求发不出去；重新连上后再试。");
+          w.status = "idle";
+          renderCollab();
+          toast(
+            "已停止 " +
+              w.name +
+              " 的当前一轮" +
+              (w.device !== "local" ? "，Mac mini 上的任务保留" : "") +
+              "。",
+          );
+        }
+        if (act === "archive-worker") {
+          const w = W(state.focused);
+          $("#archive-title").textContent = "归档 Worker " + w.name + "？";
+          $("#archive").showModal();
+        }
+        if (act === "resume-lead") {
+          state.leadStopped = false;
+          state.scene = "reported";
+          render();
+          toast("Lead 已恢复，开始处理保留的回报。");
+        }
+      });
+      $("#archive-confirm").addEventListener("click", () => {
+        const w = W(state.focused);
+        w.status = "archived";
+        $("#archive").close();
+        render();
+        toast(
+          w.device !== "local"
+            ? "已归档。Mac mini 上的任务和文件保留。"
+            : "已归档。",
+        );
+      });
+      $("#create-submit").addEventListener("click", submitCreate);
+      document.addEventListener("change", (e) => {
+        if (!state.form) return;
+        if (e.target.id === "f-model") state.form.model = e.target.value;
+        if (e.target.id === "f-perm") state.form.perm = e.target.value;
+      });
+      $("#scene").addEventListener("change", (e) => applyScene(e.target.value));
+      $("#theme").addEventListener("click", () => {
+        const dark = document.documentElement.dataset.theme !== "dark";
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        $("#theme").innerHTML = icon(dark ? "sun" : "moon");
+        const label = dark ? "切换浅色模式" : "切换深色模式";
+        $("#theme").setAttribute("aria-label", label);
+        $("#theme").title = label;
+      });
+      $("#reset").addEventListener("click", () => {
+        document.querySelectorAll("dialog[open]").forEach((d) => d.close());
+        applyScene("running");
+      });
+      render();
+    </script>
+  </body>
+</html>

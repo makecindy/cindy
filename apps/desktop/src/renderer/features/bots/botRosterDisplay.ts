@@ -1,4 +1,4 @@
-import { withoutBotGroupLanes } from './botGroupLane';
+import { withoutBotHiddenLanes } from './botGroupLane';
 import type { BotProfile } from './botStore';
 
 /** Keep unnamed and identically named hosts distinguishable without changing routing IDs. */
@@ -24,8 +24,8 @@ export function botRosterActivityAt(bot: BotProfile): number {
   return Math.max(
     finiteTimestamp(bot.createdAt),
     finiteTimestamp(bot.lastMessageAt),
-    // 群聊里的发言不把这位伙伴在伙伴列表里顶到前面。
-    ...withoutBotGroupLanes(bot.sessions).map((session) => finiteTimestamp(session.updatedAt)),
+    // 群聊 / IM 群里的发言不把这位伙伴在伙伴列表里顶到前面。
+    ...withoutBotHiddenLanes(bot.sessions).map((session) => finiteTimestamp(session.updatedAt)),
   );
 }
 

@@ -5,8 +5,11 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { cn } from '@/lib/utils';
 import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { useRemoteBots } from './useRemoteBots';
+import { useCompanionCloud } from './companionCloudStore';
+import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { cindyDeviceKey, cindyDeviceOptions, type CindyDeviceOption } from './cindyDeviceRoster';
 import { formatBotUnreadBadge } from './botListDisplay';
+import { isBotKnownOffline } from './BotConnectionStatus';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 
 /** Shared device menu for the single sidebar entry and the chat header. */
@@ -28,38 +31,52 @@ export function CindyDevicePicker({
       label={t('bots.devicePicker.switchDevice', { device: current.label })}
       value={current.key}
       truncateOptions
-      className={cn('h-6 max-w-none px-2 text-11', className)}
-      triggerAdornment={otherUnread ? (
-        <span
-          aria-label={t('bots.devicePicker.otherUnread')}
-          className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
-        />
-      ) : null}
-      options={options.map((option) => ({
-        value: option.key,
-        label: option.label,
-        title: option.deviceName,
-        endAdornment: option.unread || !option.online ? (
-          <>
-            {!option.online ? <span className="text-11 text-[var(--text-secondary)]">{t('deviceId' in option.bot && option.bot.connectionKnown === false ? 'bots.remote.unknown' : 'bots.remote.offline')}</span> : null}
-            {option.unread ? (
-              option.unreadCount ? (
-                <span
-                  aria-label={t('bots.list.unread', { count: option.unreadCount })}
-                  className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
-                >
-                  {formatBotUnreadBadge(option.unreadCount)}
-                </span>
-              ) : (
-                <span
-                  aria-label={t('bots.devicePicker.unread')}
-                  className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
-                />
-              )
-            ) : null}
-          </>
-        ) : undefined,
-      }))}
+      className={cn('h-6 w-fit max-w-full px-2 text-11', className)}
+      contentClassName="w-64 max-w-[var(--radix-select-content-available-width)]"
+      triggerAdornment={
+        otherUnread ? (
+          <span
+            aria-label={t('bots.devicePicker.otherUnread')}
+            className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
+          />
+        ) : null
+      }
+      options={options.map((option) => {
+        const offline = isBotKnownOffline(
+          option.online,
+          'deviceId' in option.bot ? option.bot.connectionKnown : undefined,
+        );
+        return {
+          value: option.key,
+          label: option.label,
+          title: option.deviceName,
+          endAdornment:
+            option.unread || offline ? (
+              <>
+                {offline ? (
+                  <span className="text-11 text-[var(--text-secondary)]">
+                    {t('bots.remote.offline')}
+                  </span>
+                ) : null}
+                {option.unread ? (
+                  option.unreadCount ? (
+                    <span
+                      aria-label={t('bots.list.unread', { count: option.unreadCount })}
+                      className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
+                    >
+                      {formatBotUnreadBadge(option.unreadCount)}
+                    </span>
+                  ) : (
+                    <span
+                      aria-label={t('bots.devicePicker.unread')}
+                      className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
+                    />
+                  )
+                ) : null}
+              </>
+            ) : undefined,
+        };
+      })}
       onValueChange={(key) => {
         const option = options.find((candidate) => candidate.key === key);
         if (option && option.key !== current.key) onSelect(option);
@@ -71,8 +88,11 @@ export function CindyDevicePicker({
 export function CindyHeaderDevicePicker({ bot }: { bot: BotChatIdentity }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const bots = useBotProfiles();
-  const remoteBots = useRemoteBots();
+  const cloud = useCompanionCloud();
+  // A demoted local Cindy is not the "local" option: she runs on her main computer.
+  const bots = withoutCloudCompanions(withoutShadowedBots(useBotProfiles(), cloud), cloud);
+  // Copies other computers still list for a Cindy that runs elsewhere are not choices either.
+  const remoteBots = withoutCloudCompanions(cloudRemoteBots(cloud, useRemoteBots()), cloud);
   const devices = useDeviceLinkDeviceList();
   const unread = useBotUnreadCounts();
   const options = cindyDeviceOptions(
@@ -94,7 +114,7 @@ export function CindyHeaderDevicePicker({ bot }: { bot: BotChatIdentity }) {
       options={options}
       current={current}
       onSelect={(option) => navigate(option.route)}
-      className="w-44 max-w-full"
+      className="max-w-44 shrink"
     />
   );
 }

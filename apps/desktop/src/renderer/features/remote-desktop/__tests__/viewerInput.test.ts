@@ -243,7 +243,13 @@ it.each([
 it.each(['control', 'meta'])(
   'forwards %s clipboard shortcuts to the remote computer as ordinary keys',
   (modifier) => {
-    viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+    viewer.receive({
+      type: 'init',
+      epoch: 'lease',
+      width: 1000,
+      height: 600,
+      clipboardModifier: modifier,
+    });
     viewer.receive({ type: 'control', enabled: true });
     pointer('pointerdown');
     pointer('pointerup');
@@ -251,6 +257,22 @@ it.each(['control', 'meta'])(
     const input = document.getElementById('keyboard-input')!;
     const modifiers = { ctrlKey: modifier === 'control', metaKey: modifier === 'meta' };
     const modifierCode = modifier === 'meta' ? 'MetaLeft' : 'ControlLeft';
+    // The other modifier is an ordinary chord on this computer (Ctrl+C in a macOS
+    // terminal, Win+V on Windows): no announcement, no waiting.
+    const other = modifier === 'meta' ? 'ControlLeft' : 'MetaLeft';
+    const otherFlags = { ctrlKey: modifier !== 'control', metaKey: modifier !== 'meta' };
+    for (const code of ['KeyC', 'KeyV']) {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { code: other, ...otherFlags, bubbles: true }),
+      );
+      input.dispatchEvent(new KeyboardEvent('keydown', { code, ...otherFlags, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { code, ...otherFlags, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { code: other, bubbles: true }));
+    }
+    vi.advanceTimersByTime(34);
+    expect(messages.some((m) => m.type === 'clipboardIntent')).toBe(false);
+    expect(events().filter((event) => event.kind === 'key')).toHaveLength(8);
+    messages = [];
     for (const code of ['KeyC', 'KeyV']) {
       input.dispatchEvent(
         new KeyboardEvent('keydown', { code: modifierCode, ...modifiers, bubbles: true }),
@@ -271,6 +293,15 @@ it.each(['control', 'meta'])(
     }
     vi.advanceTimersByTime(34);
     expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
+    // The shortcuts are only announced: copy so the controller pulls the computer's
+    // clipboard soon after, paste so it pushes the local one first. Until the
+    // controller releases the paste gate, the queued keys wait.
+    expect(messages.filter((m) => m.type === 'clipboardIntent').map((m) => m.action)).toEqual([
+      'copy',
+      'paste',
+    ]);
+    expect(events()).toEqual([]);
+    viewer.receive({ type: 'inputGate' });
     expect(events().filter((event) => event.kind === 'key' || event.kind === 'text')).toEqual(
       ['KeyC', 'KeyV'].flatMap((code) => [
         { kind: 'key', code: modifierCode, down: true },
@@ -281,6 +312,77 @@ it.each(['control', 'meta'])(
     );
   },
 );
+const macHost = () => {
+  viewer.receive({
+    type: 'init',
+    epoch: 'lease',
+    width: 1000,
+    height: 600,
+    clipboardModifier: 'meta',
+  });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  const key = (type: 'keydown' | 'keyup', code: string) =>
+    input.dispatchEvent(new KeyboardEvent(type, { code, metaKey: true, bubbles: true }));
+  const chord = (code: string) => {
+    key('keydown', 'MetaLeft');
+    key('keydown', code);
+    key('keyup', code);
+    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'MetaLeft', bubbles: true }));
+  };
+  return { input, key, chord };
+};
+it('a held paste is dropped, not sent late, when the window loses focus', () => {
+  const { key } = macHost();
+  key('keydown', 'MetaLeft');
+  key('keydown', 'KeyV');
+  vi.advanceTimersByTime(34);
+  expect(events()).toEqual([]);
+  window.dispatchEvent(new Event('blur'));
+  vi.advanceTimersByTime(34);
+  // The release goes out at once; the queued Command and V never do.
+  expect(events()).toEqual([{ kind: 'release' }]);
+  vi.advanceTimersByTime(1300);
+  expect(events()).toEqual([{ kind: 'release' }]);
+});
+it('re-arming the paste gate never ages the held batch into an input overflow', () => {
+  const { chord } = macHost();
+  chord('KeyV');
+  vi.advanceTimersByTime(900);
+  chord('KeyV');
+  vi.advanceTimersByTime(900);
+  chord('KeyV');
+  // Older than the 2 s freshness budget, but held on purpose: no overflow, no reconnect.
+  vi.advanceTimersByTime(300);
+  expect(events()).toEqual([]);
+  expect(messages.some((m) => m.type === 'inputOverflow')).toBe(false);
+  viewer.receive({ type: 'inputGate' });
+  vi.advanceTimersByTime(34);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(12);
+  expect(messages.some((m) => m.type === 'inputOverflow')).toBe(false);
+});
+it('releases a paste that the controller never answers after 1.2s, and never holds a copy', () => {
+  const { input, chord } = macHost();
+  chord('KeyC');
+  vi.advanceTimersByTime(34);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(4);
+  chord('KeyV');
+  vi.advanceTimersByTime(1100);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(4);
+  vi.advanceTimersByTime(200);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(8);
+  // Auto-repeat of a held paste neither re-announces nor re-arms the gate.
+  messages = [];
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'KeyV', metaKey: true, repeat: true, bubbles: true }),
+  );
+  vi.advanceTimersByTime(34);
+  expect(messages.some((m) => m.type === 'clipboardIntent')).toBe(false);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(1);
+});
 // Invariant: a remote key is released only when its local keyup arrives, except
 // keys pressed while Command is held on a macOS controller (macOS swallows their
 // keyup); those alone are released together with Command.

@@ -33,12 +33,8 @@ import { ToastContainer } from '@/components/ui/toast';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { onRequestRightSidebarVisibility } from '@/features/right-sidebar/lib/sidebarCommands';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
-import {
-  closeTab,
-  getBucket,
-  getTabSnapshot,
-  importTabSnapshot,
-} from '@/features/right-sidebar/store';
+import { mergeSidebarWindowBack } from '@/features/right-sidebar/lib/mergeSidebarWindowBack';
+import { closeTab, getBucket, importTabSnapshot } from '@/features/right-sidebar/store';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -75,7 +71,7 @@ export function SidebarWindowLayout() {
   useEffect(() => {
     // 子窗口需要实时事件来维护面板内容，但认证失败后的凭证读取、会话重启与消息重发
     // 必须只由主 renderer 执行，避免多个 renderer 对同一远程任务并发重试。
-    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false });
+    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false, ownsRemoteListCache: false });
   }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
@@ -290,9 +286,7 @@ export function SidebarWindowLayout() {
           {/* 合并回主窗口:关偏好 + 关本窗,主窗恢复内嵌展开 */}
           <ChromeIconButton
             onClick={() => {
-              const snapshot = getTabSnapshot(interactiveSessionId);
-              const handoff = snapshot ? { snapshots: [snapshot] } : undefined;
-              void window.electronAPI.rightSidebarWindow.setDetached(false, handoff).catch((err) => {
+              void mergeSidebarWindowBack(interactiveSessionId).catch((err) => {
                 log.warn('merge back failed', err);
               });
             }}

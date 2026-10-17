@@ -140,6 +140,16 @@ describe('mapServerMessages — Bot collaboration', () => {
     });
   });
 
+  it('projects the bounded interjection preview while still dropping persisted text', () => {
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([row({
+      clientId: 'bot-delegation-interject-mirror:delegation-1:n2',
+      content: '',
+      agentMeta: { botCollaboration: { ...META, role: 'interjection', interjectionPreview: '测试也要覆盖断网重连' } },
+    })]);
+    expect(mapped.systemCardType).toBe('bot-session-task-message');
+    expect(mapped.systemCardData).toMatchObject({ interjectionPreview: '测试也要覆盖断网重连', text: '' });
+  });
+
   it.each(['user', 'assistant'] as const)('preserves ordinary %s content that resembles an internal receipt', (role) => {
     const content = '已向后台任务发送消息：读取 /workspace/project/AGENTS.md';
     const [plain, invalid] = makerChatStore.__mapServerMessagesForTest([

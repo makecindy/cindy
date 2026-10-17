@@ -1,3 +1,4 @@
+import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
@@ -215,6 +216,7 @@ export function ModelAdvancedDrawer({
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
+  const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
@@ -281,6 +283,41 @@ export function ModelAdvancedDrawer({
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
   const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
+  const imageAgents = canEditProtocol
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
+    : [];
+  const imageAgent = imageAgents.length === 1 ? imageAgents[0] : undefined;
+  const imageModel = imageAgent ? row?.byAgent[imageAgent] : undefined;
+  const imageCapability = imageModel?.userModelConfig?.mode === 'image_generation'
+    ? imageModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate'
+    : 'default';
+  const videoAgents = canEditProtocol
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi === 'xai-videos') : [];
+  const videoAgent = videoAgents.length === 1 ? videoAgents[0] : undefined;
+  const videoModel = videoAgent ? row?.byAgent[videoAgent] : undefined;
+  const videoCapability = videoModel?.userModelConfig?.mode === 'video_generation'
+    ? videoModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate' : 'default';
+  const setImageCapability = async (value: string, kind: 'image' | 'video' = 'image') => {
+    const agent = kind === 'image' ? imageAgent : videoAgent;
+    const sourceModel = kind === 'image' ? imageModel : videoModel;
+    if (imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
+    const config = providerViewToCustomProviderConfig(provider);
+    const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
+    if (!model) return;
+    if (value === 'default') {
+      delete model.mode;
+      delete model.modalities;
+    } else {
+      model.mode = kind === 'image' ? 'image_generation' : 'video_generation';
+      model.modalities = { input: value === 'edit' ? ['text', 'image'] : ['text'], output: [kind] };
+    }
+    setImageCapabilitySaving(true);
+    try {
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { setImageCapabilitySaving(false); }
+  };
   const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
@@ -355,8 +392,10 @@ export function ModelAdvancedDrawer({
     );
   }
 
-  const vision =
-    primaryModel.supportsImageInput !== undefined
+  const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
+  const vision = imageModel?.modalities
+    ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
+    : primaryModel.supportsImageInput !== undefined
       ? primaryModel.supportsImageInput
         ? 'vision'
         : 'no-vision'
@@ -835,10 +874,60 @@ export function ModelAdvancedDrawer({
                     title={t('settings.providers.models.advanced.capability')}
                     hint={t('settings.providers.models.advanced.capabilityHint')}
                   >
+                    {imageModel && (
+                      <>
+                        <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                                aria-label={t('settings.providers.models.advanced.imageCapability.label')}
+                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
+                                {t(`settings.providers.models.advanced.imageCapability.${imageCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent className="z-[10003]" align="start">
+                              <DropdownMenuRadioGroup value={imageCapability} onValueChange={value => void setImageCapability(value)}>
+                                {(['default', 'generate', 'edit'] as const).map(value => (
+                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.imageCapability.${value}`)}</DropdownMenuRadioItem>
+                                ))}
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </Row>
+                        <p className="text-12 leading-5 text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.imageCapability.hint', { agent: AGENT_LABEL[imageAgent!] })}
+                        </p>
+                      </>
+                    )}
+                    {videoModel && (
+                      <>
+                        <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                                aria-label={t('settings.providers.models.advanced.videoCapability.label')}
+                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
+                                {t(`settings.providers.models.advanced.videoCapability.${videoCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent className="z-[10003]" align="start">
+                              <DropdownMenuRadioGroup value={videoCapability} onValueChange={value => void setImageCapability(value, 'video')}>
+                                {(['default', 'generate', 'edit'] as const).map(value => (
+                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.videoCapability.${value}`)}</DropdownMenuRadioItem>
+                                ))}
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </Row>
+                        <p className="text-12 leading-5 text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.videoCapability.hint', { agent: AGENT_LABEL[videoAgent!] })}
+                        </p>
+                      </>
+                    )}
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
                       <span
                         title={
-                          primaryModel.modalities || primaryModel.supportsImageInput !== undefined
+                          capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
                             ? t('settings.providers.models.advanced.catalogCapabilities')
                             : t(`settings.providers.models.advanced.visionSource.${vision}`)
                         }
@@ -851,13 +940,13 @@ export function ModelAdvancedDrawer({
                         />
                       </span>
                     </Row>
-                    {primaryModel.modalities &&
+                    {capabilityModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row
                           key={direction}
                           label={t(`settings.providers.models.advanced.${direction}Modalities`)}
                         >
-                          {primaryModel
+                          {capabilityModel
                             .modalities![direction].map((modality) =>
                               ['text', 'image', 'audio', 'video', 'file'].includes(modality)
                                 ? t(`settings.providers.models.advanced.modalities.${modality}`)
@@ -877,7 +966,9 @@ export function ModelAdvancedDrawer({
                   </Section>
 
                   <Section title={t('settings.providers.models.advanced.pricing')}>
-                    {price === null ? (
+                    {primaryModel.displayPricing && primaryModel.currency ? (
+                      <DisplayPricingDetails model={primaryModel} />
+                    ) : price === null ? (
                       <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
                         {t(
                           provider.access?.kind === 'subscription'
@@ -909,7 +1000,7 @@ export function ModelAdvancedDrawer({
                         </Row>
                       ))
                     )}
-                    {price?.kind === 'priced' && price.discount !== undefined && (
+                    {!primaryModel.displayPricing && price?.kind === 'priced' && price.discount !== undefined && (
                       <Row label={t('settings.providers.models.advanced.discount')}>
                         <span
                           className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"

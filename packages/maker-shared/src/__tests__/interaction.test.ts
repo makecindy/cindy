@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  asyncQuestionNeedsSupplement,
+  formatAsyncQuestionSupplement,
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
   buildAskUserQuestionDecision,
@@ -37,6 +39,33 @@ import {
 } from '../interaction.js';
 
 describe('interaction shared model', () => {
+  it('keeps original questions attached to late answers without including skipped questions', () => {
+    expect(formatAsyncQuestionSupplement([{ question: 'Scope?\nDetails?', header: 'Scope' }, { question: 'Skipped?' }],
+      { Scope: 'Mobile too', 'Skipped?': '' })).toBe('> Scope?\n> Details?\n\nMobile too');
+    expect(formatAsyncQuestionSupplement([{ question: 'Q?' }], {})).toBe('');
+  });
+
+  it('never supplements an accepted native answer', async () => {
+    const read = vi.fn();
+    expect(await asyncQuestionNeedsSupplement(async () => ({ accepted: true }), read, 'q1')).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each(['answered', 'cancelled', 'pending', 'missing'])('checks the original Host row after a lost receipt: %s', async (status) => {
+    const result = asyncQuestionNeedsSupplement(async () => { throw new Error('lost receipt'); },
+      async () => status === 'missing' ? undefined : JSON.stringify({ requestId: 'q1', status }), 'q1');
+    if (status === 'answered') expect(await result).toBe(false);
+    else if (status === 'cancelled') expect(await result).toBe(true);
+    else await expect(result).rejects.toThrow('not confirmed');
+  });
+
+  it('does not deliver against a different question or a still-pending paused question', async () => {
+    await expect(asyncQuestionNeedsSupplement(async () => ({ accepted: false }),
+      async () => ({ requestId: 'other', status: 'cancelled' }), 'q1')).rejects.toThrow();
+    await expect(asyncQuestionNeedsSupplement(async () => ({ accepted: false }),
+      async () => ({ requestId: 'q1', status: 'pending' }), 'q1')).rejects.toThrow();
+  });
+
   it('builds resolve action presentation for requestId, busy, invalid, and confirm states', () => {
     expect(buildInteractionResolveActionPresentation({
       label: '允许一次',
@@ -636,6 +665,21 @@ describe('interaction shared model', () => {
     expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
     expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
     expect(interactionBlocksRemoteComposer(null)).toBe(false);
+  });
+
+  it('lets the controller answer 代输入 without taking over its composer', () => {
+    const live = { request: { kind: 'input_handoff', requestId: 'h1', revision: 3 } };
+    const ended = { request: { kind: 'input_handoff', requestId: 'h1', revision: 4, terminal: true } };
+    expect(remoteInteractionHandling(live)).toBe('resolvable');
+    expect(remoteInteractionHandling(ended)).toBe('desktop-only');
+    // A Host-owned wait outlives the turn; the owner must still be able to chat.
+    expect(interactionBlocksRemoteComposer(live)).toBe(false);
+    expect(pendingInteractionsBlockRemoteComposer([live])).toBe(false);
+    // A question the turn is blocked on still comes first.
+    expect(sortPendingInteractions([
+      live,
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ]).map((item) => item.request.requestId)).toEqual(['p1', 'h1']);
   });
 
   it('keys composer blocking off the whole pending set, not the card being viewed', () => {

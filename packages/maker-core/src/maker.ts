@@ -22,7 +22,12 @@ import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from '
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
-import type { AgentEvent, ForkSdkSessionOptions, ForkSdkSessionResult } from './types/events.js';
+import {
+  isTerminalAgentErrorEvent,
+  type AgentEvent,
+  type ForkSdkSessionOptions,
+  type ForkSdkSessionResult,
+} from './types/events.js';
 import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
@@ -428,6 +433,37 @@ interface FailedHandleCleanup {
   handle: AgentSessionHandle;
   promise: Promise<void> | null;
   onCleaned?: () => void;
+}
+
+/**
+ * 在另一台电脑上运行的 Claude Code 会话，其新 vendor id（fork / 重建出的 id）要等这一轮
+ * 成功结束才写成持久编号。`pending` 只在同一 session 的持久化队列里读写，保证与事件同序。
+ */
+interface DeferredSdkSessionCommit {
+  pending?: string;
+}
+
+/**
+ * 这一轮没有正常落地：与对方电脑失联，或对方的 Claude 流中途崩溃 / resume 失败。
+ * 这类回合里新 fork 出的编号可能还没有对话记录，不能写成持久编号。
+ * 用户主动 Stop 等其它收尾不在此列：Claude 已经收下输入并写了记录，下一轮应接着它走。
+ */
+const UNFINISHED_TURN_REASONS = new Set([
+  'remote_agent_closed',
+  'remote_agent_lost',
+  'sdk_stream_crashed',
+  'bridge_sdk_stream_crashed',
+  'resume_session_not_found',
+  'resume_session_recovery_failed',
+]);
+
+function isUnfinishedRemoteTurnEvent(evt: AgentEvent): boolean {
+  const data = evt.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const { reason, message } = data as { reason?: unknown; message?: unknown };
+  if (typeof reason === 'string' && UNFINISHED_TURN_REASONS.has(reason)) return true;
+  return typeof message === 'string'
+    && /\[REMOTE_AGENT_(EXPIRED|DEVICE_UNREACHABLE|NOT_FOUND|UNAVAILABLE)\]/.test(message);
 }
 
 export class Maker {
@@ -1064,10 +1100,17 @@ export class Maker {
       // 透传 remoteHostId 让 host 层在 hot path 上能 O(1) 判 local/remote
       // (不用每次 send 回 DB 读 SessionMeta — register.ts checkWorkDirExists 走这条)。
       remoteHostId: meta.remoteHostId ?? null,
+      // 取实际决定启动分支的 startOpts：任务记录事后读回的旧值不能把本机启动的会话标成远端。
+      agentDeviceId: startOpts.agentDeviceId || null,
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,
     });
+
+    // 另一台电脑上的 Claude Code：新编号等这一轮成功结束才落库。失联的回合里，对方可能还没写出
+    // 这个编号的对话记录，提前落库会让下次发送 resume 到一个空会话，丢掉全部历史。
+    const deferredSdkSessionCommit: DeferredSdkSessionCommit | undefined =
+      opts.agentKind === 'claude-code' && startOpts.agentDeviceId ? {} : undefined;
 
     // 当 SDK 回填 sdkSessionId 时持久化
     session.onEvent((evt) => {
@@ -1094,14 +1137,24 @@ export class Maker {
             return;
           }
         }
-        void this.persistSdkSessionId(meta.id, evt.data).catch((e) => {
+        void this.persistSdkSessionId(meta.id, evt.data, deferredSdkSessionCommit).catch((e) => {
           this.logger.warn('failed to persist sdkSessionId', { error: String(e) });
         });
+        return;
+      }
+      if (!deferredSdkSessionCommit) return;
+      if (evt.type === 'done' && !isUnfinishedRemoteTurnEvent(evt)) {
+        void this.commitDeferredSdkSessionId(meta.id, deferredSdkSessionCommit).catch((e) => {
+          this.logger.warn('failed to commit deferred sdkSessionId', { error: String(e) });
+        });
+      } else if (evt.type === 'done' || (isTerminalAgentErrorEvent(evt) && isUnfinishedRemoteTurnEvent(evt))) {
+        void this.discardDeferredSdkSessionId(meta.id, deferredSdkSessionCommit);
       }
     });
 
     session.onStatusChange((status) => {
       if (status === 'closed') {
+        if (deferredSdkSessionCommit) void this.discardDeferredSdkSessionId(meta.id, deferredSdkSessionCommit);
         codexThreadClaim?.release();
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
@@ -1167,8 +1220,16 @@ export class Maker {
     );
   }
 
-  /** 串行持久化有效 vendor id，并屏蔽已判失效 query 的晚到事件。 */
-  private persistSdkSessionId(sessionId: string, sdkSessionId: string): Promise<void> {
+  /**
+   * 串行持久化有效 vendor id，并屏蔽已判失效 query 的晚到事件。
+   * 传入 `deferred` 时：库里已有另一个编号，就先只记在 `deferred.pending`，等这一轮成功再提交；
+   * 库里还没有编号（首轮）时没有可回退的对象，仍立即落库。
+   */
+  private persistSdkSessionId(
+    sessionId: string,
+    sdkSessionId: string,
+    deferred?: DeferredSdkSessionCommit,
+  ): Promise<void> {
     return this.enqueueSdkSessionPersistence(sessionId, async () => {
       if (this.invalidSdkSessionIds.get(sessionId)?.has(sdkSessionId)) {
         this.logger.debug('ignored stale sdkSessionId event after invalid-resume recovery', {
@@ -1177,7 +1238,43 @@ export class Maker {
         });
         return;
       }
+      if (deferred) {
+        const current = (await this.storage.get(sessionId))?.sdkSessionId;
+        if (current && current !== sdkSessionId) {
+          deferred.pending = sdkSessionId;
+          this.logger.debug('deferred sdkSessionId until the remote turn succeeds', {
+            sessionId,
+            sdkSessionId,
+          });
+          return;
+        }
+        deferred.pending = undefined;
+      }
       await this.storage.update(sessionId, { sdkSessionId });
+    });
+  }
+
+  /** 这一轮成功结束：把暂存的新 vendor id 写成持久编号（与 persistSdkSessionId 同一条队列，保序）。 */
+  private commitDeferredSdkSessionId(sessionId: string, deferred: DeferredSdkSessionCommit): Promise<void> {
+    return this.enqueueSdkSessionPersistence(sessionId, async () => {
+      const sdkSessionId = deferred.pending;
+      deferred.pending = undefined;
+      if (!sdkSessionId) return;
+      if (this.invalidSdkSessionIds.get(sessionId)?.has(sdkSessionId)) return;
+      await this.storage.update(sessionId, { sdkSessionId });
+    });
+  }
+
+  /** 这一轮失联结束或会话关闭：丢掉暂存编号，库里保持上一个成功的编号。 */
+  private discardDeferredSdkSessionId(sessionId: string, deferred: DeferredSdkSessionCommit): Promise<void> {
+    return this.enqueueSdkSessionPersistence(sessionId, async () => {
+      if (deferred.pending) {
+        this.logger.warn('dropped uncommitted sdkSessionId after the remote turn did not finish', {
+          sessionId,
+          sdkSessionId: deferred.pending,
+        });
+      }
+      deferred.pending = undefined;
     });
   }
 

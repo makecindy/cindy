@@ -1,9 +1,9 @@
 /**
  * 远程 Agent 事件拉取(控制端，每台运行 Agent 的电脑一个)。
  *
- * 同一台电脑上的全部任务共用一个 `poll`：一次带上每个任务的游标，对方没有新数据时挂起最多
- * READ_WAIT_MS。任务再多也只占设备互联一个长等待；新任务登记时另发一个覆盖全部任务的 poll，
- * 同时在途的 poll 不超过两个。两个 poll 返回的数据可能重叠，按 from 去重，游标只前进不后退。
+ * 同一台电脑上的全部任务共用一个拉取器：每个 `poll` 最多携带 64 个任务的游标，按整批轮转，
+ * 对方没有新数据时挂起最多 READ_WAIT_MS。新任务登记时可另发一个 poll，同时在途最多两个。
+ * 两个 poll 返回的数据可能重叠，按 from 去重，游标只前进不后退。
  *
  * 链路抖动：poll 按游标幂等，可恢复的错误退避后重拉；对方长时间不可达时结束全部任务。
  */
@@ -74,6 +74,8 @@ export class RemoteAgentPoller {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private rotation = 0;
   private emptyFastStreak = 0;
+  /** 在途的 poll 各自覆盖哪些任务(判断有没有任务没人在拉)。 */
+  private readonly inflightCoverage = new Set<ReadonlySet<string>>();
 
   constructor(
     readonly invoke: RemoteAgentInvoke,
@@ -108,8 +110,9 @@ export class RemoteAgentPoller {
   private snapshot(): Array<{ runId: string; cursor: number }> {
     const all = [...this.entries.values()].map((entry) => ({ runId: entry.run.runId, cursor: entry.cursor }));
     if (all.length <= REMOTE_AGENT_MAX_POLL_RUNS) return all;
-    // 超出单次上限时轮流取(对方每台控制端的任务数远低于这个上限，正常走不到)。
-    const start = this.rotation++ % all.length;
+    // 按整批推进，避免大量空闲任务在下次被拉取前超过 host 的存活期限。
+    const start = this.rotation % all.length;
+    this.rotation = (start + REMOTE_AGENT_MAX_POLL_RUNS) % all.length;
     this.needFresh = true;
     return [...all.slice(start), ...all.slice(0, start)].slice(0, REMOTE_AGENT_MAX_POLL_RUNS);
   }
@@ -117,7 +120,9 @@ export class RemoteAgentPoller {
   private async pollOnce(): Promise<void> {
     const wanted = this.snapshot();
     const startedAt = this.now();
+    const coverage: ReadonlySet<string> = new Set(wanted.map((item) => item.runId));
     this.inflight += 1;
+    this.inflightCoverage.add(coverage);
     let raw: unknown;
     let failure: unknown = null;
     try {
@@ -126,6 +131,7 @@ export class RemoteAgentPoller {
       failure = error;
     } finally {
       this.inflight -= 1;
+      this.inflightCoverage.delete(coverage);
     }
     let result: RemoteAgentPollResult | null = null;
     if (!failure) {
@@ -160,9 +166,24 @@ export class RemoteAgentPoller {
   }
 
   private ensureAfterReturn(): void {
-    // 这个 poll 回来了：没有其它在途的就再发一个；有任务没被覆盖时也发。
-    if (this.inflight === 0) this.needFresh = true;
+    // 这个 poll 回来了：没有其它在途的就再发一个；有任务没被仍在途的 poll 覆盖时也发——否则新登记的
+    // 任务在覆盖它的那个 poll 带回第一段数据后，要等旧的长等待超时(最长 READ_WAIT_MS)才有人再拉它。
+    if (this.inflight === 0 || this.hasUncoveredRun()) this.needFresh = true;
     this.ensure();
+  }
+
+  private hasUncoveredRun(): boolean {
+    for (const runId of this.entries.keys()) {
+      let covered = false;
+      for (const coverage of this.inflightCoverage) {
+        if (coverage.has(runId)) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) return true;
+    }
+    return false;
   }
 
   /** 处理一次 poll 的结果；返回是否交付了任何新数据或状态变化。 */

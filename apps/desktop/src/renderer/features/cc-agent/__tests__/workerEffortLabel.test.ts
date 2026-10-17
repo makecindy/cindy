@@ -1,19 +1,11 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkerInfo } from '../hooks/useWorkers';
 import { RolePillDropdown, WorkerListToolbar } from '../RolePillDropdown';
-
-const source = readFileSync(resolve(__dirname, '..', 'RolePillDropdown.tsx'), 'utf8').replace(
-  /\r\n?/g,
-  '\n',
-);
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -77,30 +69,74 @@ describe('RolePillDropdown worker effort label', () => {
     expect(screen.queryByLabelText(/^effort /)).toBeNull();
   });
 
-  it('uses the same model line in the summary, tabs menu, and dropdown list', () => {
-    const current = worker();
+  it.each(
+    ['summary', 'tabs menu', 'dropdown list'].flatMap((surface) =>
+      ['local', 'remote', 'offline remote'].map((kind) => ({ surface, kind })),
+    ),
+  )('shows a consistent model line for a $kind worker in the $surface', async ({ surface, kind }) => {
+    const current = worker({
+      executionDevice:
+        kind === 'local'
+          ? undefined
+          : {
+              deviceId: 'mac-mini',
+              remoteSessionId: 'remote-a',
+              deviceName: 'Mac mini',
+              reachable: kind !== 'offline remote',
+              workingDir: null,
+            },
+    });
+    const props = {
+      worker: current,
+      workers: [current],
+      selectedWorkerId: current.workerId,
+      activeWorkerCount: 1,
+      onSwitchFocus: vi.fn(),
+      onArchiveWorker: vi.fn(),
+    };
     render(
-      createElement(WorkerListToolbar, {
-        worker: current,
-        workers: [current],
-        selectedWorkerId: current.workerId,
-        activeWorkerCount: 1,
-        softLimit: 5,
-        hardLimit: 8,
-        onSwitchFocus: vi.fn(),
-        onOpenCreate: vi.fn(),
-        onOpenSettings: vi.fn(),
-        onArchiveWorker: vi.fn(),
-      }),
+      surface === 'dropdown list'
+        ? createElement(RolePillDropdown, props)
+        : createElement(WorkerListToolbar, {
+            ...props,
+            softLimit: 5,
+            hardLimit: 8,
+            onOpenCreate: vi.fn(),
+            onOpenSettings: vi.fn(),
+          }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.layoutMenuLabel' }));
-    expect(screen.getByText('gpt-5.6-sol')).toBeTruthy();
-    expect(screen.getByText('· effortLevels.xhigh')).toBeTruthy();
-    expect(screen.queryByLabelText(/^effort /)).toBeNull();
+    if (surface === 'tabs menu') {
+      fireEvent.click(screen.getByRole('button', { name: 'orca.rolePill.layoutMenuLabel' }));
+    } else if (surface === 'summary') {
+      fireEvent.focus(screen.getByRole('button', { name: /developer/ }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: /developer/ }));
+    }
 
-    expect(source.match(/<WorkerModelLine\b/g)).toHaveLength(3);
-    expect(source).toContain('<WorkerModelLine model={worker.model} effort={worker.effort} />');
+    if (kind === 'offline remote') {
+      await screen.findAllByText('orca.rolePill.deviceUnreachable');
+      expect(screen.queryByText('gpt-5.6-sol')).toBeNull();
+      expect(screen.queryByText('· effortLevels.xhigh')).toBeNull();
+    } else {
+      const models = await screen.findAllByText('gpt-5.6-sol');
+      const efforts = screen.getAllByText('· effortLevels.xhigh');
+      expect(models).toHaveLength(efforts.length);
+      models.forEach((model, index) => {
+        expect(model.parentElement).toBe(efforts[index]!.parentElement);
+        expect(model.classList.contains('truncate')).toBe(true);
+        expect(efforts[index]!.classList.contains('shrink-0')).toBe(true);
+        expect(model.parentElement?.classList.contains('text-12')).toBe(true);
+        expect(model.parentElement?.classList.contains('text-[var(--text-secondary)]')).toBe(true);
+      });
+      expect(screen.queryByText('orca.rolePill.deviceUnreachable')).toBeNull();
+    }
+    if (kind !== 'local') {
+      expect(screen.getAllByText('Mac mini').length).toBeGreaterThan(0);
+    } else {
+      expect(screen.queryByText('Mac mini')).toBeNull();
+    }
+    expect(screen.queryByLabelText(/^effort /)).toBeNull();
   });
 
   it('hides unknown or missing effort instead of falling back to medium', () => {

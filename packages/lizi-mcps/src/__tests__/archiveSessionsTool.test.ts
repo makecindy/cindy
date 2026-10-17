@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
+import { registerSendToSessionTool } from '../xdt-helper/send_to_session.js';
 import {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
@@ -20,7 +21,7 @@ function parse(result: XdtHelperToolResult) {
   return JSON.parse(block.text);
 }
 
-function setup(opts?: { sessionId?: string }) {
+function setup(opts?: { sessionId?: string; remote?: ArchiveSessionsDeps['setRemoteSessionsStatus'] }) {
   const sessionId = opts?.sessionId ?? 'current-session';
   const setSessionsStatus: ArchiveSessionsDeps['setSessionsStatus'] = vi.fn(
     async ({ sessionIds, status }: Parameters<ArchiveSessionsDeps['setSessionsStatus']>[0]) => ({
@@ -40,6 +41,7 @@ function setup(opts?: { sessionId?: string }) {
       workingDir: '/tmp/proj',
     }),
     setSessionsStatus,
+    setRemoteSessionsStatus: opts?.remote,
   };
   const registry = new XdtHelperToolRegistry();
   registerArchiveSessionsTool(registry, deps);
@@ -139,6 +141,32 @@ describe('archive_sessions tool', () => {
 });
 
 describe('unarchive_sessions tool', () => {
+  it('normalizes the explicit local alias before self-protection and deduplication', async () => {
+    const { registry, setSessionsStatus } = setup();
+    expect(parse(await registry.call('archive_sessions', { session_ids: ['local::current-session'] })).errorCode).toBe('INVALID_ARGS');
+    expect(parse(await registry.call('unarchive_sessions', { session_ids: ['s1', 'local::s1'] })).errorCode).toBe('INVALID_ARGS');
+    expect(setSessionsStatus).not.toHaveBeenCalled();
+    expect(parse(await registry.call('unarchive_sessions', { session_ids: ['local::s1'] })).ok).toBe(true);
+    expect(setSessionsStatus).toHaveBeenCalledExactlyOnceWith({ sessionIds: ['s1'], status: 'active' });
+  });
+
+  it('returns an address the existing send tool can use, without sending during restoration', async () => {
+    const { registry, setSessionsStatus } = setup({ remote: async () => ({ ok: true, changed: [
+      { sessionId: 's1', title: null, workingDir: null, status: 'active' },
+    ] }) });
+    const sendToSession = vi.fn();
+    const sendToRemoteSession = vi.fn(async () => ({ ok: true as const, agentKind: 'codex' as const,
+      wakeKind: 'queued' as const, targetTitle: null, targetLastUserSendAt: null,
+    }));
+    registerSendToSessionTool(registry, { getSessionContext: () => ({ sessionId: 'caller', agentKind: 'codex', workingDir: '/tmp/proj' }), sendToSession, sendToRemoteSession });
+    const restored = parse(await registry.call('unarchive_sessions', { session_ids: ['studio::s1'] }));
+    expect(sendToRemoteSession).not.toHaveBeenCalled();
+    expect(parse(await registry.call('send_to_session', { target_session_id: restored.changed[0].session_id, message: 'continue' }))).toMatchObject({ ok: true, wake_kind: 'queued' });
+    expect(sendToRemoteSession).toHaveBeenCalledExactlyOnceWith({ deviceId: 'studio', sessionId: 's1', message: 'continue', dispatcherSessionId: 'caller' });
+    expect(sendToSession).not.toHaveBeenCalled();
+    expect(setSessionsStatus).not.toHaveBeenCalled();
+  });
+
   it('passes status=active to host and allows the current session', async () => {
     const { registry, setSessionsStatus } = setup({ sessionId: 'current-session' });
     const res = await registry.call('unarchive_sessions', {
@@ -150,5 +178,66 @@ describe('unarchive_sessions tool', () => {
       status: 'active',
     });
     expect(parse(res)).toMatchObject({ ok: true, status: 'active', count: 2 });
+  });
+
+  it.each(['archive_sessions', 'unarchive_sessions'])('routes %s qualified ids exclusively to the remote host', async (name) => {
+    const status = name === 'archive_sessions' ? 'archived' : 'active';
+    const remote = vi.fn(async () => ({ ok: true as const, changed: [
+      { sessionId: 'current-session', title: 'remote', workingDir: null, status: status as 'active' | 'archived' },
+    ] }));
+    const { registry, setSessionsStatus } = setup({ remote });
+    const result = parse(await registry.call(name, { session_ids: ['studio::current-session'] }));
+    expect(remote).toHaveBeenCalledExactlyOnceWith({ deviceId: 'studio', sessionIds: ['current-session'], status });
+    expect(setSessionsStatus).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, count: 1, changed: [{ session_id: 'studio::current-session', status }] });
+  });
+
+  it.each([
+    ['local-task', 'studio::remote-task'],
+    ['studio::s1', 'laptop::s2'],
+    ['studio::'],
+    ['::task'],
+    ['local::studio::s1'],
+  ])('rejects a mixed/malformed batch before any write: %j', async (...session_ids) => {
+    const remote = vi.fn();
+    const { registry, setSessionsStatus } = setup({ remote });
+    expect(parse(await registry.call('unarchive_sessions', { session_ids })).errorCode).toBe('INVALID_ARGS');
+    expect(remote).not.toHaveBeenCalled();
+    expect(setSessionsStatus).not.toHaveBeenCalled();
+  });
+
+  it('never sends a composite id to the local host when remote support is absent', async () => {
+    const { registry, setSessionsStatus } = setup();
+    expect(parse(await registry.call('unarchive_sessions', { session_ids: ['studio::s1'] })).errorCode).toBe('REMOTE_UNSUPPORTED');
+    expect(setSessionsStatus).not.toHaveBeenCalled();
+  });
+
+  it('preserves partial receipts and qualifies the failed and unattempted ids', async () => {
+    const remote = vi.fn(async () => ({
+      ok: false as const, errorCode: 'REMOTE_RESULT_UNKNOWN', message: 'check status first',
+      changed: [{ sessionId: 's1', title: null, workingDir: null, status: 'active' as const }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    }));
+    const { registry, setSessionsStatus } = setup({ remote });
+    const res = await registry.call('unarchive_sessions', { session_ids: ['studio::s1', 'studio::s2', 'studio::s3'] });
+    expect(res.isError).toBe(true);
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN', data: {
+      partial: true, changed: [{ session_id: 'studio::s1' }], failed_session_id: 'studio::s2', remaining_session_ids: ['studio::s3'],
+    } });
+    expect(setSessionsStatus).not.toHaveBeenCalled();
+  });
+
+  it('marks an unknown first write as partial even without a confirmed receipt', async () => {
+    const remote = vi.fn(async () => ({
+      ok: false as const, errorCode: 'REMOTE_RESULT_UNKNOWN', message: 'check status first',
+      changed: [], failedSessionId: 's1', remainingSessionIds: ['s2'],
+    }));
+    const { registry, setSessionsStatus } = setup({ remote });
+    const res = await registry.call('unarchive_sessions', { session_ids: ['studio::s1', 'studio::s2'] });
+    expect(res.isError).toBe(true);
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'REMOTE_RESULT_UNKNOWN', data: {
+      partial: true, changed: [], failed_session_id: 'studio::s1', remaining_session_ids: ['studio::s2'],
+    } });
+    expect(setSessionsStatus).not.toHaveBeenCalled();
   });
 });

@@ -20,6 +20,25 @@ afterEach(() => {
 });
 
 describe('WeChat reliable worker transactions', () => {
+  it('settles an empty final outbox item without replaying the accepted task', () => {
+    const db = createDb();
+    activate(db, 'epoch-1', null);
+    commitBatch(db, {
+      bindingEpoch: 'epoch-1', expectedCursor: '', nextCursor: 'cursor-1',
+      messages: [message('task-1', 'platform-1', 'session-1')],
+    });
+    lease(db, 'epoch-1', 200);
+    runTx(db, 'wechatMarkAccepted', { bindingEpoch: 'epoch-1', taskId: 'task-1' });
+    const terminal = { bindingEpoch: 'epoch-1', taskId: 'task-1', now: 300,
+      outbox: [outbox('empty-final', 'client-empty', 0, '')] };
+    expect(runTx(db, 'wechatCommitTerminal', terminal)).toEqual({ committed: true, alreadyCommitted: false });
+    expect(runTx(db, 'wechatMarkOutboxDelivered', {
+      bindingEpoch: 'epoch-1', outboxId: 'empty-final', deliveredAt: 301,
+    })).toEqual({ changed: true, taskId: 'task-1', taskCompleted: true });
+    expect(readTaskStatus(db, 'task-1')).toBe('completed');
+    expect(runTx(db, 'wechatCommitTerminal', terminal)).toEqual({ committed: true, alreadyCommitted: true });
+    expect(count(db, 'wechat_outbox')).toBe(1);
+  });
   it('uses binding epoch and cursor CAS to reject stale callbacks', () => {
     const db = createDb();
 

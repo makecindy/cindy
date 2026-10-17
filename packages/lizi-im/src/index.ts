@@ -7,6 +7,8 @@
  */
 
 export const VERSION = '0.0.0';
+export { buildInboundMessageFacts } from './inboundFacts.js';
+export type { InboundMessageFacts } from './inboundFacts.js';
 
 export { BaseIM } from './BaseIM.js';
 export { createIM } from './createIM.js';
@@ -23,6 +25,7 @@ export type { Logger } from './logger.js';
 
 export type {
   IMHost,
+  IMHostFileStaging,
   IMAttachment,
   IMUnsupportedEntry,
   IMMessageEvent,
@@ -37,6 +40,7 @@ export type {
 } from './types.js';
 
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
+export type { FeishuIMOptions } from './feishu/index.js';
 export {
   decodeLaneUserId as decodeFeishuLaneUserId,
   encodeLaneUserId as encodeFeishuLaneUserId,
@@ -46,11 +50,13 @@ export type {
   RecentChatMessage as FeishuRecentChatMessage,
   ChatHistoryPage as FeishuChatHistoryPage,
 } from './feishu/outbound.js';
+export { FeishuApiError } from './feishu/outbound.js';
+export type { FeishuApiMethod, FeishuChatMembersPage } from './feishu/outbound.js';
 export type { AttachmentRef as FeishuAttachmentRef } from './feishu/incomingContent.js';
 export type { DownloadResult as FeishuDownloadResult } from './feishu/attachmentDownloader.js';
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
-export type { DiscordIMOptions } from './discord/index.js';
+export type { DiscordConfigState, DiscordIMOptions } from './discord/index.js';
 
 export { TelegramIM, createTelegramIM } from './telegram/index.js';
 // expressive 档变体池 —— 官方 bot 的 ack 表情复用同一份, 两个 bot 的表情语义
@@ -61,7 +67,16 @@ export {
   EXPRESSIVE_ERROR_POOL,
   pickExpressiveReaction,
 } from './telegram/reactionPool.js';
-export type { TelegramIMOptions, TelegramGroupWindowEntry } from './telegram/index.js';
+export type {
+  TelegramIMOptions,
+  TelegramConfigState,
+  TelegramGroupWindowEntry,
+  TelegramOutboundMedia,
+  TelegramOutboundMediaKind,
+} from './telegram/index.js';
+export { TELEGRAM_OUTBOUND_MEDIA } from './telegram/index.js';
+export { TelegramApiError } from './telegram/api.js';
+export type { TelegramApiClient, TgChatMemberUpdated, TgMessage } from './telegram/api.js';
 export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';
 export { TELEGRAM_PERSONAL_CAPABILITIES } from './telegram/presentationCapabilities.js';
@@ -98,7 +113,7 @@ export type {
   TelegramMessageLifecyclePhase,
 } from './telegram/messageLifecycle.js';
 export { WecomIM, createWecomIM } from './wecom/index.js';
-export type { WecomIMOptions } from './wecom/index.js';
+export type { WecomConfigState, WecomIMOptions } from './wecom/index.js';
 export {
   decodeWecomLane,
   encodeWecomGroupLane,

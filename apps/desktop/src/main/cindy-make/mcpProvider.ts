@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { McpProvider, McpProviderContext } from '@cindy/maker-core';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { resolveLiziMcpSessionContext } from '@cindy/mcps';
 import {
   CINDY_MAKE_MCP_SERVER_NAME,
@@ -23,6 +24,7 @@ export interface CindyMakeMcpDeps {
  * server list (Pi) hides it, while each call still fails closed on the marker.
  */
 export function isCindyMakeServerVisible(ctx: McpProviderContext): boolean {
+  if (!CINDY_MAKE_ENABLED) return false;
   if (isCindyMakeVendorOptions(ctx.vendorOptions)) return true;
   return (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir;
 }

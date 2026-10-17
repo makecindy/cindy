@@ -8,6 +8,8 @@
  *     脚本可读可不读。
  *   - exit 0 → 放行本轮;exit 2 → 跳过本轮;其它退出码 / 超时 / spawn 失败 →
  *     fail-closed 阻止本轮并记录失败，避免前置检查异常时绕过闸门。
+ *   - POSIX 下执行前先 `sh -n` 预检命令语法:sh 的语法错误退出码恰好也是 2,
+ *     不预检会把"引号没配平"之类的命令错误当成正常跳过，任务悄悄停摆。
  *   - 超时**仅在显式配置 timeoutMs 时生效**,未配置 = 不限时(产品决策:
  *     不设默认超时;代价是 hook 卡死会阻塞该轮 fire,由配置方自担)。
  *
@@ -17,7 +19,7 @@
  *   - stdout/stderr 各截断 8KB,防脚本刷屏撑爆 run 记录与日志。
  */
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import type { PreRunHookRunResult } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
 import os from 'node:os';
@@ -95,6 +97,56 @@ function firstLine(text: string): string {
   return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
+/** POSIX 下 spawn(shell:true) 实际使用的解释器;语法预检必须用同一个。 */
+const POSIX_SHELL = '/bin/sh';
+const SYNTAX_CHECK_TIMEOUT_MS = 5_000;
+
+/**
+ * POSIX shell 语法预检(`sh -n -c`,只解析不执行)。返回 shell 的报错文本;语法
+ * 正确、Windows(cmd.exe 没有对应能力)或预检本身没能完成(参数非法 / spawn
+ * 失败 / 超时 / 取消)时返回 undefined,交给真实执行按原协议处理。
+ */
+export function findShellSyntaxError(
+  command: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<string | undefined> {
+  if (process.platform === 'win32' || options.signal?.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        POSIX_SHELL,
+        ['-n', '-c', command],
+        {
+          timeout: Math.min(SYNTAX_CHECK_TIMEOUT_MS, options.timeoutMs ?? SYNTAX_CHECK_TIMEOUT_MS),
+          signal: options.signal,
+        },
+        (err, _stdout, stderr) => {
+          // 只有 shell 正常退出且非 0 才是语法错误;err.code 为字符串(ENOENT /
+          // ABORT_ERR 等)或超时被杀时不下结论。
+          if (!err || typeof err.code !== 'number') {
+            resolve(undefined);
+            return;
+          }
+          resolve(String(stderr).trim() || `${POSIX_SHELL} -n exited with code ${err.code}`);
+        },
+      );
+    } catch {
+      // 参数非法(如命令含 NUL)时 Node 同步抛错:不下结论,交给真实执行折叠成失败结果。
+      resolve(undefined);
+    }
+  });
+}
+
+/** 保存任务前校验前置检查命令;语法错误抛 invalid,让写错的命令当场被拒。 */
+export async function assertPreRunHookCommandSyntax(command: string): Promise<void> {
+  const syntaxError = await findShellSyntaxError(resolveHookCommand(command).command);
+  if (syntaxError) {
+    throw new Error(
+      `invalid pre-run hook configuration: shell syntax error in command: ${firstLine(syntaxError)}`,
+    );
+  }
+}
+
 /** 显式配置的正数才启用超时;未传 / 非法 / ≤0 → undefined(不限时)。 */
 export function resolvePreRunHookTimeoutMs(timeoutMs: number | undefined): number | undefined {
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -110,21 +162,62 @@ export function resolvePreRunHookTimeoutMs(timeoutMs: number | undefined): numbe
 export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunHookResult> {
   const timeoutMs = resolvePreRunHookTimeoutMs(input.timeoutMs);
   const startedAt = Date.now();
+  const abortedResult = (): PreRunHookResult => ({
+    status: 'aborted',
+    decision: 'block',
+    exitCode: null,
+    durationMs: Date.now() - startedAt,
+    stdout: '',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    aborted: true,
+  });
   // 进门先查:任务已被 pause/delete(信号已 abort)→ 不 spawn,直接返回
-  if (input.signal?.aborted) {
+  if (input.signal?.aborted) return abortedResult();
+
+  const resolved = resolveHookCommand(input.command);
+  // 预检与真实执行共用同一个取消信号和超时预算。
+  const syntaxError = await findShellSyntaxError(resolved.command, {
+    signal: input.signal,
+    timeoutMs,
+  });
+  if (input.signal?.aborted) return abortedResult();
+  const remainingTimeoutMs =
+    timeoutMs === undefined ? undefined : timeoutMs - (Date.now() - startedAt);
+  // 预检已耗尽配置的超时预算:不再启动真实命令,直接按超时阻止本轮。
+  if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
     return {
-      status: 'aborted',
+      status: 'timed_out',
       decision: 'block',
       exitCode: null,
-      durationMs: 0,
+      durationMs: Date.now() - startedAt,
       stdout: '',
       stderr: '',
       stdoutTruncated: false,
       stderrTruncated: false,
-      timedOut: false,
-      aborted: true,
+      timedOut: true,
+      aborted: false,
+      error: `pre-run hook timed out after ${timeoutMs}ms`,
     };
   }
+  if (syntaxError) {
+    return {
+      status: 'failed',
+      decision: 'block',
+      exitCode: null,
+      durationMs: Date.now() - startedAt,
+      stdout: '',
+      stderr: capAppendBase('', syntaxError, OUTPUT_CAP),
+      stdoutTruncated: false,
+      stderrTruncated: syntaxError.length > OUTPUT_CAP,
+      timedOut: false,
+      aborted: false,
+      error: `shell syntax error in command: ${firstLine(syntaxError)}`,
+    };
+  }
+
   return new Promise<PreRunHookResult>((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -185,14 +278,14 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
       setTimeout(() => settle({ exitCode: null }), 1_000).unref?.();
     };
 
-    // 未配置 timeoutMs 时不武装定时器 —— 不限时。
+    // 未配置 timeoutMs 时不武装定时器 —— 不限时;配置了则只用预检后剩余的预算。
     const timer =
-      timeoutMs === undefined
+      remainingTimeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
             killProcessTree(child?.pid, child, armForceSettle);
-          }, timeoutMs);
+          }, remainingTimeoutMs);
     timer?.unref?.();
 
     // 任务 pause/delete → 与超时同款树杀 + 1s 强制 settle:abortInflightAndWait
@@ -203,7 +296,6 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     };
     input.signal?.addEventListener('abort', onAbort, { once: true });
 
-    const resolved = resolveHookCommand(input.command);
     try {
       child = spawn(resolved.command, {
         shell: true,

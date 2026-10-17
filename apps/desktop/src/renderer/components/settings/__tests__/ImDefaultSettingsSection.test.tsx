@@ -66,8 +66,11 @@ vi.mock('@/hooks/useAvailableAgents', () => ({
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: ({ onUnifiedSelect, fastModeConfigurable }: {
     onUnifiedSelect: (selection: object) => void; fastModeConfigurable: boolean;
-  }) => <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
-    onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>,
+  }) => <>
+    <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
+      onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>
+    <button data-testid="select-shared" onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'owner-model', providerId: 'owner-provider', effort: 'high', agentDevice: { deviceId: 'share:owner', name: 'Owner' } })}>Select shared</button>
+  </>,
 }));
 
 vi.mock('@/components/new-chat/PermissionSelector', () => ({
@@ -99,6 +102,15 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
 }
 
 describe('ImDefaultSettingsSection Pi channel warning', () => {
+  it('saves a shared model and its location together without local catalog membership', async () => {
+    const save = vi.fn(async () => defaults('codex'));
+    window.electronAPI.maker.imDefaultSettingsSet = save;
+    render(<ImDefaultSettingsSection channel="feishu" />);
+    fireEvent.click(await screen.findByTestId('select-shared'));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ agentKind: 'codex', agents: {
+      codex: { providerId: 'owner-provider', model: 'owner-model', effort: 'high', agentDeviceId: 'share:owner' },
+    } }, 'feishu'));
+  });
   it('saves the complete selection in one update while preserving permissions', async () => {
     const save = vi.fn(async (_patch: unknown) => defaults('codex'));
     window.electronAPI.maker.imDefaultSettingsSet = save;
@@ -108,7 +120,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     fireEvent.click(screen.getByTestId('select-codex'));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0]?.[0]).toEqual({ agentKind: 'codex', agents: {
-      codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'low' },
+      codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'low', agentDeviceId: null },
     } });
   });
 

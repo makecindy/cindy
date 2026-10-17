@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sharedTaskHostPeer } from '@cindy/device-link';
@@ -54,7 +55,7 @@ describe('shared tasks in the mobile Home', () => {
 });
 
 describe('shared Home group', () => {
-  const own = { sharedTaskId: 'mine', sessionId: 'owner-task', hostDeviceId: 'desktop', ownerAccountId: 'owner', title: 'My share', revision: 1 };
+  const own = { sharedTaskId: 'mine', sessionId: 'owner-task', hostDeviceId: 'desktop', ownerAccountId: 'owner', title: 'My share', revision: 1, source: 'desktop' as string | null | undefined };
   const split = (sessions: MobileHomeSessionLike[], owned = [own], searchQuery = '', statusFilter: 'active' | 'archived' | 'all' = 'active', selectedDeviceId?: string) => {
     const home = buildMobileHomePresentation({ sessions, searchQuery, statusFilter, selectedDeviceId, devices: [
       { deviceId: 'desktop', name: 'Desktop', canOpen: true },
@@ -72,9 +73,14 @@ describe('shared Home group', () => {
     expect((result.rows.find(row => row.item?.session.id === 'joined')?.item?.session as MobileHomeSessionLike).deviceLinkDeviceId).toBe(peer);
   });
 
-  it('keeps account-discovered owner tasks visible before their device is controllable', () => {
+  it('keeps source-confirmed owner tasks visible without a complete session mirror', () => {
     expect(split([]).rows).toEqual([{ key: 'shared:mine', role: 'owned', task: own }]);
     expect(split([], []).rows).toEqual([]);
+  });
+
+  it.each([undefined, 'cindy-make', 'cindy-make-merge'])('does not synthesize a share row with source %s', source => {
+    expect(split([], [{ ...own, source }]).rows).toEqual([]);
+    expect(split([], [{ ...own, source: null }]).rows).toHaveLength(1);
   });
 
   it('moves pinned and project shared tasks into the same group', () => {
@@ -129,34 +135,20 @@ describe('shared Home group', () => {
   });
 });
 
-describe('shared role row wiring', () => {
-  const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
-
-  it('adds roles only to the existing shared group and still hides an empty group', () => {
-    expect(source).toContain('ListHeaderComponent={sharedRows.length > 0 ?');
-    expect(source.match(/sharedRole={row.role}/g)).toHaveLength(1);
-    expect(source).toContain('testID={`home.sharedRoleSlot.owned.${row.task.sessionId}`}');
-  });
-
-  it('uses a fixed title-side role slot and only renders a crown for owners', () => {
-    expect(source).toContain('const showPreviewLine = !!group || !!preview?.trim() || showSchedule || showPinned;');
-    const row = source.slice(source.indexOf('function HomeSessionRowInner('), source.indexOf('function AutomationGroupChildren('));
-    const roleSlot = row.indexOf('testID={`home.sharedRoleSlot.owned.${item.session.id}`}');
-    expect(roleSlot).toBeGreaterThan(row.indexOf('<SessionStatusMark'));
-    expect(roleSlot).toBeLessThan(row.indexOf('styles.sessionListContent'));
-    expect(row).toContain("{sharedRole === 'owned' ? (");
-    expect(row).not.toContain('{sharedRole ? (');
-    expect(row).not.toContain('accessibilityElementsHidden');
-    expect(row).not.toContain('importantForAccessibility');
-    expect(row).toContain("const accessibilityTitle = sharedRole === 'owned' ? item.title + ', ' + t('sharedTask.roleHost') : item.title;");
-    expect(row).toContain("t('devices.list.a11y.openAutomationLatest', { title: accessibilityTitle })");
-    expect(row).toContain("t('devices.list.a11y.automationTask', { title: accessibilityTitle })");
-    expect(row).toContain('accessibilityLabel={accessibilityLabel}');
-    expect(row).toContain('accessible={false}');
-    expect(row).not.toContain("accessibilityLabel={t('sharedTask.roleHost')}");
-    expect(row).not.toContain('sharedRoleBadge');
-    expect(row).toContain('color={colors.warningFg}');
-    expect(source).not.toContain('roleOwnedBadge');
-    expect(source).not.toContain('roleJoinedBadge');
+// Shared role identity and filtering run above through the production presentation.
+// Check the production row's accessibility projection rather than crown/layout strings.
+describe('shared role accessibility', () => {
+  it.each(['owned', 'joined', undefined] as const)('announces ownership only for role %s', (sharedRole) => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
+    const tree = ts.createSourceFile('HomeSurface.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let initializer: ts.Expression | undefined;
+    function visit(node: ts.Node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'accessibilityTitle') initializer = node.initializer;
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    if (!initializer) throw new Error('Missing production row accessibility title');
+    const project = new Function('sharedRole', 'item', 't', 'return (' + initializer.getText(tree) + ');');
+    expect(project(sharedRole, { title: 'Task' }, (key: string) => key)).toBe(sharedRole === 'owned' ? 'Task, sharedTask.roleHost' : 'Task');
   });
 });

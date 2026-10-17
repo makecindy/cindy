@@ -35,6 +35,11 @@ export function getSessionExternalNotificationText(title: string, kind: SessionE
   return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
 }
 
+/** 代输入 push body: fixed copy, never the screen or the agent's purpose text. */
+export function getInputHandoffNotificationBody(): string {
+  return t('settings.notifications.sessionEvent.inputHandoff');
+}
+
 export function getTeammateNotificationFallback(): string {
   return t('settings.notifications.sessionEvent.newReply');
 }

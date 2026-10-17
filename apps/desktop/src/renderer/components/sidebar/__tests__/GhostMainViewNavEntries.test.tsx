@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 const items = [
   {
     ghostId: 'alpha',
+    instanceId: 'alpha',
     title: 'Alpha',
     icon: 'puzzle',
     manifest: { id: 'alpha', name: 'Alpha Plugin' },
@@ -14,6 +15,7 @@ const items = [
   },
   {
     ghostId: 'workspace',
+    instanceId: 'workspace',
     title: 'Workspace',
     icon: 'globe',
     manifest: { id: 'workspace', name: 'Workspace Plugin' },

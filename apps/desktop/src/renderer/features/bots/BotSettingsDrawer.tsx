@@ -3,9 +3,13 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { matchPath, useBlocker, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+
 import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
+import { useCompanionCloud } from './companionCloudStore';
+import { isBotChannelLaneSession } from './botGroupLane';
 import { useRemoteBots } from './useRemoteBots';
 import { RemoteBotSettings } from './RemoteBotSettings';
 
@@ -24,13 +28,20 @@ export function BotSettingsDrawer() {
   );
   const match =
     matchPath('/bots/:botId/*', location.pathname) ?? matchPath('/bots/:botId', location.pathname);
-  const bot = remoteMatch
+  const cloud = useCompanionCloud();
+  const localBot = remoteMatch
     ? null
     : (bots.find((candidate) => candidate.id === match?.params.botId) ?? null);
+  // A demoted copy (the companion runs on another computer) is read-only: edits here would never
+  // reach the companion. Its settings live on the main computer (the banner on its task links there).
+  const bot = localBot && cloud.demotedBotIds.includes(localBot.id) ? null : localBot;
   const open = searchParams.get('settings') === '1' && (bot !== null || !!remoteBot);
 
   const requestedPage = searchParams.get('settingsPage');
   const initialPage = requestedPage === 'memory' || requestedPage === 'capabilities' ? requestedPage : 'home';
+  // 「模型」「消息平台」只有本机伙伴有; 远端伙伴仍只认上面两页。
+  const localInitialPage =
+    requestedPage === 'model' || requestedPage === 'channels' ? requestedPage : initialPage;
   const allowNavigation = useRef(false);
   const pendingGuard = useRef<Promise<boolean> | null>(null);
   const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -114,6 +125,9 @@ export function BotSettingsDrawer() {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
             }}
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
+            // The header shares the window title strip; without no-drag the page's drag
+            // regions underneath swallow the close button's clicks (see windowDrag.tsx).
+            style={WINDOW_NO_DRAG_STYLE}
           >
             <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
               <Dialog.Title className="text-15 font-medium text-[var(--text-primary)]">
@@ -140,13 +154,15 @@ export function BotSettingsDrawer() {
             ) : bot ? (
               <BotPronounProvider bot={bot}>
                 <BotSettings
-                  key={`${bot.id}:${open}:${initialPage}`}
-                  initialPage={initialPage}
+                  key={`${bot.id}:${open}:${localInitialPage}`}
+                  initialPage={localInitialPage}
                   beforeCloseRef={beforeCloseRef}
                   bot={bot}
                   onBack={performClose}
                   onOpenSession={(sessionId, searchJump) => {
                     const projection = bot.sessions.find((item) => item.id === sessionId);
+                    // IM 专线的记录在 IM 里，不在伙伴页面打开。
+                    if (isBotChannelLaneSession(projection)) return;
                     const route =
                       projection?.kind === 'history'
                         ? `/bots/${bot.id}/history/${sessionId}`

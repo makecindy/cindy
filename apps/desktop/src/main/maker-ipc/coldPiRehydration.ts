@@ -39,6 +39,22 @@ export interface ColdPiRehydrationDeps<
   bootstrapSession(createOpts: Opts): Promise<unknown>;
 }
 
+/**
+ * 冷 Pi 恢复失败后的落点（分支表抽成可执行函数，供接线层与单测共用）：
+ * - `verified`：恢复后有活会话，拿 live 读数刷新当前窗口；
+ * - `degraded`：恢复失败（最常见是存量 BYOM 路由已死，bootstrap 按 fail-closed
+ *   语义必然失败）——只记日志继续切，闸门对未知当前窗口 fail-open 放行热切，
+ *   目标路由由下一次发送懒创建。失败即拒绝切模会让会话永久卡死；
+ * - `fail-closed`：bootstrap 声称成功却没有活会话，且没降级过（原 #5508 出口）。
+ */
+export function classifyColdPiRehydrationOutcome(input: {
+  rehydrationFailed: boolean;
+  liveAfterBootstrap: boolean;
+}): 'verified' | 'degraded' | 'fail-closed' {
+  if (input.liveAfterBootstrap) return 'verified';
+  return input.rehydrationFailed ? 'degraded' : 'fail-closed';
+}
+
 async function stage<T>(
   category: ColdPiRehydrationFailureCategory,
   describe: string,

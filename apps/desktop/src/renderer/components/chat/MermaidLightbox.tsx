@@ -239,6 +239,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
 
   const overlay = (
     <div
+      data-mermaid-lightbox-overlay
       style={{
         position: 'fixed',
         inset: 0,

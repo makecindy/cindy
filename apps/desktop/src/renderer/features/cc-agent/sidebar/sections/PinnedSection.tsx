@@ -189,8 +189,6 @@ export function PinnedSection({
   const { mode, setMode } = useSidebarCardMode();
   // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
   const ViewStyleTriggerIcon = viewStyleIcon(mode);
-  // 卡片视觉(card 瀑布流 / list 单列满宽)统称"卡片态";text 为紧凑行。
-  const isCardLike = mode !== 'text';
   const [collapsed, setCollapsed] = useState(false);
 
   const visibleEntries = entries;
@@ -298,7 +296,7 @@ export function PinnedSection({
   if (visibleEntries.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-0.5 w-full">
+    <div className="flex flex-col w-full">
       {/* Section Title — height 24, padding [0,12,0,24]
           颜色规格（2026-04-20 二次确认对标设计稿 ZVIpx/WazkW）：
             Light #262626 / Dark #f5f0e8（深色文本，非 Stone 灰）
@@ -315,7 +313,7 @@ export function PinnedSection({
             type="button"
             onClick={() => setCollapsed((value) => !value)}
             aria-expanded={!collapsed}
-            className="text-sm font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
+            className="text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
           >
             {t('ccAgent.sidebar.pinned')}
           </button>
@@ -366,7 +364,13 @@ export function PinnedSection({
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
       {/* 段级收起走 SectionCollapse 高度动画,播完卸载子树。 */}
       <SectionCollapse collapsed={collapsed}>
-        <div className={cn('flex flex-col gap-0.5', isCardLike ? 'pr-0 pl-3' : 'pt-1 pr-0 pl-3')}>
+        {/* 留白放进折叠内容，收起后不残留；列表和卡片按自身内边距补偿。 */}
+        <div
+          className={cn(
+            'flex flex-col gap-0.5 pr-0 pl-3',
+            mode === 'text' ? 'pt-1.5' : mode === 'list' ? 'pt-1' : 'pt-0.5',
+          )}
+        >
           {/* 三种显示模式:
               - card:CardMasonry 响应式分栏(侧栏 ~258px 起 2 列、~424px 起 3 列,错落瀑布);
               - list:卡片视觉但**单列满宽**(不分栏、铺满左侧,类灵动岛),走单列 SortableList;

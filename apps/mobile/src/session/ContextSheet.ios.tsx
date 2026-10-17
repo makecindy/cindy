@@ -32,6 +32,7 @@ import { useTranslation } from "react-i18next";
 import { View } from "react-native";
 import type {
   ContextSheetChoiceRowProps,
+  ContextSheetSelectRowProps,
   ContextSheetProps,
   ContextSheetRowProps,
   ContextSheetFooterButtonProps,
@@ -208,6 +209,28 @@ export function ContextSheetChoiceRow<T extends string>(props: ContextSheetChoic
     >
       {props.options.map((option) => (
         <Text key={option.id} modifiers={[tag(option.id)]}>{option.label}</Text>
+      ))}
+    </Picker>
+  );
+}
+
+export function ContextSheetSelectRow(props: ContextSheetSelectRowProps) {
+  return (
+    <Picker
+      label={props.label}
+      selection={props.value}
+      onSelectionChange={(next: string | number) => {
+        if (!props.disabled && props.options.some((option) => option.id === String(next) && !option.disabled)) {
+          props.onChange(String(next));
+        }
+      }}
+      modifiers={[pickerStyle('menu'), disable(!!props.disabled)]}
+      testID={props.testID}
+    >
+      {props.options.map((option) => (
+        <Text key={option.id} modifiers={[tag(option.id), disable(!!option.disabled)]}>
+          {option.detail ? `${option.label} · ${option.detail}` : option.label}
+        </Text>
       ))}
     </Picker>
   );

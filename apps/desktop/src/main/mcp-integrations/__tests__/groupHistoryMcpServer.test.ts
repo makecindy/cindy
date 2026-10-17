@@ -91,6 +91,8 @@ describe('cindy_group_history search permission boundary', () => {
       { access: 'lane', provider: LANE_A.provider, lane: LANE_A },
     );
     expect(JSON.stringify(current.result)).toContain('telegram-personal:bot-a');
+    // epoch 毫秒之外附本机时区的可读时间, 与群上下文同一口径。
+    expect(JSON.stringify(current.result)).toMatch(/sentAtLocal[^,]*1970-01-01 \d{2}:\d{2} \(UTC[+-]\d{2}:\d{2}\)|sentAtLocal[^,]*1969-12-31 \d{2}:\d{2} \(UTC[+-]\d{2}:\d{2}\)/);
     expect(current.search).toHaveBeenCalledWith(expect.objectContaining({ lane: LANE_A }));
 
     const denied = await callSearch(

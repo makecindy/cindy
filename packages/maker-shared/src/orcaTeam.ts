@@ -102,6 +102,37 @@ export interface OrcaTeamWorker {
   model: string | null;
   effort: string | null;
   title: string | null;
+  /**
+   * Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)时那台的 id；任务仍在被控电脑。
+   * Agent 在被控电脑或旧被控端不返回时缺省。
+   */
+  agentDeviceId?: string;
+  /**
+   * 在同账号另一台电脑运行的 Worker：那台的设备 id 与真实任务 id(sessionId 是本机不跑
+   * Agent 的代理任务)。旧被控端不返回，按本机 Worker 处理。
+   */
+  executionDevice?: OrcaWorkerExecutionDevice;
+}
+
+export interface OrcaWorkerExecutionDevice {
+  deviceId: string;
+  remoteSessionId: string;
+  deviceName: string | null;
+  /** false = 被控端当前连不上那台；null = 尚未探测。 */
+  reachable: boolean | null;
+}
+
+function executionDevice(value: unknown): OrcaWorkerExecutionDevice | undefined {
+  const row = record(value);
+  const deviceId = text(row?.deviceId);
+  const remoteSessionId = text(row?.remoteSessionId);
+  if (!row || !deviceId || !remoteSessionId) return undefined;
+  return {
+    deviceId,
+    remoteSessionId,
+    deviceName: text(row.deviceName),
+    reachable: typeof row.reachable === 'boolean' ? row.reachable : null,
+  };
 }
 
 /** 被控端 `maker:collaboration-settings:get` 的控制端投影。 */
@@ -163,6 +194,10 @@ export function parseOrcaTeamWorkers(value: unknown): OrcaTeamWorker[] {
       model: text(session?.model),
       effort: text(session?.effort),
       title: text(session?.title),
+      ...(text(session?.agentDeviceId) ? { agentDeviceId: text(session?.agentDeviceId)! } : {}),
+      ...(executionDevice(row.executionDevice)
+        ? { executionDevice: executionDevice(row.executionDevice) }
+        : {}),
     });
   }
   return workers;

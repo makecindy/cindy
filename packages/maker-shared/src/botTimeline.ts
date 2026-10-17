@@ -66,6 +66,51 @@ function isSameLocalDay(left: Date, right: Date): boolean {
   );
 }
 
+/**
+ * 群聊时间线的日期分隔：返回每个本地自然日第一条消息的时间。群聊不按五分钟切时间组，
+ * 一天只出一条日期线，具体时刻放在消息上（连续消息悬停可见）。
+ */
+export function collectBotTimelineDateDividers(
+  messages: readonly BotTimelineMessage[],
+): ReadonlyMap<string, number> {
+  const dividers = new Map<string, number>();
+  let previous: Date | null = null;
+  for (const message of messages) {
+    const timestamp = timestampOf(message.createdAt);
+    if (timestamp === null) continue;
+    const value = new Date(timestamp);
+    if (previous === null || !isSameLocalDay(previous, value)) dividers.set(message.clientId, timestamp);
+    previous = value;
+  }
+  return dividers;
+}
+
+/** Same local calendar day; invalid input never matches. */
+export function isSameBotTimelineDay(left: number, right: number): boolean {
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  return isSameLocalDay(new Date(left), new Date(right));
+}
+
+/** 「今天」「昨天」, else a short date (with the year when it is not this year). */
+export function formatBotTimelineDate(timestamp: number, locale: string, now = Date.now()): string {
+  const value = new Date(timestamp);
+  const current = new Date(now);
+  const yesterday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1);
+  const relative = isSameLocalDay(value, current) ? 0 : isSameLocalDay(value, yesterday) ? -1 : null;
+  if (relative !== null) {
+    const text = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(relative, 'day');
+    return text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
+  }
+  return new Intl.DateTimeFormat(locale, value.getFullYear() === current.getFullYear()
+    ? { month: 'short', day: 'numeric', weekday: 'short' }
+    : { year: 'numeric', month: 'short', day: 'numeric' }).format(value);
+}
+
+/** Time of day only, for the time beside an author or in a merged line's gutter. */
+export function formatBotTimelineClock(timestamp: number, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(new Date(timestamp));
+}
+
 export function formatBotMessageGroupTime(
   timestamp: number,
   locale: string,

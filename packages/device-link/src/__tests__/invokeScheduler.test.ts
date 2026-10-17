@@ -17,6 +17,31 @@ const flush = async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("invoke admission", () => {
+  // A pressured peer previously refilled all four background slots. Exercise
+  // production admission with deferred reads: foreground/other peers still run.
+  it("reduces pressured background concurrency and recovers after delivery", async () => {
+    let pressured = true;
+    const scheduler = new InvokeScheduler(peer => peer === "slow" && pressured);
+    const jobs = Array.from({ length: 6 }, deferred);
+    const started: number[] = [];
+    const results = jobs.map((job, i) => scheduler.run("slow", true, 30_000, () => {
+      started.push(i);
+      return job.promise;
+    }));
+    expect(started).toEqual([0]);
+    await expect(scheduler.run("slow", false, 30_000, async () => "preview")).resolves.toBe("preview");
+    await expect(scheduler.run("healthy", true, 30_000, async () => "ok")).resolves.toBe("ok");
+    jobs[0].resolve();
+    await flush();
+    expect(started).toEqual([0, 1]);
+    pressured = false;
+    jobs[1].resolve();
+    await flush();
+    expect(started).toEqual([0, 1, 2, 3, 4, 5]);
+    jobs.forEach(job => job.resolve());
+    await Promise.all(results);
+  });
+
   const sameHost = ["host", sharedTaskHostPeer("task-a", "host"), sharedTaskGuestPeer("task-b", "member", "host")];
 
   it.each([false, true])("shares physical-host active and waiting limits across scoped peers (background=%s)", async (background) => {

@@ -41,6 +41,43 @@ describe('Android in-app installation', () => {
     expect(io.remove).not.toHaveBeenCalled(); // Android still owns the handoff.
   });
 
+  it('a discovered update waits on the offer card before downloading', async () => {
+    const { controller, io } = setup({ hasPermission: vi.fn(async () => true) });
+    controller.start({ ...target, releaseNotes: 'Notes' }, { confirm: true });
+    await settle();
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'offer', target: { releaseNotes: 'Notes' } });
+    expect(io.download).not.toHaveBeenCalled();
+    controller.retry();
+    await settle();
+    expect(io.download).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().phase).toBe('ready');
+  });
+
+  it('without permission the offer explains it first, and granting continues straight to the download', async () => {
+    const { controller, io } = setup();
+    controller.start(target, { confirm: true });
+    await settle();
+    expect(controller.getSnapshot().phase).toBe('permission-required');
+    expect(io.requestPermission).not.toHaveBeenCalled();
+    controller.retry();
+    await settle();
+    expect(io.requestPermission).toHaveBeenCalledOnce();
+    expect(io.download).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().phase).toBe('ready');
+  });
+
+  it('dismissing an offer forgets it; the next discovery asks again', async () => {
+    const { controller, io } = setup({ hasPermission: vi.fn(async () => true) });
+    controller.start(target, { confirm: true });
+    await settle();
+    controller.close();
+    expect(controller.getSnapshot().phase).toBe('idle');
+    controller.start(target, { confirm: true });
+    await settle();
+    expect(controller.getSnapshot().phase).toBe('offer');
+    expect(io.download).not.toHaveBeenCalled();
+  });
+
   it('already-authorized users download directly and installer cancellation can reuse the APK', async () => {
     const { controller, io } = setup({ hasPermission: vi.fn(async () => true) });
     controller.start(target);

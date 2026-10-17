@@ -32,7 +32,8 @@ import {
   LOGIN_CAPTCHA_PAGE_PATH,
   LOGIN_CAPTCHA_PARTITION,
 } from '../shared/webviewPartition';
-import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
+import { GHOST_PARTITION_PREFIX, ghostInstallApprovalToken, type GhostPanelMediaTarget } from '../shared/ghost';
+import { installedGhostStoragePart } from '../shared/pluginIdentity';
 import { getActiveAppSession, type AppSessionMode } from './appSessionState.js';
 import {
   matchesElectronInput,
@@ -47,6 +48,7 @@ import {
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
+import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import {
   attributeRsbNativePopupSurface,
@@ -177,7 +179,7 @@ export function authorizeGhostWebviewAttach(
   webPreferences: Record<string, unknown>,
   params: Record<string, string>,
   resolver: GhostWebviewAttachResolver = resolveGhostWebviewAttach,
-): { id: string; owner: { mode: AppSessionMode; dataOwnerId: string } } | null {
+): { id: string; instanceId: string; owner: { mode: AppSessionMode; dataOwnerId: string }; isCurrent(): boolean } | null {
   let resolved: ReturnType<GhostWebviewAttachResolver> = null;
   try {
     resolved = resolver(params.partition, params.src);
@@ -186,13 +188,38 @@ export function authorizeGhostWebviewAttach(
   }
   if (!resolved) return null;
 
+  const partitionClaim = params.partition;
+  const entryUrl = params.src;
+  const generation = getActiveAppSession().generation;
+  const instanceId = installedGhostStoragePart(resolved.ghost);
+  const approval = ghostInstallApprovalToken(resolved.ghost.approval);
+  const directory = resolved.ghost.dir;
+  const version = resolved.ghost.manifest.version;
+  const owner = resolved.owner;
+
   // Electron 在触发 will-attach-webview 前已经把 params.partition 复制进
   // webPreferences.partition，之后创建 guest 时读取的是后者。两边都必须由
   // Main 的核准结果覆盖，否则只改 attribute dict 不会改变真实 session。
   params.partition = resolved.partition;
   webPreferences.partition = resolved.partition;
   applyGhostWebviewHardening(webPreferences, params);
-  return { id: resolved.ghost.manifest.id, owner: resolved.owner };
+  return {
+    id: resolved.ghost.manifest.id,
+    instanceId,
+    owner: resolved.owner,
+    isCurrent: () => {
+      const active = getActiveAppSession();
+      if (active.generation !== generation || active.mode !== owner.mode || active.dataOwnerId !== owner.dataOwnerId) return false;
+      try {
+        const current = resolver(partitionClaim, entryUrl);
+        return current !== null && current.owner.mode === owner.mode && current.owner.dataOwnerId === owner.dataOwnerId
+          && installedGhostStoragePart(current.ghost) === instanceId && current.ghost.dir === directory
+          && current.ghost.manifest.version === version && ghostInstallApprovalToken(current.ghost.approval) === approval;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 /**
@@ -806,7 +833,14 @@ export function installBrowserGuestHandlers(
 
 interface GhostGuestNavigationHandlers {
   gesture?: typeof noteGhostUserGesture;
-  preview: typeof handleGhostPreviewNavigation;
+  preview: (
+    ghostId: string,
+    url: string,
+    hostContents: WebContents,
+    guestContents: WebContents,
+    isOwnerActive: () => boolean,
+    instanceId?: string,
+  ) => void;
   external: typeof handleGhostExternalLinkNavigation;
 }
 
@@ -834,11 +868,17 @@ export function installGhostGuestNavigationHandlers(
     preview: handleGhostPreviewNavigation,
     external: handleGhostExternalLinkNavigation,
   },
+  instanceId?: string,
+  isAttachCurrent?: () => boolean,
 ): void {
+  if (instanceId && isAttachCurrent) {
+    installGhostMediaHandoverSource(hostContents, guestContents, { ghostId, instanceId }, () => isOwnerActive() && isAttachCurrent());
+  }
   guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const isCurrent = () => isOwnerActive() && (!isAttachCurrent || isAttachCurrent());
   const noteGesture = () => {
-    if (!isOwnerActive()) return;
-    (handlers.gesture ?? noteGhostUserGesture)(ghostId);
+    if (!isCurrent()) return;
+    (handlers.gesture ?? noteGhostUserGesture)(instanceId ?? ghostId);
   };
   guestContents.on('before-mouse-event', (_event, mouse) => {
     if (mouse.type === 'mouseDown') noteGesture();
@@ -849,7 +889,7 @@ export function installGhostGuestNavigationHandlers(
   guestContents.on('will-navigate', (event, url) => {
     // owner commit 后、Renderer 卸载旧 guest 前仍可能收到导航事件。旧页
     // 不能借新 owner 的同名插件声明或授权代开外链。
-    if (!isOwnerActive()) {
+    if (!isCurrent()) {
       event.preventDefault();
       return;
     }
@@ -857,11 +897,42 @@ export function installGhostGuestNavigationHandlers(
     if (nav === 'allow') return;
     event.preventDefault();
     if (nav === 'preview') {
-      handlers.preview(ghostId, url, hostContents, guestContents, isOwnerActive);
+      handlers.preview(ghostId, url, hostContents, guestContents, isCurrent, instanceId);
     } else if (nav === 'external') {
-      handlers.external(ghostId, url, hostContents, guestContents, isOwnerActive);
+      handlers.external(ghostId, url, hostContents, guestContents, isCurrent, instanceId);
     }
   });
+}
+
+export function installGhostMediaHandoverSource(
+  hostContents: WebContents,
+  guestContents: WebContents,
+  target: GhostPanelMediaTarget & { instanceId: string },
+  isAttachCurrent: () => boolean,
+): void {
+  let sourceToken: string | null = null;
+  const revoke = () => {
+    if (sourceToken) ghostMediaHandoverTargetTracker.revoke(sourceToken);
+    sourceToken = null;
+  };
+  const isCurrent = () => !hostContents.isDestroyed() && !guestContents.isDestroyed() && isAttachCurrent();
+  guestContents.on('dom-ready', () => {
+    revoke();
+    if (!isCurrent()) return;
+    const token = ghostMediaHandoverTargetTracker.register({ ...target, isCurrent });
+    sourceToken = token;
+    void guestContents.executeJavaScript(ghostMediaHandoverDragScript(token)).catch(() => {
+      ghostMediaHandoverTargetTracker.revoke(token);
+      if (sourceToken === token) sourceToken = null;
+    });
+  });
+  guestContents.on('did-navigate', revoke);
+  guestContents.on('render-process-gone', revoke);
+  guestContents.once('destroyed', () => {
+    revoke();
+    hostContents.removeListener('destroyed', revoke);
+  });
+  hostContents.once('destroyed', revoke);
 }
 
 export function installWebviewHardener(): void {
@@ -946,6 +1017,9 @@ export function installWebviewHardener(): void {
           guestContents,
           ghostId,
           () => isGhostGuestOwnerActive(authorized.owner),
+          undefined,
+          authorized.instanceId,
+          authorized.isCurrent,
         );
         return;
       }

@@ -34,10 +34,14 @@ import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
 import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer';
 import * as cache from './remoteMediaCacheStore';
 import type { RemoteMediaEntry, StreamEntry } from './remoteMediaCacheStore';
+import { activeOwnerScopeKey } from '../appSessionState';
+import { remoteFileVersionCache } from './remoteFileVersionCache';
+import { captureRemoteMediaCacheValidity, captureRemoteMediaOwner, isImmutableRemoteMedia, remoteMediaPersistentCache } from './remoteMediaPersistentCache';
 
 const log = createLogger('device-link:remoteMediaProtocol');
 
 interface MediaFetchResult {
+  version?: string;
   ossKey: string;
   mimeType: string;
   size: number;
@@ -69,6 +73,7 @@ async function serveLocalCindyMediaBlob(
   origUrl: string,
   rangeHeader: string | null,
 ): Promise<Response | null> {
+  const assertCurrent = captureRemoteMediaOwner();
   let resolved: { absPath: string; mimeType: string; hash: string };
   try {
     resolved = blobStore.resolveSafe(origUrl);
@@ -77,7 +82,11 @@ async function serveLocalCindyMediaBlob(
   }
   let buffer: Buffer;
   try {
+    // Only current-account attachments may bypass the device-scoped cache index.
+    if (!await ledger.hasNonCacheBlob(resolved.hash)) return null;
+    assertCurrent();
     buffer = await fs.readFile(resolved.absPath);
+    assertCurrent();
   } catch {
     return null; // 本机无此 blob:走远程取件
   }
@@ -94,17 +103,38 @@ async function serveLocalCindyMediaBlob(
 const inflight = new Map<string, Promise<RemoteMediaEntry>>();
 
 function inflightKeyOf(deviceId: string, origUrl: string): string {
-  return `${deviceId} ${origUrl}`;
+  return `${activeOwnerScopeKey()} ${deviceId} ${origUrl}`;
 }
 
 /** 取得缓存条目:命中直接返回,未命中向被控端取件并落缓存(并发去重)。 */
 async function ensureEntry(deviceId: string, origUrl: string): Promise<RemoteMediaEntry> {
   const hit = cache.lookup(deviceId, origUrl);
-  if (hit) return hit;
+  // A path can change in place. Let the existing host stat/version cache validate it.
+  if (hit && (hit.kind === 'stream' || isImmutableRemoteMedia(origUrl))) return hit;
   const k = inflightKeyOf(deviceId, origUrl);
   const pending = inflight.get(k);
   if (pending) return pending;
-  const p = fetchAndCache(deviceId, origUrl).finally(() => inflight.delete(k));
+  const assertCurrent = captureRemoteMediaOwner();
+  const assertCacheCurrent = captureRemoteMediaCacheValidity();
+  const p = (async () => {
+    let disk: ReturnType<typeof remoteMediaPersistentCache> = null;
+    try { disk = remoteMediaPersistentCache(deviceId, origUrl); } catch { /* Cache is optional. */ }
+    const saved = await disk?.get(LOCAL_BUFFER_MAX).catch(() => null);
+    assertCurrent();
+    if (saved) {
+      assertCacheCurrent();
+      return cache.recordLocal(deviceId, origUrl, saved.bytes, saved.mimeType);
+    }
+    const entry = await fetchAndCache(deviceId, origUrl, assertCacheCurrent);
+    assertCurrent();
+    if (entry.kind === 'local') {
+      assertCacheCurrent();
+      await disk?.put(entry.bytes, entry.mimeType).catch(() => undefined);
+      assertCacheCurrent();
+    }
+    assertCurrent();
+    return entry;
+  })().finally(() => inflight.delete(k));
   inflight.set(k, p);
   return p;
 }
@@ -128,9 +158,15 @@ async function downloadLocalEntry(
   deviceId: string,
   origUrl: string,
   fetched: MediaFetchResult,
+  assertCurrent: () => void,
 ): Promise<RemoteMediaEntry> {
+  let versioned: ReturnType<typeof remoteFileVersionCache> = null;
+  try { versioned = remoteFileVersionCache(deviceId, origUrl, { ...fetched, assertCacheCurrent: assertCurrent }); } catch { /* Optional cache. */ }
   try {
     const { bytes } = await downloadToBuffer(fetched.ossKey);
+    assertCurrent();
+    await versioned?.put(bytes).catch(() => undefined);
+    assertCurrent();
     return cache.recordLocal(deviceId, origUrl, bytes, fetched.mimeType);
   } finally {
     void removeRemote(fetched.ossKey);
@@ -141,8 +177,10 @@ function toEntry(
   deviceId: string,
   origUrl: string,
   fetched: MediaFetchResult,
+  assertCurrent: () => void,
 ): Promise<RemoteMediaEntry> {
   if (fetched.inlineBase64 !== undefined) {
+    assertCurrent();
     return Promise.resolve(
       cache.recordLocal(
         deviceId,
@@ -158,34 +196,41 @@ function toEntry(
       cache.recordStream(deviceId, origUrl, fetched.ossKey, fetched.mimeType, fetched.size),
     );
   }
-  return downloadLocalEntry(deviceId, origUrl, fetched);
+  return downloadLocalEntry(deviceId, origUrl, fetched, assertCurrent);
 }
 
-async function fetchAndCache(deviceId: string, origUrl: string): Promise<RemoteMediaEntry> {
+async function fetchAndCache(deviceId: string, origUrl: string, assertCacheCurrent: () => void): Promise<RemoteMediaEntry> {
+  const assertCurrent = captureRemoteMediaOwner();
   const fetched = await readRemoteDeviceFile(deviceId, origUrl, remoteInvoke, {
     maxPeerBytes: LOCAL_BUFFER_MAX,
     stream: true,
+    assertCacheCurrent,
   });
   if ('path' in fetched) {
     try {
+      const bytes = await fs.readFile(fetched.path);
+      assertCacheCurrent();
       return cache.recordLocal(
         deviceId,
         origUrl,
-        await fs.readFile(fetched.path),
+        bytes,
         fetched.mimeType,
       );
     } finally {
       await fetched.dispose();
     }
   }
+  assertCurrent();
   try {
-    return await toEntry(deviceId, origUrl, fetched);
+    return await toEntry(deviceId, origUrl, fetched, assertCacheCurrent);
   } catch (err) {
+    assertCacheCurrent();
     // 下载失败的常见根因:被控端图片上传去重缓存返回了悬空 key(对象已被消费方用后删)。
     // 带 skipCache 重取一次强制重传;仍失败按原语义抛给上层(renderer 占位 + 可重试)。
     log.warn(`remote media download failed, retrying with skipCache: ${String(err)}`);
     const refetched = await invokeMediaFetch(deviceId, origUrl, true);
-    return toEntry(deviceId, origUrl, refetched);
+    assertCurrent();
+    return toEntry(deviceId, origUrl, refetched, assertCacheCurrent);
   }
 }
 
@@ -322,12 +367,15 @@ async function handleRemoteMedia(
     return serveSshRemoteMedia(parsed.origin, parsed.origUrl, rangeHeader);
   }
   const deviceId = parsed.origin.deviceId;
+  const assertCurrent = captureRemoteMediaOwner();
   try {
     if (parsed.origUrl.startsWith('cindy-media://')) {
       const local = await serveLocalCindyMediaBlob(parsed.origUrl, rangeHeader);
+      assertCurrent();
       if (local) return local;
     }
     const entry = await ensureEntry(deviceId, parsed.origUrl);
+    assertCurrent();
     if (entry.kind === 'local') return serveLocal(entry, rangeHeader);
     try {
       return await serveStream(entry, rangeHeader, signal);
@@ -379,8 +427,10 @@ async function handleRemoteMedia(
       // cache miss 窗口):否则窗口期的并发请求会发起**不带 skipCache** 的普通取件,
       // 被控端去重缓存可能把同一把 stale key 再记回缓存、覆盖掉新对象。
       const p = (async () => {
+        const assertCacheCurrent = captureRemoteMediaCacheValidity();
         const refetched = await invokeMediaFetch(deviceId, parsed.origUrl, true);
-        return toEntry(deviceId, parsed.origUrl, refetched);
+        assertCurrent();
+        return toEntry(deviceId, parsed.origUrl, refetched, assertCacheCurrent);
       })().finally(() => inflight.delete(k));
       inflight.set(k, p);
       const fresh = await p;

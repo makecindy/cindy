@@ -100,6 +100,81 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it.each(['generate', 'edit', 'default'] as const)('saves image capability %s only on the explicit Images connection', async (value) => {
+    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
+      pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{ id: 'private-image', name: 'Image' }] },
+      codex: { baseUrl: 'https://images.example.invalid/v1', imageApi: 'openai-images', models: [{
+        id: 'private-image', name: 'Image', discoveredMetadata: value === 'default'
+          ? { mode: 'image_generation', modalities: { input: ['text'], output: ['image'] } }
+          : { contextWindow: 32768 },
+        ...(value === 'default' ? { mode: 'image_generation' as const, modalities: { input: ['text', 'image'] as ('text' | 'image')[], output: ['image'] as 'image'[] } } : {}),
+      }] },
+    } }), connected: true } as ProviderView;
+    try {
+      if (value !== 'default') expect(source.imageModels).toBeUndefined();
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'private-image', name: 'Image', avail: ['pi', 'codex'], byAgent: { pi: source.models.pi![0], codex: source.models.codex![0] } }} open
+        onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageCapability.label' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: `settings.providers.models.advanced.imageCapability.${value}` }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      const saved = config.runtimes.codex!.models[0]!;
+      expect(config.runtimes.pi!.models).toEqual([{ id: 'private-image', name: 'Image' }]);
+      expect(saved.discoveredMetadata).toEqual(source.models.codex![0]!.discoveredMetadata);
+      if (value === 'default') {
+        expect(saved.mode).toBeUndefined();
+        expect(saved.modalities).toBeUndefined();
+      } else {
+        expect(saved.mode).toBe('image_generation');
+        expect(saved.modalities).toEqual({ input: value === 'edit' ? ['text', 'image'] : ['text'], output: ['image'] });
+      }
+      const active = buildUserProvider(config);
+      expect(active.imageModels?.[0]?.sourceAgent).toBe('codex');
+      expect(active.imageModels?.[0]?.modalities?.input).toEqual(value === 'edit' ? ['text', 'image'] : ['text']);
+      expect(update.mock.calls[0]![1]).toEqual({});
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+  it.each(['generate', 'edit', 'default'] as const)('saves video capability %s only on the explicit video connection', async (value) => {
+    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
+      pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{ id: 'private-video', name: 'Image' }] },
+      codex: { baseUrl: 'https://images.example.invalid/v1', videoApi: 'xai-videos', models: [{
+        id: 'private-video', name: 'Image', discoveredMetadata: value === 'default'
+          ? { mode: 'video_generation', modalities: { input: ['text'], output: ['video'] } }
+          : { contextWindow: 32768 },
+        ...(value === 'default' ? { mode: 'video_generation' as const, modalities: { input: ['text', 'image'] as ('text' | 'image')[], output: ['video'] as 'video'[] } } : {}),
+      }] },
+    } }), connected: true } as ProviderView;
+    try {
+      if (value !== 'default') expect(source.videoModels).toBeUndefined();
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'private-video', name: 'Image', avail: ['pi', 'codex'], byAgent: { pi: source.models.pi![0], codex: source.models.codex![0] } }} open
+        onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.advanced.videoCapability.label' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: `settings.providers.models.advanced.videoCapability.${value}` }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      const saved = config.runtimes.codex!.models[0]!;
+      expect(config.runtimes.pi!.models).toEqual([{ id: 'private-video', name: 'Image' }]);
+      expect(saved.discoveredMetadata).toEqual(source.models.codex![0]!.discoveredMetadata);
+      if (value === 'default') {
+        expect(saved.mode).toBeUndefined();
+        expect(saved.modalities).toBeUndefined();
+      } else {
+        expect(saved.mode).toBe('video_generation');
+        expect(saved.modalities).toEqual({ input: value === 'edit' ? ['text', 'image'] : ['text'], output: ['video'] });
+      }
+      const active = buildUserProvider(config);
+      expect(active.videoModels?.[0]?.sourceAgent).toBe('codex');
+      expect(active.videoModels?.[0]?.modalities?.input).toEqual(value === 'edit' ? ['text', 'image'] : ['text']);
+      expect(update.mock.calls[0]![1]).toEqual({});
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   it('rejects ordinary managed GGUF edits above the backend maximum', async () => {
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {

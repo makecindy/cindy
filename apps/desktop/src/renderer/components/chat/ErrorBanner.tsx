@@ -1,3 +1,8 @@
+import { remoteAgentLimitErrorKey } from '../../../shared/remoteAgentLimits';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { Button } from '@/components/ui/button';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { useProviders } from '@/hooks/useProviders';
 /**
@@ -14,9 +19,9 @@ import { useProviders } from '@/hooks/useProviders';
  *   (auth 缺失场景 Retry 立刻重发等于撞同一个 401,所以同步前先把 Retry 隐藏。)
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
-import { isCindyGatewayProxyTokenInvalidError, isResponsesLiteParallelToolCallsError, parseAgentErrorCode, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { canOfferCodexHistoryRecovery, isCindyGatewayProxyTokenInvalidError, isResponsesLiteParallelToolCallsError, parseAgentErrorCode, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
 import {
   AlertCircle,
@@ -43,6 +48,7 @@ import {
 } from '@/hooks/useCodexSessionExpiredPrompt';
 import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
 import { cn } from '@/lib/utils';
+import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
@@ -71,6 +77,8 @@ interface ErrorBannerProps {
   retryText?: string | null;
   onRetry: (text: string) => void;
   onCancel?: () => void;
+  /** 仅当前可见且拥有键盘操作权的任务启用。 */
+  dismissOnEscape?: boolean;
   /** silent-stop 耗尽横幅「继续」:清横幅 + 发隐藏续跑指令(见 makerChatStore)。 */
   onSilentStopContinue?: () => void;
   /** 账号限额等待中：额度重置后到这个时刻(unix ms)若无人处理，被控端自动继续任务。 */
@@ -82,6 +90,7 @@ interface ErrorBannerProps {
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
   agentKind?: 'cc' | 'codex' | 'pi';
+  agentDeviceId?: string | null;
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
    *  本地 codex 401 仍 hide Retry, 但只能提示用户去自己 fix login (没有 sync 入口)。 */
   remoteHostId?: string;
@@ -130,12 +139,14 @@ export function ErrorBanner({
   retryText,
   onRetry,
   onCancel,
+  dismissOnEscape = false,
   onSilentStopContinue,
   usageLimitWait,
   onCancelUsageLimitWait,
   usageLimitRecovery,
   agentKind,
   remoteHostId,
+  agentDeviceId,
   deviceLinkDeviceId,
   modelId,
   providerId,
@@ -151,6 +162,43 @@ export function ErrorBanner({
   className,
 }: ErrorBannerProps) {
   const { t, i18n } = useTranslation();
+  const bannerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!dismissOnEscape || !onCancel) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.repeat ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isAppInteractionLocked() ||
+        document.body.dataset.appShortcutRecording === '1'
+      ) {
+        return;
+      }
+      // 右栏最大化等布局会用 CSS 隐藏仍挂载的聊天区；隐藏的报错不认领 Esc。
+      if (!bannerRef.current?.checkVisibility({ checkVisibilityCSS: true })) return;
+      // 弹层优先；MorphPopover 关闭时不 preventDefault，但会保留到收合动画结束。
+      if (
+        document.querySelector(
+          '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], ' +
+            '[data-radix-popper-content-wrapper], [data-morph-side]',
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      onCancel();
+    };
+    // 冒泡阶段让输入框的候选列表、语音取消等先消费按键。
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [dismissOnEscape, onCancel]);
   const { confirm } = useConfirmDialog();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
     // 非共享凭证沿用原有确认/登录流程；共享凭证由横幅内联动作直接唤起 App。
@@ -202,6 +250,9 @@ export function ErrorBanner({
     !isAnyRemoteSession &&
     !silentEncryptedRetryEnabled &&
     isInvalidEncryptedContentError(error);
+  const showHistoryRecovery = Boolean(onForkStripEncrypted) && !isSharedTaskPeer(deviceLinkDeviceId) && canOfferCodexHistoryRecovery({
+    message: error, agentKind, remoteHostId, agentDeviceId, running: isRecoverable,
+  });
   const isOversizedHistoryError =
     agentKind === 'codex' && errorReason === 'codex_history_oversized';
   // SSH 不能自动剥图。本机 / device-link 由 main 侧协调器就地恢复，横幅不给按钮。
@@ -308,11 +359,16 @@ export function ErrorBanner({
         ? t(errorReasonI18nKey)
         : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
-  const remoteErrorKey = chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
+  const remoteErrorKey = remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
     agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
+  const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(
+    isCodexUsageLimitError && isCodexOpenAiSource && !isAnyRemoteSession && !agentDeviceId,
+    normalizedProviderId ?? 'openai',
+  );
+  const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, normalizedProviderId ?? 'openai');
   const usageLimitResetDate =
     usageLimitRecovery?.resetAtMs && Number.isFinite(usageLimitRecovery.resetAtMs)
       ? new Date(usageLimitRecovery.resetAtMs)
@@ -605,6 +661,7 @@ export function ErrorBanner({
   // **API mode 不在 hide 列表里** — gateway key 自动 refresh, retry 大概率成功。
   return (
     <div
+      ref={bannerRef}
       className={cn(
         'mx-auto flex items-start gap-2 border px-3 py-2',
         isOpenAiConnectionExpired
@@ -638,6 +695,19 @@ export function ErrorBanner({
         >
           {displayError}
         </span>
+        {showHistoryRecovery && (
+          <div className="mt-2 space-y-2">
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('chat.errorBanner.readableHistoryRecoveryDescription')}
+            </p>
+            <Button size="sm" compact data-split-pane-route-action=""
+              loading={forkStripEncryptedRunning}
+              onClick={() => void onForkStripEncrypted?.()}>
+              <GitFork size={12} />
+              {t('chat.errorBanner.readableHistoryRecovery')}
+            </Button>
+          </div>
+        )}
         {(isNetworkishError ||
           isOverloadError ||
           isStreamInterrupted ||
@@ -774,6 +844,11 @@ export function ErrorBanner({
           {t('chat.errorBanner.usageLimitAutoContinueAt', { time: usageLimitResumeAt })}
         </span>
       )}
+      {(manualReset.canReset || manualReset.canRetry) && (
+        <Button size="sm" compact loading={manualReset.busy} onClick={() => void manualReset.reset()}>
+          {manualReset.canRetry ? t('codexResets.retryReset') : t('codexResets.limitAction', { count: resetSnapshot?.rateLimitResetCredits?.availableCount ?? 0 })}
+        </Button>
+      )}
       {usageLimitResumeAt && onCancelUsageLimitWait && (
         <button
           type="button"
@@ -791,13 +866,14 @@ export function ErrorBanner({
       {safeRetryText && (
         <button
           type="button"
+          disabled={forkStripEncryptedRunning}
           onClick={() => onRetry(safeRetryText)}
           className={cn(
             'shrink-0 flex items-center gap-1 text-xs font-medium',
             isOpenAiConnectionExpired
               ? 'text-[var(--text-primary)]'
               : 'text-[var(--error-fg)]',
-            'hover:opacity-70 transition-opacity',
+            'enabled:hover:opacity-70 transition-opacity disabled:opacity-60',
           )}
           title={t('chat.errorBanner.retryTitle')}
         >

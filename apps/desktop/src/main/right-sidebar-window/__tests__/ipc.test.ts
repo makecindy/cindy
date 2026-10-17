@@ -70,6 +70,18 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
+  it('preserves workbench click intent, keeps legacy commands passive, and rejects invalid intent', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-bot-workbench-tab', sessionId: 's1', botId: 'bot-1' };
+    await handler({ sender: mainWebContents }, { command, allowOpen: false });
+    expect(controller.routeCommand).toHaveBeenLastCalledWith({ command, allowOpen: false });
+    await handler({ sender: mainWebContents }, { command: { ...command, focusTab: true }, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenLastCalledWith({ command: { ...command, focusTab: true }, allowOpen: true });
+    await expect(handler({ sender: mainWebContents }, { command: { ...command, focusTab: 'true' }, allowOpen: true }))
+      .rejects.toThrow(/command.focusTab/);
+  });
+
   it('forwards the optional device-link origin and Pi-only Subagents eligibility', () => {
     const controller = makeController();
     const { mainWebContents } = registerController(controller);

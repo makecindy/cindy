@@ -52,7 +52,7 @@ export function parseProviderShareScope(value: unknown, withSource?: boolean): P
 | 方法 | 请求体 | 响应 |
 |---|---|---|
 | `GET /` | — | `{ shares: OwnerShare[] }`（本账号、本设备的 active 分享） |
-| `POST /links` | `{ providerId, providerLabel, deviceName, identityCard }` | `{ shareId, invitation, expiresAt }` |
+| `POST /links` | `{ providerId, providerLabel, deviceName, identityCard }` | `{ shareId, invitation, linkId, expiresAt }` |
 | `POST /requests/:requestId/approve` | `{}` | `{ shareId, memberId }` |
 | `POST /requests/:requestId/reject` | `{}` | `{ requestId, status: 'rejected' }` |
 | `POST /members/:memberId/pause` | `{}` | `{ memberId, status: 'paused' }` |
@@ -64,9 +64,17 @@ interface Person { displayName: string; avatarUrl: string | null; region: 'cn' |
 interface OwnerShare {
   shareId: string; providerId: string; providerLabel: string; hostDeviceId: string; createdAt: string;
   members: Array<Person & { memberId: string; status: 'active' | 'paused'; joinedAt: string }>;
-  requests: Array<Person & { requestId: string; pairingCode: string; createdAt: string; expiresAt: string }>;
+  requests: Array<Person & { requestId: string; linkId: string; pairingCode: string; createdAt: string; expiresAt: string }>;
 }
 ```
+
+`linkId` 是一次性随机邀请口令的 SHA-256 小写十六进制摘要，只标识具体链接，不暴露口令，不能用于加入分享。
+服务端从 `POST /links` 返回它，并附在 owner 列表的每条待处理申请上。同一供应商的多个链接复用 shareId，
+审批弹窗归属必须按 linkId 区分，不能仅按 shareId、host 或 provider 匹配。
+
+这是 additive 字段：旧客户端忽略；新客户端读取及本机生成链接接受缺字段的旧服务器。跨电脑生成需要合法 linkId，
+缺失时提示更新、不向用户返回或登记可复制链接，不降级成按供应商监听。先将服务端更新到该区域所有副本，再发布
+客户端；完整去重需要生成端和供应商所在电脑同时支持。只返回已有 linkDigest，无 migration、鉴权或环境变量变化。
 
 - `POST /links`：同一（分享者、设备、`providerId`）已有 active 分享则复用，否则新建；同时用名片刷新分享者快照与 `providerLabel`、`deviceName`。`identityCard.purpose = 'share-link'`，`nonce = sha256hex(hostDeviceId + ':' + providerId)`。
 - 批准：申请必须 `pending` 且未过期；成员按（分享、guestKey）幂等：已有 `removed / left` 行时恢复为 `active`（新 memberId 不必变），链接置 `consumed`。

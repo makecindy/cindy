@@ -1,94 +1,142 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { posix, resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
+import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
+import { resolvePnpmInvocation, usablePnpmExecPath } from '../../../../scripts/shared/pnpm-invocation.mjs';
+import { extractMobileDevRegionArgs, withLocalMobileRegionConfig } from '../../scripts/lib/mobile-dev-region.mjs';
+import { extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget, resolveMobileSimulatorBundleId } from '../../scripts/lib/sim-whoami.mjs';
 
-// sim-rebuild.mjs 是纯 dev 工具脚本(依赖 booted 模拟器 + Xcode,无法在 CI 里真跑),
-// 用源码检查锁住两个提速机制的关键不变量,防止后续改动无意退化:
-// 1. pod install 必须有界(超时 + SIGKILL)且显式 UTF-8 LANG —— 曾发生 CDN 连接
-//    挂死干等 20 分钟、以及空 LANG 触发 CocoaPods Encoding::CompatibilityError。
-// 2. fingerprint 产物缓存 —— 新 worktree 未动原生层时跳过整个冷构建。
-describe('sim-rebuild script invariants', () => {
-  const source = readFileSync(resolve(process.cwd(), 'scripts/sim-rebuild.mjs'), 'utf8');
+const source = readFileSync(resolve(process.cwd(), 'scripts/sim-rebuild.mjs'), 'utf8');
+const start = source.indexOf('const iosDir =');
+if (start < 0) throw new Error('sim-rebuild workflow entry missing');
+const mobileDir = '/repo/apps/mobile';
+const cacheRoot = '/home/test/Library/Caches/xdt-maker/sim-app-cache';
+const cacheDir = `${cacheRoot}/ios-arm64-fingerprint`;
+const builtApp = `${mobileDir}/ios/build/Build/Products/Debug-iphonesimulator/Cindy.app`;
+const udid = '11111111-1111-1111-1111-111111111111';
 
-  it('runs pod install itself via the bounded runner, instead of letting prebuild own it', () => {
-    expect(source).toContain('const buildEnv = withLocalMobileRegionConfig(');
-    // prebuild 不再隐式跑 pod install(它的失败重试会带 --repo-update 打 CDN 且无界)。
-    expect(source).toContain("['exec', 'expo', 'prebuild', '-p', 'ios', '--no-install']");
-    // pod 执行策略(本地 specs 优先 / --repo-update 重试 / 空转看门狗 / UTF-8 LANG)
-    // 收敛在 sim-pod-install.mjs,行为由 simPodInstall.test.ts 用假 pod 二进制真实覆盖。
-    expect(source).toContain("import { podInstallBounded } from './sim-pod-install.mjs';");
-    expect(source).toContain('await podInstallBounded({ iosDir, env: devProcessEnv })');
+// Execute the real CLI workflow with in-memory filesystem and process boundaries.
+// simPodInstall and simNativeIdentity suites cover their real implementations separately.
+async function rebuild(options: {
+  args?: string[]; platform?: 'darwin' | 'win32'; cached?: boolean; cachedArch?: string;
+  fingerprintFailure?: boolean; metroHealthy?: boolean; builtArch?: string;
+} = {}) {
+  const env = { EXPO_PUBLIC_APP_VARIANT: 'beta', npm_execpath: '/tools/pnpm.cjs' };
+  const processStub = {
+    argv: ['node', 'sim-rebuild.mjs', ...(options.args ?? [])], env,
+    platform: options.platform ?? 'darwin', arch: 'arm64', execPath: '/node', exitCode: 0,
+    exit(code: number) { throw new Error(`exit:${code}`); },
+  };
+  const execFileSync = vi.fn((command: string, args: string[], _opts: object) => {
+    if (command === 'plutil') return args[1] === 'CFBundleIdentifier' ? 'com.xd.cindy' : 'Cindy';
+    if (command === 'lipo') return args[1].startsWith(cacheRoot) ? (options.cachedArch ?? 'arm64') : (options.builtArch ?? 'arm64');
+    if (command === '/node' && args.includes('config')) return JSON.stringify({ android: { package: 'com.xd.cindy' } });
+    if (command === 'xcrun' && args.includes('get_app_container')) return '/installed/Cindy.app';
+    if (command === 'xcrun' && args.includes('booted')) return `iPhone (${udid}) (Booted)`;
+    if (['pnpm', '/node', 'xcodebuild', 'cmd.exe', '/sdk/adb', 'xcrun'].includes(command)) return '';
+    throw new Error(`unexpected executable ${command}`);
+  });
+  const spawnSync = vi.fn((_command: string, _args: string[], _opts: { env: object }) => ({ status: 0, stdout: JSON.stringify({ hash: 'fingerprint' }) }));
+  const podInstallBounded = vi.fn(async () => undefined);
+  const rmSync = vi.fn();
+  const cpSync = vi.fn();
+  const writeFileSync = vi.fn();
+  const utimesSync = vi.fn();
+  const now = Date.now();
+  const cacheEntries = ['recent0', 'recent1', 'recent2', 'recent3', 'young', 'old'];
+  const validateSimMetroIdentity = vi.fn(() => ({ healthy: options.metroHealthy !== false, code: 'METRO_OTHER_WORKTREE' }));
+  const resolveAndroidSdkTools = vi.fn(() => ({ sdkRoot: '/sdk' }));
+  const ensureWindowsAndroidEmulator = vi.fn(async () => ({ sdkRoot: '/sdk', adb: '/sdk/adb', serial: 'emulator-5554' }));
+  const javaEnv = { ...env, JAVA_HOME: '/jdk17', ANDROID_SDK_ROOT: '/sdk', ANDROID_HOME: '/sdk' };
+  const resolveJavaRuntimeEnv = vi.fn(() => javaEnv);
+  const log = vi.fn();
+  const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
+    mobileDir, worktreeRoot: '/repo', join: posix.join, resolve: posix.resolve, homedir: () => '/home/test',
+    process: processStub, console: { log, error: log, warn: log }, execFileSync, spawnSync,
+    mobileClientBundleEnv, extractMobileDevRegionArgs, withLocalMobileRegionConfig,
+    extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget,
+    resolveMobileSimulatorBundleId: (region: string) => resolveMobileSimulatorBundleId(region, { execFile: () => JSON.stringify({ ios: { bundleIdentifier: 'com.xd.cindy' } }) }),
+    resolvePnpmInvocation: (args: string[], opts: object) => resolvePnpmInvocation(args, { ...opts, platform: processStub.platform, execPath: '/node' }),
+    usablePnpmExecPath, ensureMobileLocalRegionConfig: () => ({}), formatMobileLocalConfigStatus: () => '',
+    ensureMobileEnv: () => ({ created: false, addedKeys: [] }), formatMobileEnvStatus: () => '',
+    computeSimulatorNativeFingerprint: () => 'native-fingerprint', inspectSimulatorNativeIdentity: () => ({ healthy: true }),
+    computeFingerprintReport: (_dir: string, opts: { run: (input: object) => { hash: string } }) => {
+      if (options.fingerprintFailure) throw new Error('fingerprint unavailable');
+      return { platforms: { ios: opts.run({ binPath: '/fingerprint/cli.js', projectDir: mobileDir, platform: 'ios' }).hash } };
+    },
+    parseFingerprintCliOutput: JSON.parse, podInstallBounded,
+    existsSync: () => true, mkdirSync: vi.fn(), rmSync, cpSync, writeFileSync, utimesSync,
+    readFileSync: (path: string) => {
+      if (!options.cached || path !== `${cacheDir}/meta.json`) throw new Error('cache miss');
+      return JSON.stringify({ scheme: 'Cindy' });
+    },
+    readdirSync: (path: string) => path === `${mobileDir}/ios` ? ['Cindy.xcworkspace'] : cacheEntries,
+    statSync: (path: string) => ({ isDirectory: () => true, mtimeMs: now - (path.endsWith('/old') ? 3_600_000 : cacheEntries.indexOf(posix.basename(path)) * 1000) }),
+    resolveAndroidSdkTools, ensureWindowsAndroidEmulator, resolveJavaRuntimeEnv,
+    probeMetroOwnership: () => ({ cwd: mobileDir, source: 'same', region: 'global', envFingerprint: 'same-env' }),
+    readSimEnvironment: () => ({ envFingerprint: 'same-env' }), gitSourceIdentity: () => 'same',
+    classifySimMetroListener: (input: object) => input, validateSimMetroIdentity,
+  });
+  let error: unknown;
+  try { await execution; } catch (caught) { error = caught; }
+  return { error, execFileSync, spawnSync, podInstallBounded, rmSync, cpSync, writeFileSync, utimesSync, validateSimMetroIdentity, resolveAndroidSdkTools, ensureWindowsAndroidEmulator, resolveJavaRuntimeEnv, javaEnv, log };
+}
+
+describe('sim-rebuild workflow', () => {
+  it.each([false, true])('reuses valid cache and writes force-built artifacts back (force=%s)', async (force) => {
+    const result = await rebuild({ cached: true, args: ['--build-only', ...(force ? ['--force-build', '--udid', udid] : [])] });
+    expect(result.error).toEqual(new Error('exit:0'));
+    expect(result.podInstallBounded).toHaveBeenCalledTimes(force ? 1 : 0);
+    expect(result.execFileSync.mock.calls.some(([cmd]) => cmd === 'xcodebuild')).toBe(force);
+    const fingerprintEnv = result.spawnSync.mock.calls[0][2].env;
+    expect(fingerprintEnv).toMatchObject({ EXPO_PUBLIC_APP_VARIANT: 'beta', CINDY_USE_LOCAL_REGION_CONFIG: '1' });
+    if (force) {
+      expect(result.execFileSync).toHaveBeenCalledWith('pnpm', ['exec', 'expo', 'prebuild', '-p', 'ios', '--no-install'], expect.objectContaining({ env: fingerprintEnv }));
+      expect(result.podInstallBounded).toHaveBeenCalledWith({ iosDir: `${mobileDir}/ios`, env: fingerprintEnv });
+      expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', `platform=iOS Simulator,id=${udid}`]), expect.objectContaining({ env: fingerprintEnv }));
+      expect(result.cpSync).toHaveBeenCalledWith(builtApp, `${cacheDir}/Cindy.app`, expect.any(Object));
+      expect(JSON.parse(result.writeFileSync.mock.calls[0][1])).toMatchObject({ scheme: 'Cindy', bundleId: 'com.xd.cindy' });
+      expect(result.cpSync.mock.invocationCallOrder[0]).toBeLessThan(result.writeFileSync.mock.invocationCallOrder[0]);
+      expect(result.rmSync).toHaveBeenCalledWith(`${cacheRoot}/old`, { recursive: true, force: true });
+      expect(result.rmSync).not.toHaveBeenCalledWith(`${cacheRoot}/young`, expect.anything());
+    } else {
+      expect(result.utimesSync).toHaveBeenCalledWith(cacheDir, expect.anything(), expect.anything());
+      expect(result.utimesSync.mock.calls[0][1].getTime()).toBeGreaterThan(0);
+      expect(result.cpSync).not.toHaveBeenCalled();
+    }
+    expect(result.execFileSync.mock.calls.some(([cmd]) => cmd === 'xcrun')).toBe(false);
   });
 
-  it('reuses built .app via the @expo/fingerprint cache with a force-build escape hatch', () => {
-    // 计算失败必须降级为完整构建而不是中断。
-    expect(source).toContain('回退完整构建');
-    // 缓存键必须用**当前环境**算 fingerprint:ci-fingerprint 默认 runner 是
-    // production 口径(剥离 EXPO_PUBLIC_*),而 prebuild 继承当前环境,beta 变体
-    // (EXPO_PUBLIC_APP_VARIANT)会改原生 name——不跟 env 走会互相污染缓存。
-    expect(source).toContain('run: runFingerprintWithCurrentEnv');
-    expect(source).toContain('env: devProcessEnv');
-    // --force-build 只跳过缓存"读",构建结果仍写回同一条目覆盖坏缓存;
-    // 否则逃生舱跑完一次,坏条目还在,下次普通 rebuild 又命中它。
-    expect(source).toContain("passthrough.includes('--force-build')");
-    expect(source).toContain('if (cacheDir && !forceBuild) {');
-    expect(source).toContain(
-      'if (cacheDir) storeAppCacheEntry(cacheDir, scheme, app, readAppBundleIdentifier(app));',
-    );
-    // global 产物的 bundle id 不同于 app.json 默认 cn 值，必须从实际 .app 读。
-    expect(source).toContain("'CFBundleIdentifier'");
-    expect(source).toContain('const bundleId = readAppBundleIdentifier(app);');
-    expect(source).toContain('readAppCacheEntry(cacheDir, simArch)');
-    expect(source).toContain('assertAppSupportsArchitecture(app, simArch)');
-    expect(source).toContain("capture('lipo', ['-archs'");
-    // 缓存条目按 fingerprint + 架构定位,meta.json 是条目完整性标记。
-    expect(source).toContain('sim-app-cache');
-    expect(source).toContain('ios-${simArch}-${fingerprintHash}');
-    expect(source).toContain("join(dir, 'meta.json')");
-    // 有上限的 LRU 清理,不能无限积累 .app;且带最小年龄护栏,不删可能正被
-    // 另一个并发 rebuild 使用的条目(命中方会先 touch mtime)。
-    expect(source).toContain('APP_CACHE_KEEP');
-    expect(source).toContain('entries.slice(APP_CACHE_KEEP)');
-    expect(source).toContain('APP_CACHE_PRUNE_MIN_AGE_MS) continue;');
+  it.each(['fingerprint-failure', 'cached-architecture-mismatch'])('falls back to a full build for %s', async (reason) => {
+    const result = await rebuild({ args: ['--build-only'], cached: true, cachedArch: 'x86_64', fingerprintFailure: reason === 'fingerprint-failure' });
+    expect(result.error).toEqual(new Error('exit:0'));
+    expect(result.podInstallBounded).toHaveBeenCalledOnce();
+    expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', 'generic/platform=iOS Simulator']), expect.any(Object));
+    expect(result.cpSync).toHaveBeenCalledTimes(reason === 'fingerprint-failure' ? 0 : 1);
   });
 
-  it('uses an exact simulator destination when the Host supplies a UDID', () => {
-    expect(source).toContain('const { simulatorUdid } = extractSimWhoamiUdidArgs(passthrough);');
-    expect(source).toContain('`platform=iOS Simulator,id=${simulatorUdid}`');
-    expect(source).toContain("'-destination', simulatorDestination");
+  it('rejects incompatible build architecture before installing on the simulator', async () => {
+    const result = await rebuild({ builtArch: 'x86_64' });
+    expect(result.error).toMatchObject({ message: expect.stringContaining('Simulator 产物架构错误') });
+    expect(result.execFileSync.mock.calls.some(([, args]) => args.includes('install'))).toBe(false);
   });
 
-  it('uses the Android debug client on Windows without invoking xcrun', () => {
-    expect(source).toContain("import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';");
-    expect(source).toContain("probeMetroOwnership");
-    expect(source).toContain('const ownership = probeMetroOwnership(8081);');
-    expect(source).toContain('validateSimMetroIdentity');
-    expect(source).toContain('runningRegion: ownership?.region');
-    expect(source).toContain('if (!await ensureMetroOwnershipBeforeLaunch(bundleId)) process.exit(1)');
-    expect(source).toContain("import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';");
-    expect(source).toContain('const androidTools = process.platform === \'win32\'');
-    expect(source).toContain('requireTools: !buildOnly');
-    expect(source).toContain('ANDROID_SDK_ROOT: sdkRoot, ANDROID_HOME: sdkRoot');
-    expect(source).toContain("if (process.platform === 'win32') {");
-    expect(source).toContain('await rebuildAndroidSimulator();');
-    expect(source).toContain("'--platform', 'android', '--no-install'");
-    expect(source).toContain("const gradle = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';");
-    expect(source).toContain("run('cmd.exe', ['/d', '/s', '/c', 'gradlew.bat assembleDebug']");
-    expect(source).not.toContain('process.env.ComSpec');
-    expect(source).toContain('resolvePnpmInvocation');
-    expect(source).toContain('function runPnpm(args, opts = {})');
-    expect(source).toContain("run(gradle, ['assembleDebug']");
-    expect(source).toContain("'install', '-r', apk");
-    expect(source).toContain("'shell', 'monkey', '-p', packageName, '1'");
-    expect(source).toContain('function ensureMetroOwnershipBeforeLaunch(packageName)');
-    const metroGate = source.indexOf('if (!await ensureMetroOwnershipBeforeLaunch(packageName)) return;');
-    const androidLaunch = source.indexOf("'shell', 'monkey', '-p', packageName, '1'");
-    expect(metroGate).toBeGreaterThanOrEqual(0);
-    expect(metroGate).toBeLessThan(androidLaunch);
-
-    const windowsBranch = source.indexOf("if (process.platform === 'win32') {");
-    const iosXcrunProbe = source.indexOf("capture('xcrun', ['simctl', 'list', 'devices', 'booted'])");
-    expect(windowsBranch).toBeGreaterThanOrEqual(0);
-    expect(iosXcrunProbe).toBeGreaterThan(windowsBranch);
+  it.each([true, false])('checks Metro after Windows installation and before launch (healthy=%s)', async (healthy) => {
+    const result = await rebuild({ platform: 'win32', metroHealthy: healthy });
+    expect(result.error).toEqual(new Error(`exit:${healthy ? 0 : 1}`));
+    expect(result.resolveAndroidSdkTools).toHaveBeenCalledWith(expect.objectContaining({ platform: 'win32', requireTools: true }));
+    expect(result.resolveJavaRuntimeEnv).toHaveBeenCalledWith(expect.objectContaining({ ANDROID_SDK_ROOT: '/sdk', ANDROID_HOME: '/sdk', CINDY_USE_LOCAL_REGION_CONFIG: '1' }));
+    expect(result.execFileSync).toHaveBeenCalledWith('/node', ['/tools/pnpm.cjs', 'exec', 'expo', 'prebuild', '--platform', 'android', '--no-install'], expect.any(Object));
+    expect(result.execFileSync).toHaveBeenCalledWith('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug'], expect.objectContaining({ cwd: `${mobileDir}/android`, env: result.javaEnv, windowsVerbatimArguments: true }));
+    const install = result.execFileSync.mock.calls.findIndex(([, args]) => args.includes('install'));
+    const launch = result.execFileSync.mock.calls.findIndex(([, args]) => args.includes('monkey'));
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(result.validateSimMetroIdentity).toHaveBeenCalledWith(expect.objectContaining({ currentRegion: 'global', runningRegion: 'global', currentEnvFingerprint: 'same-env', runningEnvFingerprint: 'same-env' }));
+    expect(result.execFileSync.mock.invocationCallOrder[install]).toBeLessThan(result.validateSimMetroIdentity.mock.invocationCallOrder[0]);
+    if (healthy) expect(result.validateSimMetroIdentity.mock.invocationCallOrder[0]).toBeLessThan(result.execFileSync.mock.invocationCallOrder[launch]);
+    else expect(launch).toBe(-1);
+    expect(result.execFileSync.mock.calls.some(([cmd]) => ['xcrun', 'xcodebuild'].includes(cmd))).toBe(false);
+    expect(result.podInstallBounded).not.toHaveBeenCalled();
   });
 });

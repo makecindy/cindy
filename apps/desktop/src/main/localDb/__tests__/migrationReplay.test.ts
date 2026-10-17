@@ -103,6 +103,42 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it.each(['missing', 'legacy', 'partial'])('replays remote report persistence with %s Worker schema', (shape) => {
+    const { db, cleanup } = createTempDb();
+    try {
+      // Later migrations need the sessions and task tables these Worker fixtures omit.
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+      if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
+      db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128]);
+      expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
+      expect(tableExists(db, 'plugin_usage_events')).toBe(true);
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
+      expect(tableExists(db, 'orca_remote_opens')).toBe(true);
+      if (shape !== 'missing') {
+        expect(columnNames(db, 'orca_workers')).toEqual(expect.arrayContaining(['pending_remote_report', 'remote_stop_confirmed_at']));
+        expect(db.prepare('SELECT id FROM orca_workers').all()).toEqual([{ id: 'worker-1' }]);
+      }
+    } finally { cleanup(); }
+  });
+  it('adds nullable sessions.hidden_at to a populated database without touching existing tasks', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+      db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, pinned_at INTEGER, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Visible', 'active', NULL, 1), ('b', 'Pinned', 'archived', 5, 2);");
+      db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 125 });
+      expect(result.applied.map((migration) => migration.seq)[0]).toBe(126);
+      expect(columnNames(db, 'sessions')).toContain('hidden_at');
+      expect(db.prepare('SELECT id, title, status, pinned_at, updated_at, hidden_at FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'a', title: 'Visible', status: 'active', pinned_at: null, updated_at: 1, hidden_at: null },
+        { id: 'b', title: 'Pinned', status: 'archived', pinned_at: 5, updated_at: 2, hidden_at: null },
+      ]);
+      db.prepare("UPDATE sessions SET hidden_at = 9 WHERE id = 'a'").run();
+      expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE hidden_at IS NULL").get()).toEqual({ n: 1 });
+    } finally { cleanup(); }
+  });
   it('commits the complete fresh schema and task presets in one outer transaction', () => {
     const { db, cleanup } = createTempDb();
     try {

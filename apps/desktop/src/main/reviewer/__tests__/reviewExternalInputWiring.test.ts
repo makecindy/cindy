@@ -95,10 +95,11 @@ describe('Review external input wiring', () => {
     );
     expect(registerSource).toContain('if (changeSetContent.truncated) {');
     // The workspace fingerprint pins HEAD, not the base being compared against,
-    // so both gates must recheck the branch baseline as well.
+    // so both gates must recheck the branch baseline as well, in the same
+    // pinned directory that supplied the reviewed evidence.
     expect(
       registerSource.match(
-        /if \(!\(await reviewBranchBaselineIsCurrent\(source\.id, evidence\.branch\)\)\)/g,
+        /if \(!\(await inReviewWorkspace\(\(\) => reviewBranchBaselineIsCurrent\(source\.id, evidence\.branch\)\)\)\)/g,
       ),
     ).toHaveLength(2);
     expect(registerSource).not.toContain(

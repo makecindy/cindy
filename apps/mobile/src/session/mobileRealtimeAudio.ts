@@ -5,6 +5,7 @@ import {
 } from 'expo-modules-core';
 import type { AudioTrace } from '@cindy/voice-input-core';
 import { i18n } from '@/i18n';
+import { logMobileVoice } from '@/session/mobileVoiceDiagnostics';
 
 export type MobileRealtimeAudioChunk = {
   pcm16: ArrayBuffer;
@@ -24,7 +25,11 @@ type NativeAudioErrorEvent = {
 };
 
 type NativeRealtimeAudioModule = {
-  start(options?: { sampleRate?: number; bufferSize?: number }): Promise<void>;
+  start(options?: { sampleRate?: number; bufferSize?: number }): Promise<{
+    inputPortTypes: string[];
+    inputSampleRate: number;
+    inputChannels: number;
+  } | void>;
   stop(): Promise<void>;
   prewarm(): Promise<void>;
 };
@@ -97,6 +102,9 @@ const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
 
 let nativeBinding: RealtimeAudioNativeBinding | null | undefined;
 let expoAudioNativeModule: ExpoAudioNativeModule | null | undefined;
+// The custom Apple module owns one native engine. A replacement must wait for
+// the previous caller's complete start/stop lifecycle, including late cleanup.
+let customNativeCaptureReleased: Promise<void> = Promise.resolve();
 
 export function isMobileRealtimeAudioAvailable(): boolean {
   if (isE2eMockRealtimeAudioEnabled()) return true;
@@ -146,8 +154,13 @@ async function startCustomNativeRealtimeAudio(
     bufferSize?: number;
   },
 ): Promise<() => Promise<void>> {
-  const subscriptions: EventSubscription[] = [
-    binding.module.addListener('onAudioChunk', (event) => {
+  const previousCapture = customNativeCaptureReleased;
+  let releaseCapture!: () => void;
+  customNativeCaptureReleased = new Promise<void>((resolve) => { releaseCapture = resolve; });
+  await previousCapture;
+  const subscriptions: EventSubscription[] = [];
+  try {
+    subscriptions.push(binding.module.addListener('onAudioChunk', (event) => {
       options.onChunk({
         pcm16: decodeBase64ToArrayBuffer(event.base64Pcm16),
         trace: {
@@ -158,28 +171,44 @@ async function startCustomNativeRealtimeAudio(
           durationMs: event.durationMs,
         },
       });
-    }),
-    binding.module.addListener('onAudioError', (event) => {
+    }));
+    subscriptions.push(binding.module.addListener('onAudioError', (event) => {
       options.onError?.(new Error(event.message));
-    }),
-  ];
-
-  try {
-    await binding.module.start({
+    }));
+    const input = await binding.module.start({
       sampleRate: options.sampleRate ?? 16_000,
       bufferSize: options.bufferSize ?? DEFAULT_NATIVE_AUDIO_BUFFER_SIZE,
     });
+    logMobileVoice('debug', 'capture input', {
+      backend: 'ios-native',
+      // Older installed native modules return void; capture remains compatible.
+      inputPortTypes: input?.inputPortTypes ?? ['unknown'],
+      inputSampleRate: input?.inputSampleRate,
+      inputChannels: input?.inputChannels,
+    });
   } catch (error) {
-    subscriptions.forEach((subscription) => subscription.remove());
+    try {
+      subscriptions.forEach((subscription) => subscription.remove());
+    } finally {
+      releaseCapture();
+    }
     throw error;
   }
 
-  let stopped = false;
-  return async () => {
-    if (stopped) return;
-    stopped = true;
-    subscriptions.forEach((subscription) => subscription.remove());
-    await binding.module.stop();
+  let stopping: Promise<void> | undefined;
+  return () => {
+    stopping ??= (async () => {
+      try {
+        try {
+          subscriptions.forEach((subscription) => subscription.remove());
+        } finally {
+          await binding.module.stop();
+        }
+      } finally {
+        releaseCapture();
+      }
+    })();
+    return stopping;
   };
 }
 
@@ -279,6 +308,12 @@ async function startExpoAudioRealtimeAudio(
 
   try {
     await stream.start();
+    logMobileVoice('debug', 'capture input', {
+      backend: 'expo-audio',
+      inputPortTypes: ['unknown'],
+      inputSampleRate: stream.sampleRate,
+      inputChannels: stream.channels,
+    });
     streamStarted = true;
     lastChunkAt = Date.now();
     watchdog = setInterval(() => {

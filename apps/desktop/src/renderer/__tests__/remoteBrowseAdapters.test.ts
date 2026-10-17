@@ -78,12 +78,16 @@ describe('deviceLinkBrowseAdapter', () => {
       resolvedPath: 'C:\\Users\\cindy',
       entries: [{ name: 'Code', kind: 'dir', path: 'C:\\Users\\cindy\\Code' }],
       parent: 'C:\\Users',
+      drives: [{ name: 'C:', path: 'C:\\', current: true }, { name: 'D:', path: 'D:\\', current: false }],
+      drivesPending: true,
     });
     const res = await deviceLinkBrowseAdapter('dev-A').listDir('~');
     expect(invoke).toHaveBeenCalledWith('dev-A', 'fs:list-dir', [{ path: '~' }]);
     expect(res.resolvedPath).toBe('C:\\Users\\cindy');
     expect(res.entries).toEqual([{ name: 'Code', kind: 'dir', childPath: 'C:\\Users\\cindy\\Code' }]);
     expect(res.parent).toBe('C:\\Users');
+    expect(res.drives?.map(drive => drive.path)).toEqual(['C:\\', 'D:\\']);
+    expect(res.drivesPending).toBe(true);
   });
   it('statPath / mkdirP 经隧道调对应 channel,参数包成 [{path}]', async () => {
     invoke.mockResolvedValueOnce({ kind: 'dir', resolvedPath: '/x' });

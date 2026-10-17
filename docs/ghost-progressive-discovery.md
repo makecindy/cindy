@@ -68,6 +68,17 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   放行（见 §4 第 6 条）。Manual 正文只作为 tool-result 按需进入上下文，不进入生产
   system/developer prompt；正文是作者数据，不构成系统规则、用户意图或权限授权。
 
+
+### 2.1 namespace 寻址
+
+`ghost_info`、`ghost_call`、`ghost_manual` 和 `connect_account` 都接受可选 `namespace`：
+
+- 省略：同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
+- `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
+- 字符串：该企业的 orgSlug。
+
+同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+
 ## 3. 花名册（roster）
 
 普通任务可调用 `connect_account({kind:"plugin", id:ghost_id})`，由 Host 复用配置卡等待连接，

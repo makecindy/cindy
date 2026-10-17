@@ -52,6 +52,8 @@ const transcript = { items: [{ role: 'user' as const, text: '导出图标', at: 
 
 function setup(overrides: Partial<BotWorkbenchAccessDeps> = {}) {
   const deps: BotWorkbenchAccessDeps = {
+    readResponsibleSessionIds: vi.fn(async () => []),
+    saveResponsibility: vi.fn(async () => undefined),
     resolveCaller: vi.fn(async () => ({ ok: true as const, botId: 'bot-1' })),
     readState: vi.fn(async () => ({ directories: [PROJECT], tasks: {} })),
     readTarget: vi.fn(async () => target()),
@@ -428,6 +430,71 @@ describe('workbench detail reads for the owner', () => {
     await expect(hidden.access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_ACCESSIBLE' });
   });
+
+  it('reads an archived task the teammate is responsible for', async () => {
+    const { deps, access } = setup({
+      readResponsibleSessionIds: vi.fn(async () => ['task-1']),
+      readTarget: vi.fn(async () => target({ status: 'archived' })),
+    });
+    await expect(access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
+      .resolves.toEqual({ ok: true, taskId: 'task-1', transcript });
+    expect(deps.readResponsibleSessionIds).toHaveBeenCalledWith('bot-1');
+    expect(deps.readSessionTranscript).toHaveBeenCalledWith('task-1');
+  });
+
+  it('reads a responsible background task outside the handed-over projects', async () => {
+    const { access } = setup({
+      readState: vi.fn(async () => ({ directories: [], tasks: {} })),
+      readResponsibleSessionIds: vi.fn(async () => ['task-1']),
+      readTarget: vi.fn(async () => target({ delegationChild: true, workingDir: '/elsewhere' })),
+    });
+    await expect(access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: true, taskId: 'task-1' });
+  });
+
+  it('keeps unrelated tasks behind the project boundary', async () => {
+    const { deps, access } = setup({
+      readResponsibleSessionIds: vi.fn(async () => ['other-task']),
+      readTarget: vi.fn(async () => target({ workingDir: '/elsewhere' })),
+    });
+    await expect(access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
+    expect(deps.readSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it('still refuses archived tasks the teammate is not responsible for', async () => {
+    const { deps, access } = setup({ readTarget: vi.fn(async () => target({ status: 'archived' })) });
+    await expect(access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_ARCHIVED' });
+    expect(deps.readSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it('does not relax tool reads or continuation for responsible archived tasks', async () => {
+    const { deps, access } = setup({
+      readResponsibleSessionIds: vi.fn(async () => ['task-1']),
+      readTarget: vi.fn(async () => target({ status: 'archived' })),
+    });
+    await expect(access.read({ callerSessionId: 'bot-main', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_ARCHIVED' });
+    await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'task-1', message: '继续' }))
+      .resolves.toMatchObject({ ok: false });
+    expect(deps.sendToSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps hidden and remote tasks unreadable even when listed as responsible', async () => {
+    const hidden = setup({
+      readResponsibleSessionIds: vi.fn(async () => ['task-1']),
+      readTarget: vi.fn(async () => target({ botLinked: true })),
+    });
+    await expect(hidden.access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_ACCESSIBLE' });
+    const remote = setup({
+      readResponsibleSessionIds: vi.fn(async () => ['task-1']),
+      readTarget: vi.fn(async () => target({ remoteHostId: 'ssh-1', status: 'archived' })),
+    });
+    await expect(remote.access.readForOwner({ botId: 'bot-1', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_REMOTE' });
+  });
 });
 
 describe('workbench snapshot', () => {
@@ -448,6 +515,7 @@ describe('workbench snapshot', () => {
           },
         },
       })),
+      readResponsibleSessionIds: vi.fn(async () => ['running', 'delegated-1']),
       listDelegations: vi.fn(async () => new Map([['delegated-1', 'queued' as const]])),
       listProjectTasks: vi.fn(async () => [
         { id: 'running', title: '**导出** 图标', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: NOW - 1, messageCount: 12 },
@@ -471,28 +539,23 @@ describe('workbench snapshot', () => {
     if (!result.ok) throw new Error('expected ok');
     expect(result.workbench.tasks.map((task) => [task.taskId, task.source, task.state, task.kind])).toEqual([
       ['running', 'cindy', 'running', 'existing'],
-      ['claude:abc', 'claude-code', null, 'existing'],
       ['delegated-1', 'cindy', 'queued', 'delegated'],
     ]);
     expect(result.workbench.tasks[0]).toMatchObject({ title: '导出 图标', messageCount: 12, imported: true });
-    expect(result.workbench.tasks[1]).toMatchObject({
-      title: '把图标导出来',
-      imported: false,
-      judgment: { verdict: 'unfinished', next: '补 xxhdpi' },
-    });
-    expect(result.workbench.tasks[1]!.digest).toMatchObject({ purpose: '把图标导出来' });
+    expect(result.workbench.candidates).toEqual([{ taskId: 'claude:abc', source: 'claude-code', title: '把图标导出来', project: 'tapmon-art' }]);
     expect(result.workbench.tasks[0]!.digest).toMatchObject({ purpose: '导出图标' });
-    expect(result.workbench.counts).toEqual({ unfinished: 1, idea: 0, done: 0, unjudged: 1 });
+    expect(result.workbench.counts).toEqual({ unfinished: 0, idea: 0, done: 0, unjudged: 1 });
     expect(result.workbench.automations.map((item) => item.id)).toEqual(['s-1']);
-    expect(result.workbench.totalTasks).toBe(3);
+    expect(result.workbench.totalTasks).toBe(2);
+    expect(result.workbench.totalCandidates).toBe(1);
     // 30 天前的 Cindy 任务只计数(伙伴自己的后台任务除外),加上外部来源报来的 4 条。
     expect(result.workbench.olderCount).toBe(5);
     expect(result.workbench.projects[0]).toMatchObject({ path: PROJECT, brief: { docs: [`${PROJECT}/README.md`, `${PROJECT}/DESIGN.md`] } });
   });
 
-  it('always carries the project Cindy tasks (owner-opened, unjudged) ahead of local sessions', async () => {
+  it('keeps owner-opened project tasks in discovery without reading bodies or claiming responsibility', async () => {
     const NOW = 100 * 24 * 60 * 60 * 1000;
-    const { access } = setup({
+    const { access, deps } = setup({
       now: () => NOW,
       listProjectTasks: vi.fn(async () =>
         Array.from({ length: 35 }, (_, index) => ({
@@ -512,10 +575,28 @@ describe('workbench snapshot', () => {
     const result = await access.get({ callerSessionId: 'bot-main' });
     if (!result.ok) throw new Error('expected ok');
     const ids = result.workbench.tasks.map((task) => task.taskId);
-    expect(ids.filter((id) => id.startsWith('own-'))).toHaveLength(30);
-    expect(ids.filter((id) => id.startsWith('claude:'))).toHaveLength(10);
-    expect(result.workbench.tasks.find((task) => task.taskId === 'own-0')).toMatchObject({ judgment: null, imported: true });
-    expect(result.workbench).toMatchObject({ truncated: true, totalTasks: 55 });
+    expect(ids).toEqual([]);
+    expect(result.workbench.candidates.length).toBe(40);
+    expect(deps.readSessionDigest).not.toHaveBeenCalled();
+    expect(result.workbench).toMatchObject({ truncated: false, totalTasks: 0, totalCandidates: 55, candidatesTruncated: true });
+  });
+
+  it('caps responsible tasks and discovery candidates independently without reading candidate bodies', async () => {
+    const NOW = 100 * 24 * 60 * 60 * 1000;
+    const owned = Array.from({ length: 35 }, (_, n) => `owned-${n}`);
+    const { access, deps } = setup({
+      now: () => NOW,
+      readResponsibleSessionIds: vi.fn(async () => owned),
+      listProjectTasks: vi.fn(async () => [...owned, ...Array.from({ length: 45 }, (_, n) => `candidate-${n}`)]
+        .map((id, n) => ({ id, title: id, workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: NOW - n }))),
+      listExternalCandidates: sessions(),
+    });
+    const result = await access.get({ callerSessionId: 'bot-main' });
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.workbench.tasks).toHaveLength(30);
+    expect(result.workbench.candidates).toHaveLength(40);
+    expect(result.workbench).toMatchObject({ totalTasks: 35, truncated: true, totalCandidates: 45, candidatesTruncated: true });
+    expect(vi.mocked(deps.readSessionDigest).mock.calls.map(([id]) => id)).toEqual(owned.slice(0, 30));
   });
 
   it('keeps going without a brief when building it fails', async () => {
@@ -544,5 +625,57 @@ describe('workbench snapshot', () => {
     expect(result).toMatchObject({ ok: true, workbench: { projects: [], tasks: [], automations: [{ id: 'r-1', state: 'running' }] } });
     expect(deps.listProjectTasks).not.toHaveBeenCalled();
     expect(deps.listExternalCandidates).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('explicit per-task responsibility', () => {
+  it('takes one authorized task without starting it, then releases without touching its lifecycle', async () => {
+    const { access, deps } = setup();
+    await expect(access.setResponsibility({ callerSessionId: 'main', taskId: 'session:task-1', responsible: true }))
+      .resolves.toEqual({ ok: true, taskId: 'task-1', responsible: true });
+    expect(deps.saveResponsibility).toHaveBeenCalledWith('bot-1', 'task-1', true);
+    expect(deps.sendToSession).not.toHaveBeenCalled();
+    expect(deps.startBackgroundTask).not.toHaveBeenCalled();
+    vi.mocked(deps.readResponsibleSessionIds).mockResolvedValue(['task-1']);
+    vi.mocked(deps.readTarget).mockResolvedValue(target({ status: 'archived', workingDir: '/moved' }));
+    await expect(access.setResponsibility({ callerSessionId: 'main', taskId: 'task-1', responsible: false }))
+      .resolves.toMatchObject({ ok: true, responsible: false });
+    expect(deps.saveResponsibility).toHaveBeenLastCalledWith('bot-1', 'task-1', false);
+  });
+  it('does not let project access, another bot or revoked identity impersonate responsibility', async () => {
+    const { access, deps } = setup();
+    await expect(access.setResponsibility({ callerSessionId: 'main', taskId: 'task-1', responsible: false }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_RESPONSIBLE' });
+    vi.mocked(deps.readTarget).mockResolvedValue(target({ delegationChild: true }));
+    await expect(access.setResponsibility({ callerSessionId: 'main', taskId: 'task-1', responsible: true }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_IS_BACKGROUND_TASK' });
+    vi.mocked(deps.resolveCaller).mockResolvedValue({ ok: false, errorCode: 'NOT_A_BOT_SESSION', message: 'no' });
+    await expect(access.setResponsibility({ callerSessionId: 'other', taskId: 'task-1', responsible: true }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+    expect(deps.saveResponsibility).not.toHaveBeenCalled();
+  });
+  it.each([{ remoteHostId: 'remote' }, { botLinked: true }, { status: 'deleted' }])('rejects inaccessible targets %j', async (patch) => {
+    const { access, deps } = setup({ readTarget: vi.fn(async () => target(patch)) });
+    expect((await access.setResponsibility({ callerSessionId: 'main', taskId: 'task-1', responsible: true })).ok).toBe(false);
+    expect(deps.saveResponsibility).not.toHaveBeenCalled();
+  });
+  it('lists own created tasks across projects even when no project is authorized', async () => {
+    const { access, deps } = setup({
+      readState: vi.fn(async () => ({ directories: [], tasks: {} })),
+      readResponsibleSessionIds: vi.fn(async () => ['child']),
+      listDelegations: vi.fn(async () => new Map([['child', 'completed' as const]])),
+      listProjectTasks: vi.fn(async () => [{ id: 'child', title: 'Created elsewhere', workingDir: '/other', agentKind: 'cc', summary: null, lastActiveAt: 1 }]),
+    });
+    const result = await access.get({ callerSessionId: 'main' });
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.workbench.tasks.map(t => t.taskId)).toEqual(['child']);
+    expect(deps.listProjectTasks).toHaveBeenCalledWith([], new Set(['child']));
+  });
+  it('does not save a responsibility after the account changes', async () => {
+    const { access, deps } = setup({ isOwnerScopeCurrent: () => false });
+    await expect(access.setResponsibility({ callerSessionId: 'main', taskId: 'task-1', responsible: true }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'OWNER_SCOPE_CHANGED' });
+    expect(deps.saveResponsibility).not.toHaveBeenCalled();
   });
 });

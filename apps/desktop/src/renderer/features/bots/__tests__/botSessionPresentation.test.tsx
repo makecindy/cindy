@@ -22,6 +22,7 @@ vi.mock('../botStore', async () => {
 });
 vi.mock('react-router-dom', () => ({
   useParams: () => h.params,
+  useLocation: () => ({ state: null }),
   useNavigate: () => vi.fn(),
   Navigate: () => <div>unavailable</div>,
 }));

@@ -122,6 +122,11 @@ describe('mobile voice diagnostics', () => {
     const logged = messages();
     expect(logged.every((record) => record.scope === 'voice')).toBe(true);
     const names = logged.map((record) => record.args[0]);
+    expect(logged.find((record) => record.args[0] === 'stop requested')?.args[1]).toMatchObject({
+      capturedAudioMs: 10,
+      rmsDbfs: -30,
+      peakDbfs: -30,
+    });
     for (const name of [
       'start',
       'capture live',

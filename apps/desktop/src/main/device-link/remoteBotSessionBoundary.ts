@@ -1,6 +1,17 @@
 import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
 
-export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'missing';
+/**
+ * - ordinary / visible:正常可见;hidden:伙伴隐藏,任何远端读写都按不存在处理;
+ * - background:插件后台隐藏任务,只从列表类结果(任务列表、运行中列表)中排除,单任务读取
+ *   与操作照常,手机插件页可深链打开(未结束提示只回 id,已在源查询排除);missing:不存在。
+ */
+export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'background' | 'missing';
+
+/** 列表类 channel:插件后台隐藏任务不出现在这些结果里(与本机任务列表同口径)。 */
+const BACKGROUND_EXCLUDED_LIST_CHANNELS = new Set([
+  'local-db:sessions:list',
+  'maker:list-active',
+]);
 type Lookup = (sessionId: string, kind?: 'session' | 'bot') => Promise<RemoteBotSessionAccess>;
 export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: 'session' | 'bot') => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
 let lookup: Lookup | null = null;
@@ -127,7 +138,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       for (const id of ids) access.set(id, await lookup(id, 'session'));
     }
     const visible = (id: unknown) => typeof id === 'string'
-      && (access.get(id) === 'ordinary' || access.get(id) === 'visible');
+      && (access.get(id) === 'ordinary' || access.get(id) === 'visible' || access.get(id) === 'background');
     // The page and its foreign references share one fresh, source-owned lookup.
     // Missing or hidden page members invalidate pagination; optional parents
     // are simply omitted, including on cached/queued delivery after a hide.
@@ -161,6 +172,9 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   }
   const activeLookup = lookup;
   const activeBatchLookup = batchLookup;
+  const excludeBackground = BACKGROUND_EXCLUDED_LIST_CHANNELS.has(channel);
+  const excluded = (access: RemoteBotSessionAccess) =>
+    access === 'hidden' || (excludeBackground && access === 'background');
   const identity = (item: unknown) => {
     const row = record(item);
     const ref = record(row?.ref);
@@ -172,7 +186,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   const project = async (item: unknown) => {
     const key = identity(item);
     if (!key) return item;
-    return await activeLookup(key.id, key.kind) === 'hidden' ? null : item;
+    return excluded(await activeLookup(key.id, key.kind)) ? null : item;
   };
   if (Array.isArray(value)) {
     const identities = value.map(identity);
@@ -191,7 +205,7 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     }
     return value.filter((item, index) => {
       const key = identities[index];
-      return item !== null && (!key || (accessByKind.get(key.kind)?.get(key.id) ?? 'hidden') !== 'hidden');
+      return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
     });
   }
   const row = record(value);

@@ -1,19 +1,16 @@
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 /**
- * textOneshotPinOptions.ts — 快问快答(text.oneshot)钉档的目录模型清单与路由解析。
+ * textOneshotPinOptions.ts — 快问快答(text.oneshot)可选目录模型清单与路由解析。
  *
- * 背景(2026-08-05 与刘佳黎定稿):钉档可选项从 9 个轻量档位扩展为**当前供应商
- * 目录里的全部文本模型**——用户安装插件即承担其成本,主机在安装/详情页如实
- * 展示可选面,不再用一份小清单替用户做成本决定。
+ * 可选项是**当前供应商目录里的全部文本模型**(2026-08-05 与刘佳黎定稿)——用户
+ * 安装插件即承担其成本,主机如实展示可选面。目录钉('cat:' 编码)精确钉死一组
+ * 供应商×agent×模型,系统辅助模型设置沿用这一编码。
  *
- * 钉值两种形态(消费方都要认):
- * - 轻量档位键(如 'litellm-kimi-k2.6',见 utilityModelProfiles):随系统链演进
- *   的逻辑档位,覆盖表里的既有形态;
- * - 目录钉(本文件 'cat:' 编码):精确钉死一组 供应商×agent×模型。
- *
- * 插件还可在身份卡 `cindy.oneshotModel` 声明**偏好**模型 id(目录模型,如
- * 'codex/gpt-5.5'):解析优先级 = 用户钉档 > 插件声明 > 系统默认链。声明只表达
- * 意图——目录没有 / 已停用 / 不可路由时按未声明处理,绝不构成硬依赖。
+ * 插件详情的「模型」字段与插件新建任务共用 pluginTaskPrefsStore(2026-10 合并,
+ * 旧的逐能力钉档已迁移);插件还可在身份卡 `cindy.oneshotModel` 声明**偏好**
+ * 模型 id(目录模型,如 'codex/gpt-5.5'):解析优先级 = 用户选的模型 > 插件声明 >
+ * 系统辅助模型链。声明只表达意图——目录没有 / 已停用 / 不可路由时按未声明处理,
+ * 绝不构成硬依赖。
  *
  * 纯逻辑、零 Electron:被 cindySlot(类型)与 IPC 接线共用,单测直测。
  */
@@ -46,10 +43,16 @@ const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code'] as const;
  */
 const ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS = new Set(['xd', 'openai', 'xai']);
 
-/** 一次快问快答的路由:用户钉档或插件声明解析出的终态。 */
-export type OneshotRoute =
-  | { kind: 'utility-profile'; profileId: string }
-  | { kind: 'catalog'; providerId: string; agentKind: AgentKind; model: string };
+/**
+ * 一次快问快答的路由:用户在插件详情选的模型或插件声明解析出的终态。
+ * providerId 缺省时由执行侧按 agent×模型唯一推断,推断不出即 fail closed。
+ */
+export type OneshotRoute = {
+  kind: 'catalog';
+  providerId?: string;
+  agentKind: AgentKind;
+  model: string;
+};
 
 /** 目录钉编码:cat:<providerId>:<agentKind>:<modelId>(modelId 可含 '/' 与 ':')。 */
 export function encodeCatalogPin(providerId: string, agentKind: AgentKind, model: string): string {

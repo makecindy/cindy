@@ -66,6 +66,73 @@ describe('buildReviewPrompt', () => {
     expect(result.prompt).toContain('只读');
   });
 
+  it('labels development text as an unverified claim and asks for a findings count', () => {
+    const { prompt } = buildReviewPrompt({
+      context: [
+        { role: 'user', text: '修复登录问题' },
+        { role: 'assistant', text: '已修复，测试通过' },
+      ],
+      workspace: null,
+      changeSet: changeSet(),
+      artifacts: [],
+    });
+
+    expect(prompt).toContain('开发方交付说明（未经核实的自述）: 已修复，测试通过');
+    expect(prompt).not.toContain('执行结果:');
+    expect(prompt.trimEnd().endsWith('这一行只供程序读取，不要在其它地方提及。')).toBe(true);
+    expect(prompt).toContain('<review-findings count="N"/>');
+  });
+
+  it('reviews other changed repositories as part of the same deliverable', () => {
+    const dirtyWorkspace = (diffPath: string) => ({
+      dirty: true,
+      totalFiles: 1,
+      stagedFiles: 0,
+      unstagedFiles: 1,
+      untrackedFiles: 0,
+      disabledReason: null,
+      diffs: { staged: [], unstaged: [fileDiff({ source: 'unstaged', path: diffPath })] },
+    });
+    const result = buildReviewPrompt({
+      context: [],
+      workspace: dirtyWorkspace('client.ts'),
+      changeSet: null,
+      artifacts: [],
+      primaryRoot: '/work/client',
+      additionalRepositories: [
+        { root: '/work/server', workspace: dirtyWorkspace('server.ts'), branch: null },
+      ],
+    });
+
+    expect(result.targetKind).toBe('changes');
+    expect(result.prompt).toContain('## 主仓库：/work/client');
+    expect(result.prompt).toContain('## 其它仓库：/work/server');
+    expect(result.prompt).toContain('client.ts');
+    expect(result.prompt).toContain('server.ts');
+    expect(result.prompt).toContain('不得用一个仓库的代码去评判另一个仓库的补丁');
+  });
+
+  it('treats a clean primary with a changed additional repository as a change review', () => {
+    const result = buildReviewPrompt({
+      context: [],
+      workspace: null,
+      changeSet: null,
+      artifacts: [],
+      additionalRepositories: [
+        {
+          root: '/work/server',
+          workspace: null,
+          branch: {
+            baseRef: 'main', baseOid: 'b', mergeBaseOid: 'm', fileCount: 1,
+            diffs: [fileDiff({ source: 'branch', path: 'server.ts' })], capped: null,
+          },
+        },
+      ],
+    });
+    expect(result.targetKind).toBe('changes');
+    expect(result.prompt).toContain('server.ts');
+  });
+
   it('keeps non-Git artifact review available', () => {
     const result = buildReviewPrompt({
       focus: '检查合同是否遗漏条款',
@@ -326,8 +393,7 @@ describe('buildReviewPrompt', () => {
     expect(result.prompt).not.toContain('src/unrelated.ts');
   });
 
-  it('prefers uncommitted work over the branch diff', () => {
-    // Uncommitted changes are what the user is looking at right now.
+  it('reviews branch commits together with the current uncommitted edits', () => {
     const result = buildReviewPrompt({
       context: [],
       workspace: {
@@ -353,10 +419,13 @@ describe('buildReviewPrompt', () => {
       },
       changeSet: null,
       artifacts: [],
+      historyCaptureIncomplete: true,
     });
 
     expect(result.prompt).toContain('src/wip.ts');
-    expect(result.prompt).not.toContain('src/committed.ts');
+    expect(result.prompt).toContain('src/committed.ts');
+    expect(result.prompt).toContain('以磁盘上的当前代码为最终状态');
+    expect(result.prompt).toContain('历史改动记录不完整');
   });
 
   it('says so when the branch diff was unreadable and there is no change set', () => {

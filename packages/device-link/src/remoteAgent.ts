@@ -84,6 +84,8 @@ export const REMOTE_AGENT_ERROR_CODES = [
   'REMOTE_AGENT_UNAVAILABLE',
   // 那台电脑没有对这个供应商打开「允许被远程调用」(或已关闭)。
   'REMOTE_AGENT_PROVIDER_NOT_ALLOWED',
+  // 供应商组转来的受邀者任务：这台电脑的主人没有同意这个受邀者经组使用(只回给打开时带了 reshareKey 的组所在电脑)。
+  'REMOTE_AGENT_RESHARE_NOT_ALLOWED',
 ] as const;
 export type RemoteAgentErrorCode = (typeof REMOTE_AGENT_ERROR_CODES)[number];
 
@@ -154,7 +156,63 @@ export type RemoteAgentRequest =
   | { op: 'poll'; runs: Array<{ runId: string; cursor: number }>; waitMs?: number }
   | { op: 'reply'; runId: string; requestId: string; payload: RemoteAgentPayload }
   | { op: 'push'; runId: string; seq: number; frames: RemoteAgentPushFrame[] }
-  | { op: 'close'; runId: string; mode: 'close' | 'detach'; reason: RemoteAgentTeardownReason };
+  | { op: 'close'; runId: string; mode: 'close' | 'detach'; reason: RemoteAgentTeardownReason }
+  /**
+   * 供应商组(组所在电脑 → 组内电脑)：组所在电脑删掉某个受邀者后，请组内电脑清掉替这个受邀者
+   * 运行过的任务留下的会话记录与目录。relay 是组所在电脑为受邀者取的不透明键(打开任务时随载荷带过来)，
+   * 只作用于调用方自己的 relay。旧版组内电脑回 REMOTE_AGENT_INVALID(它从没接过被中转的任务)。
+   */
+  | { op: 'forget'; relay: string }
+  /**
+   * 供应商组转分享(组所在电脑 → 分享来的组内电脑，调用方是那台的受邀者)：组所在电脑把自己分享的人
+   * 经组使用这台电脑的请求整体报上来(整体替换调用方上一份)，那台的主人逐人同意。回包是每一项此刻的结果
+   * ({@link RemoteAgentReshareResult})。只发给 caps 声明了 reshareConsent 的电脑；支持大名单的电脑另声明
+   * reshareBatch，分片在最后一片到达前不会替换审批名单。
+   */
+  | { op: 'reshare'; entries: RemoteAgentReshareEntry[]; batch?: RemoteAgentReshareBatch };
+
+/** 供应商组为受邀者取的不透明键(组所在电脑按受邀者派生，不含身份信息)；「需要换一台」凭证同一格式。 */
+export const REMOTE_AGENT_RELAY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
+/** 转分享批次 id 与 relay 一样是不透明的短键，不携带账号或成员身份。 */
+export const REMOTE_AGENT_RESHARE_BATCH_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
+/**
+ * 转分享请求里的一个人：组所在电脑分享的人(按账号，不分设备)。key 是组所在电脑按(分享, 成员)派生的不透明键，
+ * 打开中转任务时随载荷带上(reshareKey)；昵称与头像由组所在电脑转述，只用来让那台的主人认出是谁。
+ */
+export interface RemoteAgentReshareEntry {
+  key: string;
+  name: string;
+  avatar?: string;
+}
+
+/** 大名单转分享的片段信息；每个片段仍受 REMOTE_AGENT_MAX_RESHARE_ENTRIES 限制。 */
+export interface RemoteAgentReshareBatch {
+  id: string;
+  index: number;
+  count: number;
+}
+
+export type RemoteAgentReshareState = 'pending' | 'approved' | 'rejected';
+export const REMOTE_AGENT_RESHARE_STATES: readonly RemoteAgentReshareState[] = ['pending', 'approved', 'rejected'];
+
+export interface RemoteAgentReshareResult {
+  entries: Array<{ key: string; state: RemoteAgentReshareState }>;
+  /** 分块请求的回执；complete=false 时接收端尚未替换审批记录。 */
+  batch?: RemoteAgentReshareBatch & { complete: boolean };
+}
+
+/** 一次转分享请求最多带几个人(远高于实际分享人数，只用来挡异常请求)。 */
+export const REMOTE_AGENT_MAX_RESHARE_ENTRIES = 256;
+const RESHARE_NAME_MAX = 128;
+const RESHARE_AVATAR_MAX = 2048;
+
+/**
+ * 供应商组「需要换一台」：组所在电脑在中转任务的事件流里发出的状态键，值是一次性凭证。只发给打开任务时
+ * 声明了 acceptsGroupSwitch 的控制端，排在那次错误前面；控制端取走凭证、不并入任务状态。
+ */
+export const REMOTE_AGENT_GROUP_SWITCH_STATE_KEY = 'providerGroupSwitch';
 
 /** 与 maker-core AgentSessionTeardownReason 同值。 */
 export const REMOTE_AGENT_TEARDOWN_REASONS = ['navigation', 'account-boundary', 'app-quit'] as const;
@@ -168,6 +226,18 @@ export interface RemoteAgentCaps {
   maxPayloadBytes: number;
   /** 是否支持 opaque 虚拟工作区；不支持时控制端必须拒绝启动以免泄露真实路径。 */
   virtualWorkspace?: boolean;
+  /**
+   * 供应商组：能接受同账号组所在电脑中转过来的受邀者任务(打开时带 relay 键就按受邀者隔离运行)。
+   * 不声明的电脑，组所在电脑不给它分受邀者的任务(否则受邀者会拿到主人级权限)。
+   */
+  guestRelay?: boolean;
+  /**
+   * 供应商组转分享：受邀者(组所在电脑)可以报上它分享的人、由这台的主人逐人同意(op `reshare`)，组转来的受邀者任务
+   * 只在同意过的人上运行。不声明的电脑给不出同意，组所在电脑不把受邀者的任务分给它。
+   */
+  reshareConsent?: boolean;
+  /** 是否支持带 batch 的转分享请求；未声明时只能使用单片旧协议。 */
+  reshareBatch?: boolean;
 }
 
 export interface RemoteAgentReadResult {
@@ -226,6 +296,23 @@ function id(value: unknown): string {
 function count(value: unknown, max: number): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > max) invalid();
   return value as number;
+}
+
+function reshareBatch(value: unknown): RemoteAgentReshareBatch {
+  const v = record(value);
+  if (typeof v.id !== 'string' || !REMOTE_AGENT_RESHARE_BATCH_ID_PATTERN.test(v.id)) invalid();
+  // 片数不是产品人数上限；实际接收端按字节预算限制暂存内容。
+  const batchCount = count(v.count, Number.MAX_SAFE_INTEGER);
+  if (batchCount < 1) invalid();
+  const index = count(v.index, batchCount - 1);
+  return { id: v.id, index, count: batchCount };
+}
+
+function reshareResultBatch(value: unknown): RemoteAgentReshareResult['batch'] {
+  const v = record(value);
+  const batch = reshareBatch(v);
+  if (typeof v.complete !== 'boolean') invalid();
+  return { ...batch, complete: v.complete };
 }
 
 function base64Chars(bytes: number): number {
@@ -334,9 +421,63 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         mode: oneOf(v.mode, ['close', 'detach'] as const),
         reason: oneOf(v.reason, REMOTE_AGENT_TEARDOWN_REASONS),
       };
+    case 'forget':
+      if (typeof v.relay !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(v.relay)) invalid();
+      return { op: 'forget', relay: v.relay };
+    case 'reshare': {
+      if (!Array.isArray(v.entries) || v.entries.length > REMOTE_AGENT_MAX_RESHARE_ENTRIES) invalid();
+      const entries = v.entries.map(reshareEntry);
+      if (new Set(entries.map((entry) => entry.key)).size !== entries.length) invalid();
+      return {
+        op: 'reshare',
+        entries,
+        ...(v.batch === undefined ? {} : { batch: reshareBatch(v.batch) }),
+      };
+    }
     default:
       invalid();
   }
+}
+
+function reshareEntry(value: unknown): RemoteAgentReshareEntry {
+  const v = record(value);
+  if (typeof v.key !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(v.key)) invalid();
+  const name = typeof v.name === 'string' ? v.name.trim() : '';
+  // eslint-disable-next-line no-control-regex -- 控制字符是显式拒绝目标
+  if (!name || name.length > RESHARE_NAME_MAX || /[\u0000-\u001f\u007f]/.test(name)) invalid();
+  const avatar = reshareAvatar(v.avatar);
+  return { key: v.key, name, ...(avatar ? { avatar } : {}) };
+}
+
+/** 头像只收 https 地址；其他写法丢掉(不让整条请求失败)。 */
+function reshareAvatar(value: unknown): string | null {
+  if (typeof value !== 'string' || !value || value.length > RESHARE_AVATAR_MAX) return null;
+  try {
+    return new URL(value).protocol === 'https:' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 组所在电脑读 `reshare` 的回包：不认识的状态、不在请求里的键丢掉。 */
+export function parseRemoteAgentReshareResult(value: unknown, keys?: ReadonlySet<string>): RemoteAgentReshareResult {
+  const v = record(value);
+  if (!Array.isArray(v.entries) || v.entries.length > REMOTE_AGENT_MAX_RESHARE_ENTRIES) invalid();
+  const entries: RemoteAgentReshareResult['entries'] = [];
+  const seen = new Set<string>();
+  for (const item of v.entries) {
+    const entry = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    if (!entry || typeof entry.key !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(entry.key)) continue;
+    if (seen.has(entry.key)) invalid();
+    seen.add(entry.key);
+    if (keys && !keys.has(entry.key)) continue;
+    if (!(REMOTE_AGENT_RESHARE_STATES as readonly unknown[]).includes(entry.state)) continue;
+    entries.push({ key: entry.key, state: entry.state as RemoteAgentReshareState });
+  }
+  return {
+    entries,
+    ...(v.batch === undefined ? {} : { batch: reshareResultBatch(v.batch) }),
+  };
 }
 
 /** poll 按游标幂等：peer reset 后可以重读，其余 op 不可重试。 */
@@ -367,6 +508,9 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
+    ...(v.guestRelay === true ? { guestRelay: true } : {}),
+    ...(v.reshareConsent === true ? { reshareConsent: true } : {}),
+    ...(v.reshareBatch === true ? { reshareBatch: true } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;

@@ -49,18 +49,27 @@ export function buildDesktopConfirmNoticeText(what: string): string {
 }
 
 /**
+ * 代输入提示:只给任务名与入口,不含界面内容,也不接收输入(值只走签名加密通道)。
+ * 任务名是原样数据,模板只做拼接。
+ */
+export function buildInputHandoffNoticeText(taskTitle: string): string {
+  return `🔐 需要你帮忙输入:${taskTitle} · 在 Cindy 中打开`;
+}
+
+/**
  * 组装 fire-and-forget 通知函数(DI 便于单测;生产接线见
  * desktopConfirmNoticeWiring.ts)。
  */
 export function createDesktopConfirmNotifier(
   deps: DesktopConfirmNoticeDeps,
+  buildText: (what: string) => string = buildDesktopConfirmNoticeText,
 ): (sessionId: string, what: string) => void {
   return (sessionId, what) => {
     void (async () => {
       try {
         const openId = await deps.getFeishuOpenId(sessionId);
         if (!openId) return;
-        await deps.sendFeishuText(openId, buildDesktopConfirmNoticeText(what));
+        await deps.sendFeishuText(openId, buildText(what));
       } catch (err) {
         deps.logWarn?.(
           `desktop-confirm IM notice failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,

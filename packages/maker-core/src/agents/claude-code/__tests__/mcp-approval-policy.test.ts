@@ -293,7 +293,37 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+const OUTPUT_DELIVERY_ROUTING = {
+  overrides: [
+    {
+      capabilityId: 'output-delivery',
+      source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'tool', id: 'Artifact' },
+      invocation: 'disabled',
+    },
+    {
+      capabilityId: 'output-delivery',
+      source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'mcp', id: 'claude.ai Claude Docs' },
+      invocation: 'disabled',
+    },
+  ],
+} as const satisfies CapabilityRoutingPolicy;
+
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('removes host-disabled built-in tools and MCP servers from a local session', async () => {
+    const { handle } = await startSession(undefined, {
+      capabilityRouting: OUTPUT_DELIVERY_ROUTING,
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      disallowedTools?: string[];
+      settings?: { deniedMcpServers?: unknown };
+    };
+
+    expect(options.disallowedTools).toEqual(['Artifact']);
+    expect(options.settings?.deniedMcpServers).toEqual([
+      { serverName: 'claude.ai Claude Docs' },
+    ]);
+    await handle.close();
+  });
   it('captures known writes before execution and marks Bash opaque only after execution', async () => {
     const beforeKnownFileWrite = vi.fn(async () => undefined);
     const noteOpaqueWrite = vi.fn();
@@ -1996,5 +2026,34 @@ describe('remote sessions share the same permission semantics', () => {
     ).resolves.toMatchObject({ behavior: 'deny' });
     expect(permissionRequests(failed.seen)).toHaveLength(0);
     await failed.handle.close();
+  });
+});
+
+describe('remote sessions apply host-disabled built-in surfaces', () => {
+  it('passes disallowed tools and denied MCP servers to the remote daemon', async () => {
+    const config = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = config;
+    const workingDir = await makeTempDir();
+    let startParams: Record<string, unknown> | undefined;
+    const deps = createDeps(() => 'auto-approve');
+    deps.capabilityRouting = OUTPUT_DELIVERY_ROUTING;
+    deps.remoteCcQueryFactory = (async (args: { startParams: Record<string, unknown> }) => {
+      startParams = args.startParams;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-remote-output-routing',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+
+    expect(startParams?.disallowedTools).toEqual(['Artifact']);
+    expect(
+      (startParams?.extraOptions as { settings?: { deniedMcpServers?: unknown } })
+        ?.settings?.deniedMcpServers,
+    ).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
+    await handle.close();
   });
 });

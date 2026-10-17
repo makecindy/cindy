@@ -1,3 +1,5 @@
+import { builtInSkillsRoot, sharedBuiltInSkillsRoot, validActiveBundle } from './built-in-skill-activation';
+export { builtInSkillsRoot, sharedBuiltInSkillsRoot, canonicalBuiltInSkillActivationPath } from './built-in-skill-activation';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
@@ -103,15 +105,6 @@ export function builtInSkillPluginRoot(userDataDir: string): string {
   return path.join(userDataDir, 'managed-agent-skills', 'cindy');
 }
 
-export function builtInSkillsRoot(userDataDir: string): string {
-  return path.join(userDataDir, 'system-skills');
-}
-
-/** Profile-independent storage shared by Global, China, dev, and isolated profiles. */
-export function sharedBuiltInSkillsRoot(appDataDir: string): string {
-  return path.join(appDataDir, 'Cindy', 'shared-system-skills');
-}
-
 export function builtInSkillDescriptors(
   userDataDir: string,
   appDataDir?: string,
@@ -163,40 +156,6 @@ function stableBuiltInSkillDescriptors(
   userDataDir: string,
 ): BuiltInSkillDescriptor[] {
   return builtInSkillDescriptorsAtRoot(path.join(root, ACTIVE_BUNDLE_LINK), userDataDir);
-}
-
-function validActiveBundle(value: unknown): value is string {
-  return typeof value === 'string'
-    && /^v[1-9][0-9]*-[a-f0-9]{16}-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
-}
-
-/** Keep enable/disable intent stable while immutable built-in bundle revisions change. */
-export function canonicalBuiltInSkillActivationPath(
-  source: string,
-  userDataDir: string,
-  appDataDir?: string,
-): string {
-  const name = path.basename(source);
-  if (!(BUILT_IN_SKILL_NAMES as readonly string[]).includes(name)) return source;
-  const bundleRoot = path.dirname(source);
-  const managedRoots = [
-    builtInSkillsRoot(userDataDir),
-    ...(appDataDir ? [sharedBuiltInSkillsRoot(appDataDir)] : []),
-  ];
-  if (
-    path.basename(bundleRoot) === ACTIVE_BUNDLE_LINK
-    && managedRoots.some((root) => realPathOrNormalized(path.dirname(bundleRoot)) === realPathOrNormalized(root))
-  ) {
-    return path.join(path.dirname(bundleRoot), name);
-  }
-  const versionsRoot = path.dirname(bundleRoot);
-  const stableRoot = path.dirname(versionsRoot);
-  if (
-    path.basename(versionsRoot) !== VERSIONS_DIRECTORY ||
-    !validActiveBundle(path.basename(bundleRoot)) ||
-    !managedRoots.some((root) => realPathOrNormalized(stableRoot) === realPathOrNormalized(root))
-  ) return source;
-  return path.join(stableRoot, name);
 }
 
 function parseManifest(raw: string): MaterializationManifest | null {

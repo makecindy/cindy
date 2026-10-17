@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -276,7 +276,9 @@ describe('session runtime control wiring', () => {
     expect(grantUpdate).toContain('withSendToSessionLock(sessionId');
     expect(grantUpdate).toContain('applyRemoteDirectoryGrantUpdate(axis');
     expect(grantUpdate).toContain('persist: (patch) => persistSessionFields(sessionId, patch)');
-    expect(grantUpdate).toContain('terminate: () => maker.closeSession(sessionId)');
+    expect(grantUpdate).toMatch(
+      /terminate: \(\) => \(axis === 'extraDirs' && sess\?\.agentDeviceId && sess\.isTurnRunning\(\)\s*\? maker\.closeSessionIfCurrent\(sess, 'runtime-refresh', \{ afterCurrentTurn: true \}\)\s*: maker\.closeSession\(sessionId\)\)/,
+    );
     expect(grantUpdate).toContain('markRemoteSettingPersistedInsideHandler(result.dirs)');
     expect(grantUpdate).toContain('options.remote || route?.remoteHostId');
     expect(grantUpdate).toContain('isPersistedDirectoryGrantSubset(accepted, previousDirs)');
@@ -328,6 +330,39 @@ describe('session runtime control wiring', () => {
     expect(extraDirs).toContain('!isLibraryExtraDirSlot(dir)');
     expect(extraDirs).not.toContain('splitExtraDirSlots(persisted)');
     expect(extraDirs).not.toContain('[...requested, ...library]');
+  });
+
+  it.each([
+    ['extraDirs', true, true, true],
+    ['extraDirs', true, false, false],
+    ['extraDirs', false, true, false],
+    ['extraDirs', false, false, false],
+    ['writableDirs', true, true, false],
+    ['writableDirs', true, false, false],
+    ['writableDirs', false, true, false],
+    ['writableDirs', false, false, false],
+  ] as const)('directory rollback termination: %s, remote=%s, running=%s, deferred=%s', (axis, remote, running, deferred) => {
+    const grantUpdate = handlerBody(
+      registerSource,
+      'export function applyDirectoryGrants(',
+      'export async function applyLibraryReadonlyExtraDir(',
+    );
+    // Execute the actual injected callback: writable rollback must always stop
+    // immediately, while only a running remote read-only grant can wait.
+    const terminateExpression = grantUpdate.match(/terminate:\s*(\(\) => \([\s\S]*?\)),\n\s*\}\);/)?.[1];
+    expect(terminateExpression).toBeDefined();
+    const sessionId = 'directory-rollback';
+    const sess = { agentDeviceId: remote ? 'remote-device' : undefined, isTurnRunning: () => running };
+    const maker = { closeSession: vi.fn(), closeSessionIfCurrent: vi.fn() };
+    const terminate = new Function('axis', 'sess', 'maker', 'sessionId', `return (${terminateExpression});`)(axis, sess, maker, sessionId);
+    terminate();
+    if (deferred) {
+      expect(maker.closeSessionIfCurrent).toHaveBeenCalledExactlyOnceWith(sess, 'runtime-refresh', { afterCurrentTurn: true });
+      expect(maker.closeSession).not.toHaveBeenCalled();
+    } else {
+      expect(maker.closeSession).toHaveBeenCalledExactlyOnceWith(sessionId);
+      expect(maker.closeSessionIfCurrent).not.toHaveBeenCalled();
+    }
   });
 
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
@@ -1041,21 +1076,28 @@ describe('session runtime control wiring', () => {
     const catchBlock = setModel.slice(rehydrateCall, setModel.indexOf('rehydratedColdPiRuntime = liveSessionBeforeRouteChange;'));
     expect(catchBlock).toContain('} catch (error) {');
     expect(catchBlock).not.toContain('} catch {');
-    // Both the thrown failure and the "not live after bootstrap" case go through the one
+    // Only the "not live after bootstrap" case still goes through the fail-closed
     // reporter, which logs the full reason and throws the IPC error with a safe detail.
-    expect(catchBlock.match(/reportColdPiRehydrationFailure\(/g)).toHaveLength(2);
+    // The rehydration catch itself degrades and continues (dead stored route must not
+    // dead-lock the session); the full reason stays in the main log.
+    expect(catchBlock.match(/reportColdPiRehydrationFailure\(/g)).toHaveLength(1);
     expect(catchBlock).toContain("new ColdPiRehydrationError('runtime-not-live'");
     expect(catchBlock).toContain('log,');
     expect(catchBlock).toContain('throwIpcError,');
-    // The error code and fail-closed outcome are unchanged: still no route change on failure.
-    expect(catchBlock.match(/localModelWindowSwitchErrorCode\('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'\)/g)).toHaveLength(2);
+    expect(catchBlock).toContain("coldPiRehydrationOutcome === 'fail-closed'");
+    // The error code and fail-closed outcome remain only for the non-degrade branch.
+    expect(catchBlock.match(/localModelWindowSwitchErrorCode\('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'\)/g)).toHaveLength(1);
 
     // Raw reasons (which may carry local paths or stderr) stay in the main log; the IPC
     // message only carries the category and the name/code-based detail.
+    const fieldsStart = coldPiRehydrationFailureSource.indexOf('function logColdPiRehydrationFields(');
+    expect(fieldsStart).toBeGreaterThan(-1);
+    const fields = coldPiRehydrationFailureSource.slice(fieldsStart);
+    expect(fields).toContain('reason: failure.reason');
+    expect(fields).toContain('COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE');
     const reporterStart = coldPiRehydrationFailureSource.indexOf('export function reportColdPiRehydrationFailure(');
     expect(reporterStart).toBeGreaterThan(-1);
     const reporter = coldPiRehydrationFailureSource.slice(reporterStart);
-    expect(reporter).toContain('reason: failure.reason');
     expect(reporter).toContain('coldPiRehydrationFailureMessage(failure)');
     const messageBuilder = handlerBody(
       coldPiRehydrationFailureSource,
@@ -1064,6 +1106,31 @@ describe('session runtime control wiring', () => {
     );
     expect(messageBuilder).toContain('failure.detail');
     expect(messageBuilder).not.toContain('failure.reason');
+  });
+
+  it('keeps the model switch alive when cold Pi rehydration fails (dead stored route)', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 存量 BYOM 路由已死（provider 被删/不再提供该模型）时冷启动 bootstrap 必然
+    // fail-closed 失败；恢复失败若拒绝切模，发送与切模互相锁死（会话永久卡死）。
+    // catch 必须降级：只记日志，并与「跳过核实」同款语义置位，让目标路由由下一次
+    // 发送懒创建；闸门对未知当前窗口 fail-open 放行热切。
+    const rehydrateCall = setModel.indexOf('await rehydrateColdPiRuntimeForWindowVerification(sessionId)');
+    const postRehydrate = setModel.indexOf(
+      'liveSessionBeforeRouteChange = maker.getSession(sessionId);',
+      rehydrateCall,
+    );
+    expect(rehydrateCall).toBeGreaterThan(-1);
+    expect(postRehydrate).toBeGreaterThan(rehydrateCall);
+    const catchOnly = setModel.slice(rehydrateCall, postRehydrate);
+    expect(catchOnly).toContain('} catch (error) {');
+    expect(catchOnly).toContain('logColdPiRehydrationFailure({ log }, coldPiFailureContext, error);');
+    expect(catchOnly).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
+    expect(catchOnly).not.toContain('throwIpcError');
+    expect(catchOnly).not.toContain('reportColdPiRehydrationFailure');
   });
 
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
@@ -1271,7 +1338,10 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('finalPressureContextTokens = contextTokens');
     expect(setModel).toContain('runtimeRouteChanged || piConfigurationRefresh || confirmedContextWindow !== undefined');
     expect(setModel).toContain('targetContextWindow = finalPiWindow');
-    expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
+    expect(setModel).toContain('orcaRemoteLead: sessions.orcaRemoteLead');
+    expect(setModel).toMatch(
+      /if \(!isDeviceLinkInvoke\(\) && runtimeAgentKind === 'pi' &&\s*!runtimeStatus\.orcaRole && !parseOrcaRemoteLead\(runtimeStatus\.orcaRemoteLead\)\) \{\s*targetContextWindow = confirmedContextWindow \?\? targetContextWindow;/,
+    );
     expect(setModel).toContain('planUserRuntimeModelSwitch({');
     expect(setModel).not.toContain(
       "runtimeAgentKind !== 'pi' || isDeviceLinkInvoke() || !!runtimeStatus.remoteHostId",

@@ -97,7 +97,7 @@
     "sessionExpiredOrForbidden": "{{appName}} 語音服務的登入已失效或沒有權限，請確認登入狀態後重試（狀態碼 {{status}}）。",
     "incomplete": "語音輸入未完成，請重試。",
     "missingRefinerTargetProvider": "語音潤色暫時無法使用，請重新登入 {{appName}} 後重試。",
-    "emptyTranscript": "檢測到語音但未識別出文字，請重試。",
+    "emptyTranscript": "沒聽清楚，請檢查麥克風或靠近一點再試。",
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音識別沒有繼續返回結果，請重試。",
     "transcriptKept": "{{message}}（識別出的文字已經保留，可以直接編輯）",

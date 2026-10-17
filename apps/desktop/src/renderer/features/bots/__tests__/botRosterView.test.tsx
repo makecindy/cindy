@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   generateDraft: vi.fn(),
   galleryPortrait: vi.fn(async (_index: number) => 'data:image/png;base64,cG9ydHJhaXQ='),
   defaultModel: 'cindy-selected-model',
+  withDefaultBackup: false,
   navigate: vi.fn(),
   onboarding: false,
   availableVendors: new Set(['cc', 'codex', 'pi']),
@@ -38,6 +39,8 @@ vi.mock('../botStore', () => ({
   BotModelSelectionRequiredError: mocks.BotModelSelectionRequiredError,
   addBotProfileAndWait: mocks.addBotProfileAndWait,
   useBotProfiles: () => mocks.profiles,
+  subscribeBotGlobalModel: () => () => {},
+  getEffectiveBotModelChain: () => mocks.defaultModel ? [{ harness: 'codex', model: mocks.defaultModel, providerId: 'openai', effort: 'high', fastMode: false }, ...(mocks.withDefaultBackup ? [{ harness: 'pi', model: 'hidden-backup', providerId: 'backup-provider', effort: 'high', fastMode: false }] : [])] : [],
   refreshBotProfiles: vi.fn(),
   retryBotInvitation: vi.fn(),
   getEffectiveBotModelSettings: () => ({
@@ -100,10 +103,13 @@ vi.mock('../BotPortraitPicker', () => ({
 }));
 
 import { BotRosterView } from '../BotRosterView';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 beforeEach(() => {
+  setDataOwnerGeneration('fixture-owner');
   mocks.galleryPortrait.mockClear();
   mocks.defaultModel = 'cindy-selected-model';
+  mocks.withDefaultBackup = false;
   mocks.generateDraft.mockReset();
   mocks.generateDraft.mockResolvedValue({
     token: 'draft-1',
@@ -126,6 +132,34 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('name-only creation', () => {
+  it.each([false, true])('restores the provider-setup draft after unmount (inline=%s), then discards it on cancel', async inline => {
+    const first = render(<BotRosterView inline={inline} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Keep me' } });
+    fireEvent.click(screen.getByTestId('portrait'));
+    fireEvent.click(screen.getByRole('button', { name: 'choose-custom-model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'connect-source' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/settings?tab=providers');
+    first.unmount();
+    const returned = render(<BotRosterView />);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Keep me');
+    expect(screen.getByTestId('portrait').textContent).toBe('data:image/png;base64,bWFudWFs');
+    expect(screen.getByTestId('selected-engine').textContent).toBe('pi');
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
+    returned.unmount();
+    render(<BotRosterView />);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
+  });
+
+  it('does not restore a setup draft across an account transition', () => {
+    const first = render(<BotRosterView />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Private draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'connect-source' }));
+    first.unmount();
+    setDataOwnerGeneration('another-owner');
+    render(<BotRosterView />);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
+  });
+
   it('randomizes across all 17 portraits per new form, not by roster length', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const first = render(<BotRosterView inline />);
@@ -161,6 +195,23 @@ describe('name-only creation', () => {
     expect(mocks.generateDraft).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('keeps default-chain inheritance but saves only the visible explicit model: selected=%s', async selected => {
+    mocks.withDefaultBackup = true;
+    render(<BotRosterView />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });
+    if (selected) fireEvent.click(screen.getByRole('button', { name: 'choose-custom-model' }));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
+    const input = mocks.addBotProfileAndWait.mock.calls[0][0];
+    if (selected) {
+      expect(input.capabilities.modelChainOverride).toEqual([
+        { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false },
+      ]);
+      expect(input.capabilities.modelChain).toEqual(input.capabilities.modelChainOverride);
+    } else expect(input.capabilities).toBeUndefined();
+  });
+
   it('preserves the name when the configured model is unavailable', async () => {
     mocks.addBotProfileAndWait.mockRejectedValueOnce(new mocks.BotModelSelectionRequiredError());
     render(<BotRosterView />);
@@ -170,6 +221,25 @@ describe('name-only creation', () => {
     await screen.findByRole('alert');
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Mika');
     expect(mocks.navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'choose-custom-codex-model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-new'));
+    expect(mocks.addBotProfileAndWait).toHaveBeenLastCalledWith(expect.objectContaining({
+      name: 'Mika', avatarImageBase64: 'cG9ydHJhaXQ=',
+      capabilities: expect.objectContaining({ modelChainOverride: [{ harness: 'codex', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false }] }),
+    }));
+  });
+
+  it('allows selecting a model before creating when there is no usable default', async () => {
+    mocks.defaultModel = '';
+    render(<BotRosterView inline />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });
+    fireEvent.click(screen.getByRole('button', { name: 'choose-custom-model' }));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledWith(expect.objectContaining({
+      capabilities: expect.objectContaining({ harness: 'pi', model: 'custom-model', providerId: 'custom' }),
+    })));
   });
 
   it('renders creation directly in the empty state and prevents duplicate names', async () => {

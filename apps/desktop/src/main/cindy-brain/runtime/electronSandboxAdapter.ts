@@ -16,7 +16,8 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost.js';
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
-import { ownerScopedGhostPartition } from '../ghostWebviewPartition.js';
+import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -111,30 +112,38 @@ export function sendToGhostLogic(ghostId: string, payload: unknown): boolean {
 }
 
 /** The remote page uses the same owner partition and running logic as desktop. */
-export async function invokeGhostMobileRelay(ghostId: string, operation: MobileRelayOperation): Promise<unknown> {
-  const partition = ownerScopedGhostPartition(ghostId, getActiveAppSession());
+export async function invokeGhostMobileRelay(ghost: InstalledGhost, operation: MobileRelayOperation): Promise<unknown> {
+  const ghostId = installedGhostStoragePart(ghost);
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
   if (!partition) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  const isCurrent = captureGhostProtocolTargetGuard(partition);
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
   const ownerSession = session.fromPartition(partition);
   for (const [id, plugin] of logicWebContentsToGhost) {
     if (plugin !== ghostId) continue;
     const wc = webContents.fromId(id);
     if (wc && !wc.isDestroyed() && wc.session === ownerSession) {
-      return wc.executeJavaScript(mobilePageRelayScript(operation));
+      const result = await wc.executeJavaScript(mobilePageRelayScript(operation));
+      if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+      return result;
     }
   }
   throw new Error('PLUGIN_PAGE_UNAVAILABLE');
 }
 
 export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: string, method: string, body?: string, offset = 0, expectedRevision?: string) {
-  const partition = ownerScopedGhostPartition(ghost.manifest.id, getActiveAppSession());
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, getActiveAppSession());
   if (!partition) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  ensureGhostProtocolRegistered(ghost);
+  const isCurrent = captureGhostProtocolTargetGuard(partition);
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
   // Read only the requested immutable blob chunk. The desktop protocol buffers
   // the whole file, which would repeat that work for every remote video chunk.
   if (pathname.startsWith('/media/')) {
     const match = /^\/media\/([a-f0-9]{64})(\.[a-z0-9]+)$/.exec(pathname);
     const missing = { status: 404, mime: 'application/octet-stream', base64: '' };
     if (!match || method !== 'GET' || !Number.isSafeInteger(offset) || offset < 0) return missing;
-    if (!(await ghostCanReadMedia(match[1], ghost.manifest.id))) return missing;
+    if (!(await ghostCanReadMedia(match[1], installedGhostStoragePart(ghost)))) return missing;
     let resolved: { absPath: string; mimeType: string };
     try { resolved = resolveBlobHashRef(match[1], match[2]); } catch { return missing; }
     const handle = await fs.open(resolved.absPath, nodeFs.constants.O_RDONLY | nodeFs.constants.O_NOFOLLOW);
@@ -144,12 +153,12 @@ export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: stri
       const data = Buffer.alloc(Math.min(49_152, stat.size - offset));
       const { bytesRead } = await handle.read(data, 0, data.length, offset);
       if (bytesRead !== data.length) throw new Error('PLUGIN_MEDIA_CHANGED');
+      if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
       return { status: 200, mime: resolved.mimeType, base64: data.toString('base64'), revision: match[1],
         ...(offset + bytesRead < stat.size ? { nextOffset: offset + bytesRead } : {}),
       };
     } finally { await handle.close(); }
   }
-  ensureGhostProtocolRegistered(ghost);
   const file = /^\/(?:library|media)\//.test(pathname);
   const response = await session.fromPartition(partition).fetch(`${GHOST_SCHEME}://${ghost.manifest.id}${pathname}`, { method, body,
     ...(file && offset ? { headers: { Range: `bytes=${offset}-` } } : {}),
@@ -179,6 +188,7 @@ export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: stri
     } finally { await reader.cancel(); }
   }
   const remaining = Number(response.headers.get('content-length'));
+  if (!isCurrent()) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
   return { status: response.status === 206 ? 200 : response.status, mime: response.headers.get('content-type') ?? 'application/json', base64: Buffer.concat(chunks).toString('base64'), ...(revision ? { revision } : {}),
     ...(file && remaining > total ? { nextOffset: offset + total } : {}),
   };
@@ -240,15 +250,16 @@ export function setGhostAgentModelsProvider(
  * adapter 反向依赖)。注入的是带"在装态守卫"的包装层——卸下后分区里
  * 残留的 fetch 不能复活写出新文件。
  */
-let ghostKvStore: {
+interface GhostKvProtocolStore {
   read(ghostId: string): Record<string, unknown>;
   write(ghostId: string, value: Record<string, unknown>): void;
-} | null = null;
+  captureTarget(ghostId: string): unknown;
+  isTargetCurrent(ghostId: string, expectedTarget: unknown): boolean;
+}
 
-export function setGhostKvStore(store: {
-  read(ghostId: string): Record<string, unknown>;
-  write(ghostId: string, value: Record<string, unknown>): void;
-}): void {
+let ghostKvStore: GhostKvProtocolStore | null = null;
+
+export function setGhostKvStore(store: GhostKvProtocolStore): void {
   ghostKvStore = store;
 }
 
@@ -261,6 +272,7 @@ type GhostSecretsProtocolHandler = (args: {
   method: string;
   pathname: string;
   readBodyText: () => Promise<string>;
+  isCurrent: () => boolean;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
@@ -279,6 +291,7 @@ type GhostOauthProtocolHandler = (args: {
   method: string;
   pathname: string;
   readBodyText: () => Promise<string>;
+  isCurrent: () => boolean;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostOauthHandler: GhostOauthProtocolHandler | null = null;
@@ -298,6 +311,7 @@ type GhostConnectionsProtocolHandler = (args: {
   method: string;
   pathname: string;
   readBodyText: () => Promise<string>;
+  isCurrent: () => boolean;
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostConnectionsHandler: GhostConnectionsProtocolHandler | null = null;
@@ -308,12 +322,14 @@ export function setGhostConnectionsHandler(handler: GhostConnectionsProtocolHand
 
 /** 该分区是否已挂过协议 handler(session 分区随 app 生命周期,挂一次即可)。 */
 const partitionRegistered = new Set<string>();
-const partitionGhost = new Map<string, { dir: string; entry: string }>();
-type GhostProtocolOwnerIdentity = Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>;
+const revokedPartitions = new Set<string>();
+const partitionGhost = new Map<string, { dir: string; entry: string; storagePart: string }>();
+const partitionTargetGuard = new Map<string, () => boolean>();
+type GhostProtocolOwnerIdentity = Pick<ActiveAppSession, 'mode' | 'dataOwnerId' | 'generation'>;
 const partitionOwner = new Map<string, GhostProtocolOwnerIdentity>();
 
 function ghostProtocolOwnerSnapshot(owner: ActiveAppSession): GhostProtocolOwnerIdentity {
-  return { mode: owner.mode, dataOwnerId: owner.dataOwnerId };
+  return { mode: owner.mode, dataOwnerId: owner.dataOwnerId, generation: owner.generation };
 }
 
 function isSameGhostProtocolOwner(
@@ -324,7 +340,8 @@ function isSameGhostProtocolOwner(
 }
 
 function isGhostProtocolOwnerActive(owner: GhostProtocolOwnerIdentity): boolean {
-  return isSameGhostProtocolOwner(owner, getActiveAppSession());
+  const current = getActiveAppSession();
+  return isSameGhostProtocolOwner(owner, current) && owner.generation === current.generation;
 }
 
 /**
@@ -336,9 +353,18 @@ export function ensureGhostProtocolRegistered(
   ghost: InstalledGhost,
   owner: ActiveAppSession = getActiveAppSession(),
 ): void {
-  const partition = ownerScopedGhostPartition(ghost.manifest.id, owner);
+  const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, owner);
   if (!partition) throw new Error('ghost protocol requires an active data owner');
   registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(owner));
+}
+
+export function revokeLegacyGhostProtocolPartition(ghostId: string): void {
+  const partition = ownerScopedGhostPartition(ghostId, getActiveAppSession());
+  if (!partition) return;
+  revokedPartitions.add(partition);
+  for (const registered of partitionRegistered) {
+    if (registered.startsWith(partition + ':receipt:')) revokedPartitions.add(registered);
+  }
 }
 
 /**
@@ -350,6 +376,24 @@ export function ensureGhostProtocolRegistered(
 const GHOST_HTML_CSP =
   "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:";
 
+function createGhostProtocolTargetGuard(
+  ghostId: string,
+  partition: string,
+  owner: GhostProtocolOwnerIdentity,
+): () => boolean {
+  const store = ghostKvStore;
+  if (!store) return () => false;
+  const expectedTarget = store.captureTarget(ghostId);
+  return () => expectedTarget !== null && expectedTarget !== undefined &&
+    ghostKvStore === store && !revokedPartitions.has(partition) &&
+    isGhostProtocolOwnerActive(owner) &&
+    store.isTargetCurrent(ghostId, expectedTarget);
+}
+
+function captureGhostProtocolTargetGuard(partition: string): () => boolean {
+  return partitionTargetGuard.get(partition) ?? (() => false);
+}
+
 function registerGhostProtocol(
   partition: string,
   ghost: InstalledGhost,
@@ -359,11 +403,19 @@ function registerGhostProtocol(
   if (registeredOwner && !isSameGhostProtocolOwner(registeredOwner, owner)) {
     throw new Error('ghost protocol partition already belongs to a different data owner');
   }
-  partitionGhost.set(partition, {
+  const binding = {
     dir: ghost.dir,
     entry: ghost.manifest.entry,
-  });
-  if (partitionRegistered.has(partition)) return;
+    storagePart: installedGhostStoragePart(ghost),
+  };
+  if (partitionRegistered.has(partition)) {
+    const registered = partitionGhost.get(partition);
+    if (!registered || registered.dir !== binding.dir || registered.entry !== binding.entry || registered.storagePart !== binding.storagePart) {
+      revokedPartitions.add(partition);
+    }
+    return;
+  }
+  const isRegistrationCurrent = createGhostProtocolTargetGuard(binding.storagePart, partition, owner);
   // 注意:登记发生在全部挂载成功之后(函数末尾)——session.fromPartition 在
   // app ready 前会 throw,若先登记后挂载,失败分区会被永久标记"已注册"而
   // 实际无 handler,面板与电子脑一起哑火(review P0 的中毒模式)。
@@ -389,17 +441,17 @@ function registerGhostProtocol(
     }
     callback({ cancel: !allowed });
   });
-  ses.protocol.handle(SCHEME, async (request) => {
+  const handleRequest = async (request: Request): Promise<Response> => {
     try {
       // owner B 提交后，owner A 的旧 guest 仍可能短暂存活并新发请求。
-      // 在 URL 路由、body 读取和任何 provider 调用前拒绝旧 Session；已经
-      // 进入 handler 的请求不在这里取消或排空。
-      if (!isGhostProtocolOwnerActive(owner)) {
+      // 在 URL 路由、body 读取和任何 provider 调用前拒绝旧 Session。
+      if (!isRegistrationCurrent()) {
         return new Response(null, {
           status: 403,
           headers: { 'Cache-Control': 'no-store' },
         });
       }
+      const storagePart = binding.storagePart;
       const url = new URL(request.url);
       // 分区专属通道只认自己的 id,其它 host 一律 403(结构隔离的最后一道断言)。
       if (url.host !== ghostId) return new Response(null, { status: 403 });
@@ -408,19 +460,19 @@ function registerGhostProtocol(
       // 账本验归属(出生自本意识或挂本意识画廊),通过才从字节仓读——
       // 查无此账与不属于你统一 404,不给沙箱探测面。
       if (url.pathname.startsWith('/media/')) {
-        return serveGhostMedia(ghostId, url.pathname.slice('/media/'.length), request.headers.get('range'));
+        return serveGhostMedia(storagePart, url.pathname.slice('/media/'.length), request.headers.get('range'));
       }
       // /library/<相对路径>:面板只读投影本意识的持久作品库文件(图片/视频/
       // 导出物)。解析器由 cindy-brain/index 注入(binding 根 + vault 路径纪律,
       // 与电子脑 read 同源校验);内容可变,Cache-Control 走 no-cache(与
       // 内容寻址的 /media 长缓存不同)。失败统一折叠 404。
       if (url.pathname.startsWith('/library/')) {
-        return serveGhostLibraryFile(ghostId, decodeURIComponent(url.pathname.slice('/library/'.length)), request.headers.get('range'));
+        return serveGhostLibraryFile(storagePart, decodeURIComponent(url.pathname.slice('/library/'.length)), request.headers.get('range'));
       }
       // /gallery:本意识画廊清单(重启回放)。分区专属通道天然只答自己的账;
       // 内容只有指纹地址与备注字符串,零文件字节。
       if (url.pathname === '/gallery') {
-        return serveGhostGallery(ghostId);
+        return serveGhostGallery(storagePart, ghostId);
       }
       // /wake:面板叫醒自己的电子脑(§4"确实有活才开门"的面板侧入口)。
       // spawn 幂等(已在跑立即返回);沉睡/熔断由注入的 handler 拒绝。
@@ -428,7 +480,7 @@ function registerGhostProtocol(
       // 只回状态字符串,不回任何细节。
       if (url.pathname === '/wake') {
         if (!ghostWakeHandler) return new Response(null, { status: 503 });
-        const wake = await ghostWakeHandler(ghostId);
+        const wake = await ghostWakeHandler(storagePart);
         return new Response(JSON.stringify(wake), {
           status: 200,
           headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' },
@@ -453,7 +505,7 @@ function registerGhostProtocol(
         if (url.search) return new Response(null, { status: 400, headers });
         if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
         try {
-          const result = await ghostAgentModelsProvider(ghostId);
+          const result = await ghostAgentModelsProvider(storagePart);
           if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
           return new Response(JSON.stringify(result), {
             status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
@@ -482,7 +534,7 @@ function registerGhostProtocol(
           return new Response(null, { status: 400 });
         }
         if (!ghostMediaModelsProvider) return new Response(null, { status: 503 });
-        const result = await ghostMediaModelsProvider(ghostId, type);
+        const result = await ghostMediaModelsProvider(storagePart, type);
         return new Response(JSON.stringify(result), {
           status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
           headers: {
@@ -496,13 +548,15 @@ function registerGhostProtocol(
       // (ghostKvEndpoint,已单测),这里只做 Response 包装。
       if (url.pathname === '/kv') {
         if (!ghostKvStore) return new Response(null, { status: 503 });
+        const store = ghostKvStore;
         const out = await handleGhostKvRequest({
           method: request.method,
           // 有界读取(readBoundedBodyText):content-length 预检 + 流式限额,
           // 不受信 body 永不全量进主进程内存——沙箱允许死,主机不能被 OOM。
           readBodyText: () => readBoundedBodyText(request),
-          store: ghostKvStore,
-          ghostId,
+          store,
+          ghostId: storagePart,
+          isCurrent: isRegistrationCurrent,
           log,
         });
         return new Response(out.body ?? null, {
@@ -520,10 +574,11 @@ function registerGhostProtocol(
       if (url.pathname === '/secrets' || url.pathname.startsWith('/secrets/')) {
         if (!ghostSecretsHandler) return new Response(null, { status: 503 });
         const out = await ghostSecretsHandler({
-          ghostId,
+          ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
           readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
         });
         return new Response(out.body ?? null, {
           status: out.status,
@@ -541,10 +596,11 @@ function registerGhostProtocol(
       if (url.pathname === '/oauth' || url.pathname.startsWith('/oauth/')) {
         if (!ghostOauthHandler) return new Response(null, { status: 503 });
         const out = await ghostOauthHandler({
-          ghostId,
+          ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
           readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
         });
         return new Response(out.body ?? null, {
           status: out.status,
@@ -562,10 +618,11 @@ function registerGhostProtocol(
       if (url.pathname === '/connections' || url.pathname.startsWith('/connections/')) {
         if (!ghostConnectionsHandler) return new Response(null, { status: 503 });
         const out = await ghostConnectionsHandler({
-          ghostId,
+          ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
           readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
         });
         return new Response(out.body ?? null, {
           status: out.status,
@@ -578,7 +635,7 @@ function registerGhostProtocol(
         });
       }
       if (url.pathname === GHOST_BOOT_PATH || url.pathname === '/') {
-        const entry = partitionGhost.get(partition)?.entry;
+        const entry = binding.entry;
         if (!entry) return new Response(null, { status: 404 });
         return new Response(ghostBootHtml(entry), {
           status: 200,
@@ -589,7 +646,7 @@ function registerGhostProtocol(
           },
         });
       }
-      const installDir = partitionGhost.get(partition)?.dir;
+      const installDir = binding.dir;
       if (!installDir) return new Response(null, { status: 404 });
       const filePath = resolveGhostFilePath(installDir, url.pathname);
       if (!filePath) return new Response(null, { status: 403 });
@@ -609,8 +666,16 @@ function registerGhostProtocol(
       log.error('cindy-ghost protocol error', { error: err instanceof Error ? err.message : String(err) });
       return new Response(null, { status: 500 });
     }
+  };
+  ses.protocol.handle(SCHEME, async (request) => {
+    const response = await handleRequest(request);
+    if (isRegistrationCurrent()) return response;
+    void response.body?.cancel().catch(() => undefined);
+    return new Response(null, { status: 403, headers: { 'Cache-Control': 'no-store' } });
   });
   partitionOwner.set(partition, owner);
+  partitionGhost.set(partition, binding);
+  partitionTargetGuard.set(partition, isRegistrationCurrent);
   partitionRegistered.add(partition); // 全部挂载成功,才算注册完成
 }
 
@@ -750,16 +815,16 @@ function mediaTypeForLibraryPath(relPath: string): string {
 }
 
 /** 画廊清单响应:[{src, caption}](新的在前;账本不可用时回空数组不报错)。 */
-async function serveGhostGallery(ghostId: string): Promise<Response> {
+async function serveGhostGallery(storagePart: string, protocolHost: string): Promise<Response> {
   let items: Awaited<ReturnType<typeof listGhostGalleryFromLedger>> = [];
   try {
-    items = await listGhostGalleryFromLedger(ghostId);
+    items = await listGhostGalleryFromLedger(storagePart);
   } catch (err) {
     // 账本未就绪(登录早期等):回空墙,面板照常渲染空态,不给沙箱报错面。
-    log.warn('ghost gallery list unavailable', { ghostId, error: err instanceof Error ? err.message : String(err) });
+    log.warn('ghost gallery list unavailable', { ghostId: storagePart, error: err instanceof Error ? err.message : String(err) });
   }
   const payload = items.map((it) => ({
-    src: `${SCHEME}://${ghostId}/media/${it.hash}${it.ext}`,
+    src: `${SCHEME}://${protocolHost}/media/${it.hash}${it.ext}`,
     caption: it.label ?? '',
   }));
   return new Response(JSON.stringify(payload), {
@@ -775,7 +840,7 @@ class ElectronSandboxHandle implements SandboxHandle {
 
   constructor(private readonly ghost: InstalledGhost) {
     const activeOwner = getActiveAppSession();
-    const partition = ownerScopedGhostPartition(ghost.manifest.id, activeOwner);
+    const partition = ownerScopedGhostPartitionForInstalledGhost(ghost, activeOwner);
     if (!partition) throw new Error('ghost sandbox requires an active data owner');
     registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(activeOwner));
     this.win = new BrowserWindow({
@@ -797,7 +862,7 @@ class ElectronSandboxHandle implements SandboxHandle {
       },
     });
     ghostWebContentsIds.add(this.win.webContents.id);
-    logicWebContentsToGhost.set(this.win.webContents.id, ghost.manifest.id);
+    logicWebContentsToGhost.set(this.win.webContents.id, installedGhostStoragePart(ghost));
     this.win.webContents.on('render-process-gone', (_event, details) => {
       if (this.destroyed) return;
       // 延迟一拍再收尸:不在 Chromium 事件分发中途销毁窗口(重入风险)。

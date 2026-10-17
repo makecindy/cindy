@@ -50,7 +50,7 @@ function restore(focused: string | null = null, key = 'message') {
     listRef: { current: { scrollToIndex } },
     scrollToEndProgrammatically,
   };
-  expect(effect).not.toBe('');
+  if (!effect) throw new Error('Missing production initial-position effect');
   const compiled = ts.transpileModule(`const run = ${effect};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
@@ -131,7 +131,7 @@ describe('top padding during bookmark restoration', () => {
       scrollMetricsRef: { current: { offsetY: sequence ? 600 : 0 } },
       scrollToOffsetProgrammatically: vi.fn(),
     };
-    expect(paddingEffect).not.toBe('');
+    if (!paddingEffect) throw new Error('Missing production top-padding effect');
     const compiled = ts.transpileModule(`const run = ${paddingEffect};`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText;

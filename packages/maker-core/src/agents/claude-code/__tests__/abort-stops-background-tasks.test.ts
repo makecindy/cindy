@@ -3207,6 +3207,7 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     // 模拟 SDK 在 retry backoff 中不立即响应 interrupt(如全池冷却 503)。
     let interruptResolved = false;
     fakeQuery.interrupt.mockImplementation(async () => {
+      // real-wait: keep interrupt pending to assert the in-flight guard.
       await new Promise((r) => setTimeout(r, 200));
       interruptResolved = true;
     });

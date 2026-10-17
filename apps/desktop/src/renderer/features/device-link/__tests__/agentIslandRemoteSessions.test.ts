@@ -83,6 +83,35 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     relay.dispose(); clearRemoteSessionActivity();
   });
 
+  it('carries silence through relay, store and IPC without losing unread or suppressing later errors', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const events: string[] = [];
+    const relay = new SessionActivityRelay(payload => {
+      applyRemoteSessionActivity('device-a', payload);
+      const inputs = buildAgentIslandRemoteSessionInputs([remoteSession('a-1', 'device-a')], MACHINE_ALL, getRemoteSessionActivity);
+      const parsed = parseAgentIslandRemoteSessions(inputs);
+      expect(parsed).not.toBeNull();
+      events.push(...syncAgentIslandDeviceSessions(state, parsed!, 2_000).events.map(event => event.kind));
+    }, { minIntervalMs: 0 });
+    const activity = { sessionId: 'a-1', phase: 'running', recordStatus: 'active', compactDetail: 'Working', startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: 'Working', attention: true, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
+    try {
+      relay.publish([activity]);
+      const silent = { ...activity, phase: 'completed' as const, completionNotification: 'silent' as const };
+      relay.publish([silent]);
+      relay.replay([silent]);
+      expect(events).toEqual([]);
+      expect(state.sessions.get('a-1')).toMatchObject({ phase: 'completed', unread: true, completionNotification: 'silent' });
+      expect(state.activeTransientSessionId).toBeNull();
+      relay.publish([activity]);
+      relay.publish([{ ...activity, phase: 'error' }]);
+      expect(events).toEqual(['error']);
+    } finally {
+      relay.dispose();
+      clearRemoteSessionActivity();
+    }
+  });
+
   it('includes every remote task with live activity under the "all" scope', () => {
     expect(buildAgentIslandRemoteSessionInputs(sessions, MACHINE_ALL, readActivity)).toEqual([
       {

@@ -14,6 +14,7 @@ import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
 import { __resetPanelRegistryForTest } from '../../panels/registry';
 import {
   __resetCollapsePrefsForTests,
+  clearPanelCollapsedRecord,
   migrateLegacySidebarCollapsed,
   readPanelCollapsed,
   readPanelCollapsedRecord,
@@ -111,6 +112,17 @@ describe('global 作用域(session-list → 布局树)', () => {
 });
 
 describe('per-session 作用域(right-tabs → 会话桶)', () => {
+  it('withdraws only the failed default write, preserving a later same-value choice', () => {
+    const ctx = { sessionId: 'failed-default' };
+    const first = writePanelCollapsed('right-tabs', ctx, false)!;
+    writePanelCollapsed('right-tabs', ctx, false);
+    clearPanelCollapsedRecord('right-tabs', ctx, false, first);
+    expect(readPanelCollapsedRecord('right-tabs', ctx)).toBe(false);
+    const retry = writePanelCollapsed('right-tabs', ctx, false)!;
+    clearPanelCollapsedRecord('right-tabs', ctx, false, retry);
+    expect(readPanelCollapsedRecord('right-tabs', ctx)).toBeNull();
+  });
+
   it('record 读法保留无记录 / false / true 三态', () => {
     expect(readPanelCollapsedRecord('right-tabs', { sessionId: 'fresh' })).toBeNull();
 

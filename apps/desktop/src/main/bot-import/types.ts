@@ -1,4 +1,5 @@
 import type {
+  CompanionImportBotPlatform,
   CompanionImportEntry,
   CompanionImportSourceKind,
 } from '@cindy/maker-shared/companion-import';
@@ -60,6 +61,8 @@ export interface ImportItem {
   envDependencies?: { names: string[]; entries: string[] };
   mcp?: ImportedMcpServer;
   credential?: { format: string; value: unknown };
+  /** `bots` entries: where the source enables this bot, so the import can stop and restore it. */
+  bot?: { platform: CompanionImportBotPlatform; account: string; enabledPath: string[] };
   asset?: { name: string; bytes: Buffer; executable?: boolean };
   automation?: {
     sourceId: string;

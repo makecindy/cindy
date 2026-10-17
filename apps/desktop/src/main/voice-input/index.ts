@@ -38,6 +38,7 @@ import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
 } from '../maker-host/auth-adapters.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import {
   activeOwnerScopeKey,
   getActiveAppSession,
@@ -155,6 +156,7 @@ import {
   type VoiceInputConnectionTestResult,
 } from '../../shared/voiceInputConnectionTest.js';
 import { runSerializedVoiceInputConnectionTest } from './voiceInputConnectionTest.js';
+import { getSpeakerFilterService, registerVoiceSpeakerFilterIpc } from './speaker/index.js';
 
 const log = createLogger('voice-input');
 let customAsrCredentialRevision = 0;
@@ -1759,12 +1761,16 @@ async function createVoiceInputProvider(
       }
       const { proxyApiKey, proxyBaseUrl } = readLiteLlmProxyConfig();
       if (!proxyApiKey || !proxyBaseUrl) throw new Error(profile.missingCredentialMessage);
-      return new RealtimeAsrWebSocketProvider(buildRealtimeAsrProviderOptions(
-        profile,
-        sourceLanguage,
-        () => Promise.resolve(proxyApiKey),
-        proxyBaseUrl,
-      ));
+      return new RealtimeAsrWebSocketProvider({
+        ...buildRealtimeAsrProviderOptions(
+          profile,
+          sourceLanguage,
+          () => Promise.resolve(proxyApiKey),
+          proxyBaseUrl,
+        ),
+        // 这条直连网关的 WebSocket 携带 Cindy AI Key;握手 401 时上报 Key 失效。
+        onAuthorizationRejected: reportCindyGatewayKeyRejected,
+      });
     }
     throw new Error(`Unsupported realtime ASR provider ${provider}.`);
   }
@@ -1797,6 +1803,8 @@ async function createVoiceInputProvider(
         sourceLanguage,
         missingCredentialMessage: profile.missingCredentialMessage,
         errorFallbackMessage: profile.errorFallbackMessage,
+        // 这条直连网关的 WebSocket 携带 Cindy AI Key;握手 401 时上报 Key 失效。
+        onAuthorizationRejected: reportCindyGatewayKeyRejected,
       });
     }
     throw new Error(`Unsupported native ASR protocol ${nativeConfig.protocolProfile}.`);
@@ -1876,6 +1884,7 @@ export async function transcribeVoiceInputAudioFile(
  */
 export function registerVoiceInputIpc(): void {
   registerVoiceInputDataStoreIpc();
+  registerVoiceSpeakerFilterIpc();
   if (!appRestoreRegistered) {
     appRestoreRegistered = true;
     app.once('before-quit', () => {
@@ -2342,9 +2351,12 @@ export function registerVoiceInputIpc(): void {
       if (runId) emit({ type: 'timeline', runId, event: timelineEvent });
     });
 
+    // "Recognize my voice": undefined unless enabled, enrolled and the models are on disk.
+    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings());
     const controller = new VoiceInputController({
       asr: provider,
       refiner,
+      audioGate,
       pauseRefinementEnabled: true,
       recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
@@ -2430,6 +2442,7 @@ export function registerVoiceInputIpc(): void {
         refiner: refiner ? effectiveRefinerProfile?.model : undefined,
         refinerProvider: refiner ? effectiveRefinerProfile?.id : undefined,
         refinerChain: refiner ? readyRefinerProfiles.map((profile) => profile.id) : undefined,
+        speakerFilter: Boolean(audioGate),
         refinementEnabled: Boolean(refiner),
         refinementRequested: shouldRefine,
         refinementContext: refiner ? summarizeRefinementContext(refinementContext) : undefined,

@@ -14,6 +14,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
+import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
@@ -82,7 +83,7 @@ interface ForkNativeSource {
   nextSwitch: MessagePosition | null;
   /** false = 原生会话已因同引擎换窗失效，只复制可见历史，首次发送走交接。 */
   reuseVendorSession: boolean;
-  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
 }
 
 interface ForkTimelineMessage {
@@ -163,7 +164,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
     .filter(
@@ -184,7 +185,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
     fromLabel: label,
     toLabel: label,
     sessionId: opts.sessionId,
-    reason: opts.reason,
+    // fork 出的新任务不知道原来隔了多久,空闲间隔边界按「换了干净原生会话」的通用口径交接。
+    reason: opts.reason === 'idle-gap' ? 'native-session-recovery' : opts.reason,
   });
   await commitContextRebuild(opts.sessionId, handoff, {
     reason: opts.reason,
@@ -208,7 +210,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
 }
 
 interface ParsedContextRebuildBoundary {
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
   sourceAgentKind?: DbAgentKind;
   sourceModel?: string | null;
   sourceProviderId?: string | null;
@@ -221,7 +223,8 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
       parsed.reason !== 'context-overflow' &&
       parsed.reason !== 'model-window-switch' &&
       parsed.reason !== 'pi-prompt-timeout' &&
-      parsed.reason !== 'native-session-recovery'
+      parsed.reason !== 'native-session-recovery' &&
+      parsed.reason !== 'idle-gap'
     ) {
       return null;
     }
@@ -247,7 +250,7 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
 
 function parseContextRebuildReason(
   content: string,
-): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | null {
+): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap' | null {
   return parseContextRebuildBoundary(content)?.reason ?? null;
 }
 
@@ -785,6 +788,8 @@ export async function forkSessionAtMessage(
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
 
+  assertCindyMakeSessionAvailable(source.source);
+
   // 轮 26 发现 5 防御深度:远端会话 fork 由 SDK 层拒绝(pi forkSdkSession 抛
   // NotSupportedError remoteFork;cc/codex 由 daemon 远端执行)。host 层显式
   // 守卫兜底 —— 若未来某 agent 的 SDK 守卫漏掉,这里阻止 DB 写入产生
@@ -1102,6 +1107,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
+
+  assertCindyMakeSessionAvailable(source.source);
+
   // 先校验"类型"再校验"运行状态":non-codex 会话(可能 sdkSessionId 也为空)应拿到
   // 更准确的 NOT_CODEX_SESSION 而不是 SOURCE_NEVER_RAN。
   if (source.agentKind !== 'codex') {

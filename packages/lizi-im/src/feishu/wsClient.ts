@@ -62,43 +62,61 @@ import {
   coordinateDualDelivery,
   resetDualDeliveryForTest,
 } from './dualDelivery.js';
-import { getLog } from './moduleScope.js';
+import { bindScope, getLog, getScope, runInScope, scopeSlot } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js';
 import type { IMMessageEvent } from '../types.js';
 
 // ── module state ──────────────────────────────────────────────────────────────
 
-let client: Lark.WSClient | null = null;
-let detector: ConflictDetector | null = null;
-let currentBotAppId: string | null = null;
+const ws_SLOT = Symbol('feishu.ws');
+function createWsState() {
+  return {
+    client: null as Lark.WSClient | null,
+    detector: null as ConflictDetector | null,
+    currentBotAppId: null as string | null,
+    currentService: null as BotCredentials['service'] | null,
+    pendingStartAccount: null as Pick<BotCredentials, 'appId' | 'service'> | null,
+    topicLeaseDiscardThroughGeneration: 0,
+    currentStatus: 'idle' as FeishuConnectionStatus,
+    acceptingInbound: false,
+    lifecycleGeneration: 0,
+    conflictTransitionGeneration: null as number | null,
+    lifecycleAnnouncementEnabled: true,
+    pendingOfflineNotice: false,
+    botOpenId: null as string | null,
+    strangerNoticeAt: new Map<string, number>(),
+    orphanNoticeAt: new Map<string, number>(),
+    orphanRetryEpoch: 0,
+    orphanNoticeDelivered: new Set<string>(),
+    orphanNoticeRetries: new Map<string, PendingOrphanRetry>(),
+    suspendedOrphanRetries: [] as SuspendedOrphanRetry[],
+    orphanAttemptCeiling: new Map<string, number>(),
+    unconfirmedOpenRetries: new Map<string, UnconfirmedOpenRetry>(),
+    suspendedUnconfirmedOpens: [] as UnconfirmedOpenRetry[],
+    orphanNoticeInFlight: new Map<string, InFlightOrphanSend>(),
+    inboundInFlight: new Map<string, { generation: number }>(),
+    seenInboundMessages: new Map<string, number>(),
+  };
+}
+/** 本实例(FeishuScope)的模块状态; 没有 scope 时落在默认实例上。 */
+const S = () => scopeSlot(ws_SLOT, createWsState);
 /** 当前连接的 service(feishu/lark)— 账号边界含 service, 同名 appId 也不可串。 */
-let currentService: BotCredentials['service'] | null = null;
 /**
  * start() 等待旧连接 stop() 时即发布下一账号身份。旧入站 await 若在
  * currentBotAppId 已清空、新账号尚未装入的空窗恢复，仍能区分同账号重连与换号。
  */
-let pendingStartAccount: Pick<BotCredentials, 'appId' | 'service'> | null = null;
 /** Latest connection generation invalidated by an explicit logical logout/shutdown. */
-let topicLeaseDiscardThroughGeneration = 0;
-let currentStatus: FeishuConnectionStatus = 'idle';
-let acceptingInbound = false;
-let lifecycleGeneration = 0;
-let conflictTransitionGeneration: number | null = null;
 
-let lifecycleAnnouncementEnabled = true;
-let pendingOfflineNotice = false;
 
 /**
  * 本 bot 在自己 app 视角下的 open_id — 群消息判 @ 用(mentions[].id.open_id
  * 对比)。连接成功后从 /open-apis/bot/v3/info 拉取; null = 未知, 此时群消息
  * 一律丢弃(惰性失效, 不影响私聊)。换凭证/断开时清空。
  */
-let botOpenId: string | null = null;
 
 /** 非 owner 群 @ 的礼貌回应 per-user 冷却(open_id → 上次回应 ts)。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
-const strangerNoticeAt = new Map<string, number>();
 
 /**
  * 开场白孤立(话题 id 不可恢复且撤回失败)时回复开场白说明失败 — per-opener
@@ -114,14 +132,12 @@ const strangerNoticeAt = new Map<string, number>();
  * 再长的故障窗口里平台重推同样无效, 无限重试只会让定时器跨连接悬挂。
  */
 const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
-const orphanNoticeAt = new Map<string, number>();
 
 /**
  * 清凭证代次。clearOrphanRetriesForCredentialClear 只删 map 条目, 挡不住
  * 已经 await 出去的 REST。代次在清凭证时递增, 发送前后比对: 过期续段不得
  * 再 suspend/schedule, 否则同账号再登录会把登出前的 opener 重试/撤回复活。
  */
-let orphanRetryEpoch = 0;
 
 /**
  * 提示**成功送达**的 opener 集合。与 orphanNoticeAt 分离: 后者在发送前
@@ -131,14 +147,13 @@ let orphanRetryEpoch = 0;
  * 容量上限(孤儿事件每次一个 opener, 进程内不会无界增长)。
  */
 const ORPHAN_DELIVERED_MAX_ENTRIES = 200;
-const orphanNoticeDelivered = new Set<string>();
 
 function markNoticeDelivered(openerMessageId: string): void {
-  orphanNoticeDelivered.add(openerMessageId);
-  while (orphanNoticeDelivered.size > ORPHAN_DELIVERED_MAX_ENTRIES) {
-    const oldest = orphanNoticeDelivered.values().next().value;
+  S().orphanNoticeDelivered.add(openerMessageId);
+  while (S().orphanNoticeDelivered.size > ORPHAN_DELIVERED_MAX_ENTRIES) {
+    const oldest = S().orphanNoticeDelivered.values().next().value;
     if (typeof oldest !== 'string') break;
-    orphanNoticeDelivered.delete(oldest);
+    S().orphanNoticeDelivered.delete(oldest);
   }
 }
 
@@ -156,7 +171,6 @@ interface PendingOrphanRetry {
   attempt: number;
 }
 
-const orphanNoticeRetries = new Map<string, PendingOrphanRetry>();
 
 /**
  * stop() 时被挂起的排队重试(定时器已取消, 元数据保留)。同账号重连后由
@@ -171,7 +185,6 @@ interface SuspendedOrphanRetry {
   messageId: string;
   attempt: number;
 }
-const suspendedOrphanRetries: SuspendedOrphanRetry[] = [];
 
 /**
  * 该 opener 的尝试预算天花板(opener → 最高 attempt, 只增不减, 跨链保持)。
@@ -179,15 +192,14 @@ const suspendedOrphanRetries: SuspendedOrphanRetry[] = [];
  * 预算反复重置, 撤回兜底永远到不了; 天花板让任何新链都从既有进度续接。
  */
 const ORPHAN_ATTEMPT_CEILING_MAX_ENTRIES = 200;
-const orphanAttemptCeiling = new Map<string, number>();
 
 function bumpOrphanAttemptCeiling(openerMessageId: string, attempt: number): number {
-  const ceiling = Math.max(orphanAttemptCeiling.get(openerMessageId) ?? 0, attempt);
-  orphanAttemptCeiling.set(openerMessageId, ceiling);
-  while (orphanAttemptCeiling.size > ORPHAN_ATTEMPT_CEILING_MAX_ENTRIES) {
-    const oldest = orphanAttemptCeiling.keys().next().value;
+  const ceiling = Math.max(S().orphanAttemptCeiling.get(openerMessageId) ?? 0, attempt);
+  S().orphanAttemptCeiling.set(openerMessageId, ceiling);
+  while (S().orphanAttemptCeiling.size > ORPHAN_ATTEMPT_CEILING_MAX_ENTRIES) {
+    const oldest = S().orphanAttemptCeiling.keys().next().value;
     if (typeof oldest !== 'string') break;
-    orphanAttemptCeiling.delete(oldest);
+    S().orphanAttemptCeiling.delete(oldest);
   }
   return ceiling;
 }
@@ -195,14 +207,14 @@ function bumpOrphanAttemptCeiling(openerMessageId: string, attempt: number): num
 /** 挂起一个排队重试(按 opener 去重, 预算续接天花板)。 */
 function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
   entry.attempt = bumpOrphanAttemptCeiling(entry.openerMessageId, entry.attempt);
-  for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
-    if (suspendedOrphanRetries[i]!.openerMessageId === entry.openerMessageId) {
-      suspendedOrphanRetries.splice(i, 1);
+  for (let i = S().suspendedOrphanRetries.length - 1; i >= 0; i--) {
+    if (S().suspendedOrphanRetries[i]!.openerMessageId === entry.openerMessageId) {
+      S().suspendedOrphanRetries.splice(i, 1);
     }
   }
   // 不设容量帽: 每条都是尚未终态化的孤儿收口链, 事件已 ACK。
   // 静默 shift 最早一条会让重连后既不提示也不撤回, 用户永久看到「思考中」。
-  suspendedOrphanRetries.push(entry);
+  S().suspendedOrphanRetries.push(entry);
 }
 
 /**
@@ -211,9 +223,9 @@ function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
  * 不能无限期等待账号再次出现(届时向早已过时的 opener 补发提示/撤回)。
  */
 function resumeOrphanRetriesFor(botAppId: string, service: BotCredentials['service']): void {
-  for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
-    const entry = suspendedOrphanRetries[i]!;
-    suspendedOrphanRetries.splice(i, 1);
+  for (let i = S().suspendedOrphanRetries.length - 1; i >= 0; i--) {
+    const entry = S().suspendedOrphanRetries[i]!;
+    S().suspendedOrphanRetries.splice(i, 1);
     if (entry.botAppId !== botAppId || entry.service !== service) continue;
     scheduleOrphanNoticeRetry(
       entry.botAppId,
@@ -239,7 +251,7 @@ function suspendOrDropOnConnectionChange(
   if (isSameBotActive(botAppId, service)) return false;
   const log = getLog();
   const accountChanged =
-    currentBotAppId !== null && (currentBotAppId !== botAppId || currentService !== service);
+    S().currentBotAppId !== null && (S().currentBotAppId !== botAppId || S().currentService !== service);
   if (accountChanged) {
     log.info(`[feishu/wsClient] orphan opener ${context} skipped: account changed`);
     return true;
@@ -277,17 +289,15 @@ interface UnconfirmedOpenRetry {
   abandonUnpairedFlat?: () => void;
 }
 
-const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
-const suspendedUnconfirmedOpens: UnconfirmedOpenRetry[] = [];
 
 function clearUnconfirmedOpenRetries(): void {
-  for (const retry of unconfirmedOpenRetries.values()) {
+  for (const retry of S().unconfirmedOpenRetries.values()) {
     if (retry.timer) clearTimeout(retry.timer);
     retry.abandonUnpairedFlat?.();
   }
-  unconfirmedOpenRetries.clear();
-  for (const retry of suspendedUnconfirmedOpens) retry.abandonUnpairedFlat?.();
-  suspendedUnconfirmedOpens.length = 0;
+  S().unconfirmedOpenRetries.clear();
+  for (const retry of S().suspendedUnconfirmedOpens) retry.abandonUnpairedFlat?.();
+  S().suspendedUnconfirmedOpens.length = 0;
 }
 
 function suspendUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
@@ -295,24 +305,24 @@ function suspendUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
     clearTimeout(entry.timer);
     entry.timer = undefined;
   }
-  unconfirmedOpenRetries.delete(entry.messageId);
-  for (let i = suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
-    if (suspendedUnconfirmedOpens[i]!.messageId === entry.messageId) {
-      suspendedUnconfirmedOpens.splice(i, 1);
+  S().unconfirmedOpenRetries.delete(entry.messageId);
+  for (let i = S().suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
+    if (S().suspendedUnconfirmedOpens[i]!.messageId === entry.messageId) {
+      S().suspendedUnconfirmedOpens.splice(i, 1);
     }
   }
   // 不设容量帽: 每条都是尚未终态化的轮次, 事件已 ACK、入站认领仍在。
   // 静默 shift 最早一条会让重连后既不重派 turn, 也无法收口服务端思考卡。
-  suspendedUnconfirmedOpens.push(entry);
+  S().suspendedUnconfirmedOpens.push(entry);
 }
 
 function resumeUnconfirmedOpenRetriesFor(
   botAppId: string,
   service: BotCredentials['service'],
 ): void {
-  for (let i = suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
-    const entry = suspendedUnconfirmedOpens[i]!;
-    suspendedUnconfirmedOpens.splice(i, 1);
+  for (let i = S().suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
+    const entry = S().suspendedUnconfirmedOpens[i]!;
+    S().suspendedUnconfirmedOpens.splice(i, 1);
     if (entry.botAppId !== botAppId || entry.service !== service) {
       entry.abandonUnpairedFlat?.();
       continue;
@@ -344,7 +354,7 @@ async function recallRecoveredOpener(
 }
 
 function scheduleTakeoverRecallRetry(entry: UnconfirmedOpenRetry, epoch: number): void {
-  if (orphanRetryEpoch !== epoch) {
+  if (S().orphanRetryEpoch !== epoch) {
     getLog().info(
       '[feishu/wsClient] late-takeover opener recall stale after credential clear — dropping retry',
     );
@@ -364,14 +374,14 @@ function scheduleUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
     suspendUnconfirmedOpenRetry({ ...entry, timer: undefined, attempt: 0 });
     return;
   }
-  const existing = unconfirmedOpenRetries.get(entry.messageId);
+  const existing = S().unconfirmedOpenRetries.get(entry.messageId);
   if (existing?.timer) clearTimeout(existing.timer);
-  const epoch = orphanRetryEpoch;
+  const epoch = S().orphanRetryEpoch;
   entry.timer = setTimeout(() => {
-    unconfirmedOpenRetries.delete(entry.messageId);
+    S().unconfirmedOpenRetries.delete(entry.messageId);
     void retryUnconfirmedOpen(entry, epoch);
   }, delay);
-  unconfirmedOpenRetries.set(entry.messageId, entry);
+  S().unconfirmedOpenRetries.set(entry.messageId, entry);
 }
 
 async function retryUnconfirmedOpen(
@@ -381,8 +391,8 @@ async function retryUnconfirmedOpen(
   const log = getLog();
   if (!isSameBotActive(entry.botAppId, entry.service)) {
     const accountChanged =
-      currentBotAppId !== null &&
-      (currentBotAppId !== entry.botAppId || currentService !== entry.service);
+      S().currentBotAppId !== null &&
+      (S().currentBotAppId !== entry.botAppId || S().currentService !== entry.service);
     if (accountChanged) {
       log.info('[feishu/wsClient] unconfirmed openThread retry skipped: account changed');
       entry.abandonUnpairedFlat?.();
@@ -393,7 +403,7 @@ async function retryUnconfirmedOpen(
     return;
   }
   const opener = await outbound.openThread(entry.messageId);
-  if (orphanRetryEpoch !== epoch) {
+  if (S().orphanRetryEpoch !== epoch) {
     entry.abandonUnpairedFlat?.();
     return;
   }
@@ -401,8 +411,8 @@ async function retryUnconfirmedOpen(
   // await 后必须再核当前 bot, 否则会把 A 的 opener/turn 写进 B 的 outbound。
   if (!isSameBotActive(entry.botAppId, entry.service)) {
     const accountChanged =
-      currentBotAppId !== null &&
-      (currentBotAppId !== entry.botAppId || currentService !== entry.service);
+      S().currentBotAppId !== null &&
+      (S().currentBotAppId !== entry.botAppId || S().currentService !== entry.service);
     if (accountChanged) {
       log.info('[feishu/wsClient] unconfirmed openThread dropped after await: account changed');
       entry.abandonUnpairedFlat?.();
@@ -471,11 +481,12 @@ async function retryUnconfirmedOpen(
   feishuEvents.emit('message', {
     channelName: 'feishu',
     senderId: laneUserId,
+    invoked: true,
     chatId: entry.chatId,
     contextId: entry.botAppId,
     messageId: entry.messageId,
     text: entry.text,
-    speaker: { id: entry.senderOpenId, name: '', isOwner: true },
+    speaker: { id: entry.senderOpenId, name: '', isOwner: ownerGuard.check(entry.senderOpenId) },
     ...(groupContextLane ? { groupContextLane } : {}),
     ...(entry.replyContext ? { replyContext: entry.replyContext } : {}),
     attachments: entry.attachments,
@@ -486,10 +497,10 @@ async function retryUnconfirmedOpen(
 
 /** 测试注入口 — 清空挂起/排队重试。生产代码不要调用。 */
 export function resetOrphanRetriesForTest(): void {
-  for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
-  orphanNoticeRetries.clear();
-  suspendedOrphanRetries.length = 0;
-  orphanAttemptCeiling.clear();
+  for (const retry of S().orphanNoticeRetries.values()) clearTimeout(retry.timer);
+  S().orphanNoticeRetries.clear();
+  S().suspendedOrphanRetries.length = 0;
+  S().orphanAttemptCeiling.clear();
   clearUnconfirmedOpenRetries();
 }
 
@@ -501,12 +512,12 @@ export function resetOrphanRetriesForTest(): void {
  * 保留语义)。
  */
 export function clearOrphanRetriesForCredentialClear(): void {
-  orphanRetryEpoch += 1;
-  for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
-  orphanNoticeRetries.clear();
-  suspendedOrphanRetries.length = 0;
-  orphanAttemptCeiling.clear();
-  orphanNoticeDelivered.clear();
+  S().orphanRetryEpoch += 1;
+  for (const retry of S().orphanNoticeRetries.values()) clearTimeout(retry.timer);
+  S().orphanNoticeRetries.clear();
+  S().suspendedOrphanRetries.length = 0;
+  S().orphanAttemptCeiling.clear();
+  S().orphanNoticeDelivered.clear();
   clearUnconfirmedOpenRetries();
   // 注意: orphanNoticeInFlight **不清空** — 在途 REST 无法取消, 保留去重
   // 记账让同凭证快速重登录后的重投共享旧请求(而不是并发第二条提示);
@@ -515,7 +526,7 @@ export function clearOrphanRetriesForCredentialClear(): void {
 
 /** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */
 function wasNoticeDelivered(openerMessageId: string): boolean {
-  return orphanNoticeDelivered.has(openerMessageId);
+  return S().orphanNoticeDelivered.has(openerMessageId);
 }
 
 /**
@@ -526,7 +537,7 @@ function wasNoticeDelivered(openerMessageId: string): boolean {
  * 别的账号或无连接时才失败, 旧账号的开场白不得经新账号的 client 操作。
  */
 function isSameBotActive(botAppId: string, service: BotCredentials['service']): boolean {
-  return acceptingInbound && currentBotAppId === botAppId && currentService === service;
+  return S().acceptingInbound && S().currentBotAppId === botAppId && S().currentService === service;
 }
 
 /**
@@ -541,13 +552,14 @@ function shouldAbandonTopicLease(
   service: BotCredentials['service'],
   generation: number,
 ): boolean {
-  if (generation <= topicLeaseDiscardThroughGeneration) return true;
-  if (pendingStartAccount) {
-    return pendingStartAccount.appId !== botAppId || pendingStartAccount.service !== service;
+  if (generation <= S().topicLeaseDiscardThroughGeneration) return true;
+  const pendingAccount = S().pendingStartAccount;
+  if (pendingAccount) {
+    return pendingAccount.appId !== botAppId || pendingAccount.service !== service;
   }
   return (
-    currentBotAppId !== null &&
-    (currentBotAppId !== botAppId || currentService !== service)
+    S().currentBotAppId !== null &&
+    (S().currentBotAppId !== botAppId || S().currentService !== service)
   );
 }
 
@@ -561,7 +573,6 @@ interface InFlightOrphanSend {
   epoch: number;
   promise: Promise<'delivered' | 'failed'>;
 }
-const orphanNoticeInFlight = new Map<string, InFlightOrphanSend>();
 
 /**
  * 处理中的入站消息记账(key = `${appId}:${messageId}` → 所属 generation)。
@@ -569,7 +580,6 @@ const orphanNoticeInFlight = new Map<string, InFlightOrphanSend>();
  * 同账号重连后该消息的重投能被新连接处理(不被仍持有的认领压掉); 已处理
  * 完的消息认领不受影响(重推抑制不变)。
  */
-const inboundInFlight = new Map<string, { generation: number }>();
 
 /**
  * 发送孤儿提示(单一 in-flight): 同一 opener 并发进入时共享同一次发送结果,
@@ -580,7 +590,7 @@ function sendOrphanNoticeOnce(
   openerMessageId: string,
   epoch: number,
 ): Promise<'delivered' | 'failed' | 'stale'> {
-  const inFlight = orphanNoticeInFlight.get(openerMessageId);
+  const inFlight = S().orphanNoticeInFlight.get(openerMessageId);
   if (inFlight) {
     // 清凭证前创建的 in-flight 不得被新代处理者当作本代结果推进 — 否则
     // 旧请求失败时新 handler 的 epoch 校验通过, 登出前的重试复活。
@@ -601,11 +611,11 @@ function sendOrphanNoticeOnce(
     }
   })();
   // set 与 get 在同一同步块内完成 — 并发调用不会双双通过(JS 单线程)。
-  orphanNoticeInFlight.set(openerMessageId, { epoch, promise: attempt });
+  S().orphanNoticeInFlight.set(openerMessageId, { epoch, promise: attempt });
   return attempt.finally(() => {
     // 结果已共享给所有等待者后才清理; 幂等删除, 早到的 finally 不影响
     // 已经持有 promise 引用的等待者。
-    orphanNoticeInFlight.delete(openerMessageId);
+    S().orphanNoticeInFlight.delete(openerMessageId);
   });
 }
 
@@ -622,7 +632,7 @@ async function sendOrphanOpenerNotice(
     releaseInboundClaim(botAppId, messageId);
     return;
   }
-  const last = orphanNoticeAt.get(openerMessageId) ?? 0;
+  const last = S().orphanNoticeAt.get(openerMessageId) ?? 0;
   if (Date.now() - last < ORPHAN_NOTICE_COOLDOWN_MS) {
     // 冷却命中(重投场景): 这次投递不产出任何可见结果 — 释放本次认领, 否则
     // 冷却期间的 claim 会卡满 10 分钟, 换代后新连接的重投被丢弃(stop 已清掉
@@ -630,12 +640,12 @@ async function sendOrphanOpenerNotice(
     releaseInboundClaim(botAppId, messageId);
     return;
   }
-  orphanNoticeAt.set(openerMessageId, Date.now());
+  S().orphanNoticeAt.set(openerMessageId, Date.now());
   // in-flight 去重: 执行中的重试会与这里共享同一次发送 — 重投不并发打出
   // 第二条提示; 结果为共享, 送达/失败按共享结果处理。
-  const epoch = orphanRetryEpoch;
+  const epoch = S().orphanRetryEpoch;
   const outcome = await sendOrphanNoticeOnce(openerMessageId, epoch);
-  if (epoch !== orphanRetryEpoch) {
+  if (epoch !== S().orphanRetryEpoch) {
     // 清凭证发生在发送期间: 续段放弃 — 不再 schedule/suspend。
     log.info('[feishu/wsClient] orphan opener notice stale after credential clear — dropping continuation');
     return;
@@ -652,10 +662,10 @@ async function sendOrphanOpenerNotice(
     // 送达: 重新认领触发消息(后续重投被入站去重拦下) + 清掉该 opener 的
     // 挂起重试(重试绕过冷却, 不清会在稍后重复提示, 甚至重试耗尽时误撤回)。
     claimInboundMessage(botAppId, messageId);
-    const pending = orphanNoticeRetries.get(openerMessageId);
+    const pending = S().orphanNoticeRetries.get(openerMessageId);
     if (pending) {
       clearTimeout(pending.timer);
-      orphanNoticeRetries.delete(openerMessageId);
+      S().orphanNoticeRetries.delete(openerMessageId);
     }
   } else {
     releaseInboundClaim(botAppId, messageId);
@@ -716,13 +726,13 @@ function scheduleOrphanNoticeRetry(
     void outbound.recallOwnMessage(openerMessageId);
     return;
   }
-  const existing = orphanNoticeRetries.get(openerMessageId);
+  const existing = S().orphanNoticeRetries.get(openerMessageId);
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
-    orphanNoticeRetries.delete(openerMessageId);
+    S().orphanNoticeRetries.delete(openerMessageId);
     void retryOrphanOpenerNotice(botAppId, service, openerMessageId, messageId, attempt);
   }, delay);
-  orphanNoticeRetries.set(openerMessageId, {
+  S().orphanNoticeRetries.set(openerMessageId, {
     timer,
     botAppId,
     service,
@@ -761,9 +771,9 @@ async function retryOrphanOpenerNotice(
   }
   // in-flight 去重: 与冷却后的重投共享同一次发送 — 不会并发打出第二条提示;
   // 若重投的发送已在进行, 这里等待它的结果而不是另发一条。
-  const epoch = orphanRetryEpoch;
+  const epoch = S().orphanRetryEpoch;
   const outcome = await sendOrphanNoticeOnce(openerMessageId, epoch);
-  if (epoch !== orphanRetryEpoch) {
+  if (epoch !== S().orphanRetryEpoch) {
     log.info('[feishu/wsClient] orphan opener notice retry stale after credential clear — dropping continuation');
     return;
   }
@@ -817,24 +827,23 @@ async function retryOrphanOpenerNotice(
  */
 const INBOUND_DEDUPE_TTL_MS = 10 * 60_000;
 const INBOUND_DEDUPE_MAX_ENTRIES = 1_000;
-const seenInboundMessages = new Map<string, number>();
 
 /** true = 本进程没见过这条消息(可以处理); false = 重推, 应当丢弃。 */
 function claimInboundMessage(appId: string, messageId: string): boolean {
   const key = `${appId}:${messageId}`;
   const now = Date.now();
-  const seenAt = seenInboundMessages.get(key);
+  const seenAt = S().seenInboundMessages.get(key);
   if (seenAt !== undefined && now - seenAt < INBOUND_DEDUPE_TTL_MS) return false;
   // delete + set: Map 对已存在的 key 保留旧插入序, 过期条目刷新后必须重新排到
   // 队尾, 否则下面按插入序淘汰会先砍掉刚刷新的那条。
-  seenInboundMessages.delete(key);
-  seenInboundMessages.set(key, now);
-  for (const [k, ts] of seenInboundMessages) {
-    const withinBudget = seenInboundMessages.size <= INBOUND_DEDUPE_MAX_ENTRIES;
+  S().seenInboundMessages.delete(key);
+  S().seenInboundMessages.set(key, now);
+  for (const [k, ts] of S().seenInboundMessages) {
+    const withinBudget = S().seenInboundMessages.size <= INBOUND_DEDUPE_MAX_ENTRIES;
     // 插入序 = 时间序, 最老的都没过期且没超量 ⇒ 后面的也不用看。
     if (withinBudget && now - ts < INBOUND_DEDUPE_TTL_MS) break;
     if (k === key) continue;
-    seenInboundMessages.delete(k);
+    S().seenInboundMessages.delete(k);
   }
   return true;
 }
@@ -846,7 +855,7 @@ function claimInboundMessage(appId: string, messageId: string): boolean {
  * 会再次起 turn。
  */
 function releaseInboundClaim(appId: string, messageId: string): void {
-  seenInboundMessages.delete(`${appId}:${messageId}`);
+  S().seenInboundMessages.delete(`${appId}:${messageId}`);
 }
 
 /**
@@ -863,7 +872,7 @@ function abandonInboundTurn(botAppId: string, messageId: string): void {
 
 /** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
 export function resetInboundDedupeForTest(): void {
-  seenInboundMessages.clear();
+  S().seenInboundMessages.clear();
   resetDualDeliveryForTest();
 }
 
@@ -877,15 +886,15 @@ const FEISHU_WS_PING_TIMEOUT_SECONDS = 30;
 
 function emitRendererStatus(error?: string): void {
   feishuEvents.emit('status', {
-    status: currentStatus,
+    status: S().currentStatus,
     error,
-    botAppId: currentBotAppId,
+    botAppId: S().currentBotAppId,
     ownerOpenId: ownerGuard.firstAllowed() ?? storage.readOwnerOpenId(),
   });
 }
 
 function setStatus(status: FeishuConnectionStatus, error?: string): void {
-  currentStatus = status;
+  S().currentStatus = status;
   emitRendererStatus(error);
   // Also broadcast public IMStatus to host orchestrator subscribers
   feishuEvents.emit('imStatus', toImStatus(status, error));
@@ -894,21 +903,21 @@ function setStatus(status: FeishuConnectionStatus, error?: string): void {
 function toImStatus(s: FeishuConnectionStatus, error?: string) {
   if (s === 'idle') return { kind: 'idle' as const };
   if (s === 'testing' || s === 'reconnecting') return { kind: 'connecting' as const };
-  if (s === 'connected') return { kind: 'connected' as const, appId: currentBotAppId ?? '' };
-  if (s === 'conflict') return { kind: 'conflict' as const, appId: currentBotAppId ?? '' };
+  if (s === 'connected') return { kind: 'connected' as const, appId: S().currentBotAppId ?? '' };
+  if (s === 'conflict') return { kind: 'conflict' as const, appId: S().currentBotAppId ?? '' };
   return { kind: 'error' as const, reason: error ?? 'unknown' };
 }
 
 export function getCurrentStatus(): FeishuConnectionStatus {
-  return currentStatus;
+  return S().currentStatus;
 }
 
 export function getCurrentBotAppId(): string | null {
-  return currentBotAppId;
+  return S().currentBotAppId;
 }
 
 export function setLifecycleAnnouncement(enabled: boolean): void {
-  lifecycleAnnouncementEnabled = enabled;
+  S().lifecycleAnnouncementEnabled = enabled;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
@@ -927,7 +936,7 @@ async function fetchBotOpenId(): Promise<void> {
     });
     const openId = res?.bot?.open_id;
     if (typeof openId === 'string' && openId) {
-      botOpenId = openId;
+      S().botOpenId = openId;
       log.info(`[feishu/wsClient] bot open_id resolved ...${openId.slice(-8)}`);
     } else {
       log.warn('[feishu/wsClient] bot/v3/info returned no open_id — group messages disabled');
@@ -940,7 +949,7 @@ async function fetchBotOpenId(): Promise<void> {
 
 /** 测试注入口 — 生产代码不要调用。 */
 export function setBotOpenIdForTest(openId: string | null): void {
-  botOpenId = openId;
+  S().botOpenId = openId;
 }
 
 const FEISHU_CONFLICT_ERROR = '该 App 已被另一台设备占用 (exceed_conn_limit)';
@@ -951,15 +960,15 @@ function isConflictSignal(message: string): boolean {
 }
 
 function isActiveConnection(generation: number, appId: string): boolean {
-  return acceptingInbound && lifecycleGeneration === generation && currentBotAppId === appId;
+  return S().acceptingInbound && S().lifecycleGeneration === generation && S().currentBotAppId === appId;
 }
 
 async function transitionToConflict(generation: number, appId: string): Promise<void> {
-  if (conflictTransitionGeneration === generation || !isActiveConnection(generation, appId)) {
+  if (S().conflictTransitionGeneration === generation || !isActiveConnection(generation, appId)) {
     return;
   }
 
-  conflictTransitionGeneration = generation;
+  S().conflictTransitionGeneration = generation;
   setStatus('conflict', FEISHU_CONFLICT_ERROR);
   await stop({
     keepStatus: true,
@@ -976,7 +985,7 @@ function handleReadySignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReady();
-  if (activeDetector.getVerdict()?.kind === 'connected' && currentStatus !== 'connected') {
+  if (activeDetector.getVerdict()?.kind === 'connected' && S().currentStatus !== 'connected') {
     setStatus('connected');
   }
 }
@@ -988,7 +997,7 @@ function handleReconnectingSignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReconnecting();
-  if (activeDetector.getVerdict()?.kind !== 'conflict' && currentStatus === 'connected') {
+  if (activeDetector.getVerdict()?.kind !== 'conflict' && S().currentStatus === 'connected') {
     setStatus('reconnecting');
   }
 }
@@ -1000,7 +1009,7 @@ function handleReconnectedSignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReconnected();
-  if (activeDetector.getVerdict()?.kind === 'connected' && currentStatus !== 'connected') {
+  if (activeDetector.getVerdict()?.kind === 'connected' && S().currentStatus !== 'connected') {
     setStatus('connected');
   }
 }
@@ -1086,34 +1095,39 @@ export async function start(
     `[feishu/wsClient] start requested reason=${opts.reason ?? 'unspecified'} announceLifecycle=${opts.announceLifecycle === false ? 'no' : 'yes'}`,
   );
   const pendingAccount = { appId: creds.appId, service: creds.service };
-  pendingStartAccount = pendingAccount;
+  S().pendingStartAccount = pendingAccount;
   try {
-    if (client) {
+    if (S().client) {
       await stop({
         announceOffline: opts.announceLifecycle !== false,
         reason: `${opts.reason ?? 'start'}:replace-existing-client`,
       });
     }
   } catch (err) {
-    if (pendingStartAccount === pendingAccount) pendingStartAccount = null;
+    if (S().pendingStartAccount === pendingAccount) S().pendingStartAccount = null;
     throw err;
   }
 
-  const startedGeneration = ++lifecycleGeneration;
-  acceptingInbound = true;
-  currentBotAppId = creds.appId;
-  currentService = creds.service;
+  const startedGeneration = ++S().lifecycleGeneration;
+  S().acceptingInbound = true;
+  S().currentBotAppId = creds.appId;
+  S().currentService = creds.service;
   // 并发 start 时只清自己的标记，不覆盖更新一轮已经发布的待启动身份。
-  if (pendingStartAccount === pendingAccount) pendingStartAccount = null;
+  if (S().pendingStartAccount === pendingAccount) S().pendingStartAccount = null;
   setStatus('testing');
 
   const startDetector = new ConflictDetector({
     readyTimeoutMs: 8000,
     reconnectThreshold: 2,
   });
-  detector = startDetector;
+  S().detector = startDetector;
 
-  client = new Lark.WSClient({
+  // Lark SDK 从它自己的 socket / 定时器里回调: 显式绑回本实例的作用域, 不靠
+  // AsyncLocalStorage 隐式传播(多份 bot 并存时串线就是账号串线)。
+  const scope = getScope();
+  const bound = <A extends unknown[], R>(fn: (...args: A) => R) => bindScope(scope, fn);
+  const sdkLogger = makeCapturingLogger(startDetector, startedGeneration, creds.appId);
+  const client = new Lark.WSClient({
     appId: creds.appId,
     appSecret: creds.appSecret,
     domain: creds.service === 'lark' ? Lark.Domain.Lark : Lark.Domain.Feishu,
@@ -1122,41 +1136,50 @@ export async function start(
     wsConfig: {
       pingTimeout: FEISHU_WS_PING_TIMEOUT_SECONDS,
     },
-    logger: makeCapturingLogger(startDetector, startedGeneration, creds.appId),
-    onReady: () => {
+    logger: {
+      trace: bound(sdkLogger.trace),
+      debug: bound(sdkLogger.debug),
+      info: bound(sdkLogger.info),
+      warn: bound(sdkLogger.warn),
+      error: bound(sdkLogger.error),
+    },
+    onReady: bound(() => {
       handleReadySignal(startDetector, startedGeneration, creds.appId);
-    },
-    onError: (error) => {
+    }),
+    onError: bound((error) => {
       handleErrorSignal(error, startDetector, startedGeneration, creds.appId);
-    },
-    onReconnecting: () => {
+    }),
+    onReconnecting: bound(() => {
       handleReconnectingSignal(startDetector, startedGeneration, creds.appId);
-    },
-    onReconnected: () => {
+    }),
+    onReconnected: bound(() => {
       handleReconnectedSignal(startDetector, startedGeneration, creds.appId);
-    },
+    }),
   });
+  S().client = client;
 
   outbound.bindClient(creds);
 
   const eventDispatcher = new Lark.EventDispatcher({}).register({
     'im.message.receive_v1': async (data: unknown) => {
-      try {
-        // 传入本代 connection 的 generation — 处理途中有 await(附件下载/
-        // 开话题), 恢复执行时必须复查门禁, 防止旧连接的轮次漏进新连接。
-        await handleIncomingMessage(
-          creds.appId,
-          creds.service,
-          startedGeneration,
-          data as RawMessageEvent,
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error('[feishu/wsClient] handleIncomingMessage threw:', msg);
-      }
+      await runInScope(scope, async () => {
+        try {
+          // 传入本代 connection 的 generation — 处理途中有 await(附件下载/
+          // 开话题), 恢复执行时必须复查门禁, 防止旧连接的轮次漏进新连接。
+          await handleIncomingMessage(
+            creds.appId,
+            creds.service,
+            startedGeneration,
+            data as RawMessageEvent,
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error('[feishu/wsClient] handleIncomingMessage threw:', msg);
+        }
+      });
     },
-    'card.action.trigger': handleCardAction,
-    'card.action.trigger_v1': handleCardAction,
+    'card.action.trigger': (data: unknown) => runInScope(scope, () => handleCardAction(data)),
+    'card.action.trigger_v1': (data: unknown) => runInScope(scope, () => handleCardAction(data)),
   });
 
   try {
@@ -1169,19 +1192,19 @@ export async function start(
   }
 
   const verdict = await startDetector.waitForVerdict();
-  if (detector === startDetector) detector = null;
+  if (S().detector === startDetector) S().detector = null;
 
   // stop() can abandon the detector while this start() is awaiting its
   // verdict. Ignore that stale result instead of overwriting the final idle
   // status or announcing online after logout.
-  if (!acceptingInbound || lifecycleGeneration !== startedGeneration) {
+  if (!S().acceptingInbound || S().lifecycleGeneration !== startedGeneration) {
     log.info('[feishu/wsClient] ignore stale start verdict after stop');
     return 'error';
   }
 
   switch (verdict.kind) {
     case 'connected':
-      if (currentStatus !== 'connected') setStatus('connected');
+      if (S().currentStatus !== 'connected') setStatus('connected');
       void fetchBotOpenId();
       // 恢复本 bot 在 stop() 时被挂起的排队重试(同账号重连) — 事件已被
       // ACK, 不恢复的话孤儿提示/撤回链随断连永久消失。
@@ -1228,42 +1251,42 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
     : null;
   if (opts.discardPendingTopicLeases) {
     // Explicit logout wins over any stale replacement intent.
-    pendingStartAccount = null;
+    S().pendingStartAccount = null;
   } else if (pendingAccount) {
-    pendingStartAccount = pendingAccount;
+    S().pendingStartAccount = pendingAccount;
   }
   try {
     await stopCurrentClient(opts);
   } catch (err) {
-    if (pendingAccount && pendingStartAccount === pendingAccount) pendingStartAccount = null;
+    if (pendingAccount && S().pendingStartAccount === pendingAccount) S().pendingStartAccount = null;
     throw err;
   }
 }
 
 async function stopCurrentClient(opts: StopOptions): Promise<void> {
   const log = getLog();
-  const stoppedGeneration = lifecycleGeneration;
+  const stoppedGeneration = S().lifecycleGeneration;
   if (opts.discardPendingTopicLeases) {
-    topicLeaseDiscardThroughGeneration = Math.max(
-      topicLeaseDiscardThroughGeneration,
+    S().topicLeaseDiscardThroughGeneration = Math.max(
+      S().topicLeaseDiscardThroughGeneration,
       stoppedGeneration,
     );
   }
   // Close the logical ingress gate before awaiting the offline announcement.
   // Lark may still deliver callbacks while stop is waiting on network I/O;
   // those callbacks must never reach account-scoped host state after logout.
-  acceptingInbound = false;
-  lifecycleGeneration += 1;
+  S().acceptingInbound = false;
+  S().lifecycleGeneration += 1;
   log.info(
-    `[feishu/wsClient] stop requested reason=${opts.reason ?? 'unspecified'} status=${currentStatus} hasClient=${client ? 'yes' : 'no'} keepStatus=${opts.keepStatus ? 'yes' : 'no'} announceOffline=${opts.announceOffline === false ? 'no' : 'yes'} offlineTimeoutMs=${opts.offlineTimeoutMs ?? DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS}`,
+    `[feishu/wsClient] stop requested reason=${opts.reason ?? 'unspecified'} status=${S().currentStatus} hasClient=${S().client ? 'yes' : 'no'} keepStatus=${opts.keepStatus ? 'yes' : 'no'} announceOffline=${opts.announceOffline === false ? 'no' : 'yes'} offlineTimeoutMs=${opts.offlineTimeoutMs ?? DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS}`,
   );
   // currentStatus === 'connected' 时一定发; 'reconnecting' 时也发 —— 关闭应用
   // 时 SDK 可能在 close() 之前先记录一条 reconnect 日志, 导致状态切到
   // 'reconnecting', 若只检查 'connected' 则 offline 通知会静默丢失。
   if (
     opts.announceOffline !== false &&
-    client &&
-    (currentStatus === 'connected' || currentStatus === 'reconnecting')
+    S().client &&
+    (S().currentStatus === 'connected' || S().currentStatus === 'reconnecting')
   ) {
     const timeoutMs = opts.offlineTimeoutMs ?? DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS;
     let timedOut = false;
@@ -1286,30 +1309,32 @@ async function stopCurrentClient(opts: StopOptions): Promise<void> {
     }
   } else {
     log.info(
-      `[feishu/wsClient] offline announcement skipped status=${currentStatus} hasClient=${client ? 'yes' : 'no'}`,
+      `[feishu/wsClient] offline announcement skipped status=${S().currentStatus} hasClient=${S().client ? 'yes' : 'no'}`,
     );
   }
-  if (client) {
+  const closingClient = S().client;
+  if (closingClient) {
     try {
       log.info('[feishu/wsClient] closing WS client');
-      client.close({ force: true });
+      closingClient.close({ force: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`[feishu/wsClient] close threw: ${msg}`);
     }
-    client = null;
+    S().client = null;
   }
-  if (detector) {
-    detector.abandon();
-    detector = null;
+  const abandonedDetector = S().detector;
+  if (abandonedDetector) {
+    abandonedDetector.abandon();
+    S().detector = null;
   }
-  botOpenId = null;
-  strangerNoticeAt.clear();
-  orphanNoticeAt.clear();
-  orphanNoticeDelivered.clear();
+  S().botOpenId = null;
+  S().strangerNoticeAt.clear();
+  S().orphanNoticeAt.clear();
+  S().orphanNoticeDelivered.clear();
   // 排队的重试挂起(不丢弃): 事件已被 ACK, 直接取消会让提示永远不再出现 —
   // 元数据入 suspendedOrphanRetries, 同账号重连后由 start() 恢复入队。
-  for (const retry of orphanNoticeRetries.values()) {
+  for (const retry of S().orphanNoticeRetries.values()) {
     clearTimeout(retry.timer);
     suspendOrphanRetry({
       botAppId: retry.botAppId,
@@ -1319,8 +1344,8 @@ async function stopCurrentClient(opts: StopOptions): Promise<void> {
       attempt: retry.attempt,
     });
   }
-  orphanNoticeRetries.clear();
-  for (const retry of [...unconfirmedOpenRetries.values()]) {
+  S().orphanNoticeRetries.clear();
+  for (const retry of [...S().unconfirmedOpenRetries.values()]) {
     suspendUnconfirmedOpenRetry(retry);
   }
   // 注意: orphanNoticeInFlight **不**清空 — in-flight 的 REST 请求在 stop()
@@ -1329,20 +1354,20 @@ async function stopCurrentClient(opts: StopOptions): Promise<void> {
   // 处理中的入站消息: 所属连接即将失效, 该消息不会再有产出 — 释放认领并
   // evict 开话题缓存, 让同账号重连后的重投被新连接处理(而不是被仍持有的
   // 认领压掉后 ACK 掉、且不再有重投保证); 已处理完的消息认领不动。
-  for (const key of inboundInFlight.keys()) {
-    seenInboundMessages.delete(key);
+  for (const key of S().inboundInFlight.keys()) {
+    S().seenInboundMessages.delete(key);
     const sep = key.indexOf(':');
     if (sep > 0) outbound.evictOpenThreadOutcome(key.slice(sep + 1));
   }
-  inboundInFlight.clear();
+  S().inboundInFlight.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
-    pendingOfflineNotice = false;
+    S().pendingOfflineNotice = false;
     ownerGuard.clear();
   }
   if (!opts.keepStatus) {
-    currentBotAppId = null;
-    currentService = null;
+    S().currentBotAppId = null;
+    S().currentService = null;
     setStatus('idle');
   }
 }
@@ -1358,9 +1383,9 @@ async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
     return;
   }
 
-  if (phase === 'offline') pendingOfflineNotice = true;
+  if (phase === 'offline') S().pendingOfflineNotice = true;
 
-  if (!lifecycleAnnouncementEnabled) {
+  if (!S().lifecycleAnnouncementEnabled) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: message suppressed by setting`);
     return;
   }
@@ -1419,9 +1444,7 @@ function sanitizeMentionName(value: string): string {
  * 其他人的占位符替换为 `@名字`(名字是平台可改字段 — 不可信输入, 控制字符
  * 剥除 + 截断后使用)。text/post 抽出的正文里的占位符同一口径处理。
  *
- * 纯 @bot(剥完为空)仍是召唤: 回退为 `@bot显示名`, 与 Telegram / 官方 bot
- * 「纯 @ 无正文保留原文」同口径 —— 返回空串会被入站当成「没有可转发的内容」
- * 整条丢弃, 用户看到的就是「@ 了没反应」。
+ * 纯 @bot 剥完保持空正文，召唤事实通过事件的 invoked 标记传递。
  */
 function resolveMentionPlaceholders(
   text: string,
@@ -1429,17 +1452,15 @@ function resolveMentionPlaceholders(
   selfOpenId: string,
 ): string {
   let out = text;
-  let selfMentionText: string | null = null;
   for (const mention of mentions) {
     if (!mention.key) continue;
     const isSelf = mention.id?.open_id === selfOpenId;
     const safeName = sanitizeMentionName(mention.name ?? "");
-    if (isSelf && out.includes(mention.key)) selfMentionText = `@${safeName || 'bot'}`;
     const replacement = isSelf ? '' : `@${safeName || 'user'}`;
     out = out.split(mention.key).join(replacement);
   }
   out = out.replace(/[ \t]{2,}/g, ' ').trim();
-  return out || selfMentionText || '';
+  return out;
 }
 
 /** 群消息是否 @ 到本 bot。botOpenId 未知恒 false(群功能惰性失效)。 */
@@ -1492,7 +1513,7 @@ async function handleIncomingMessage(
     return;
   }
 
-  inboundInFlight.set(`${botAppId}:${messageId}`, { generation });
+  S().inboundInFlight.set(`${botAppId}:${messageId}`, { generation });
   try {
     await processClaimedMessage(botAppId, service, generation, data, {
       messageId,
@@ -1502,8 +1523,8 @@ async function handleIncomingMessage(
     });
   } finally {
     // 自己的 entry 才清 — 重连后新连接可能已为同一条消息重新记账。
-    const entry = inboundInFlight.get(`${botAppId}:${messageId}`);
-    if (entry?.generation === generation) inboundInFlight.delete(`${botAppId}:${messageId}`);
+    const entry = S().inboundInFlight.get(`${botAppId}:${messageId}`);
+    if (entry?.generation === generation) S().inboundInFlight.delete(`${botAppId}:${messageId}`);
   }
 }
 
@@ -1533,17 +1554,18 @@ async function processClaimedMessage(
   let abandonTopic: (() => void) | undefined;
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
-    if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
+    if (!mentionsSelf(data.message?.mentions, S().botOpenId)) return;
     // 群里绝不 TOFU 认主(钉钉同款): 没有 owner 时群消息全丢。
     if (!ownerGuard.firstAllowed()) {
       log.info('[feishu/wsClient] drop group mention: no owner bound yet');
       return;
     }
-    // 非 owner @bot → 礼貌回应(per-user 冷却), 不起 turn。
-    if (!ownerGuard.check(senderOpenId)) {
-      const last = strangerNoticeAt.get(senderOpenId) ?? 0;
+    // 非 owner @bot → 礼貌回应(per-user 冷却), 不起 turn; 对外开放的实例
+    // (伙伴自有连接)放行, 带非主人标记进业务层。
+    if (!ownerGuard.check(senderOpenId) && !getScope().guests) {
+      const last = S().strangerNoticeAt.get(senderOpenId) ?? 0;
       if (Date.now() - last >= STRANGER_NOTICE_COOLDOWN_MS) {
-        strangerNoticeAt.set(senderOpenId, Date.now());
+        S().strangerNoticeAt.set(senderOpenId, Date.now());
         try {
           await outbound.replyText(messageId, transportMessages.group.strangerNotice);
         } catch (err) {
@@ -1590,14 +1612,14 @@ async function processClaimedMessage(
       }
     }
 
-    // whitelist gate
-    if (!ownerGuard.check(senderOpenId)) {
+    // whitelist gate(对外开放的实例放行非主人私聊, 下面带非主人标记进业务层)。
+    if (!ownerGuard.check(senderOpenId) && !getScope().guests) {
       log.warn(`[feishu/wsClient] drop non-whitelisted sender ...${senderOpenId.slice(-8)}`);
       return;
     }
 
-    if (pendingOfflineNotice) {
-      pendingOfflineNotice = false;
+    if (S().pendingOfflineNotice) {
+      S().pendingOfflineNotice = false;
       try {
         await outbound.sendText(senderOpenId, transportMessages.lifecycle.offlineNotice);
       } catch (err) {
@@ -1608,6 +1630,13 @@ async function processClaimedMessage(
   }
 
   const parsed = parseIncoming(msgType, rawContent);
+  const senderIsOwner = ownerGuard.check(senderOpenId);
+  // 命令永远只认主人: 对外开放时陌生人的 `/xxx` 静默丢(不可被探测, 与 Telegram 同口径)。
+  if (!senderIsOwner && /^\s*[/!]/.test(parsed.text)) {
+    abandonUnpairedFlat?.();
+    abandonTopic?.();
+    return;
+  }
   let attachments: Awaited<ReturnType<typeof downloadAttachments>>['attachments'] = [];
   let unsupported = parsed.unsupported;
   if (parsed.attachments.length > 0) {
@@ -1628,13 +1657,14 @@ async function processClaimedMessage(
   }
 
   // 群消息: 剥 @bot 占位符、其他 @ 转显示名。
+  const selfOpenId = S().botOpenId;
   const text =
-    isGroup && data.message?.mentions && botOpenId
-      ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId)
+    isGroup && data.message?.mentions && selfOpenId
+      ? resolveMentionPlaceholders(parsed.text, data.message.mentions, selfOpenId)
       : parsed.text;
 
   // Drop entirely only when there's literally nothing to relay.
-  if (!text && attachments.length === 0 && unsupported.length === 0) {
+  if (!text && attachments.length === 0 && unsupported.length === 0 && !(isGroup && parsed.text.trim())) {
     abandonUnpairedFlat?.();
     abandonTopic?.();
     return;
@@ -1654,7 +1684,7 @@ async function processClaimedMessage(
   if (!isActiveConnection(generation, botAppId)) {
     // stop() 已释放认领(重连接管)时不得再碰 — 新连接可能已为同一条消息
     // 重新认领; 记账还在(处理在 stop 之外被换代)→ 释放让重投可处理。
-    if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
+    if (S().inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
       abandonInboundTurn(botAppId, messageId);
     }
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
@@ -1693,7 +1723,7 @@ async function processClaimedMessage(
       if (!isActiveConnection(generation, botAppId)) {
         // 同上: stop() 已释放认领时不重复释放; 记账还在才 abandon(释放 +
         // evict 开话题缓存, 让重推在新连接上用新客户端重试 API)。
-        if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
+        if (S().inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
           abandonInboundTurn(botAppId, messageId);
         }
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
@@ -1707,7 +1737,7 @@ async function processClaimedMessage(
       if (opener.kind === 'orphaned') {
         if (isUnpairedFlatTakenOver?.()) {
           log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
-          const recallEpoch = orphanRetryEpoch;
+          const recallEpoch = S().orphanRetryEpoch;
           const recalled = await recallRecoveredOpener(opener.openerMessageId, 'orphaned');
           if (!recalled) {
             scheduleTakeoverRecallRetry(
@@ -1787,7 +1817,7 @@ async function processClaimedMessage(
       if (commitUnpairedFlat && !commitUnpairedFlat()) {
         log.info('[feishu/wsClient] unpaired flat aborted: late topic took over routing');
         if (opener.kind === 'opened') {
-          const recallEpoch = orphanRetryEpoch;
+          const recallEpoch = S().orphanRetryEpoch;
           const recalled = await recallRecoveredOpener(opener.messageId, 'opened');
           if (!recalled) {
             scheduleTakeoverRecallRetry(
@@ -1832,6 +1862,7 @@ async function processClaimedMessage(
   // the user-facing wording and the "skip agent for pure-unsupported" rule).
   feishuEvents.emit('message', {
     channelName: 'feishu',
+    invoked: isGroup,
     senderId: laneUserId ?? senderOpenId,
     ...(!isGroup && data.message?.thread_id && data.message?.root_id
       ? { replyThread: { rootMessageId: data.message.root_id, threadId: data.message.thread_id } }
@@ -1840,11 +1871,12 @@ async function processClaimedMessage(
     contextId: botAppId,
     messageId,
     text,
-    ...(laneUserId
+    ...(laneUserId || !senderIsOwner
       ? {
-          // 群轮次必带 speaker — 共享层以它识别群轮(强确认策略/命令主人门)。
-          // 触发人恒为 owner(上面的门已保证), name 留空(飞书事件不带显示名)。
-          speaker: { id: senderOpenId, name: '', isOwner: true },
+          // 群轮次必带 speaker — 共享层以它识别群轮(强确认策略/命令主人门);
+          // 对外开放的实例里非主人的私聊同样带 speaker(访客权限策略据此收紧)。
+          // name 留空(飞书事件不带显示名)。
+          speaker: { id: senderOpenId, name: '', isOwner: senderIsOwner },
         }
       : {}),
     ...(groupContextLane ? { groupContextLane } : {}),
@@ -1857,7 +1889,7 @@ async function processClaimedMessage(
 
 async function handleCardAction(data: unknown): Promise<unknown> {
   const log = getLog();
-  if (!acceptingInbound) {
+  if (!S().acceptingInbound) {
     log.info('[feishu/wsClient] drop card action while connection is stopping');
     return {};
   }

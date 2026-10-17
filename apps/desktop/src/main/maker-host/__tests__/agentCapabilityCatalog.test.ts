@@ -67,8 +67,69 @@ describe('shared runtime capability discovery', () => {
       ...context, vendorOptions: { [RUNTIME_MCP_NAMES_KEY]: [] },
     }, { server: 'custom' })).toMatchObject({ ok: false, capability: { reason: 'not-mounted-in-current-runtime' } });
     expect(await readAgentCapabilityCatalog(providers, context, { server: 'custom' }))
-      .toMatchObject({ ok: true, discovery: 'harness-mcp' });
+      .toMatchObject({ ok: false, discovery: 'harness-mcp', errorCode: 'HARNESS_DISCOVERY_UNAVAILABLE' });
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  describe('servers the engine connects itself', () => {
+    const custom = [{ name: 'custom_omc', toClaudeSdkConfig: vi.fn() }];
+
+    it('lists the tools the caller engine actually holds for the server', async () => {
+      const read = vi.fn(async () => ({ state: 'connected' as const, tools: [
+        { name: 'search', description: 'x'.repeat(400) }, { name: 'open' },
+      ] }));
+      const result = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined, read);
+      expect(read).toHaveBeenCalledWith('custom_omc');
+      expect(result).toMatchObject({ ok: true, discovery: 'harness-mcp', engineState: 'connected',
+        tools: [{ name: 'search' }, { name: 'open' }] });
+      expect((result as { tools: Array<{ description?: string }> }).tools[0]!.description).toHaveLength(301);
+      expect(custom[0]!.toClaudeSdkConfig).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['not-mounted', '新建任务'],
+      ['no-tools', '连接失败'],
+      ['failed', '连接此服务失败'],
+      ['needs-auth', '授权'],
+      ['pending', '仍在连接'],
+      ['disabled', '已被停用'],
+    ] as const)('names the %s engine state instead of reporting success', async (state, text) => {
+      const result = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined,
+        async () => ({ state, tools: [] }));
+      expect(result).toMatchObject({ ok: false, errorCode: 'HARNESS_MCP_NOT_READY', engineState: state });
+      expect((result as { message: string }).message).toContain(text);
+    });
+
+    it('distinguishes an engine without a status entry from a failed read and hides failure text', async () => {
+      expect(await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined, async () => null))
+        .toMatchObject({ ok: false, errorCode: 'HARNESS_DISCOVERY_UNAVAILABLE' });
+      const failed = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined,
+        async () => { throw new Error('HTTP 404 https://omc.example/mcp?token=secret'); });
+      expect(failed).toMatchObject({ ok: false, errorCode: 'HARNESS_DISCOVERY_FAILED' });
+      expect(JSON.stringify(failed)).not.toContain('secret');
+    });
+
+    it('times out a stuck engine read', async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined,
+          () => new Promise(() => undefined));
+        await vi.advanceTimersByTimeAsync(8_000);
+        expect(await pending).toMatchObject({ ok: false, errorCode: 'HARNESS_DISCOVERY_FAILED' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not ask the engine about a server the runtime did not mount', async () => {
+      const read = vi.fn();
+      expect(await readAgentCapabilityCatalog(custom, {
+        ...context, vendorOptions: { [RUNTIME_MCP_NAMES_KEY]: [] },
+      }, { server: 'custom_omc' }, undefined, read)).toMatchObject({
+        ok: false, capability: { reason: 'not-mounted-in-current-runtime' },
+      });
+      expect(read).not.toHaveBeenCalled();
+    });
   });
 
   it('returns an explicit discovery failure without leaking factory errors', async () => {

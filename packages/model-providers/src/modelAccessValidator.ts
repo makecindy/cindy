@@ -1,3 +1,4 @@
+import { parseModelDisplayPricing } from './modelDisplayPricing.js';
 import {
   validModelMetadata,
   expandedRegistryEntries,
@@ -838,7 +839,10 @@ export function parseListModelsResponse(
           `response.models[${index}].availability must be available or requires_payment`,
         );
       }
-      const { availability, ...legacyShape } = raw;
+      const { availability, displayPricing: rawDisplayPricing, ...legacyShape } = raw;
+      // Optional presentation data evolves independently of model availability.
+      // An unsupported quote must not reject the catalog or retain an older quote.
+      const displayPricing = parseModelDisplayPricing(rawDisplayPricing);
       const sanitized = sanitizeModelEntryAgents(
         legacyShape,
         MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
@@ -855,7 +859,7 @@ export function parseListModelsResponse(
         MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
       );
       if (error) return fail(error);
-      models.push({ ...(sanitized as PlainObject), availability });
+      models.push({ ...(sanitized as PlainObject), availability, ...(displayPricing ? { displayPricing } : {}) });
     }
     return ok({
       schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,

@@ -365,6 +365,7 @@ async function runRefreshRemoteDeviceSessions(
               ...(opts.coalescingMode === 'weak' ? {} : { fresh: true }),
             },
           ],
+          { background: status === 'archived' || opts.coalescingMode === 'weak' },
         );
         // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
         if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))

@@ -56,6 +56,15 @@ export function resolveAgentProcessRegistration(pid: number): AgentProcessRegist
   };
 }
 
+/** 当前仍登记的本地 Codex app-server PID；只代表登记事实，调用方须再核对 PPID。 */
+export function listCodexProcessPids(): number[] {
+  const pids: number[] = [];
+  for (const [pid, registration] of registrations) {
+    if (registration.kind === 'codex') pids.push(pid);
+  }
+  return pids;
+}
+
 export function resolveCodexProcessRole(pid: number): AgentProcessRole | null {
   const registration = registrations.get(pid);
   return registration?.kind === 'codex' ? registration.role : null;

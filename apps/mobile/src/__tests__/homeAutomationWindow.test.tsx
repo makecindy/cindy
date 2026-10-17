@@ -38,6 +38,7 @@ function renderChildren(count: number, anchor: number, old = false) {
     useContext: () => ({ scrollY: { value: 0 }, viewportHeight: 800 }), HomeListViewportContext: {},
     useAnimatedRef: () => ({}), useSharedValue: (value: number) => ({ value }), useState: () => [anchor, () => {}],
     buildHomeProjectChildOffsets, estimateHomeSessionRowHeight: () => 60,
+    useHomeRowDisplay: () => ({ taskInfoFields: ['time'], viewMode: 'list' }),
     shouldWindowHomeProjectChildren, resolveHomeProjectChildWindow,
     PROJECT_CHILD_WINDOW_THRESHOLD: 20, PROJECT_CHILD_WINDOW_OVERSCAN: 4, PROJECT_CHILD_WINDOW_SIZE: 15,
     Reanimated: { View: 'animated-view' }, View: 'view', HomeProjectWindowAnchorTracker: 'tracker',
@@ -77,6 +78,15 @@ it('bounds 200 recent runs before layout, while scrolling, and when reversing to
       expect(rows.at(-1)!.props.hideDivider).toBe(true);
     }
   }
+});
+
+// PR #6298 review: retained expanded groups must not multiply initial native
+// mounts (23 groups x 23 rows). Unit tier, actual production child renderer;
+// earlier coverage allowed every unmeasured group to mount a full window.
+it('does not eagerly mount runs for multiple unmeasured expanded groups', () => {
+  const rows = Array.from({ length: 23 }, () => renderChildren(23, -1).elements)
+    .flat().filter(node => node.type === 'row');
+  expect(rows).toHaveLength(0);
 });
 
 it('preserves small previews and the view-all action for old runs', () => {
@@ -123,6 +133,7 @@ it('connects native layout and scroll measurements through the real tracker to r
     useAnimatedReaction: (p: typeof prepare, r: typeof react) => { prepare = p; react = r; },
     measure, runOnJS: (callback: unknown) => callback,
     buildHomeProjectChildOffsets, estimateHomeSessionRowHeight: () => 60,
+    useHomeRowDisplay: () => ({ taskInfoFields: ['time'], viewMode: 'list' }),
     shouldWindowHomeProjectChildren, resolveHomeProjectChildWindow, resolveHomeProjectChildAnchor,
     PROJECT_CHILD_WINDOW_THRESHOLD: 20, PROJECT_CHILD_WINDOW_OVERSCAN: 4,
     PROJECT_CHILD_WINDOW_SIZE: 15, PROJECT_CHILD_WINDOW_SHIFT: 4,
@@ -152,12 +163,16 @@ it('connects native layout and scroll measurements through the real tracker to r
     act(() => root.render(<Viewport.Provider value={{ scrollY, viewportHeight: 800 }}>
       <Group group={{ key: 'group', items, sessionCount: 200 }} testID="fixture" onOpenSession={open} />
     </Viewport.Provider>));
-    frame(200, 0);
+    frame(2400, 0);
     expect(measure).not.toHaveBeenCalled();
     expect(rows()).toHaveLength(0);
     act(() => onLayout());
-    frame(200, 0);
+    frame(2400, 0);
+    expect(rows()).toHaveLength(0);
+    frame(1200, 1200); // Preload one viewport before actually becoming visible.
     expect(rows()).toHaveLength(23);
+    expect(rows()[0].dataset.row).toBe('s0');
+    frame(200, 2200);
     expect(rows()[0].dataset.row).toBe('s0');
     frame(-6000, 6200);
     expect(rows()[0].dataset.row).toBe('s96');
@@ -168,7 +183,13 @@ it('connects native layout and scroll measurements through the real tracker to r
     frame(-11800, 12000);
     expect(rows().at(-1)?.dataset.row).toBe('s199');
     frame(-12000, 12200);
-    expect(rows()).toHaveLength(0); // Fully outside the viewport.
+    // Leaving the viewport must not discard the last bounded window: a
+    // reverse scroll can reveal it before the JS update is delivered.
+    expect(rows().at(-1)?.dataset.row).toBe('s199');
+    frame(-13000, 13200); // Far outside the preload band: release nested rows.
+    expect(rows()).toHaveLength(0);
+    frame(-12400, 12600); // Preload the tail before it re-enters on reversal.
+    expect(rows().at(-1)?.dataset.row).toBe('s199');
     frame(-11800, 12000);
     expect(rows().at(-1)?.dataset.row).toBe('s199');
     frame(200, 0);

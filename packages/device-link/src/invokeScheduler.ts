@@ -23,6 +23,8 @@ interface PeerQueue {
 export class InvokeScheduler {
   private readonly peers = new Map<string, PeerQueue>();
 
+  constructor(private readonly isPressured: (peerId: string) => boolean = () => false) {}
+
   run<T>(
     peerId: string,
     background: boolean,
@@ -124,7 +126,10 @@ export class InvokeScheduler {
     while (state.active < MAX_ACTIVE && state.jobs.length) {
       let index = state.jobs.findIndex((job) => !job.background);
       if (index < 0) {
-        if (state.background >= MAX_BACKGROUND_ACTIVE) break;
+        // Keep one background read progressing, but do not refill a slow
+        // transport with four new reads every time old requests time out.
+        const limit = this.isPressured(state.jobs[0].peerId) ? 1 : MAX_BACKGROUND_ACTIVE;
+        if (state.background >= limit) break;
         index = 0;
       }
       state.jobs.splice(index, 1)[0].start();

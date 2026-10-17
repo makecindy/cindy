@@ -176,6 +176,7 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
       title: typeof task.title === 'string' ? task.title.slice(0, 500) : '',
       model: typeof task.model === 'string' ? task.model.slice(0, 256) : '',
       providerId: isShortString(task.providerId) ? task.providerId : null,
+      source: isShortString(task.source) ? task.source : null,
       contextTokens: finiteNonNegative(task.contextTokens),
       contextWindow: finiteNonNegative(task.contextWindow),
       lastActiveAt: isUnixMs(task.lastActiveAt) ? task.lastActiveAt : 0,

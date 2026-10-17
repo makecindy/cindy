@@ -29,6 +29,7 @@ vi.mock('../../logger', () => ({
 import {
   gitExec,
   GitExecError,
+  isGitProcessTreeAlive,
   normalizeSafeDirectorySpelling,
   safeDirectorySpellings,
 } from '../gitExec';
@@ -178,6 +179,35 @@ afterEach(() => {
 });
 
 describe('gitExec timeoutMs', () => {
+  it('keeps a dead checkout root leased while a Windows descendant remains', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 4343, ParentProcessId: 4242, CreationDate: 'x' }];
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    });
+    await expect(isGitProcessTreeAlive(4242)).resolves.toBe(true);
+  });
+
+  it('keeps a lease when the Windows snapshot has already lost the checkout root', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    });
+    await expect(isGitProcessTreeAlive(4242)).resolves.toBe(true);
+  });
+
+  it('records the spawned checkout PID before completion', async () => {
+    const state = installExecFileMock();
+    const onSpawn = vi.fn();
+    const result = gitExec(['checkout', 'HEAD', '--', '.'], undefined, { onSpawn });
+    expect(onSpawn).toHaveBeenCalledExactlyOnceWith(state.child.pid);
+    state.gitCb!(null, '', '');
+    await expect(result).resolves.toEqual({ stdout: '', stderr: '' });
+  });
+
   it('stdout ENOTCONN 先完成整树清理，再收口为 GitExecError', async () => {
     setPlatform('win32');
     const state = installExecFileMock();

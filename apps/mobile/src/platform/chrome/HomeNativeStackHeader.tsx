@@ -1,9 +1,10 @@
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { memo, useState } from "react";
 import { Stack } from "expo-router";
-import { HomeHeaderGlassButton } from "@/session/HomeHeaderGlassButton";
+import { centeredHomeTitleWidth, HomeStackHeader } from "./HomeStackHeader";
+import { nativeToolbarMenuItems } from "./nativeToolbarMenuItems";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
-import { ChevronDown, Menu } from "lucide-react-native";
+import { ChevronDown } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaFrame, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "@/components/AppText";
@@ -26,9 +27,13 @@ import { lineHeight, navigationChrome, spacing } from "@/theme/tokens";
 
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
- * 透明导航栏;设备标题使用与任务标题相同的轻磨砂胶囊。Android 不渲染。
+ * 透明导航栏;标题保留任务范围的长名称避让规则。Android 不渲染。
+ *
+ * memo:系统顶栏(react-native-screens)每次选项变化都会整组重建 bar button item,展开中的
+ * 菜单随之关闭。调用方须传稳定的 props(菜单内容无实质变化时保持同一引用),避免后台同步
+ * 之类的无关重渲染把用户正在看的菜单关掉。
  */
-export function HomeNativeStackHeader({
+export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   displayA11y,
   displayActions,
   menuA11y,
@@ -50,7 +55,6 @@ export function HomeNativeStackHeader({
   menuA11y: string;
   onDisplayAction(id: string): void;
   onOpenDeviceMenu(): void;
-  onOpenDisplaySettings(): void;
   onOpenMenu(): void;
   onOpenRemoteDesktop?: () => void;
   remoteDesktopA11y: string;
@@ -79,11 +83,9 @@ export function HomeNativeStackHeader({
   // remote-desktop action, a name that fits the mirrored width stays centered;
   // a longer one takes the gap, right-aligned, and grows into the spare room
   // beside the menu before it ellipsizes. Mirrored margins add UIKit's title
-  // clearance, otherwise iOS 26 shifts the title toward the leading edge. The
-  // cap keeps wide windows, whose bar margins differ, from clipping both ends.
+  // clearance, otherwise iOS 26 shifts the title toward the leading edge.
   const trailingItems = showRemoteGuide ? 0 : onOpenRemoteDesktop ? 2 : 1;
-  const mirroredWidth = Math.max(navigationChrome.target, Math.min(360,
-    barWidth - (navigationChrome.target * Math.max(1, trailingItems) + spacing.lg * 2 + spacing.md) * 2));
+  const mirroredWidth = centeredHomeTitleWidth(barWidth, trailingItems);
   const gapWidth = Math.max(navigationChrome.target, Math.min(360,
     barWidth - navigationChrome.target * (1 + trailingItems) - spacing.lg * 4 - spacing.xs));
   const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
@@ -153,72 +155,21 @@ export function HomeNativeStackHeader({
   );
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerBackVisible: false,
-          headerShadowVisible: false,
-          headerShown: true,
-          headerStyle: { backgroundColor: "transparent" },
-          headerTintColor: colors.textPrimary,
-          headerTransparent: true,
-          headerTitle: () => (
-            <View style={[styles.titleFrame, { width: titleWidth }]}>
-              {titleMeasure}
-              {titleNode}
-            </View>
-          ),
-        }}
-      />
-      <Stack.Header
-        style={{
-          backgroundColor: "transparent",
-          color: colors.textPrimary,
-          shadowColor: "transparent",
-        }}
-      />
-      <Stack.Toolbar placement="left">
-        {keepMenuTopLeft ? (
-          // This home-only custom item stays at the top left on Duo. Hosting it
-          // in the native bar keeps its hit target above the transparent header.
-          <Stack.Toolbar.View hidesSharedBackground>
-            <HomeHeaderGlassButton accessibilityLabel={menuA11y} onPress={onOpenMenu} testID="home.chromeMenu">
-              <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-            </HomeHeaderGlassButton>
-          </Stack.Toolbar.View>
-        ) : (
-          <Stack.Toolbar.Button icon="line.3.horizontal" accessibilityLabel={menuA11y} onPress={onOpenMenu} />
-        )}
-      </Stack.Toolbar>
+    <HomeStackHeader menuA11y={menuA11y} menuTestID="home.chromeMenu" onOpenMenu={onOpenMenu}
+      keepMenuTopLeft={keepMenuTopLeft}
+      title={<View style={[styles.titleFrame, { width: titleWidth }]}>{titleMeasure}{titleNode}</View>}>
       {showRemoteGuide ? null : (
         <Stack.Toolbar placement="right">
           {onOpenRemoteDesktop ? <Stack.Toolbar.Button icon={require("../../../assets/navigation/monitor.png")} iconRenderingMode="template"
             accessibilityLabel={remoteDesktopA11y} onPress={onOpenRemoteDesktop} /> : null}
           <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel={displayA11y}>
-            {displayMenuItems(displayActions, onDisplayAction)}
+            {nativeToolbarMenuItems(displayActions, onDisplayAction)}
           </Stack.Toolbar.Menu>
         </Stack.Toolbar>
       )}
-    </>
+    </HomeStackHeader>
   );
-}
-
-
-function displayMenuItems(actions: readonly NativePullDownAction[], onAction: (id: string) => void): ReactNode {
-  return actions.map(action => action.subactions?.length ? (
-    <Stack.Toolbar.Menu key={action.id} title={action.title} inline={action.displayInline}
-      disabled={action.disabled} destructive={action.destructive}>
-      {displayMenuItems(action.subactions, onAction)}
-    </Stack.Toolbar.Menu>
-  ) : (
-    <Stack.Toolbar.MenuAction key={action.id} disabled={action.disabled}
-      destructive={action.destructive} isOn={action.state === 'on'} subtitle={action.subtitle}
-      icon={action.image as ComponentProps<typeof Stack.Toolbar.MenuAction>['icon']}
-      unstable_keepPresented={action.keepPresented} onPress={() => onAction(action.id)}>
-      {action.title}
-    </Stack.Toolbar.MenuAction>
-  ));
-}
+});
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({

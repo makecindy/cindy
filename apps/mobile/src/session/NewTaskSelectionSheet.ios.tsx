@@ -1,6 +1,7 @@
 import { Button, Image, Picker, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
 import { disabled, font, foregroundStyle, frame, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
+import { workspacePathsEqual } from './workspaceSelection';
 import { iconSize, useTheme } from '@/theme';
 import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeRow } from './ComposerNativeRow';
@@ -22,6 +23,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
     <ComposerSheet
       visible={p.page !== null}
       onClose={p.onClose}
+      onClosed={p.onClosed}
       onBack={browsing ? p.onBack : undefined}
       backLabel={t('shared.back')}
       title={t(p.page === 'device' ? 'session.new.selectControlledDevice' : browsing ? 'session.new.chooseOtherFolder' : 'session.new.selectWorkspace')}
@@ -51,7 +53,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
         {p.workspaces.length ? <Section>
           {p.workspaces.map(workspace => <ComposerNativeRow key={workspace.workingDir}
             title={workspace.title} subtitle={workspace.workingDir} leading={icon('folder')}
-            selected={p.workspaceKind === 'project' && p.workingDir.trim() === workspace.workingDir}
+            selected={p.workspaceKind === 'project' && workspacePathsEqual(p.workingDir, workspace.workingDir)}
             disabled={p.busy} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
         </Section> : null}
         <Section>

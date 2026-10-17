@@ -77,6 +77,11 @@
     "planDoneGeneric": "Work split finished",
     "olderOnComputer": "Earlier messages are on your computer"
   },
+  "quote": {
+    "label": "Quoting {{name}}: {{summary}}",
+    "deleted": "Original message was deleted",
+    "attachments": "{{name}} and others ({{total}} files)"
+  },
   "notice": {
     "memberJoined": "{{name}} joined the group",
     "memberFailed": "{{name}} couldn’t reply this time",
@@ -87,7 +92,19 @@
     "workdirUnavailable": "{{name}} can’t find the working directory",
     "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
     "stepTimeout": "{{name}} took too long, so this step was stopped",
-    "stepUnavailable": "{{name}} is unavailable and can’t do this step"
+    "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+    "runtimeFailure": {
+      "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
+      "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the teammate settings, then send your message again.",
+      "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
+      "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
+      "UPSTREAM_OVERLOADED": "{{name}} couldn't reply: the model service is temporarily overloaded.\nTry sending again later, or choose another available model.",
+      "QUOTA_EXCEEDED": "{{name}} could not reply: the model usage limit was reached.\nCheck the provider quota, or choose another available model.",
+      "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
+      "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
+      "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+    },
+    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
   },
   "plan": {
     "intro_one": "This takes {{count}} step. Here’s who does it:",
@@ -123,8 +140,21 @@
     "planning": "Splitting the work…",
     "step": "Working on it…"
   },
+  "task": {
+    "state": {
+      "started": "In progress",
+      "waiting": "Waiting for your confirmation",
+      "completed": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "timed-out": "Timed out"
+    }
+  },
   "files": {
-    "onComputer": "These files are on your computer. Open them there."
+    "onComputer": "These files are on your computer. Open them there.",
+    "loading": "Loading…",
+    "unavailable": "Unavailable right now",
+    "untitled": "Attachment"
   },
   "settings": {
     "open": "Group Settings",
@@ -135,7 +165,7 @@
     "minMembers": "A group chat needs at least {{min}} teammates",
     "maxMembers": "Up to {{max}}",
     "noMoreBots": "No other teammates are available to add",
-    "nameSaveFailed": "Couldn’t save the group name. The previous name was kept.",
+    "nameSaveFailed": "The group name could not be saved. Your input was kept. Please retry.",
     "membersSaveFailed": "Couldn’t update members. Try again.",
     "replyMode": "When No One Is @Mentioned",
     "replyModeAll": "Anyone Can Reply",
@@ -149,7 +179,7 @@
     "speakingMode": "Speaking order",
     "speakingModeAuto": "Automatic",
     "speakingModeSequential": "One at a time",
-    "speakingModeAutoNote": "Without @mentions or with @Everyone, teammates think at the same time in the first pass, then reply one after another. Mentioned teammates answer in the order you mentioned them.",
+    "speakingModeAutoNote": "No mentions or @Everyone: think simultaneously on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
     "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
     "speakingModeSaveFailed": "Couldn't save the speaking order. Try again.",
     "setOrganizer": "Make Organizer",
@@ -161,15 +191,46 @@
     "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
     "add": "Add teammate",
     "projectDirOnComputer": "Choose or change it on your computer",
-    "memberActions": "Actions for {{name}}"
+    "memberActions": "Actions for {{name}}",
+    "managementComputer": "Management computer",
+    "retry": "Retry",
+    "reconnect": "Reconnect",
+    "conflict": "Group settings changed. Review them before saving again. Your input was kept.",
+    "archive": "Archive group chat",
+    "archiveConfirmTitle": "Archive “{{name}}”?",
+    "archiveNote": "Only a group owner can archive it. This stops new messages and keeps the history.",
+    "managementStatus": {
+      "ready": "Connected",
+      "loading": "Connecting…",
+      "noHost": "Disconnected",
+      "permission": "Read-only",
+      "upgrade": "Update needed",
+      "unavailable": "Settings unavailable"
+    }
   },
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
     "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+    "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",
-    "planClosed": "This plan has already ended or been updated."
+    "planClosed": "This plan has already ended or been updated.",
+    "invalidAttachment": "This attachment cannot be read. Select it again and send.",
+    "attachmentUnavailable": "Could not retrieve the attachment from your phone. Check the device connection and retry.",
+    "attachmentTooLarge": "The attachment exceeds 100 MB. Choose a smaller file.",
+    "mediaUploadFailed": "Could not upload the attachment to the chat service. Try again later.",
+    "authRequired": "Your sign-in has expired. Sign in again on your computer.",
+    "chatUnavailable": "The chat service is unavailable. Check your connection and retry.",
+    "importPending": "Group history is still syncing. Try again later.",
+    "requestTimeout": "The result is not confirmed yet. Refresh to check before retrying.",
+    "permissionDenied": "You do not have permission to manage this group.",
+    "serviceError": "The chat service could not complete the request. Try again later.",
+    "groupArchived": "This group is archived. This action is unavailable.",
+    "quoteUnavailable": "The quoted message was deleted or is no longer visible. The quote was removed. Send again.",
+    "lifecycleUnavailable": "The current server or computer does not support this action yet.",
+    "groupDissolved": "This group has been dissolved. You can still read the available history.",
+    "lastOwner": "Transfer ownership or dissolve this group before leaving."
   },
   "followUp": {
     "next": "Plan · Next step",
@@ -182,5 +243,17 @@
     "attachmentFailed": "Couldn’t open the attachment. Try again.",
     "previewUnavailable": "Preview unavailable",
     "endpointUnavailable": "Group chat service configuration is unavailable. Please retry."
+  },
+  "lifecycle": {
+    "dissolve": "Dissolve group",
+    "dissolveNote": "This cannot be undone. Messaging will stop for everyone, active work will stop, and invitations will expire. Members keep access to the history they can already read.",
+    "hide": "Remove from my list",
+    "hideNote": "Remove this chat from your list on all your devices. This does not change membership, delete history, stop ongoing work, or affect other members.",
+    "leave": "Leave group",
+    "leaveNote": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
+    "unavailable": "The current server or computer does not support this action yet.",
+    "dissolved": "This group has been dissolved. You can still read the available history.",
+    "failed": "Could not complete this action. Try again.",
+    "lastOwner": "Transfer ownership or dissolve this group before leaving."
   }
 }

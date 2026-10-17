@@ -97,7 +97,7 @@
     "sessionExpiredOrForbidden": "{{appName}} の音声サービスのログインが失効したか、権限がありません。ログイン状態を確認してからやり直してください（ステータス {{status}}）。",
     "incomplete": "音声入力が完了しませんでした。もう一度お試しください。",
     "missingRefinerTargetProvider": "音声の推敲を利用できません。{{appName}} にもう一度ログインしてから再試行してください。",
-    "emptyTranscript": "音声を検出しましたが、テキストを認識できませんでした。もう一度お試しください。",
+    "emptyTranscript": "聞き取れませんでした。マイクを確認するか、近づいてもう一度お試しください。",
     "connectionInterrupted": "音声接続が中断されました。ネットワークを確認してからやり直してください。",
     "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
     "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",

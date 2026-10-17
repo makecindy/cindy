@@ -46,9 +46,11 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).toContain('title: row.title,');
   });
 
-  it('keeps ordinary task search on the desktop-visible source boundary by default', () => {
+  it('keeps ordinary task search on the task-list source boundary by default', () => {
+    // Same boundary as the sidebar: /review Reviewer tasks are opened from their
+    // source card, not found as ordinary tasks.
     expect(conversationSearchSource).toContain(
-      'hostScope.sessionSources === undefined\n    ? DESKTOP_VISIBLE_SESSION_SOURCES',
+      'hostScope.sessionSources === undefined\n    ? DESKTOP_TASK_LIST_SESSION_SOURCES',
     );
   });
 
@@ -100,6 +102,7 @@ function createSearchDb(): Database.Database {
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
       summary TEXT,
       provider_id TEXT,
       user_send_at INTEGER,
@@ -121,6 +124,7 @@ function createSearchDb(): Database.Database {
       writable_dirs TEXT NOT NULL DEFAULT '[]',
       remote_host_id TEXT,
       agent_device_id TEXT,
+      orca_remote_lead TEXT,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,
@@ -210,6 +214,31 @@ describe('conversationSearch recent activity SQL filtering', () => {
           sessionIds: ['updated-recently', 'sent-recently'],
           sessionActivityFromMs: now - 3 * day,
         }),
+      );
+    } finally {
+      clearCurrentDbClient(client);
+      db.close();
+    }
+  });
+});
+
+describe('conversationSearch plugin background tasks', () => {
+  it('excludes hidden tasks from title and content candidates', async () => {
+    const db = createSearchDb();
+    const client = makeSearchDbClient(db);
+    setCurrentDbClient(client, 'test-user');
+    mocks.searchChatHistoryHybrid.mockResolvedValue({
+      hits: [], sessions: {}, vectorUsed: false, vectorSkipReason: null,
+      nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+    });
+    try {
+      insertSearchSession(db, 'shown', 10, null);
+      insertSearchSession(db, 'background', 20, null);
+      db.prepare('UPDATE sessions SET hidden_at = 5 WHERE id = ?').run('background');
+      const response = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
+      expect(response.results.map((result) => result.session.id)).toEqual(['shown']);
+      expect(mocks.searchChatHistoryHybrid).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionIds: ['shown'] }),
       );
     } finally {
       clearCurrentDbClient(client);

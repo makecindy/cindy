@@ -57,7 +57,6 @@ export const TAB_IDS = [
   'ghosts',
   'builtin-tools',
   'computer-use',
-  'cindy-make',
   'storage',
   'help',
   'about',

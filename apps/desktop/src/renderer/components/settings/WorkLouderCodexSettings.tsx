@@ -1077,7 +1077,13 @@ export function WorkLouderCodexSettings({
               ) : (
                 <Switch
                   checked={guardState?.enabled ?? false}
-                  disabled={guardLoading || guardSaving || !guardState || !guardState.supported}
+                  disabled={
+                    guardLoading ||
+                    guardSaving ||
+                    !guardState ||
+                    !guardState.supported ||
+                    guardState.status === 'paused'
+                  }
                   onCheckedChange={(checked) => void setGuardEnabled(checked)}
                   aria-label={t('settings.shortcuts.workLouderCodex.codexGuard.aria')}
                 />
@@ -1560,6 +1566,8 @@ function guardDescriptionKey(
 ): string {
   if (requestFailed) return 'error';
   switch (status) {
+    case 'paused':
+      return 'paused';
     case 'unsupported':
       return 'unsupported';
     case 'protecting':

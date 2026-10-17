@@ -97,7 +97,7 @@
     "sessionExpiredOrForbidden": "Your {{appName}} voice sign-in has expired or lacks permission. Check your sign-in status and try again (status {{status}}).",
     "incomplete": "Voice input didn't finish. Try again.",
     "missingRefinerTargetProvider": "Voice refinement is unavailable. Sign in to {{appName}} again and retry.",
-    "emptyTranscript": "Speech was detected but no text was recognized. Try again.",
+    "emptyTranscript": "Couldn't hear you clearly. Check your microphone or move closer and try again.",
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",

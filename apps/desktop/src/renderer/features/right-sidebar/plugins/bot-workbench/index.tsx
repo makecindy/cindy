@@ -8,7 +8,8 @@ interface BotWorkbenchTabState {
 }
 
 /**
- * 伙伴工作台:只由伙伴主任务页自动创建(不进「+」菜单),每个任务至多一个。
+ * 伙伴工作台:伙伴主任务页首次进入时自动创建,每个任务至多一个。关掉后可从聊天头部入口或
+ * 「+」菜单重新打开(菜单项只在本机伙伴主任务里出现,由 AddTabDropdown 带上伙伴 id 打开)。
  * 只在已确认是本机的任务里渲染;device-link 远程或归属未解析时不显示内容。
  */
 const plugin: TabKindPlugin<BotWorkbenchTabState> = {
@@ -20,7 +21,6 @@ const plugin: TabKindPlugin<BotWorkbenchTabState> = {
     order: 0,
     enabled: true,
     singleton: true,
-    hiddenFromMenu: true,
   },
   TabPillTitle: ({ t }) => <>{t('bots.workbench.title')}</>,
   TabPillIcon: () => <LayoutGrid size={13} />,

@@ -12,7 +12,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, DeviceHostedSession } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
+import type { CloseHandler, LineHandler, Transport } from '../app-server/transport.js';
 import { withoutCodexSpawnModelOverrides } from '../device-hosted-guest.js';
 import { CodexAgent } from '../index.js';
 
@@ -34,6 +36,75 @@ function noopLogger(): Logger {
   return logger;
 }
 
+/** 假传输：让 profile 生命周期请求走真实 AppServerClient 的 pending/超时逻辑。 */
+class FakeAppServerTransport implements Transport {
+  readonly lines: string[] = [];
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+
+  async writeLine(line: string): Promise<void> {
+    this.lines.push(line);
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onStderr(): () => void {
+    return () => undefined;
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  async close(): Promise<void> {}
+
+  emitLine(value: unknown): void {
+    const line = JSON.stringify(value);
+    for (const handler of this.lineHandlers) handler(line);
+  }
+}
+
+/**
+ * 让 profile 替换请求走真实 AppServerClient + 假传输(#5774 review)：请求的
+ * timeoutMs/extendWhileProgress 由 AppServerClient 的 pending 超时逻辑真实执行，
+ * 才能验证接受期限收口后晚到响应仍被 pending 收下、晚到窗口结束后请求被清除。
+ * 受控 Promise 会绕过内层超时，即使两层同上限丢响应也测不出来。
+ */
+function installRealAppServerReplacement(fixture: Awaited<ReturnType<typeof startHosted>>) {
+  const transport = new FakeAppServerTransport();
+  const client = new AppServerClient({ createTransport: () => transport, logger: noopLogger() });
+  client.start();
+  const baseRequest = fixture.request.getMockImplementation()!;
+  let replacementGated = false;
+  let inner: Promise<unknown> = Promise.resolve(undefined);
+  fixture.request.mockImplementation(async (
+    method: string,
+    params: unknown,
+    options?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
+  ) => {
+    // startSession 的首次 thread/start 已经发完；此后唯一的 ThreadStart 就是 profile 替换。
+    if (method === Method.ThreadStart && !replacementGated) {
+      replacementGated = true;
+      inner = client.request(method, params, options);
+      return inner;
+    }
+    return baseRequest(method, params);
+  });
+  return {
+    client,
+    transport,
+    lastRequestId: () => (JSON.parse(transport.lines.at(-1)!) as { id: number }).id,
+    innerSettled: () => inner.then(
+      () => ({ ok: true }),
+      (error: Error) => ({ ok: false, message: error.message }),
+    ),
+  };
+}
+
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
   tempDirs.push(dir);
@@ -51,7 +122,35 @@ interface Fixture {
   guestHome?: boolean;
   /** 受邀者启动时用的来源；默认就是分享的供应商(xd)。 */
   providerId?: string;
+  /** app-server 不给功能清单(旧版本或出错)。 */
+  noFeatureList?: boolean;
+  /** 宿主提供的任务隧道往来记录。 */
+  linkActivity?: DeviceHostedSession['linkActivity'];
 }
+
+/** app-server 的功能清单，分两页返回。 */
+const FEATURE_PAGES: Record<string, { data: Array<{ name: string; stage: string; enabled: boolean }>; nextCursor: string | null }> = {
+  first: {
+    data: [
+      { name: 'shell_tool', stage: 'stable', enabled: true },
+      { name: 'view_image', stage: 'stable', enabled: true },
+      { name: 'shell_snapshot', stage: 'stable', enabled: true },
+      { name: 'image_generation', stage: 'stable', enabled: true },
+      { name: 'in_app_local_automation', stage: 'stable', enabled: true },
+      { name: 'network_proxy', stage: 'beta', enabled: false },
+    ],
+    nextCursor: 'page-2',
+  },
+  'page-2': {
+    data: [
+      { name: 'multi_agent', stage: 'stable', enabled: true },
+      { name: 'item_ids', stage: 'removed', enabled: true },
+      { name: 'web_search_request', stage: 'deprecated', enabled: false },
+      { name: 'future_local_tool', stage: 'underDevelopment', enabled: true },
+    ],
+    nextCursor: null,
+  },
+};
 
 const SHARED_PROVIDER = { providerId: 'xd', modelIds: ['gpt-5.5'], routeToken: 'route-token' };
 
@@ -86,7 +185,10 @@ async function startHosted(fixture: Fixture) {
       async logout() {},
       async getAuthEnv() { return {}; },
     },
-    runtimeConfig: { systemPrompt: 'GLOBAL CINDY HOST PROMPT' },
+    runtimeConfig: {
+      systemPrompt: 'GLOBAL CINDY HOST PROMPT',
+      taskShellEnv: () => ({ CINDY_INPUT_HANDOFF_ROUTE: 'host-route' }),
+    },
     binaryPath: process.execPath,
     logger: noopLogger(),
     getGhostRosterPrompt,
@@ -144,6 +246,9 @@ async function startHosted(fixture: Fixture) {
         };
       case Method.EnvironmentAdd:
         return {};
+      case Method.ExperimentalFeatureList:
+        if (fixture.noFeatureList) throw new Error('unknown method');
+        return FEATURE_PAGES[(params as { cursor?: string }).cursor ?? 'first'];
       case Method.ThreadStart:
         return {
           thread: { id: 'start-thread-id', ...(reportedHome !== codexHome ? { path: path.join(reportedHome, 'sessions', 'rollout.jsonl') } : {}) },
@@ -208,6 +313,7 @@ async function startHosted(fixture: Fixture) {
     mirrorRoot,
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
+    ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
   };
   const started = agent.startSession({
     sessionId: 'hosted-session',
@@ -229,6 +335,11 @@ function threadParams(request: ReturnType<typeof vi.fn>, method: string): Record
   const params = request.mock.calls.find(([called]) => called === method)?.[1] as Record<string, unknown> | undefined;
   if (!params) throw new Error(`expected ${method}`);
   return params;
+}
+
+/** host.request 的第三个参数(超时与顺延设置)。 */
+function requestOptions(request: ReturnType<typeof vi.fn>, method: string): Record<string, unknown> | undefined {
+  return request.mock.calls.find(([called]) => called === method)?.[2] as Record<string, unknown> | undefined;
 }
 
 afterEach(async () => {
@@ -268,6 +379,20 @@ describe('Codex device-hosted guest sessions', () => {
     // 联网搜索与同账号托管会话一致，不额外关闭。
     expect(config.web_search).toBeUndefined();
     expect(config['features.multi_agent']).toBeUndefined();
+    // Codex 功能按白名单：名单外的(本机开着的、关着的、Codex 新增的)都写 false；名单内的、已移除的、
+    // 关着的旧开关不动。功能清单逐页取完。
+    expect(config).toMatchObject({
+      'features.image_generation': false,
+      'features.in_app_local_automation': false,
+      'features.network_proxy': false,
+      'features.future_local_tool': false,
+    });
+    // shell 快照由执行环境在受邀者电脑上生成，保持开启。
+    for (const key of ['features.shell_tool', 'features.view_image', 'features.shell_snapshot', 'features.item_ids', 'features.web_search_request']) {
+      expect(config[key]).toBeUndefined();
+    }
+    expect(fixture.request.mock.calls.filter(([method]) => method === Method.ExperimentalFeatureList)
+      .map(([, params]) => (params as { cursor?: string }).cursor)).toEqual([undefined, 'page-2']);
     // 项目说明经执行环境从受邀者电脑读取，项目根的判定与同账号一致。
     expect(config.project_root_markers).toBeUndefined();
     // 本机用户的技能关闭；Codex 自带的与受邀者带来的保留。
@@ -311,9 +436,19 @@ describe('Codex device-hosted guest sessions', () => {
     expect(String(params.developerInstructions)).toContain(GHOST_ROSTER);
     expect(fixture.getContactsPromptState).toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).toHaveBeenCalled();
-    // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)。
+    // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)，Codex 功能也不按白名单收窄。
     expect(fixture.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ExperimentalFeatureList)).toBe(false);
+    expect(config['features.image_generation']).toBeUndefined();
+    // Terminal password prompts would reach this computer's owner, not the account running the task.
+    expect(config['shell_environment_policy.set.CINDY_INPUT_HANDOFF_ROUTE']).toBeUndefined();
     await handle.close();
+  });
+
+  it('refuses a shared user when Codex cannot list its features', async () => {
+    const fixture = await startHosted({ guest: true, noFeatureList: true });
+    await expect(fixture.started).rejects.toThrow(/Cannot start Codex for a shared user safely/);
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
   });
 
   it('refuses a shared user without its own Codex home', async () => {
@@ -360,6 +495,184 @@ describe('Codex device-hosted guest sessions', () => {
     expect(fixture.prepareCodexResumeSession).toHaveBeenCalled();
     expect(fixture.resolveCodexThreadStorage).toHaveBeenCalled();
     expect(fixture.prepareCodexSkills).toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it.each([false, true])('lets thread requests keep waiting while the tunnel still has traffic (#5764, resume: %s)', async (resume) => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, resume, linkActivity });
+    const handle = await fixture.started;
+    const optionsOf = (method: string) => requestOptions(fixture.request, method) as {
+      timeoutMs?: number;
+      extendWhileProgress?: { lastProgressAt(): number | null; idleMs: number; maxMs: number; describe?(): string };
+    } | undefined;
+    const thread = optionsOf(resume ? Method.ThreadResume : Method.ThreadStart);
+    expect(thread).toMatchObject({ timeoutMs: 60_000, extendWhileProgress: { idleMs: 30_000, maxMs: 300_000 } });
+    expect(thread?.extendWhileProgress?.lastProgressAt()).toBe(1_234);
+    expect(thread?.extendWhileProgress?.describe?.()).toContain('execution environment answered 3/4 requests');
+    await handle.send({ type: 'user', content: 'hi' });
+    expect(optionsOf(Method.TurnStart)).toMatchObject({ timeoutMs: 60_000, extendWhileProgress: { idleMs: 30_000 } });
+    await handle.close();
+  });
+
+  it('extends hosted workspace profile lifecycle requests with tunnel progress', async () => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    await handle.setExtraDirs?.(['/shared-profile']);
+    await handle.send({ type: 'user', content: 'use the hosted profile' });
+
+    const replacementCall = fixture.request.mock.calls
+      .filter(([method]) => method === Method.ThreadStart)[1] as unknown as [string, unknown, unknown] | undefined;
+    const replacement = replacementCall?.[2] as Record<string, unknown> | undefined;
+    // 内层 host.request = 外层接受期限(60s 基准 / 30s 静默 / 5min 封顶，见
+    // criticalThreadRpcOptions)+ 5min 晚到响应窗口：接受期限收口后内层还要能收到
+    // 晚到响应跑 onLateResolve 清理，不能两层同上限(#5772 review)。
+    expect(replacement).toMatchObject({
+      timeoutMs: 360_000,
+      extendWhileProgress: { idleMs: 330_000, maxMs: 600_000 },
+    });
+    const progress = replacement?.extendWhileProgress as {
+      lastProgressAt(): number | null;
+      describe?(): string;
+    };
+    expect(progress.lastProgressAt()).toBe(1_234);
+    expect(progress.describe?.()).toContain('execution environment answered 3/4 requests');
+    await handle.close();
+  });
+
+  it('keeps the hosted profile lifecycle acceptance open with tunnel progress and cleans up late responses', async () => {
+    let activityAt = 0;
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: activityAt,
+      execRequests: 4,
+      execResponses: 3,
+      execMaxInFlight: 2,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    const host = await fixture.getHost.mock.results[0]!.value;
+    // 受测的替换请求走真实 AppServerClient + 假传输(#5774 review)：pending 的删除由
+    // 真实超时逻辑负责，受控 Promise 会绕过内层超时、测不出两层同上限丢响应。
+    const appServer = installRealAppServerReplacement(fixture);
+    await handle.setExtraDirs?.(['/shared-profile']);
+    activityAt = Date.now() + 45_000;
+    vi.useFakeTimers();
+    let sendSettled = false;
+    try {
+      const sendPromise = handle.send(
+        { type: 'user', content: 'use the hosted profile' },
+        { throwOnStartFailure: true },
+      );
+      void sendPromise.then(
+        () => {
+          sendSettled = true;
+        },
+        () => {
+          sendSettled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      // 基准 60s 到点时链路仍有往来：接受期限顺延，不收口。
+      expect(sendSettled).toBe(false);
+      activityAt = Date.now() + 10_000;
+      await vi.advanceTimersByTimeAsync(40_000);
+      // 往来停满 30s 才按超时收口(实际等了 100s，超过 60s 基准)。
+      await expect(sendPromise).rejects.toThrow(/did not acknowledge within 100000ms/);
+      expect(fixture.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+    // 接受期限收口后，晚到响应仍被真实 pending 收下并到达 onLateResolve：脱线线程
+    // 被退订，而不是被同上限的内层超时删掉 pending 丢弃。
+    appServer.transport.emitLine({
+      id: appServer.lastRequestId(),
+      result: {
+        thread: { id: 'late-thread-id' },
+        model: 'gpt-5.5',
+        modelProvider: 'openai',
+        cwd: '/repo',
+      },
+    });
+    await vi.waitFor(() => expect(host.unsubscribeThread).toHaveBeenCalledWith('late-thread-id'));
+    await appServer.client.close();
+    await handle.close();
+  });
+
+  it('clears an unanswered profile replacement after the late response window', async () => {
+    // 链路没有往来：外层 60s 基准直接收口，内层靠晚到响应窗口继续存活。
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: null,
+      execRequests: 0,
+      execResponses: 0,
+      execMaxInFlight: 0,
+      httpInFlight: 0,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    const host = await fixture.getHost.mock.results[0]!.value;
+    const appServer = installRealAppServerReplacement(fixture);
+    await handle.setExtraDirs?.(['/shared-profile']);
+    vi.useFakeTimers();
+    try {
+      const sendPromise = handle.send(
+        { type: 'user', content: 'use the hosted profile' },
+        { throwOnStartFailure: true },
+      );
+      // 失败在 fake timers 推进中发生：先挂处理器，避免 unhandled rejection。
+      void sendPromise.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(sendPromise).rejects.toThrow(/did not acknowledge within 60000ms/);
+      // 晚到窗口(5min)到点后 AppServerClient 按超时显式删除 pending：
+      // 请求被清除，而不是无限挂在 pending 里泄漏。
+      await vi.advanceTimersByTimeAsync(310_000);
+      await expect(appServer.innerSettled()).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringMatching(/timed out after 360000ms/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    // 窗口结束后才到的响应被丢弃，不会再触发 onLateResolve 的退订清理。
+    appServer.transport.emitLine({
+      id: appServer.lastRequestId(),
+      result: { thread: { id: 'too-late-thread-id' } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(host.unsubscribeThread).not.toHaveBeenCalled();
+    await appServer.client.close();
+    await handle.close();
+  });
+
+  it('keeps the fixed limit when the host provides no tunnel activity', async () => {
+    const fixture = await startHosted({ guest: false });
+    const handle = await fixture.started;
+    const options = requestOptions(fixture.request, Method.ThreadStart);
+    expect(options).toMatchObject({ timeoutMs: 60_000 });
+    expect(options).not.toHaveProperty('extendWhileProgress');
+    // 生命周期请求同样走固定 60s 接受期限(不是本地会话的 10s)，内层再留晚到响应窗口。
+    await handle.setExtraDirs?.(['/shared-profile']);
+    await handle.send({ type: 'user', content: 'use the hosted profile' });
+    const replacementCall = fixture.request.mock.calls
+      .filter(([method]) => method === Method.ThreadStart)[1] as unknown as [string, unknown, unknown] | undefined;
+    const replacement = replacementCall?.[2] as Record<string, unknown> | undefined;
+    expect(replacement).toMatchObject({ timeoutMs: 360_000 });
+    expect(replacement).not.toHaveProperty('extendWhileProgress');
     await handle.close();
   });
 

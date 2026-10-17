@@ -65,9 +65,12 @@ export async function readHistoryDisk(authority: Authority): Promise<HistoryView
       ready: true, loading: false, error: null };
   } catch { return null; }
 }
+export function fitsHistoryDisk(snapshot: HistoryViewSnapshot<RemoteMessage>): boolean {
+  return historyValueBytes([snapshot.items, snapshot.details, snapshot.expanded, snapshot.nextCursor], HISTORY_DISK_ITEM_BYTES - 1024) <= HISTORY_DISK_ITEM_BYTES - 1024;
+}
 export async function writeHistoryDisk(authority: Authority, snapshot: HistoryViewSnapshot<RemoteMessage>): Promise<boolean> {
   if (!authority.current() || !snapshot.ready || snapshot.loading || snapshot.error) return false;
-  if (historyValueBytes([snapshot.items, snapshot.details, snapshot.expanded, snapshot.nextCursor], HISTORY_DISK_ITEM_BYTES - 1024) > HISTORY_DISK_ITEM_BYTES - 1024) return false;
+  if (!fitsHistoryDisk(snapshot)) return false;
   try {
     const messages = (rows: readonly RemoteMessage[]) => rows.map(row =>
       row.agentMeta?.isStreaming === true || row.agentMeta?.streaming === true
@@ -81,7 +84,7 @@ export async function writeHistoryDisk(authority: Authority, snapshot: HistoryVi
     const items = (values: readonly HistoryViewItem<RemoteMessage>[]): HistoryViewItem<RemoteMessage>[] => values.map(item =>
       item.type === 'messages' ? { ...item, messages: messages(item.messages), ...(item.deferred ? { deferred: summary(item.deferred) } : {}) }
         : { ...item, summary: summary(item.summary), ...(item.children ? { children: items(item.children) } : {}) });
-    const text = JSON.stringify({ version: 1, items: items(snapshot.items),
+    const text = JSON.stringify({ version: 1, readReceipt: snapshot.readReceipt, items: items(snapshot.items),
       details: [...snapshot.details].filter(([, detail]) => detail.complete && !detail.loading && !detail.error)
         .map(([key, detail]) => [key, { ...detail, messages: messages(detail.messages) }]),
       expanded: [...snapshot.expanded], nextCursor: snapshot.nextCursor, hasMore: snapshot.hasMore,

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
+import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
 import type { SessionMetaPatch } from '@/device-link/mobileMakerTransport';
 import {
   remoteSessionStore,
@@ -23,6 +24,7 @@ import {
   type SessionSwipeAction,
 } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
+import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 
 /**
  * 首页与设备详情共用的任务行写回 / 滑动 / 选项菜单 / 重命名。
@@ -58,7 +60,8 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
     }
     const releasePending = sessionPendingWrites.track(session.id, fields);
     try {
-      const updated = await sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
+      const updated = await withNewSessionCreationRemoval(session.id, rpcDeviceId, patch.status,
+        () => sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
         write.isLatest,
         (assertStillLatest) => invoke<RemoteSession>(
           rpcDeviceId,
@@ -66,7 +69,7 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
           [session.id, patch],
           { preSend: assertStillLatest },
         ),
-      ));
+      )), write.isLatest);
       if (updated && write.isLatest()) {
         const currentUpdatedAt = remoteSessionStore.getSessions()
           .find((s) => s.id === session.id)?.updatedAt ?? null;
@@ -82,6 +85,11 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
     } catch (err) {
       if (write.isLatest()) {
         if (fields.includes('status')) {
+          if (isExplicitRemoteNotFoundError(err)) {
+            remoteSessionStore.applySessionPatch(shardId, session.id, { status: 'deleted' });
+            remoteSessionStore.requestReseed(shardId);
+            return;
+          }
           const shardName = remoteSessionStore.getSessions()
             .find((s) => s.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName
             ?? session.deviceLinkDeviceName

@@ -14,6 +14,7 @@ import type { PresentationLocalizer } from './presentationLocalization.js';
 import { stripTrailingPathSeparators } from './pathText.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
 
 export const MOBILE_HOME_ALL_DEVICES = 'all';
 
@@ -149,15 +150,18 @@ export function buildMobileHomePresentation({
   unnamedLabel,
   localizer,
 }: MobileHomeOptions): MobileHomePresentation {
+  const visibleSessions = CINDY_MAKE_ENABLED
+    ? sessions
+    : sessions.filter((session) => !isCindyMakeSource(session.source));
   // 设备身份归一化在管线源头对每个会话算出 canonicalDeviceId(写入字段,不改 deviceLinkDeviceId):
   // 后续设备筛选统计、matchesSelectedDevice 过滤、项目分组、概览、卡片 deviceId 全部按 canonicalDeviceId
   // 判断,保证「首页卡片 / 设备筛选 / 跳转参数」的设备维度一致;deviceLinkDeviceId 保持物理路由 key,
   // openSession / applySessionPatch 仍按它路由,不受归并影响。
   const deviceIdentity = buildDeviceIdentity(
     devices,
-    sessions.map((session) => ({ deviceId: session.deviceLinkDeviceId, name: session.deviceLinkDeviceName })),
+    visibleSessions.map((session) => ({ deviceId: session.deviceLinkDeviceId, name: session.deviceLinkDeviceName })),
   );
-  const normalizedSessions = sessions.map((session) => canonicalizeSessionDevice(session, deviceIdentity));
+  const normalizedSessions = visibleSessions.map((session) => canonicalizeSessionDevice(session, deviceIdentity));
   const deviceFilters = buildDeviceFilters(devices, normalizedSessions, pendingInteractionIndex, selectedDeviceId);
   const normalizedSelectedDeviceId = normalizeSelectedDeviceId(deviceFilters, selectedDeviceId);
   const query = normalizeSearchQuery(searchQuery);

@@ -12,6 +12,12 @@ import {
 } from '../features/cc-agent/sidebar/sections/ProjectsSection';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+const feature = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/cindy-make-feature')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
+beforeEach(() => { feature.enabled = true; });
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: ReactNode }) => children,
 }));
@@ -261,6 +267,14 @@ describe('Offline device header names', () => {
 });
 
 describe('Cindy Make sidebar entry', () => {
+  it.each([false, true])('hides the label, old tasks and creation entry with device grouping %s when disabled', (groupDevice) => {
+    feature.enabled = false;
+    render(<ProjectsSection {...makeProps(groupDevice, false)} />);
+    expect(screen.queryByText('settings.cindyMake.title')).toBeNull();
+    expect(screen.queryByText('Make task')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.cindyMake.create.title' })).toBeNull();
+    expect(screen.getByText('Ordinary project')).toBeTruthy();
+  });
   function makeProps(groupDevice: boolean, custom: boolean) {
     const p = props(groupDevice);
     const make = {

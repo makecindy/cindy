@@ -49,6 +49,7 @@ beforeEach(() => {
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
     if (path.startsWith('/v1/conversations?')) return [room];
     if (path.endsWith('/snapshot')) return { room, members: [], messages: [], cursor: '1' };
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
     if (path.includes('/messages?')) return [];
     if (path.includes('/changes?')) return { head: '1' };
     if (options.method === 'POST') return { id: self };

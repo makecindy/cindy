@@ -9,7 +9,7 @@ import { buildMakerUserMessage, sanitizeQueuedMessageForPersistence, type AgentI
 import { redactMessageOriginForSharedGuest, redactQueueItemForSharedGuest } from '../../device-link/sharedTaskMessageOrigin';
 import { rebuildSessionQueueItem } from '../sessionControlService';
 import { projectCoordinationOutput } from '../coordinationOutput';
-import type { AgentEvent } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, type AgentEvent } from '@cindy/maker-core';
 import { stripMainOnlySendOpts } from '../mobileClientPromptNote';
 
 const h = vi.hoisted(() => ({ db: null as ReturnType<typeof drizzle> | null }));
@@ -105,8 +105,10 @@ it('uses the registered host entry for both quiet and explicitly visible delegat
   const send = vi.fn(async (params: unknown) => params);
   let currentOwner = true;
   const dispatch = new Function('captureDataOwnerBroadcastScope', 'isDataOwnerBroadcastScopeCurrent',
-    'classifySessionMessagePurpose', 'coordinationInput', 'sendToSessionInternal', code)(
-    () => 'owner', () => currentOwner, classifySessionMessagePurpose, coordinationInput, send);
+    'classifySessionMessagePurpose', 'coordinationInput', 'sendToSessionInternal',
+    'AUTO_REVIEW_DELEGATED_CONTINUATION', code)(
+    () => 'owner', () => currentOwner, classifySessionMessagePurpose, coordinationInput, send,
+    AUTO_REVIEW_DELEGATED_CONTINUATION);
   await dispatch({ dispatcherSessionId: 'child', targetSessionId: 'parent', message: 'Agreement' });
   expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ forceQueue: true, botTaskCoordination: receipt,
     persistedContent: '[UI_ACTION_TRIGGER]Agreement', autoReviewUserText: { kind: 'delegated-continuation' } }));

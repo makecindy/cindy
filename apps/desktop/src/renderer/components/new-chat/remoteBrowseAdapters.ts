@@ -39,6 +39,8 @@ export interface BrowseListResult {
   entries: BrowseEntry[];
   /** 上级目录;已在根则 null(弹窗据此 disable「返回上级」)。 */
   parent: string | null;
+  drives?: { name: string; path: string; current: boolean }[];
+  drivesPending?: boolean;
 }
 
 export interface RemoteBrowseAdapter {
@@ -78,11 +80,15 @@ export function deviceLinkBrowseAdapter(deviceId: string): RemoteBrowseAdapter {
         resolvedPath: string;
         entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
         parent: string | null;
+        drives?: BrowseListResult['drives'];
+        drivesPending?: boolean;
       }>('fs:list-dir', path);
       return {
         resolvedPath: res.resolvedPath,
         entries: res.entries.map((e) => ({ name: e.name, kind: e.kind, childPath: e.path })),
         parent: res.parent,
+        drives: res.drives,
+        drivesPending: res.drivesPending,
       };
     },
     statPath: (path) =>

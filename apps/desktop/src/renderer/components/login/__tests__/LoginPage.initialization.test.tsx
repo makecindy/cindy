@@ -1,18 +1,24 @@
 // @vitest-environment jsdom
 
 import { useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { CindyAuthClient, reduceAuthFlow, type AuthFlowState } from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
-import type { DesktopLoginAction, DesktopLoginActionResult } from '../../../../shared/authIpc';
+import type {
+  DesktopLoginAction,
+  DesktopLoginActionResult,
+  DesktopLoginState,
+} from '../../../../shared/authIpc';
 
 const auth = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
   loadLoginState: vi.fn<() => Promise<DesktopLoginActionResult>>(),
   beginAddAccount: vi.fn<() => Promise<DesktopLoginActionResult>>(),
   cancelAddAccount: vi.fn(async () => undefined),
+  enterLocalMode: vi.fn(async () => undefined),
+  acceptPrivacyConsent: vi.fn(async () => undefined),
   dispatchLoginAction: vi.fn<(action: DesktopLoginAction) => Promise<DesktopLoginActionResult>>(),
 }));
 
@@ -30,17 +36,27 @@ import { AddAccountLoginPage } from '../AddAccountLoginPage';
 import { LoginPage } from '../LoginPage';
 
 let identifierState: AuthFlowState;
-let publishState: (state: AuthFlowState | null) => void;
+let publishState: (state: DesktopLoginState | null) => void;
 let epoch: number;
 
-function Harness({ addAccount = false }: { addAccount?: boolean }) {
-  const [loginState, setLoginState] = useState<AuthFlowState | null>(null);
+function Harness({
+  addAccount = false,
+  credentialStoreUnavailable = false,
+  initialState = null,
+}: {
+  addAccount?: boolean;
+  credentialStoreUnavailable?: boolean;
+  initialState?: DesktopLoginState | null;
+}) {
+  const [loginState, setLoginState] = useState<DesktopLoginState | null>(initialState);
   publishState = setLoginState;
   auth.value = {
     loginState,
+    credentialStoreUnavailable,
     loadLoginState: auth.loadLoginState,
     beginAddAccount: auth.beginAddAccount,
     cancelAddAccount: auth.cancelAddAccount,
+    enterLocalMode: auth.enterLocalMode,
     dispatchLoginAction: auth.dispatchLoginAction,
   };
   return (
@@ -54,7 +70,7 @@ beforeEach(async () => {
   epoch = 0;
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin' },
+    value: { platform: 'darwin', acceptPrivacyConsent: auth.acceptPrivacyConsent },
   });
   const providers = await new CindyAuthClient({
     baseUrl: 'https://auth.scenario.invalid',
@@ -88,8 +104,39 @@ afterEach(() => {
 });
 
 describe('login initialization ownership', () => {
+  it.each([null, { step: 'entry' } as const])(
+    'shows known credential recovery before a login response arrives from %j',
+    (initialState) => {
+      auth.loadLoginState.mockImplementation(() => new Promise(() => undefined));
+      render(<Harness credentialStoreUnavailable initialState={initialState} />);
+
+      expect(screen.getByTestId('login-panel-error')).toBeTruthy();
+      expect(screen.getByText('credentialStore.dialog.title')).toBeTruthy();
+      expect(screen.queryByTestId('login-panel-preparing')).toBeNull();
+      expect(screen.queryByTestId('login-panel-entry')).toBeNull();
+      expect(screen.queryByTestId('login-local-mode')).toBeNull();
+      expect(auth.enterLocalMode).not.toHaveBeenCalled();
+      expect(auth.acceptPrivacyConsent).not.toHaveBeenCalled();
+    },
+  );
+
+  it('withdraws pending skip consent when credential health fails before the login response', () => {
+    auth.loadLoginState.mockImplementation(() => new Promise(() => undefined));
+    const view = render(<Harness />);
+    fireEvent.click(screen.getByTestId('login-local-mode'));
+    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
+
+    view.rerender(<Harness credentialStoreUnavailable />);
+
+    expect(screen.getByTestId('login-panel-error')).toBeTruthy();
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    expect(screen.queryByTestId('login-local-mode')).toBeNull();
+    expect(auth.enterLocalMode).not.toHaveBeenCalled();
+    expect(auth.acceptPrivacyConsent).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
-    'returns from an initialization error to the login entry (addAccount=%s)',
+    'leaves an initialization error without requesting providers (addAccount=%s)',
     async (addAccount) => {
       const initialize = addAccount ? auth.beginAddAccount : auth.loadLoginState;
       initialize.mockImplementation(async () => {
@@ -101,12 +148,12 @@ describe('login initialization ownership', () => {
         publishState(state);
         return { success: false, code: state.code, state };
       });
-      // Publish the successful reset result through the same auth-state boundary
-      // consumed by the real useLogin hook and LoginPage.
+      // Navigation remains local even though no provider config was loaded.
       auth.dispatchLoginAction.mockImplementation(async (action) => {
-        if (action.type !== 'reset') throw new Error('expected reset');
-        publishState(identifierState);
-        return { success: true, state: identifierState };
+        if (action.type !== 'back') throw new Error('back must not retry');
+        const state = { step: 'entry' } as const;
+        publishState(state);
+        return { success: true, state };
       });
       render(<Harness addAccount={addAccount} />);
 
@@ -117,15 +164,57 @@ describe('login initialization ownership', () => {
 
       fireEvent.click(back);
 
-      await screen.findByTestId('login-panel-identifier');
-      expect(screen.getByTestId('login-input')).toBeTruthy();
+      if (addAccount) {
+        await waitFor(() => expect(auth.cancelAddAccount).toHaveBeenCalledOnce());
+        expect(auth.dispatchLoginAction).not.toHaveBeenCalled();
+        return;
+      }
+      await screen.findByTestId('login-panel-entry');
+      expect(screen.getByTestId('login-entry-continue')).toBeTruthy();
       expect(screen.queryByTestId('login-panel-error')).toBeNull();
       expect(screen.queryByTestId('login-error-text')).toBeNull();
       expect(screen.queryByTestId('login-error-retry')).toBeNull();
-      expect(auth.dispatchLoginAction).toHaveBeenCalledExactlyOnceWith({ type: 'reset' });
+      expect(auth.dispatchLoginAction).toHaveBeenCalledExactlyOnceWith({ type: 'back' });
       expect(auth.cancelAddAccount).not.toHaveBeenCalled();
     },
   );
+
+  it('allows Back and Skip Sign-In while an error retry is still pending', async () => {
+    auth.loadLoginState.mockImplementation(async () => {
+      const state = { step: 'error', code: 'REQUEST_TIMEOUT', recoverTo: 'identifier' } as const;
+      publishState(state);
+      return { success: false, code: state.code, state };
+    });
+    let finishRetry!: (result: DesktopLoginActionResult) => void;
+    auth.dispatchLoginAction.mockImplementation(async (action) => {
+      if (action.type === 'back') {
+        const state = { step: 'entry' } as const;
+        publishState(state);
+        return { success: true, state };
+      }
+      return new Promise((resolve) => {
+        finishRetry = resolve;
+      });
+    });
+    render(<Harness />);
+    await waitFor(() =>
+      expect((screen.getByTestId('login-error-retry') as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId('login-error-retry'));
+    expect((screen.getByTestId('login-error-retry') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('login-back-button') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('login-local-mode') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('login-back-button'));
+    await screen.findByTestId('login-panel-entry');
+    await act(async () => finishRetry({ success: false, code: 'REQUEST_TIMEOUT', state: null }));
+    expect(screen.queryByTestId('login-error-text')).toBeNull();
+    expect((screen.getByTestId('login-entry-continue') as HTMLButtonElement).disabled).toBe(false);
+    expect(auth.loadLoginState).toHaveBeenCalledOnce();
+    expect(auth.dispatchLoginAction.mock.calls.map(([action]) => action.type)).toEqual([
+      'reset',
+      'back',
+    ]);
+  });
 
   it('opens add-account login without an invalidated load or a false failure', async () => {
     render(<Harness addAccount />);

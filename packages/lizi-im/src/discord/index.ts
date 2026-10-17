@@ -70,10 +70,20 @@ interface DiscordFilePayload {
 }
 
 export interface DiscordIMOptions {
+  /** 凭证键名前缀(伙伴自有连接各一个, 缺省空 = 设置页那份)。 */
+  secretKeyPrefix?: string;
+  /** 是否注册 `discordBot:*` 设置卡 IPC 并广播状态(缺省 true; 伙伴连接关掉)。 */
+  ipc?: boolean;
   resolveImageUrl?: (url: string) => string;
   gatewayFactory?: (ev: DiscordGatewayEvents) => DiscordGateway;
   expiredCardNotice?: string;
   ownerNoticeText?: Partial<Record<OwnerNoticePhase, string>> | ((phase: OwnerNoticePhase) => string);
+}
+
+export interface DiscordConfigState {
+  status: IMStatus;
+  ownerUserId: string | null;
+  saveErrorStatus?: IMStatus;
 }
 
 export class DiscordIM extends BaseIM implements ChannelIM {
@@ -89,7 +99,6 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private dmResolverClient: unknown = null;
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
-  private readonly mediaDir: string;
   private suppressNextOnlineNotice = false;
   private pendingOfflineNotice = false;
   private runtimeOnlineAnnounced = false;
@@ -100,10 +109,6 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
     super('discord', host);
-    if (!host.paths.discordMediaDir) {
-      throw new Error('IMHost.paths.discordMediaDir is required to wire the discord channel');
-    }
-    this.mediaDir = host.paths.discordMediaDir;
     this.gateway = (opts.gatewayFactory ?? createDiscordGateway)({
       onStatus: (s) => this.setStatus(s),
       onDmMessage: (m) => {
@@ -122,8 +127,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.runtimeOnlineAnnounced = false;
     this.lifecycleNoticeVersion += 1;
     this.lifecycleAnnouncementEnabled = this.readLifecycleAnnouncement();
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
-    this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
+    const token = this.host.secrets.read(this.key(TOKEN_SECRET_KEY))?.trim() ?? '';
+    this.ownerUserId = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY))?.trim() ?? '';
     if (!this.lifecycleAnnouncementEnabled) {
       this.clearRuntimeActiveMarker();
     }
@@ -133,7 +138,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     }
 
     this.pendingOfflineNotice = this.lifecycleAnnouncementEnabled && Boolean(
-      this.ownerUserId && this.host.secrets.read(RUNTIME_ACTIVE_SECRET_KEY),
+      this.ownerUserId && this.host.secrets.read(this.key(RUNTIME_ACTIVE_SECRET_KEY)),
     );
 
     try {
@@ -154,80 +159,126 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.setStatus({ kind: 'idle' });
   }
 
-  registerIpc(): void {
-    const configResult = (saveErrorStatus?: IMStatus) => ({
+  /** 本实例的 secret 键名(见 DiscordIMOptions.secretKeyPrefix)。 */
+  private key(base: string): string {
+    return `${this.opts.secretKeyPrefix ?? ''}${base}`;
+  }
+
+  getConfigState(saveErrorStatus?: IMStatus): DiscordConfigState {
+    return {
       status: this.status,
       ownerUserId: this.ownerUserId || null,
       ...(saveErrorStatus ? { saveErrorStatus } : {}),
-    });
+    };
+  }
 
-    this.host.ipc.handle('discordBot:set-config', async (payload) => {
-      // IPC handlers are registered before init(). Sync the persisted preference
-      // before any gateway status can queue a lifecycle notice or write its marker.
-      this.applyLifecycleAnnouncement(this.readLifecycleAnnouncement());
-      const config = isRecord(payload) ? payload : {};
-      const token = typeof config.token === 'string' ? config.token.trim() : '';
-      const ownerUserId =
-        typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
-      if (!this.host.secrets.isAvailable()) {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
-        return configResult();
-      }
+  /** 设置里填的主人用户 id; 未填为空串。 */
+  getOwnerUserId(): string {
+    return this.ownerUserId;
+  }
 
-      const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
-      const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
-      const previousRuntimeOwnerUserId = this.ownerUserId;
-
-      const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
-      const ownerUserIdSaved = ownerUserId
-        ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
-        : true;
-      if (!tokenSaved || !ownerUserIdSaved) {
-        this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-        this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
-        return configResult();
-      }
-
-      const nextOwnerUserId = ownerUserId || this.ownerUserId;
-      if (token) {
-        this.configVersion += 1;
-        const wasConnectedBeforeReconnect = this.status.kind === 'connected';
-        await this.gateway.destroy();
-        this.ownerUserId = nextOwnerUserId;
-        this.suppressNextOnlineNotice = true;
-        try {
-          await this.gateway.connect(token);
-          this.markRuntimeActive();
-          const linkedNoticeConfigVersion = this.configVersion;
-          await this.sendOwnerNoticeWithTimeout(
-            nextOwnerUserId,
-            'linked',
-            OWNER_NOTICE_TIMEOUT_MS,
-            () => this.isOwnerNoticeCurrent(linkedNoticeConfigVersion, nextOwnerUserId),
-          );
-          if (wasConnectedBeforeReconnect && this.status.kind === 'connected') {
-            this.suppressNextOnlineNotice = false;
-          }
-        } catch (err) {
-          this.suppressNextOnlineNotice = false;
-          const msg = err instanceof Error ? err.message : String(err);
-          this.log.warn(`discord gateway connect failed from set-config: ${msg}`);
-          const failedStatus = mapDiscordLoginErrorToStatus(err);
-          this.setStatus(failedStatus);
-          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-          await this.reconnectPreviousGateway(previousToken);
-          return configResult(failedStatus);
-        }
-      } else if (nextOwnerUserId !== this.ownerUserId) {
-        this.configVersion += 1;
-        this.ownerUserId = nextOwnerUserId;
-      }
+  /**
+   * 保存 token / 主人 id 并重连(设置卡与伙伴连接共用)。失败时回滚到之前的凭证并在
+   * 返回值里带 saveErrorStatus。
+   */
+  async setConfig(payload: unknown): Promise<DiscordConfigState> {
+    const configResult = (saveErrorStatus?: IMStatus) => this.getConfigState(saveErrorStatus);
+    // IPC handlers are registered before init(). Sync the persisted preference
+    // before any gateway status can queue a lifecycle notice or write its marker.
+    this.applyLifecycleAnnouncement(this.readLifecycleAnnouncement());
+    const config = isRecord(payload) ? payload : {};
+    const token = typeof config.token === 'string' ? config.token.trim() : '';
+    const ownerUserId =
+      typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
+    if (!this.host.secrets.isAvailable()) {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
       return configResult();
-    });
+    }
+
+    const previousToken = this.host.secrets.read(this.key(TOKEN_SECRET_KEY));
+    const previousOwnerUserId = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY));
+    const previousRuntimeOwnerUserId = this.ownerUserId;
+
+    const tokenSaved = token ? this.host.secrets.write(this.key(TOKEN_SECRET_KEY), token) : true;
+    const ownerUserIdSaved = ownerUserId
+      ? this.host.secrets.write(this.key(OWNER_USER_ID_SECRET_KEY), ownerUserId)
+      : true;
+    if (!tokenSaved || !ownerUserIdSaved) {
+      this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
+      this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
+      this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      return configResult();
+    }
+
+    const nextOwnerUserId = ownerUserId || this.ownerUserId;
+    if (token) {
+      this.configVersion += 1;
+      const wasConnectedBeforeReconnect = this.status.kind === 'connected';
+      await this.gateway.destroy();
+      this.ownerUserId = nextOwnerUserId;
+      this.suppressNextOnlineNotice = true;
+      try {
+        await this.gateway.connect(token);
+        this.markRuntimeActive();
+        const linkedNoticeConfigVersion = this.configVersion;
+        await this.sendOwnerNoticeWithTimeout(
+          nextOwnerUserId,
+          'linked',
+          OWNER_NOTICE_TIMEOUT_MS,
+          () => this.isOwnerNoticeCurrent(linkedNoticeConfigVersion, nextOwnerUserId),
+        );
+        if (wasConnectedBeforeReconnect && this.status.kind === 'connected') {
+          this.suppressNextOnlineNotice = false;
+        }
+      } catch (err) {
+        this.suppressNextOnlineNotice = false;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`discord gateway connect failed from set-config: ${msg}`);
+        const failedStatus = mapDiscordLoginErrorToStatus(err);
+        this.setStatus(failedStatus);
+        this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
+        this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
+        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+        await this.reconnectPreviousGateway(previousToken);
+        return configResult(failedStatus);
+      }
+    } else if (nextOwnerUserId !== this.ownerUserId) {
+      this.configVersion += 1;
+      this.ownerUserId = nextOwnerUserId;
+    }
+    return configResult();
+  }
+
+  /** 通知主人、断开并清掉本实例的全部凭证。 */
+  async disconnect(): Promise<{ status: IMStatus }> {
+    this.configVersion += 1;
+    const disconnectedNoticeConfigVersion = this.configVersion;
+    const disconnectedOwnerUserId = this.ownerUserId;
+    this.ownerUserId = '';
+    const noticeDeadline = Date.now() + OWNER_NOTICE_TIMEOUT_MS;
+    await this.waitForRuntimeOnlineNotice(noticeDeadline, OWNER_NOTICE_TIMEOUT_MS);
+    await this.sendOwnerNoticeWithTimeout(
+      disconnectedOwnerUserId,
+      'disconnected',
+      Math.max(0, noticeDeadline - Date.now()),
+      () => this.configVersion === disconnectedNoticeConfigVersion && !this.ownerUserId,
+    );
+    this.host.secrets.remove(this.key(TOKEN_SECRET_KEY));
+    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET_KEY));
+    this.clearRuntimeActiveMarker();
+    this.pendingOfflineNotice = false;
+    this.runtimeOnlineAnnounced = false;
+    await this.gateway.destroy();
+    this.setStatus({ kind: 'idle' });
+    return { status: this.status };
+  }
+
+  registerIpc(): void {
+    // 伙伴自有连接不注册设置卡 IPC(通道名固定, 第二份实例会重复注册)。
+    if (this.opts.ipc === false) return;
+
+    this.host.ipc.handle('discordBot:set-config', (payload) => this.setConfig(payload));
 
     // Renderer IPC can run after handler registration but before init(). Read the
     // persisted preference here instead of exposing the constructor default.
@@ -254,28 +305,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return { ok: true, lifecycleAnnouncement: enabled };
     });
 
-    this.host.ipc.handle('discordBot:disconnect', async () => {
-      this.configVersion += 1;
-      const disconnectedNoticeConfigVersion = this.configVersion;
-      const disconnectedOwnerUserId = this.ownerUserId;
-      this.ownerUserId = '';
-      const noticeDeadline = Date.now() + OWNER_NOTICE_TIMEOUT_MS;
-      await this.waitForRuntimeOnlineNotice(noticeDeadline, OWNER_NOTICE_TIMEOUT_MS);
-      await this.sendOwnerNoticeWithTimeout(
-        disconnectedOwnerUserId,
-        'disconnected',
-        Math.max(0, noticeDeadline - Date.now()),
-        () => this.configVersion === disconnectedNoticeConfigVersion && !this.ownerUserId,
-      );
-      this.host.secrets.remove(TOKEN_SECRET_KEY);
-      this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-      this.clearRuntimeActiveMarker();
-      this.pendingOfflineNotice = false;
-      this.runtimeOnlineAnnounced = false;
-      await this.gateway.destroy();
-      this.setStatus({ kind: 'idle' });
-      return { status: this.status };
-    });
+    this.host.ipc.handle('discordBot:disconnect', () => this.disconnect());
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -362,6 +392,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async patchMarkdownCard(messageId: string, markdown: string): Promise<void> {
     const message = await this.fetchMessage(messageId);
+    if (!markdown.trim()) {
+      await message.delete();
+      this.cardSpecs.delete(messageId);
+      return;
+    }
     const { text } = markdownToDiscord(markdown);
     await message.edit({
       content: text.slice(0, 2000),
@@ -387,6 +422,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           await message.edit(text);
         },
         markdownToDiscord,
+        remove: async (messageId) => {
+          const message = await this.fetchMessage(messageId);
+          await message.delete();
+        },
         chunk: chunkDiscordText,
         resolveImageUrl: this.opts.resolveImageUrl,
         uploadImages: (messageId, absPaths) => this.uploadImages(messageId, absPaths),
@@ -458,13 +497,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private readLifecycleAnnouncement(): boolean {
-    return this.host.secrets.read(LIFECYCLE_ANNOUNCEMENT_SECRET_KEY) !== 'false';
+    return this.host.secrets.read(this.key(LIFECYCLE_ANNOUNCEMENT_SECRET_KEY)) !== 'false';
   }
 
   private writeLifecycleAnnouncement(enabled: boolean): boolean {
     try {
       if (!this.host.secrets.isAvailable()) return false;
-      return this.host.secrets.write(LIFECYCLE_ANNOUNCEMENT_SECRET_KEY, String(enabled));
+      return this.host.secrets.write(this.key(LIFECYCLE_ANNOUNCEMENT_SECRET_KEY), String(enabled));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord lifecycle announcement preference write threw: ${msg}`);
@@ -524,7 +563,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private setStatus(s: IMStatus): void {
     const previous = this.status;
     this.status = s;
-    this.host.ipc.broadcast('discordBot:status-change', { status: s });
+    if (this.opts.ipc !== false) {
+      this.host.ipc.broadcast('discordBot:status-change', { status: s });
+    }
     for (const h of this.statusHandlers) {
       try {
         h(s);
@@ -707,7 +748,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     }
     if (!this.ownerUserId) return;
     if (!this.gateway.client) return;
-    if (!this.host.secrets.read(RUNTIME_ACTIVE_SECRET_KEY) && this.status.kind !== 'connected') return;
+    if (!this.host.secrets.read(this.key(RUNTIME_ACTIVE_SECRET_KEY)) && this.status.kind !== 'connected') return;
 
     const expectedConfigVersion = this.configVersion;
     const expectedOwnerUserId = this.ownerUserId;
@@ -743,7 +784,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     try {
       if (!this.lifecycleAnnouncementEnabled) return;
       if (!this.host.secrets.isAvailable()) return;
-      const ok = this.host.secrets.write(RUNTIME_ACTIVE_SECRET_KEY, String(Date.now()));
+      const ok = this.host.secrets.write(this.key(RUNTIME_ACTIVE_SECRET_KEY), String(Date.now()));
       if (!ok) this.log.warn('discord runtime active marker write failed');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -753,7 +794,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   private clearRuntimeActiveMarker(): void {
     try {
-      this.host.secrets.remove(RUNTIME_ACTIVE_SECRET_KEY);
+      this.host.secrets.remove(this.key(RUNTIME_ACTIVE_SECRET_KEY));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord runtime active marker remove threw: ${msg}`);
@@ -851,12 +892,14 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     m: MessageLike,
     acceptedContext: { appId: string; configVersion: number; ownerUserId: string },
   ): Promise<void> {
+    const stagedDiscards: Array<() => Promise<void>> = [];
     try {
       const event = await normalizeDmMessage(m, {
         contextId: acceptedContext.appId,
-        mediaDir: this.mediaDir,
         download: downloadUrl,
-        media: this.host.media,
+        stagedDiscards,
+        ...(this.host.media ? { media: this.host.media } : {}),
+        ...(this.host.files ? { files: this.host.files } : {}),
       });
       if (!event) return;
       if (
@@ -865,6 +908,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         this.ownerUserId !== acceptedContext.ownerUserId ||
         this.gateway.appId !== acceptedContext.appId
       ) {
+        // 下载期间换代(登出/换号/换 bot): 回滚本次暂存, 不把旧账号的附件留给新账号。
+        for (const discard of stagedDiscards) await discard().catch(() => undefined);
         return;
       }
       for (const h of this.messageHandlers) {
@@ -937,6 +982,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       fetch(messageId: string): Promise<{
         react(emoji: string): Promise<unknown>;
         edit(payload: unknown): Promise<unknown>;
+        delete(): Promise<unknown>;
         reactions: {
           resolve(token: string): { users: { remove(userId: string | undefined): Promise<unknown> } } | null;
         };
@@ -955,6 +1001,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         fetch(messageId: string): Promise<{
           react(emoji: string): Promise<unknown>;
           edit(payload: unknown): Promise<unknown>;
+          delete(): Promise<unknown>;
           reactions: {
             resolve(token: string): { users: { remove(userId: string | undefined): Promise<unknown> } } | null;
           };
@@ -963,7 +1010,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     };
   }
 
-  private async fetchMessage(messageId: string): Promise<{ edit(payload: unknown): Promise<unknown> }> {
+  private async fetchMessage(messageId: string): Promise<{ edit(payload: unknown): Promise<unknown>; delete(): Promise<unknown> }> {
     const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
     const channel = await this.fetchChannel(channelId);
     return channel.messages.fetch(nativeMessageId);
@@ -1029,8 +1076,7 @@ export function createDiscordIM(host: IMHost, opts?: DiscordIMOptions): DiscordI
   return new DiscordIM(host, opts);
 }
 
-async function downloadUrl(url: string, dest: string): Promise<void> {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+async function downloadUrl(url: string): Promise<Uint8Array> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort();
@@ -1041,8 +1087,7 @@ async function downloadUrl(url: string, dest: string): Promise<void> {
     if (!response.ok) {
       throw new Error(`download failed: ${response.status}`);
     }
-    const bytes = Buffer.from(await response.arrayBuffer());
-    fs.writeFileSync(dest, bytes);
+    return Buffer.from(await response.arrayBuffer());
   } catch (err) {
     if (controller.signal.aborted) {
       throw new Error(`download timed out after ${DISCORD_ATTACHMENT_DOWNLOAD_TIMEOUT_MS}ms`);

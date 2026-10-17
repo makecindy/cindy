@@ -13,7 +13,7 @@ import {
   RefreshCcw,
   X,
 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
@@ -1969,6 +1969,7 @@ function InvoiceRequestDialog({
       application: 'Cindy',
       paymentMethod,
       amount: formatMoney(order.amount, order.currency, billingLocale),
+      invoiceTitleHint: t('billing.orders.invoice.invoiceTitleHint'),
     });
     return { subject, body };
   };
@@ -2059,6 +2060,17 @@ function InvoiceRequestDialog({
           {BILLING_SUPPORT_EMAIL}
         </button>
         {descriptionAfterEmail}
+      </p>
+
+      <p className="mt-3 text-12 leading-5 text-[var(--confirm-desc)]">
+        <Trans
+          i18n={i18n}
+          t={t}
+          i18nKey="billing.orders.invoice.personalInvoicePolicy"
+          components={{
+            strong: <strong className="font-semibold text-[var(--confirm-title)]" />,
+          }}
+        />
       </p>
 
       <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">

@@ -17,7 +17,8 @@
  * The pool itself is in-memory; on app restart, hydrate() rebuilds it from disk.
  */
 
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, dialog } from 'electron';
+import { t } from '../i18n.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -75,6 +76,7 @@ import { ensurePiManagerDaemon } from '@cindy/maker-remote-ssh';
 import { PROTOCOL_VERSION as PI_MANAGER_PROTOCOL_VERSION } from '@cindy/maker-pi-manager';
 import { invalidateRemotePiPathCaches, redactCredentialText } from '../maker-host/pi-remote-transport.js';
 import { serializeEnvBlock } from './env-block.js';
+import { confirmHostKeyChange } from './host-key-recovery.js';
 import { classifyConnectFailure } from './connect-failure.js';
 import {
   addKeyToAgent,
@@ -1412,6 +1414,43 @@ export function registerRemoteSshIpc(): void {
       });
       return { ok: true as const };
     });
+  });
+
+  // Local UI only: trust changes require a native confirmation with main-owned details.
+  ipcMain.handle('maker:remote-ssh:review-host-key', async (event, args: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = requireString(requireObject(args).id, 'id');
+    const host = getPool().get(id);
+    if (!host) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
+    const store = getSharedHostKeyStore();
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throwIpcError('SSH_CONNECT_FAILED', 'The requesting window is no longer available.');
+    try {
+      const updated = await confirmHostKeyChange({
+        getHost: () => getPool().get(id),
+        store,
+        isWindowAlive: () => !parent.isDestroyed(),
+        confirm: async (mismatch) => {
+          const result = await dialog.showMessageBox(parent, {
+            type: 'warning',
+            title: t('settings.remote.hostKey.title'),
+            message: t('settings.remote.hostKey.explanation').replace('{{host}}', () => mismatch.host),
+            detail: t('settings.remote.hostKey.details')
+              .replace('{{trusted}}', () => mismatch.trusted)
+              .replace('{{presented}}', () => mismatch.presented)
+              .replace('{{file}}', () => store.filePath),
+            buttons: [t('settings.remote.hostKey.cancel'), t('settings.remote.hostKey.trust')],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+          return result.response === 1;
+        },
+      });
+      return { updated };
+    } catch {
+      throwIpcError('SSH_CONNECT_FAILED', t('settings.remote.hostKey.updateFailed'));
+    }
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.CONNECT, async (_event, args: unknown) => {

@@ -17,6 +17,7 @@ export interface UsageTaskMeta {
   title: string;
   model: string;
   providerId: string | null;
+  source?: string | null;
   contextTokens: number;
   contextWindow: number;
   /** userSendAt 与 updatedAt 中较新者 (unix ms)。 */
@@ -53,6 +54,7 @@ export async function getUsageTaskMeta(): Promise<UsageTaskMeta[]> {
       title: sessions.title,
       model: sessions.model,
       providerId: sessions.providerId,
+      source: sessions.source,
       contextTokens: sessions.contextTokens,
       contextWindow: sessions.contextWindow,
       userSendAt: sessions.userSendAt,
@@ -74,6 +76,7 @@ export async function getUsageTaskMeta(): Promise<UsageTaskMeta[]> {
     title: row.title,
     model: row.model,
     providerId: row.providerId ?? null,
+    source: row.source ?? null,
     contextTokens: row.contextTokens ?? 0,
     contextWindow: row.contextWindow ?? 0,
     lastActiveAt: Math.max(row.userSendAt ?? 0, row.updatedAt),

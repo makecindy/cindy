@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   pending: false,
   enabled: true,
   verified: true,
+  organization: false,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../appSessionState.js', () => ({
@@ -31,6 +32,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
   listAvailableGhostsForAuthorization: () => [
     {
       enabled: state.enabled,
+      namespace: null,
+      dir: path.join(state.root, 'cindy-brain', '_ns', '_root', 'my-plugin'),
       approvedSkillRoot: path.join(
         state.root,
         state.owner,
@@ -45,6 +48,13 @@ vi.mock('../../cindy-brain/index.js', () => ({
         },
       },
     },
+    ...(state.organization ? [{
+      enabled: state.enabled,
+      namespace: 'acme',
+      dir: path.join(state.root, 'cindy-brain', 'my-plugin'),
+      approvedSkillRoot: path.join(state.root, state.owner, 'ghost-install-state', 'skill-snapshots', 'organization'),
+      manifest: { id: 'my-plugin', skill: { items: [{ name: 'demo', dir: 'skills/demo', description: 'Organization skill' }] } },
+    }] : []),
   ],
 }));
 import { listCindyManagedSkills, prepareCindyCodexSkills } from '../managed-skills.js';
@@ -65,6 +75,7 @@ beforeEach(async () => {
   state.pending = false;
   state.enabled = true;
   state.verified = true;
+  state.organization = false;
   await writeSkill(path.join(state.root, 'shared-system-skills'), 'learn', 'learn');
   await writeSkill(
     path.join(state.root, 'a', 'ghost-install-state', 'skill-snapshots', 'rev'),
@@ -79,6 +90,20 @@ afterEach(async () => {
 });
 
 describe('Cindy managed skill catalog', () => {
+  it('keeps same-name root and in-place organization skills distinct through Codex projection', async () => {
+    state.organization = true;
+    await writeSkill(path.join(state.root, 'a', 'ghost-install-state', 'skill-snapshots', 'organization'), 'demo', 'demo');
+    const skills = await listCindyManagedSkills();
+    expect(skills.map(skill => skill.claudeCommandName)).toEqual([
+      'cindy:learn', 'cindy-plugin-_root__my-plugin:demo', 'cindy-plugin-my-plugin:demo',
+    ]);
+    const home = path.join(state.root, 'codex-home');
+    await prepareCindyCodexSkills(home);
+    for (const skill of skills) {
+      expect(await fs.realpath(path.join(home, 'skills', codexManagedSkillLinkName(skill.claudeCommandName), 'SKILL.md'))).toBe(skill.path);
+    }
+  });
+
   it('uses verified sources and manifest names despite real-directory and foreign-link projection conflicts', async () => {
     await writeSkill(path.join(state.root, 'managed-agent-skills', 'cindy'), 'learn', 'impostor');
     const ghostRoot = path.join(state.root, 'a', 'ghost-install-state', 'agent-skills');
@@ -91,7 +116,7 @@ describe('Cindy managed skill catalog', () => {
     const skills = await listCindyManagedSkills();
     expect(skills.map((skill) => skill.claudeCommandName)).toEqual([
       'cindy:learn',
-      'cindy-plugin-my-plugin:demo',
+      'cindy-plugin-_root__my-plugin:demo',
     ]);
     expect(skills.map((skill) => skill.path)).toEqual(
       await Promise.all([
@@ -140,7 +165,7 @@ describe('Cindy managed skill catalog', () => {
 
   it('revokes disabled plugin projections from default and independent Codex homes without deleting sources', async () => {
     const homes = ['default', 'account-a', 'account-b'].map((name) => path.join(state.root, name));
-    const linkName = codexManagedSkillLinkName('cindy-plugin-my-plugin:demo');
+    const linkName = codexManagedSkillLinkName('cindy-plugin-_root__my-plugin:demo');
     const source = path.join(
       state.root,
       'a',

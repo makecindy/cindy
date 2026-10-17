@@ -31,6 +31,7 @@ import {
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
 } from '../codexBuiltinToolPolicy.js';
 import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
+import { BOT_IM_CHANNELS_VENDOR_KEY } from '../../../shared/botImConnection.js';
 import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
@@ -423,6 +424,47 @@ describe('piEnvironment per-session identity', () => {
     make?.disposeSessionCtx?.();
   });
 
+  it('exposes cindy_telegram_bot only to a Session carrying a Telegram channel marker', async () => {
+    const providers = [makeProvider('cindy_telegram_bot'), makeProvider('custom_probe')];
+    const desktop = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-desktop',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(desktop?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    desktop?.disposeSessionCtx?.();
+
+    const lane = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-lane',
+      workingDir: '/bots/bot/workspace',
+      vendorOptions: { telegramChatId: 'g/-100123', source: 'telegram' },
+    });
+    expect(lane?.mcpBridge?.servers.map((server) => server.name)).toEqual([
+      'cindy_telegram_bot',
+      'custom_probe',
+    ]);
+    lane?.disposeSessionCtx?.();
+
+    const canonical = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-main',
+      workingDir: '/bots/bot/workspace',
+      vendorOptions: { [BOT_IM_CHANNELS_VENDOR_KEY]: ['telegram'] },
+    });
+    expect(canonical?.mcpBridge?.servers.map((server) => server.name)).toEqual([
+      'cindy_telegram_bot',
+      'custom_probe',
+    ]);
+    canonical?.disposeSessionCtx?.();
+
+    const feishuOnly = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-feishu-only',
+      workingDir: '/bots/bot/workspace',
+      vendorOptions: { [BOT_IM_CHANNELS_VENDOR_KEY]: ['feishu'] },
+    });
+    expect(feishuOnly?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    feishuOnly?.disposeSessionCtx?.();
+  });
+
   it('omits a stable built-in server when the frozen Bot Toolset disables it', async () => {
     const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
       sessionId: 'pi-bot-no-collab',
@@ -780,6 +822,100 @@ describe('piEnvironment per-session identity', () => {
     expect(Object.values(config?.mcpEnv ?? {})).toContain(`Bearer ${allowedSecret}`);
     expect(Object.values(config?.mcpEnv ?? {})).not.toContain(`Bearer ${excludedSecret}`);
     config?.disposeSessionCtx?.();
+  });
+
+  it.each([false, true])('enforces frozen Pi custom-App mounts at the bridge request boundary (remote=%s)', async (remote) => {
+    const credentials = vi.fn((id: string) => `test-main-only-credential-${id}`);
+    const providers = ['allowed_app', 'excluded_app'].map((id) => new CustomMcpProvider(
+      { id, name: id, url: 'https://mcp.example.invalid', transport: 'http', headers: {} },
+      credentials,
+      (read) => {
+        const server = new McpServer({ name: id, version: '1' });
+        server.tool('credentialed', {}, async () => {
+          read(); // Main would attach the stored credentials to the upstream here.
+          return { content: [{ type: 'text' as const, text: 'done' }] };
+        });
+        server.server.fallbackNotificationHandler = async () => { read(); };
+        return server;
+      },
+    ));
+    const ordinary = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-ordinary-apps', sessionInstanceId: 'ordinary-instance', workingDir: '/repo',
+      ...(remote ? { remoteHostId: 'remote-host' } : {}), vendorOptions: {},
+    });
+    const vendorOptions: Record<string, unknown> = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] };
+    const frozen = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-frozen-apps', sessionInstanceId: 'frozen-instance', workingDir: '/repo',
+      ...(remote ? { remoteHostId: 'remote-host' } : {}), vendorOptions,
+      botMcpPolicy: {
+        mode: 'allowlist', configured: ['allowed_app'],
+        catalog: providers.map(({ name }) => ({ name, source: 'custom' as const, available: true })),
+      },
+    });
+    try {
+      expect(frozen!.mcpBridge!.servers.map((server) => server.name)).toEqual(['allowed_app']);
+      expect(vendorOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['allowed_app']);
+      expect(credentials).not.toHaveBeenCalled();
+      const headers = (token: string) => ({
+        authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      });
+      const allowed = frozen!.mcpBridge!.servers[0]!;
+      const init = await fetch(allowed.url, {
+        method: 'POST', headers: headers(frozen!.mcpBridge!.token), body: INIT_BODY(1),
+      });
+      expect(init.status).toBe(200);
+      const allowedSession = init.headers.get('mcp-session-id')!;
+      await init.text();
+      const called = await fetch(allowed.url, {
+        method: 'POST', headers: { ...headers(frozen!.mcpBridge!.token), 'mcp-session-id': allowedSession },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'credentialed', arguments: {} } }),
+      });
+      expect(called.status).toBe(200);
+      expect(await readRpcText(called)).toMatchObject({ result: { content: [{ text: 'done' }] } });
+      expect(credentials).toHaveBeenCalledWith('allowed_app');
+      credentials.mockClear();
+
+      // A bridge transport can already exist for another Session. Neither its
+      // MCP session id nor a rewritten mounted URL may widen this Bot's mount.
+      const ordinaryExcluded = ordinary!.mcpBridge!.servers.find((server) => server.name === 'excluded_app')!;
+      const existing = await fetch(ordinaryExcluded.url, {
+        method: 'POST', headers: headers(ordinary!.mcpBridge!.token), body: INIT_BODY(3),
+      });
+      expect(existing.status).toBe(200);
+      const borrowedSession = existing.headers.get('mcp-session-id')!;
+      await existing.text();
+      const excluded = new URL(allowed.url);
+      excluded.pathname = '/mcp/excluded_app';
+      const statuses: number[] = [];
+      const deniedInit = await fetch(excluded, {
+        method: 'POST', headers: headers(frozen!.mcpBridge!.token), body: INIT_BODY(4),
+      });
+      statuses.push(deniedInit.status);
+      await deniedInit.text();
+      for (const body of [
+        { jsonrpc: '2.0', id: 5, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'credentialed', arguments: {} } },
+        { jsonrpc: '2.0', method: 'example/side-effect' },
+      ]) {
+        const response = await fetch(excluded, {
+          method: 'POST', headers: { ...headers(frozen!.mcpBridge!.token), 'mcp-session-id': borrowedSession },
+          body: JSON.stringify(body),
+        });
+        statuses.push(response.status);
+        await response.text();
+      }
+      const deleted = await fetch(excluded, {
+        method: 'DELETE', headers: { ...headers(frozen!.mcpBridge!.token), 'mcp-session-id': borrowedSession },
+      });
+      statuses.push(deleted.status);
+      await deleted.text();
+      expect(statuses).toEqual([403, 403, 403, 403, 403]);
+      expect(credentials).not.toHaveBeenCalled();
+    } finally {
+      frozen?.disposeSessionCtx?.();
+      ordinary?.disposeSessionCtx?.();
+    }
   });
 
   it('derives a stable per-session bridge token across rebuilds (round 41 — envHash stability)', async () => {

@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
 import { scanAllSkills } from '../../skillhub/scanner';
 
+vi.mock('../../skillhub/customizationScanHost', async () => {
+  const { buildSkillList } = await import('../../skillhub/skillListProjection');
+  return { projectSkillList: vi.fn(async (input) => buildSkillList(input)) };
+});
+
 vi.mock('../../skillhub/registry', () => ({
   registryService: { listAllInstalls: vi.fn(async () => []), getInstall: vi.fn(async () => null) },
 }));

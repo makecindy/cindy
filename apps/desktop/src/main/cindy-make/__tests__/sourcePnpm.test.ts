@@ -109,3 +109,28 @@ it('accepts fixed colon-separated script names while rejecting shell operators b
     );
   }
 });
+
+it('accepts the pinned pnpm write roots while still rejecting arbitrary paths', async () => {
+  const signal = new AbortController().signal;
+  // The pinned write-root flags carry fixed relative paths; they pass the launch
+  // interlock (no spaces, quotes or shell metacharacters) and reach pnpm, where the
+  // CLI beats whatever the content's own `.npmrc` or `pnpm-workspace.yaml` sets.
+  for (const argument of [
+    '--config.modules-dir=node_modules',
+    '--config.virtual-store-dir=node_modules/.pnpm',
+    '--config.store-dir=node_modules/.cindy-make-store',
+  ]) {
+    await expect(runSourcePnpm({ PATH: '' }, ['install', argument], '.', signal)).rejects.toThrow(
+      'pnpm not found',
+    );
+  }
+  for (const argument of [
+    '--store-dir=C:/Users/John Smith/store',
+    '--registry=https://attacker.invalid',
+    '--config.store-dir=node_modules & whoami',
+  ]) {
+    await expect(runSourcePnpm({ PATH: '' }, ['install', argument], '.', signal)).rejects.toThrow(
+      'unsafe pnpm argument',
+    );
+  }
+});

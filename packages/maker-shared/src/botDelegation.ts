@@ -220,3 +220,8 @@ export type BotDelegationListResult =
 export type BotDelegationCancelResult =
   | { ok: true; delegationId: string; childSessionId: string | null }
   | { ok: false; errorCode: string; message: string };
+
+/** The owner's 补一句 from a task card: the quiet trace left in the Bot's own chat. */
+export type BotDelegationNoteTraceResult =
+  | { ok: true; delegationId: string }
+  | { ok: false; errorCode: string; message: string };

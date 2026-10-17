@@ -52,7 +52,7 @@ import {
   pruneAnthropicCompatForGateway,
   type PiBundledModelInfo,
 } from '../pi-host.js';
-import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
+import { getActiveCatalog, setActiveCatalog, setCustomProviderConfigs, setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
@@ -151,6 +151,50 @@ const piBundledModel = (
   maxTokens: 128_000,
   ...over,
 });
+
+it.each(['absent', 'compatible', 'other-api'] as const)(
+  'carries a restored account model into the subscription serializer (native entry: %s)',
+  (nativeEntry) => {
+    const id = 'gpt-future-account-fixture';
+    const providerId = 'openai-restored';
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviderConfigs([{
+      id: providerId, name: 'Restored account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{
+        id, name: id, discoveredMetadata: {
+          efforts: ['low', 'high', 'ultra'], defaultEffort: 'ultra',
+          contextWindow: 272000, maxOutputTokens: 16000, supportsImageInput: false,
+        },
+      }] } },
+    }]);
+    try {
+      const native = piBundledModel(id,
+        nativeEntry === 'compatible' ? 'openai-codex-responses' : 'openai-completions', {
+          thinkingLevelMap: { low: 'medium' }, compat: { supportsStrictTools: true },
+        });
+      const probe = new Map([['openai-codex', new Map(nativeEntry === 'absent' ? [] : [[id, native]])]]);
+      const catalog = getActiveCatalog();
+      expect(deriveAvailableModels(catalog, 'pi').some(model => model.id === `chatgpt/${id}`)).toBe(true);
+      const result = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567', probe);
+      const provider = result.providers.find(p => p.sourceProviderId === providerId)!;
+      expect(provider).toMatchObject({
+        id: `openai-codex-${providerId}`, api: 'openai-codex-responses', inheritModels: false,
+        headers: { 'x-cindy-pi-provider-id': providerId },
+      });
+      const model = provider.models.find(m => m.id === `chatgpt/${id}`)!;
+      expect(model).toMatchObject({
+        wireId: id, api: 'openai-codex-responses', input: ['text'], maxTokens: 16000,
+        thinkingLevelMap: { low: nativeEntry === 'compatible' ? 'medium' : 'low', high: 'high', max: null },
+      });
+      expect(model.thinkingLevelMap).not.toHaveProperty('ultra');
+      expect(model.compat).toEqual(nativeEntry === 'compatible' ? native.compat : undefined);
+      expect(result.providers.find(p => p.sourceProviderId === 'openai')?.models.some(m => m.wireId === id)).toBe(false);
+    } finally {
+      setCustomProviders([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  },
+);
 
 afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);

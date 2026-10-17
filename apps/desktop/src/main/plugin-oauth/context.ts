@@ -8,11 +8,15 @@ import type {
   PluginDeviceOffer,
   PluginAuthorizationOffer,
   PluginDeviceOpened,
+  InputHandoffOffer,
+  InputHandoffSubmission,
 } from '@cindy/device-link';
 
 /** Captured by a validated card action, never from model/Renderer URL parameters. */
 export interface RemoteOauthContext {
   scope: string;
+  /** Device that opened this signed exchange (for value-free records only). */
+  peer?: string;
   assertCurrent(): void;
   authorize(offer: PluginOauthOffer, signal: AbortSignal): Promise<PluginOauthCallback>;
   /** Optional additive capability; old loopback callers stay unchanged. */
@@ -23,6 +27,8 @@ export interface RemoteOauthContext {
   ): Promise<PluginOauthCallback | PluginDeviceOpened>;
   submitSecret?(offer: PluginSecretOffer): Promise<string>;
   submitConnection?(offer: PluginConnectionOffer): Promise<PluginConnectionInput>;
+  /** 代输入 step values; one signed exchange per step. */
+  submitInput?(offer: InputHandoffOffer): Promise<InputHandoffSubmission>;
   cancelled?: AbortSignal;
   finish(ok: boolean): void;
 }

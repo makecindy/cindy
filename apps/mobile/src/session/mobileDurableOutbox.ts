@@ -23,6 +23,25 @@ export const mobileDurableOutbox = createDurableOutbox(outboxStorage, async (rec
   await reconcileCommittedComposerDraft(record.item.sessionId, record.draftHandoff, check);
 });
 
+/** Persist before destructive cleanup: an account switch may discard its reply. */
+export async function suspendCreationDraftForCleanup(record: { sessionId: string; deviceId: string }): Promise<void> {
+  const owner = getMobileAuthOwner();
+  const guard = () => {
+    if (!owner.accountKey || !isMobileAuthOwnerCurrent(owner)) throw new Error('OUTBOX_OWNER_CHANGED');
+  };
+  guard();
+  await mobileDurableOutbox.activate(owner.accountKey);
+  guard();
+  for (const draft of getCurrentMobileOutboxRecords().filter(r =>
+    r.deviceId === record.deviceId && r.item.sessionId === record.sessionId && r.creation)) {
+    guard();
+    // This also refuses records with send evidence before any destructive call.
+    cancelledCreationDraft(draft);
+    if (!draft.suspended) await mobileDurableOutbox.update(draft, { suspended: true });
+  }
+  guard();
+}
+
 /** Host ACK must be followed by this durable write before the recovery ledger is removed. */
 export async function persistCancelledCreationDraft(record: { sessionId: string; deviceId: string; originalWorkingDir?: string }): Promise<void> {
   const owner = getMobileAuthOwner();

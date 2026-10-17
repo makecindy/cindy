@@ -26,7 +26,7 @@ function session(id: string, patch: Partial<MobileHomeSessionLike> = {}): Mobile
 }
 
 describe('mobileHome', () => {
-  it('groups Cindy Make creation and merge tasks by source without changing their working directories', () => {
+  it('hides Cindy Make creation and merge tasks from the home presentation', () => {
     const sessions = [
       session('make-a', { source: 'cindy-make', workingDir: 'C:\\Cindy\\tasks\\random-a' }),
       session('make-b', { source: 'cindy-make', workingDir: '/data/cindy/tasks/random-b' }),
@@ -40,43 +40,29 @@ describe('mobileHome', () => {
     });
 
     expect(home.chats).toEqual([]);
-    expect(home.projects).toHaveLength(2);
-    const make = home.projects.find((project) => project.kind === 'cindy-make');
-    expect(make).toMatchObject({
-      key: 'cindy-make:pc',
-      title: 'Cindy Make',
-      subtitle: 'My PC',
-      workingDir: '',
-      sessionCount: 4,
-      pendingInteractionCount: 3,
-    });
-    expect(make?.sessions.map((item) => item.session.id).sort()).toEqual(['make-a', 'make-b', 'merge', 'no-dir']);
-    for (const item of make?.sessions ?? []) {
-      expect(item.session.workingDir).toBe(sessions.find((original) => original.id === item.session.id)?.workingDir);
-    }
-    expect(home.projects.find((project) => !project.kind)?.sessions.map((item) => item.session.id)).toEqual(['ordinary']);
+    expect(home.projects).toHaveLength(1);
+    expect(home.projects[0]?.sessions.map((item) => item.session.id)).toEqual(['ordinary']);
   });
 
-  it('keeps Cindy Make folders scoped to the selected computer and stable across task directory changes', () => {
+  it('hides Cindy Make projects regardless of device selection or task directory', () => {
     const sessions = ['pc-a', 'pc-b'].map((deviceLinkDeviceId) => session(deviceLinkDeviceId, {
       deviceLinkDeviceId,
       source: 'cindy-make',
     }));
     const devices = sessions.map((item) => ({ deviceId: item.id, name: item.id }));
     const home = buildMobileHomePresentation({ devices, sessions });
-    expect(home.projects.map((project) => project.key).sort()).toEqual(['cindy-make:pc-a', 'cindy-make:pc-b']);
+    expect(home.projects).toEqual([]);
 
     const selected = buildMobileHomePresentation({ devices, sessions, selectedDeviceId: 'pc-a' });
-    expect(selected.projects).toHaveLength(1);
-    expect(selected.projects[0].sessions.map((item) => item.session.id)).toEqual(['pc-a']);
+    expect(selected.projects).toEqual([]);
     const moved = buildMobileHomePresentation({
       devices,
       sessions: [{ ...sessions[0], workingDir: '/another/checkout' }],
     });
-    expect(moved.projects[0].key).toBe(selected.projects[0].key);
+    expect(moved.projects).toEqual([]);
   });
 
-  it('preserves pinning, archive filters and search when grouping Cindy Make tasks', () => {
+  it('hides Cindy Make tasks from pinned, archived and search views', () => {
     const sessions = [
       session('pinned', { source: 'cindy-make', pinnedAt: '2026-01-01T00:00:00.000Z' }),
       session('active', { source: 'cindy-make' }),
@@ -84,13 +70,13 @@ describe('mobileHome', () => {
       session('deleted', { source: 'cindy-make', status: 'deleted' }),
     ];
     const home = buildMobileHomePresentation({ sessions });
-    expect(home.pinned.map((item) => item.session.id)).toEqual(['pinned']);
-    expect(home.projects[0].sessions.map((item) => item.session.id)).toEqual(['active']);
+    expect(home.pinned).toEqual([]);
+    expect(home.projects).toEqual([]);
     const archived = buildMobileHomePresentation({ sessions, statusFilter: 'archived' });
     expect(archived.pinned).toEqual([]);
-    expect(archived.projects[0].sessions.map((item) => item.session.id)).toEqual(['archived']);
+    expect(archived.projects).toEqual([]);
     const searched = buildMobileHomePresentation({ sessions, searchQuery: 'active' });
-    expect(searched.projects[0].sessions.map((item) => item.session.id)).toEqual(['active']);
+    expect(searched.projects).toEqual([]);
     expect(buildMobileHomePresentation({ sessions, searchQuery: 'absent' }).projects).toEqual([]);
   });
 

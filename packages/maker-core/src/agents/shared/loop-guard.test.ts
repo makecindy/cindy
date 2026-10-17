@@ -599,6 +599,35 @@ describe('ToolLoopGuard pacing and final limits', () => {
     }
   });
 
+  it('treats waits issued together and run one by one as paced (2026-10 gate polling false positive)', () => {
+    const { guard, advance } = clockGuard();
+    const wait = (i: number) => ({ command: `sleep 58; grep GATE_EXIT gate.log # ${i % 2}` });
+    let id = 0;
+    // 模型一次发出 3-6 条等待命令,工具逐条排队执行:发出时刻相差 1 秒,结果每分钟到一个。
+    for (const batch of [6, 6, 3, 3, 6]) {
+      const ids: string[] = [];
+      for (let i = 0; i < batch; i++) {
+        advance(1_000);
+        ids.push(String(id));
+        guard.onToolUse(String(id), 'Bash', wait(id));
+        id += 1;
+      }
+      for (const toolUseId of ids) {
+        advance(minute);
+        expect(guard.onToolResult(toolUseId, `11:${toolUseId} waiting`).kind).toBe('ok');
+      }
+    }
+  });
+
+  it('still counts identical fast calls issued together and finished together', () => {
+    const { guard, advance } = clockGuard();
+    const verdicts: ToolLoopGuardVerdict[] = [];
+    for (let i = 0; i < 4; i++) guard.onToolUse(String(i), 'read', { path: 'same.ts' });
+    advance(minute);
+    for (let i = 0; i < 4; i++) verdicts.push(guard.onToolResult(String(i), 'unchanged'));
+    expect(verdicts[3]).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
+  });
+
   it('stops identical paced polling after one hour without review', () => {
     const { guard, advance } = clockGuard();
     let verdict: ToolLoopGuardVerdict = { kind: 'ok' };

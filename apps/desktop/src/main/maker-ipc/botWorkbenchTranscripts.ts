@@ -469,6 +469,8 @@ export async function listExternalSessionsForProjects(input: {
   since: number;
   now: number;
   max?: number;
+  /** Discovery may read cwd metadata, but must not parse message digests. */
+  metadataOnly?: boolean;
 }): Promise<{ sessions: WorkbenchExternalSession[]; olderCount: number; overflowCount: number }> {
   if (input.projectDirs.length === 0) return { sessions: [], olderCount: 0, overflowCount: 0 };
   const { recent, olderCount } = await collectTranscriptFiles(input.roots, input.projectDirs, input.since, input.now);
@@ -485,11 +487,11 @@ export async function listExternalSessionsForProjects(input: {
   const max = input.max ?? WORKBENCH_EXTERNAL_MAX;
   const sessions = await Promise.all(
     matched.slice(0, max).map(async (file): Promise<WorkbenchExternalSession> => {
-      const digest = await readFileDigest(file.source, file.id, file.file, file).catch(() => null);
+      const digest = input.metadataOnly ? null : await readFileDigest(file.source, file.id, file.file, file).catch(() => null);
       return {
         source: file.source,
         id: file.id,
-        title: digest?.purpose ?? '',
+        title: digest?.purpose ?? (input.metadataOnly ? file.id : ''),
         cwd: file.cwd,
         updatedAt: file.mtimeMs,
         file: file.file,

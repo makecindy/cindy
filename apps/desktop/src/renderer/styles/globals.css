@@ -68,6 +68,14 @@
     -webkit-user-drag: none;
   }
 
+  /* Native Sortable marks its direct row draggable after pointerdown. Restore
+     its subtree too: Chromium can start the drag on a project title or icon.
+     Filtered controls never arm the row, and fallback lists stay unchanged. */
+  [data-sortable-native-dnd='true'] > [draggable='true'],
+  [data-sortable-native-dnd='true'] > [draggable='true'] * {
+    -webkit-user-drag: element !important;
+  }
+
   /* SessionItem 是同窗分屏的原生 HTML5 拖拽源。拖拽通常从标题、图标或时间
      子节点起手，所以必须与 composer atom 一样让整棵子树恢复 element drag；
      行内按钮仍由 onDragStart 的交互区守卫 preventDefault，不会误触发分屏。 */
@@ -793,6 +801,20 @@ html:lang(ko) {
   padding-left: 0;
 }
 .ProseMirror .ghost-cmd-pill + .ghost-cmd-pill::before {
+  content: none;
+}
+/* 同名冲突的 `/slug`、`/@root` 限定符:字符留在 doc 里供发送期消歧,渲染层
+   收起;企业实例在同一颗胶囊尾部显示「团队共享」标签。 */
+.ProseMirror .ghost-cmd-qualifier {
+  display: none;
+}
+.ProseMirror .ghost-cmd-pill[data-ghost-cmd-origin]::after {
+  content: attr(data-ghost-cmd-origin);
+  margin-left: 6px;
+  color: var(--text-tertiary);
+}
+/* CJK 标点会把胶囊切成多段、每段都带来源属性:只在最后一段显示标签。 */
+.ProseMirror .ghost-cmd-pill[data-ghost-cmd-origin]:has(+ .ghost-cmd-pill)::after {
   content: none;
 }
 
@@ -1604,6 +1626,18 @@ body.resizing-pane [data-ghost-webview] {
 }
 .pending-queue-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--msg-scrollbar-hover);
+}
+
+/* 项目选择菜单的列表:还能继续滚动的一侧 24px 渐隐,提示列表未完(只改透明度,双模式通用)。
+   遮罩只取不透明度:currentColor 继承菜单的不透明正文色,不引入字面颜色。 */
+.folder-picker-fade-top {
+  mask-image: linear-gradient(to bottom, transparent, currentColor 24px);
+}
+.folder-picker-fade-bottom {
+  mask-image: linear-gradient(to bottom, currentColor calc(100% - 24px), transparent);
+}
+.folder-picker-fade-top.folder-picker-fade-bottom {
+  mask-image: linear-gradient(to bottom, transparent, currentColor 24px, currentColor calc(100% - 24px), transparent);
 }
 
 /* Composer 形变面板(MorphPopover)内的下拉列表 — 8px 细滚动条。

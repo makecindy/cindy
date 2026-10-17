@@ -1,6 +1,7 @@
 import type { McpProvider, McpProviderContext } from '@cindy/maker-core';
 import type { McpTransport } from '../../shared/customMcp.js';
 import { isPiCustomMcpProviderAvailable } from '../mcp-integrations/piMcpTransport.js';
+import { CustomMcpProvider } from '../mcp-integrations/custom-mcp-provider.js';
 
 function isCustomMcpAvailable(input: {
   agentKind: McpProviderContext['agentKind'];
@@ -8,6 +9,9 @@ function isCustomMcpAvailable(input: {
   provider: McpProvider;
   custom?: { transport: McpTransport };
 }): boolean {
+  // The Apps facade is carried by the authenticated Host bridge for every
+  // harness, including SSH. Direct-transport limitations do not apply to it.
+  if (input.provider instanceof CustomMcpProvider && input.provider.supportsApps) return true;
   // SSH Codex receives only REMOTE_ALLOWED_SERVER_NAMES; user configs are not
   // written into its daemon. Remote Claude serializes http/sse into startParams.
   // Remote Pi connects to custom HTTP MCPs directly (`s.remote` is not tunneled).

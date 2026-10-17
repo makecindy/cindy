@@ -622,6 +622,7 @@ export function MainWindowActionButton({
   density = 'default',
   grow = false,
   hitSlop,
+  numberOfLines = 1,
   style,
   textStyle,
   buttonRef,
@@ -631,6 +632,8 @@ export function MainWindowActionButton({
   grow?: boolean;
   /** Compact buttons (38pt) inside content rows extend their touch target to 44pt this way. */
   hitSlop?: PressableProps['hitSlop'];
+  /** Set to 0 for actions that must wrap within their available width. */
+  numberOfLines?: number;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   buttonRef?: Ref<View>;
@@ -672,7 +675,7 @@ export function MainWindowActionButton({
         <ActivityIndicator color={tone === 'danger-solid' ? colors.sharedTaskConfirmForeground : tone === 'primary' ? colors.ctaText : colors.textSecondary} size="small" />
       ) : (
         <Text
-          numberOfLines={1}
+          numberOfLines={numberOfLines}
           style={[
             styles.mainActionButtonText,
             compact && styles.mainActionButtonTextCompact,

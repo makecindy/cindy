@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { findUnenforcedCapabilityRoutes } from '@cindy/maker-core';
+
 import { buildDesktopCapabilityRoutingPolicy } from '../capability-routing.js';
 
 function codexPluginRoutes(cindyBrowserEnabled: boolean, codexBrowserUseAvailable = true) {
@@ -10,7 +12,8 @@ function codexPluginRoutes(cindyBrowserEnabled: boolean, codexBrowserUseAvailabl
     (override) =>
       override.source.kind === 'harness-plugin'
       && override.source.harness === 'codex'
-      && override.source.surface === 'plugin',
+      && override.source.surface === 'plugin'
+      && override.capabilityId !== 'output-delivery',
   );
 }
 
@@ -82,7 +85,9 @@ describe('buildDesktopCapabilityRoutingPolicy', () => {
     });
     const routes = policy.overrides.filter(
       (route) =>
-        route.source.id !== 'computer-use@openai-bundled' && route.source.surface === 'plugin',
+        route.source.id !== 'computer-use@openai-bundled'
+        && route.source.surface === 'plugin'
+        && route.capabilityId !== 'output-delivery',
     );
 
     expect(routes.map((route) => route.source.id)).toEqual([
@@ -138,5 +143,48 @@ describe('buildDesktopCapabilityRoutingPolicy', () => {
       }),
     ]);
     expect(browserRoutes[0]?.replacement).toBeUndefined();
+  });
+});
+
+describe('desktop capability routing stays enforceable', () => {
+  const variants = [true, false, undefined].flatMap((cindyBrowserEnabled) =>
+    [true, false].flatMap((codexBrowserUseAvailable) =>
+      [true, false].flatMap((codexBrowserUseProvisioned) =>
+        [undefined, 'remote-1'].flatMap((remoteHostId) =>
+          [true, false].map((cindyComputerAvailable) => ({
+            cindyBrowserEnabled,
+            codexBrowserUseAvailable,
+            codexBrowserUseProvisioned,
+            remoteHostId,
+            cindyComputerAvailable,
+          })),
+        ),
+      ),
+    ),
+  );
+
+  it('only emits routes that a harness adapter applies', () => {
+    for (const variant of variants) {
+      expect(findUnenforcedCapabilityRoutes(buildDesktopCapabilityRoutingPolicy(variant)))
+        .toEqual([]);
+    }
+  });
+
+  it('hides vendor-UI output surfaces in every runtime', () => {
+    for (const variant of variants) {
+      const sources = buildDesktopCapabilityRoutingPolicy(variant).overrides
+        .filter((route) => route.capabilityId === 'output-delivery')
+        .map((route) => `${route.source.harness}:${route.source.surface}:${route.source.id}:${route.invocation}`);
+      expect(sources).toEqual([
+        'claude-code:tool:SendUserFile:disabled',
+        'claude-code:tool:Artifact:disabled',
+        'claude-code:mcp:claude.ai Claude Docs:disabled',
+        'claude-code:skill:artifact-design:disabled',
+        'claude-code:skill:artifact-diagramming:disabled',
+        'claude-code:skill:artifact-capabilities:disabled',
+        'claude-code:skill:anthropic-skills:docs:disabled',
+        'codex:plugin:visualize@openai-bundled:disabled',
+      ]);
+    }
   });
 });

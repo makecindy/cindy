@@ -1,14 +1,28 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useAuth } from '@/contexts/AuthContext';
 import { BotImportForm } from './BotImportForm';
 import { Button } from '@/components/ui/button';
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { normalizeBotName } from '../../../shared/botCreation';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
-import { addBotProfileAndWait, BotModelSelectionRequiredError, useBotProfiles, type BotProfile } from './botStore';
+import { addBotProfileAndWait, BotModelSelectionRequiredError, getEffectiveBotModelChain, subscribeBotGlobalModel, useBotProfiles, type BotProfile } from './botStore';
+import { useProviders } from '@/hooks/useProviders';
+import { BotModelChainEditor } from './BotModelChainEditor';
+import type { BotModelRoute } from '../../../shared/botModelChain';
+
+// Only the provider-setup detour retains a draft; ordinary close/unmount discards it.
+let providerSetupDraft: {
+  owner: DataOwnerGeneration;
+  dataOwnerId: string | null;
+  name: string;
+  portrait?: string;
+  initialPortrait: number;
+  modelOverride: BotModelRoute[] | null;
+} | null = null;
 
 interface BotRosterViewProps {
   onCreated?: (bot: BotProfile) => void;
@@ -23,10 +37,17 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   const { dataOwnerId } = useAuth();
   const navigate = useNavigate();
   const bots = useBotProfiles();
+  useProviders();
+  useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
+  const [restoredDraft] = useState(() => providerSetupDraft
+    && providerSetupDraft.dataOwnerId === dataOwnerId
+    && isDataOwnerGenerationCurrent(providerSetupDraft.owner) ? providerSetupDraft : null);
+  useEffect(() => { providerSetupDraft = null; }, []);
+  const [modelOverride, setModelOverride] = useState<BotModelRoute[] | null>(restoredDraft?.modelOverride ?? null);
   const [importing, setImporting] = useState(false);
-  const [name, setName] = useState('');
-  const [portrait, setPortrait] = useState<string>();
-  const [initialPortrait] = useState(() => Math.floor(Math.random() * BOT_PORTRAIT_COUNT));
+  const [name, setName] = useState(restoredDraft?.name ?? '');
+  const [portrait, setPortrait] = useState<string | undefined>(restoredDraft?.portrait);
+  const [initialPortrait] = useState(() => restoredDraft?.initialPortrait ?? Math.floor(Math.random() * BOT_PORTRAIT_COUNT));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitting = useRef(false);
@@ -48,6 +69,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     setError(null);
     try {
       const bot = await addBotProfileAndWait({ name: name.trim(), description: '',
+        ...(modelOverride ? { capabilities: { ...modelOverride[0], modelChain: modelOverride, modelChainOverride: modelOverride } } : {}),
         avatarImageBase64: portrait.split(',')[1], prepareInvitation: true });
       if (!alive.current) return;
       if (onCreated) onCreated(bot); else navigate(`/bots/${bot.id}`);
@@ -91,11 +113,24 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             className="mt-2 h-11 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-16 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" />
         </label>
       </div>
+        <div className="mt-5">
+          <BotModelChainEditor
+            label={t('bots.settingsTabs.model')}
+            value={(modelOverride ?? getEffectiveBotModelChain()).slice(0, 1)}
+            disabled={creating}
+            allowFallbacks={false}
+            onChange={(routes) => { setModelOverride(routes.slice(0, 1)); setError(null); }}
+            onNavigateToProviders={() => {
+              providerSetupDraft = { owner: getDataOwnerGeneration(), dataOwnerId, name, portrait, initialPortrait, modelOverride };
+              navigate('/settings?tab=providers');
+            }}
+          />
+          <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+            {t(modelOverride ? 'bots.guided.modelForThisBot' : 'bots.guided.modelFollowsDefault')}
+          </p>
+        </div>
         {(error || duplicate) && (
           <p role="alert" className="mt-4 text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : error}</p>
-        )}
-        {error === t('bots.guided.modelRequired') && (
-          <button type="button" className="mt-3 h-9 rounded-full px-4 text-13 hover:bg-[var(--surface-hover)]" onClick={() => navigate('/settings?tab=providers')}>{t('bots.settingsTabs.model')}</button>
         )}
         <div className="mt-8 flex justify-between gap-3">
           <Button variant="secondary" size="lg" type="button" disabled={creating} onClick={() => setImporting(true)}>{t('bots.import.entry')}</Button>

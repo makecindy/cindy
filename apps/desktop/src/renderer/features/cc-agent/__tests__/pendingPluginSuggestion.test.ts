@@ -30,6 +30,17 @@ describe('installation continuation', () => {
     );
     expect(takePendingPluginSuggestion(nonce, 'a', 'local')).toBeNull();
   });
+  it('rebinds a logical root suggestion to its physical install instance', () => {
+    const nonce = startPendingPluginSuggestion({
+      ...request,
+      suggestion: { ...request.suggestion, id: 'plugin:test:one' },
+    });
+    expect(readyPendingPluginSuggestion(nonce, 'a', '_root__test')).toBe(nonce);
+    expect(getPendingPluginSuggestion()?.suggestion).toMatchObject({
+      id: 'plugin:_root__test:one',
+      pluginId: '_root__test',
+    });
+  });
   it('ignores completion after cancellation or after another selection', () => {
     const old = startPendingPluginSuggestion(request);
     cancelPendingPluginSuggestion(old);

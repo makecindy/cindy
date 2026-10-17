@@ -19,6 +19,7 @@ const readSource = (...segments: string[]): string =>
   readFileSync(resolve(__dirname, '..', ...segments), 'utf8').replace(/\r\n?/g, '\n');
 
 const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDraftRoute.tsx');
+const remoteDefaultsSource = readSource('features', 'cc-agent', 'useRemoteDraftDefaults.ts');
 const ccAgentSessionViewSource = readSource('features', 'cc-agent', 'CCAgentSessionView.tsx');
 
 const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
@@ -95,7 +96,7 @@ describe('Shared create project picker', () => {
       'getProjectPickerEmptyLabelKey(workspacePrompt)',
     );
     // 2026-07-19 恢复 worktree 入口(用户裁决,488cb33 误删回归;详见
-    // newMakerCreateAgentVisualContract):路由允许且仅允许一个 advancedOnly
+    // CREATE AGENT 视觉规则):路由允许且仅允许一个 advancedOnly
     // 变体的 WorktreeChipsRow(2026-07-28 起渲染 [分支 chip][worktree 勾选 chip],
     // 齿轮 popover 已移除;folderPickerMode="project" 仅为其 advancedHidden
     // 语义服务),不回退 folder chip 版;项目选择仍由 mode pill 独占。
@@ -944,7 +945,7 @@ describe('Shared create project picker', () => {
   });
 
   // 远程模型目录的 loading / error 与草稿默认值都是创建前置条件：任一路径没就绪
-  // 都不能把兜底值提交给对端；真实读取失败还必须告知用户，不能在 loading=false 后放行。
+  // 都不能把兜底值提交给对端；无缓存首读失败必须告知用户，不能在 loading=false 后放行。
   it('blocks send and goal creation until remote models/defaults are ready, including terminal errors', () => {
     expect(newMakerDraftRouteSource).toContain(
       'capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)',
@@ -966,7 +967,8 @@ describe('Shared create project picker', () => {
       "throw new Error(t('ccAgent.draft.remoteDefaultsLoadFailed'))",
     );
     expect(newMakerDraftRouteSource).toContain('setRemoteDraftRetryEpoch((value) => value + 1)');
-    expect(newMakerDraftRouteSource).toContain("status: unsupported ? 'ready' : 'error'");
+    // 首读失败阻止创建、有缓存时刷新失败保留可用状态：由 remoteDraftDefaultsCache.test.tsx
+    // 执行真实页面 hooks 验证，不再将所有读取失败都静态锁定为 error。
     expect(newMakerDraftRouteSource).toContain(
       "if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return null;",
     );
@@ -1408,9 +1410,10 @@ describe('Shared create project picker', () => {
     //    这里只锁「本仓存在那个正确范例」,它是这条规则的出处。
     expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId);');
     const refreshSource = readSource('lib', 'remoteCatalogSnapshot.ts');
-    expect(refreshSource).toContain('evictDeviceProviders(deviceId)');
+    const evictAt = refreshSource.search(/evictDeviceProviders\(deviceId(?:,|\))/);
+    expect(evictAt).toBeGreaterThan(-1);
     expect(refreshSource).toContain('prefetchDeviceProviders(deviceId)');
-    expect(refreshSource.indexOf('evictDeviceProviders(deviceId)')).toBeLessThan(
+    expect(evictAt).toBeLessThan(
       refreshSource.indexOf('prefetchDeviceProviders(deviceId)'),
     );
   });
@@ -1435,8 +1438,8 @@ describe('Shared create project picker', () => {
     expect(agentCapabilitiesHookSource).toContain(
       "notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });",
     );
-    expect(deviceProvidersHookSource).toContain(
-      "notifyDeviceProviders(deviceId, { status: 'loading' });",
+    expect(deviceProvidersHookSource).toMatch(
+      /notifyDeviceProviders\(deviceId,\s*\{\s*status: 'loading'/,
     );
     // 上游事实:fetch effect 只按 (agentKind, deviceId) 重跑,换项目不会触发它。
     expect(agentCapabilitiesHookSource).toContain('}, [agentKind, deviceId]);');
@@ -1484,8 +1487,20 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
     );
-    // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
-    expect(chatInputSource).toContain('if (onExtraDirsChange) {');
+    // The single add entry grants write access only through the local Main picker;
+    // legacy read-only directories retain their independent removal callback.
+    expect(chatInputSource).toMatch(
+      /if \(onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
+    );
+    const directoryAction = chatInputSource.slice(
+      chatInputSource.indexOf("id: 'add-extra-dir'"),
+      chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
+    );
+    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
+    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
+    expect(directoryAction).toContain('writableGrantScope,');
+    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
     );
@@ -1618,16 +1633,48 @@ describe('Shared create project picker', () => {
     expect((body.match(/resolveDeviceLinkDraftDefaults\(/g) ?? []).length).toBeGreaterThanOrEqual(
       3,
     );
+    expect((body.match(/freshProviders,/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(body).not.toContain('agentCatalogProviders');
+  });
+
+  it('uses the selected provider catalog for remote effort recalculation', () => {
+    const pushStart = remoteDefaultsSource.indexOf(
+      'const re = resolveDeviceLinkDraftDefaults(',
+    );
+    const pushBlock = remoteDefaultsSource.slice(
+      pushStart,
+      remoteDefaultsSource.indexOf('return { ...prev', pushStart),
+    );
+    const modelSwitchStart = newMakerDraftRouteSource.indexOf(
+      'const resolved = resolveDeviceLinkDraftDefaults(',
+    );
+    const modelSwitchBlock = newMakerDraftRouteSource.slice(
+      modelSwitchStart,
+      newMakerDraftRouteSource.indexOf('setDlSel((prev) =>', modelSwitchStart),
+    );
+    const unifiedStart = newMakerDraftRouteSource.indexOf('const baseline = capabilities');
+    const unifiedBlock = newMakerDraftRouteSource.slice(
+      unifiedStart,
+      newMakerDraftRouteSource.indexOf('// 能力与镜像都还没到', unifiedStart),
+    );
+
+    for (const block of [pushBlock, modelSwitchBlock, unifiedBlock]) {
+      expect(block).toContain('agentCatalogProviders,');
+    }
+    expect(unifiedBlock).toContain('providerId: selection.providerId,');
   });
 
   it('reapplies refreshed regional defaults only while the remote runtime is untouched', () => {
-    const seed = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
-      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    const seed = remoteDefaultsSource.slice(
+      remoteDefaultsSource.indexOf('export function useRemoteDraftSelection('),
+      remoteDefaultsSource.indexOf('export function useRemoteDraftPush('),
     );
     expect(seed).toContain('shouldReseedDeviceLinkDraftDefaults({');
     expect(seed).toContain('capabilitiesChanged,');
-    expect(seed).toContain('if (!capabilities || capabilitiesLoading');
+    expect(seed).toContain('!capabilities');
+    expect(seed).toContain('capabilitiesLoading');
+    expect(seed).toContain('!deviceDraftDefaultsReady');
+    expect(seed).toContain('!deviceProviderCatalogReady');
     expect(seed).toContain('controllerTouched: dlRuntimeTouchedRef.current,');
     expect(seed).toContain('remoteModelChosenByUser: deviceDraftDefaults?.modelChosenByUser,');
     expect(seed).toContain('modelChosenByUser: true,');
@@ -1655,9 +1702,9 @@ describe('Shared create project picker', () => {
    * 或「永远判不成新目标」)。
    */
   it('advances the device-link seed key to the engine the user just picked', () => {
-    const seed = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('// seed dlSel:'),
-      newMakerDraftRouteSource.indexOf('// 远程草稿展示用:'),
+    const seed = remoteDefaultsSource.slice(
+      remoteDefaultsSource.indexOf('export function useRemoteDraftSelection('),
+      remoteDefaultsSource.indexOf('export function useRemoteDraftPush('),
     );
     // 播种 effect 侧的 key 构造(正本)。
     expect(seed).toContain('const key = `${catalogDeviceId}:${capabilityAgentKind}`;');

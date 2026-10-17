@@ -33,6 +33,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { hasDeliveryNamespace } from '../../shared/pluginIdentity.js';
+
 import {
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_MS,
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS,
@@ -200,13 +202,27 @@ export class GhostScheduleSlot {
           )
         : undefined;
 
+    const logicalId = ghost.manifest.id;
+    const pending = ghost.namespaceState === 'pending' || !hasDeliveryNamespace(ghost);
+    const address = pending
+      ? `
+
+调用这个插件时只传 ghost_id「${logicalId}」，不要传 namespace。`
+      : ghost.namespace
+        ? `
+
+调用这个插件时使用 ghost_id「${logicalId}」，namespace 传「${ghost.namespace}」。`
+        : `
+
+调用这个插件时使用 ghost_id「${logicalId}」，namespace 传 null。`;
     const draft: GhostScheduleDraftPush = {
       requestId: this.deps.newRequestId?.() ?? randomUUID(),
-      ghostId,
+      ghostId: logicalId,
+      ...(pending ? {} : { namespace: ghost.namespace ?? null }),
       ghostName: ghost.manifest.name,
       ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
       name,
-      prompt,
+      prompt: prompt + address,
       ...(intervalMs !== undefined ? { intervalMs } : {}),
     };
     const delivered = typeof request.mobilePageId === 'string'

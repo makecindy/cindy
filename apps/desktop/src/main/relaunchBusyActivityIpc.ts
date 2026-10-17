@@ -30,6 +30,16 @@ export async function readRelaunchBlockingActivity() {
 }
 
 /**
+ * Restart-sensitive work other than model turns (background Bash, Claude/Ghost background
+ * activity, Cindy slot jobs, PI Subagents, scheduler runs). Unknown counts as busy.
+ */
+export async function readRelaunchBackgroundActivity() {
+  return currentSources
+    ? evaluateRelaunchBusyActivity({ ...currentSources(), anySessionInTurn: () => false })
+    : { busy: true, reasons: ['not-ready'] };
+}
+
+/**
  * 横幅延后轮询会反复问同一条探针,但不能把每次 busy 都打成「manual relaunch」INFO。
  * Renderer 传入的 payload 不可信:只有精确 `{ silent: true }` 才静默,其余一律按手动查询打日志。
  */

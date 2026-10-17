@@ -196,7 +196,7 @@ describe('listAvailableMediaModels', () => {
     ]);
     expect(serverApiFetchMock).toHaveBeenCalledWith(
       '/api/model-access/models?schemaVersion=5',
-      expect.any(Object),
+      expect.objectContaining({ headers: { 'X-Cindy-Model-Capabilities': 'display_pricing' } }),
     );
   });
 

@@ -199,7 +199,7 @@ async function rebuildAndroidSimulator() {
   const gradle = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
   console.log('› Android gradle assembleDebug');
   if (process.platform === 'win32') {
-    run('cmd.exe', ['/d', '/s', '/c', 'gradlew.bat assembleDebug'], {
+    run('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug'], {
       cwd: androidDir,
       env: javaEnv,
       windowsVerbatimArguments: true,

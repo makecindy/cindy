@@ -8,7 +8,11 @@ import { cn } from '@/lib/utils';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
 import { Tip } from '@/components/ui/tooltip';
 
-import { useProviderWeeklyQuota, type ProviderUsageScope } from './useProviderWeeklyQuota';
+import {
+  useProviderWeeklyQuota,
+  type ProviderGroupUsageOf,
+  type ProviderUsageScope,
+} from './useProviderWeeklyQuota';
 import { formatQuotaResetCountdown } from '../status/usageCardModel';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
@@ -37,6 +41,7 @@ export function UnifiedModelRail({
   providerLabel,
   interactionDisabled = false,
   providerUsage = null,
+  providerGroupUsage,
   remoteSources,
 }: {
   items: readonly UnifiedRailItem[];
@@ -47,12 +52,16 @@ export function UnifiedModelRail({
   interactionDisabled?: boolean;
   /** Whose account usage the directory may show; null hides it. */
   providerUsage?: ProviderUsageScope | null;
+  /** 供应商组那一格的用量读谁(provider-groups.md §10);缺省 = 都按格所在目录读。 */
+  providerGroupUsage?: ProviderGroupUsageOf;
   /**
-   * 远程供应商格的数据(只有可选远程 Agent 的新任务草稿传)。传了它,本机供应商格的
-   * 图标 / 名字 / 用量一律按本机读 —— 面板此刻可能正列着某台电脑的目录。
+   * 可选远程 Agent 的供应商格。localProviders 属于任务所在电脑，远控时未必是控制端本机；
+   * 图标 / 名字 / 用量都跟随该电脑，不随面板正在浏览的目录切换。
    */
   remoteSources?: {
     localProviders: readonly ProviderView[];
+    /** localProviders 所在电脑；null / 缺省 = 控制端本机。 */
+    localUsageDeviceId?: string | null;
     localProviderLabel: (providerId: string) => string;
     providersOf: (deviceId: string) => readonly ProviderView[];
     labelOf: (deviceId: string, providerId: string) => string;
@@ -86,16 +95,39 @@ export function UnifiedModelRail({
           item.kind === 'provider' || item.kind === 'remote-provider'
             ? railProviders.find((entry) => entry.id === item.providerId)
             : undefined;
-        // 用量跟随该格目录的归属:远程格读那台电脑的镜像,本机格在远程 Agent 模式下恒读本机。
+        // 普通格读任务所在电脑，远程格读指定电脑；两者都不借用当前浏览目录的归属。
         const usageDeviceId =
           item.kind === 'remote-provider'
             ? item.deviceId
             : remoteSources
-              ? null
+              ? (remoteSources.localUsageDeviceId ?? null)
               : (providerUsage?.deviceId ?? null);
+        // 供应商组那一格代表组里的几台电脑：任务正经组在某台运行时读那台的账号(与输入框下方的用量
+        // 一致)，还没分到电脑时不显示某一台的配额；悬停多写一句说明是哪台。
+        const groupUsage =
+          provider && (item.kind === 'provider' || item.kind === 'remote-provider')
+            ? (providerGroupUsage?.(
+                item.kind === 'remote-provider' ? item.deviceId : null,
+                item.providerId,
+              ) ?? null)
+            : null;
+        const usageProvider = groupUsage
+          ? groupUsage.kind === 'running'
+            ? groupUsage.usage?.provider
+            : undefined
+          : provider;
         const accountIdentity =
-          provider?.openAiAccount?.identity?.trim() ||
-          provider?.subscriptionAccount?.identity?.trim();
+          usageProvider?.openAiAccount?.identity?.trim() ||
+          usageProvider?.subscriptionAccount?.identity?.trim();
+        const groupNote = groupUsage
+          ? groupUsage.kind !== 'running'
+            ? t('newChat.modelSelector.unified.providerGroupUnassigned')
+            : groupUsage.deviceName === null
+              ? t('newChat.modelSelector.unified.providerGroupRunningHere')
+              : t('newChat.modelSelector.unified.providerGroupRunningOn', {
+                  device: groupUsage.deviceName,
+                })
+          : undefined;
         const label =
           item.kind === 'favorites'
             ? t('newChat.modelSelector.unified.railFavorites')
@@ -119,12 +151,17 @@ export function UnifiedModelRail({
             <RailButton
               label={label}
               accountIdentity={accountIdentity}
+              {...(groupNote ? { groupNote } : {})}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={providerUsage ? provider : undefined}
-              usageDeviceId={usageDeviceId}
+              provider={providerUsage ? usageProvider : undefined}
+              usageDeviceId={
+                groupUsage?.kind === 'running' && groupUsage.usage
+                  ? groupUsage.usage.scope.deviceId
+                  : usageDeviceId
+              }
             >
               {item.kind === 'favorites' ? (
                 // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
@@ -154,6 +191,8 @@ export function UnifiedModelRail({
 interface RailButtonProps {
   label: string;
   accountIdentity?: string;
+  /** 供应商组那一格:用量读的是哪台(或还没分到电脑),账号名跟在这一句后面。 */
+  groupNote?: string;
   isActive: boolean;
   itemKey: string;
   onClick: () => void;
@@ -181,6 +220,7 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
 function RailButtonView({
   label,
   accountIdentity,
+  groupNote,
   isActive,
   itemKey,
   onClick,
@@ -197,16 +237,21 @@ function RailButtonView({
       ? null
       : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: remaining })}`;
   const reset = formatQuotaResetCountdown(quota?.resetsAt, Date.now(), t);
-  const displayLabel = providerAccountLabel(label, accountIdentity);
-  const tooltip = quotaLabel ? (
-    <>
-      <div>{displayLabel}</div>
-      {quotaLabel && <div>{quotaLabel}</div>}
-      {reset && <div>{reset}</div>}
-    </>
-  ) : (
-    displayLabel
-  );
+  // 供应商组：组名不带某一台的账号，账号跟在「当前在 {电脑} 上运行」后面。
+  const displayLabel = groupNote ? label : providerAccountLabel(label, accountIdentity);
+  const note = groupNote ? providerAccountLabel(groupNote, accountIdentity) : null;
+  const description = [note, quotaLabel].filter(Boolean).join(' · ');
+  const tooltip =
+    quotaLabel || note ? (
+      <>
+        <div>{displayLabel}</div>
+        {note && <div>{note}</div>}
+        {quotaLabel && <div>{quotaLabel}</div>}
+        {reset && <div>{reset}</div>}
+      </>
+    ) : (
+      displayLabel
+    );
   return (
     <Tip
       text={tooltip}
@@ -219,7 +264,7 @@ function RailButtonView({
         disabled={disabled}
         onClick={onClick}
         aria-label={displayLabel}
-        aria-description={quotaLabel ?? undefined}
+        aria-description={description || undefined}
         aria-pressed={isActive}
         data-rail-item={itemKey}
         className={cn(

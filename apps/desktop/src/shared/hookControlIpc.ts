@@ -340,6 +340,7 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
  * 按本表与本机目录 model 组合后经 effectiveSourceIdForModel 收窄派发。
  */
 export interface HookWorkspaceProviderSourceEntry {
+  agentDeviceId?: string | null;
   channel: 'slack' | 'telegram' | 'x';
   /** Slack multi-team 归属; Telegram / X / 单绑定为 null。 */
   teamId: string | null;

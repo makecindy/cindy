@@ -116,6 +116,26 @@ describe('TabStrip Pi Subagents gate', () => {
   });
 });
 
+describe('TabStrip Cindy Make menu visibility', () => {
+  it('keeps Cindy Make out of the add menu', () => {
+    renderStrip();
+    const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+    vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+      x: 20,
+      y: 20,
+      top: 20,
+      right: 44,
+      bottom: 44,
+      left: 20,
+      width: 24,
+      height: 24,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
+    expect(screen.queryByText('settings.cindyMake.title')).toBeNull();
+  });
+});
+
 afterEach(() => cleanup());
 
 describe('TabStrip 中键关闭 tab', () => {

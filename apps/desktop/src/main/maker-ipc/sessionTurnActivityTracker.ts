@@ -19,11 +19,30 @@ export class SessionTurnActivityTracker {
   private readonly sessionTurnKeepaliveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastAnySessionTurnKeepalive = false;
   private onAnySessionTurnKeepaliveChange: ((isRunning: boolean) => void) | null = null;
+  private onSessionTurnChange: ((sessionId: string) => void) | null = null;
 
   setTurnKeepaliveChangeListener(listener: ((isRunning: boolean) => void) | null): void {
     this.onAnySessionTurnKeepaliveChange = listener;
     this.lastAnySessionTurnKeepalive = this.anySessionTurnKeepalive();
     listener?.(this.lastAnySessionTurnKeepalive);
+  }
+
+  /** 某个任务的逻辑 turn 开始 / 结束(含任务关闭)。只通知变化，监听方自己去读当前状态。 */
+  setSessionTurnChangeListener(listener: ((sessionId: string) => void) | null): void {
+    this.onSessionTurnChange = listener;
+  }
+
+  private setInTurn(sessionId: string, isRunning: boolean | null): void {
+    const before = this.sessionInTurn.get(sessionId) === true;
+    if (isRunning === null) this.sessionInTurn.delete(sessionId);
+    else this.sessionInTurn.set(sessionId, isRunning);
+    if (before !== (isRunning === true)) {
+      try {
+        this.onSessionTurnChange?.(sessionId);
+      } catch {
+        // 监听方的问题不能影响 turn 记账。
+      }
+    }
   }
 
   isSessionInTurn(sessionId: string): boolean {
@@ -43,7 +62,7 @@ export class SessionTurnActivityTracker {
 
   setSessionInTurn(sessionId: string, isRunning: boolean): void {
     if (isRunning) this.clearScheduledSessionTurnKeepalive(sessionId);
-    this.sessionInTurn.set(sessionId, isRunning);
+    this.setInTurn(sessionId, isRunning);
     this.sessionTurnDispatchBoundary.set(sessionId, isRunning);
     this.sessionTurnKeepalive.set(sessionId, isRunning);
     this.notifyAnySessionTurnKeepaliveIfChanged();
@@ -51,7 +70,7 @@ export class SessionTurnActivityTracker {
 
   deleteSession(sessionId: string): void {
     this.clearScheduledSessionTurnKeepalive(sessionId);
-    this.sessionInTurn.delete(sessionId);
+    this.setInTurn(sessionId, null);
     this.sessionTurnDispatchBoundary.delete(sessionId);
     this.sessionTurnKeepalive.delete(sessionId);
     this.notifyAnySessionTurnKeepaliveIfChanged();
@@ -69,7 +88,7 @@ export class SessionTurnActivityTracker {
     sessionId: string,
     options: { releaseDispatchBoundary: boolean },
   ): void {
-    this.sessionInTurn.set(sessionId, false);
+    this.setInTurn(sessionId, false);
     if (options.releaseDispatchBoundary) {
       this.sessionTurnDispatchBoundary.set(sessionId, false);
     }

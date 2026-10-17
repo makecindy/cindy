@@ -1,20 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
 import { HistoryViewController, projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { cacheOutboxHistory } from '@/session/outboxHistoryCache';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { cacheSessionMessagesIfCurrent, captureSessionMessageCacheWriteAuthority, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
-import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { remoteSessionStore, useSessionMessages } from '@/session/remoteSessionStore';
 import { clearRemoteHistoryViews, getRemoteHistoryView, mountRemoteHistoryView } from '@/session/remoteHistoryViews';
 import type { RemoteMessage } from '@/session/types';
 
 const state = vi.hoisted(() => ({ rows: [] as RemoteMessage[], fail: false,
+  effects: [] as Array<() => void | (() => void)>,
   files: new Map<string, string>(), raw: new Map<string, string>() }));
-vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
-  getMessages: () => state.rows, getSessionRetention: () => 'regular',
-} }));
+vi.mock('react', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react')>(),
+  useEffect: (effect: () => void | (() => void)) => { state.effects.push(effect); },
+  useRef: <T>(current: T) => ({ current }),
+  useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+}));
 vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global' }));
 vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
   read: async (name: string) => state.files.get(name) ?? null,
@@ -53,35 +55,52 @@ async function opened(rows: RemoteMessage[], error?: string) {
   return { entry, source };
 }
 const save = (current = () => true) => cacheOutboxHistory('d', 's', 'sent', current);
-// Execute the actual unmount effect without mounting the native message screen.
-const source = ts.createSourceFile('remoteSessionStore.ts', readFileSync(
-  new URL('../session/remoteSessionStore.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
-const hook = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'useSessionMessageCacheSync')!;
-let cleanupSource = '';
-function findCleanup(node: ts.Node) {
-  if (ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect') {
-    const callback = node.arguments[0];
-    if (ts.isArrowFunction(callback) && ts.isArrowFunction(callback.body)) cleanupSource = callback.body.getText(source);
-  }
-  ts.forEachChild(node, findCleanup);
-}
-findCleanup(hook);
+// Run the production hook's effect lifecycle without loading a native renderer.
 function flushUnmount(rendered: RemoteMessage[]) {
-  const bindings = { persistTimerRef: { current: setTimeout(() => {}, 60_000) },
-    ctxRef: { current: { deviceId: 'd', sessionId: 's', messages: rendered } },
-    remoteSessionStore, captureSessionMessageCacheWriteAuthority, cacheSessionMessagesIfCurrent, clearTimeout };
-  const js = ts.transpileModule(`const { ${Object.keys(bindings).join(',')} } = bindings; (${cleanupSource})();`,
-    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  new Function('bindings', js)(bindings);
+  const latest = state.rows;
+  state.rows = rendered;
+  useSessionMessages('s', 'd');
+  const cleanups = state.effects.splice(0).map(effect => effect());
+  state.rows = latest;
+  for (const cleanup of cleanups) cleanup?.();
 }
-beforeEach(() => { state.rows = [row('sent', 2)]; state.fail = false; setMobileAuthOwner('a'); });
+beforeEach(() => {
+  state.rows = [row('sent', 2)]; state.fail = false; setMobileAuthOwner('a');
+  vi.spyOn(remoteSessionStore, 'getMessages').mockImplementation(() => state.rows);
+  vi.spyOn(remoteSessionStore, 'getSessionRetention').mockReturnValue('regular');
+});
 afterEach(async () => {
   state.fail = false;
   releases.splice(0).forEach(release => release());
   clearRemoteHistoryViews(); await clearHistoryDisk(); state.raw.clear(); setMobileAuthOwner(null);
+  vi.restoreAllMocks();
 });
 
 describe('outbox to offline history handoff', () => {
+  // Regression: reopened old tasks retain host-owned bubbles even though history
+  // already cached their user rows. Existing cases always populated the raw store.
+  // Unit: a cached user row, empty raw window, and no network response must suffice.
+  it('hands off a cached user row without fetching it back into the raw window', async () => {
+    const { source } = await opened([row('sent', 2)]);
+    expect(await save()).toBe(true);
+    releases.splice(0).forEach(release => release());
+    clearRemoteHistoryViews();
+    state.rows = [];
+    const entry = getRemoteHistoryView('d', 's', source);
+    entry.view.setNetworkAvailable(false);
+    releases.push(mountRemoteHistoryView(entry, source, true));
+    await entry.view.restoreCachedView(() => readHistoryDisk(historyDiskAuthority('d', 's')));
+    expect(entry.view.getSnapshot().stale).toBe(true);
+    expect(await save()).toBe(true);
+    expect(source.readHistoryView).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify((await readHistoryDisk(historyDiskAuthority('d', 's')))?.items))
+      .toContain('message sent');
+  });
+  it('does not use another role with the same client id as proof of a sent user row', async () => {
+    await opened([{ ...row('sent', 2), role: 'assistant' }]);
+    state.rows = [];
+    expect(await save()).toBe(false);
+  });
   it('retains display ownership when the page is absent or its snapshot predates the send', async () => {
     expect(await save()).toBe(false);
     await opened([row('previous', 1)]);
@@ -189,8 +208,11 @@ describe('outbox to offline history handoff', () => {
     expect(await save()).toBe(false);
   });
   it('does not release a row removed by clear or rewind', async () => {
-    const { entry } = await opened([row('sent', 2)]);
+    const { entry, source } = await opened([row('sent', 2)]);
     state.rows = [];
+    // reset refreshes an active view: the host must reflect the deletion too,
+    // rather than reintroducing the row as new authoritative history.
+    source.readHistoryView.mockResolvedValue({ version: 1, items: [], hasMore: false, nextCursor: null });
     entry.view.reset();
     await clearHistoryDisk('d', 's');
     expect(await save()).toBe(false);

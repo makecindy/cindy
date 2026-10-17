@@ -40,6 +40,12 @@ Tauri 实现）与 Electron 侧的更新服务（`apps/desktop/src/main/updateSe
 
 先读实际代码再决定实现；不要只凭文档或记忆猜测更新流程。
 
+## Agent 入口
+
+Agent 只能通过 `updateService.ts` 的 `applyConfirmedAppUpdateForAgent` 走同一条
+check → download → relaunch 状态机，且必须先经宿主确认卡；不得给 Agent 新开下载、替换或重启
+路径。产品规则见 [`../product-rules/agent-app-update.md`](../product-rules/agent-app-update.md)。
+
 ## Review 要点
 
 1. 改动是否触及更新器或更新服务？触及就必须先有 owner 确认，PR 说明写明。

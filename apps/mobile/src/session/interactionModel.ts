@@ -11,7 +11,7 @@ import {
   type PermissionReviewPresentation,
 } from '@cindy/maker-shared/interaction';
 import { i18n } from '@/i18n';
-import { readAskUserDraft } from '@/session/interactionDraftStore';
+import { askQuestionsIdentity, readAskUserDraftFor } from '@/session/interactionDraftStore';
 
 export {
   answerKey,
@@ -216,7 +216,10 @@ export function buildCollapsedPendingInteractionPresentation(input: {
   requestId: string | null | undefined;
 }): { accessibilityLabel: string; summaryText: string | null } {
   const questionIndex = input.requestId
-    ? readAskUserDraft(input.requestId)?.currentIndex ?? 0
+    ? readAskUserDraftFor(
+      input.requestId,
+      askQuestionsIdentity(sharedNormalizeAskQuestions(input.item.request.questions)),
+    )?.currentIndex ?? 0
     : 0;
   const summaryText = pendingInteractionSummaryText(input.item, questionIndex);
   return {

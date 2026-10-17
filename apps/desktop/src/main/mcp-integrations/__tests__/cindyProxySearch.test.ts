@@ -163,6 +163,53 @@ describe('cindyProxySearch', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('网关 401 时即使读正文失败也上报本次请求携带的 Key', async () => {
+    const onKeyRejected = vi.fn();
+    const brokenBody = {
+      ok: false,
+      status: 401,
+      headers: new Headers(),
+      text: async () => {
+        throw new TypeError('terminated');
+      },
+    } as unknown as Response;
+    const service = createCindyProxySearchService({
+      getBaseUrl: () => 'https://gateway.example.test',
+      getApiKey: () => 'search-key-sent',
+      onKeyRejected,
+      fetchImpl: vi.fn(async () => brokenBody) as unknown as typeof fetch,
+    });
+    await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+      status: 401,
+    });
+    expect(onKeyRejected).toHaveBeenCalledTimes(1);
+    expect(onKeyRejected).toHaveBeenCalledWith('search-key-sent');
+  });
+
+  it('网关 401 时上报本次请求携带的 Key,其他状态不上报', async () => {
+    for (const [status, expectedReports] of [[401, 1], [403, 0], [429, 0], [200, 0]] as const) {
+      const onKeyRejected = vi.fn();
+      const service = createCindyProxySearchService({
+        getBaseUrl: () => 'https://gateway.example.test',
+        getApiKey: () => 'search-key-sent',
+        onKeyRejected,
+        fetchImpl: vi.fn(async () =>
+          response(
+            status === 200
+              ? { content: [{ type: 'web_search_tool_result', content: [] }] }
+              : { error: 'rejected' },
+            { status },
+          ),
+        ) as unknown as typeof fetch,
+      });
+      await service.search({ query: 'Cindy', limit: 5 });
+      expect(onKeyRejected).toHaveBeenCalledTimes(expectedReports);
+      if (expectedReports > 0) expect(onKeyRejected).toHaveBeenCalledWith('search-key-sent');
+    }
+  });
+
   it('归一化鉴权、额度、限流、服务不可用和非法响应错误', async () => {
     const cases = [
       { status: 401, body: { error: 'insufficient scope' }, code: 'AUTH_REJECTED' },

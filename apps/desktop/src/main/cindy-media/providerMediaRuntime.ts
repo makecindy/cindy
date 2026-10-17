@@ -10,6 +10,15 @@ export interface ProviderMediaRuntimeModel {
   modalities: { input: string[]; output: string[] };
   officialDocs?: string;
   imageProtocol?: ImageProtocol;
+  videoProtocol?: 'xai-videos';
+}
+
+export interface ProviderVideoConnection {
+  baseUrl: string;
+  headers: Record<string, string>;
+  /** Opaque binding revision; never contains the source's credentials. */
+  revision: string;
+  assertCurrent(): void;
 }
 
 export interface ProviderMediaRuntimeRequest extends ImageParameters {
@@ -21,10 +30,10 @@ export interface ProviderMediaRuntimeRequest extends ImageParameters {
   signal?: AbortSignal;
 }
 
-export interface ProviderMediaRuntimeResult {
+export type ProviderMediaRuntimeResult = {
   buffer: Buffer;
   mimeType: string;
-}
+} | { url: string };
 
 interface ProviderMediaRuntime {
   listModels(): ProviderMediaRuntimeModel[];
@@ -32,6 +41,7 @@ interface ProviderMediaRuntime {
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
+  resolveVideoConnection?(providerId: string, modelId: string): ProviderVideoConnection | null;
   invoke(request: ProviderMediaRuntimeRequest): Promise<ProviderMediaRuntimeResult>;
 }
 
@@ -42,7 +52,14 @@ export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void 
 }
 
 export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
-  return runtime?.listModels() ?? [];
+  return [
+    ...(runtime?.listModels() ?? []),
+    ...(runtime?.listVideoModels?.().filter(model => model.videoProtocol) ?? []),
+  ];
+}
+
+export function resolveProviderVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null {
+  return runtime?.resolveVideoConnection?.(providerId, modelId) ?? null;
 }
 
 /** Readiness only; dispatch still belongs to the image/video execution registries. */

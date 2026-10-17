@@ -1,4 +1,13 @@
 {
+  "entry": {
+    "title": "打开任务",
+    "loading": "正在读取任务…",
+    "failed": "未能读取任务信息",
+    "missing": "这台电脑没有返回该任务的信息",
+    "timedOut": "读取任务信息超时",
+    "retry": "重新读取",
+    "back": "返回"
+  },
   "failedScheduleNotice": {
     "text": "此前有自动运行失败。",
     "precheck": "自动检查暂时受阻。",
@@ -7,6 +16,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} 已关闭，请选择已开启的模型后再发送。",
+    "modelUnavailableReselect": "{{model}} 在这台电脑上已不可用，请重新选择模型后再发送。",
     "cancel": "取消",
     "dismissRecommendation": "关闭推荐",
     "delete": "删除",
@@ -30,7 +40,12 @@
     "openMicPermission": "打开麦克风权限设置",
     "maxAttachments": "最多添加 {{max}} 个附件。",
     "voiceStopRecording": "停止录音",
-    "capabilitiesUnsupported": "无法读取电脑端的命令和资源列表，请更新电脑上的 Cindy 后重试"
+    "capabilitiesUnsupported": "无法读取电脑端的命令和资源列表，请更新电脑上的 Cindy 后重试",
+    "plugins": "插件",
+    "pluginsChooseDevice": "请先选择设备",
+    "pluginsLoading": "正在加载插件…",
+    "pluginsEmpty": "暂无已安装插件",
+    "pluginsReload": "重新加载插件"
   },
   "presentation": {
     "collaboration": {
@@ -196,6 +211,7 @@
     "retry": "重试",
     "firstMessageNotSent": "首条消息没有发出，内容已还原到输入框。",
     "attachmentsNotCarriedBack": "有 {{count}} 个附件没能一起带回，需要重新添加。",
+    "pendingAttachmentsNotCarriedBack": "尚未完成选择或上传的附件没能一起带回，请重新添加。",
     "localStorageFull": "Cindy 在手机上的本地存储已满，消息没能保存，请稍后重试。",
     "commandWaitsForSession": "任务还在创建中，这个命令要等任务就绪后才能用，请稍后再发。",
     "locateMessageNotFound": "未找到要定位的消息。",
@@ -217,6 +233,7 @@
     "sessionNotSyncedRetry": "任务尚未同步完成，请稍后再试。",
     "savingPreviousQueueEdit": "正在保存上一条排队消息的修改，完成后再编辑。",
     "attachmentsUploadingBeforeEdit": "还有附件正在上传，等上传完成后再编辑排队消息。",
+    "goalCommandAttachments": "请单独发送 /goal。草稿和附件已保留。",
     "goalAlreadyActive": "该任务已有进行中的目标，请先在此处理它。",
     "resetReconfirmTitle": "请重新确认",
     "resetOfferExpired": "重置凭证已过期，请确认刷新后的配额信息。",
@@ -232,6 +249,7 @@
     "deleteMessageTitle": "删除本条消息？",
     "deleteMessageBody": "用户消息只删除本条；AI 消息会删除上一次用户输入之后产生的整轮输出。之后的消息继续保留。下次发送时，AI 上下文会从剩余记录重建。",
     "deleteMessageAction": "删除本条消息",
+    "deleteMessageBusy": "请等当前回复结束后再删除消息",
     "readingCapabilities": "正在读取 {{agent}} 运行能力…",
     "editingQueueMessageNumbered": "正在编辑第 {{index}} 条排队消息",
     "editingQueueMessage": "正在编辑排队消息",
@@ -276,6 +294,7 @@
     "shareMessage": "分享这条消息"
   },
   "new": {
+    "goalCommandNeedsSession": "请进入已有任务清除目标。",
     "selectDevice": "选择设备",
     "workspaceDialogue": "对话",
     "workspaceProject": "项目",
@@ -297,6 +316,7 @@
     "selectDeviceError": "请选择设备。",
     "enterProjectPath": "请输入电脑端项目路径。",
     "enterModel": "请输入模型。",
+    "modelLoading": "正在读取模型…",
     "enterFirstMessageOrAttachment": "请输入首条消息或添加附件。",
     "noSessionIdReturned": "未能确认远程电脑上的新任务已创建，请重新同步后查看。",
     "sessionIdNotAdopted": "远程电脑上的 Cindy 版本不兼容，请更新后重试。",
@@ -347,7 +367,6 @@
     "worktreeBranchesLoading": "正在读取分支…",
     "worktreeBranchSaving": "正在同步所选分支…",
     "worktreeBranchSyncFailed": "无法确认已保存的源分支，请重新选择分支",
-    "worktreeSettingsSaving": "正在同步 worktree 设置…",
     "worktreeSettingsSyncFailed": "未能保存 worktree 默认设置，仍可按当前选择继续",
     "worktreeBranchesRetry": "无法读取分支，点按重试",
     "worktreeDetecting": "检测环境中…",
@@ -480,6 +499,8 @@
     "deleteOne": "删除本条消息"
   },
   "tail": {
+    "readableHistoryRecovery": "用可读历史新建任务",
+    "readableHistoryRecoveryDescription": "如果重试仍然失败，可用可读历史新建任务，省略内部加密信息。原任务保留，失败消息不会自动重发。",
     "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
     "replyFailed": "本次回复未能完成。请查看错误详情以了解原因。",
     "showErrorDetails": "查看错误详情",
@@ -502,10 +523,6 @@
     "moreOptions": "更多选项",
     "archiveConversation": "归档任务",
     "closeActionMenu": "关闭任务操作菜单",
-    "referenceAroundAnchor": "链接附近",
-    "referenceRecent": "最近消息",
-    "referenceCount": "{{num}} 条",
-    "referenceTruncated": "已截断",
     "pinnedSection": "置顶",
     "extraDirsSummary": "当前 {{num}} 个附加目录",
     "noExtraDirsSummary": "当前没有附加目录",
@@ -524,6 +541,7 @@
     "taskAlreadyCreated": "电脑上已创建这个任务，已保存的消息会在原任务中继续发送。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以在电脑上这个供应商的「远程与分享」页查看组内电脑。",
     "REMOTE_DAEMON_CLOSED": "远程连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程任务无法访问本地文件或图片附件。请直接粘贴内容。",
     "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
@@ -551,6 +569,8 @@
     "REMOTE_AGENT_EXPIRED": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
     "REMOTE_AGENT_NOT_FOUND": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
     "REMOTE_AGENT_BUSY": "那台电脑上同时运行的任务太多。先结束一些任务后再试。",
+    "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
+    "REMOTE_AGENT_TOTAL_LIMIT": "远程电脑保留的任务总数已达上限。请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
     "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
     "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
@@ -566,6 +586,19 @@
     "enableSubmit": "开启协同",
     "createWorkerTitle": "创建新 Worker",
     "createWorkerSubmit": "创建 Worker",
+    "executionDeviceLabel": "运行设备",
+    "leadComputer": "Lead 所在电脑",
+    "deviceOnline": "在线",
+    "deviceNeedsUpdate": "版本过旧，需更新",
+    "deviceUnavailable": "运行设备不可用",
+    "executionDeviceHint": "只列出 Lead 所在电脑可控制的同账号在线电脑。",
+    "remoteDirLabel": "运行设备上的工作目录",
+    "remoteDirChat": "对话",
+    "remoteDirPath": "指定目录",
+    "remoteDirPlaceholder": "运行设备上的绝对路径",
+    "remoteDirChatHint": "在运行设备创建对话任务，不绑定项目。",
+    "remoteDirPathHint": "在运行设备上检查目录；不存在时报错，不会改用 Lead 所在电脑的目录。",
+    "remoteDirInvalid": "请输入运行设备上的绝对路径。",
     "roleLabel": "角色名",
     "roleHint": "只是一个名字，方便多个协作者时分辨角色，不改变能力",
     "customRole": "自定义",
@@ -586,6 +619,9 @@
     "workerCountSummary_other": "{{count}} 个 Worker · {{running}} 运行中",
     "loading": "正在读取 Worker…",
     "noWorkers": "还没有 Worker",
+    "otherComputer": "另一台电脑",
+    "deviceUnreachable": "暂时无法获取状态",
+    "archiveRemoteConfirmDesc": "它会从这个协同里移除，并停止 {{device}} 上正在进行的这一轮。{{device}} 上的任务、记录和文件都会保留，标注「协同已结束」。",
     "manageGroup": "管理",
     "hardLimitHint": "已达硬上限 {{limit}} 个 · 归档现有 Worker 后可继续创建",
     "softLimitHint": "已超过软上限 {{limit}} 个 · Worker 过多会增加内存占用",
@@ -618,6 +654,7 @@
     "errors": {
       "unsupported": "电脑端版本过旧，暂不支持协同",
       "loadFailed": "Worker 状态读取失败。",
+      "loadExecutionDevices": "读取运行设备失败。",
       "startFailed": "开启协同失败。",
       "createFailed": "创建 Worker 失败。",
       "archiveFailed": "归档 Worker 失败。",

@@ -155,7 +155,7 @@ export async function verifyImportedAutomation(root: string, botId: string, item
         if (entry.env) return Object.keys(entry.env).every(name => !isDataVariable(name) || verifiedVariables.has(name));
         // Files/skills were copied before verification; unknown credentials
         // cannot be satisfied by a successful read from a different connection.
-        return !!entry.asset || entry.view.category !== 'connections';
+        return !!entry.asset || entry.view.category !== 'connections' && entry.view.category !== 'bots';
       });
     const scriptNames = sourceRoot ? [string(item.automation.original.script), string(item.automation.original.monitor_script)]
       .filter(Boolean).map(value => importedScriptName(sourceRoot, value)) : [];

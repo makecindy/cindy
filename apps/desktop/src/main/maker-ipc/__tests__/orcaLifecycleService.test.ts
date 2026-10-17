@@ -163,7 +163,7 @@ describe('OrcaLifecycleService', () => {
         insideSend = true; allowed = !revoked;
         try { await runAcceptedCallback(opts.onAccepted, 'worker-session-1', 'placeholder'); nativeCalls++; return { dispatched: true }; }
         finally { insideSend = false; }
-      } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() } };
+      } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() }, orcaRemoteWorkers: { runtime: { isRemote: () => false } } };
       const js = ts.transpileModule(`return ({${callback}}).sendWorkerReadyPlaceholder;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
       deps.sendWorkerReadyPlaceholder = new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
       deps.rollbackCreatedWorker = vi.fn(async () => { expect(insideSend).toBe(false); });
@@ -702,6 +702,35 @@ describe('OrcaLifecycleService', () => {
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
+  });
+
+  it('places the first worker on another computer and sends its task as plain text', async () => {
+    const { deps, service } = createDeps();
+    const create = vi.mocked(deps.createWorkerInTeam);
+    const base = create.getMockImplementation()!;
+    create.mockImplementation(async (params, ...rest) => {
+      const created = await base(params, ...rest);
+      return created.ok ? { ...created, executionDeviceId: params.executionDeviceId } : created;
+    });
+
+    await expect(
+      service.enableTeam({
+        leadSessionId: 'lead-1',
+        workerAgent: 'codex',
+        role: 'reader',
+        delegateTask: '读取 notes.txt 第二行',
+        executionDeviceId: 'mac-mini',
+        workingDir: '/Users/demo/Interviews',
+      }),
+    ).resolves.toMatchObject({ ok: true, dispatched: true });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews' }),
+      undefined,
+      expect.any(Function),
+    );
+    // 运行设备上没有读取 Lead 历史的 Worker 桥：不包 UI Assignment。
+    expect(vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message).toBe('读取 notes.txt 第二行');
   });
 
   it('keeps the worker role slug as the default label when a delegate task exists', async () => {

@@ -32,6 +32,7 @@ function forkedSessionIdFromTx(): string {
   if (!call) throw new Error('no fork.session tx call recorded');
   return (call.args as { newSession: { id: string } }).newSession.id;
 }
+import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -40,6 +41,24 @@ const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 // maker.forkSdkSession 内部已包含 SDK 调用 + uuidMap 构建; 业务测试只关心其入参
 // (确认 fork 把对的 sourceSdkSessionId / upToMessageId / title / workingDir 传下去)
 // 和返回值 (uuidMap 决定 messages.agentMeta remap 结果)。
+const { ipcHandlers, sessionCreatedMock } = vi.hoisted(() => ({
+  ipcHandlers: new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>(),
+  sessionCreatedMock: vi.fn(),
+}));
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: (
+      channel: string,
+      handler: (event: unknown, ...args: unknown[]) => Promise<unknown>,
+    ) => {
+      ipcHandlers.set(channel, handler);
+    },
+  },
+}));
+vi.mock('../localDb/ipc/sessionCreatedBroadcast.js', () => ({
+  emitSessionCreated: sessionCreatedMock,
+}));
+
 const forkSdkSessionMock = vi.fn();
 vi.mock('../maker-host/index.js', () => ({
   getMaker: () => ({
@@ -107,6 +126,8 @@ const originalXdtUserDataDir = process.env.XDT_USER_DATA_DIR;
 const tempDirs: string[] = [];
 
 beforeEach(async () => {
+  ipcHandlers.clear();
+  sessionCreatedMock.mockClear();
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (originalXdtUserDataDir === undefined) delete process.env.XDT_USER_DATA_DIR;
@@ -216,6 +237,49 @@ async function writeClaudeJsonlInConfigDir(
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
+
+describe('disabled Cindy Make fork boundaries', () => {
+  const cases = ['cindy-make', 'cindy-make-merge'].flatMap((source) =>
+    [MAKER_INVOKE.FORK, MAKER_INVOKE.FORK_STRIP_ENCRYPTED].flatMap((channel) =>
+      ['orchestration', 'legacy IPC'].map((entryPoint) => ({ source, channel, entryPoint })),
+    ),
+  );
+
+  it.each(cases)(
+    'rejects $source through $entryPoint $channel before reading history or creating a child',
+    async ({ source, channel, entryPoint }) => {
+      selectQueue.push(
+        [makeSourceRow({ source, agentKind: 'codex' })],
+        [makeMessageRow({ clientId: 'legacy-message' })],
+      );
+      const args =
+        channel === MAKER_INVOKE.FORK
+          ? ['src-session', 'legacy-message']
+          : ['src-session'];
+      let operation: Promise<unknown>;
+      if (entryPoint === 'legacy IPC') {
+        const { registerMakerForkIpc } = await import('../maker-ipc/fork.js');
+        registerMakerForkIpc();
+        operation = ipcHandlers.get(channel)!({}, ...args);
+      } else {
+        operation =
+          channel === MAKER_INVOKE.FORK
+            ? forkSessionAtMessage('src-session', 'legacy-message')
+            : forkSessionStripEncrypted('src-session');
+      }
+
+      await expect(operation).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+      expect(selectQueue).toHaveLength(1);
+      expect(forkSdkSessionMock).not.toHaveBeenCalled();
+      expect(txMock).not.toHaveBeenCalled();
+      expect(queryOneMock).not.toHaveBeenCalled();
+      expect(queryMock).not.toHaveBeenCalled();
+      expect(createMessageMock).not.toHaveBeenCalled();
+      expect(commitContextRebuildMock).not.toHaveBeenCalled();
+      expect(sessionCreatedMock).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('forkSessionAtMessage', () => {
   it('inherits the task context-window budget (preference entry, not a session column)', async () => {

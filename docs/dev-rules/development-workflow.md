@@ -20,7 +20,10 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
 - **你的编辑对运行中的 app 无效**：Vite HMR 只 watch 启动 dev 实例的那个 checkout，
   worktree 下的改动既不热更也不随重启生效。「改了没反应」不是 bug。开发过程中的增量验证在本
   worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**提交前仍须完成
-  第 2 节的提交前验证**。需要运行时验证时 commit + push 后交用户（你无法重启宿主）。
+  第 2 节的提交前验证**。需要运行时验证时，在本 worktree 用
+  `pnpm restart:desktop:remote -- --isolated=@worktree` 起一个属于本 worktree 的独立实例
+  （不会停掉宿主，也不与其他 checkout 抢默认 `dev` 沙箱），成功以
+  `DESKTOP_DEV_VERDICT=ready` 为准，细则见 [`desktop-development.md`](desktop-development.md)。
 - **宿主 app 日志不在你的 cwd 下**：dev 日志在启动 checkout（通常是 baseRepo）的
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
 - **会话结束与工作区保留**：是否 commit 由用户或宿主工作流决定，不能仅因会话结束

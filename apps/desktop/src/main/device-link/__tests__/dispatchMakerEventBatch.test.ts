@@ -15,6 +15,7 @@ import {
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SESSION_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -136,6 +137,41 @@ afterEach(() => {
 });
 
 describe('[1] 能力协商', () => {
+  it('keeps SDK done off the list subscription while retaining full detail events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1];
+    subscriptions.subscribe('list', ['sessions'], 'list', capabilities);
+    subscriptions.subscribe('detail', ['sessions', 'session:s1'], 'detail', capabilities);
+    const payload = { sessionId: 's1', resolvedContent: 'tool-body', event: { type: 'done', source: 'codex',
+      turnContinuationId: 2, turnScope: 'background', data: { raw: { items: ['tool-body'] }, result: 'tool-body',
+        plan: ['tool-body'], cancelled: true, silentStop: true } } };
+    __testing.forwardPush('maker:event', payload);
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent.filter(push => push.dst === 'list')).toEqual([]);
+    expect((h.sent.find(push => push.dst === 'detail')!.payload as MakerEventBatchPayload).events).toEqual([payload]);
+  });
+
+  it('prefetches full prose for new list subscribers only, without duplicate delivery or tools', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const caps = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1];
+    subscriptions.subscribe('phone', ['sessions'], 'phone', caps);
+    subscriptions.subscribe('desktop', ['sessions', 'session:s1'], 'desktop', caps);
+    subscriptions.subscribe('old', ['sessions'], 'old');
+    const content = '完整长回复'.repeat(2000);
+    __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'm1', event: { type: 'text', data: { text: content, isFinal: false } } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'm1', clientId: 'm1', role: 'assistant', content } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'tool', role: 'tool_result', content } });
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    const phone = h.sent.filter(push => push.dst === 'phone');
+    expect(phone.map(push => push.channel)).toEqual(['local-db:messages:created']);
+    expect(phone[0].payload).toMatchObject({ listMessage: true, message: { content, remoteBodyVersion: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    expect(h.sent.filter(push => push.dst === 'old')).toEqual([]);
+    expect(h.sent.filter(push => push.dst === 'desktop' && push.channel === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
+    expect(subscriptions.controllerHasTopic('phone', 'session:s1')).toBe(false);
+  });
+
   it('coalesces task patches even for legacy list subscribers and cancels offline peers', async () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -560,6 +596,21 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
 });
 
 describe('[11] 重连恢复的顺序(review 第三轮)', () => {
+  it.each(['completed offline', '中'.repeat(200_000), '\u0000'.repeat(200_000)])('replays an allowed offline body intact (%#)', (content) => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1];
+    subscriptions.subscribe('phone', ['sessions'], 'phone', capabilities);
+    h.client.getStatus.mockReturnValue('connecting');
+    const message = { id: 'final', clientId: 'final', role: 'assistant', content };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toEqual([]);
+    h.client.getStatus.mockReturnValue('online');
+    __testing.handleSubscriptionFrame('phone', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'], capabilities }] });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ channel: 'local-db:messages:created', payload: { listMessage: true, message } });
+  });
+
   it('订阅重放 drain 离线积压之前先排空断线前的事件批', () => {
     // 断线期间同会话的新事件/终态进 offlinePushQueue,旧批留在内存等重试;
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
@@ -703,6 +754,63 @@ describe('running session recovery on slow links', () => {
   const snapshot = { ...delta('whole prefix'), event: {
     type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
   } };
+
+  it('keeps oversized recovery text on demand for list-only subscribers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const oversized = { ...snapshot, event: { ...snapshot.event, data: { ...snapshot.event.data, text: 'x'.repeat(200_001) } } };
+    setSessionTextSnapshotReader(() => oversized);
+    subscriptions.subscribe('list', ['sessions', 'session:s1'], 'list', [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    __testing.handleSubscriptionFrame('list', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([]);
+    __testing.handleSubscriptionFrame('detail', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }] });
+    expect(h.sent.at(-1)).toMatchObject({ channel: SESSION_SYNC_CHANNEL, payload: oversized });
+  });
+
+  it('drops pending detail text when leaving chat and only prefetches the completed body', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    subscriptions.subscribe('phone', ['sessions', 'session:s1'], 'phone',
+      [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    __testing.forwardPush('maker:event', delta('pending detail suffix'));
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toEqual([]);
+    __testing.forwardPush('maker:event', delta('list suffix'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(h.sent).toEqual([]);
+    const message = { id: 'p1', role: 'assistant', content: 'complete durable body' };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ payload: { listMessage: true, message } });
+    __testing.forwardPush('maker:event', delta('cancelled suffix'));
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'] }] });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toHaveLength(1);
+  });
+
+  it('never finalizes a truncated list prefix after cumulative or full-snapshot overflow', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('list', ['sessions'], 'list', [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    // Each delta fits the old per-event check, but together they exceed the body limit.
+    for (let i = 0; i < 3; i++) __testing.forwardPush('maker:event', delta('中'.repeat(100_000)));
+    __testing.forwardPush('maker:event', snapshot);
+    __testing.forwardPush('maker:event', { ...snapshot, event: { ...snapshot.event,
+      data: { ...snapshot.event.data, text: '中'.repeat(200_001) } } });
+    __testing.forwardPush('maker:event', { sessionId: 's1', event: { type: 'done', data: {} } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1',
+      message: { id: 'p1', role: 'assistant', content: '中'.repeat(300_000) } });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toEqual([]);
+    // The next bounded message is independent and remains eligible for prefetch.
+    const message = { id: 'p2', role: 'assistant', content: 'next complete reply' };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ payload: { listMessage: true, message } });
+  });
 
   it.each([
     ['batch', 'queue'], ['batch', 'peer'], ['legacy', 'queue'], ['legacy', 'peer'],

@@ -56,6 +56,39 @@ describe("structured share fallback", () => {
       expect(block.x + width).toBeLessThanOrEqual(cell.x + cell.width);
     }
   });
+  it("keeps outer emphasis on links and code wrapped by bold, italic or strikethrough", () => {
+    const layout = buildConversationShareSvgLayout({
+      allShareableIds: ["m"],
+      colors: {
+        background: "white",
+        surfaceElevated: "white",
+        border: "gray",
+        codeSurface: "gray",
+        inlineCode: "black",
+        surfaceChip: "gray",
+        textPrimary: "black",
+        textSecondary: "gray",
+        textTertiary: "gray",
+        syntax: {},
+      },
+      width: 640,
+      messages: [
+        {
+          clientId: "m",
+          kind: "assistant",
+          body: "**https://a.example/x** *https://b.example/y* ~~https://c.example/z~~ **`code`**",
+        },
+      ],
+    });
+    const find = (word: string) =>
+      layout.bubbles[0]!.textBlocks.find((t) => t.lines.join("") === word);
+    expect(find("https://a.example/x")).toMatchObject({ bold: true, decoration: "underline" });
+    expect(find("https://b.example/y")).toMatchObject({ italic: true, decoration: "underline" });
+    // SVG 只有一种装饰线:删除线优先于链接下划线。
+    expect(find("https://c.example/z")?.decoration).toBe("line-through");
+    expect(find("code")).toMatchObject({ bold: true, monospace: true });
+  });
+
   it.each([lightColors, darkColors])(
     "retains Markdown styles and table cells within the canvas",
     (c) => {

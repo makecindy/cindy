@@ -31,6 +31,9 @@ import {
   sendFile,
   sendText,
   claimPatchableOpener,
+  recallMessage,
+  getAccountEpoch,
+  rearmAnchorToTrigger,
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { resolveFeishuMediaUrl } from './mediaCache.js';
@@ -117,7 +120,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    */
   private extraImageAbsPaths: string[] = [];
 
-  constructor(messageId: string, openId: string, initial: string, private readonly opts?: { threadTs?: string }) {
+  constructor(messageId: string, openId: string, initial: string, private readonly opts?: { threadTs?: string }, private readonly openerEpoch?: number) {
     this.messageId = messageId;
     this.openId = openId;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
@@ -223,6 +226,16 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
   private async doFinalize(): Promise<void> {
     const log = getLog();
     const text = this.buffer;
+    if (!text.trim() && this.extraImageAbsPaths.length === 0) {
+      // A claimed opener is also the topic's reply anchor. Only its owning
+      // account/round may restore that anchor after a successful recall.
+      if (this.openerEpoch !== undefined && getAccountEpoch() !== this.openerEpoch) return;
+      await recallMessage(this.messageId);
+      if (this.openerEpoch !== undefined && getAccountEpoch() === this.openerEpoch) {
+        rearmAnchorToTrigger(this.openId, this.messageId);
+      }
+      return;
+    }
 
     // 1. Upload all xdt-image URLs in parallel; missing entries get a "图片
     //    加载失败" placeholder in the final card.
@@ -307,7 +320,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     //    a) text only → plain markdown card v2
     //    b) text + images (markdown 内联 OR tool_result 追加) → mixed elements card
     //    c) empty text + only files → "🎉 N 个文件已送达" placeholder
-    //    d) totally empty → fallback "(空回复)"
+    //    d) extra images all failed → delivery failure (truly empty finals returned above)
     const hasAnyImage = imageUrls.length > 0 || extraImageKeys.length > 0;
     const fileOnly = cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0;
     try {
@@ -320,7 +333,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
         // 兜底分支会塞 "(空回复)" — 但 hasAnyImage 时一定不为空, 所以不会触发。
         card = buildMixedMarkdownCardV2(cardText, imageMap, extraImageKeys);
       } else {
-        card = buildMarkdownCardV2(cardTextTrimmed.length > 0 ? cardText : transportMessages.streaming.emptyReply);
+        card = buildMarkdownCardV2(cardTextTrimmed.length > 0 ? cardText : transportMessages.streaming.deliveryFailed);
       }
       card = fitCardToLimit(cardText, card, (visibleText) =>
         hasAnyImage
@@ -359,7 +372,7 @@ export async function start(
   // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
   const claimed = opts?.threadTs ? null : claimPatchableOpener(openId);
   if (claimed) {
-    return new FeishuStreamingTextHandle(claimed, openId, initial, opts);
+    return new FeishuStreamingTextHandle(claimed, openId, initial, opts, getAccountEpoch());
   }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial), opts);
   return new FeishuStreamingTextHandle(messageId, openId, initial, opts);
@@ -370,5 +383,9 @@ export async function start(
  * 把 picker card 直接转成"已接管 + 总结"视图, 替代发两张独立消息。
  */
 export async function patchMarkdown(messageId: string, markdown: string): Promise<void> {
+  if (!markdown.trim()) {
+    await recallMessage(messageId);
+    return;
+  }
   await patchCardRaw(messageId, buildMarkdownCardV2(markdown));
 }

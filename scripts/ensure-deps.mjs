@@ -8,6 +8,9 @@
  *   3. Electron binary 完整性 — 确认 electron postinstall 已完整解出 dist binary
  *   4. native ABI 隔离 — root 保持 Node ABI，Electron cache 单独准备 native binding
  *
+ * `--electron-binary` 只跑第 3 道，由根 postinstall 调用，让任何 `pnpm install` 结束时
+ * Electron 都是完整的。
+ *
  * 关于 hoisted 模式：项目 .npmrc 指定 node-linker=hoisted，绝大多数依赖被平铺到根
  * node_modules，但原生二进制包（electron、protobufjs 等）必须留
  * 在子包 node_modules 下。如果这些子包目录只剩 postinstall 产物（例如
@@ -430,6 +433,26 @@ function ensureElectronBinaryComplete(root = ROOT) {
   }
 }
 
+// CI 用 stub dist 代替真实 Electron；显式跳过下载时也不应在安装阶段补下载。
+export function electronBinaryCheckSkipReason(env = process.env) {
+  if (env.ELECTRON_OVERRIDE_DIST_PATH) return 'ELECTRON_OVERRIDE_DIST_PATH';
+  if (env.ELECTRON_SKIP_BINARY_DOWNLOAD) return 'ELECTRON_SKIP_BINARY_DOWNLOAD';
+  return null;
+}
+
+// 由根 postinstall 调用。pnpm 的 side-effects cache 一旦记下「electron 构建完成但没有产物」
+// （例如某次安装设置了 ELECTRON_SKIP_BINARY_DOWNLOAD），之后同机每个新 worktree 都会跳过
+// Electron 自己的 postinstall，留下缺 dist 的安装。这里在每次 install 末尾按 install.js
+// 语义复核一次，缺失就补装，不依赖 store 缓存是否干净。
+function ensureElectronBinaryAfterInstall() {
+  const skipReason = electronBinaryCheckSkipReason();
+  if (skipReason) {
+    log(`已设置 ${skipReason}，跳过 Electron binary 检查`);
+    return;
+  }
+  ensureElectronBinaryComplete();
+}
+
 // 检测 frozen-lockfile 是否生效（根 .npmrc 显式配置，或环境变量覆盖）。
 // 仅用于在 install 失败时判断要不要给出 frozen 专属的修复指引。
 function isFrozenLockfileEnabled() {
@@ -734,6 +757,10 @@ function ensureElectronNativeBinding(electronVersion, electronArch) {
 function main() {
   if (process.argv.slice(2).includes('--workspace-only')) {
     ensureWorkspaceOnlyDependencies();
+    return;
+  }
+  if (process.argv.slice(2).includes('--electron-binary')) {
+    ensureElectronBinaryAfterInstall();
     return;
   }
 

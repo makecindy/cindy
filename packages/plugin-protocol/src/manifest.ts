@@ -207,6 +207,8 @@ export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
   tasks?: boolean;
+  /** 后台隐藏任务;必须与 `tasks: true` 同时声明。 */
+  hiddenTasks?: boolean;
   schedule?: boolean;
 }
 
@@ -2939,10 +2941,16 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
       return { ok: false, reason: 'agent.tasks must be boolean' };
     }
+    if (agentRaw.hiddenTasks !== undefined && typeof agentRaw.hiddenTasks !== 'boolean') {
+      return { ok: false, reason: 'agent.hiddenTasks must be boolean' };
+    }
+    if (agentRaw.hiddenTasks === true && agentRaw.tasks !== true) {
+      return { ok: false, reason: 'agent.hiddenTasks: true 需要同时声明 agent.tasks: true' };
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -2950,10 +2958,11 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
+      ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }

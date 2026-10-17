@@ -10,12 +10,41 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  bindHostedSessionProvider,
   clearAllSessionProviders,
+  clearSessionProvider,
   freezeSessionProviderAtStart,
   getSessionProvider,
   hasSessionProvider,
   setSessionProvider,
 } from '../session-provider-store';
+
+describe('hosted provider binding lifecycle', () => {
+  beforeEach(() => clearAllSessionProviders());
+
+  it('keeps a replacement run registered despite late updates and cleanup from the old run', () => {
+    const old = bindHostedSessionProvider('remote-task', 'fp');
+    const current = bindHostedSessionProvider('remote-task', 'other');
+    old.setProvider('stale');
+    old.release();
+    expect(getSessionProvider('remote-task')).toBe('other');
+    current.setProvider('fp');
+    expect(getSessionProvider('remote-task')).toBe('fp');
+    current.release();
+    expect(hasSessionProvider('remote-task')).toBe(false);
+  });
+
+  it.each(['session', 'account', 'overwrite'] as const)('invalidates late callbacks on %s cleanup', (boundary) => {
+    const binding = bindHostedSessionProvider('remote-task', 'fp');
+    if (boundary === 'session') clearSessionProvider('remote-task');
+    if (boundary === 'account') clearAllSessionProviders();
+    if (boundary === 'overwrite') setSessionProvider('remote-task', 'new-source');
+    binding.setProvider('late');
+    binding.release();
+    expect(getSessionProvider('remote-task')).toBe(boundary === 'overwrite' ? 'new-source' : null);
+    expect(hasSessionProvider('remote-task')).toBe(boundary === 'overwrite');
+  });
+});
 
 describe('freezeSessionProviderAtStart', () => {
   beforeEach(() => {

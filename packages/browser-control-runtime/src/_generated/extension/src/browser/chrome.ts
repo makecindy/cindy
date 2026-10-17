@@ -829,6 +829,8 @@ export function buildOpenClawChromeLaunchArgs(params: {
   if (headlessMode.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
+  } else {
+    args.push("--no-startup-window");
   }
   if (resolved.noSandbox) {
     args.push("--no-sandbox");

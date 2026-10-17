@@ -141,7 +141,11 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   }
   if (r.type === 'open-bot-workbench-tab') {
     if (typeof r.botId !== 'string' || !r.botId || r.botId.length > 128) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
-    return { type: 'open-bot-workbench-tab', sessionId: r.sessionId, botId: r.botId };
+    if (r.focusTab !== undefined && typeof r.focusTab !== 'boolean') throwIpcError('INVALID_PARAMS', 'command.focusTab must be boolean');
+    return {
+      type: 'open-bot-workbench-tab', sessionId: r.sessionId, botId: r.botId,
+      ...(r.focusTab === undefined ? {} : { focusTab: r.focusTab }),
+    };
   }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =

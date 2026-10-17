@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
+  buildClaudeDeniedMcpServers,
+  buildClaudeDisallowedTools,
   buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeRemoteOrcaCallerGuards,
   buildClaudeRemoteRootOnlyToolGuards,
@@ -160,6 +162,45 @@ describe('buildClaudeSkillOverrides', () => {
     } as const satisfies CapabilityRoutingPolicy;
 
     expect(buildClaudeSkillOverrides(policy)).toEqual({});
+  });
+});
+
+describe('Claude disabled built-in surfaces', () => {
+  const policy = {
+    overrides: [
+      {
+        capabilityId: 'output-delivery',
+        source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'tool', id: 'Artifact' },
+        invocation: 'disabled',
+      },
+      {
+        capabilityId: 'output-delivery',
+        source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'mcp', id: 'claude.ai Claude Docs' },
+        invocation: 'disabled',
+      },
+      {
+        capabilityId: 'feishu',
+        source: { kind: 'harness-plugin', harness: 'claude-code', surface: 'mcp', id: 'plugin:feishu-delegate:feishu-delegate' },
+        invocation: 'explicit-only',
+      },
+      {
+        capabilityId: 'output-delivery',
+        source: { kind: 'harness-builtin', harness: 'codex', surface: 'tool', id: 'view_image' },
+        invocation: 'disabled',
+      },
+    ],
+  } as const satisfies CapabilityRoutingPolicy;
+
+  it('maps disabled tools to SDK disallowedTools', () => {
+    expect(buildClaudeDisallowedTools(policy)).toEqual(['Artifact']);
+    expect(buildClaudeDisallowedTools(undefined)).toEqual([]);
+  });
+
+  it('denies a disabled MCP server by name so its instructions leave the prompt too', () => {
+    expect(buildClaudeDeniedMcpServers(policy)).toEqual([
+      { serverName: 'claude.ai Claude Docs' },
+    ]);
+    expect(buildClaudeDeniedMcpServers(undefined)).toEqual([]);
   });
 });
 

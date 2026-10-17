@@ -29,6 +29,7 @@ import { useChatSessionFile } from './ChatSessionFileContext';
 import { TextLightbox } from './TextLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { isHtmlFilePath } from './useOpenWithMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 
 const MAX_VISIBLE_FILES = 3;
 
@@ -49,6 +50,7 @@ function TurnChangeFileRow({
   const absolutePath = resolveToolFilePath(file.path, cwd);
   const htmlWithSession = isHtmlFilePath(absolutePath) ? sessionId : undefined;
   const contextMenu = useFileChipContextMenu({
+    fileName: absolutePath,
     getAbsPath: () => absolutePath,
     canOpenInBrowser: isBrowserOpenablePath(absolutePath),
     sidebarOpenSessionId: htmlWithSession,
@@ -66,7 +68,9 @@ function TurnChangeFileRow({
         ref={fileRowRef}
         type="button"
         title={absolutePath}
-        onClick={onOpenReview}
+        onClick={(event) => contextMenu.onActivate(event, onOpenReview)}
+        onAuxClick={(event) => { if (event.button === 1) contextMenu.onActivate(event, onOpenReview); }}
+        onKeyDown={activateInlineLinkFromKeyboard}
         onContextMenu={contextMenu.onContextMenu}
         className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
       >

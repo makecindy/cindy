@@ -1,6 +1,7 @@
 import { getAppCapabilities } from '../appCapabilities.js';
 import { createLogger } from '../logger.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
@@ -81,6 +82,8 @@ export interface CindyProxySearchDeps {
   getBaseUrl(): string;
   getApiKey(): string | null;
   fetchImpl: typeof fetch;
+  /** 网关以 401 拒绝本次请求携带的 Cindy AI Key 时调用,入参为该 Key。 */
+  onKeyRejected?(apiKey: string): void;
   timeoutMs?: number;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -444,6 +447,8 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
       }
 
       const requestId = requestIdOf(response);
+      // 拿到状态码就上报,不依赖后续正文读取成功(读正文中断时也不能漏报)。
+      if (response.status === 401) deps.onKeyRejected?.(apiKey);
       let body: string;
       try {
         body = await response.text();
@@ -549,6 +554,7 @@ export function getCindyProxySearchService(): CindyProxySearchService {
     getApiKey: () =>
       getAppCapabilities().canUseCindyGateway ? getProviderSecretStore().get('xd') : null,
     fetchImpl: outboundFetch,
+    onKeyRejected: reportCindyGatewayKeyRejected,
     log,
   });
   return service;

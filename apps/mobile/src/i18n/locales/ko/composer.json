@@ -97,7 +97,7 @@
     "sessionExpiredOrForbidden": "{{appName}} 음성 서비스 로그인이 만료되었거나 권한이 없습니다. 로그인 상태를 확인한 후 다시 시도하세요(상태 코드 {{status}}).",
     "incomplete": "음성 입력이 완료되지 않았습니다. 다시 시도하세요.",
     "missingRefinerTargetProvider": "음성 다듬기를 사용할 수 없습니다. {{appName}}에 다시 로그인한 후 다시 시도하세요.",
-    "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도해 주세요.",
+    "emptyTranscript": "잘 듣지 못했습니다. 마이크를 확인하거나 더 가까이에서 다시 시도해 주세요.",
     "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",

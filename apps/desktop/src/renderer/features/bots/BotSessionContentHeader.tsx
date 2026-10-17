@@ -8,7 +8,8 @@
  * right end of the bar — because "click the name" is the discoverable one and
  * "the gear is on the right" is the learned one. Local teammates also get a
  * permanent way into their workbench here: the sidebar tab can be closed, and
- * nothing else reopens it.
+ * nothing else reopens it — plus the IM-style "add people" entry that turns
+ * this chat into a group or brings the teammate into one.
  */
 import { useMemo } from 'react';
 import { LayoutGrid, Settings2 } from 'lucide-react';
@@ -18,9 +19,12 @@ import { useTranslation } from 'react-i18next';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useRegisterContentHeader } from '../feature-context';
 import { openBotWorkbenchTab } from '@/features/right-sidebar/lib/openBotWorkbenchTab';
+import { BotAddToGroupMenu } from './BotAddToGroupMenu';
 import { BotAvatar } from './BotAvatar';
 import { isCindyDeviceBot } from './cindyDeviceRoster';
 import { CindyHeaderDevicePicker } from './CindyDevicePicker';
+import { CompanionHomeChip } from './BotHomeComputerSetting';
+import { useCompanionCloud } from './companionCloudStore';
 
 export interface BotChatIdentity {
   id: string;
@@ -32,13 +36,21 @@ export interface BotChatIdentity {
   name: string;
   avatar?: string | null;
   avatarColor?: string | null;
+  /** Only the teammate's own canonical private chat (not channel routes or read-only history) can start a group. */
+  canonicalChat?: boolean;
 }
 
 export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const isCindy = isCindyDeviceBot(bot);
+  const cloud = useCompanionCloud();
+  // A cloud companion is one teammate wherever it runs: the header names its main computer and
+  // switches it, instead of listing per-computer copies (the older Cindy device picker).
+  const homeKnown =
+    cloud.enabled &&
+    cloud.actors.some((actor) => actor.externalId === bot.id && !!actor.homeDeviceId);
+  const isCindy = !homeKnown && isCindyDeviceBot(bot);
   const openSettings = () => {
     const search = new URLSearchParams(location.search);
     search.set('settings', '1');
@@ -60,13 +72,15 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
+      {homeKnown ? <CompanionHomeChip bot={{ id: bot.id, name: bot.name }} /> : null}
       {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        {bot.deviceId && !isCindy ? (
+        {bot.deviceId && !isCindy && !homeKnown ? (
           <span className="max-w-32 truncate text-12 text-[var(--text-tertiary)]">
             {bot.deviceName}
           </span>
         ) : null}
+        {bot.canonicalChat && !bot.deviceId ? <BotAddToGroupMenu botId={bot.id} /> : null}
         {!bot.deviceId && bot.sessionId ? (
           <button
             type="button"

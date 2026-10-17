@@ -179,7 +179,7 @@ export async function prepareBotCapabilityEpochBeforeSend<T extends {
   coordinator: BotCompactRuntimeRefreshCoordinator;
 }): Promise<BotCompactRuntimeRefreshOutcome> {
   const row = await deps.readSession();
-  if (!row || (row.role !== 'canonical' && row.role !== 'group')
+  if (!row || (row.role !== 'canonical' && row.role !== 'group' && row.role !== 'channel')
     || row.source !== 'bot' || row.status !== 'active' || !row.workingDir) {
     return 'not-bot';
   }

@@ -10,13 +10,19 @@ import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
 import { ClaudeCodeAgent, type AgentDeps, type AgentEvent, type InteractionRequest, type Logger } from '@cindy/maker-core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { buildUserProvider } from '@cindy/model-providers';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { remoteAgentEventMapper } from '../controller/eventMap';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
+import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
+import { setCustomProviderKeyReader } from '../../maker-host/provider-route';
+import { bindHostedSessionProvider, clearAllSessionProviders } from '../../maker-host/session-provider-store';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
@@ -57,6 +63,8 @@ function text(value: string): string {
 }
 
 interface MainRequest {
+  sdkSessionId: string;
+  apiKey: string;
   system: string;
   firstUser: string;
   toolNames: string[];
@@ -116,7 +124,11 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
             if (block.type === 'tool_result') results.push({ text: contentText(block.content), isError: block.is_error === true });
           }
         }
-        requests.push({ system, firstUser, toolNames, results });
+        requests.push({
+          system, firstUser, toolNames, results,
+          sdkSessionId: String(req.headers['x-claude-code-session-id'] ?? ''),
+          apiKey: String(req.headers['x-api-key'] ?? ''),
+        });
         const step = steps[results.length];
         res.end(step ? toolUse(results.length, step.name, step.input) : text('all done'));
       });
@@ -132,7 +144,7 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  function claudeDeps(): AgentDeps {
+  function claudeDeps(proxyEndpoint = endpoint): AgentDeps {
     return {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -140,33 +152,47 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
         logout: async () => {},
         getAuthEnv: async () => ({ ANTHROPIC_API_KEY: 'fake-test-key' }),
       },
-      runtimeConfig: { endpoint },
+      runtimeConfig: { endpoint: proxyEndpoint },
       binaryPath: CLAUDE,
       logger: noopLogger,
     };
   }
 
-  async function run(permissionMode: 'bypassPermissions' | 'default', resolve?: (request: InteractionRequest) => boolean) {
+  async function run(
+    permissionMode: 'bypassPermissions' | 'default',
+    resolve?: (request: InteractionRequest) => boolean,
+    route?: { endpoint: string; model: string; providerId: string; resolveHostedId?: boolean },
+    initialPermissionMode = permissionMode,
+  ) {
     const project = path.join(root, `project-${permissionMode}`);
     const hostRoot = path.join(root, `host-${permissionMode}`);
     fs.mkdirSync(project, { recursive: true });
     fs.writeFileSync(path.join(project, 'hello.txt'), 'hello from the controller\n');
     fs.writeFileSync(path.join(project, 'CLAUDE.md'), '# Project memory\nAlways answer briefly.\n');
-    const agent = new ClaudeCodeAgent(claudeDeps());
+    const agent = new ClaudeCodeAgent(claudeDeps(route?.endpoint));
     const host = createRemoteAgentHost({
       isAgentAvailable: (kind) => kind === 'claude-code',
       startHosted: (input) => agent.startSession(hostedStartOptions(input)),
       isControllerAuthorized: () => true,
+      ...(route ? {
+        providerAccess: {
+          resolve: async () => route.providerId,
+          isAllowed: (providerId: string) => providerId === route.providerId,
+        },
+        bindOwnerProviderRoute: bindHostedSessionProvider,
+      } : {}),
       captureOwner: () => 'owner',
       isOwnerCurrent: () => true,
       runsRoot: hostRoot,
     });
+    if (route) setClaudeProxySessionIdResolver((sdkSessionId) => route.resolveHostedId === false ? null : host.resolveClaudeSessionId(sdkSessionId));
     const captured: string[] = [];
     const handle = await startRemoteAgentSession('claude-code', {
       sessionId: `cc-hosted-${permissionMode}`,
       workingDir: project,
-      model: MODEL,
-      permissionMode,
+      model: route?.model ?? MODEL,
+      ...(route ? { providerId: route.providerId } : {}),
+      permissionMode: initialPermissionMode,
     }, {
       invoke: async (args) => JSON.parse(JSON.stringify(await host.handle('controller-1', JSON.parse(JSON.stringify(args[0]))) ?? null)),
       rgPath: RG,
@@ -200,10 +226,14 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
         if (event.type === 'done') return;
       }
     })();
-    await handle.send({ type: 'user', content: 'Do the scripted work.' });
-    await done;
-    await handle.close({ reason: 'navigation' });
-    host.dispose();
+    try {
+      if (initialPermissionMode !== permissionMode) await handle.setPermissionMode!(permissionMode);
+      await handle.send({ type: 'user', content: 'Do the scripted work.' });
+      await done;
+    } finally {
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
     return { project, hostRoot, events, asked, captured };
   }
 
@@ -216,7 +246,8 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
       { name: 'mcp__cindy_exec__Edit', input: { file_path: path.join(projectPath, 'made.txt'), old_string: 'one', new_string: 'two' } },
     ];
     requests.length = 0;
-    const { project, hostRoot, events, captured } = await run('bypassPermissions');
+    const { project, hostRoot, events, captured, asked } = await run('bypassPermissions');
+    expect(asked).toEqual([]);
     const first = requests[0];
     // 模型看不到只能操作本机的自带文件与命令工具。
     for (const builtin of ['Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep']) {
@@ -245,6 +276,14 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
     expect(toolNames).toEqual(['Bash', 'Write', 'Read', 'Edit']);
   });
 
+  it('honors switching an existing hosted session to Full access without a confirmation', { timeout: 120_000 }, async () => {
+    steps = [{ name: 'mcp__cindy_exec__Bash', input: { command: 'printf switched > switched.txt' } }];
+    requests.length = 0;
+    const { project, asked } = await run('bypassPermissions', undefined, undefined, 'default');
+    expect(asked).toEqual([]);
+    expect(fs.readFileSync(path.join(project, 'switched.txt'), 'utf8')).toBe('switched');
+  });
+
   it('asks on this computer for commands that change things, but not for reads and read-only commands', { timeout: 120_000 }, async () => {
     const projectPath = path.join(root, 'project-default');
     steps = [
@@ -267,5 +306,90 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
     expect(last.results[0].isError).toBe(false);
     expect(last.results[1].isError).toBe(false);
     expect(last.results[3].isError).toBe(true);
+  });
+
+  async function withProviderProxy(
+    model: string,
+    use: (proxyEndpoint: string, fallbackRequests: string[]) => Promise<void>,
+    createProxy = createAnthropicCompatProxy,
+  ): Promise<void> {
+    const fallbackRequests: string[] = [];
+    const fallback = createServer((req, res) => {
+      if (req.method === 'POST' && req.url?.startsWith('/v1/messages')) fallbackRequests.push(req.url);
+      req.resume();
+      res.writeHead(200, { 'content-type': 'text/event-stream' }).end(text('FALLBACK'));
+    });
+    let proxy: ProxyHandle | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        fallback.once('error', reject);
+        fallback.listen(0, '127.0.0.1', () => {
+          fallback.removeListener('error', reject);
+          resolve();
+        });
+      });
+      const address = fallback.address();
+      if (!address || typeof address === 'string') throw new Error('fallback server has no port');
+      const fallbackEndpoint = `http://127.0.0.1:${address.port}`;
+      setCustomProviders(['selected', 'other'].map((id) => buildUserProvider({
+        id, name: id,
+        runtimes: { 'claude-code': {
+          baseUrl: id === 'selected' ? endpoint : fallbackEndpoint,
+          wireProtocol: 'anthropic-messages', models: [{ id: model, name: model }],
+        } },
+      })));
+      setCustomProviderKeyReader((id) => `${id}-native-test-key`);
+      setClaudeProxyGatewayKeyReader(() => 'fake-test-key');
+      proxy = await createProxy({ upstream: fallbackEndpoint, routingTransform: createModelRoutingTransform() });
+      await use(proxy.url, fallbackRequests);
+    } finally {
+      try {
+        await proxy?.dispose();
+      } finally {
+        try {
+          if (fallback.listening) await new Promise<void>((resolve) => fallback.close(() => resolve()));
+        } finally {
+          setClaudeProxySessionIdResolver(() => null);
+          setClaudeProxyGatewayKeyReader(() => null);
+          setCustomProviderKeyReader(() => null);
+          setCustomProviders([]);
+          clearAllSessionProviders();
+        }
+      }
+    }
+  }
+
+  it('cleans up the fallback server and provider settings when proxy startup fails', async () => {
+    let fallbackEndpoint = '';
+    const use = vi.fn(async () => {});
+    const createProxy = vi.fn<typeof createAnthropicCompatProxy>(async (options) => {
+      if (typeof options.upstream !== 'string') throw new Error('expected a literal test upstream');
+      fallbackEndpoint = options.upstream;
+      throw new Error('proxy startup failed');
+    });
+    await expect(withProviderProxy('hosted-shared-model', use, createProxy)).rejects.toThrow('proxy startup failed');
+    expect(createProxy).toHaveBeenCalledOnce();
+    expect(use).not.toHaveBeenCalled();
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'selected' || provider.id === 'other')).toBe(false);
+    await expect(fetch(fallbackEndpoint)).rejects.toThrow();
+  });
+
+  it.each(['claude-sonnet-4-5-20250929', 'hosted-shared-model'])('routes the first real Claude SDK model request for %s to its selected provider', { timeout: 120_000 }, async (model) => {
+    await withProviderProxy(model, async (proxyEndpoint, fallbackRequests) => {
+      requests.length = 0;
+      steps = [];
+      if (model.startsWith('claude-')) {
+        await run('bypassPermissions', undefined, { endpoint: proxyEndpoint, model, providerId: 'selected', resolveHostedId: false });
+        expect(fallbackRequests.length).toBeGreaterThan(0);
+        expect(requests).toEqual([]);
+        fallbackRequests.length = 0;
+      }
+      await run('bypassPermissions', undefined, { endpoint: proxyEndpoint, model, providerId: 'selected' });
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests[0].sdkSessionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(requests[0].sdkSessionId).not.toBe('cc-hosted-bypassPermissions');
+      expect(requests.every((request) => request.apiKey === 'selected-native-test-key')).toBe(true);
+      expect(fallbackRequests).toEqual([]);
+    });
   });
 });

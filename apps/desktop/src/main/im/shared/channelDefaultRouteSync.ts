@@ -44,7 +44,7 @@ import type { ImOrchestratorConfig } from './types';
 
 const log = createLogger('im:default-route');
 
-type RouteAuthCheck = (route: Pick<ImDefaultRoute, 'agentKind' | 'model' | 'providerId'>) => Promise<boolean>;
+type RouteAuthCheck = (route: Pick<ImDefaultRoute, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>) => Promise<boolean>;
 
 export interface ImChannelDefaultRouteSync {
   /**
@@ -67,7 +67,8 @@ export interface ImChannelDefaultRouteSync {
   syncBeforeWiring(sessionId: string): Promise<void>;
 }
 
-interface SessionRouteRow {
+export interface SessionRouteRow {
+  agentDeviceId?: string | null;
   source: string | null;
   status: string;
   remoteHostId: string | null;
@@ -93,6 +94,7 @@ async function readSessionRouteRow(sessionId: string): Promise<SessionRouteRow |
       agentKind: sessions.agentKind,
       model: sessions.model,
       providerId: sessions.providerId,
+      agentDeviceId: sessions.agentDeviceId,
       effort: sessions.effort,
       fastMode: sessions.fastMode,
       imDefaultRoute: sessions.imDefaultRoute,
@@ -124,6 +126,7 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
     agentKind: toCoreAgentKind(row.agentKind),
     model: row.model ?? '',
     providerId: row.providerId?.trim() || null,
+    ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
     effort: row.effort ?? null,
   };
 }
@@ -134,7 +137,7 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
  */
 function providerNormalizer(providers: ProviderView[]) {
   return (route: ImDefaultRoute): string | null =>
-    route.providerId ?? effectiveSourceIdForModel(providers, null, route.model, route.agentKind as AgentKind);
+    route.agentDeviceId ? route.providerId : route.providerId ?? effectiveSourceIdForModel(providers, null, route.model, route.agentKind as AgentKind);
 }
 
 async function listProviders(): Promise<ProviderView[] | null> {
@@ -165,23 +168,42 @@ export function createImChannelDefaultRouteSync(deps: {
   isRouteUsable: RouteAuthCheck;
 }): ImChannelDefaultRouteSync {
   const { source, config } = deps;
+  return createDefaultRouteFollower({
+    label: source,
+    ownsRow: (row) => isChannelOwnedRow(row, source),
+    fingerprint: () => readImDefaultSettingsFingerprint(source),
+    resolveTarget: (providers) => resolveImSessionDefaults(config, providers, source),
+    isRouteUsable: deps.isRouteUsable,
+  });
+}
+
+/** 两类 bot 共用切换判定、待生效意图与发送锁，只由各入口提供默认配置。 */
+export function createDefaultRouteFollower(deps: {
+  label: string;
+  ownsRow(row: SessionRouteRow): boolean;
+  fingerprint(): string;
+  resolveTarget(providers: ProviderView[]): Promise<ImDefaultRoute & { fingerprint: string }>;
+  isRouteUsable: RouteAuthCheck;
+}): ImChannelDefaultRouteSync {
+  const source = deps.label;
 
   async function evaluate(sessionId: string): Promise<Evaluation | 'defer-unknown' | null> {
     const row = await readSessionRouteRow(sessionId);
-    if (!row || !isChannelOwnedRow(row, source)) return null;
+    if (!row || !deps.ownsRow(row)) return null;
     const record = parseImDefaultRouteRecord(row.imDefaultRoute);
     // 用户单独改过路由(墓碑): 永不跟随, 不必解析新默认。
     if (record?.manual) return null;
-    if (!imDefaultRouteMayNeedSync(record, readImDefaultSettingsFingerprint(source))) return null;
+    if (!imDefaultRouteMayNeedSync(record, deps.fingerprint())) return null;
     const providers = await listProviders();
     // 目录拿不到就无法可靠比对来源, 本条消息先按原路由走 —— 但若记录仍认领着在世
     // 的系统意图, 调用方必须暂缓通用意图应用(PR #5155 review P2)。
     if (!providers) return 'defer-unknown';
-    const defaults = await resolveImSessionDefaults(config, providers, source);
+    const defaults = await deps.resolveTarget(providers);
     const target: ImDefaultRoute = {
       agentKind: defaults.agentKind,
       model: defaults.model,
       providerId: defaults.providerId,
+      ...(defaults.agentDeviceId ? { agentDeviceId: defaults.agentDeviceId } : {}),
       effort: defaults.effort,
     };
     const current = currentRouteOf(row);
@@ -196,6 +218,7 @@ export function createImChannelDefaultRouteSync(deps: {
             agentKind: pending.agentKind,
             model: pending.model,
             providerId: pending.providerId,
+            agentDeviceId: pending.agentDeviceId === undefined ? row.agentDeviceId : pending.agentDeviceId,
             effort: pending.effort ?? null,
           }
         : undefined,
@@ -241,7 +264,7 @@ export function createImChannelDefaultRouteSync(deps: {
       outcome = await applySessionRouteUnderSendLock(
         sessionId,
         // Fast 不属于渠道默认: 保留任务自己的开关, 不拿新任务的固定默认覆盖。
-        { ...e.target, fastMode: e.currentFastMode },
+        { ...e.target, agentDeviceId: e.target.agentDeviceId ?? null, fastMode: e.currentFastMode },
         e.current.agentKind,
       );
     } catch (err) {
@@ -266,6 +289,7 @@ export function createImChannelDefaultRouteSync(deps: {
                   agentKind: intent.agentKind,
                   model: intent.model,
                   providerId: intent.providerId,
+                  agentDeviceId: intent.agentDeviceId === undefined ? e.target.agentDeviceId : intent.agentDeviceId,
                   effort: intent.effort ?? null,
                 },
                 intent.rev,
@@ -357,7 +381,7 @@ export function createImChannelDefaultRouteSync(deps: {
   async function followClaimStillPending(sessionId: string): Promise<boolean> {
     try {
       const row = await readSessionRouteRow(sessionId);
-      if (!row || !isChannelOwnedRow(row, source)) return false;
+      if (!row || !deps.ownsRow(row)) return false;
       const pending = readPendingAgentSwitchRoute(sessionId);
       return recordClaimsPendingIntent(
         parseImDefaultRouteRecord(row.imDefaultRoute),
@@ -366,6 +390,7 @@ export function createImChannelDefaultRouteSync(deps: {
               agentKind: pending.agentKind,
               model: pending.model,
               providerId: pending.providerId,
+              agentDeviceId: pending.agentDeviceId === undefined ? row.agentDeviceId : pending.agentDeviceId,
               effort: pending.effort ?? null,
             }
           : undefined,
@@ -467,6 +492,7 @@ export async function backfillLegacyImDefaultRoutes(
       agentKind: sessions.agentKind,
       model: sessions.model,
       providerId: sessions.providerId,
+      agentDeviceId: sessions.agentDeviceId,
       effort: sessions.effort,
       imDefaultRoute: sessions.imDefaultRoute,
       feishuBotAppId: sessions.feishuBotAppId,
@@ -500,6 +526,7 @@ export async function backfillLegacyImDefaultRoutes(
       agentKind: defaults.agentKind,
       model: defaults.model,
       providerId: defaults.providerId,
+      agentDeviceId: defaults.agentDeviceId ?? null,
       effort: defaults.effort,
     };
   } catch (err) {

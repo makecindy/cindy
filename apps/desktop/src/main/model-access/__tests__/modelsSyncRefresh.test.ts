@@ -28,6 +28,20 @@ describe('parseModelsSyncPayload', () => {
     },
   );
 
+  it('accepts quote removal or an unsupported quote as a successful replacement', () => {
+    const model = {
+      id: 'example-video', name: 'Example Video', mode: 'video_generation',
+      currency: 'USD', agents: [], availability: 'available',
+    };
+    const quote = { items: [{ label: 'Output', price: 0.5, unit: 'second', quantity: 1 }] };
+    const response = { schemaVersion: 5, accountTier: 'paid', models: [{ ...model, displayPricing: quote }] };
+    expect(parseModelsSyncPayload(response)).toMatchObject({ ok: true, models: [{ displayPricing: quote }] });
+    for (const displayPricing of [undefined, null, { items: [] }, { items: [{ ...quote.items[0], priceType: 'future' }] }]) {
+      expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing }] }))
+        .toEqual({ ok: true, accountTier: 'paid', models: [model] });
+    }
+  });
+
   const baseModel = {
     id: 'deepseek/deepseek-v4-pro',
     name: 'DeepSeek V4 Pro',
@@ -237,7 +251,7 @@ describe('waitForModelsSyncRefresh', () => {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
         cache: 'no-store',
-        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech' },
+        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing' },
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);

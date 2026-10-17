@@ -11,12 +11,12 @@
  * (宁可让上层保留可重试的输入,不把未持久化误报成成功)。
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { InputDeliveryReceipt } from '@cindy/device-link';
 
 import { getDbClient, getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from './client/current';
-import { agentInputQueueSnapshots, messages } from './schema';
+import { agentInputQueueSnapshots, messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import {
   sanitizeQueuedMessageForPersistence,
@@ -180,6 +180,11 @@ export async function readInputDeliveryReceipts(
   const pending = new Set(raw.filter(isRestorableQueuedMessage).map((item) => item.clientId));
   const rows = await owner.client.drizzle.select({
     clientId: messages.clientId, role: messages.role, rewindAt: messages.rewindAt,
+    // /clear hides history without deleting rows. Read the boundary with the row
+    // so even old controllers without a saved boundary receive terminal evidence.
+    cleared: sql<number>`coalesce(${messages.createdAt} <= (
+      select ${sessions.clearedAt} from ${sessions} where ${sessions.id} = ${sessionId}
+    ), 0)`,
   }).from(messages).where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)));
   assertQueueOwner(owner);
   const persisted = new Map(rows.map((row) => [row.clientId, row]));
@@ -188,7 +193,7 @@ export async function readInputDeliveryReceipts(
     return {
       clientId,
       state: row
-        ? row.role === 'message_tombstone' || row.rewindAt !== null ? 'removed' : 'accepted'
+        ? row.role === 'message_tombstone' || row.rewindAt !== null || row.cleared === 1 ? 'removed' : 'accepted'
         : pending.has(clientId) ? 'pending' : 'unknown',
     };
   });

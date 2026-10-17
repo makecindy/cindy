@@ -226,10 +226,13 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     const first = (result.content as Array<{ type: string; text: string }>)[0];
     const payload = JSON.parse(first.text) as {
       ok: boolean;
-      categories: { name: string; tool_count: number }[];
+      categories: { name: string; tool_count: number; description: string }[];
     };
     expect(payload.ok).toBe(true);
-    expect(payload.categories).toEqual([{ name: 'scheduler', tool_count: 11 }]);
+    // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
+    expect(payload.categories).toEqual([
+      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*device.*只在本机/) },
+    ]);
     await h.cleanup();
   });
 
@@ -597,7 +600,8 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       arguments: { name: 'schedule_get', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
-    expect(env).toEqual({ ok: true, data: null });
+    // 本机读取自带范围：data:null 只说明本机没有。
+    expect(env).toEqual({ ok: true, data: null, scope: 'local' });
     await h.cleanup();
   });
 

@@ -359,8 +359,8 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
 /* ============================== groupDevice load/persist ============================== */
 
 /**
- * 「按设备分组」开关(E 期):默认开(定稿)。仅在有远程设备连接时可见/生效
- * (与顶部设备切换栏同一出现条件);仅本机时选项隐藏、效果自然为单段。
+ * 「按设备分组」开关(E 期):默认开(定稿)。有可选远程设备（含断线缓存）时可见/生效；
+ * 没有可选远程设备时选项隐藏、效果自然为单段，不改写偏好。
  */
 export function loadGroupDevice(): boolean {
   const storage = safeStorage();

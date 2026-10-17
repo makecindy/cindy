@@ -6,6 +6,34 @@ import { clearPeerMedia, installPeerFileDownload, recordPeerMedia } from '@/devi
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 
 describe('file browser playback and download', () => {
+  it.each([true, false])('reclaims the cloud object only after a local copy is available: %s', async (downloaded) => {
+    const local = { ossKey: '', size: 3, mimeType: 'application/pdf' };
+    const uri = 'file:///cached-export.pdf';
+    const dispose = vi.fn();
+    recordPeerMedia(local, uri, dispose);
+    const deleteOssObject = vi.fn();
+    const cacheDownload = vi.fn(async () => {
+      expect(deleteOssObject).not.toHaveBeenCalled();
+      return downloaded ? local : null;
+    });
+    const maker = createMobileMakerTransport({ deviceId: 'cleanup-export', invoke: vi.fn() });
+    vi.spyOn(maker.fileBrowser, 'readBytes').mockResolvedValue({
+      ...local, ossKey: 'export/cloud-key', cacheDownload,
+    });
+    try {
+      const url = await exportRemoteFileToUrl({
+        maker, deviceId: 'cleanup-export', stream: false,
+        openLink: vi.fn(async () => {}),
+        presignGet: vi.fn(async () => ({ getUrl: 'https://example.test/export', expiresAt: new Date(Date.now() + 3_600_000).toISOString() })),
+        deleteOssObject,
+      }, '/p', 'file.pdf', 1);
+      expect(url).toBe(downloaded ? uri : 'https://example.test/export');
+      expect(cacheDownload).toHaveBeenCalledWith('https://example.test/export');
+      expect(deleteOssObject.mock.calls).toEqual(downloaded ? [['export/cloud-key']] : []);
+      expect(dispose).not.toHaveBeenCalled();
+    } finally { clearPeerMedia(); }
+  });
+
   it.each(['audio/mpeg', 'video/mp4', 'image/png', 'application/pdf', 'application/octet-stream'])('keeps %s previews off cached peer downloads in either order', async (mimeType) => {
     for (const first of [false, true]) {
       const direct = { ossKey: '', size: 70_000, mimeType };
@@ -31,7 +59,7 @@ describe('file browser playback and download', () => {
           expect(await exportRemoteFileToUrl({ ...deps, stream }, '/p', 'media', 1))
             .toBe(stream ? 'https://example.test/stream' : local);
         }
-        expect(peer).toHaveBeenCalledOnce();
+        expect(peer).toHaveBeenCalledTimes(2);
         expect(deps.presignGet).toHaveBeenCalledOnce();
       } finally { uninstall(); clearPeerMedia(); }
     }

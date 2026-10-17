@@ -15,6 +15,7 @@
  */
 
 const bySession = new Map<string, string | null>();
+const hostedBindings = new Map<string, symbol>();
 
 /** Canonical provider id used by runtime routing and every persistence adapter. */
 export function normalizeSessionProviderId(
@@ -27,7 +28,32 @@ export function normalizeSessionProviderId(
 
 /** 设定某会话的供应商(SET_MODEL 携带 providerId 时调用)。null/'' = 清除显式选择。 */
 export function setSessionProvider(sessionId: string, providerId: string | null): void {
+  hostedBindings.delete(sessionId);
   bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
+}
+
+/**
+ * 托管任务不创建本机 Session，也不经过 prepareStartOptions，须在启动 Agent 前登记来源。
+ * 每次运行持有独立登记：重连后的新运行、普通写入或账号清理都会令旧登记失效，
+ * 迟到的换源/回滚/收尾不能覆盖新运行或重新写回已清掉的来源。
+ */
+export function bindHostedSessionProvider(sessionId: string, providerId: string): {
+  setProvider(providerId: string): void;
+  release(): void;
+} {
+  const binding = Symbol();
+  hostedBindings.set(sessionId, binding);
+  bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
+  return {
+    setProvider(nextProviderId) {
+      if (hostedBindings.get(sessionId) !== binding) return;
+      bySession.set(sessionId, normalizeSessionProviderId(nextProviderId) ?? null);
+    },
+    release() {
+      if (hostedBindings.get(sessionId) !== binding) return;
+      clearSessionProvider(sessionId);
+    },
+  };
 }
 
 /**
@@ -66,10 +92,12 @@ export function hydrateSessionProvider(sessionId: string, providerId: string | n
 
 /** 会话关闭/销毁时清理内存条目。 */
 export function clearSessionProvider(sessionId: string): void {
+  hostedBindings.delete(sessionId);
   bySession.delete(sessionId);
 }
 
 /** 账户 / app-session 边界清理全部 owner-scoped 路由。 */
 export function clearAllSessionProviders(): void {
+  hostedBindings.clear();
   bySession.clear();
 }

@@ -12,6 +12,7 @@ import { createLogger } from '../logger.js';
 import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { withCindyGatewayKeyRejectionReport } from '../model-access/gatewayKeyRejection.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 
 const log = createLogger('art');
@@ -25,6 +26,13 @@ function readApiKey(): string | null {
   if (!getAppCapabilities().canUseCindyGateway) return null;
   return getProviderSecretStore().get('xd');
 }
+
+/**
+ * 注入给网关图像/视频后端的 fetch:行为与它们默认使用的全局 fetch 相同(调用时才取
+ * 全局 fetch),只在响应 401 时按本次 Authorization 头里的 Key 上报 Cindy AI Key 失效。
+ * 结果下载等不带该头的请求不会上报。
+ */
+const gatewayMediaFetch = withCindyGatewayKeyRejectionReport((input, init) => fetch(input, init));
 
 function getGatewayBaseUrl(): string {
   // 与 key 同源的生效 endpoint(model-access 下发值优先,回落端点清单)。
@@ -56,6 +64,7 @@ export function getCindyProxyMediaService(): CindyProxyMediaService {
     artService = createCindyProxyMediaService({
       imageApi: {
         getApiKey: readApiKey,
+        fetchImplementation: gatewayMediaFetch,
         proxy: {
           baseUrl: getGatewayBaseUrl(),
           generatePath: '/v1/images/generations',
@@ -82,6 +91,7 @@ function createGatewayVideoProviders(baseUrl: string) {
     createSeedanceProvider({
       baseUrl,
       getApiKey: readApiKey,
+      fetchImplementation: gatewayMediaFetch,
       logger: log,
     }),
     // Seedance 2.5 是独立 provider(值域与 2.0 差太远,capabilities 是
@@ -90,11 +100,13 @@ function createGatewayVideoProviders(baseUrl: string) {
     createSeedance25Provider({
       baseUrl,
       getApiKey: readApiKey,
+      fetchImplementation: gatewayMediaFetch,
       logger: log,
     }),
     createHappyhorseProvider({
       baseUrl,
       getApiKey: readApiKey,
+      fetchImplementation: gatewayMediaFetch,
       logger: log,
     }),
   ];

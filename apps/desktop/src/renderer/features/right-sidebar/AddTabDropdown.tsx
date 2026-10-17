@@ -10,7 +10,7 @@
 
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, FileDiff, FolderTree, Globe, ListTodo, Terminal, Wrench } from 'lucide-react';
+import { Bot, FileDiff, FolderTree, Globe, LayoutGrid, ListTodo, Terminal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   DropdownMenuContent,
@@ -18,8 +18,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
-import { useBotProfiles } from '@/features/bots/botStore';
+import { canonicalBotSessionId, useBotProfiles } from '@/features/bots/botStore';
 import { findBotProfileForSession } from '@/features/bots/botSessionOwners';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { openBotWorkbenchTab } from './lib/openBotWorkbenchTab';
 import type { TabKindId, TabKindMenuMeta } from './types';
 
 const BOT_SECONDARY_KINDS = new Set<TabKindId>([
@@ -53,6 +55,15 @@ interface AddTabDropdownProps {
 
 // Phase 1 硬编码。Phase 2 之后由 plugin registry 自动汇总。
 const MENU_ITEMS: TabKindMenuMeta[] = [
+  {
+    // 伙伴工作台:只在本机伙伴主任务里出现,关掉后可从这里重新打开。
+    kind: 'bot-workbench',
+    labelKey: 'bots.workbench.title',
+    icon: LayoutGrid,
+    order: 0,
+    enabled: true,
+    singleton: true,
+  },
   {
     kind: 'file-browser',
     labelKey: 'rightSidebar.tabs.kinds.fileBrowser',
@@ -98,14 +109,6 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     order: 30,
     enabled: true,
   },
-  {
-    kind: 'cindy-make',
-    labelKey: 'settings.cindyMake.title',
-    icon: Wrench,
-    order: 12,
-    enabled: true,
-    singleton: true,
-  },
 ];
 
 export function AddTabDropdown({
@@ -119,7 +122,18 @@ export function AddTabDropdown({
 }: AddTabDropdownProps) {
   const { t } = useTranslation();
   const bots = useBotProfiles();
-  const isBotSession = Boolean(sessionId && findBotProfileForSession(bots, sessionId));
+  const bot = sessionId ? findBotProfileForSession(bots, sessionId) : undefined;
+  const isBotSession = Boolean(bot);
+  // 工作台只属于本机伙伴的主任务(渠道 / 历史 / 群专线任务与远端任务都没有)。
+  const sessionRow = sessionId ? sessionsStore.findById(sessionId) : null;
+  const workbenchBotId =
+    bot &&
+    sessionId &&
+    canonicalBotSessionId(bot) === sessionId &&
+    !sessionRow?.remoteHostId &&
+    !sessionRow?.deviceLinkDeviceId
+      ? bot.id
+      : null;
   // 跟随:Radix Popper 负责摆位与视口碰撞。打开期间用 rAF 轮询 anchor —— 从布局中
   // 消失(关掉最后一个 tab 面板收起)直接关闭,避免菜单悬空残留在旧坐标。
   //
@@ -148,6 +162,7 @@ export function AddTabDropdown({
   }, [open, anchorRef, onClose]);
 
   const visibleItems = MENU_ITEMS.filter((item) => {
+    if (item.kind === 'bot-workbench' && !workbenchBotId) return false;
     if (item.kind === 'subagents' && !subagentsAvailable) return false;
     if (isBotSession && BOT_SECONDARY_KINDS.has(item.kind)) return false;
     return true;
@@ -177,7 +192,14 @@ export function AddTabDropdown({
             icon={m.icon}
             label={t(m.labelKey)}
             trailing={alreadyOpen ? t('rightSidebar.tabs.menu.alreadyOpen') : undefined}
-            onSelect={() => onSelect(m.kind)}
+            onSelect={() => {
+              // 工作台标签需要伙伴 id,走与聊天头部入口同一个打开器(重建并排到最前、展开侧栏)。
+              if (m.kind === 'bot-workbench' && sessionId && workbenchBotId) {
+                void openBotWorkbenchTab(sessionId, workbenchBotId).catch(() => undefined);
+                return;
+              }
+              onSelect(m.kind);
+            }}
           />
         );
       })}

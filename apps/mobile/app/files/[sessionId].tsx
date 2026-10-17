@@ -72,6 +72,7 @@ import {
 } from '@/session/composerAttachmentInbox';
 import { mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
+import { FileTransferBusyNotice } from '@/session/FileTransferBusyNotice';
 import {
   getCachedListingSync,
   loadAllFilesIndex,
@@ -114,6 +115,8 @@ import { imageMimeFromUrl } from '@/session/remoteMediaDiskCache';
 import { downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
 import type { FileBrowserSearchMatch, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore, useRemoteSessions } from '@/session/remoteSessionStore';
+import { CindyMakeSessionGate } from '@/session/CindyMakeSessionGate';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import type { RemoteSession } from '@/session/types';
 import { fontWeight, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { docThumbSnippetType, iconSize, iconStroke, radius, spacing, typeScale } from '@/theme/tokens';
@@ -123,6 +126,15 @@ const NOTICE_DISMISS_MS = 2500;
 const SEARCH_FILES_CAP = 20000;
 
 export default function RemoteFileBrowserScreen() {
+  const { sessionId, deviceId } = useLocalSearchParams<{ sessionId: string; deviceId?: string }>();
+  return (
+    <CindyMakeSessionGate sessionId={String(sessionId ?? '')} deviceId={readRouteString(deviceId) ?? undefined}>
+      <RemoteFileBrowserContent />
+    </CindyMakeSessionGate>
+  );
+}
+
+function RemoteFileBrowserContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -225,16 +237,23 @@ export default function RemoteFileBrowserScreen() {
       return;
     }
     if (!deviceId || !sessionId) return;
+    let cancelled = false;
     void withTransientRemoteRetry(async () => {
       await openLink(deviceId);
       return maker.getSession(sessionId);
     })
       .then((loaded) => {
+        if (cancelled) return;
+        if (!CINDY_MAKE_ENABLED && isCindyMakeSource(loaded?.source)) {
+          router.replace('/');
+          return;
+        }
         setSession(loaded);
         setError(null);
       })
-      .catch((err) => setError(formatRemoteError(err)));
-  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, sessionId]);
+      .catch((err) => { if (!cancelled) setError(formatRemoteError(err)); });
+    return () => { cancelled = true; };
+  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, router, sessionId]);
 
   // workdir 就绪后加载偏好(异步存储可能比同步内存新)。
   useEffect(() => {
@@ -484,45 +503,90 @@ export default function RemoteFileBrowserScreen() {
     });
   }, [absolutePathOf, deviceId, router, sessionId]);
 
+  // 进行中的长按「导出/分享」:底栏一直显示到结束并带「取消」;取消或新的导出
+  // 接替后,旧一次的结果(含失败)一律丢弃,不再弹分享单。cancelled 给导出轮询与
+  // 结果检查用,abort 中止图片取件。
+  const exportRunRef = useRef<{ cancelled: boolean; abort: AbortController } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const stopExportRun = useCallback(() => {
+    const run = exportRunRef.current;
+    if (!run) return;
+    run.cancelled = true;
+    run.abort.abort();
+    exportRunRef.current = null;
+  }, []);
+  const cancelExport = useCallback(() => {
+    stopExportRun();
+    setExporting(false);
+  }, [stopExportRun]);
+  // 离开本屏即取消(含点进下一层目录:Expo Router 把本屏留在栈中不卸载,只失焦);
+  // 与点「取消」同一出口,一并复位底栏,回到本屏时不残留忙碌状态。
+  useFocusEffect(useCallback(() => cancelExport, [cancelExport]));
+
   const shareItem = useCallback((item: FileBrowserGridItem) => {
     // 导出/分享 = 系统分享单一步到位(iOS 分享单自带「存储图像」,不再单设保存)。
     setContextItem(null);
     if (item.kind !== 'file') return;
-    showNotice(t('files.browser.exporting'));
+    stopExportRun();
+    const run = { cancelled: false, abort: new AbortController() };
+    exportRunRef.current = run;
+    setExporting(true);
     void (async () => {
       try {
         let url: string;
         let mime: string;
         if (item.thumb === 'image') {
           // 图片走媒体取件管线(与 lightbox 同源,命中它的解析缓存)。
-          const resolved = await resolveFileMedia({
-            kind: 'image',
-            url: remoteFileMediaUrl(absolutePathOf(item.relPath), item.mtimeMs),
-            previewable: false,
-          });
+          const resolved = await resolveFileMedia(
+            {
+              kind: 'image',
+              url: remoteFileMediaUrl(absolutePathOf(item.relPath), item.mtimeMs),
+              previewable: false,
+            },
+            { signal: run.abort.signal },
+          );
           url = resolved.url;
           mime = resolved.mimeType;
         } else {
           // 非图片同样一步到系统分享单(两段式导出,与预览页分享同链路),
           // 不再折跳预览页多一步操作。
           url = await exportRemoteFileToUrl(
-            { maker, deviceId, openLink, presignGet, isCancelled: () => unmountedRef.current },
+            {
+              maker,
+              deviceId,
+              openLink,
+              presignGet,
+              deleteOssObject: (key) => {
+                void auth.apiFetch('/api/device-link/media', {
+                  baseUrl: DEVICE_LINK_API_BASE_URL, method: 'DELETE', body: { key },
+                }).catch(() => undefined);
+              },
+              isCancelled: () => unmountedRef.current || run.cancelled,
+            },
             workdir,
             item.relPath,
             item.mtimeMs,
           );
           mime = shareMimeForFileName(item.name);
         }
-        const localUri = await downloadRemoteMediaShareTemp(url, mime, item.name);
+        // Consume late staging results even after cancellation; the helper
+        // releases them without starting another copy or download.
+        const localUri = await downloadRemoteMediaShareTemp(url, mime, item.name, run.abort.signal);
+        if (run.cancelled) return;
         if (!localUri) throw new Error(t('files.browser.downloadFailed'));
         const sharing = await import('expo-sharing');
+        if (run.cancelled) return;
         await sharing.shareAsync(localUri, { mimeType: mime });
-        setNotice(null);
       } catch (err) {
-        showNotice(formatRemoteError(err));
+        if (!run.cancelled) showNotice(formatRemoteError(err));
+      } finally {
+        if (exportRunRef.current === run) {
+          exportRunRef.current = null;
+          setExporting(false);
+        }
       }
     })();
-  }, [absolutePathOf, deviceId, maker, openLink, presignGet, resolveFileMedia, showNotice, t, workdir]);
+  }, [absolutePathOf, auth, deviceId, maker, openLink, presignGet, resolveFileMedia, showNotice, stopExportRun, t, workdir]);
 
   /** lightbox 底部显式操作(与预览页底栏同构):复制路径 / 发送到会话。 */
   const lightboxActions = useMemo((): readonly ImageLightboxAction[] => [
@@ -978,12 +1042,23 @@ export default function RemoteFileBrowserScreen() {
         />
       )}
 
-      {!searchOpen ? (
+      {/* 导出进行中的提示与「取消」不随搜索隐藏:搜索期间导出仍在继续。 */}
+      {!searchOpen || exporting ? (
         <View style={styles.footer}>
-          <Text style={styles.footerStrong} testID="files.summary">{summary}</Text>
-          <Text style={styles.footerText}>
-            {notice ?? (status === 'online' ? t('files.browser.footerOnline') : t('files.browser.footerConnecting'))}
-          </Text>
+          {!searchOpen ? (
+            <Text style={styles.footerStrong} testID="files.summary">{summary}</Text>
+          ) : null}
+          {exporting ? (
+            <FileTransferBusyNotice
+              label={t('files.browser.exporting')}
+              onCancel={cancelExport}
+              testID="files.exporting"
+            />
+          ) : (
+            <Text style={styles.footerText}>
+              {notice ?? (status === 'online' ? t('files.browser.footerOnline') : t('files.browser.footerConnecting'))}
+            </Text>
+          )}
         </View>
       ) : null}
 

@@ -794,6 +794,7 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     }).catch(() => 'rejected' as const);
     const result = await Promise.race([
       resultPromise,
+      // real-wait: bound the proxy request while the upstream cancellation path is under test.
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000)),
     ]);
     controller.abort();
@@ -3176,6 +3177,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
           await Promise.race([
             seenPromise,
             new Promise<never>((_resolve, reject) => {
+              // real-wait: bound the real PI process handshake if the proxy is never reached.
               reachTimeout = setTimeout(
                 () => reject(new Error(`real PI did not reach proxy: ${stderr}`)),
                 10_000,
@@ -3201,6 +3203,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
       } finally {
         if (child && child.exitCode === null && child.signalCode === null) {
           await new Promise<void>((resolve) => {
+            // real-wait: bound child shutdown after sending SIGTERM to the real PI process.
             const timer = setTimeout(() => {
               if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
               resolve();
@@ -3730,6 +3733,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     const outcome = await Promise.race([
       operation.then(() => 'settled' as const),
       new Promise<'timeout'>((resolve) => {
+        // real-wait: watchdog the upstream abort path so a hung response cannot stall the test.
         timeoutHandle = setTimeout(() => resolve('timeout'), 1000);
       }),
     ]);

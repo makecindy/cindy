@@ -28,6 +28,12 @@ import type {
   InteractionDecision,
   InteractionRequest,
 } from '@cindy/maker-core';
+import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
+
+export type SessionPermissionRequest = Pick<
+  Extract<InteractionRequest, { kind: 'permission' }>,
+  'toolName' | 'metadata' | 'suggestions'
+>;
 
 // ── 语义常量 ────────────────────────────────────────────────────────────────
 
@@ -142,12 +148,17 @@ export function buildPermissionAllowOnceDecision(): InteractionDecision {
  * createSessionPermissionUpdate 同值, 这里就地写死只为不给 hook 链路引入
  * maker-core 运行期依赖; 漂移由本模块单测钉住(见 __tests__)。
  */
-export function buildPermissionAllowAlwaysDecision(toolName: string): InteractionDecision {
+export function buildPermissionAllowAlwaysDecision(request: SessionPermissionRequest): InteractionDecision {
+  // 本机凭证卡的授权范围由宿主定义，不能转换成普通工具的 addRules。
+  if (request.metadata?.hostOwnedConfirmation === 'shared_provider_credential'
+    && isProviderShareCredentialSessionApproval(request.suggestions)) {
+    return { kind: 'permission', behavior: 'allow', permissionUpdates: request.suggestions };
+  }
   return {
     kind: 'permission',
     behavior: 'allow',
     permissionUpdates: [
-      { type: 'addRules', rules: [{ toolName }], behavior: 'allow', destination: 'session' },
+      { type: 'addRules', rules: [{ toolName: request.toolName }], behavior: 'allow', destination: 'session' },
     ],
   };
 }
@@ -374,7 +385,7 @@ export function composeInteractionModel(req: InteractionRequest): InteractionMod
           index: 1,
           label: null,
           style: 'default',
-          decision: buildPermissionAllowAlwaysDecision(req.toolName),
+          decision: buildPermissionAllowAlwaysDecision(req),
         },
         {
           choiceId: 'permission:deny',

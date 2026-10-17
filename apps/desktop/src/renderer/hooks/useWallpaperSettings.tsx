@@ -26,6 +26,8 @@ import {
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
+import { useWallpaperAsset } from './useWallpaperAsset';
+import { useReducedMotion } from './useReducedMotion';
 
 export interface WallpaperSettings {
   wallpaperId: WallpaperId;
@@ -38,6 +40,10 @@ export interface WallpaperSettings {
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
+  downloadPending: boolean;
+  downloadFailed: boolean;
+  downloadProgress: number;
+  retryDownload: () => void;
   visibility: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
@@ -84,6 +90,22 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
   const visibility = getWallpaperVisibility(settings, isDark);
+  const reducedMotion = useReducedMotion();
+  const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
+  const videoAsset = useWallpaperAsset(
+    settings.wallpaperId,
+    'video',
+    visibility > 0 && settings.wallpaperMotion === 'dynamic' && !reducedMotion,
+  );
+  const downloadPending = imageAsset.loading || videoAsset.loading;
+  const downloadFailed = imageAsset.failed || videoAsset.failed;
+  const downloadBytes = imageAsset.total + videoAsset.total;
+  const downloadProgress =
+    downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
+  const retryDownload = useCallback(() => {
+    imageAsset.retry();
+    videoAsset.retry();
+  }, [imageAsset.retry, videoAsset.retry]);
   // Document-level surface also covers settings, split panes, portals and detached
   // app windows, without changing the layout tree or stacking order of its panes.
   useLayoutEffect(() => {
@@ -96,7 +118,9 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
             ? 'none'
             : `url("${customUrl}")`
           : undefined
-        : getBuiltinWallpaperBackground(settings.wallpaperId);
+        : imageAsset.url
+          ? `url("${imageAsset.url}")`
+          : getBuiltinWallpaperBackground(settings.wallpaperId);
     const active = Boolean(background);
     if (active) {
       root.dataset.wallpaperActive = 'true';
@@ -116,7 +140,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil', '--app-wallpaper-blur'])
         root.style.removeProperty(name);
     };
-  }, [settings, visibility, blurPreview]);
+  }, [settings, visibility, blurPreview, imageAsset.url]);
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
   const pendingRef = useRef<Array<{ id: number; patch: Partial<WallpaperSettings> }>>([]);
@@ -237,6 +261,10 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
+      downloadPending,
+      downloadFailed,
+      downloadProgress,
+      retryDownload,
       setWallpaper,
       setVisibility,
       setBlur,
@@ -255,6 +283,10 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       settings,
       failedUrl,
       visibility,
+      downloadPending,
+      downloadFailed,
+      downloadProgress,
+      retryDownload,
     ],
   );
 
@@ -265,6 +297,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
           wallpaperId={settings.wallpaperId}
           motion={settings.wallpaperMotion}
           customWallpaperUrl={settings.customWallpaperUrl}
+          officialVideoUrl={videoAsset.url}
           onFailure={onPlaybackFailure}
           onReady={onPlaybackReady}
         />

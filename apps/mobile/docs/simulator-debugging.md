@@ -311,6 +311,15 @@ Release 也可在设置 → 调试 / 开发者打开 Debug 日志，复现后导
 配置日志服务的构建还可手动上传筛选后的运行摘要（最近 7 天最多 500 条），成功自动复制编号。
 上传摘要不包含详细 Debug 文件，需要详细现场时用导出或开发设备容器读取。
 
+滚动几何在交互状态不变时最多每 250 ms 记录一次；拖动结束、拖动/惯性/读历史/贴底
+状态变化仍立即记录。键盘日志只记录实际几何或显隐变化，关闭且已退出的弹层、不需要
+键盘避让的弹层不注册键盘监听。日志条数不能直接当作原生事件次数或监听器数量。
+`content recovery state` 的 `elapsedMs` / `foregroundElapsedMs` 只累计该任务页聚焦且
+App 为 active 的等待时间，`wallElapsedMs` 单独保留包含后台与离开页面的总时长。
+旧版本仅有 `elapsedMs`，其中可能包含后台时间，不能直接解读成用户等待或界面卡死。
+实现与回归见 `src/debug/useContentRecoveryDiagnostics.ts`、`scrollDebugSampler.ts`
+及相邻测试，键盘回归见 `src/__tests__/composerKeyboard.test.tsx`、`sheetKeyboardSubscription.test.tsx`。
+
 ### 从开发版 iPhone 读取历史 Debug 文件
 
 手机与 Mac 配对、开启 Developer Mode 后，可通过 Xcode 设备管理窗口

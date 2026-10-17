@@ -41,6 +41,9 @@ import type { Logger } from '../interfaces/logger.js';
 /** 工厂函数: 给一个绝对文件路径, 返回 better-sqlite3 Database 实例。host 注入。 */
 export type SqliteFactory = (filePath: string) => Database.Database;
 
+/** review 一次性调用预算: 一段 ≤200 词的建议, 给足 60s(LLM 冷启 + 长 dump)。 */
+const REVIEW_ONE_SHOT_OPTS = { maxTokens: 800, timeoutMs: 60_000 } as const;
+
 export interface MakerMemoryManagerDeps {
   /** Maker memory 文件根目录, host 注入 (e.g. <electron userData>/maker-memory) */
   basePath: string;
@@ -94,6 +97,19 @@ export interface MakerMemoryManagerDeps {
    * 缺席 = 不裁决(未接入停用设置的宿主)。
    */
   isOneShotRouteDisabled?: (agent: AgentKind) => Promise<boolean>;
+  /**
+   * memory_review 的一次性文本调用(host 注入)。返回 null / 空串 = 链上没产出,
+   * manager 不再回退 reviewAgent 的默认 oneShot 路由(那是本账号无权模型的死路),
+   * 直接以可读原因 fail-closed。
+   *
+   * desktop 注入的实现走共享辅助模型链: review agent 的默认模型(claude-haiku-4-5)
+   * 在部分供应商网关上不在账号可用清单内(403 user_model_access_denied), 硬编码
+   * 默认路由会让 memory_review 对这些账号 100% 失败(2026-10-14 实测)。
+   */
+  reviewOneShot?: (
+    prompt: string,
+    opts: { maxTokens: number; timeoutMs: number },
+  ) => Promise<string | null>;
   logger: Logger;
   /** 配置覆盖 */
   config?: Partial<MemoryConfig>;
@@ -892,10 +908,6 @@ export class MakerMemoryManager {
       return { suggestions: 'No memories in this workdir yet.' };
     }
     const reviewAgentKind = this.deps.reviewAgent ?? 'claude-code';
-    const agent = this.deps.agents[reviewAgentKind];
-    if (!agent) {
-      throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
-    }
     if (await this.deps.isOneShotRouteDisabled?.(reviewAgentKind)) {
       throw new Error(
         `runReview: one-shot route for '${reviewAgentKind}' is disabled in settings`,
@@ -917,7 +929,32 @@ export class MakerMemoryManager {
       summary,
     ].join('\n');
 
-    const suggestions = await agent.oneShot(prompt, { maxTokens: 800, timeoutMs: 60_000 });
+    // host 注入的自定义一次性调用优先(共享辅助模型链); agent 查找推迟到这里: 注入链
+    // 缺席时未注册 review agent 才该把 review 硬拦死。
+    const injectedChain = this.deps.reviewOneShot !== undefined;
+    const custom = injectedChain
+      ? await this.deps.reviewOneShot!(prompt, REVIEW_ONE_SHOT_OPTS)
+      : null;
+    // 辅助链的 await 可能横跨账号边界(链因此中止并返回 null)。此时旧 owner 的
+    // dump 一条都不能再发: 回落默认路由会读新账号凭据, 而末尾复核只能挡住返回,
+    // 撤不回已发出的 prompt。任一分支出发前必须重新复核, fail-closed 抛出。
+    this.assertScopeUnchanged(scopeAtEntry);
+    if (custom && custom.trim().length > 0) {
+      return { suggestions: custom };
+    }
+    // 宿主注入了链 = 用户显式指定了本次审查的路由。链上没产出时再回退 review agent
+    // 默认路由, 只会落到硬编码的 claude-haiku-4-5, 对没有 Anthropic 权限的账号必然
+    // 403, 用户看到的是与真实原因无关的死路(2026-10-14 实测)。改成一句可读原因。
+    if (injectedChain) {
+      throw new Error(
+        'runReview: auxiliary model chain produced no text; configure an available auxiliary model in Settings',
+      );
+    }
+    const agent = this.deps.agents[reviewAgentKind];
+    if (!agent) {
+      throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
+    }
+    const suggestions = await agent.oneShot(prompt, REVIEW_ONE_SHOT_OPTS);
     // oneShot await 后、返回前复核 (review #2388 Codex 21st P1): 边界在 LLM
     // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
     this.assertScopeUnchanged(scopeAtEntry);

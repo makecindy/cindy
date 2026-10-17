@@ -40,6 +40,39 @@ describe('composeProgressView — 过程区/正文合成骨架(两侧共用)', (
   });
 });
 
+function status(data: Record<string, unknown>): AgentEvent {
+  return { type: 'status', data: { status: 'Running', isRunning: true, ...data } } as unknown as AgentEvent;
+}
+
+function speed(rate: number, tokens = 100): Record<string, unknown> {
+  return { rate, average: rate, tokens, elapsedMs: 1_000, streaming: true };
+}
+
+describe('createTurnPresenter — status 事件带出头部 tok/s', () => {
+  it('跟随宿主实测速度, 无读数的占位帧保留上一个值, 不可靠时隐藏', () => {
+    const presenter = createTurnPresenter({ mode: 'buffer-replace', startedAt: 0 });
+    presenter.applyToolUse(toolUse('Read', 'r1'));
+
+    expect(presenter.applyStatus(status({ tokenSpeed: speed(116.4) }))).toBe(true);
+    expect(presenter.activity.tokenRate).toBe(116);
+
+    // 占位帧(无 tokenSpeed)/ 首个输出前的 0 读数 / 坏数据: 不改头部, 避免来回闪。
+    expect(presenter.applyStatus(status({}))).toBe(false);
+    expect(presenter.applyStatus(status({ tokenSpeed: speed(0, 0) }))).toBe(false);
+    expect(presenter.applyStatus(status({ tokenSpeed: { rate: 'fast' } }))).toBe(false);
+    expect(presenter.activity.tokenRate).toBe(116);
+
+    expect(presenter.applyStatus(status({ tokenSpeed: speed(297) }))).toBe(true);
+    expect(presenter.composeRunning('').split('\n')[0]).toContain('· 297 tok/s');
+
+    // 与桌面运行状态栏同口径: 不可靠读数隐藏, 而不是显示错数。
+    expect(
+      presenter.applyStatus(status({ generationReliable: false, tokenSpeed: speed(300) })),
+    ).toBe(true);
+    expect(presenter.composeRunning('')).not.toContain('tok/s');
+  });
+});
+
 describe('createTurnPresenter — buffer-replace 策略(个人 IM 渠道现有行为)', () => {
   it('isFinal 用该条全文整体替换缓冲, 流式增量追加', () => {
     const p = createTurnPresenter({ mode: 'buffer-replace' });

@@ -1,4 +1,5 @@
 import { apiFetchRaw } from '@/api/client';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { canMobilePeerUpload, tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
@@ -46,6 +47,7 @@ interface UploadDeps {
   uploadFile?: MobileAttachmentFileUploader;
   readFileChunk?: MobileAttachmentChunkReader;
   snapshotFile?: (uri: string) => Promise<{ uri: string; size: number; cleanup?: () => Promise<void> }>;
+  retainImage?: (ref: string, uri: string) => Promise<void>;
 }
 
 /** presign 是小 POST,不该吃满默认 20s 超时;弱网抖动重试一次(重复 presign 无副作用,PUT 前不产生对象)。 */
@@ -332,8 +334,13 @@ export async function uploadMobileAttachmentFromFile(
     id?: string;
     deps?: UploadDeps;
     signal?: AbortSignal;
+    /** The outbox can remove a record without aborting its already-running upload. */
+    isActive?: () => boolean;
   },
 ): Promise<RemoteSerializedAttachment> {
+  const owner = getMobileAuthOwner();
+  const isActive = () => !!owner.accountKey && isMobileAuthOwnerCurrent(owner)
+    && !options.signal?.aborted && (options.isActive?.() ?? true);
   assertMobileDocumentSize(candidate.size);
   // 直连不设体积上限;超过 OSS 上限的附件只能直连——先确认直连可用(只查对端能力),
   // 不可用就在快照和摘要之前失败,不白复制、白读一遍数 GB 的文件。
@@ -349,6 +356,21 @@ export async function uploadMobileAttachmentFromFile(
     : options.deps?.readFileChunk
       ? { uri: fileUri, size: candidate.size }
       : await snapshotMobileAttachmentFile(fileUri);
+  // Both the composer and the background outbox upload here. Keep the exact hashed
+  // snapshot before cleanup; retaining only in the composer loses background sends.
+  const retain = async (attachment: RemoteSerializedAttachment) => {
+    if (attachment.category === 'image' && isActive()) {
+      try {
+        if (options.deps?.retainImage) {
+          await options.deps.retainImage(attachment.url ?? attachment.path, snapshot.uri);
+        } else {
+          const { registerSentAttachmentThumb } = await import('@/session/sentAttachmentThumbStore');
+          await registerSentAttachmentThumb(attachment.url ?? attachment.path, snapshot.uri, undefined, isActive);
+        }
+      } catch { /* Optional local copy must not turn a completed upload into a failed send. */ }
+    }
+    return attachment;
+  };
   try {
     if (snapshot.size !== candidate.size) {
       throw new Error(`Attachment size changed: expected ${candidate.size}, actual ${snapshot.size}`);
@@ -364,7 +386,7 @@ export async function uploadMobileAttachmentFromFile(
       if (peerRef) {
         const attachment = buildMobileUploadedAttachment({ ...candidate, sha256, peerRef, id: options.id });
         if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
-        return attachment;
+        return await retain(attachment);
       }
       // 直连没走通:OSS 保底只收上限以内的附件,presign 前拦下,避免孤儿对象。
       assertMobileOssAttachmentSize(candidate.size);
@@ -396,7 +418,7 @@ export async function uploadMobileAttachmentFromFile(
     if (!attachment) {
       throw new Error(i18n.t('composer.upload.noFileRead'));
     }
-    return attachment;
+    return await retain(attachment);
   } finally {
     await snapshot.cleanup?.()?.catch(() => undefined);
   }

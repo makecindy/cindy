@@ -28,6 +28,8 @@ export interface BotSkillSummaryWire {
 export interface BotSkillCallbacks {
   save(params: {
     callerSessionId: string;
+    /** 当前运行实例;IM 专线上 host 据此读逐轮渠道作用域判定「是不是主人触发的轮次」。 */
+    callerSessionInstanceId?: string;
     name: string;
     description: string;
     body: string;
@@ -40,6 +42,7 @@ export interface BotSkillCallbacks {
   >;
   list(params: {
     callerSessionId: string;
+    callerSessionInstanceId?: string;
     query?: string;
     offset?: number;
     limit?: number;
@@ -53,6 +56,11 @@ export interface BotSkillToolDeps {
 
 function callerSessionId(deps: BotSkillToolDeps): string | null {
   return deps.getSessionContext().sessionId ?? null;
+}
+
+function callerSessionInstanceId(deps: BotSkillToolDeps): { callerSessionInstanceId: string } | Record<never, never> {
+  const instanceId = deps.getSessionContext().sessionInstanceId;
+  return instanceId ? { callerSessionInstanceId: instanceId } : {};
 }
 
 function missingSession() {
@@ -96,6 +104,7 @@ export function registerBotSkillTools(
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.save({
         callerSessionId: sessionId,
+        ...callerSessionInstanceId(deps),
         name,
         description,
         body,
@@ -125,6 +134,7 @@ export function registerBotSkillTools(
       const sessionId = callerSessionId(deps);
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.list({ callerSessionId: sessionId,
+        ...callerSessionInstanceId(deps),
         ...(query !== undefined ? { query } : {}),
         ...(offset !== undefined ? { offset } : {}),
         ...(limit !== undefined ? { limit } : {}),

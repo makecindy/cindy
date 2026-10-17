@@ -58,8 +58,8 @@ export function startSharedTaskRuntime(options: {
     api: sharedTaskApi, journal: createSharedTaskJournal(db.client),
     ownerAccountId, hostDeviceId: getDeviceId(), creationState, isCurrent: current,
     async readSession(sessionId) {
-      const rows = await db.client.query<{ id: string; title: string; status: string }>(
-        'SELECT id, title, status FROM sessions WHERE id = ? LIMIT 1', [sessionId]);
+      const rows = await db.client.query<{ id: string; title: string; status: string; source: string | null }>(
+        'SELECT id, title, status, source FROM sessions WHERE id = ? LIMIT 1', [sessionId]);
       return rows[0] ?? null;
     },
     revoke: (sharedTaskId, memberId) => {

@@ -102,13 +102,69 @@ for (const kind of ['quota', 'credit'] as const) {
     await waitFor(() => expect(statusBar.result.current.usage).not.toBeNull());
     settings.rerender({ enabled: true });
     expect(settings.result.current.usage).toEqual(statusBar.result.current.usage);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(kind === 'quota' ? 2 : 1);
     statusBar.unmount();
     settings.unmount();
     const reopened = renderHook(() => useUsage(true));
     expect(reopened.result.current.usage).not.toBeNull();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(kind === 'quota' ? 3 : 1);
     act(() => reopened.result.current.refresh());
-    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(kind === 'quota' ? 4 : 2));
   });
 }
+
+
+it('clears the mounted and warm quota cache when the main process reports no limit', async () => {
+  state.owner = 'quota-unlimited';
+  state.membership = 'org';
+  let changed!: Parameters<typeof window.electronAPI.maker.usage.onClaudeAccountChanged>[0];
+  window.electronAPI.maker.usage.onClaudeAccountChanged = (listener) => {
+    changed = listener;
+    return () => {};
+  };
+  state.quota.mockResolvedValue({ spend: 100, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 });
+  const view = renderHook(() => useClaudeAccountUsageResult(true));
+  await waitFor(() => expect(view.result.current.usage?.maxBudget).toBe(100));
+  state.quota.mockResolvedValue(null);
+  act(() => changed(null));
+  expect(view.result.current.usage).toBeNull();
+  view.unmount();
+  const reopened = renderHook(() => useClaudeAccountUsageResult(true));
+  expect(reopened.result.current.usage).toBeNull();
+  await waitFor(() => expect(reopened.result.current.loading).toBe(false));
+});
+
+
+it('preserves owner-bound warm quota when a refresh has no main snapshot', async () => {
+  state.owner = 'quota-unavailable';
+  state.membership = 'org';
+  state.quota.mockResolvedValue({ spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 });
+  const first = renderHook(() => useClaudeAccountUsageResult(true));
+  await waitFor(() => expect(first.result.current.usage?.spend).toBe(12));
+  first.unmount();
+  // No active listener while main switches accounts; returning to this owner
+  // can yield null after a failed request, without invalidating its warm data.
+  state.quota.mockResolvedValue(null);
+  const reopened = renderHook(() => useClaudeAccountUsageResult(true));
+  act(() => reopened.result.current.refresh());
+  await waitFor(() => expect(state.quota).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(reopened.result.current.loading).toBe(false));
+  expect(reopened.result.current.usage?.spend).toBe(12);
+  reopened.unmount();
+  const finalView = renderHook(() => useClaudeAccountUsageResult(true));
+  await waitFor(() => expect(finalView.result.current.loading).toBe(false));
+  expect(finalView.result.current.usage?.spend).toBe(12);
+});
+
+it.each(['unlimited', 'invalidated'])('replays an authoritative %s read after the clear push was missed while unmounted', async (quotaState) => {
+  state.owner = `quota-missed-clear-${quotaState}`;
+  state.membership = 'org';
+  state.quota.mockResolvedValue({ spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 });
+  const first = renderHook(() => useClaudeAccountUsageResult(true));
+  await waitFor(() => expect(first.result.current.usage?.spend).toBe(12));
+  first.unmount();
+  state.quota.mockResolvedValue({ quotaState });
+  const reopened = renderHook(() => useClaudeAccountUsageResult(true));
+  await waitFor(() => expect(reopened.result.current.loading).toBe(false));
+  expect(reopened.result.current.usage).toBeNull();
+});

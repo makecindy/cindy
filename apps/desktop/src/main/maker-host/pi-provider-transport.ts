@@ -21,12 +21,16 @@ export function invocationModelRecord(model: CatalogModel, upstream: string, api
     ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
     ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
+  // The active catalog is authoritative; unknown capability must not silently
+  // discard images in native bridges while the Pi runtime allows them.
+  const supportsImageInput = model.supportsImageInput ?? model.modalities?.input.includes('image')
+    ?? known?.supportsImageInput ?? known?.modalities?.input.includes('image') ?? true;
   return {
     ...(known ?? {}), id: model.id, name: model.name, upstream,
     contextWindow: model.contextWindowMax ?? model.contextWindow,
     maxOutput: model.maxOutput ?? known?.maxOutput,
-    modalities: model.modalities ?? known?.modalities ?? { input: ['text'], output: ['text'] },
-    supportsImageInput: model.supportsImageInput ?? known?.supportsImageInput ?? false,
+    modalities: model.modalities ?? known?.modalities ?? { input: supportsImageInput ? ['text', 'image'] : ['text'], output: ['text'] },
+    supportsImageInput,
     supportsFastMode: model.supportsFastMode,
     reasoning: model.efforts.length > 0, efforts: model.efforts, defaultEffort: model.defaultEffort,
     execution: { pi: { ...known?.execution.pi, api: selected ?? known!.execution.pi.api,
@@ -204,7 +208,7 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
     api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow ?? 200_000,
     maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow ?? 200_000), reasoning: row.reasoning ?? (row.efforts?.length ?? 0) > 0,
-    input: row.supportsImageInput ? ['text', 'image'] : ['text'],
+    input: (row.supportsImageInput ?? row.modalities?.input.includes('image') ?? true) ? ['text', 'image'] : ['text'],
     cost: { input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
       cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0 },
     thinkingLevelMap: { ...row.execution.pi.thinkingLevelMap, ...Object.fromEntries(PI_REASONING_EFFORTS.map(level =>

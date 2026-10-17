@@ -27,6 +27,7 @@ import { createLogger } from '../logger.js';
 import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugins.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
+import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -110,6 +111,14 @@ export interface BotProfileRuntimeDeps {
     remoteHostId?: string;
   }) => Promise<BotToolsetCatalogItem[]>;
   readMemoryIndex?: (scopeKey: string) => Promise<string>;
+  /**
+   * 这个伙伴绑定了哪些平台的机器人(Telegram / 飞书), 来自 bot-im-connections 记录(不含凭证)。
+   *
+   * 主人私聊进的是伙伴主任务, 它与桌面共用、不带专线的 `telegramChatId` / `feishuChatId`;
+   * 没有这份清单, 主任务上就挂不上 `cindy_telegram_bot` / `cindy_feishu_bot`, 主人在私聊里
+   * 让伙伴发投票 / 发文件时它只能说「没有这组工具」。远端会话同样适用: 出站走的是本机连接。
+   */
+  listBotImChannels?: (input: { botId: string }) => readonly BotImChannel[];
   /**
    * 这个伙伴的队友们(除它自己之外、还启用着的伙伴)。
    *
@@ -494,8 +503,9 @@ export async function hydrateBotProfileRuntime(
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(eq(botSessionLinks.sessionId, opts.id), eq(sessions.source, 'bot')))
     .limit(1);
-  // Group lanes are long-lived like the canonical Chat and share its Profile/Home.
-  if (!row || !['canonical', 'delegation', 'group'].includes(row.role)) return null;
+  // Group lanes and IM channel lanes are long-lived like the canonical Chat and
+  // share its Profile/Home. Channel lanes are full-profile lanes (not chat-only).
+  if (!row || !['canonical', 'delegation', 'group', 'channel'].includes(row.role)) return null;
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -793,6 +803,55 @@ export async function hydrateBotProfileRuntime(
       runtimeConfiguredMcpServers.push(serverName);
     }
   }
+  // 主任务(主人私聊落点)与桌面共用, 不带专线的 chat 字段; 它靠「伙伴绑了哪些渠道」的标记
+  // 挂渠道工具 —— 写进 vendorOptions, 让各 harness 的 MCP 门禁(mcp-providers isEnabled /
+  // codexEnvironment buildSessionMcpConfig / piEnvironment capabilityGated)按同一份标记放行。
+  // 能动哪个 chat 仍由逐轮作用域租约决定, 桌面轮次没有租约, 工具一律 fail closed。
+  const boundImChannels: readonly BotImChannel[] =
+    row.role === 'canonical' ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
+  if (boundImChannels.length > 0) {
+    opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
+  }
+  // IM 专线(飞书连接交给伙伴后的群 / 话题)的渠道出站工具是这条专线回消息、回文件的
+  // 载体, 不是伙伴的可选能力: 会话带飞书渠道 vendorOptions 时始终挂上, 伙伴显式收窄的
+  // 工具集也不收掉它。只放行这一项, 不扩其它能力; 继承模式本来就包含它。
+  // 主任务同理: 伙伴绑了飞书机器人, 主人私聊里就该能直接发消息 / 发文件 / 调 Open API。
+  if (
+    (row.role === 'channel' && typeof opts.vendorOptions?.feishuChatId === 'string')
+    || boundImChannels.includes('feishu')
+  ) {
+    const imServer = 'cindy_feishu_bot';
+    const imToolset = PROVIDER_NAME_TO_PLUGIN_ID[imServer];
+    if (
+      !runtimeConfiguredMcpServers.includes(imServer)
+      && mcpCatalog.some((item) => item.name === imServer && item.available !== false)
+    ) {
+      runtimeConfiguredMcpServers.push(imServer);
+    }
+    if (
+      !runtimeConfiguredToolsets.includes(imToolset)
+      && toolsetCatalog.some((item) => item.id === imToolset && item.available !== false)
+    ) {
+      runtimeConfiguredToolsets.push(imToolset);
+    }
+    disabledToolsets = disabledToolsets.filter((id) => id !== imToolset);
+  }
+  // Telegram 专线同理: cindy_telegram_bot 是这条专线在 Telegram 里发媒体 / 投票 / 表情、下载
+  // 对方文件的载体, 不是伙伴可选能力; 会话带 Telegram 渠道 vendorOptions 时始终进 allowlist。
+  // 它不映射到工具集(无插件 id), 所以只动 MCP allowlist。能不能动哪个 chat 由逐轮作用域判定。
+  // 主任务同理: 伙伴绑了 Telegram 机器人, 主人私聊里就该能直接发投票 / 媒体 / 调 Bot API。
+  if (
+    (row.role === 'channel' && typeof opts.vendorOptions?.telegramChatId === 'string')
+    || boundImChannels.includes('telegram')
+  ) {
+    const imServer = 'cindy_telegram_bot';
+    if (
+      !runtimeConfiguredMcpServers.includes(imServer)
+      && mcpCatalog.some((item) => item.name === imServer && item.available !== false)
+    ) {
+      runtimeConfiguredMcpServers.push(imServer);
+    }
+  }
   const identity = chatOnly ? profile.description : version.identitySource.trim();
   opts.botProfilePrompt = buildBotProfilePrompt({
     displayName: profile.displayName,
@@ -818,7 +877,10 @@ export async function hydrateBotProfileRuntime(
     botCreationEnabled: row.role === 'canonical' && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.
-    ownSkillsEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
+    // IM 专线与主任务是同一个伙伴: 群 / 话题里学到的做法同样该沉淀成它自己的技能, 否则主人在
+    // 群里让它「记成技能」只能听到「当前任务只读」。写入仍只认主人触发的轮次(botSkillService
+    // 按逐轮渠道作用域判定), 其他成员触发时工具会说明原因。
+    ownSkillsEnabled: (row.role === 'canonical' || row.role === 'channel') && helperAvailable && !opts.remoteHostId,
     botModeEnabled: row.role === 'canonical',
     // Match the ordinary helper surface on this engine and transport.
     sessionControlEnabled: helperAvailable && (!opts.remoteHostId || opts.agentKind === 'pi'),
@@ -1049,8 +1111,9 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  // Canonical Chats and group lanes follow Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'group';
+  // Canonical Chats, group lanes and IM channel lanes follow Profile updates;
+  // delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'group' || row.role === 'channel';
   const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256

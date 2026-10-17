@@ -1,6 +1,11 @@
 /** One installer shared by startup, Settings and the forced-update gate. No React/native imports. */
-export interface AndroidInstallTarget { installUrl: string; version: string }
-export type AndroidInstallPhase = 'idle' | 'permission-required' | 'permission' | 'permission-denied' | 'downloading' | 'installing' | 'ready' | 'error';
+export interface AndroidInstallTarget { installUrl: string; version: string; releaseNotes?: string }
+/** offer: an update was discovered and waits for the user's go-ahead (permission already granted). */
+export type AndroidInstallPhase = 'idle' | 'offer' | 'permission-required' | 'permission' | 'permission-denied' | 'downloading' | 'installing' | 'ready' | 'error';
+export interface AndroidInstallStartOptions {
+  /** Discovery prompts wait for an explicit tap; the forced gate's button already is that tap. */
+  confirm?: boolean;
+}
 export interface AndroidInstallState {
   phase: AndroidInstallPhase;
   target: AndroidInstallTarget | null;
@@ -31,6 +36,7 @@ export class AndroidInstallController {
   private file: string | null = null;
   // Files passed to Android must survive dialog dismissal and installation cancellation.
   private handedToInstaller = false;
+  private awaitingConfirm = false;
   constructor(private io: AndroidInstallIO) {}
   getSnapshot = (): AndroidInstallState => this.state;
   subscribe = (listener: () => void): (() => void) => {
@@ -43,18 +49,22 @@ export class AndroidInstallController {
   }
 
   /** false means an old native build or a web landing page: keep the original browser path. */
-  start(target: AndroidInstallTarget): boolean {
+  start(target: AndroidInstallTarget, options: AndroidInstallStartOptions = {}): boolean {
     try {
       if (!this.io.supported() || !isDirectApkUrl(target.installUrl)) return false;
     } catch { return false; }
     if (this.state.phase !== 'idle' || this.operation) return true;
+    this.awaitingConfirm = options.confirm === true;
     this.update({ phase: 'permission', target, progress: null });
     void this.run();
     return true;
   }
+  /** The sheet's primary action: confirm the offer, grant permission, install, or retry. */
   retry = (): void => {
     if (!this.operation && this.state.target) {
       const grant = this.state.phase === 'permission-required' || this.state.phase === 'permission-denied';
+      // Tapping the primary action of the first card is the confirmation.
+      this.awaitingConfirm = false;
       void this.run(grant);
     }
   };
@@ -77,6 +87,10 @@ export class AndroidInstallController {
       if (!current()) return;
       if (!allowed) {
         this.update({ phase: 'permission-denied', target, progress: null });
+        return;
+      }
+      if (this.awaitingConfirm) {
+        this.update({ phase: 'offer', target, progress: null });
         return;
       }
       if (!this.file) {
@@ -114,6 +128,7 @@ export class AndroidInstallController {
     this.file = null;
     if (file && !this.handedToInstaller) void this.io.remove(file).catch(() => undefined);
     this.handedToInstaller = false;
+    this.awaitingConfirm = false;
     this.update(IDLE);
   };
 

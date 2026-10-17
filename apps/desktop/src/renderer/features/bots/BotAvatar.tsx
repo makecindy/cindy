@@ -16,6 +16,10 @@
  * bundled preset sentinel render as an `<img>`. Any unknown
  * `cindy://avatar/…` sentinel is not a grapheme, so it falls back to the neutral
  * initial instead of painting the raw sentinel string as text.
+ *
+ * A cloud companion's actor avatar (an `https://` public image, cloud-companions.md) also
+ * arrives in `avatar` when the row is built from the cloud (its main computer is offline):
+ * it renders as artwork too. Only a single grapheme is ever painted as text.
  */
 import { rewriteToRemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { useEffect, useState } from 'react';
@@ -25,8 +29,9 @@ import cindyPresetAvatar from '@/assets/bot-presets/cindy.png';
 import dashPresetAvatar from '../../../../resources/legacy-teammate-avatars/dash.png';
 import liziPresetAvatar from '../../../../resources/legacy-teammate-avatars/lizi.png';
 import { cn } from '@/lib/utils';
-import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
+import { isManagedBotAvatarUrl, isSingleBotAvatarGrapheme } from '../../../shared/botAvatarValue';
 import { CINDY_AVATAR_SCHEME_PREFIX, isCindyAvatarSentinel } from './botAvatarIdentity';
+import { useCachedCompanionAvatar, type CompanionAvatarSource } from './companionAvatarCache';
 
 // The sentinel lives in an asset-free leaf module (see botAvatarIdentity.ts) but
 // stays part of this module's public surface: UI code imports the avatar
@@ -146,16 +151,25 @@ export interface BotAvatarProps {
 export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
   const bundledArtwork = BUNDLED_AVATAR_BY_SENTINEL[emoji.toLowerCase()] ?? null;
-  const publicArtwork = bot.avatarUrl?.startsWith('https://') ? bot.avatarUrl : null;
-  const artwork = publicArtwork ?? bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? rewriteToRemoteMediaOrigin(emoji, bot.deviceId ? { kind: 'device', deviceId: bot.deviceId } : undefined) : null);
-  const [imageFailed, setImageFailed] = useState(false);
-  useEffect(() => setImageFailed(false), [artwork]);
-  const visibleArtwork = imageFailed ? null : artwork;
-  // An unresolved sentinel (a preset only a newer client knows) is still not a
-  // grapheme: fall through to the initial rather than paint `cindy://avatar/…`.
-  const glyph = visibleArtwork || isCindyAvatarSentinel(emoji) || isManagedBotAvatarUrl(emoji)
-    ? ''
-    : emoji;
+  const publicArtwork = [bot.avatarUrl, emoji].find((value) => value?.startsWith('https://')) ?? null;
+  // Avatars held elsewhere (another computer, the cloud) are read from this computer's copy first.
+  const remoteManaged = !publicArtwork && !bundledArtwork && !!bot.deviceId && isManagedBotAvatarUrl(emoji);
+  const cacheSource: CompanionAvatarSource | null = publicArtwork ? { avatar: publicArtwork, deviceId: null }
+    : remoteManaged ? { avatar: emoji, deviceId: bot.deviceId! } : null;
+  const cached = useCachedCompanionAvatar(cacheSource);
+  const original = publicArtwork ?? bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? rewriteToRemoteMediaOrigin(emoji, bot.deviceId ? { kind: 'device', deviceId: bot.deviceId } : undefined) : null);
+  // While the local lookup runs, only the tint shows (no initial flashing before the image).
+  const waiting = cached === undefined;
+  // The local copy first; if it cannot load (e.g. recycled meanwhile), the original address.
+  const candidates = waiting ? [] : [...new Set([cached, original].filter((value): value is string => !!value))];
+  const candidateKey = candidates.join('\n');
+  const [failed, setFailed] = useState<readonly string[]>([]);
+  useEffect(() => setFailed([]), [candidateKey]);
+  const visibleArtwork = candidates.find((candidate) => !failed.includes(candidate)) ?? null;
+  // Anything that is not one grapheme (an unresolved sentinel, an address whose image failed)
+  // falls through to the initial rather than painting the raw string.
+  const glyph = !visibleArtwork && isSingleBotAvatarGrapheme(emoji) ? emoji : '';
+  const initial = waiting ? '' : botAvatarInitial(bot.name);
   return (
     <span
       aria-hidden
@@ -174,13 +188,13 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
           src={visibleArtwork}
           alt=""
           draggable={false}
-          onError={() => setImageFailed(true)}
+          onError={() => setFailed((previous) => [...previous, visibleArtwork])}
           className="pointer-events-none h-full w-full select-none rounded-full object-cover"
         />
       ) : glyph ? (
         <span>{glyph}</span>
       ) : (
-        <span className="font-medium text-[var(--text-primary)]">{botAvatarInitial(bot.name)}</span>
+        <span className="font-medium text-[var(--text-primary)]">{initial}</span>
       )}
     </span>
   );

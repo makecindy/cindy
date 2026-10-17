@@ -3,18 +3,19 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { REMOTE_AGENT_READ_MAX_BYTES, type RemoteAgentErrorInfo } from '@cindy/device-link';
+import { REMOTE_AGENT_MAX_POLL_RUNS, REMOTE_AGENT_READ_MAX_BYTES, REMOTE_AGENT_READ_WAIT_MS, type RemoteAgentErrorInfo } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller, type PolledRun } from '../controller/poller';
 import { EventLog } from '../eventLog';
+import { REMOTE_AGENT_HOST_IDLE_MS } from '../host/runHost';
 
 interface FakeRun {
   log: EventLog;
 }
 
 /** 与 runHost 的 poll 同一套语义的最小被控端(只关心事件流)。 */
-function fakeHost() {
+function fakeHost(maxWaitMs = 200) {
   const runs = new Map<string, FakeRun>();
   const calls: Array<{ runs: Array<{ runId: string; cursor: number }>; waitMs?: number }> = [];
   let failNext: Error | null = null;
@@ -44,7 +45,7 @@ function fakeHost() {
       const ready = live.length < request.runs.length || live.some(({ run, cursor }) => run.log.isReady(cursor));
       if (!ready && (request.waitMs ?? 0) > 0) {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(finish, Math.min(request.waitMs ?? 0, 200));
+          const timer = setTimeout(finish, Math.min(request.waitMs ?? 0, maxWaitMs));
           const offs = live.map(({ run }) => run.log.onChange(finish));
           function finish() {
             clearTimeout(timer);
@@ -112,7 +113,63 @@ afterEach(() => {
 });
 
 describe('multiplexed poll', () => {
-  it('delivers every run exactly once with at most two polls in flight', async () => {
+  it.each([130, 1000])('refreshes all %i idle runs before host expiry with at most two polls', async count => {
+    vi.useFakeTimers();
+    const host = fakeHost(REMOTE_AGENT_READ_WAIT_MS);
+    const lastRead = new Map<string, number>();
+    let inflight = 0;
+    let peak = 0;
+    const poller = new RemoteAgentPoller(async args => {
+      const request = args[0] as { runs: Array<{ runId: string }> };
+      expect(request.runs.length).toBeLessThanOrEqual(REMOTE_AGENT_MAX_POLL_RUNS);
+      request.runs.forEach(({ runId }) => lastRead.set(runId, Date.now()));
+      peak = Math.max(peak, ++inflight);
+      try { return await host.invoke(args); } finally { inflight -= 1; }
+    });
+    const sinks = Array.from({ length: count }, (_, i) => collector(`idle-${i}`));
+    for (const sink of sinks) {
+      host.add(sink.run.runId);
+      lastRead.set(sink.run.runId, Date.now());
+      poller.register(sink.run);
+    }
+    try {
+      // 没有任何事件，host 每次都挂满 10 秒；连续检查两个回收周期。
+      for (let elapsed = 0; elapsed < REMOTE_AGENT_HOST_IDLE_MS * 2; elapsed += 5_000) {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(Math.max(...[...lastRead.values()].map(at => Date.now() - at))).toBeLessThan(REMOTE_AGENT_HOST_IDLE_MS);
+      }
+      expect(peak).toBeLessThanOrEqual(2);
+      expect(sinks.every(sink => sink.lost === null)).toBe(true);
+    } finally {
+      sinks.forEach(sink => poller.unregister(sink.run.runId));
+      await vi.advanceTimersByTimeAsync(REMOTE_AGENT_READ_WAIT_MS);
+    }
+  });
+  it('keeps pulling a run registered during a long wait, without waiting for the old poll to time out', async () => {
+    // 被控端照实挂满等待时间：旧的长等待只覆盖第一个任务。
+    const host = fakeHost(10_000);
+    const poller = new RemoteAgentPoller((args) => host.invoke(args));
+    const first = randomUUID();
+    const second = randomUUID();
+    host.add(first).append({ step: 'started' });
+    const firstSink = collector(first);
+    poller.register(firstSink.run);
+    await until(() => firstSink.text().includes('started'));
+    const secondLog = host.add(second);
+    const secondSink = collector(second);
+    poller.register(secondSink.run);
+    secondLog.append({ step: 'projection' });
+    await until(() => secondSink.text().includes('projection'));
+    const startedAt = Date.now();
+    secondLog.append({ step: 'started' });
+    await until(() => secondSink.text().includes('"started"'), 2_000);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    host.runs.get(first)!.log.end();
+    secondLog.end();
+    await until(() => firstSink.done && secondSink.done);
+  });
+
+  it.each([12, 130])('delivers %i runs exactly once with at most two polls in flight', async count => {
     const host = fakeHost();
     let inflight = 0;
     let peak = 0;
@@ -125,7 +182,7 @@ describe('multiplexed poll', () => {
         inflight -= 1;
       }
     });
-    const ids = Array.from({ length: 12 }, () => randomUUID());
+    const ids = Array.from({ length: count }, () => randomUUID());
     const logs = ids.map((runId) => host.add(runId));
     const sinks = ids.map((runId) => collector(runId));
     for (const sink of sinks) poller.register(sink.run);

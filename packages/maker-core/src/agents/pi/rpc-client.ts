@@ -16,7 +16,7 @@
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { Logger } from '../../interfaces/logger.js';
 
-import type { PiTransport } from './transport.js';
+import type { PiDisconnectReason, PiTransport } from './transport.js';
 
 export { attachJsonlReader } from './transport.js';
 export { createPiStdioTransport } from './transport.js';
@@ -61,6 +61,8 @@ export interface PiRpcSpawnOptions {
   onEvent: (event: PiRpcEvent) => void;
   /** 进程退出回调(exit code / signal;正常 close() 也会触发)。 */
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
+  /** RPC loss without confirmed executor exit. Runtime cleanup still needs close(). */
+  onDisconnect?: (reason: PiDisconnectReason) => void;
   onStderrLine?: (line: string) => void;
 }
 
@@ -176,7 +178,16 @@ export class PiRpcProcess {
       this.exitError = this.createExitError(`pi process exited (code=${info.code}, signal=${info.signal})`);
       this.startupStderr = '';
       this.failAllPending(this.exitError);
+      this.flushUnsettledFrameDiagnostics();
       opts.onExit({ code: info.code, signal: info.signal });
+    });
+    this.transport.onDisconnect?.((reason) => {
+      this.closed = true;
+      this.exitError = this.createExitError(`pi RPC disconnected (${reason}); executor exit unconfirmed`);
+      this.startupStderr = '';
+      this.failAllPending(this.exitError);
+      this.flushUnsettledFrameDiagnostics();
+      opts.onDisconnect?.(reason);
     });
     this.transport.onOversizedFrame?.(() => this.failOversizedPending());
   }
@@ -206,7 +217,7 @@ export class PiRpcProcess {
       refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
     } = {},
   ): Promise<PiRpcResponse> {
-    if (this.isClosed) throw this.exitError ?? this.createExitError('pi process already exited');
+    if (this.isClosed) throw this.exitError ?? this.createExitError('pi RPC transport is closed');
     const id = `c${this.nextRequestId++}`;
     const payload = JSON.stringify({ ...command, id });
 
@@ -421,6 +432,14 @@ export class PiRpcProcess {
       });
       this.eventFrameCounts.clear();
     }
+  }
+
+  private flushUnsettledFrameDiagnostics(): void {
+    if (this.eventFrameCounts.size === 0) return;
+    this.logger.info('pi rpc turn frame histogram (no agent_settled)', {
+      frames: Object.fromEntries(this.eventFrameCounts),
+    });
+    this.eventFrameCounts.clear();
   }
 
   private failOversizedPending(): void {

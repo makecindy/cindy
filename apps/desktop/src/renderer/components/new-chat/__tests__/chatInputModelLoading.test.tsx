@@ -4,13 +4,16 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { ChatInput } from '../ChatInput';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
+import { getEffortChangeCoordinator } from '../effortChangeQueue';
 
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
-  setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), remoteProviders: [] as ProviderView[],
+  setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
+  localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
 }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -37,9 +40,10 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange }: { modelId: string; onModelChange: typeof h.selectModel }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null }) => {
   h.selectModel = onModelChange;
-  return <span data-testid="model-selector">{modelId}</span>;
+  h.selectEffort = effort;
+  return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
 vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: () => ({ providers: h.remoteProviders, status: h.remoteStatus, refresh: () => {} }) }));
 vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
@@ -54,7 +58,7 @@ vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor |
   h.editor = editor;
   return { state: h.listening ? 'listening' : 'idle', isListening: h.listening, isBusy: h.listening, draftText: '', start: vi.fn(), stop: h.stop, cancel: vi.fn() };
 } }));
-vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: [], loading: false }) }));
+vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
 vi.mock('@/hooks/useConnectedSource', () => ({ useConnectedSource: () => ({ hasConnectedSource: true, loading: false }) }));
 vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({ agents: [], loading: false }) }));
@@ -87,14 +91,64 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
-beforeEach(() => { h.listening = false; h.stop.mockClear(); window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); h.remoteProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+beforeEach(() => { h.listening = false; h.stop.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
+afterEach(() => { cleanup(); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+it.each([null, 'test-host'])('preserves no-effort after creation when sending the second message (%s)', async (deviceLinkDeviceId) => {
+  h.localProviders = [sshNativeCodexProvider([sshModel('qwen3:14b', { efforts: [], defaultEffort: null })])];
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null}
+    initialModel="qwen3:14b" initialEffort={null} onSend={onSend} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>First message</p>'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][2]).toBe('');
+
+  view.rerender(<ChatInput {...props} sessionId={`no-effort-created-${deviceLinkDeviceId}`} deviceLinkDeviceId={deviceLinkDeviceId}
+    initialModel="qwen3:14b" initialEffort={onSend.mock.calls[0][2]} onSend={onSend} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Second message</p>'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(onSend.mock.calls[1][0]).toBe('Second message');
+  expect(onSend.mock.calls[1][2]).toBe('');
+});
+
+it.each([null, ''])('adopts an explicit no-effort session snapshot without reusing a stale committed tier (%j)', async (initialEffort) => {
+  h.localProviders = [sshNativeCodexProvider([sshModel('qwen3:14b', { efforts: [], defaultEffort: null })])];
+  const sessionId = `no-effort-existing-${initialEffort === null ? 'null' : 'empty'}`;
+  getEffortChangeCoordinator().setCommittedEffort(sessionId, 'high');
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={sessionId} deviceLinkDeviceId={null}
+    initialModel="qwen3:14b" initialEffort={initialEffort} onSend={onSend} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Continue without effort</p>'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][2]).toBe('');
+});
+
+it('keeps the shared guest model visible but locks selection without locking message input', async () => {
+  const onSend = vi.fn().mockResolvedValue(undefined);
+  const inputProps = { ...props, hideRuntimeControls: false, initialModel: 'gpt-6-sol', onSend };
+  const view = render(<ChatInput {...inputProps} deviceLinkDeviceId={sharedTaskHostPeer('shared', 'host')} />);
+  const selector = () => screen.getByTestId('model-selector') as HTMLButtonElement;
+  expect(selector().textContent).toBe('gpt-6-sol');
+  expect(selector().disabled).toBe(true);
+  await act(async () => { expect(await h.selectModel?.('other-model')).toBe(false); });
+  expect(h.setModel).not.toHaveBeenCalled();
+  expect(h.editor?.isEditable).toBe(true);
+
+  await act(async () => { view.rerender(<ChatInput {...inputProps} deviceLinkDeviceId="host" />); });
+  expect(selector().disabled).toBe(false);
+});
 
 const queuedMessage = {
   clientId: 'queue-edit-test',
@@ -179,6 +233,20 @@ it('sends a remote-only Codex model when the controller has no connected provide
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
   expect(onSend.mock.calls[0][1]).toBe('remote-only');
   expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
+});
+
+// 回归：投影 effort 为 null（目录误判/不可调档）时选择器回落会话已持久化档位，
+// 不能兜底成字面量 'low'；投影有值时仍优先投影值。
+it.each([
+  ['null projection with the persisted session effort instead of a literal low', null, 'high', 'high'],
+  ['the projected effort wins over the initial prop when present', 'medium', 'high', 'medium'],
+] as const)('renders %s', async (_name, projectedEffort, initialEffort, expected) => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
+  render(<ChatInput {...props} hideRuntimeControls={false} sessionId="ssh-effort-fallback" deviceLinkDeviceId={null} remoteHostId="builder"
+    initialModel="remote-only" initialProviderId="openai" initialEffort={initialEffort}
+    runtimeEffective={{ agentKind: 'codex', model: 'remote-only', providerId: 'openai', effort: projectedEffort, fastMode: false }}
+    onSend={vi.fn()} />);
+  await waitFor(() => expect(h.selectEffort).toBe(expected));
 });
 
 it.each([

@@ -198,12 +198,14 @@ const LABELS: Record<string, string> = {
 };
 
 export default function RemoteDesktopScreen() {
-  const { deviceId: rawId, deviceName: rawName } = useLocalSearchParams<{
+  const { deviceId: rawId, deviceName: rawName, handoff: rawHandoff } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
+    handoff?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
   const deviceName = typeof rawName === "string" ? rawName : deviceId;
+  const handoff = typeof rawHandoff === "string" && rawHandoff ? rawHandoff : undefined;
   const router = useRouter();
   const focused = useIsFocused();
   return (
@@ -218,6 +220,7 @@ export default function RemoteDesktopScreen() {
       <RemoteDesktopSession
         deviceId={deviceId}
         deviceName={deviceName}
+        handoff={handoff}
         focused={focused}
         onBack={() => goBackGuarded(router)}
       />
@@ -228,6 +231,7 @@ export default function RemoteDesktopScreen() {
 export function RemoteDesktopSession({
   deviceId,
   deviceName,
+  handoff,
   focused,
   onBack,
   onRestore,
@@ -236,6 +240,8 @@ export function RemoteDesktopSession({
 }: {
   deviceId: string;
   deviceName: string;
+  /** 代输入 live view: only the window this waiting request is about (the host picks it). */
+  handoff?: string;
   focused: boolean;
   onBack(): void;
   onRestore?(): void;
@@ -407,6 +413,8 @@ export function RemoteDesktopSession({
   );
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
+  const exitLockPolicy = useRef(false);
+  exitLockPolicy.current = lockOnExitLoaded && lockOnExit;
   const [status, setStatus] = useState("connecting");
   const [appState, setAppState] = useState(AppState.currentState);
   const [error, setError] = useState<string | null>(null);
@@ -448,6 +456,8 @@ export function RemoteDesktopSession({
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
+  const inputModeRef = useRef(inputMode);
+  inputModeRef.current = inputMode;
   const canInput = Boolean(lease?.controlling) && !viewOnlySelected;
   const mode: Mode = canInput ? inputMode : "pan";
   const [operations, setOperations] = useState(false);
@@ -631,6 +641,8 @@ export function RemoteDesktopSession({
   );
   const request = useCallback(
     async <T,>(message: RemoteDesktopRequest, preSend?: () => void) => {
+      if (message.op === "start" || message.op === "heartbeat")
+        message = { ...message, lockOnExit: exitLockPolicy.current };
       const relay = () =>
         linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
           preSend,
@@ -658,6 +670,17 @@ export function RemoteDesktopSession({
     () => ({ current: new RemoteDesktopViewerSession(request) }),
     [request],
   );
+  const updateLockOnExit = (enabled: boolean) => {
+    setLockOnExit(enabled);
+    // Requests and exit can run before React commits the preference update.
+    exitLockPolicy.current = enabled;
+    exitLock.current = enabled && caps?.lockOnExit === true;
+    const current = active.current;
+    if (current)
+      void request({ op: "heartbeat", lease: current.lease }).catch(() => {
+        // Local preference remains saved; the regular heartbeat retries sync.
+      });
+  };
   const authRef = useRef(auth);
   authRef.current = auth;
   const loadIceServers = (attemptId: string) =>
@@ -1083,6 +1106,7 @@ export function RemoteDesktopSession({
         linkRef.current.status !== "online" ||
         !ready.current ||
         !videoPreferencesLoaded ||
+        !lockOnExitLoaded ||
         !deviceId ||
         AppState.currentState !== "active"
       )
@@ -1106,6 +1130,7 @@ export function RemoteDesktopSession({
             displayId: displayId ?? recovery.current.displayId,
             resume: resuming,
             takeover,
+            ...(handoff ? { handoff } : {}),
             // Hosts with `autoControl` grant control with the lease.
             control: wantsControl.current,
             onStart: () => {
@@ -1116,7 +1141,8 @@ export function RemoteDesktopSession({
               mark("capabilities");
               capsRef.current = { deviceId, value: result };
               setHostCaps({ deviceId, value: result });
-              if (supportsAutoUnlock(result.platform)) {
+              // A window view never unlocks the computer: it shows a window on an unlocked desktop.
+              if (!handoff && supportsAutoUnlock(result.platform)) {
                 // Linux capture may be unavailable until its locker releases the session.
                 if (result.platform === "linux") {
                   return securityRef.current.maybeUnlock(async () => {
@@ -1204,7 +1230,12 @@ export function RemoteDesktopSession({
             videoSettingsRef.current.audio &&
             !audioUnavailable.current,
         });
-        send({ type: "mode", mode });
+        // Playback/display preparation can yield after React has already sent
+        // the controlling mode. Do not overwrite it with connect's old "pan".
+        send({
+          type: "mode",
+          mode: inputAllowed(next.controlling) ? inputModeRef.current : "pan",
+        });
         // Entering remote desktop is the user's intent to control. The existing
         // host permission and ownership gates still decide whether it is allowed.
         if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
@@ -1231,14 +1262,15 @@ export function RemoteDesktopSession({
     [
       deviceId,
       fail,
+      handoff,
       landscape,
-      mode,
       request,
       resolveControlFailure,
       send,
       stop,
       t,
       videoPreferencesLoaded,
+      lockOnExitLoaded,
       viewerSession,
     ],
   );
@@ -1606,7 +1638,7 @@ export function RemoteDesktopSession({
       restoreInlinePresentationRef.current();
       if (!active.current) void connectRef.current();
     }
-  }, [focused, pause, videoPreferencesLoaded]);
+  }, [focused, pause, videoPreferencesLoaded, lockOnExitLoaded]);
   useEffect(() => {
     send({
       type: "theme",
@@ -3293,10 +3325,10 @@ export function RemoteDesktopSession({
               <RemoteDesktopPanel
                 railAnchor={systemSideRail ? {
                   right: (sideRailWidth - navigationChrome.target) / 2,
-                  top: (sideRailTop + navigationChrome.target + spacing.lg + windowSize.height - insets.bottom - navigationChrome.target * (caps?.omarchyMenu ? 5 : 4)) / 2,
+                  top: (sideRailTop + navigationChrome.target + spacing.lg + windowSize.height - insets.bottom - navigationChrome.target * (handoff ? 2 : caps?.omarchyMenu ? 5 : 4)) / 2,
                 } : undefined}
                 toolbarOnLeft={toolbarOnLeft}
-                toolbarActionCount={caps?.omarchyMenu ? 5 : 4}
+                toolbarActionCount={handoff ? 2 : caps?.omarchyMenu ? 5 : 4}
                 visible={operations && focused}
                 landscape={landscape}
                 topInset={edgePadding.paddingTop}
@@ -3309,7 +3341,7 @@ export function RemoteDesktopSession({
                     ? undefined
                     : () => setControlPage("controls")
                 }
-                caption={`${deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
+                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
                 onClose={() => setOperations(false)}
                 footer={
                   <RemoteDesktopDisconnect onPress={() => void leave()} />
@@ -3325,7 +3357,7 @@ export function RemoteDesktopSession({
                     lockOnExit,
                     lockOnExitAvailable:
                       lockOnExitLoaded && caps?.lockOnExit === true,
-                    onLockOnExit: setLockOnExit,
+                    onLockOnExit: updateLockOnExit,
                   }}
                   connected={Boolean(lease) && !connectionPending}
                   controlling={Boolean(lease?.controlling)}
@@ -3378,7 +3410,7 @@ export function RemoteDesktopSession({
                     onResolution: changeResolution,
                   }}
                   inputMode={inputMode}
-                  displays={caps?.displays ?? []}
+                  displays={handoff ? [] : (caps?.displays ?? [])}
                   displayId={recovery.current.displayId ?? lease?.display.id}
                   onViewOnly={() => void toggleControl()}
                   onInputMode={(value) => {
@@ -3476,6 +3508,7 @@ export function RemoteDesktopSession({
           >
             <RemoteDesktopToolbar
               landscape={landscape || systemSideRail}
+              windowOnly={Boolean(handoff)}
               onWorkspaceLeft={
                 caps?.workspaceNavigation
                   ? () => workspaceAction("workspaceLeft")

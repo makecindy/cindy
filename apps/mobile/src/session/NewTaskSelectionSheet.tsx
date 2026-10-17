@@ -15,6 +15,7 @@ export interface NewTaskSelectionSheetProps {
   error: string | null;
   showHidden: boolean;
   onClose(): void;
+  onClosed?(): void;
   onBack(): void;
   onDevice(id: string): void;
   onDialogue(): void;

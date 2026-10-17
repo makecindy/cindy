@@ -11,6 +11,7 @@
  * 问题,留在 footer 最自然。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -39,6 +40,7 @@ import {
 import { radius, spacing, typeScale } from '@/theme/tokens';
 
 export interface InlineQueueSectionProps {
+  onRecoverHistory?: () => void;
   projection: InputProjection;
   sessionSource?: string | null;
   busy?: boolean;
@@ -51,6 +53,7 @@ export interface InlineQueueSectionProps {
 }
 
 export function InlineQueueSection({
+  onRecoverHistory,
   projection,
   sessionSource,
   busy,
@@ -101,6 +104,7 @@ export function InlineQueueSection({
           {/* 稳定错误 marker 按当前显示端语言翻译；其它错误保留 auth 引导，否则使用本地化摘要。 */}
           <Text style={styles.errorText}>{projectionError}</Text>
           <AgentErrorDetails message={projection.error} />
+          {onRecoverHistory ? <ReadableHistoryRecovery onRecover={onRecoverHistory} busy={controlsDisabled} /> : null}
           <View style={styles.errorActions}>
             {retryable ? <ActionPill
               busy={busy}

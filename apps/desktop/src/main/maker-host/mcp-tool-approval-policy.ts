@@ -69,6 +69,11 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   'cindy_memory::list_tools',
   'cindy_contacts::list_tools',
   'cindy_slack::slack_status',
+  // 只读当前 Telegram 对话的信息(chat 由逐轮作用域钉死, 无自由文本参数, 不出境)。
+  'cindy_telegram_bot::get_chat',
+  // 只读当前飞书对话的信息 / 某条消息(chat 由逐轮作用域钉死, message_id 需在本 chat 内)。
+  'cindy_feishu_bot::get_chat',
+  'cindy_feishu_bot::get_message',
 ]);
 
 /**
@@ -83,7 +88,12 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_android',
   'cindy_browser',
   'cindy_computer',
+  // 飞书轮次里往当前对话发消息 / 文件、表情、置顶与 send_*_to_user: 与 bot 自己回复同一出口,
+  // 目标由逐轮作用域钉死。call_api / recall_message 单独在下方按次审批。
   'cindy_feishu_bot',
+  // Telegram 轮次里往当前对话发消息 / 媒体 / 投票、表情、下载对方文件: 与 bot 自己
+  // 回复同一出口, 目标 chat 由逐轮作用域钉死。call_api / delete_message 单独在下方按次审批。
+  'cindy_telegram_bot',
   'cindy_slack',
   'cindy_scheduler',
   'cindy_memory',
@@ -144,6 +154,27 @@ function canAutoApproveCindyArtGhostCall(context: McpToolApprovalContext): boole
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
   return ghostId === 'cindy-art' && CINDY_ART_MEDIA_TOOLS.has(tool);
+}
+
+/** cindy_scheduler 里接受 `device` 的写工具（与 packages/lizi-mcps/src/scheduler 的 writeDeviceShape 一致）。 */
+const SCHEDULER_CROSS_DEVICE_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'schedule_update',
+  'schedule_pause',
+  'schedule_resume',
+  'schedule_delete',
+  'schedule_run_now',
+]);
+
+/** `device` 指向本机以外的电脑。缺省与 "local" 是本机；其余值（含形状异常）一律按非本机处理。 */
+function targetsAnotherComputer(device: unknown): boolean {
+  return device !== undefined && device !== null && device !== 'local';
+}
+
+/** `deviceId::sessionId` 的设备段；本机 id（无前缀或前缀残缺）返回 undefined。 */
+function sessionIdDevice(sessionId: unknown): string | undefined {
+  if (typeof sessionId !== 'string') return undefined;
+  const split = sessionId.indexOf('::');
+  return split > 0 && split < sessionId.length - 2 ? sessionId.slice(0, split) : undefined;
 }
 
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
@@ -210,6 +241,37 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
+    // Moving a teammate hands its running to another computer: the task's permission mode decides.
+    if (action === 'move_teammate_home') return 'prompt-each-time';
+    // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
+    if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
+      return 'prompt-each-time';
+    }
+    if ((action === 'archive_sessions' || action === 'unarchive_sessions') &&
+      (!Array.isArray(args?.session_ids) || args.session_ids.some((id) =>
+        typeof id !== 'string' || targetsAnotherComputer(sessionIdDevice(id))))) {
+      return 'prompt-each-time';
+    }
+  }
+  // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
+  // 免审批，Auto 走统一审阅，Ask 由用户确认。本机操作与跨电脑读取保持原样。
+  if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
+    const params = readJsonObject(toolParams);
+    const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
+    const args = readJsonObject(params?.args);
+    if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
+      return 'prompt-each-time';
+    }
+  }
+  // Telegram 的任意方法直通(call_api)与删消息: 方法名 / 目标由参数决定, 一次放行不能
+  // 变成对后续任意方法的授权, 交给会话权限档按次判定(Full Access 免审批, Auto 审阅,
+  // Ask 确认)。Codex 省略 toolName 时同样按次, 不借 trusted-server 捷径。
+  if (serverName === 'cindy_telegram_bot' && (!toolName || toolName === 'call_api' || toolName === 'delete_message')) {
+    return 'prompt-each-time';
+  }
+  // 飞书同口径: 任意 Open API 与撤回按次审批; 省略 toolName 时无法分辨是不是这两个, fail closed。
+  if (serverName === 'cindy_feishu_bot' && (!toolName || toolName === 'call_api' || toolName === 'recall_message')) {
+    return 'prompt-each-time';
   }
   // Choosing a new Worker root delegates filesystem access. Do not let the
   // trusted-server shortcut or a cached server grant authorize another root.

@@ -204,4 +204,93 @@ describe('Bot group lane transactions', () => {
     ]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM bot_group_members WHERE bot_id = 'mimi'").get()).toEqual({ n: 0 });
   });
+
+  describe('IM channel lanes (connection handed to a Bot)', () => {
+    const groupKey = 'im:telegram:777:g:-100123';
+    const topicKey = 'im:telegram:777:g:-100123:t:9';
+
+    it('creates one hidden channel lane per route key without a group-member check and reuses it', () => {
+      // abu is active but not a member of any local group.
+      const args = { botId: 'abu', routeKey: groupKey, session: laneSession('im-lane-1') };
+      expect(tx(db, { name: 'bots.createChannelLane', args })).toEqual({ sessionId: 'im-lane-1', created: true });
+      expect(tx(db, { name: 'bots.createChannelLane', args: { ...args, session: laneSession('im-lane-2') } }))
+        .toEqual({ sessionId: 'im-lane-1', created: false });
+      // A topic is its own lane.
+      expect(tx(db, { name: 'bots.createChannelLane', args: { ...args, routeKey: topicKey, session: laneSession('im-topic') } }))
+        .toEqual({ sessionId: 'im-topic', created: true });
+      expect(db.prepare("SELECT bot_id, role, route_key, profile_version FROM bot_session_links WHERE session_id = 'im-lane-1'").get())
+        .toEqual({ bot_id: 'abu', role: 'channel', route_key: groupKey, profile_version: 1 });
+      expect(db.prepare("SELECT source, status FROM sessions WHERE id = 'im-lane-1'").get())
+        .toEqual({ source: 'bot', status: 'active' });
+    });
+
+    it('opens a fresh lane once the previous one for the same route key is archived', () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-old') } });
+      expect(tx(db, {
+        name: 'bots.archiveChannelLanes',
+        args: { routeKey: groupKey, routeKeyPrefix: null, exceptBotId: null, now: 77 },
+      })).toEqual({ archivedSessionIds: ['im-old'] });
+      expect(db.prepare("SELECT archived_at FROM bot_session_links WHERE session_id = 'im-old'").get())
+        .toEqual({ archived_at: 77 });
+      expect(db.prepare("SELECT status FROM sessions WHERE id = 'im-old'").get()).toEqual({ status: 'archived' });
+      expect(tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-new') } }))
+        .toEqual({ sessionId: 'im-new', created: true });
+    });
+
+    it('archives a whole connection by prefix, keeping the newly bound Bot and other connections', () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-mimi') } });
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'abu', routeKey: topicKey, session: laneSession('im-abu') } });
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: 'im:telegram:7770:g:1', session: laneSession('im-other') } });
+      tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey: 'group:g1', session: laneSession('lane-1') } });
+      expect(tx(db, {
+        name: 'bots.archiveChannelLanes',
+        args: { routeKey: null, routeKeyPrefix: 'im:telegram:777:', exceptBotId: 'abu', now: 5 },
+      })).toEqual({ archivedSessionIds: ['im-mimi'] });
+      expect(db.prepare("SELECT id, status FROM sessions WHERE id IN ('im-mimi','im-abu','im-other','lane-1') ORDER BY id").all())
+        .toEqual([
+          { id: 'im-abu', status: 'active' },
+          { id: 'im-mimi', status: 'archived' },
+          { id: 'im-other', status: 'active' },
+          { id: 'lane-1', status: 'active' },
+        ]);
+    });
+
+    it('refuses lanes for unavailable Bots and non-IM route keys', () => {
+      expect(() => tx(db, {
+        name: 'bots.createChannelLane',
+        args: { botId: 'kapi', routeKey: groupKey, session: laneSession('im-x') },
+      })).toThrow(expect.objectContaining({ code: 'BOT_UNAVAILABLE' }));
+      expect(() => tx(db, {
+        name: 'bots.createChannelLane',
+        args: { botId: 'mimi', routeKey: 'group:g1', session: laneSession('im-y') },
+      })).toThrow();
+      expect(() => tx(db, {
+        name: 'bots.archiveChannelLanes',
+        args: { routeKey: groupKey, routeKeyPrefix: 'im:telegram:777:', exceptBotId: null, now: 1 },
+      })).toThrow();
+      expect(db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE id LIKE 'im-%'").get()).toEqual({ n: 0 });
+    });
+
+    it('starts a channel lane in the Bot Home workspace', async () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-lane-1') } });
+      const ensureWorkspaceDir = vi.fn(async () => '/bots/mimi/workspace');
+      const opts: MakerSessionCreateOpts = { id: 'im-lane-1', agentKind: 'claude-code', model: 'model-a', workingDir: '/stale', workspaceKind: 'project', remoteHostId: 'stale-host' };
+      await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir, legacyUserDataPath: () => '/legacy' });
+      expect(opts).toMatchObject({ workingDir: '/bots/mimi/workspace', workspaceKind: 'dialogue', remoteHostId: undefined });
+      expect(ensureWorkspaceDir).toHaveBeenCalledWith(ownerRoot, 'mimi', '/legacy');
+    });
+
+    it('deletes channel lanes instead of keeping them as task history when a Bot is deleted', () => {
+      tx(db, { name: 'bots.createChannelLane', args: { botId: 'mimi', routeKey: groupKey, session: laneSession('im-lane-1') } });
+      db.exec("UPDATE bot_profiles SET status = 'archived' WHERE id = 'mimi'");
+      expect(tx(db, {
+        name: 'bots.deleteProfile',
+        args: { botId: 'mimi', sessionIds: ['mimi-main', 'im-lane-1'], keepTaskHistory: true, at: 50 },
+      })).toEqual({ sessionIds: ['mimi-main', 'im-lane-1'], status: 'archived' });
+      expect(db.prepare('SELECT id, source, status FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'im-lane-1', source: 'bot', status: 'deleted' },
+        { id: 'mimi-main', source: 'desktop', status: 'archived' },
+      ]);
+    });
+  });
 });

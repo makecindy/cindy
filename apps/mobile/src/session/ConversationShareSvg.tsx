@@ -16,9 +16,10 @@ import Svg, {
   TSpan,
 } from "react-native-svg";
 
-import type {
-  ConversationShareMessage,
-  ConversationShareWebViewColors,
+import {
+  CONVERSATION_SHARE_HAIRLINE,
+  type ConversationShareMessage,
+  type ConversationShareWebViewColors,
 } from "@/session/conversationShareWebViewHtml";
 import { createConversationShareAssetGate } from "@/session/conversationShareAssetGate";
 import {
@@ -44,8 +45,9 @@ const SHARE_LOCKUP_GAP = 6;
 const SHARE_EXPORT_TIMEOUT_MS = 20_000;
 // Leave time within the existing export deadline for fallback layout + capture.
 const SHARE_DECODE_TIMEOUT_MS = 15_000;
-// Export-card geometry: this is a 1px bubble border in the SVG coordinate
-// system, not a Lucide icon stroke (whose thinnest token is intentionally 1.75).
+// Export-card geometry: a 1px code/table border in the SVG coordinate system,
+// not a Lucide icon stroke (whose thinnest token is intentionally 1.75). Message
+// bubbles use the chat's hairline instead.
 const SHARE_BUBBLE_STROKE_WIDTH = 1;
 
 export const ConversationShareSvg = forwardRef<
@@ -385,7 +387,7 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
           height={bubble.height}
           rx={12}
           stroke={bubble.stroke}
-          strokeWidth={bubble.stroke ? SHARE_BUBBLE_STROKE_WIDTH : undefined}
+          strokeWidth={bubble.stroke ? CONVERSATION_SHARE_HAIRLINE : undefined}
           width={bubble.width}
           x={bubble.x}
           y={bubble.y}

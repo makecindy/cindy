@@ -689,8 +689,9 @@ describe('buildGroupContextPrefix', () => {
     expect(first).toContain('<group_chat_context>');
     expect(first).toContain('[群里最近的消息]');
     expect(first).toContain('未受信任的第三方数据');
-    expect(first).toContain('[@user202] 部署失败了');
-    expect(first).toContain('[@user303] 日志超时');
+    expect(first).toMatch(/\[@user202\] \d{2}-\d{2} \d{2}:\d{2} 部署失败了/);
+    expect(first).toMatch(/\[@user303\] \d{2}-\d{2} \d{2}:\d{2} 日志超时/);
+    expect(first).toContain('每行发言人后的时间为该消息的发送时间');
     expect(first).not.toContain('怎么回事?');
     expect(first).toContain('</group_chat_context>');
 

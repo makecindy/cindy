@@ -11,6 +11,7 @@ export function buildMobileHistoryRenderItems(options: {
   sessionId: string;
   sessionSource?: string | null;
   pendingHandoff?: ReadonlySet<string>;
+  staleTail?: ReadonlySet<string>;
   localUserClientIds?: ReadonlySet<string>;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
 }): MobileMessageRenderItem[] {
@@ -18,6 +19,7 @@ export function buildMobileHistoryRenderItems(options: {
     view: options.view, snapshot: options.snapshot, liveMessages: options.messages,
     isLive: (row) => row.agentMeta?.isStreaming === true,
     pendingHandoff: options.pendingHandoff,
+    staleTail: options.staleTail,
     isLocalUser: (row) => options.localUserClientIds?.has(row.clientId) === true,
     streaming: options.streaming,
     build: (rows, streaming) => buildMobileMessageRenderItems(rows, {

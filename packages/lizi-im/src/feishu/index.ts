@@ -28,12 +28,23 @@ import type {
   StreamingTextHandle,
 } from '../types.js';
 
-import { setHost } from './moduleScope.js';
+import {
+  createFeishuScope,
+  registerDefaultScope,
+  runInScope,
+  type FeishuScope,
+} from './moduleScope.js';
 import * as wsClient from './wsClient.js';
 import * as storage from './storage.js';
 import * as ownerGuard from './ownerGuard.js';
 import { feishuEvents } from './events.js';
-import { cancelAppRegistration, reconnectSavedCredentials, registerFeishuIpc } from './ipc.js';
+import {
+  cancelAppRegistration,
+  clearAndDisconnect,
+  reconnectSavedCredentials,
+  registerFeishuIpc,
+  saveAndConnect,
+} from './ipc.js';
 import * as outbound from './outbound.js';
 import * as streamingText from './streamingText.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
@@ -42,7 +53,21 @@ import type { AttachmentRef } from './incomingContent.js';
 /** 连接仍在时重新入队后的排空退避: 100ms / 300ms / 900ms / 2.7s, 耗尽坐等下一次 connected。 */
 const CONNECTED_FLUSH_RETRY_DELAYS_MS = [100, 300, 900, 2700] as const;
 
+export interface FeishuIMOptions {
+  /**
+   * 凭证与 TOFU 主人在 host.secrets 里的键名前缀。缺省为空 = 设置页那份个人 bot
+   * 的历史键名(同时登记为默认作用域); 伙伴自有连接各给一个前缀, 多份实例互不读写。
+   */
+  secretKeyPrefix?: string;
+  /** 是否注册 `feishuBot:*` 设置卡 IPC 并广播状态(缺省 true; 第二份实例必须关掉)。 */
+  ipc?: boolean;
+  /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
+  guests?: boolean;
+}
+
 export class FeishuIM extends BaseIM implements ChannelIM {
+  /** 本实例的作用域: 所有模块状态、事件总线与凭证键名都挂在它上面。 */
+  readonly scope: FeishuScope;
   /** 重连空窗暂存的开场白卡消费在连接就绪后排空(见 deferOpenerConsume)。 */
   private readonly offImStatus: () => void;
   /** 串行排空, 避免 connected 与失败重试重叠处理同一条目。 */
@@ -69,16 +94,39 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   private retryFlushAttempt = 0;
   private disposed = false;
 
-  constructor(host: IMHost) {
+  constructor(host: IMHost, options: FeishuIMOptions = {}) {
     super('feishu', host);
-    setHost(host, this.log);
+    this.scope = createFeishuScope({
+      host,
+      log: this.log,
+      secretKeyPrefix: options.secretKeyPrefix ?? '',
+      ipc: options.ipc !== false,
+      guests: options.guests === true,
+    });
+    // 设置页那份(无前缀、带 IPC)就是默认作用域: 单测直接调模块函数、Electron IPC 进来
+    // 没有作用域时都落在它上面。
+    if (!this.scope.secretKeyPrefix && this.scope.ipc) registerDefaultScope(this.scope);
+    // 每个公开 / 私有方法都在本实例的作用域里执行(方法内部的 await / 定时器 / Promise
+    // 链靠 AsyncLocalStorage 自动带着), 这样 wsClient / outbound / storage 这些模块
+    // 函数读到的都是本实例的状态。
+    for (const name of Object.getOwnPropertyNames(FeishuIM.prototype)) {
+      if (name === 'constructor') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(FeishuIM.prototype, name);
+      const method = descriptor?.value;
+      if (typeof method !== 'function') continue;
+      Object.defineProperty(this, name, {
+        configurable: true,
+        writable: true,
+        value: (...args: unknown[]) => runInScope(this.scope, () => method.apply(this, args)),
+      });
+    }
     const onImStatus = (status: IMStatus) => {
       if (status.kind !== 'connected') return;
       this.resetConnectedFlushRetry();
       void this.flushDeferredOpenerConsumes();
     };
-    feishuEvents.on('imStatus', onImStatus);
-    this.offImStatus = () => feishuEvents.off('imStatus', onImStatus);
+    this.scope.events.on('imStatus', onImStatus);
+    this.offImStatus = () => this.scope.events.off('imStatus', onImStatus);
   }
 
   private openerConsumeKey(userId: string, kind: 'markdown' | 'spec'): string {
@@ -243,6 +291,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       try {
         if ('markdown' in entry) {
           await streamingText.patchMarkdown(openerId, entry.markdown);
+          if (!entry.markdown.trim()) {
+            if (outbound.getAccountEpoch() === epoch) outbound.rearmAnchorToTrigger(entry.userId, entry.openerId);
+            resolveFlush(null);
+            continue;
+          }
         } else {
           await outbound.updateInteractive(openerId, entry.spec);
           outbound.registerCardLane(entry.userId, openerId);
@@ -285,7 +338,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           resolveFlush(null);
           continue;
         }
-        outbound.rearmAnchorToTrigger(entry.userId);
+        outbound.rearmAnchorToTrigger(entry.userId, entry.openerId);
+        if ('markdown' in entry && !entry.markdown.trim()) {
+          resolveFlush(null);
+          continue;
+        }
         try {
           // 走 outbound 直发, 避免再进 sendWithDeferred 等待自己造成死锁。
           const sent =
@@ -375,6 +432,30 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   /** Re-negotiate Feishu permissions while preserving credentials and TOFU owner. */
   reconnect(): Promise<{ verdict: 'connected' | 'conflict' | 'error' }> {
     return reconnectSavedCredentials();
+  }
+
+  /**
+   * 保存 app 凭证并建连(宿主直接调用, 与设置卡 `feishuBot:save` 同一条路径)。
+   * 伙伴自有连接添加时用。
+   */
+  saveCredentials(creds: {
+    appId: string;
+    appSecret: string;
+    service: 'feishu' | 'lark';
+    /** 已知主人(把个人 bot 移给伙伴时沿用原主人, 不再等首个私聊者认定)。 */
+    ownerOpenId?: string;
+  }): Promise<{ verdict: 'connected' | 'conflict' | 'error' | 'pending' }> {
+    return saveAndConnect(
+      creds.appId,
+      creds.appSecret,
+      creds.service,
+      creds.ownerOpenId ? { replacementOwnerOpenId: creds.ownerOpenId } : {},
+    );
+  }
+
+  /** 断开并清除全部凭证与 TOFU 主人(与设置卡 `feishuBot:clear` 同一条路径)。 */
+  clearCredentials(): Promise<void> {
+    return clearAndDisconnect();
   }
 
   // ── inbound subscriptions ───────────────────────────────────────────────────
@@ -487,6 +568,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     const epoch = outbound.getAccountEpoch();
     try {
       await streamingText.patchMarkdown(openerId, markdown);
+      if (!markdown.trim() && outbound.getAccountEpoch() === epoch) {
+        outbound.rearmAnchorToTrigger(userId, openerId);
+      }
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -592,7 +676,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       this.log.info('consumePendingOpener: account changed during recall — dropping turn');
       return true;
     }
-    outbound.rearmAnchorToTrigger(userId);
+    outbound.rearmAnchorToTrigger(userId, openerId);
     return false;
   }
 
@@ -666,6 +750,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       try {
         if ('markdown' in entry) {
           await streamingText.patchMarkdown(entry.openerId, entry.markdown);
+          if (!entry.markdown.trim() && outbound.getAccountEpoch() === epoch) {
+            outbound.rearmAnchorToTrigger(userId, entry.openerId);
+          }
         } else {
           await outbound.updateInteractive(entry.openerId, entry.spec);
           outbound.registerCardLane(userId, entry.openerId);
@@ -700,7 +787,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           this.log.warn('sendWithDeferredOpenerConsume: recall failed — keeping opener for retry');
           throw err;
         }
-        outbound.rearmAnchorToTrigger(userId);
+        outbound.rearmAnchorToTrigger(userId, entry.openerId);
         // fallthrough: 回落正常发送
       }
     }
@@ -757,7 +844,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   /**
    * 下载任意历史消息的附件(群历史图片/文件进上下文用)。复用私聊入站的
-   * messageResource 下载与 mediaStore 缓存;client 未就绪时全部进 unsupported。
+   * messageResource 下载与同一套存放(媒体进 host 总仓, 其余文件交 host 暂存);
+   * client 未就绪时全部进 unsupported。
    */
   async downloadMessageAttachments(
     messageId: string,
@@ -773,7 +861,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         })),
       };
     }
-    return downloadAttachments(c, messageId, refs);
+    // 只供群历史上下文: 图片按可回收缓存写入(只进模型、不落库, 没有任务引用)。
+    return downloadAttachments(c, messageId, refs, { history: true });
   }
 
   /**
@@ -798,6 +887,63 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    */
   removeMessageReaction(messageId: string, reactionId: string): Promise<void> {
     return outbound.removeReaction(messageId, reactionId);
+  }
+
+  // ── Agent 直通 Open API(cindy_feishu_bot 轮次内工具) ──────────────────────
+  // 都在本实例作用域里跑(构造器包了 runInScope): 伙伴自有连接调到的是它自己的
+  // client, 不会串到设置页那份。目标 chat / message 由桌面侧逐轮作用域钉死。
+
+  /** 以本 bot 的 tenant token 调任意飞书 Open API; 失败抛 FeishuApiError。 */
+  callApi(args: {
+    method: outbound.FeishuApiMethod;
+    path: string;
+    params?: Record<string, unknown>;
+    data?: unknown;
+  }): Promise<Record<string, unknown>> {
+    return outbound.callApi(args);
+  }
+
+  getChatInfo(chatId: string): Promise<Record<string, unknown>> {
+    return outbound.getChatInfo(chatId);
+  }
+
+  listChatMembers(
+    chatId: string,
+    opts?: { pageToken?: string; pageSize?: number },
+  ): Promise<outbound.FeishuChatMembersPage> {
+    return outbound.listChatMembers(chatId, opts);
+  }
+
+  getMessage(messageId: string): Promise<Record<string, unknown> | null> {
+    return outbound.getMessage(messageId);
+  }
+
+  pinMessage(messageId: string): Promise<void> {
+    return outbound.pinMessage(messageId);
+  }
+
+  unpinMessage(messageId: string): Promise<void> {
+    return outbound.unpinMessage(messageId);
+  }
+
+  /** 撤回消息(飞书只允许撤回 bot 自己发的); 失败抛 FeishuApiError。 */
+  recallMessage(messageId: string): Promise<void> {
+    return outbound.recallMessage(messageId);
+  }
+
+  /** 直接回复某条消息(纯文本, reply 容器)。 */
+  replyText(replyToMessageId: string, text: string): Promise<{ messageId: string }> {
+    return outbound.replyText(replyToMessageId, text);
+  }
+
+  /** 直接回复某条消息(markdown 卡片, reply 容器)。 */
+  replyMarkdownText(replyToMessageId: string, markdown: string): Promise<{ messageId: string }> {
+    return outbound.replyMarkdownText(replyToMessageId, markdown);
+  }
+
+  /** 当前连接的 bot app_id(未连接为 null)。 */
+  getBotAppId(): string | null {
+    return wsClient.getCurrentBotAppId();
   }
 
   // ── lifecycle announcement toggle ────────────────────────────────────────
@@ -834,6 +980,6 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   }
 }
 
-export function createFeishuIM(host: IMHost): FeishuIM {
-  return new FeishuIM(host);
+export function createFeishuIM(host: IMHost, options?: FeishuIMOptions): FeishuIM {
+  return new FeishuIM(host, options);
 }

@@ -59,6 +59,7 @@ type CleanPhase =
 
 export function StorageManagementCard() {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [databaseBytes, setDatabaseBytes] = useState<number | null>(null);
   const [warningThresholdGiB, setWarningThresholdGiB] = useState(10);
@@ -153,6 +154,34 @@ export function StorageManagementCard() {
       toast.error(t('settings.about.storage.chatAttachmentsClearFailed'));
     } finally {
       directoryCleanupBusyRef.current = false;
+    }
+  };
+
+  const handleClearRemoteMedia = async () => {
+    if (cleanupBusyRef.current) return;
+    cleanupBusyRef.current = true;
+    try {
+      const api = window.electronAPI.cindyMediaStorage;
+      const scan = await api.scan({ draftUrls: getAllDraftAttachmentUrls(), scope: 'remote-media' });
+      if (!scan.success) throw new Error('scan failed');
+      const bytes = scan.cache.evictable.reduce((sum, entry) => sum + entry.bytes, 0);
+      if (!await confirm({
+        title: t('settings.about.storage.remoteMediaClearTitle'),
+        description: t('settings.about.storage.remoteMediaClearDescription', { size: formatBytes(bytes) }),
+        confirmText: t('settings.about.storage.remoteMediaClearButton'),
+        cancelText: t('settings.about.storage.cancelButton'),
+      })) return;
+      const result = await api.cleanup({
+        scope: 'remote-media', draftUrls: getAllDraftAttachmentUrls(),
+        evictCacheHashes: scan.cache.evictable.map((entry) => entry.hash),
+        zeroRefHashes: [], deadDirNames: [], cleanTmpFiles: false,
+      });
+      toast.success(t('settings.about.storage.cleanupDoneToast', { size: formatBytes(result.freedBytes) }));
+      void refreshStats();
+    } catch {
+      toast.error(t('settings.about.storage.cleanupFailed'));
+    } finally {
+      cleanupBusyRef.current = false;
     }
   };
 
@@ -381,6 +410,21 @@ export function StorageManagementCard() {
               {t('settings.about.storage.chatAttachmentsClearButton')}
             </CardButton>
           </div>
+        </div>
+        <div aria-hidden className="h-px w-full bg-[var(--settings-theme-card-border)]" />
+        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-13 text-[var(--settings-section-sublabel)]">
+              <span id="settings-search-settings-about-storage-remoteMediaLabel">{t('settings.about.storage.remoteMediaLabel')}</span>
+              {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
+            </span>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.about.storage.remoteMediaDescription')}
+            </p>
+          </div>
+          <CardButton onClick={handleClearRemoteMedia}>
+            {t('settings.about.storage.remoteMediaClearButton')}
+          </CardButton>
         </div>
       </div>
 

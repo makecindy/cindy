@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
 import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
 import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
+import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
@@ -16,7 +17,7 @@ it.each(['Do not publish.', '', undefined])('keeps live authority through the fi
   expect(start).toBeGreaterThan(0);
   const end = source.indexOf('\n      });', start) + '\n      });'.length;
   const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
-    'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION',
+    'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'MCP_APP_MESSAGE_GUARD', 'appContext',
     compile(`return (async () => { ${source.slice(start, end)} })();`));
   const invoke = async (delegated: boolean) => {
     let result;
@@ -25,13 +26,58 @@ it.each(['Do not publish.', '', undefined])('keeps live authority through the fi
     });
     await deliver({ steer }, 'Publish now', { [AUTO_REVIEW_SOURCE_CONTENT]: '',
       ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}) }, {}, 'Old persisted permission',
-      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION);
+      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, MCP_APP_MESSAGE_GUARD);
     expect(steer).toHaveBeenCalledOnce();
     return result;
   };
   expect(await invoke(true)).toEqual(previous ?? 'Old persisted permission');
   expect(await invoke(false)).toEqual('Old persisted permission');
 });
+
+it.each(['context', 'message', 'none'] as const)(
+  'revalidates App steer authority after async preparation (%s revocation)',
+  async (revocation) => {
+    const start = source.indexOf('await sess.steer(steerPayload as never, {');
+    const marker = '      appContext?.consume();';
+    const end = source.indexOf(marker, start) + marker.length;
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
+      'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'MCP_APP_MESSAGE_GUARD', 'appContext',
+      compile(`return (async () => { ${source.slice(start, end)} })();`));
+    let prepared = false;
+    const provider = vi.fn();
+    const messageGuard = vi.fn(async () => {
+      if (prepared && revocation === 'message') throw new Error('MCP_APP_CARD_UNAVAILABLE');
+    });
+    const context = {
+      text: 'PRIVATE_APP_DRAFT',
+      assertCurrent: vi.fn(async () => {
+        if (prepared && revocation === 'context') throw new Error('MCP_APP_CARD_UNAVAILABLE');
+      }),
+      consume: vi.fn(),
+    };
+    const steer = vi.fn(async (_content: unknown, opts: { beforeProviderStart?: () => Promise<void> }) => {
+      await Promise.resolve();
+      prepared = true;
+      await opts.beforeProviderStart?.();
+      provider();
+    });
+    const pending = deliver({ steer }, 'Continue', { [MCP_APP_MESSAGE_GUARD]: messageGuard }, {}, '',
+      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, MCP_APP_MESSAGE_GUARD, context);
+    if (revocation === 'none') {
+      await pending;
+      expect(provider).toHaveBeenCalledOnce();
+      expect(context.consume).toHaveBeenCalledOnce();
+      expect(context.assertCurrent).toHaveBeenCalledOnce();
+    } else {
+      await expect(pending).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+      expect(provider).not.toHaveBeenCalled();
+      expect(context.consume).not.toHaveBeenCalled();
+    }
+    expect(messageGuard).toHaveBeenCalledOnce();
+  },
+);
 
 it('restores human authorization for both live and cold internal delegated sends', () => {
   for(const target of ['live','session']) {
@@ -188,4 +234,30 @@ it('shares the Lead send lock across whole plan registration and final Worker ad
   const block=source.slice(start, source.indexOf('getLeadSessionRow:',start));
   expect(block).toContain('withLeadSendLock: withSendToSessionLock');
   expect(block.lastIndexOf('createPluginTaskStore(epoch.client).get')).toBeGreaterThan(block.indexOf('pluginTaskServiceForCurrentOwner!().get'));
+});
+
+
+it('routes trusted script follow-ups through durable authorization restoration, without trusting wire labels', async () => {
+  const start = source.indexOf('    sendToSession: async (params) => {');
+  const end = source.indexOf('    enableOrca: enableOrcaInternal,', start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const sendToSessionInternal = vi.fn(async (params) => params);
+  const send = new Function(
+    'captureDataOwnerBroadcastScope', 'classifySessionMessagePurpose', 'isDataOwnerBroadcastScopeCurrent',
+    'sendToSessionInternal', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'coordinationInput',
+    compile(`return ({ ${source.slice(start, end)} }).sendToSession;`),
+  )(() => 'owner', async () => ({ coordination: null, delegatedContinuation: false }), () => true,
+    sendToSessionInternal, AUTO_REVIEW_DELEGATED_CONTINUATION, () => { throw new Error('not coordination'); });
+  const params = { targetSessionId: 'task', message: 'CI failed; repair and push the PR' };
+  expect(await send({ ...params, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true })).toMatchObject({
+    autoReviewUserText: { kind: 'delegated-continuation' },
+    forceQueue: true,
+    resumeWithStoredPermissionMode: true,
+  });
+  const untrusted = await send({ ...params, AUTO_REVIEW_DELEGATED_CONTINUATION: true });
+  expect(untrusted).not.toHaveProperty('autoReviewUserText');
+  expect(untrusted).not.toHaveProperty('forceQueue');
+  expect(await send({ message: 'new task', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
+    .not.toHaveProperty('autoReviewUserText');
 });

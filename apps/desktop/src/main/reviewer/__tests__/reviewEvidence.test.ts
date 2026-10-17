@@ -863,11 +863,21 @@ describe('loadReviewEvidence attachment boundaries', () => {
     });
     expect(await readReviewContextFingerprint('source')).toBe(evidence.contextFingerprint);
 
+    // Progress narration alone is not reviewed context.
+    reviewRows.push({
+      role: 'assistant',
+      content: JSON.stringify({ text: 'checking the files' }),
+      agentMeta: JSON.stringify({ model: 'claude-sonnet-5' }),
+      createdAt: 2,
+      id: 'narration-2',
+    });
+    expect(await readReviewContextFingerprint('source')).toBe(evidence.contextFingerprint);
+
     reviewRows.push({
       role: 'assistant',
       content: JSON.stringify({ text: 'new result without file changes' }),
-      agentMeta: null,
-      createdAt: 2,
+      agentMeta: JSON.stringify({ turnCompleted: true }),
+      createdAt: 3,
       id: 'message-2',
     });
     const changedFingerprint = await readReviewContextFingerprint('source');
@@ -877,7 +887,7 @@ describe('loadReviewEvidence attachment boundaries', () => {
       role: 'assistant',
       content: '',
       agentMeta: JSON.stringify({ internalOnly: true }),
-      createdAt: 3,
+      createdAt: 4,
       id: 'hidden-card',
     });
     expect(await readReviewContextFingerprint('source')).toBe(changedFingerprint);
@@ -900,6 +910,54 @@ describe('loadReviewEvidence attachment boundaries', () => {
       id: 'review-card',
     });
     expect(await readReviewContextFingerprint('source')).toBe(changedFingerprint);
+  });
+
+  it.each([
+    ['codex', { assistantPhase: 'commentary' }, { assistantPhase: 'final_answer', turnCompleted: true }],
+    ['claude-code', { uuid: 'u', model: 'claude-sonnet-5' }, { uuid: 'f', model: 'claude-sonnet-5', turnCompleted: true }],
+    ['pi', { model: 'pi-model' }, { model: 'pi-model', turnCompleted: true }],
+  ])('keeps the %s user request and final answer but drops progress narration', async (_harness, narrationMeta, finalMeta) => {
+    const workingDir = await tempDir();
+    // The fake query returns rows as stored: newest first, like the SQL order.
+    reviewRows.push(...[
+      {
+        role: 'user' as const,
+        content: JSON.stringify({ text: 'fix the device list' }),
+        agentMeta: null,
+        createdAt: 1,
+        id: 'message-1',
+      },
+      ...Array.from({ length: 30 }, (_, index) => ({
+        role: 'assistant' as const,
+        content: JSON.stringify({ text: `progress ${index}` }),
+        agentMeta: JSON.stringify(narrationMeta),
+        createdAt: 2 + index,
+        id: `narration-${String(index).padStart(2, '0')}`,
+      })),
+      {
+        role: 'assistant' as const,
+        content: JSON.stringify({ text: 'done: tests pass' }),
+        agentMeta: JSON.stringify(finalMeta),
+        createdAt: 40,
+        id: 'message-final',
+      },
+    ].reverse());
+
+    const evidence = await loadReviewEvidence({
+      sourceSessionId: 'source',
+      workingDir,
+      attachments: [],
+      explicitArtifactGrant: {
+        paths: [],
+        pathIdentities: new Map(),
+        inlineAttachmentKeys: [],
+      },
+    });
+
+    expect(evidence.context).toEqual([
+      { role: 'user', text: 'fix the device list' },
+      { role: 'assistant', text: 'done: tests pass' },
+    ]);
   });
 
   it('does not let a hidden lifecycle row evict the twentieth visible context message', async () => {
@@ -1137,9 +1195,7 @@ describe('loadReviewEvidence attachment boundaries', () => {
     ]);
   });
 
-  it('does not read the branch diff while uncommitted work exists', async () => {
-    // Uncommitted work is the review target; reading the branch as well would
-    // bury it under commits the user is not asking about.
+  it('reads the committed branch changes even when uncommitted work exists', async () => {
     const repoRoot = await tempDir();
     readReviewDataMock.mockResolvedValue(cappedReviewData(repoRoot, 'src/a.ts'));
 
@@ -1154,7 +1210,9 @@ describe('loadReviewEvidence attachment boundaries', () => {
       },
     });
 
-    expect(readReviewBranchDiffMock).not.toHaveBeenCalled();
+    expect(readReviewBranchDiffMock).toHaveBeenCalledWith('source', null);
+    // This fixture has no commits above the baseline; reading it is still
+    // necessary to distinguish an unchanged branch from hidden committed work.
     expect(evidence.branch).toBeNull();
   });
 

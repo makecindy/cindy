@@ -15,10 +15,14 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
+import { EventEmitter } from 'node:events';
+
+const scanFork = vi.hoisted(() => vi.fn());
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
 // 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
 vi.mock('electron', () => ({
+  utilityProcess: { fork: scanFork },
   app: {
     on: vi.fn(),
     isReady: () => false,
@@ -140,6 +144,21 @@ function snapshotProcessListeners(events: ProcessEventName[]) {
 }
 
 describe('runQuitDisposers', () => {
+  it('disposes pending Skill discovery through the real quit registry', async () => {
+    const lifecycle = await freshLifecycle();
+    const child = new EventEmitter();
+    const kill = vi.fn(() => true);
+    scanFork.mockReturnValue(Object.assign(child, { kill, postMessage: vi.fn() }));
+    const { scanLocalCustomizations } = await import('../skillhub/customizationScanHost');
+    const scan = scanLocalCustomizations('pi', {});
+    expect(kill).not.toHaveBeenCalled();
+    await lifecycle.runQuitDisposers();
+    expect((await scan).errors[0].message).toContain('stopped');
+    expect(kill).toHaveBeenCalledOnce();
+    expect((await scanLocalCustomizations('pi', {})).errors[0].message).toContain('stopped');
+    expect(scanFork).toHaveBeenCalledOnce();
+  });
+
   it('keeps the bootstrap quit budget open for an in-flight mode write and restoration', async () => {
     vi.useFakeTimers();
     const { onQuit, runQuitDisposers, SHUTDOWN_HARD_KILL_GRACE_SECONDS } = await freshLifecycle();

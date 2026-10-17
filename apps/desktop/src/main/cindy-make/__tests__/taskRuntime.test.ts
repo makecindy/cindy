@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 const harness = vi.hoisted(() => ({
+  retainedOperation: false,
   select: vi.fn(),
   readBoundary: vi.fn(),
   insert: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('../taskWorkspace.js', () => ({
 }));
 vi.mock('../upstreamMergeRuntime.js', () => ({
   syncSourceBeforeCindyMakeTask: harness.syncSource,
+  hasRetainedSourceOperation: () => harness.retainedOperation,
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => client }));
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -61,7 +63,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
   isDataOwnerBroadcastScopeCurrent: () => harness.current,
 }));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../maker-ipc/sessionRuntimeControl.js', () => ({
   getSessionRuntimeControlSnapshot: () => ({ effectiveOverride: harness.effective }),
@@ -196,6 +198,21 @@ describe('Cindy Make task runtime', () => {
     expect(harness.syncSource.mock.invocationCallOrder[0]).toBeLessThan(
       harness.workspace.mock.invocationCallOrder[0],
     );
+    expect(harness.send).toHaveBeenCalledOnce();
+  });
+
+  it('starts from the current personal version while a Sync conflict waits in its task', async () => {
+    const start = input();
+    initialReads();
+    harness.retainedOperation = true;
+    try {
+      await startCindyMakeTask(start, 1);
+      await cindyMakeManager.waitForTask(start.runId);
+    } finally {
+      harness.retainedOperation = false;
+    }
+    expect(harness.syncSource).not.toHaveBeenCalled();
+    expect(harness.workspace).toHaveBeenCalledOnce();
     expect(harness.send).toHaveBeenCalledOnce();
   });
 

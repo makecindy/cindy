@@ -45,7 +45,7 @@ export function desktopUnitPool(
 }
 
 /**
- * Split every Vitest workspace by the same CI shard so the two Windows jobs
+ * Split every Vitest workspace by the same CI shard so the parallel shard jobs
  * still form one complete unit gate. The runner adds `passWithNoTests` only
  * when a workspace has fewer selected files than the configured shard count.
  */
@@ -89,11 +89,200 @@ const makerCoreIntegrationInclude = [
   'src/agents/claude-code/__tests__/*.integration.test.ts',
   'src/agents/pi/__tests__/*.integration.test.ts',
 ];
+const makerCoreGuardInclude = [
+  'src/agents/shared/auto-review-remote-wiring.test.ts',
+];
 const makerPiManagerIntegrationInclude = [
   'src/__tests__/pi-manager.integration.test.ts',
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+];
+const mobileGuardInclude = [
+  // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.
+  'src/__tests__/mobileNativeBoundaryContracts.test.ts',
+  'src/__tests__/messageNativeLifecycleContracts.test.ts',
+  'src/__tests__/nativeE2eContracts.test.ts',
+  // Credential ownership, retry protocol, and cross-file design contracts:
+  // these read production sources to cover call-site boundaries, not runtime behavior.
+  'src/__tests__/authWeakNetworkBootstrap.test.ts',
+  'src/__tests__/mobileAuthServerLogin.test.ts',
+  'src/__tests__/messageSelectionHighlight.test.ts',
+  'src/__tests__/precreatedWorktreeRecoveryBridge.test.ts',
+  'src/__tests__/remoteListIncludePinned.test.ts',
+  'src/__tests__/revokedAccessTipDismissal.test.ts',
+  'src/__tests__/sendEnqueueRetry.test.ts',
+  'src/__tests__/sessionScreenshotShare.test.ts',
+  'src/auth/__tests__/xdOrgBetaWiring.test.ts',
+  // CSP must be applied at the WebView and download call sites, not only in its helper.
+  'src/__tests__/htmlPreviewCsp.test.ts',
+  'src/auth/__tests__/loginHandoffState.test.ts',
+  'src/__tests__/accountDeletion.test.ts',
+  'src/__tests__/androidSessionInteractionParity.test.tsx',
+  'src/__tests__/chatQuoteCrossDevice.test.ts',
+  'src/__tests__/edgeBlurMask.test.ts',
+  'src/__tests__/filePreviewPagerWiring.test.ts',
+  'src/__tests__/forcedUpdateGate.test.ts',
+  'src/__tests__/historyWindowBackfillWiring.test.ts',
+  'src/__tests__/homeChromeMenusAndroid.test.ts',
+  'src/__tests__/homeDesktopFirst.test.ts',
+  'src/__tests__/inactiveSessionListSubscriptions.test.ts',
+  'src/__tests__/mobileGoalCommands.test.ts',
+  'src/__tests__/mobilePiRosterSessionBinding.test.ts',
+  'src/__tests__/mobilePresentationRefresh.test.ts',
+  'src/__tests__/mobileProviderLogo.test.ts',
+  'src/__tests__/optimisticSessionComposer.test.ts',
+  'src/__tests__/orcaCollabScreenWiring.test.ts',
+  'src/__tests__/orphanSessionActions.test.ts',
+  'src/__tests__/pastedImageAttachment.test.ts',
+  'src/__tests__/sessionSwipe.test.ts',
+  'src/__tests__/sendingQueueBadge.test.ts',
+  'src/__tests__/sessionAgentSwitchWiring.test.ts',
+  'src/__tests__/sessionListRemoteAgentMark.test.ts',
+  'src/__tests__/sessionMessageMemoryWiring.test.ts',
+  'src/__tests__/sessionSendHiddenModelSheet.test.ts',
+  'src/__tests__/sessionTitleProjection.test.ts',
+  'src/__tests__/startupSplashOverlay.test.ts',
+  'src/__tests__/statusBarVcMigration.test.ts',
+];
+// Static source-contract checks (security, permission, and design rules) run
+// in the explicit guard tier. Keeping an exact allowlist makes it impossible
+// for a new source scan to silently become part of the ordinary unit gate.
+const desktopGuardInclude = [
+  'src/renderer/__tests__/sessionAgentSwitchRemoteRouting.contract.test.ts',
+  'src/main/__tests__/deviceLinkVoiceCredentialBootstrap.test.ts',
+  'src/main/__tests__/discordExternalization.test.ts',
+  'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
+  'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
+  'src/renderer/__tests__/promptRecommendationBadge.test.ts',
+  'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
+  'src/renderer/__tests__/typographyDiscipline.test.ts',
+  'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
+  // Existing credential/permission/protocol contracts, separated from runtime units.
+  'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
+  'src/main/__tests__/authAccountDeletionLifecycle.test.ts',
+  'src/main/__tests__/authLegacyTokenMirror.test.ts',
+  'src/main/__tests__/authPassiveSharedInstance.test.ts',
+  'src/main/__tests__/authSessionExpiredDetection.test.ts',
+  'src/main/ghost-panel-window/__tests__/preload-contract.test.ts',
+  'src/main/right-sidebar-window/__tests__/preload-contract.test.ts',
+  'src/main/maker-ipc/__tests__/piPackageEnableConfirmationIpc.test.ts',
+  'src/main/plugin-market/__tests__/ipcErrorBoundary.test.ts',
+  'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
+  'src/main/__tests__/authHostedCallback.contract.test.ts',
+  'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',
+  'src/renderer/__tests__/authContextRace.contract.test.ts',
+  'src/main/__tests__/mobileClientPromptNote.contract.test.ts',
+  'src/main/cindy-brain/__tests__/legacyGhostRecoveryOrchestration.contract.test.ts',
+  'src/main/cindy-brain/__tests__/codexImageAuthBinding.contract.test.ts',
+  'src/main/__tests__/authCredentialStoreHealth.contract.test.ts',
+  'src/main/__tests__/authLoginFlowReset.contract.test.ts',
+  'src/main/maker-ipc/__tests__/messageDeleteHandler.contract.test.ts',
+  'src/renderer/__tests__/orcaWorkerAttentionWatcherMount.test.ts',
+  'src/renderer/__tests__/userMessageSourceLabels.test.ts',
+  // These native host suites also protect cross-runtime privacy/permission
+  // and packaging contracts unavailable through a JS-only helper fake.
+  'src/main/__tests__/sessionDragReleaseNativeHost.test.ts',
+  'src/main/computer-permission-guide/__tests__/MacComputerPermissionGuideNativeHost.test.ts',
+  'src/main/cindy-brain/__tests__/libraryExtraDirGrantContract.test.ts',
+  'src/main/agent-island/__tests__/nativeContracts.test.ts',
+  'src/main/xbox-gamepad/__tests__/nativeContracts.test.ts',
+  // Native input caller authentication plus its production Forge/fuse boundary.
+  // macOS executes the native probe; other platforms enforce the packaging contract.
+  'src/main/remote-desktop/__tests__/macosInput.test.ts',
+  'src/main/__tests__/authCaptchaIpcSecurity.test.ts',
+  'src/main/__tests__/appearanceUtilityWindowRegistration.test.ts',
+  'src/main/__tests__/authSameOwnerRefreshUi.test.ts',
+  'src/main/__tests__/browserRuntimeDirStartup.test.ts',
+  'src/main/__tests__/clearSessionHandoffOrdering.test.ts',
+  'src/main/__tests__/dbSlimmingIpcSecurity.test.ts',
+  'src/main/__tests__/deviceLinkAutoTitleWiring.test.ts',
+  'src/main/__tests__/deviceLinkInputSteerDedupeWiring.test.ts',
+  'src/main/__tests__/endpointEnvUsageGuard.test.ts',
+  'src/main/__tests__/gitContextIpcSecurity.test.ts',
+  'src/main/__tests__/isolatedOnProductionProfileStartup.test.ts',
+  'src/main/__tests__/invokeCaptureHealthOrdering.test.ts',
+  'src/main/__tests__/modelVisibilityOwnerClaimOrdering.test.ts',
+  'src/main/__tests__/piSubagentQuitEscalation.test.ts',
+  'src/main/__tests__/piSubagentUpdateRelaunchGate.test.ts',
+  'src/main/__tests__/remoteAgentSetModelWiring.test.ts',
+  'src/main/__tests__/writableDirectoryGrantWiring.test.ts',
+  'src/main/__tests__/windowThemeVibrancyIpcSecurity.test.ts',
+  // This contract executes the exported close-generation functions in isolation because importing
+  // the full device-link singleton would start Electron runtime wiring. Keep it in the explicit
+  // guard tier rather than letting its source extraction enter ordinary unit tests.
+  'src/main/mcp-apps/__tests__/remoteViews.test.ts',
+  'src/renderer/features/cc-agent/sidebar/__tests__/sessionCardReviewRegressions.test.ts',
+  'src/renderer/__tests__/orcaModelWindowSelection.test.ts',
+  'src/renderer/__tests__/markdownRendererXdtAudio.test.ts',
+  'src/renderer/__tests__/markdownDiffBlock.test.ts',
+  // Cross-file entry isolation and privileged-link propagation contracts;
+  // component rendering and cache-lease behavior remain in the unit tier.
+  'src/renderer/__tests__/resourceUsageEntryIsolation.test.ts',
+  'src/renderer/__tests__/markdownTargetRendererContract.test.ts',
+  'src/renderer/__tests__/bulkSessionStatusRouting.test.ts',
+  'src/renderer/__tests__/homeUsageDashboardSource.test.ts',
+  'src/renderer/features/plugin/__tests__/unreadDotMotion.test.ts',
+  'src/renderer/__tests__/workdirBrowseRemoteSafety.test.ts',
+  'src/renderer/__tests__/remoteAgentRelocationWiring.test.ts',
+  'src/renderer/features/bots/__tests__/botPermissionSwitch.test.ts',
+  'src/renderer/features/bots/__tests__/botChatSurface.test.ts',
+  // Shared sidebar geometry and non-wrapping metadata are cross-file design
+  // contracts retained from main; component behavior stays in sidebar units.
+  'src/renderer/features/bots/__tests__/teammatesSectionSpacing.test.ts',
+  'src/main/cindy-brain/__tests__/forgeOidcInstallEntry.test.ts',
+  'src/main/cindy-brain/__tests__/forge.connection.test.ts',
+  'src/main/cindy-brain/__tests__/forge.oauth.test.ts',
+  'src/main/cindy-brain/__tests__/sessionFocusRetryContract.test.ts',
+  'src/main/cindy-brain/__tests__/ghostDevRuntimeContract.test.ts',
+  'src/main/cindy-brain/__tests__/ghostIpcMutationLease.test.ts',
+  'src/main/cindy-brain/__tests__/ghostIpcSenderTrust.test.ts',
+  'src/main/cindy-brain/__tests__/ghostLocalUpdateSource.wiring.test.ts',
+  'src/main/cindy-brain/__tests__/librarySaveAsDialogParent.test.ts',
+  'src/main/cindy-brain/__tests__/marketGhostSessionBoundary.test.ts',
+  'src/main/cindy-media/__tests__/ccAgentWriteGuard.test.ts',
+  'src/main/im/telegram/__tests__/uiText.test.ts',
+  'src/main/maker-ipc/__tests__/botMainDependencies.test.ts',
+  'src/main/maker-ipc/__tests__/botCompactContinuity.test.ts',
+  'src/main/maker-ipc/__tests__/remoteSessionMakerMemory.test.ts',
+  'src/main/maker-ipc/__tests__/scheduleProviderDiscoveryWiring.test.ts',
+  'src/main/maker-ipc/__tests__/sendToSessionLazyResumePermission.test.ts',
+  'src/main/maker-ipc/__tests__/sessionTreeProviderResume.test.ts',
+  'src/main/device-link/__tests__/ownershipAccountSource.test.ts',
+  'src/main/maker-host/__tests__/codexModelBackfillWiring.test.ts',
+  'src/main/maker-ipc/__tests__/orcaUiAssignmentWiring.test.ts',
+  'src/main/remote-ssh/__tests__/ccManagerInstallSource.test.ts',
+  'src/main/utility-model/__tests__/auxiliaryCustomNoAgentFallback.test.ts',
+  'src/main/workdir-probe-host/__tests__/WorkdirProbeHostPackaging.test.ts',
+  'src/main/embedding-host/__tests__/hostLifecycle.test.ts',
+  'src/main/maker-ipc/__tests__/messageSourceNote.test.ts',
+  'src/main/usage/__tests__/accountUsageLimit.test.ts',
+  'src/renderer/__tests__/compactComposerTypography.test.ts',
+  'src/renderer/__tests__/chatInputModelSelectorRouting.test.ts',
+  'src/renderer/__tests__/chatInputSessionFocus.test.ts',
+  'src/renderer/__tests__/chatClickabilitySignal.test.ts',
+  'src/renderer/__tests__/controlledBannerPlacement.test.ts',
+  'src/renderer/__tests__/controlledDraftRemoteAgentWiring.test.ts',
+  'src/renderer/__tests__/deviceLinkInteractionScenarios.test.ts',
+  'src/renderer/__tests__/dialogueSidebarSection.test.ts',
+  'src/renderer/__tests__/dialogScrimDismissal.test.ts',
+  'src/renderer/__tests__/disabledCursorVisualContract.test.ts',
+  'src/renderer/__tests__/makerExperimentalThemeContract.test.ts',
+  'src/renderer/__tests__/iconButtonTooltips.test.ts',
+  'src/renderer/__tests__/modalSurfaceContract.test.ts',
+  'src/renderer/__tests__/orcaWorkflowRoute.test.ts',
+  'src/renderer/__tests__/projectsSidebarSection.test.ts',
+  'src/renderer/__tests__/remoteWorkerCreationContext.test.ts',
+  'src/renderer/__tests__/remoteAgentModelMemoryWiring.test.ts',
+  'src/renderer/__tests__/orcaRemoteRoutingInvariants.test.ts',
+  'src/renderer/__tests__/sidebarCollapseResetSource.test.ts',
+  'src/renderer/__tests__/sessionContentHeaderDragRegion.test.ts',
+  'src/renderer/__tests__/sessionTitleProjectionOutlets.test.ts',
+  'src/renderer/__tests__/shareSelectionContainment.test.ts',
+  'src/renderer/__tests__/toastZIndex.test.ts',
+  'src/renderer/__tests__/unsupportedTextPreview.test.ts',
+  'src/renderer/hooks/__tests__/useCCAgentChatHiddenFreeze.test.tsx',
 ];
 
 export function desktopUnitWorkerCount(
@@ -129,6 +318,7 @@ const requiredUnitWorkspace = (name, cwd, { workers = 1, execution, pool, exclud
 
 export default {
   workspaces: [
+    requiredUnitWorkspace('cindy-headless', 'apps/cindy-headless'),
     {
       name: 'desktop',
       cwd: 'apps/desktop',
@@ -168,6 +358,7 @@ export default {
             'src/main/scheduler-host/__tests__/*.db.test.ts',
             'src/main/__tests__/directSessionSendGuard.test.ts',
             'src/main/__tests__/makerSendToSessionOrdering.test.ts',
+            ...desktopGuardInclude,
             '**/*.bench.ts',
           ],
         },
@@ -223,37 +414,46 @@ export default {
         guard: {
           status: 'required',
           coverage: 'allowlist',
-          command: vitestBin('run'),
+          // The typed-send guard builds a ~1 GiB TypeScript Program. Give it
+          // the workspace budget and keep other Desktop files out of its CPU
+          // slot rather than letting two default-sized guard pools contend.
+          execution: 'exclusive',
+          command: vitestBin('run', '--maxWorkers=1'),
           include: [
             'src/main/__tests__/directSessionSendGuard.test.ts',
             'src/main/__tests__/makerSendToSessionOrdering.test.ts',
+            ...desktopGuardInclude,
           ],
         },
       },
     },
     // Mobile has enough test files to become the critical path at one worker.
     // Give it the full worker budget, but never overlap it with other workspaces.
-    requiredUnitWorkspace('mobile', 'apps/mobile', { workers: 4, execution: 'exclusive' }),
-    requiredUnitWorkspace('@cindy/anthropic-compat-proxy', 'packages/anthropic-compat-proxy'),
-    requiredUnitWorkspace('@cindy/anthropic-responses-bridge', 'packages/anthropic-responses-bridge'),
-    requiredUnitWorkspace('@cindy/responses-anthropic-bridge', 'packages/responses-anthropic-bridge'),
-    requiredUnitWorkspace('@cindy/model-compat', 'packages/model-compat'),
-    requiredUnitWorkspace('@cindy/responses-chat-bridge', 'packages/responses-chat-bridge'),
-    requiredUnitWorkspace('@cindy/auth-client', 'packages/auth-client'),
-    requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
-    requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
-    requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
-    noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
-    requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
-    noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),
-    noCollectableWorkspace('@cindy/gitlab-client', 'packages/gitlab-client'),
-    noCollectableWorkspace('@cindy/heartbeat-client', 'packages/heartbeat-client'),
-    requiredUnitWorkspace('@cindy/im', 'packages/lizi-im'),
-    requiredUnitWorkspace('@cindy/mcps', 'packages/lizi-mcps'),
-    requiredUnitWorkspace('@cindy/maker-cc-manager', 'packages/maker-cc-manager'),
+    {
+      name: 'mobile',
+      cwd: 'apps/mobile',
+      status: 'required',
+      tiers: {
+        unit: {
+          status: 'required',
+          execution: 'exclusive',
+          command: unitVitestCommand(4),
+          exclude: mobileGuardInclude,
+        },
+        guard: {
+          status: 'required',
+          coverage: 'allowlist',
+          command: vitestBin('run'),
+          include: mobileGuardInclude,
+        },
+      },
+    },
     // Stays on forks: palette-scanner's tests stub HOME and the scanner resolves
     // it through os.homedir(), which a worker thread cannot see (see
     // UNIT_POOL_DEFAULT above).
+    // At one worker it was the last workspace still running in every CI shard;
+    // it scales linearly (2026-10-16: 248s / 125s / 65s at 1 / 2 / 4 workers),
+    // so it runs exclusively with the full worker budget, like mobile.
     {
       name: '@cindy/maker-core',
       cwd: 'packages/maker-core',
@@ -261,8 +461,16 @@ export default {
       tiers: {
         unit: {
           status: 'required',
-          command: unitVitestCommand(1, 'forks'),
-          exclude: ['**/*.integration.test.ts', '**/*.e2e.test.ts', '**/*.git-integration.test.ts'],
+          execution: 'exclusive',
+          command: unitVitestCommand(desktopUnitWorkerCount(), 'forks'),
+          exclude: ['**/*.integration.test.ts', '**/*.e2e.test.ts', '**/*.git-integration.test.ts', ...makerCoreGuardInclude],
+        },
+        guard: {
+          status: 'required',
+          coverage: 'allowlist',
+          execution: 'exclusive',
+          command: vitestBin('run', '--maxWorkers=1'),
+          include: makerCoreGuardInclude,
         },
         'git-integration': {
           status: 'manual',
@@ -281,6 +489,23 @@ export default {
         },
       },
     },
+    requiredUnitWorkspace('@cindy/anthropic-compat-proxy', 'packages/anthropic-compat-proxy'),
+    requiredUnitWorkspace('@cindy/anthropic-responses-bridge', 'packages/anthropic-responses-bridge'),
+    requiredUnitWorkspace('@cindy/responses-anthropic-bridge', 'packages/responses-anthropic-bridge'),
+    requiredUnitWorkspace('@cindy/model-compat', 'packages/model-compat'),
+    requiredUnitWorkspace('@cindy/responses-chat-bridge', 'packages/responses-chat-bridge'),
+    requiredUnitWorkspace('@cindy/auth-client', 'packages/auth-client'),
+    requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
+    requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
+    requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
+    noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
+    requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
+    noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),
+    noCollectableWorkspace('@cindy/gitlab-client', 'packages/gitlab-client'),
+    noCollectableWorkspace('@cindy/heartbeat-client', 'packages/heartbeat-client'),
+    requiredUnitWorkspace('@cindy/im', 'packages/lizi-im'),
+    requiredUnitWorkspace('@cindy/mcps', 'packages/lizi-mcps'),
+    requiredUnitWorkspace('@cindy/maker-cc-manager', 'packages/maker-cc-manager'),
     requiredUnitWorkspace('@cindy/maker-remote-ssh', 'packages/maker-remote-ssh'),
     // 轮 42:新包 maker-pi-manager(TS 单例 pi daemon)已随 SSH remote 交付;
     // 漏登记会让 test-workspaces 的 manifest 覆盖校验失败(全量门禁拒跑)。

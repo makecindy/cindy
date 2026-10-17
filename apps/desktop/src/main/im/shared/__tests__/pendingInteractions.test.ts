@@ -55,7 +55,7 @@ describe('cancelPending 交还卡片地址', () => {
     // register 走了默认 extras; 这里补登记带 permissionCard 的版本(新 requestId)。
     const resolve2 = vi.fn();
     registerPendingExternal('req-perm2', 'permission', 'chat|666', resolve2, vi.fn(), {
-      toolName: 'Bash',
+      permissionRequest: { toolName: 'Bash' },
       permissionCard: { title: '🔧 工具调用：Bash', body: '**参数预览**\n```json\n{"cmd": "ls"}\n```' },
     });
 

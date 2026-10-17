@@ -32,12 +32,14 @@ import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { readImDefaultSettings } from './defaultSettingsStore';
+import { readImRemoteProviderRoute } from './remoteProviderRoute';
 import { fingerprintImDefaultSettings, type ImDefaultRoute } from './shared/channelDefaultRoute';
 import type { ImOrchestratorConfig } from './shared/types';
 
 const log = createLogger('im:defaults');
 
 export interface ResolvedImSessionDefaults {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   effort: Effort;
@@ -69,6 +71,19 @@ export async function resolveImSessionDefaults(
   channel?: ImDefaultSettingsChannel,
 ): Promise<ResolvedImSessionDefaults> {
   const raw = readImDefaultSettings(channel);
+  const remote = raw.agents[raw.agentKind];
+  if (remote.agentDeviceId) {
+    const { model } = await readImRemoteProviderRoute({ ...remote, agentDeviceId: remote.agentDeviceId, agentKind: raw.agentKind });
+    return {
+      ...remote,
+      agentKind: raw.agentKind,
+      effort: model.efforts.includes(remote.effort) || !model.efforts.length
+        ? remote.effort : model.defaultEffort ?? model.efforts[0],
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: fingerprintImDefaultSettings(raw),
+    };
+  }
   const providers =
     providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
   const requestedAgent = raw.agentKind;
@@ -126,6 +141,7 @@ export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDef
     agentKind: raw.agentKind,
     model: settings.model,
     providerId: settings.providerId?.trim() || null,
+    agentDeviceId: settings.agentDeviceId ?? null,
     effort: settings.effort,
   };
 }

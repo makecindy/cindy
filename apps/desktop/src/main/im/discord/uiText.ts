@@ -33,6 +33,8 @@ export const ui = {
     detachedBySlash: '🚪 接管结束，咱们回到 Discord 私聊。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的 Discord 私聊。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
+    companionManagedCommand:
+      '🧭 这个 bot 已经交给伙伴啦 — 模型、权限和工作目录都跟着伙伴设置走，想改的话去 Cindy 的伙伴设置里调~',
   },
 
   agent: {

@@ -1,4 +1,13 @@
 {
+  "entry": {
+    "title": "Open Task",
+    "loading": "Loading task…",
+    "failed": "Could not load task details.",
+    "missing": "This computer did not return details for this task.",
+    "timedOut": "Loading task details timed out.",
+    "retry": "Reload Task",
+    "back": "Go Back"
+  },
   "failedScheduleNotice": {
     "text": "An automatic run failed.",
     "precheck": "Automatic checks are temporarily blocked.",
@@ -7,6 +16,7 @@
   },
   "common": {
     "modelHiddenReselect": "{{model}} is turned off. Choose an enabled model before sending.",
+    "modelUnavailableReselect": "{{model}} is no longer available on this computer. Choose another model before sending.",
     "cancel": "Cancel",
     "dismissRecommendation": "Dismiss recommendation",
     "delete": "Delete",
@@ -30,7 +40,12 @@
     "openMicPermission": "Open microphone settings",
     "maxAttachments": "You can add up to {{max}} attachments.",
     "voiceStopRecording": "Stop Recording",
-    "capabilitiesUnsupported": "Couldn't load commands and resources from your computer. Update Cindy on your computer and try again."
+    "capabilitiesUnsupported": "Couldn't load commands and resources from your computer. Update Cindy on your computer and try again.",
+    "plugins": "Plugins",
+    "pluginsChooseDevice": "Choose a Device",
+    "pluginsLoading": "Loading plugins…",
+    "pluginsEmpty": "No Installed Plugins",
+    "pluginsReload": "Reload Plugins"
   },
   "presentation": {
     "collaboration": {
@@ -200,6 +215,7 @@
     "retry": "Retry",
     "firstMessageNotSent": "The first message wasn't sent; its content has been restored to the input box.",
     "attachmentsNotCarriedBack": "{{count}} attachment(s) couldn't be brought back — please add them again.",
+    "pendingAttachmentsNotCarriedBack": "Attachments still being selected or uploaded couldn't be brought back. Please add them again.",
     "localStorageFull": "Cindy's local storage on this phone is full, so the message couldn't be saved. Please try again.",
     "commandWaitsForSession": "The session is still being created — this command needs the session to be ready. Please try again shortly.",
     "locateMessageNotFound": "Couldn't find the message to jump to.",
@@ -221,6 +237,7 @@
     "sessionNotSyncedRetry": "The session hasn't finished syncing; try again shortly.",
     "savingPreviousQueueEdit": "Saving the previous queued message edit; edit again once it finishes.",
     "attachmentsUploadingBeforeEdit": "Attachments are still uploading; edit the queued message after they finish.",
+    "goalCommandAttachments": "Send /goal without attachments. Your draft and attachments are kept.",
     "goalAlreadyActive": "This session already has an active goal; handle it here first.",
     "resetReconfirmTitle": "Confirm Again",
     "resetOfferExpired": "The reset credential has expired; review the refreshed quota info.",
@@ -236,6 +253,7 @@
     "deleteMessageTitle": "Delete this message?",
     "deleteMessageBody": "Deleting a user message removes only that message; deleting an AI message removes the entire turn generated after the previous user input. Later messages are kept. On your next send, the AI context is rebuilt from the remaining records.",
     "deleteMessageAction": "Delete this message",
+    "deleteMessageBusy": "Wait for the current response to finish before deleting a message.",
     "readingCapabilities": "Reading {{agent}} capabilities…",
     "editingQueueMessageNumbered": "Editing queued message #{{index}}",
     "editingQueueMessage": "Editing queued message",
@@ -280,6 +298,7 @@
     "shareMessage": "Share this message"
   },
   "new": {
+    "goalCommandNeedsSession": "Open an existing session to clear its goal.",
     "selectDevice": "Select a device",
     "workspaceDialogue": "Chat",
     "workspaceProject": "Project",
@@ -301,6 +320,7 @@
     "selectDeviceError": "Select a device.",
     "enterProjectPath": "Enter the project path on the computer.",
     "enterModel": "Enter a model.",
+    "modelLoading": "Loading model…",
     "enterFirstMessageOrAttachment": "Enter a first message or add an attachment.",
     "noSessionIdReturned": "Could not confirm that the new session was created on the remote computer. Sync again to check.",
     "sessionIdNotAdopted": "The Cindy version on the remote computer is incompatible. Update it and try again.",
@@ -351,7 +371,6 @@
     "worktreeBranchesLoading": "Loading branches…",
     "worktreeBranchSaving": "Syncing the selected branch…",
     "worktreeBranchSyncFailed": "Could not confirm the saved source branch — retry the branch selection",
-    "worktreeSettingsSaving": "Syncing the worktree setting…",
     "worktreeSettingsSyncFailed": "Could not save the worktree default. You can still use this selection.",
     "worktreeBranchesRetry": "Could not load branches. Tap to retry",
     "worktreeDetecting": "Detecting environment…",
@@ -484,6 +503,8 @@
     "deleteOne": "Delete this message"
   },
   "tail": {
+    "readableHistoryRecovery": "New task from readable history",
+    "readableHistoryRecoveryDescription": "If retry keeps failing, create a new task using readable history. Internal encrypted information is omitted. The original task is kept, and the failed message is not resent automatically.",
     "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
     "replyFailed": "This reply could not be completed. Check the error details for more information.",
     "showErrorDetails": "Show Error Details",
@@ -506,10 +527,6 @@
     "moreOptions": "More options",
     "archiveConversation": "Archive session",
     "closeActionMenu": "Close session actions menu",
-    "referenceAroundAnchor": "Around the link",
-    "referenceRecent": "Recent messages",
-    "referenceCount": "{{num}} messages",
-    "referenceTruncated": "Truncated",
     "pinnedSection": "Pinned",
     "extraDirsSummary": "{{num}} additional directories",
     "noExtraDirsSummary": "No additional directories",
@@ -528,6 +545,7 @@
     "taskAlreadyCreated": "This task already exists on the computer. Its saved messages will resume there."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",
     "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
     "AUTO_REVIEW_UNAVAILABLE": "Auto approve could not reach a decision, so actions that need approval now need your confirmation. Switch this session to Full access if you would rather not be interrupted. That mode is higher risk.",
@@ -555,6 +573,8 @@
     "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
     "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
     "REMOTE_AGENT_BUSY": "Too many sessions are running on the other computer. End some of them and try again.",
+    "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
+    "REMOTE_AGENT_TOTAL_LIMIT": "The provider computer has reached its total remote session limit. Ask the owner to release unused sessions or raise the limit in Remote & sharing.",
     "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
     "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
@@ -570,6 +590,19 @@
     "enableSubmit": "Start collaboration",
     "createWorkerTitle": "New Worker",
     "createWorkerSubmit": "Create Worker",
+    "executionDeviceLabel": "Execution device",
+    "leadComputer": "Lead's computer",
+    "deviceOnline": "Online",
+    "deviceNeedsUpdate": "Update required",
+    "deviceUnavailable": "Execution device unavailable",
+    "executionDeviceHint": "Only online computers on this account that the Lead's computer can control are listed.",
+    "remoteDirLabel": "Folder on execution device",
+    "remoteDirChat": "Chat",
+    "remoteDirPath": "Specify folder",
+    "remoteDirPlaceholder": "Absolute path on execution device",
+    "remoteDirChatHint": "Create a chat session on the execution device without linking it to a project.",
+    "remoteDirPathHint": "The folder is checked on the execution device. A missing folder causes an error; the Lead's folder is never used instead.",
+    "remoteDirInvalid": "Enter an absolute path on the execution device.",
     "roleLabel": "Role name",
     "roleHint": "Just a name to tell collaborators apart. It doesn't change capabilities.",
     "customRole": "Custom",
@@ -590,6 +623,9 @@
     "workerCountSummary_other": "{{count}} Workers · {{running}} running",
     "loading": "Loading Workers…",
     "noWorkers": "No Workers yet",
+    "otherComputer": "Another computer",
+    "deviceUnreachable": "Status unavailable",
+    "archiveRemoteConfirmDesc": "Removes it from this collaboration and stops the current round on {{device}}. The task, history and files on {{device}} are kept and marked “Collaboration ended”.",
     "manageGroup": "Manage",
     "hardLimitHint": "Hard limit of {{limit}} reached · Archive a Worker to create more",
     "softLimitHint": "Over the soft limit of {{limit}} · More Workers use more memory",
@@ -622,6 +658,7 @@
     "errors": {
       "unsupported": "The computer's version is too old for collaboration",
       "loadFailed": "Couldn't load Workers.",
+      "loadExecutionDevices": "Could not load execution devices.",
       "startFailed": "Couldn't start collaboration.",
       "createFailed": "Couldn't create the Worker.",
       "archiveFailed": "Couldn't archive the Worker.",

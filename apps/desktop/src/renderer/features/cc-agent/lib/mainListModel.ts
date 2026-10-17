@@ -24,6 +24,7 @@
  */
 
 import type { Session } from '@/lib/ccAgent.types';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import {
   MACHINE_ALL,
@@ -349,6 +350,21 @@ export function buildMainListEntries({
   scheduleSessionIndex,
 }: BuildMainListEntriesInput): MainListEntry[] {
   const ctx = priorityContext;
+  if (!CINDY_MAKE_ENABLED) {
+    const keep = (session: Session) => !isCindyMakeFamilySource(session.source);
+    projects = projects.flatMap((project) => {
+      const sessions = project.sessions.filter(keep);
+      if (sessions.length === project.sessions.length) return [project];
+      return sessions.length ? [{ ...project, sessions }] : [];
+    });
+    dialogues = dialogues.filter(keep);
+    unclassified = unclassified.filter(keep);
+    bots = bots.flatMap((bot) => {
+      const sessions = bot.sessions.filter(keep);
+      if (sessions.length === bot.sessions.length) return [bot];
+      return sessions.length ? [{ ...bot, sessions }] : [];
+    });
+  }
   const entries: MainListEntry[] = [];
   const partitioned = partitionCindyMakeSessions({ projects, dialogues, unclassified });
   projects = partitioned.projects;

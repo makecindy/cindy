@@ -296,10 +296,18 @@ export function filterSlashCommands(
   limit = 25,
 ): UnifiedCommand[] {
   const q = query.trim().toLowerCase();
+  const rankOf = (text: string): number => {
+    const value = text.toLowerCase();
+    return value === q ? 0 : value.startsWith(q) ? 1 : value.includes(q) ? 2 : -1;
+  };
   const filtered = commands
     .map((command, index) => {
-      const name = command.name.toLowerCase();
-      const rank = q ? (name === q ? 0 : name.startsWith(q) ? 1 : name.includes(q) ? 2 : -1) : 0;
+      // 插件指令同名时 name 带隐藏的 `/slug`,菜单只显示 label:按两者中更好的一个排序,
+      // 输入显示名算精确匹配,输入完整限定指令也照常命中。
+      const ranks = [rankOf(command.name)];
+      if (command.kind === 'desktop' && command.label) ranks.push(rankOf(command.label));
+      const matched = ranks.filter((r) => r >= 0);
+      const rank = q ? (matched.length > 0 ? Math.min(...matched) : -1) : 0;
       const officialPriority = isCindyOfficialSlashCommand(command) ? 0 : 1;
       return { command, index, rank, officialPriority };
     })

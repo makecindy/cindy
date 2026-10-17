@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { botSessionInputBlockReason } from '../botSessionInputGuard.js';
+import {
+  botSessionInputBlockReason,
+  isShadowedCompanionCanonical,
+} from '../botSessionInputGuard.js';
 
 describe('Bot task input guard', () => {
   it('does not affect ordinary Cindy tasks', () => {
@@ -25,5 +28,21 @@ describe('Bot task input guard', () => {
     expect(
       botSessionInputBlockReason({ source: 'bot', role: null, profileStatus: null }),
     ).toContain('归属信息不完整');
+  });
+});
+
+describe('shadowed companion guard', () => {
+  const shadowed = (botId: string) => botId === 'bot_mia';
+  it('blocks only the main task of a demoted copy', () => {
+    expect(isShadowedCompanionCanonical({ role: 'canonical', botId: 'bot_mia' }, shadowed)).toBe(
+      true,
+    );
+    expect(isShadowedCompanionCanonical({ role: 'delegation', botId: 'bot_mia' }, shadowed)).toBe(
+      false,
+    );
+    expect(isShadowedCompanionCanonical({ role: 'canonical', botId: 'bot_other' }, shadowed)).toBe(
+      false,
+    );
+    expect(isShadowedCompanionCanonical(null, shadowed)).toBe(false);
   });
 });

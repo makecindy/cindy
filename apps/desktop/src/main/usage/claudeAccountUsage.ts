@@ -1,3 +1,6 @@
+import { refreshQuotaCredentialOwner, cloudQuotaOwnerKey, quotaCredentialsReady, quotaCredentialGeneration, onQuotaCredentialSourceChanged } from '../model-access/quotaCredentialState.js';
+import type { ClaudeQuotaClear } from '../../shared/claudeQuotaState.js';
+import { readOrganizationAccountUsage } from './organizationAccountUsage.js';
 /**
  * claudeAccountUsage — Claude 账号配额 (LiteLLM spend / max_budget) 拉取与广播。
  *
@@ -47,6 +50,7 @@ import { getAuthState } from '../authManager';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger';
 import { readClaudeApiKey } from '../maker-host/auth-adapters';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection';
 import { outboundFetch } from '../maker-host/outbound-fetch';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs';
 import { getGatewayAccountCurrency } from './modelPricing';
@@ -92,11 +96,29 @@ const IDLE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 let snapshot: ClaudeAccountUsageSnapshot | null = null;
 let snapshotOwnerKey: string | null = null;
+let clearReason: ClaudeQuotaClear['quotaState'] = 'unlimited';
 let fetchInFlight = false;
 let fetchOwnerKey: string | null = null;
 let refreshQueued = false;
 let lastFetchAt = 0;
+let lastFetchOwnerKey: string | null = null;
 let idlePollTimer: NodeJS.Timeout | null = null;
+
+/** Reset process-local quota state for tests that share one module instance. */
+export function __resetClaudeAccountUsageForTesting(): void {
+  if (idlePollTimer) clearInterval(idlePollTimer);
+  idlePollTimer = null;
+  snapshot = null;
+  snapshotOwnerKey = null;
+  clearReason = 'unlimited';
+  fetchInFlight = false;
+  fetchOwnerKey = null;
+  refreshQueued = false;
+  lastFetchAt = 0;
+  lastFetchOwnerKey = null;
+  quotaSnapshotRevision = 0;
+  quotaSnapshotListeners.clear();
+}
 
 interface LiteLlmUserInfo {
   spend?: number;
@@ -121,7 +143,7 @@ function currentQuotaOwner(): QuotaOwner | null {
   const auth = getAuthState();
   if (auth.mode === 'cloud') {
     if (auth.user?.membershipKind !== 'org' || !auth.dataOwnerId) return null;
-    return { key: `cloud:${auth.dataOwnerId}`, authenticatedUserId: auth.user.id };
+    return { key: cloudQuotaOwnerKey(auth)!, authenticatedUserId: auth.user.id };
   }
   if (auth.mode === 'local' && auth.dataOwnerId) {
     return { key: `local:${auth.dataOwnerId}` };
@@ -149,6 +171,7 @@ async function fetchUserInfo(
       signal,
     });
     if (!res.ok) {
+      if (res.status === 401) reportCindyGatewayKeyRejected(apiKey);
       log.debug(`user/info non-2xx: ${res.status}`);
       return null;
     }
@@ -181,6 +204,7 @@ async function fetchTodayActivity(
       { headers: { Authorization: `Bearer ${apiKey}` }, signal },
     );
     if (!res.ok) {
+      if (res.status === 401) reportCindyGatewayKeyRejected(apiKey);
       log.debug(`daily/activity non-2xx: ${res.status}`);
       return null;
     }
@@ -202,7 +226,14 @@ function resolveDailyActivitySpend(activity: LiteLlmDailyActivity): { todaySpend
   return { todaySpend: Number.isFinite(totalSpend) ? totalSpend : 0 };
 }
 
-async function fetchOnce(authenticatedUserId?: string): Promise<ClaudeAccountUsageSnapshot | null> {
+async function fetchOnce(authenticatedUserId?: string): Promise<ClaudeAccountUsageSnapshot | 'unlimited' | null> {
+  // Enterprise AIGateway inference endpoints need not expose LiteLLM management APIs.
+  // Resolve the signed-in member's tenant in Model Access. Nova/older servers keep
+  // the existing direct query; authorization/network errors never trigger fallback.
+  if (getAuthState().mode === 'cloud') {
+    const managed = await readOrganizationAccountUsage();
+    if (managed !== undefined) return managed;
+  }
   // 币种优先取账号目录声明。取不到时**不放弃整个快照**,回落本地账本币种:
   // 手填 XD key 是明确支持的兜底流程(Model Access 处于 disabled / failed 时),那时没有
   // 目录可推导,若直接 return 会让这些会话永久看不到账号配额 —— 比"币种按账本回落"更糟。
@@ -214,6 +245,8 @@ async function fetchOnce(authenticatedUserId?: string): Promise<ClaudeAccountUsa
   // 无关,proxy 只服务于子进程的 chat completion 请求。
   const baseUrl = claudeUpstreamEndpoint().trim();
   if (!apiKey || !baseUrl) return null;
+  const legacyOwner = currentQuotaOwner();
+  if (getAuthState().mode === 'cloud' && (!legacyOwner || !quotaCredentialsReady(legacyOwner.key, baseUrl))) return null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -228,6 +261,7 @@ async function fetchOnce(authenticatedUserId?: string): Promise<ClaudeAccountUsa
       fetchTodayActivity(baseUrl, apiKey, controller.signal),
     ]);
     if (!cycle) return null;
+    if (getAuthState().mode === 'cloud' && (!legacyOwner || !quotaCredentialsReady(legacyOwner.key, baseUrl))) return null;
     const todaySpend = dailyActivity ? resolveDailyActivitySpend(dailyActivity).todaySpend : null;
     log.info(
       `refreshed cycle=${cycle.spend.toFixed(2)}/${cycle.maxBudget.toFixed(2)} today=${todaySpend == null ? 'n/a' : todaySpend.toFixed(2)} resetAt=${cycle.budgetResetAt ?? 'n/a'}`,
@@ -259,15 +293,27 @@ export async function triggerClaudeAccountUsageRefresh(force = false): Promise<v
     if (fetchOwnerKey !== owner.key) refreshQueued = true;
     return;
   }
-  if (!force && Date.now() - lastFetchAt < THROTTLE_MS) return;
+  if (!force && lastFetchOwnerKey === owner.key && Date.now() - lastFetchAt < THROTTLE_MS) return;
 
   fetchInFlight = true;
   fetchOwnerKey = owner.key;
   lastFetchAt = Date.now();
+  lastFetchOwnerKey = owner.key;
   try {
+    if (owner.key.startsWith('cloud:')) refreshQuotaCredentialOwner(owner.key);
+    const generation = quotaCredentialGeneration();
     const next = await fetchOnce(owner.authenticatedUserId);
-    if (!next) return;
+    if (getAuthState().mode === 'cloud' && quotaCredentialGeneration() !== generation) return;
     if (currentQuotaOwner()?.key !== owner.key) return;
+    if (next === 'unlimited') {
+      clearReason = 'unlimited';
+      snapshot = null;
+      snapshotOwnerKey = owner.key;
+      broadcast(null);
+      ensureIdlePoll();
+      return;
+    }
+    if (!next) return;
     snapshot = next;
     snapshotOwnerKey = owner.key;
     broadcast(next);
@@ -302,7 +348,25 @@ export function readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | n
   return owner && snapshotOwnerKey === owner.key ? snapshot : null;
 }
 
-function broadcast(payload: ClaudeAccountUsageSnapshot): void {
+/** Authoritative no-limit state is replayable even if no renderer heard its push. */
+export function readClaudeAccountQuotaClear(): ClaudeQuotaClear | null {
+  const owner = currentQuotaOwner();
+  return owner && snapshotOwnerKey === owner.key && snapshot === null
+    ? { quotaState: clearReason } : null;
+}
+
+let quotaSnapshotRevision = 0;
+const quotaSnapshotListeners = new Set<() => void>();
+export function readClaudeAccountUsageRevision(): number { return quotaSnapshotRevision; }
+export function observeClaudeAccountUsage(listener: () => void): () => void {
+  quotaSnapshotListeners.add(listener);
+  return () => { quotaSnapshotListeners.delete(listener); };
+}
+
+function broadcast(payload: ClaudeAccountUsageSnapshot | null): void {
+  quotaSnapshotRevision++;
+  for (const listener of quotaSnapshotListeners) listener();
+
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_CLAUDE_ACCOUNT_CHANGED, payload);
@@ -312,3 +376,17 @@ function broadcast(payload: ClaudeAccountUsageSnapshot): void {
   // (刷新自带 10s 节流 + turn-done 触发,低频;无 active 链路时 O(1) no-op)。
   tapWindowBroadcast(USAGE_CLAUDE_ACCOUNT_CHANGED, payload);
 }
+
+// A new gateway invalidates both finite and unlimited results from the previous
+// source. Replayable invalidation also covers renderers that missed the push.
+onQuotaCredentialSourceChanged((ownerKey) => {
+  const owner = currentQuotaOwner();
+  if (!owner || !owner.key.startsWith('cloud:') || owner.key !== ownerKey) return;
+  snapshot = null;
+  snapshotOwnerKey = owner.key;
+  clearReason = 'invalidated';
+  lastFetchAt = 0;
+  broadcast(null);
+  if (fetchInFlight) refreshQueued = true;
+  else void triggerClaudeAccountUsageRefresh(true).catch(() => undefined);
+});

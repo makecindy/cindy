@@ -87,7 +87,7 @@ Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介
 `renderer/lib/modelDescriptions.ts` 解析本地简介，文案放在五语 `common.json` 的
 `modelDescriptions`。只写简短用途，不从文案推导能力、协议、价格、窗口或默认档位。
 
-模型选择器的「全部」「收藏」分栏中，非 Cindy AI 模型的第二行优先展示供应商、
+模型选择器的「全部」「收藏」分栏中，除任务所在电脑自己的 Cindy AI 外，模型的第二行优先展示供应商、
 已识别账号及可用的订阅套餐余量；账号已包含在供应商名称中时不重复追加。余量仅用
 重置倒计时和剩余百分比表示，不显示图表或周期标题。耗量告警仅作用于百分比，
 倒计时保持普通辅助文字色；过期窗口最多显示 10 分钟「重置中」，随后显示未知值，
@@ -95,10 +95,13 @@ Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介
 费用符号、折扣和免费标签统一使用中性色，保留原价档位的符号个数、折扣明暗与百分比标签。
 整行不换行，长来源名称省略；额度段最多占行宽 70%，过长时省略，
 给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量，改读被控端用量镜像
-（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；Cindy AI 及单供应商分栏
-继续展示本地简介。实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和
-`UnifiedModelRow.tsx`，行为覆盖见 `renderer/__tests__/modelSourceDetails.test.tsx` 及
-`unifiedModelPanelRendering.test.tsx`。
+（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；任务所在电脑自己的 Cindy AI
+及单供应商分栏继续展示本地简介。分享来的、同账号其他电脑上的 Cindy AI 以及外来收藏不属于这一例外，
+与其他供应商一样展示来源（如 `Cindy AI · 来自 Magi 的分享`、`Cindy AI · 工作室 Mac`，#6110）；是否属于
+本机目录由 `UnifiedModelPanel` 判断，可见行与定宽测量行共用同一判断，`UnifiedModelRow` 收到来源即展示。
+实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和 `UnifiedModelRow.tsx`，行为覆盖见
+`renderer/__tests__/modelSourceDetails.test.tsx`、`unifiedModelPanelRendering.test.tsx` 及
+`remoteAgentDeviceFavoritesPanel.test.tsx`。
 
 同系列不同接入路径复用用途说明；特殊长上下文版本保留单独的费用提醒。
 媒体用途优先尊重明确的类型字段，不能因厂商分组是 GPT 就介绍成编程模型。

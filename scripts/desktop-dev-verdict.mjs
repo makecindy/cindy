@@ -17,6 +17,7 @@ const VERDICT_FIELDS = Object.freeze([
   'pid',
   'region',
   'message',
+  'log',
   'next',
 ]);
 
@@ -158,7 +159,9 @@ export function printDesktopDevVerdict(verdict, writer = console.log) {
 }
 
 function isolatedNextIfNeeded(context, code) {
-  return shouldSuggestIsolatedNext({ isolated: context.isolated, code })
+  // 默认 dev 沙箱跨 checkout 共用：被另一个 worktree 的实例占着时，换成本 worktree
+  // 自己的沙箱就能并行启动，不必停掉别人的实例。
+  return code === 'USERDATA_IN_USE' || shouldSuggestIsolatedNext({ isolated: context.isolated, code })
     ? { next: isolatedRestartNextCommand(context) }
     : {};
 }
@@ -216,6 +219,7 @@ export function buildDesktopDevVerdictFromFailure(error, context = {}) {
     mode: context.isolated ? 'isolated' : 'shared',
     ...(context.sandbox ? { sandbox: context.sandbox } : {}),
     ...(context.rootDir ? { root: context.rootDir } : {}),
+    ...(context.log ? { log: context.log } : {}),
     ...isolatedNextIfNeeded(context, code),
   };
 }

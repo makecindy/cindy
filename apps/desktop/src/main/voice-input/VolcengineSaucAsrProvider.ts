@@ -21,6 +21,11 @@ type VolcengineSaucAsrProviderOptions = {
   connectTimeoutMs?: number;
   missingCredentialMessage?: string;
   errorFallbackMessage?: string;
+  /**
+   * Called with proxyApiKey when the WebSocket handshake is rejected with HTTP 401 on the
+   * gateway proxy path. The connectionProvider path (Cindy voice tokens) never calls it.
+   */
+  onAuthorizationRejected?: (token: string) => void;
 };
 
 const log = createLogger('voice-input:volcengine-sauc-asr');
@@ -86,6 +91,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
   private readonly connectTimeoutMs: number;
   private readonly missingCredentialMessage: string;
   private readonly errorFallbackMessage: string;
+  private readonly onAuthorizationRejected?: (token: string) => void;
   private socket?: WebSocket;
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
@@ -122,6 +128,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
     this.missingCredentialMessage = options.missingCredentialMessage ?? 'API key is required for Volcengine SAUC ASR.';
     this.errorFallbackMessage = options.errorFallbackMessage ?? 'Volcengine SAUC transcription failed.';
+    this.onAuthorizationRejected = options.onAuthorizationRejected;
   }
 
   onEvent(callback: (event: AsrEvent) => void): void {
@@ -219,6 +226,9 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
       const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
         response.resume();
         const statusCode = response.statusCode ?? 'unknown';
+        if (statusCode === 401 && !this.connectionProvider && this.proxyApiKey) {
+          this.onAuthorizationRejected?.(this.proxyApiKey);
+        }
         const statusMessage = response.statusMessage ? ` ${response.statusMessage}` : '';
         // Include the dialed host/path + gateway trace id: a handshake 404
         // against a gateway missing the ASR passthrough route is otherwise

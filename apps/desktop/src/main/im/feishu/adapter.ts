@@ -28,6 +28,8 @@ import fs from 'node:fs';
 import { app } from 'electron';
 import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane } from '@cindy/im';
 
+import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
+import type { FeishuToolScope } from '../shared/channelToolScope';
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { readImDefaultSettings } from '../defaultSettingsStore';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
@@ -238,10 +240,26 @@ function cachedChatNameForNote(feishuIm: FeishuIM, chatId: string): string | nul
   return null;
 }
 
+/**
+ * 每条入站消息的 `[渠道说明]` 末尾点一句本轮可用的渠道工具 —— Agent 不知道自己在飞书里、
+ * 每次摸瞎试工具是 2026-10-16 Chris 点名的痛点。个人 bot 与伙伴自有连接同一句。
+ */
+export function feishuToolsHint(service: 'feishu' | 'lark'): string {
+  const platform = service === 'lark' ? 'Lark' : '飞书';
+  return `本轮可直接用 cindy_feishu_bot 工具操作${platform} Open API(send_text / send_markdown / send_file 发到本对话或回复某条消息, set_reaction 表情, get_chat 群信息与成员, get_message 读消息, pin_message 置顶, call_api 任意接口), 默认目标就是本条所在对话。`;
+}
+
+export interface FeishuAdapterOptions {
+  /** 伙伴自有连接: 私聊按主人 / 外部用户分落点(transport 对外开放时才会有外部私聊)。 */
+  companionBotId?: string;
+}
+
 export function buildFeishuAdapter(
   feishuIm: FeishuIM,
   config: ImOrchestratorConfig,
+  options: FeishuAdapterOptions = {},
 ): ImChannelAdapter {
+  const companion = Boolean(options.companionBotId);
   const isLark = () => feishuIm.getService() === 'lark';
   const conversationPrefix = () => (isLark() ? '[Lark·DM] ' : '[飞书·DM] ');
   const groupPrefix = (threadId: string) =>
@@ -351,12 +369,29 @@ export function buildFeishuAdapter(
     processingEmoji: REACTION_PROCESSING,
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
+    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放
+    // 后的外部用户私聊(transport guests)按用户一条专线。
+    companionLane: (userId) => {
+      const lane = decodeFeishuLaneUserId(userId);
+      if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };
+      return userId === feishuIm.getOwnerOpenId() ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
+    },
 
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,
     // 注入可借 owner 轮次的宽松档执行危险操作; 确认卡经 deliverToOwnerDm
     // 改投 owner 私聊, 点击也只认 owner。DM 不挂, owner 私聊保持全速。
-    turnPermissionPolicyFor: (event) =>
-      event.speaker ? createFeishuGroupTurnPermissionPolicy(event.messageId, event.speaker.isOwner) : undefined,
+    // 伙伴自有 bot(2026-10-16 Chris 裁决): 伙伴设置里的权限档是唯一开关。主人触发的
+    // 轮次不另挂策略; 成员 / 外部用户触发的轮次只在破坏性动作上要主人确认, 口径与
+    // Telegram 一致(不用飞书个人 bot 的「非只读即确认」)。
+    turnPermissionPolicyFor: (event) => {
+      if (!event.speaker) return undefined;
+      if (companion) {
+        return event.speaker.isOwner
+          ? undefined
+          : createFeishuGroupTurnPermissionPolicy(event.messageId, false, 'destructive');
+      }
+      return createFeishuGroupTurnPermissionPolicy(event.messageId, event.speaker.isOwner);
+    },
     // 群护栏取缔: 用户在渠道设置里显式允许群会话用「完全访问」→ 该档位
     // 不再挂强确认策略(maker 不再拒绝, 按用户选择直接执行)。群上下文的
     // 防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
@@ -366,13 +401,39 @@ export function buildFeishuAdapter(
     // open_id(飞书事件不带显示名)。私聊写 p2p chat_id。
     channelNoteSourceFor: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
-      if (!lane) return { chatKind: 'direct', ...(event.chatId ? { chatId: event.chatId } : {}) };
+      const toolsHint = feishuToolsHint(feishuIm.getService());
+      // 私聊: 主人只写 chat_id; 对外开放后外部用户的私聊写明发言人、不是主人。
+      if (!lane) return { ...imChannelNoteDirectSourceFromEvent(event), toolsHint };
       const chatName = cachedChatNameForNote(feishuIm, lane.chatId);
       return {
         chatKind: 'group',
         chatId: lane.chatId,
         ...(chatName ? { chatName } : {}),
         ...(event.speaker?.id ? { senderId: event.speaker.id } : {}),
+        toolsHint,
+      };
+    },
+    // cindy_feishu_bot 轮次内工具的逐轮作用域: 目标 chat 就是触发消息所在的 chat / 话题; 触发者
+    // 是不是主人由 Main 校验过的 speaker / owner open_id 决定(不来自模型参数)。transport 就是
+    // 这条连接自己的 FeishuIM —— 伙伴自有连接的工具不会串到设置页那份 bot。
+    channelToolScopeFor: (event): FeishuToolScope => {
+      const lane = decodeFeishuLaneUserId(event.senderId);
+      const requesterIsOwner = lane
+        ? event.speaker?.isOwner === true
+        : event.speaker
+          ? event.speaker.isOwner
+          : event.senderId === feishuIm.getOwnerOpenId();
+      return {
+        channel: 'feishu',
+        im: feishuIm,
+        botId: event.contextId,
+        laneUserId: event.senderId,
+        chatId: lane ? lane.chatId : event.chatId,
+        threadId: lane ? lane.threadId : '',
+        chatKind: lane ? 'group' : 'direct',
+        requesterIsOwner,
+        triggerMessageId: event.messageId,
+        companion,
       };
     },
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。

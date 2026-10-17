@@ -128,6 +128,10 @@ describe('sidebar display settings menu', () => {
     expect(rows[0].textContent).toContain('项目、对话、设备');
     expect(rows[2].textContent).toContain('跟随任务');
     const submenu = await openSubmenu(/^任务排序/);
+    // PR #6196: preserve the historical glass-menu clipping regression through
+    // real unit DOM containment; content/click assertions alone miss a lost portal.
+    expect(root.contains(submenu)).toBe(false);
+    expect(document.body.contains(submenu)).toBe(true);
     expect(
       within(submenu)
         .getAllByRole('menuitem')

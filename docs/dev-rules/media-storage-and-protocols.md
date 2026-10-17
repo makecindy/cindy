@@ -32,6 +32,22 @@
   预览就复制一份。远程设备或 SSH 文件必须保留真实来源，不能把远程绝对路径当成本机路径。
 - docx、PDF、zip 等非媒体文件不进入媒体字节仓，继续使用已有 `xdt-file` 等受控文件
   通道。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
+- 飞书、Discord、Telegram、企业微信四个个人 IM 渠道的入站附件，去处只由 `@cindy/im` 的
+  `classifyInboundAttachment` 判定（MIME 或扩展名任一命中即可）：
+  - 图片与音视频经 `IMHost.media` 进总仓（`cacheImage` 一律带 `staging: true`，另有
+    `cacheMedia`），以可回收暂存写入。host 入仓前按真实字节核验类型（`im/shared/inboundMediaVerify.ts`），
+    消息落库时 pin 为用户附件；下载期间发生换代则回滚。
+  - 非媒体文件经 `IMHost.files` 暂存到按账号隔离的 `im-attachments/<渠道>/staging/`。消息路由到任务后，
+    由 `im/shared/turnRunner.ts` 调用 `adoptStagedInboundFiles`，把触发消息自己的附件移入
+    `im-attachments/<渠道>/sessions/<任务ID>/`。群历史附件和受保护内容不落库，留在暂存区按龄回收。
+    实现见 `im/shared/inboundFileStaging.ts`。
+  - host 缺对应能力或总仓拒收格式时标为不支持，不回落写 `cc-agent/*-media`。
+- 另外两个个人 IM 渠道暂未接入上述分流，各自保留现有做法：
+  - 钉钉只收图片，经 `cacheImage`（未带 `staging`）直接按用户附件入仓。
+  - 微信由 `im/wechat/mediaStaging.ts` 在已知任务后直接 `ingestMedia` 媒体，并把文件写入同一棵
+    `im-attachments/wechat/sessions/<任务ID>/`。
+  - 任务删除时，两者与上述四个渠道统一由 `removeImSessionAttachmentDirs` 清理。迁移这两个渠道前，
+    先对齐本条规则。
 
 ## 写入与记账
 
@@ -57,17 +73,61 @@
   不直接删除共享 blob；物理回收由 `recycler.ts` 根据账本统一处理。
 - `isCache: true` 只用于可以重新获取或重新生成的缓存。缓存一旦成为聊天历史、作品或其他
   不可再生用户内容，必须沿用现有 pin／引用流程转为不可按缓存回收。
+- 远程文件的长期复用（2026-10-16 用户要求）不以短 TTL 清空：媒体经 `ingestMedia` /
+  `integration-cache` 持久入仓，`remote-file` 命名空间按现有缓存预算自动 LRU 回收。
+  预算用量统计整个媒体仓的 cache 字节，但排除手动管理的 `remote-media` 长期副本；
+  命名空间只限制逐出候选，不另分配一份额度。
+  消费者持有独立副本，新写入的仓内缓存同样可逐出；其他缓存已占满额度时不强留新副本。
+  自动清理只接受该命名空间独占且仍为 `isCache` 的字节；扫描和条件删除都检查其他
+  引用与 pin，不能清理聊天附件或其他集成的共享字节。其他媒体清理维持原手动流程。
+  普通 HTML 等非媒体仍走 `remote-file-cache`。完整身份、复验与平台清理策略见
+  [`protocol-compatibility.md`](protocol-compatibility.md)「远程文件连接复用与版本缓存」。
+- 桌面聊天的不可变远程图片通过 `device-link/remoteMediaPersistentCache.ts` 复用媒体总仓，
+  `remote-media` 索引包含账号、来源设备和原始地址。先查内存、再查磁盘，缓存命中不取件；
+  重启和断连不清理，不增加自动到期或容量淘汰。设置中的「远程图片缓存」复用账本扫描和
+  条件删除，只清该命名空间独占的缓存，保护草稿、已保存附件及其他集成共享字节。
+  普通路径不按 URL 永久缓存：继续由主机复核版本，完整中转下载也可写入已有版本缓存；
+  控制端发送图片时，同一缓存还保留实际上传的字节（含压缩结果），按其最终内容地址登记，
+  覆盖直传与 OSS、文件选择与内存图片。不能用压缩前的本机原图代替历史消息中的压缩版本。
+  留存遵守远程协议既有的 64 MiB 整图读取上限，并核对上传大小、指纹和真实图片类型；
+  文件在上传后发生变化时不登记错误副本。上传开始时捕获账号与清理代次，迟到结果不能
+  写入新账号或重建用户刚清理的缓存。复用现有 `remote-media` 清理入口，不增设目录或 TTL。
+  音视频仍走流式播放。旧主机不返回版本时不把可修改文件登记为长期有效。
+  回归见 `remoteMediaPersistentCache.test.ts`、`remoteMediaProtocol.test.ts` 与 `storageIpc.test.ts`。
 - 零引用入仓只适用于已有草稿或生成结果提交链路。新增零引用窗口时，必须证明内容在消息
   落库前不会被回收，并用测试覆盖成功、失败、取消和重试。
-- 三款官方壁纸的高清 WebP 与 2304×1440 MP4 均随包，清单标记 `delivery: bundled`，
-  不访问 OSS/CDN，不重复打包低清视频。未来显式标记 `delivery: cdn` 的条目才启用
-  客户端级 CDN 下载，按清单字节数与 SHA-256 校验后入仓；当前清单保留引用，
-  下载成功后回收已不在清单的客户端视频，失败回退随包视频。
-  发布脚本只上传 CDN 条目，始终跳过 bundled 条目。发布命令为
-  `node --env-file=<发布配置> scripts/publish-wallpaper-videos.mjs --directory=<视频目录> --region=global`；
-  中国大陆版显式用 `--region=cn`，发布两区时分别执行。可加 `--verify-only` 离线核验。
-  CDN 文件名为 `<壁纸编号>-hd.mp4`；`--verify-only` 同时校验仓内内置视频。
+- 所有官方壁纸原图均为 OSS/CDN 按需分发（2026-10-17 用户裁决，将三款场景的已有下载链路
+  扩展到其余静态图片，替代静态原图随包的决定）。包内仅保留
+  `renderer/assets/wallpapers/previews/` 中的三款 640×400 WebP 与 `thumbnails/` 中的静态缩略图；
+  原始高清图和 2304×1440 MP4 保留为发布输入，不进入 Renderer 资源依赖图。
+  清单中静态条目只有 `delivery` 与 `image`，顶层视频元数据仅用于三款动态场景；
+  静态条目不暴露动态选项、不下载视频。默认无壁纸和浏览设置列表不下载，
+  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频；下载或解码失败保留可用背景。
+  传输复用统一下载器并保留 guardedOutboundFetch 的来源校验，清单大小及 SHA-256 校验后入仓。
+  缓存位于既有 `userData/cindy-media/client-wallpaper/`，仅以内容哈希和扩展名寻址，
+  **不含应用版本或账号**；启动与升级先核对本地文件，有效即返回，不请求 CDN。
+  只有文件缺失、损坏或素材哈希变化才重新下载。
+  官方 WebP、MP4 与自定义媒体的引用合并保留；切换壁纸及常规升级不删除当前清单内已下载素材。
+  回归见 `main/__tests__/wallpaperVideo.test.ts` 的升级离线复用及损坏修复测试，
+  `customWallpaper.test.ts` 覆盖自定义媒体操作不误删官方图片和视频。
+  发布脚本默认核验仓内原始素材，`--directory` 也接受按 hash 命名的导出目录或旧 `-hd.mp4` 输入。
+  `node scripts/publish-wallpaper-videos.mjs --verify-only` 离线核验；
+  `node scripts/publish-wallpaper-videos.mjs --check-cdn --region=global` 只读校验清单全部线上文件；
+  实际发布使用 `node --env-file=<发布配置> scripts/publish-wallpaper-videos.mjs --region=global`。
+  中国大陆版显式用 `--region=cn`，内部 dev 环境显式用 `--region=dev`；三个环境分别发布并校验，
+  资源先于对应客户端上线。只读校验优先读取本环境的 `XDT_GLOBAL_CDN_BASE_URL` / `XDT_CDN_BASE_URL` /
+  `XDT_DEVCH_CDN_BASE_URL`，未配置时读取对应 endpoint 文件；dev 不回落到生产配置。
+  对象名为 `wallpapers/<sha256>.webp` / `.mp4`；三款场景预览图可用
+  `node scripts/prepare-wallpaper-previews.mjs` 从原始图片重建，该组三张图的总预算为 300 KiB。
+  静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
+- 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
+  伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
+  复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按
+  总量上限与 LRU 统一回收，不另建目录、store 或协议。本机已有同指纹 blob 时直接使用，不再复制。只保存主机按
+  字节识别为图片、且不超过头像上限（5 MB）的内容；公开头像走共用的受控公网图片下载。两种地址各自不可变
+  （blob 地址即内容指纹，云端换头像会生成新地址），命中不需要重新校验。Renderer 经
+  `maker:companion-avatar:resolve` 先查本机副本，未命中时照常显示原地址并在后台保存一份。
 - 可再生 HTML 临时快照缓存是独立副本的例外：仅在快照已物化自己的文件、HTTP 服务不依赖
   媒体仓 blob、且该缓存不作为持久附件提交时，使用 `isCache: true` 和空引用入仓。
   必须验证媒体仓缓存不可用时快照仍可读取，以及重复打开、失败、取消和重试不新增业务引用；
@@ -181,7 +241,35 @@
   只证明工具链路可用，不能证明普通用户的使用路径已通过。
 - `import_image` 不是客户端展示图片的唯一入口。Agent 输出正常的本地 Markdown 图片时，
   客户端继续按当前任务的路径上下文和既有权限取件，不能因为没有调用指定工具而拒绝展示。
-  直接路径仍依赖源文件存在，不得把这种兼容展示表述成已持久入库。
+  已完成的 assistant 消息在写入及历史读取时，经 `taskImageDelivery.ts` 自动保存当前任务
+  工作目录、可验证的当前 Claude scratchpad 内的普通图片（单张最多 20 MiB）。成功后将
+  消息中的真实 Markdown 图片引用替换为 `cindy-media://` 并挂任务引用；代码示例与原生
+  Agent transcript 不改写，单张失败不阻塞正文或其它图片。IM 出站复用同一导入入口。
+  官方渠道只对整轮内容导入一次，最终正文复用该次导入的地址替换表；正文与附件扫描
+  指向同一副本，不因临时源文件在收口时删除或替换而再次读取出不同结果。
+  SSH 官方渠道不导入或读取控制端文件，仍复用出站引用清理：本地图片地址（含远端
+  Windows 路径）只保留说明，并提示附件发送不完整，不将不可用的媒体地址发到 IM。
+  与图片共用目标的普通链接也指向保存后的同一图片；外发时这些本地链接降为显示文字，
+  并清除对应引用定义，不能把原始路径留在 definition 中。网页链接和代码示例不改写。
+  兼容仅限 hostless `xdt-image:///绝对路径` / `xdt-file:///绝对路径` 图片引用；协议读取器
+  不放宽。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
+  自动导入在首次文件系统访问前拒绝 UNC、WebDAV 和 Windows 设备命名空间；先解码兼容
+  图片 URL，再检查路径，不能等 `realpath` 触发网络解析后才判断目录范围。
+  确认消息未发布时，新建引用的回滚复用原账号的补偿日志；旧数据库已关闭时保留待补偿 ID，
+  由原账号下一次就绪时的既有恢复流程删除，不向新账号写引用，也不回滚已发布的消息。
+  数据库提交回执丢失时保留引用，避免误删已提交消息的图片；不为此新增发布恢复队列。
+  已知中断边界：入库成功、消息地址尚未更新时进程退出，任务引用可能保留到任务删除。
+  源文件仍在时，下次读取消息会复用同一副本完成更新；源文件已被清理时无法仅凭原路径
+  找回副本，保留原消息且不宣称交付成功。本次不提供跨崩溃的导入与消息发布原子性。
+  导入、发布、回滚、普通消息挂引用与回退后的存活消息引用清理，共用 `ledger.ts` 的
+  同数据库、同任务串行入口。挂引用等待导入结算后再去重；清理等待发布或回滚后再判断
+  是否仍被消息引用，不能在正文尚未替换地址时删除导入正在复用的引用。
+  无可信 SDK session、原生长目录 hash 布局、SSH 或已删除源文件不能靠此恢复；未成功
+  导入的直接路径仍依赖源文件存在，不得声称已持久入库。
+- Desktop 的图片加载失败默认显示暂不可用，通过现有 preload 图片读取接口确认源文件
+  `ENOENT`（IPC `NOT_FOUND`）才显示缺失；不使用被受管协议 CORS 策略禁止的 renderer fetch。
+  流式输出时保留加载状态，流式结束、地址更新、窗口重新聚焦或网络恢复时自然重试，
+  不增加轮询。仅字节读取成功不触发重试，避免图片可读但不能解码时反复加载。
 - Mobile 自动预览本地 Markdown 图片仅限当前任务工作目录内；请求携带当前目录作为
   `baseDir`，Host 按真实路径复验，防止符号链接越界。目录外图片保留显式点击入口。
   正文图集收集同样复用此边界，避免查看器预取相邻页时绕过限制；目录外文字入口点击后

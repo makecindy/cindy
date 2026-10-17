@@ -18,7 +18,7 @@ import {
   type ConversationSearchDeviceOrigin,
   type ConversationSearchInvoke,
 } from '@/session/conversationSearch';
-import type { ConversationSearchResponse } from '@cindy/maker-shared/conversation-search';
+import type { ConversationSearchRequest, ConversationSearchResponse } from '@cindy/maker-shared/conversation-search';
 import type { RemoteSession } from '@/session/types';
 
 function session(partial: Partial<RemoteSession> & Pick<RemoteSession, 'id' | 'title'>): RemoteSession {
@@ -77,6 +77,39 @@ const studio: ConversationSearchDeviceOrigin = {
 };
 
 describe('searchConversationsAcrossDevices', () => {
+  it.each([1, 3, 24, 40])('finds ordinary hits behind %i Make hits on a bounded legacy host', async (hiddenCount) => {
+    const indexed = indexedPage([
+      ...Array.from({ length: hiddenCount }, (_entry, index) => 'make-' + index),
+      'ordinary-0', 'ordinary-1', 'ordinary-2', 'ordinary-3',
+    ]);
+    for (const [index, item] of indexed.results.slice(0, hiddenCount).entries()) {
+      item.session.source = index % 2 === 0 ? 'cindy-make' : 'cindy-make-merge';
+    }
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => {
+      const remoteRequest = args[0] as ConversationSearchRequest;
+      return { ...indexed, results: indexed.results.slice(0, Math.min(remoteRequest.limit ?? 20, 50)) };
+    });
+    const page = await searchConversationsAcrossDevices([studio], { query: 'needle', limit: 3 }, {
+      invoke: invoke as ConversationSearchInvoke,
+      getCachedSessions: () => [],
+    });
+
+    expect(page.results.map((item) => item.session.id)).toEqual(['ordinary-0', 'ordinary-1', 'ordinary-2']);
+    expect(page.results.every((item) => item.session.deviceLinkDeviceId === 'dev-a')).toBe(true);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('dev-a', 'local-db:conversations:search', [
+      expect.objectContaining({ limit: 50, semanticMode: 'keyword' }),
+    ]);
+  });
+
+  it('excludes Make hits returned by an older desktop before the result limit', async () => {
+    const indexed = indexedPage(['make', 'merge', 'ordinary']);
+    indexed.results[0].session.source = 'cindy-make';
+    indexed.results[1].session.source = 'cindy-make-merge';
+    const page = await searchConversationsAcrossDevices([studio], { query: 'needle', limit: 1 }, {
+      invoke: vi.fn(async () => indexed) as ConversationSearchInvoke, getCachedSessions: () => [],
+    });
+    expect(page.results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('stamps indexed hits and keeps one device failure from wiping the rest', async () => {
     const invoke = vi.fn(async (deviceId: string, channel: string) => {
       if (channel !== 'local-db:conversations:search') throw new Error(`unexpected ${channel}`);
@@ -208,6 +241,14 @@ describe('searchConversationsAcrossDevices', () => {
 });
 
 describe('searchCachedDeviceSessions', () => {
+  it('excludes Make titles and previews from the cache', () => {
+    const page = searchCachedDeviceSessions(studio, { query: 'needle', limit: 1 }, [
+      session({ id: 'make', title: 'needle', source: 'cindy-make' }),
+      session({ id: 'merge', title: 'Other', preview: 'needle', source: 'cindy-make-merge' }),
+      session({ id: 'ordinary', title: 'Needle notes', source: 'desktop' }),
+    ]);
+    expect(page.results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('matches the current device only', () => {
     const page = searchCachedDeviceSessions(
       studio,

@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+/**
+ * 「允许被远程调用」一行的「远程与分享」入口：有组时写组的台数，没有组时写「远程与分享」；
+ * 始终可点(供应商组不依赖远程调用)；有待审批申请时带提示点。
+ */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,36 +17,27 @@ vi.mock('react-i18next', () => ({
 afterEach(() => cleanup());
 
 describe('ProviderShareEntryButton', () => {
-  it('opens the management page when every capability is on', () => {
+  it('names the page when the provider has no group and opens it', () => {
     const onOpen = vi.fn();
-    render(<ProviderShareEntryButton gate="on" pendingCount={0} onOpen={onOpen} />);
+    render(<ProviderShareEntryButton groupSize={null} pendingCount={0} onOpen={onOpen} />);
     const button = screen.getByTestId('provider-share-entry');
-    expect(button.getAttribute('aria-label')).toBe('providerShare.entry.manage');
-    expect(button.getAttribute('aria-disabled')).toBeNull();
+    expect(button.textContent).toBe('providerShare.entry.label');
+    expect(button.getAttribute('aria-label')).toBeNull();
     expect(screen.queryByTestId('provider-share-entry-dot')).toBeNull();
     fireEvent.click(button);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a dot and the pending count when requests wait for approval', () => {
-    render(<ProviderShareEntryButton gate="on" pendingCount={2} onOpen={vi.fn()} />);
-    expect(screen.getByTestId('provider-share-entry').getAttribute('aria-label')).toBe(
-      'providerShare.entry.manageWithPending:2',
-    );
-    expect(screen.getByTestId('provider-share-entry-dot')).toBeTruthy();
+  it('shows how many computers the group has instead of a separate group row', () => {
+    render(<ProviderShareEntryButton groupSize={3} pendingCount={0} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('provider-share-entry').textContent).toBe('settings.providers.remote.groupBadge:3');
   });
 
-  it.each([
-    ['invocation-off', 'providerShare.entry.disabledInvocation'],
-    ['remote-off', 'providerShare.entry.disabledRemoteControl'],
-  ] as const)('stays visible but unavailable when %s, explaining which step to enable', (gate, label) => {
-    const onOpen = vi.fn();
-    render(<ProviderShareEntryButton gate={gate} pendingCount={3} onOpen={onOpen} />);
-    const button = screen.getByTestId('provider-share-entry');
-    expect(button.getAttribute('aria-disabled')).toBe('true');
-    expect(button.getAttribute('aria-label')).toBe(label);
-    expect(screen.queryByTestId('provider-share-entry-dot')).toBeNull();
-    fireEvent.click(button);
-    expect(onOpen).not.toHaveBeenCalled();
+  it('shows a dot and the pending count when requests wait for approval', () => {
+    render(<ProviderShareEntryButton groupSize={2} pendingCount={2} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('provider-share-entry').getAttribute('aria-label')).toBe(
+      'settings.providers.remote.groupBadge:2 · providerShare.entry.pending:2',
+    );
+    expect(screen.getByTestId('provider-share-entry-dot')).toBeTruthy();
   });
 });

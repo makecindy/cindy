@@ -216,6 +216,7 @@ const remoteOptimisticRecoveryBatchSnapshots = new WeakMap<
   Map<string, RemoteOptimisticDraftSnapshot>
 >();
 let remoteOptimisticAttachmentUrls: string[] = [];
+let botGroupOutboxAttachmentUrls: string[] = [];
 let activeDataOwnerId: string | null = null;
 
 /**
@@ -723,7 +724,7 @@ export function restoreRemoteOptimisticDraft(
  * 没关系，main 侧只抽 cindy-media 指纹)。
  */
 export function getAllDraftAttachmentUrls(): string[] {
-  const urls = new Set<string>(remoteOptimisticAttachmentUrls);
+  const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls]);
   // Owner switches retain each owner's draft so switching back can restore it.
   // Protect every retained namespace as well; reporting only the active owner
   // would leave an old owner's still-restorable attachment eligible for sweep.
@@ -752,6 +753,23 @@ export function setRemoteOptimisticAttachmentUrls(urls: readonly string[]): void
     return;
   }
   remoteOptimisticAttachmentUrls = next;
+  syncDraftUrlsToMain();
+}
+
+/**
+ * Keep media held by group chat messages that left the composer but are still being
+ * sent or kept for 重试 live (botGroupOutbox.ts). A separate slot: the task outbox above
+ * replaces its own list wholesale.
+ */
+export function setBotGroupOutboxAttachmentUrls(urls: readonly string[]): void {
+  const next = [...new Set(urls)].sort();
+  if (
+    next.length === botGroupOutboxAttachmentUrls.length &&
+    next.every((url, index) => url === botGroupOutboxAttachmentUrls[index])
+  ) {
+    return;
+  }
+  botGroupOutboxAttachmentUrls = next;
   syncDraftUrlsToMain();
 }
 

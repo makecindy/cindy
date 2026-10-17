@@ -3,6 +3,7 @@ import {
   buildClientDeviceNote,
   buildMessageSourceNote,
   describeMessageSourceSender,
+  isCrossDeviceSourceSessionId,
   messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
@@ -137,6 +138,14 @@ describe('messageSourceSenderFromMeta', () => {
 });
 
 describe('messageSourceIdEntries', () => {
+  it('uses the same MCP server identity for UI hints and model source notes', () => {
+    const meta = { sourcePlugin: { pluginId: 'mcp-app:reports', name: 'Reports' } };
+    expect(messageSourceIdEntries(meta)).toEqual([{ kind: 'mcpApp', id: 'reports' }]);
+    expect(describeMessageSourceSender(messageSourceSenderFromMeta(meta)!)).toBe(
+      '由 MCP App「Reports」(mcp_server_id: reports) 发送',
+    );
+  });
+
   it('lists the ids of the visible sender label, in the same priority as the label', () => {
     expect(
       messageSourceIdEntries({
@@ -242,5 +251,14 @@ describe('private group reply provenance', () => {
     expect(readMessageSourceGroup(meta)).toEqual({ groupId: 'group-1', name: 'Design Room' });
     expect(describeMessageSourceSender(messageSourceSenderFromMeta(meta)!)).toContain('从群聊「Design Room」(group_id: group-1)');
     expect(readMessageSourceGroup({ sourceGroup: { name: 'No identity' } })).toBeUndefined();
+  });
+});
+
+describe('isCrossDeviceSourceSessionId', () => {
+  it('recognizes only a device-qualified source task id', () => {
+    expect(isCrossDeviceSourceSessionId('dev-A::task-1')).toBe(true);
+    for (const local of [undefined, '', 'task-1', '::task-1', 'dev-A::']) {
+      expect(isCrossDeviceSourceSessionId(local)).toBe(false);
+    }
   });
 });

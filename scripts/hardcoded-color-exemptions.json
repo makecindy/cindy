@@ -106,7 +106,7 @@
  },
  {
   "glob": "apps/desktop/src/renderer/components/ui/toast/Toast.tsx",
-  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 已导出供 toastColors 守)",
+  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 使用已批准的语义色)",
   "owner": "E5D",
   "matches": [
    {
@@ -135,11 +135,6 @@
   "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
-  "glob": "apps/desktop/src/renderer/__tests__/toastColors.test.ts",
-  "reason": "E5D Toast 四色定稿单测(期望 hex)",
-  "owner": "E5D"
- },
- {
   "glob": "apps/desktop/src/renderer/__tests__/themePermissionColors.test.ts",
   "reason": "E5D Auto Approval 默认值单测(期望 hex #417CDD)",
   "owner": "E5D"
@@ -148,11 +143,6 @@
   "glob": "apps/desktop/src/renderer/components/splash/SplashScreen.tsx",
   "reason": "E6/E6-B splash 双模式:进度条双套白黑 alpha(既有值恢复)+ hsl(var()) 双模式取色(膘叔交付,阿梅 E6-B-R PASS)",
   "owner": "E6"
- },
- {
-  "glob": "apps/desktop/src/renderer/__tests__/newMakerCreateAgentVisualContract.test.ts",
-  "reason": "合同测试值守护断言(expect toContain hex),非样式硬编码",
-  "owner": "E2"
  },
  {
   "glob": "apps/desktop/src/renderer/components/new-chat/*.tsx",

@@ -24,6 +24,17 @@ export interface AppearanceOverrides {
 
 export type WallpaperMotion = 'static' | 'dynamic';
 
+export const WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL =
+  'appearance-settings:wallpaper-download-progress';
+
+/** Local Desktop transfer telemetry; never persisted or sent through device-link. */
+export interface WallpaperDownloadProgress {
+  wallpaperId: WallpaperId;
+  kind: 'image' | 'video';
+  loaded: number;
+  total: number;
+}
+
 export interface AppearanceSettings {
   uiFamily: string;
   codeFamily: string;
@@ -61,13 +72,43 @@ export const APPEARANCE_LIMITS = {
   wallpaperBlur: { min: 0, max: 20, step: 1 },
 } as const;
 
-export const WALLPAPER_IDS = [
+/** Current picker order; saved selections also accept the hidden compatibility IDs below. */
+export const SELECTABLE_WALLPAPER_IDS = [
   'none',
   'cindy-window',
   'cindy-studio',
   'cindy-dream',
+  'cindy-whisper',
+  'cindy-crimson',
+  'cindy-night-glance',
+  'cindy-scarlet-stroll',
+  'cindy-neon',
+  'cindy-prism',
+  'wheatfield-watch',
+  'teacup-cat',
+  'moon-solitude',
+  'night-launch',
+  'stardust-vortex',
+  'silent-orbits',
+  'dune-dawn',
+  'planet-dawn',
+  'neon-valley',
+  'silent-circuit',
+  'indigo-folds',
+  'cloud-roaming',
+  'dune-sphere',
+  'ocean-clouds',
+  'blush-leaves',
+  'white-wilderness',
+  'rose-quartz',
+  'silver-veins',
+  'dawn-arc',
+  'tidal-lines',
   'custom',
 ] as const;
+
+/** Keep already-selected artwork working when a choice is removed from the picker. */
+export const WALLPAPER_IDS = [...SELECTABLE_WALLPAPER_IDS, 'blue-gaze', 'amber-light'] as const;
 export type WallpaperId = (typeof WALLPAPER_IDS)[number];
 
 export function normalizeCustomWallpaperUrl(value: unknown): string {

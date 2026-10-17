@@ -13,7 +13,7 @@ import ko from '@/i18n/locales/ko/common.json';
 import type { CindyMakeHistoryState } from '../../../../shared/cindyMakeHistory';
 import { CindyMakeHistoryPanel } from '../CindyMakeHistoryPanel';
 import { CindyMakeVersionsPanel } from '../CindyMakeVersionsPanel';
-import { CindyMakeMergeNotice } from '../CindyMakeMergeNotice';
+import { CindyMakeSyncStatus } from '../CindyMakeSync';
 
 const h = vi.hoisted(() => ({ make: {}, error: vi.fn(), success: vi.fn() }));
 vi.mock('@/lib/cindyMakeState', () => ({ useCindyMakeState: () => h.make }));
@@ -313,15 +313,12 @@ describe('Cindy Make history with real translations', () => {
           <I18nextProvider i18n={i18n}>
             <CindyMakeVersionsPanel />
             <CindyMakeHistoryPanel hasPersonalVersion />
-            <CindyMakeMergeNotice
+            <CindyMakeSyncStatus
               state={{
-                id: 'merge',
-                status: 'conflict',
-                error: 'checksFailed',
-                ref: 'main',
-                upstreamCommit: 'a'.repeat(40),
-                hasWorkspace: true,
+                waiting: { kind: 'official', reason: 'missing', missing: 2, sessionId: 'merge' },
               }}
+              onAccept={() => undefined}
+              onAbandon={() => undefined}
             />
           </I18nextProvider>
         </MemoryRouter>,
@@ -355,7 +352,10 @@ describe('Cindy Make history with real translations', () => {
         'round-a',
         'round-b',
       ]);
-      expect(screen.getByRole('button', { name: resource.cindyMake.merge.resolve })).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: resource.cindyMake.sync.accept.action }),
+      ).toBeTruthy();
+      expect(screen.getByRole('button', { name: resource.cindyMake.merge.openTask })).toBeTruthy();
       expect(i18n.t('settings.cindyMake.tabs.versions')).toBe(
         resource.settings.cindyMake.tabs.versions,
       );

@@ -3,6 +3,7 @@ import { app } from 'electron';
 import { writeBlob } from '../../cindy-media/blobStore.js';
 import { recordBlob, type LedgerDb } from '../../cindy-media/ledger.js';
 import { sniffImageMime } from '../../lightboxMediaActions.js';
+import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
 import { BOT_AVATAR_MAX_BYTES } from '../../../shared/botAvatarValue.js';
@@ -37,14 +38,20 @@ export function decodeBotAvatarImage(value: unknown): { buffer: Buffer; mimeType
   return { buffer, mimeType: validateBotAvatarBuffer(buffer) };
 }
 
-/** Shared upload/migration ingress; the caller atomically attaches the returned blob to the profile. */
+/**
+ * Shared upload/migration ingress; the caller atomically attaches the returned blob to the profile.
+ * HDR uploads (local picker, phone, import) are stored as real SDR bytes; SDR bytes are unchanged.
+ */
 export async function storeTeammateAvatarImage(
   image: { buffer: Buffer; mimeType: string },
   db: LedgerDb,
   assertCurrent: () => void,
 ) {
   assertCurrent();
-  const written = await writeBlob({ buffer: image.buffer, mimeType: validateBotAvatarBuffer(image.buffer) });
+  validateBotAvatarBuffer(image.buffer);
+  const sdr = await toSdrAvatarImage(image);
+  assertCurrent();
+  const written = await writeBlob({ buffer: sdr.buffer, mimeType: validateBotAvatarBuffer(sdr.buffer) });
   assertCurrent();
   await recordBlob({ hash: written.hash, ext: written.ext, mimeType: written.mimeType, bytes: written.bytes, isCache: false }, db);
   assertCurrent();

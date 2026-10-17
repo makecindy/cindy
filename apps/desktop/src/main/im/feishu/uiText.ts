@@ -37,6 +37,12 @@ export const ui = {
     detachedBySlash: '🚪 接管结束，咱们回到私聊频道。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的私聊。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
+    // 连接已交给伙伴(伙伴即 IM 本体)时的命令提示。
+    companionDmNew:
+      '🧭 这里是伙伴的主对话，会一直接着聊，不会另开新任务。想换个话题直接说就好；需要单独做的事，伙伴会自己开后台任务。',
+    companionLaneNew: '🌱 已为这个群开始一段新对话，之前的上下文收起来了，从头开始吧~',
+    companionManagedCommand:
+      '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。',
   },
 
   // ── agent runtime feedback ─────────────────────────────────────────────────
@@ -87,6 +93,7 @@ export const ui = {
     unsupportedNotice: (entries: IMUnsupportedEntry[]) =>
       `ℹ️ 以下内容我消化不了，先丢一边了：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
       `其它部分收到啦，正在处理~`,
+    companionUnavailable: (reason: string) => `⏸ 伙伴现在接不了消息：${reason.slice(0, 200)}`,
   },
 
   // ── pre-dispatch 失败细分文案 ──────────────────────────────────────────────

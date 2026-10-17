@@ -11,10 +11,11 @@ let db: Database.Database;
 beforeEach(() => {
   h.current = true;
   db = new Database(':memory:');
-  db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT);
+  db.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT, hidden_at INTEGER);
     CREATE TABLE bot_session_links(session_id TEXT PRIMARY KEY, bot_id TEXT);
     CREATE TABLE bot_profiles(id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT);
-    INSERT INTO sessions VALUES ('ordinary','desktop'),('visible','bot'),('hidden','bot'),('archived','bot'),('orphan','bot');
+    INSERT INTO sessions(id, source) VALUES ('ordinary','desktop'),('visible','bot'),('hidden','bot'),('archived','bot'),('orphan','bot');
+    INSERT INTO sessions(id, source, hidden_at) VALUES ('background','plugin',5);
     INSERT INTO bot_profiles VALUES ('v',NULL,'active'),('h',1,'active'),('a',NULL,'archived');
     INSERT INTO bot_session_links VALUES ('visible','v'),('hidden','h'),('archived','a');`);
   h.db = drizzle(db);
@@ -31,6 +32,11 @@ describe('batch DB visibility', () => {
     for (const id of ids) expect(await readRemoteBotSessionAccess(id)).toBe(result.get(id));
     expect(Object.fromEntries(await readRemoteBotSessionAccessBatch(['v','h','a','no'], 'bot')))
       .toEqual({ v:'visible', h:'hidden', a:'hidden', no:'missing' });
+  });
+  it('marks plugin background tasks as background, not hidden', async () => {
+    expect(await readRemoteBotSessionAccess('background')).toBe('background');
+    db.exec("UPDATE sessions SET hidden_at=NULL WHERE id='background'");
+    expect(await readRemoteBotSessionAccess('background')).toBe('ordinary');
   });
   it('bounds queries and denies the entire result when ownership changes', async () => {
     const select = vi.spyOn(h.db!, 'select');

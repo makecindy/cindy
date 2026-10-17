@@ -44,11 +44,12 @@ it('continues to hide unexpected provider failures from mobile', async () => {
   await expect(invoke()).rejects.toThrow('[INTERNAL] remote resource provider failed');
 });
 
-it.each([false, true])('negotiates chunk reads without changing the legacy resource (%s)', async supported => {
+it.each([false, true])('negotiates chunk reads and the bots category without changing the legacy resource (%s)', async supported => {
   h.channel = 'maker:remote-resources:get';
   h.remote.mockResolvedValueOnce({ preview: { id: 'preview', entries: [] } });
-  await h.handlers.get('maker:remote-resources:get')!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' }, client: { protocolVersion: 1, primitives: ['companion-import', ...(supported ? ['companion-import-chunks-v1'] : [])] } });
-  expect(h.remote).toHaveBeenLastCalledWith('preview:source', 'phone', supported);
+  await h.handlers.get('maker:remote-resources:get')!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' }, client: { protocolVersion: 1, primitives: ['companion-import', ...(supported ? ['companion-import-chunks-v1', 'companion-import-bots-v1'] : [])] } });
+  // A controller that never advertised the bots category keeps receiving bots under connections.
+  expect(h.remote).toHaveBeenLastCalledWith('preview:source', 'phone', supported, supported);
 });
 
 it('acknowledges a selection chunk without navigating before the host accepts the full import', async () => {

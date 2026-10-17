@@ -1,3 +1,5 @@
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { CodexResetCredits } from './CodexResetCredits';
 import {
   FIVE_HOUR_WINDOW_MINUTES,
   formatCompactTimeUntilReset,
@@ -15,6 +17,10 @@ import { useProviders } from '@/hooks/useProviders';
  */
 
 import React from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { X } from 'lucide-react';
+import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { summarizeCodexRateLimitReset } from '@cindy/maker-shared/session-controls';
@@ -1006,6 +1012,7 @@ export function TodaySpendChip({
     usesCodexQuotaForm && !isAnyRemoteSession,
     providerId ?? 'openai',
   );
+  const manualReset = useCodexRateLimitReset(codexRateLimits, refreshCodexRateLimits, providerId ?? 'openai');
   // xAI 限流快照同为本机 main 抓的 —— SSH 远程仍抑制回落价值估算;device-link 远程
   // 走被控端镜像(订阅周用量 invoke + push,限流头 push-only,与本机同语义降级)。
   // 本机侧按所选供应商账号取(多账号供应商,#4197 / #4246:限流 hook 同样带 providerId)。
@@ -1061,6 +1068,7 @@ export function TodaySpendChip({
   const [quotaPopoverPortalHost, setQuotaPopoverPortalHost] = React.useState<HTMLDivElement | null>(
     null,
   );
+  const [resetListOpen, setResetListOpen] = React.useState(false);
   const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
   const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
   const quotaPopoverPointerInsideRef = React.useRef(false);
@@ -1220,6 +1228,7 @@ export function TodaySpendChip({
       identity,
     };
     if (!contextInvalidated) return;
+    setResetListOpen(false);
 
     // provider / model 或任务切换会原地复用组件；在新 chip 节点挂载后同步收口旧弹窗，
     // 清掉 hover / focus 残态与悬空 timer，并把卡片接管的键盘焦点交还给当前 chip。
@@ -1508,10 +1517,25 @@ export function TodaySpendChip({
     // accountUsage / xai / claude 快照均已在上方切到被控端镜像,与本机同一套卡片渲染。
     if (!remoteHostId) {
       account = usesCodexQuotaForm
-        ? buildCodexUsageCard(accountUsage, codexResetSummary, t, windowLabelNowMs, formatterLocale)
+        ? buildCodexUsageCard(
+            accountUsage,
+            !isAnyRemoteSession && codexRateLimits?.rateLimitResetCredits ? null : codexResetSummary,
+            t,
+            windowLabelNowMs,
+            formatterLocale,
+          )
         : usesXaiQuotaForm
           ? buildXaiUsageCard(xaiSubscriptionUsage, xaiRateLimit, t, windowLabelNowMs)
           : buildClaudeUsageCard(claudeSubscriptionUsage, t);
+      // Identity and quota must come from the same provider on the same execution device.
+      const identityProvider = quotaProviders.find(
+        (provider) =>
+          provider.id ===
+          (providerId ?? (usesCodexQuotaForm ? 'openai' : usesXaiQuotaForm ? 'xai' : 'anthropic')),
+      );
+      account.identity = usesCodexQuotaForm
+        ? identityProvider?.openAiAccount?.identity
+        : identityProvider?.subscriptionAccount?.identity;
     }
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t);
@@ -1646,7 +1670,7 @@ export function TodaySpendChip({
       onFocusCapture={refreshCodexRateLimits}
     >
       <Popover
-        open={quotaPopoverOpen}
+        open={quotaPopoverOpen && !resetListOpen}
         onOpenChange={(open) => {
           // 打开只由 hover / focus 驱动；Radix 的 outside / Escape 仍可请求关闭。
           if (!open) closeQuotaPopoverImmediately();
@@ -1742,7 +1766,7 @@ export function TodaySpendChip({
             quotaPopoverOpenSourceRef.current = null;
             scheduleQuotaPopoverClose();
           }}
-          className="w-[340px] max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
+          className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
             account={account}
@@ -1752,9 +1776,59 @@ export function TodaySpendChip({
             dashboardLabel={usageDashboardLabel}
             onOpenDashboard={handleClick}
             dashboardButtonRef={quotaPopoverDashboardButtonRef}
+            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
+              <Button size="xs" compact tone="quiet" aria-label={t('codexResets.title')} title={t('codexResets.title')}
+                onClick={() => {
+                  quotaPopoverFocusTakenRef.current = false;
+                  closeQuotaPopoverImmediately();
+                  setResetListOpen(true);
+                }}>
+                {manualReset.canRetry ? t('codexResets.retryReset') : t('codexResets.available', { count: codexRateLimits?.rateLimitResetCredits?.availableCount ?? 0 })}
+              </Button>
+            ) : null}
           />
         </PopoverContent>
       </Popover>
+      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession} onOpenChange={setResetListOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            onPointerDownOutside={(event) => event.preventDefault()}
+            className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              // The confirmation owns focus when it opens after this dialog closes.
+              if (!manualReset.busy) {
+                quotaPopoverFocusTakenRef.current = true;
+                restoreQuotaPopoverFocus();
+              }
+            }}
+          >
+            <Dialog.Title className="sr-only">{t('codexResets.title')}</Dialog.Title>
+            <div className="max-h-[60vh] overflow-y-auto">
+              <CodexResetCredits variant="dialog" snapshot={codexRateLimits} busy={manualReset.busy}
+                canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => {
+                  setResetListOpen(false);
+                  const context = quotaPopoverContextRef.current.identity;
+                  void manualReset.reset(credit).finally(() => {
+                    if (quotaPopoverContextRef.current.identity !== context) return;
+                    quotaPopoverFocusTakenRef.current = true;
+                    restoreQuotaPopoverFocus();
+                  });
+                }} />
+            </div>
+            <Dialog.Close asChild>
+              <Tip text={t('common.dismiss')} contentClassName="z-[10001]">
+                <button type="button" aria-label={t('common.dismiss')}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-[var(--confirm-desc)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Tip>
+            </Dialog.Close>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       {confettiBurst && (
         <QuotaResetConfetti
           key={confettiBurst.nonce}

@@ -1,4 +1,5 @@
 import { compatibilityProtocol } from '@cindy/model-compat/protocol';
+import { PI_MODEL_APIS } from './types.js';
 import type {
   AgentKind,
   CatalogModel,
@@ -18,8 +19,8 @@ export function modelProtocolComparison(
 ) {
   // Canonical protocol is model metadata, never reverse-engineered from a harness configuration.
   const declared = Object.values(models)
-    .filter((m) => m.nativeApi !== undefined)
-    .map((m) => m.nativeApi);
+    .map((m) => m.nativeApi)
+    .filter((api): api is PiModelApi | null => api === null || PI_MODEL_APIS.some(value => value === api));
   const reference: PiModelApi | null = declared.length
     ? new Set(declared).size === 1
       ? declared[0]!

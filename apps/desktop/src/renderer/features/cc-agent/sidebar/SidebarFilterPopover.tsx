@@ -197,8 +197,8 @@ export interface SidebarFilterPopoverProps {
   /** 当前范围内无项目任务数,用来在项目筛选里画「对话」选项。 */
   dialogueCount?: number;
   /**
-   * 是否有远程设备连接(E 期)。「按设备分组」与顶部设备切换栏同一出现条件:
-   * 仅远程连接时显示;仅本机时该选项整行隐藏。
+   * 是否有可选的远程设备（含断线缓存）。设备仍在切换栏可选时保留分组选项，
+   * 仅剩本机或被拒设备时隐藏，不因连接状态抖动改变分组。
    */
   hasRemoteDevices?: boolean;
   /**

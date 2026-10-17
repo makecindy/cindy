@@ -23,7 +23,10 @@ export interface DeliverSessionEventDeps {
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerTerminalTurn'> | null;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
-    'onExternalTurnSettled' | 'isAutoResumePending' | 'isAutoResumeDeferred'
+    | 'onExternalTurnSettled'
+    | 'isAutoResumePending'
+    | 'isAutoResumeDeferred'
+    | 'getProviderGroupSwitchHoldId'
   > | null;
   readonly overflowSuppressedBroadcasts: Map<
     string,
@@ -49,9 +52,15 @@ export interface DeliverSessionEventDeps {
   readonly settlePendingSessionRuntimeControlHolder:
     ((sessionId: string, reason: string) => void) | null;
   readonly deferredCodexRestartHolder: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
+  readonly gatewayCodexRestartHolder?: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null;
   readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
   readonly gitSnapshotCoordinator: Pick<GitSnapshotCoordinator, 'onTurnEnd' | 'onTurnAbort'> | null;
+  /**
+   * 智能体回合因 Cindy AI Key 失效终止时调用(按本机当前 Key 上报,触发凭据重新同步)。
+   * 智能体不会回报自己用的是哪把 Key。
+   */
+  readonly reportAgentCindyGatewayKeyRejected?: () => void;
 }
 
 export function deliverSessionEvent(
@@ -74,6 +83,9 @@ export function deliverSessionEvent(
   } = prepared;
   let { persistId } = stream;
   const { resolvedContent } = stream;
+  // 所有会话的终态事件都经过这里(不受 Agent Island 的会话过滤影响):回合因 Cindy AI
+  // Key 失效结束时,让 model-access 重新拉取凭据。判定复用 isGatewayProxyTokenRecoveryErrorEvent。
+  if (isGatewayProxyTokenRecovery) deps.reportAgentCindyGatewayKeyRejected?.();
   // 先 broadcast 保 UI 实时性,再 flush(flush 只入队、不阻塞)。
   // Keep the raw event for main-side coordination/persistence, but only
   // cross renderer/device-link boundaries with the redacted copy.
@@ -97,6 +109,12 @@ export function deliverSessionEvent(
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&
     (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data));
+  // 供应商组正在为这次失败换电脑：error 行先不落库(暂存，换成了就丢掉)，同样不预留 persistId。
+  // 协调器在 prepare 阶段同步登记，结算都是异步的，这里与 terminal 阶段看到的是同一次登记。
+  const providerGroupHoldId =
+    event.type === 'error' && isTerminalTurnErrorEvent(event)
+      ? (deps.agentInputCoordinatorHolder?.getProviderGroupSwitchHoldId(session.id) ?? null)
+      : null;
   if (
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&
@@ -104,7 +122,8 @@ export function deliverSessionEvent(
     !isRemoteAuthRetry &&
     !isGatewayProxyTokenRecovery &&
     !autoResumeWouldSuppressPersist &&
-    !suppressOverflowBroadcast
+    !suppressOverflowBroadcast &&
+    providerGroupHoldId === null
   ) {
     persistId = reserveTurnErrorPersistId(
       session.id,
@@ -151,6 +170,7 @@ export function deliverSessionEvent(
     deps.settlePendingCredentialSwitch(session.id, `event:${event.type}`);
     deps.settlePendingSessionRuntimeControlHolder?.(session.id, `event:${event.type}`);
     deps.deferredCodexRestartHolder?.onSessionSettled();
+    deps.gatewayCodexRestartHolder?.onSessionSettled();
     deps.agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
     deps.refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
   } else if (shouldMarkTurnStatusIdleAfterBroadcast) {
@@ -172,7 +192,7 @@ export function deliverSessionEvent(
   if (isTerminalTurnErrorEvent(event)) {
     deps.gitSnapshotCoordinator?.onTurnAbort(session.id);
   }
-  return { persistId, workerTerminalCapture };
+  return { persistId, workerTerminalCapture, providerGroupHoldId };
 }
 
 export type SessionDeliveryResult = ReturnType<typeof deliverSessionEvent>;

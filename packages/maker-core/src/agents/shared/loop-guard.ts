@@ -36,9 +36,11 @@ const STABLE_READ_DISTINCT_LIMIT = 32;
 const STABLE_READ_MIN_REPEATS = 4;
 const READ_ONLY_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'read', 'grep', 'find', 'ls']);
 /**
- * 节奏判据:本次普通调用距上一次普通调用开始至少这么久,说明模型在等外部进度
- * (sleep 后再查 CI、命令内自带等待、慢推理),不是快速空转。这类结果不计入
- * 第 1-3 层的重复判据,只受下方两条最终上限约束。
+ * 节奏判据:本次普通调用距上一次普通调用开始至少这么久,或本次结果距上一次普通结果
+ * 到达至少这么久,说明模型在等外部进度(sleep 后再查 CI、命令内自带等待、慢推理),
+ * 不是快速空转。看结果间隔是因为模型可能一次发出多条相同的等待命令、再逐条排队执行:
+ * 发出时刻挨在一起,实际每条都等了很久。这类结果不计入第 1-3 层的重复判据,只受下方
+ * 两条最终上限约束。
  */
 const DEFAULT_PACED_INTERVAL_MS = 30_000;
 /** 最终上限:快速(非节奏)的完全相同调用连续达到此数,不经复核直接判定。 */
@@ -210,7 +212,7 @@ export interface ToolLoopGuardOptions {
   rotationDistinctLimit?: number;
   /** 第 4 层:同工具同类契约错误连续多少次判止损。 */
   contractConsecutiveLimit?: number;
-  /** 两次普通调用开始间隔达到此值即视为节奏轮询,不计入重复判据。 */
+  /** 两次普通调用开始间隔或结果到达间隔达到此值即视为节奏轮询,不计入重复判据。 */
   pacedIntervalMs?: number;
   /** 快速完全相同调用的最终上限(不经复核)。 */
   finalConsecutiveLimit?: number;
@@ -254,8 +256,8 @@ export type ToolLoopGuardVerdict =
  * 不按调用总数或任意长度的重复序列硬中断:仅凭工具 trace 无法区分合法批处理、
  * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。因此 1-4 层的命中
  * 都是"疑似"(final=false),调用方可交给辅助模型复核;复核放行后由
- * acceptCurrentPattern() 暂缓疑似判定。距上一次普通调用 ≥ pacedIntervalMs
- * 才开始的调用视为节奏轮询,不计入重复判据。两条最终上限(快速完全相同
+ * acceptCurrentPattern() 暂缓疑似判定。距上一次普通调用开始或上一次普通结果
+ * 到达 ≥ pacedIntervalMs 的结果视为节奏轮询,不计入重复判据。两条最终上限(快速完全相同
  * 连续 finalConsecutiveLimit 次、完全相同结果持续 finalStreakMs)与长只读
  * 轮转不经复核直接判定(final=true)。
  *
@@ -283,6 +285,7 @@ export class ToolLoopGuard {
 
   // 节奏判据与复核材料
   private lastOrdinaryStartedAt: number | null = null;
+  private lastOrdinaryFinishedAt: number | null = null;
   private evidence: ToolLoopEvidence[] = [];
   /** 复核放行后,接下来还有多少次普通结果不报疑似。 */
   private suspicionGraceResults = 0;
@@ -393,9 +396,13 @@ export class ToolLoopGuard {
     if (isPollingTool(toolUse.name, toolUse.input, isError)) return { kind: 'ok' };
     this.lastResultObservedValue = true;
 
-    const paced = this.lastOrdinaryStartedAt !== null
-      && toolUse.startedAt - this.lastOrdinaryStartedAt >= this.pacedIntervalMs;
+    const finishedAt = this.now();
+    const paced = (this.lastOrdinaryStartedAt !== null
+      && toolUse.startedAt - this.lastOrdinaryStartedAt >= this.pacedIntervalMs)
+      || (this.lastOrdinaryFinishedAt !== null
+        && finishedAt - this.lastOrdinaryFinishedAt >= this.pacedIntervalMs);
     this.lastOrdinaryStartedAt = Math.max(this.lastOrdinaryStartedAt ?? toolUse.startedAt, toolUse.startedAt);
+    this.lastOrdinaryFinishedAt = finishedAt;
     this.recordEvidence(toolUse, output, isError);
     const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
     const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
@@ -592,6 +599,7 @@ export class ToolLoopGuard {
     this.streakResults = 0;
     this.streakStartedAt = 0;
     this.lastOrdinaryStartedAt = null;
+    this.lastOrdinaryFinishedAt = null;
     this.evidence = [];
     this.suspicionGraceResults = 0;
     this.callWindow = [];

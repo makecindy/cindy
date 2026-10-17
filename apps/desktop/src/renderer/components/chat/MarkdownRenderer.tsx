@@ -12,6 +12,8 @@
  */
 
 import { Tip } from '@/components/ui/tooltip';
+import { useImageLoadFailure } from './useImageLoadFailure';
+import { ChatLoadingImage } from './ChatLoadingImage';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
@@ -51,7 +53,7 @@ import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
-import { Check, Copy, FolderOpen } from 'lucide-react';
+import { Check, Copy, FolderOpen, ArrowUpRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
@@ -124,9 +126,11 @@ import { useFileChipContextMenu } from './useFileChipContextMenu';
 import {
   isHtmlFilePath,
   openHtmlFileByPreference,
-  openUrlByPreference,
+  activateMessageUrl,
   useOpenWithMenu,
 } from './useOpenWithMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
+import { useLinkContextMenu } from './useLinkContextMenu';
 
 /**
  * Recursively flatten an arbitrary react-markdown children tree into a
@@ -842,15 +846,17 @@ function LightboxImage({
   src,
   alt,
   onZoom,
+  streaming = false,
   ...props
 }: {
   src?: string;
   alt?: string;
   onZoom: (src: string) => void;
+  streaming?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
-  const [hasError, setHasError] = useState(false);
+  const { status: imageStatus, onError } = useImageLoadFailure(src, streaming);
   // Right-click → custom popover menu. We track cursor pos so a 0×0 virtual
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -861,11 +867,10 @@ function LightboxImage({
   // image-local-cache F4: when the underlying file is missing (cache cleared,
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
   // filename is best-effort: derive it from the URL's last segment.
-  if (hasError) {
-    const fallbackName = src
-      ? decodeURIComponent(src.split(/[\\/]/).pop() ?? 'image')
-      : 'image';
-    return <ImageMissingPlaceholder filename={alt || fallbackName} />;
+  if (imageStatus) {
+    let fallbackName = src?.split(/[\\/]/).pop() ?? 'image';
+    try { fallbackName = decodeURIComponent(fallbackName); } catch { /* malformed link */ }
+    return <ImageMissingPlaceholder filename={alt || fallbackName} status={imageStatus} />;
   }
 
   const zoomLabel = alt || t('chat.media.clickToZoom');
@@ -898,11 +903,11 @@ function LightboxImage({
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
       >
-        <img
+        <ChatLoadingImage
           src={src}
           alt={alt ?? ''}
           style={{ maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' }}
-          onError={() => setHasError(true)}
+          onError={onError}
           {...props}
         />
       </button>
@@ -1015,6 +1020,7 @@ function FileTargetChip({
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
+    fileName: resolvedAbsPath,
     getAbsPath: async () => resolvedAbsPath,
     location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
@@ -1023,16 +1029,16 @@ function FileTargetChip({
     onViewSource: htmlWithSession ? onOpen : undefined,
   });
 
-  const activate = () => {
+  const activate = (event: React.MouseEvent<HTMLElement>) => {
     // 与输入附件一致：点击打开 lightbox 前先撤掉 hover 层，避免关闭大图后残留。
     setImagePreviewOpen(false);
-    if (htmlWithSession) {
-      if (sidebarTargetSessionId) {
-        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
+    ctxMenu.onActivate(event, async () => {
+      if (htmlWithSession && sidebarTargetSessionId) {
+        await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
+      } else {
+        await onOpen();
       }
-      return;
-    }
-    void onOpen();
+    });
   };
 
   return (
@@ -1043,17 +1049,13 @@ function FileTargetChip({
         tabIndex={0}
         title={title}
         onClick={activate}
+        onAuxClick={(event) => { if (event.button === 1) activate(event); }}
         onContextMenu={ctxMenu.onContextMenu}
         onPointerEnter={() => {
           if (imagePreviewSrc) setImagePreviewOpen(true);
         }}
         onPointerLeave={() => setImagePreviewOpen(false)}
-        onKeyDown={(e) => {
-          // 换掉原生按钮元素后,键盘激活要自己补回来。
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.preventDefault();
-          activate();
-        }}
+        onKeyDown={activateInlineLinkFromKeyboard}
         className={cn(
           'inline rounded-[6px] border-0 px-1 py-0.5',
           'font-mono text-14 align-baseline',
@@ -1132,6 +1134,7 @@ function ResolvedLocalLink({
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
+    fileName: resolvedAbsPath,
     getAbsPath: () => resolvedAbsPath,
     location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
@@ -1140,21 +1143,22 @@ function ResolvedLocalLink({
     onViewSource: htmlWithSession ? onOpen : undefined,
   });
 
+  const activate = (event: React.MouseEvent<HTMLElement>) => ctxMenu.onActivate(event, async () => {
+    if (htmlWithSession && sidebarTargetSessionId) {
+      await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
+      return;
+    }
+    await onOpen();
+  });
+
   return (
     <>
       <a
         href={href}
         className={MARKDOWN_LINK_CLASS}
-        onClick={async (e) => {
-          e.preventDefault();
-          if (htmlWithSession) {
-            if (sidebarTargetSessionId) {
-              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
-            }
-            return;
-          }
-          await onOpen();
-        }}
+        onClick={activate}
+        onKeyDown={activateInlineLinkFromKeyboard}
+        onAuxClick={(event) => { if (event.button === 1) void activate(event); }}
         onContextMenu={ctxMenu.onContextMenu}
         {...anchorProps}
       >
@@ -1472,6 +1476,21 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
+  const openInlineTarget = () => {
+    if (target.kind === 'anchor') {
+      if (!target.id) return;
+      const element = document.getElementById(target.id);
+      if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      else toast.error(t('chat.markdownRenderer.anchorNotFound'));
+    } else if (target.kind === 'local-image-url') {
+      setLightboxSrc(rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin));
+    }
+  };
+  const inlineMenu = useLinkContextMenu(href ?? '', [{
+    label: t('chat.markdownRenderer.openLink'),
+    icon: <ArrowUpRight className="mr-2 h-4 w-4" />,
+    run: openInlineTarget,
+  }]);
 
   if (target.kind === 'audio') {
     return <InlineXdtAudioPlayer src={rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin)} />;
@@ -1546,52 +1565,36 @@ function MarkdownTargetLink({
     <a
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
+      onKeyDown={activateInlineLinkFromKeyboard}
       onClick={async (e) => {
         e.preventDefault();
-
-        if (target.kind === 'anchor') {
-          if (!target.id) return;
-          const el = document.getElementById(target.id);
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          } else {
-            toast.error(t('chat.markdownRenderer.anchorNotFound'));
-          }
-          return;
-        }
 
         if (target.kind === 'external') {
           // 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,设置 →
           // 个性化 → 链接打开方式);右键弹"打开方式"菜单临时选另一种。
           // 修饰键点击(macOS ⌘ / Windows Ctrl)临时强制走系统浏览器,不改偏好。
           // 无会话上下文(Market 预览等)保持原有直开默认浏览器。
-          if (openWith.isEnabled && sidebarTargetSessionId && !(e.metaKey || e.ctrlKey)) {
-            await openUrlByPreference(sidebarTargetSessionId, target.href, t);
-            return;
-          }
-          const res = await window.electronAPI.openExternal(target.href);
-          if (!res.success) toast.error(t('chat.markdownRenderer.openLinkFailed'));
+          await activateMessageUrl(e, sidebarTargetSessionId, target.href, t);
           return;
         }
-
-        if (target.kind === 'local-image-url') {
-          // 远程会话:本机媒体 scheme 链接改写到 cindy-remote-media://(同内嵌图);本地原样。
-          setLightboxSrc(rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin));
-          return;
-        }
+        openInlineTarget();
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        if (target.kind === 'external') void activateMessageUrl(event, sidebarTargetSessionId, target.href, t);
+        else openInlineTarget();
       }}
       onContextMenu={(e) => {
-        // 仅外链有右键"打开方式"菜单;anchor / local-image-url 保持浏览器默认右键。
-        if (target.kind !== 'external' || !openWith.isEnabled) return;
-        e.preventDefault();
-        e.stopPropagation();
-        openWith.openAt(e.clientX, e.clientY, target.href);
+        if (target.kind === 'external') openWith.onContextMenu(e, target.href);
+        else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
     >
       {children}
     </a>
     {openWith.menu}
+    {inlineMenu.menu}
     </>
   );
 }
@@ -1777,6 +1780,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         return (
           <LightboxImage
+            streaming={isStreaming}
             src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
             alt={alt}
             onZoom={setLightboxSrc}

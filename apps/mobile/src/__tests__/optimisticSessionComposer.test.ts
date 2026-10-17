@@ -12,7 +12,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
@@ -307,22 +308,69 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(branch).toContain('handoff.release(committed)');
   });
 
-  it('carries follow-ups back to the new-session screen when creation itself failed', () => {
+  it('carries follow-ups and a pending picker warning back when creation itself failed', async () => {
     // create-failed 的「返回编辑」会连合成会话行一起删掉:不把 outbox 一并 stash,
     // unmount cleanup 会把那些消息写进一个即将消失的会话草稿,用户再也找不回(review P1)。
     const source = readSource(SCREEN);
-    const backToEditStart = source.indexOf("text: t('session.screen.backToEdit')");
-    const backToEditEnd = source.indexOf("text: t('session.screen.retry')", backToEditStart);
+    const backToEditStart = source.indexOf("useFailedCreationReturnToEdit({");
+    const backToEditEnd = source.indexOf("const prevCreationStatusRef", backToEditStart);
     const branch = source.slice(backToEditStart, backToEditEnd);
     // 跨页导航:upload controller 随会话页销毁,在途上传保不住,只能取消 + 告知。
     expect(branch).toContain("takeOutboxForSession(sessionId, 'cancel')");
-    expect(branch.indexOf('takeOutboxForSession'))
-      .toBeLessThan(branch.indexOf('dismissNewSessionCreation(sessionId, { removeSyntheticRow: true })'));
+    expect(branch).toContain('useFailedCreationReturnToEdit({');
+    expect(branch).not.toContain('Alert.alert');
+    expect(source).not.toContain('retryNewSessionCreation');
+    expect(branch).toContain('stashDraft: prepared => {');
+    const recovery = readSource('src/session/returnNewSessionToEdit.ts');
+    const stash = recovery.indexOf('stashDraft(prepared);');
+    expect(stash).toBeGreaterThanOrEqual(0);
+    expect(recovery).toContain('editSessionId: sessionId');
+    expect(recovery).not.toContain('dismissNewSessionCreation(sessionId, { removeSyntheticRow: true })');
+    const creation = readSource('src/session/newSessionCreation.ts');
+    const claim = creation.slice(creation.indexOf('export function drainStashedNewSessionDraft'));
+    expect(claim).toContain('dismissNewSessionCreation(sessionId, { removeSyntheticRow: true })');
     expect(branch).toContain('outboxItemDraftText');
     // 装不下的中转对象回收 + 把「没能带回多少」随 stash 带到新建页。
     expect(branch).toContain('discardRecoveredAttachments(dropped);');
     expect(branch).toContain('const unrecoveredCount = dropped.length + cancelledUploadCount;');
     expect(branch).toContain("notice: unrecoveredCount > 0");
+
+    // Execute the production handoff with a picker open but no upload slot yet.
+    // The old pending-count guard returned without saving any warning.
+    const ast = ts.createSourceFile(SCREEN, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let beforeNavigate: ts.Expression | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useFailedCreationReturnToEdit') {
+        const options = node.arguments[0] as ts.ObjectLiteralExpression;
+        beforeNavigate = options.properties.find((p): p is ts.PropertyAssignment =>
+          ts.isPropertyAssignment(p) && p.name.getText(ast) === 'beforeNavigate')?.initializer;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    expect(beforeNavigate).toBeDefined();
+    const save = vi.fn(async () => []);
+    const warning = vi.fn();
+    const context = {
+      getMobileAuthOwner: () => 'owner', isMobileAuthOwnerCurrent: () => true,
+      outboxSessionAliveRef: { current: 'task' }, sessionId: 'task', deviceId: 'mac',
+      getPendingUploadCount: () => 0, hasAttachmentInput: () => true,
+      t: (key: string) => key, attachmentError: null, setAttachmentError: warning,
+      discardAllPendingUploadsForScopeChange: vi.fn(), draftRef: { current: '' },
+      attachmentsRef: { current: [] }, appendNewSessionEditComposer: save,
+      getUploadedSource: vi.fn(),
+      releaseUploadedSources: vi.fn(), setAttachments: vi.fn(), replaceComposerDraft: vi.fn(),
+      discardRecoveredAttachments: vi.fn(),
+    };
+    const code = ts.transpileModule(`const callback = ${beforeNavigate!.getText(ast)};`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    await new Function(...Object.keys(context), `${code}; return callback();`)(...Object.values(context));
+    expect(save).toHaveBeenCalledWith('task', 'mac', {
+      text: '', attachments: [], notice: 'session.screen.pendingAttachmentsNotCarriedBack',
+      getUploadedSource: context.getUploadedSource,
+    });
+    expect(warning).toHaveBeenCalledWith('session.screen.pendingAttachmentsNotCarriedBack');
   });
 
   it('never silently drops recovered attachments, and never discards live tray ones', () => {
@@ -453,9 +501,44 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(gate).toBeLessThan(clear);
     const branch = source.slice(gate, clear);
     expect(branch).toContain('isRemoteSessionMissing(readSessionRowNow())');
-    expect(branch).toContain("setError(t('session.screen.commandWaitsForSession'));");
     // 早退必须自己解掉发送锁(这一段在 try/finally 之前)。
     expect(branch).toContain('sendInFlightRef.current = false;');
     expect(branch).toContain('setSending(false);');
+
+    // 执行实际门禁，避免把错误提示的固定语法当作行为契约。
+    const screen = ts.createSourceFile(SCREEN, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let guard: ts.IfStatement | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && node.expression.getText(screen).includes('commandNeedsRemoteSession(')) guard = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(screen);
+    expect(guard).toBeDefined();
+    const run = new Function('args', `
+      const { missing, companionEntry, connectionDispatchBlockedAtSend, setError, setSending, sendInFlightRef, consume } = args;
+      const earlyLocalCommand = {}, earlyDesktopCommand = null;
+      const commandNeedsRemoteSession = () => true;
+      const readSessionRowNow = () => missing ? null : { id: 'existing' };
+      const isRemoteSessionMissing = row => row === null;
+      const t = key => key;
+      ${guard!.getText(screen)}
+      consume();
+    `);
+    for (const [missing, ready, blocked] of [[true, true, false], [false, false, false], [false, true, true], [false, true, false]]) {
+      const setError = vi.fn(), setSending = vi.fn(), consume = vi.fn();
+      const sendInFlightRef = { current: true };
+      run({ missing, companionEntry: { ready }, connectionDispatchBlockedAtSend: blocked,
+        setError, setSending, sendInFlightRef, consume });
+      if (missing || !ready || blocked) {
+        expect(setError).toHaveBeenCalledExactlyOnceWith(missing
+          ? 'session.screen.commandWaitsForSession' : 'session.screen.sessionNotSyncedRetry');
+        expect(consume).not.toHaveBeenCalled();
+        expect(sendInFlightRef.current).toBe(false);
+        expect(setSending).toHaveBeenCalledExactlyOnceWith(false);
+      } else {
+        expect(setError).not.toHaveBeenCalled();
+        expect(consume).toHaveBeenCalledOnce();
+      }
+    }
   });
 });

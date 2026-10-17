@@ -31,6 +31,39 @@ describe('normalizeRemoteMessages', () => {
     await i18n.changeLanguage('zh-CN');
   });
 
+  it('recognizes host-marked MCP App cards and leaves ordinary assistant content unchanged', () => {
+    const content = { mcpApp: { version: 1, serverId: 'example', serverRevision: 'revision', resourceUri: 'ui://example/app', tool: { name: 'draft', title: '申请表', inputSchema: { type: 'object' } }, arguments: {},
+      result: { content: [{ type: 'text', text: 'Saved form result' }], _meta: { private: 'view-only' } } } };
+    const output = normalizeRemoteMessages([
+      message({ id: 'app', role: 'assistant', content, agentMeta: { mcpApp: true } }),
+      message({ id: 'plain', role: 'assistant', content: '工具返回的文本' }),
+    ]);
+    expect(output[0]).toMatchObject({ systemCardType: 'mcp-app', systemCardData: { title: '申请表', fallbackText: 'Saved form result' } });
+    expect(output[1]).toMatchObject({ body: '工具返回的文本' });
+  });
+
+  it("renders public guest MCP App summaries, including pending cards with no text", () => {
+    const rows = ["", "Saved result"].map((text, index) =>
+      message({
+        id: `guest-app-${index}`,
+        role: "assistant",
+        agentMeta: { mcpApp: true },
+        content: { mcpAppHistory: { version: 1, title: "Draft form", text } },
+      }),
+    );
+    expect(
+      normalizeRemoteMessages(rows).map((row) => [
+        row.systemCardType,
+        row.systemCardData,
+      ]),
+    ).toEqual(
+      ["", "Saved result"].map((fallbackText) => [
+        "mcp-app",
+        { title: "Draft form", fallbackText },
+      ]),
+    );
+  });
+
   it('renders a projected large tool input from its bounded summary and keeps its result', () => {
     const projected = projectLargeSettledToolInputs([
       message({
@@ -1198,7 +1231,7 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: {
           sourceDevice: { deviceId: 'phone-1', name: 'Dash 的\niPhone', platform: 'mobile' },
           sourcePlugin: { pluginId: 'plugin-1', name: '日报' },
-          sharedTaskAuthor: { displayName: '访客甲', memberId: 'm1' },
+          sharedTaskAuthor: { displayName: '访客甲', memberId: 'm1', accountId: 'acct-guest' },
         },
       }),
       message({
@@ -1220,6 +1253,8 @@ describe('normalizeRemoteMessages', () => {
         ['unknown-platform', undefined, undefined, undefined],
         ['assistant-ignored', undefined, undefined, undefined],
       ]);
+    // 作者账号只用于判断「是不是我的消息」(气泡配色),不作权限依据。
+    expect(items.map((item) => item.sharedAuthorAccountId)).toEqual(['acct-guest', undefined, undefined]);
   });
 
   it('reads the sending session of tool-sent and Orca messages without mixing it into automation', () => {

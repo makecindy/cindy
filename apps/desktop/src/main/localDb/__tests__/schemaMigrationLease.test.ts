@@ -49,6 +49,7 @@ async function stopChild(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.send?.('release');
   await new Promise<void>((resolve) => {
+    // real-wait: bound cleanup while the child process may ignore the release message.
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       resolve();

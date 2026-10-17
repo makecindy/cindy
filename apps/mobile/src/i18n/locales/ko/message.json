@@ -10,11 +10,13 @@
   },
   "renderer": {
     "moreActions": "추가 메시지 작업",
+    "reply": "답장",
     "newMessagesToBottom": "새 메시지, 맨 아래로 이동",
     "jumpToBottom": "맨 아래로 이동",
     "openForkOrigin": "분기 원본 메시지 열기",
     "viewForkOrigin": "분기 원본 보기",
     "emptyMessages": "메시지가 없습니다",
+    "historyNotCached": "이 휴대폰에 저장된 기록이 없습니다. 컴퓨터에 연결하면 동기화됩니다.",
     "syncing": "동기화 중",
     "copyLinkHint": "탭하여 메시지 링크 복사",
     "sentTime": "보낸 시간 {{time}}",
@@ -104,7 +106,8 @@
     "handoffContentDesc": "인계 내용——전환 시 새 엔진에 전달되는 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
     "handoffContentDescEnglishSource": "인계 내용——전환 시 새 엔진에 전달되는 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
     "openDiagramDetail": "다이어그램 세부 정보 열기",
-    "sessionChipFallback": "세션 {{id}}",
+    "sessionChipFallback": "세션",
+    "messageChipFallback": "인용한 메시지",
     "imageFallbackTitle": "이미지",
     "mermaidExportFailedTitle": "내보내기 실패",
     "mermaidRenderIncompleteBody": "다이어그램이 아직 완전히 렌더링되지 않았거나 내보내기에 실패했습니다. 나중에 다시 시도하세요.",
@@ -260,12 +263,25 @@
       "usageReset": "사용량이 복구되어 자동으로 계속했습니다",
       "pending": "다시 연결하는 중…",
       "pendingWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "다른 컴퓨터로 전환하는 중…",
       "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회",
       "detail": {
         "reason": "중단 원인",
         "attempt": "이번 재시도 {{attempt}}/{{total}}",
         "sessionTotal": "이 세션에서 재연결 {{count}}회"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}}이(가) 사용량 한도에 도달해 {{to}}에서 이어서 진행했습니다",
+        "auth": "{{from}}의 로그인이 만료되어 {{to}}에서 이어서 진행했습니다",
+        "unavailable": "{{from}}에 연결할 수 없어 {{to}}에서 이어서 진행했습니다",
+        "overload": "{{from}}의 서비스가 혼잡해 {{to}}에서 이어서 진행했습니다",
+        "failed": "{{from}}에서 문제가 생겨 {{to}}에서 이어서 진행했습니다"
+      },
+      "agentReconnect": {
+        "named": "{{computer}}에 다시 연결되어 이어서 진행했습니다",
+        "unnamed": "원래 컴퓨터에 다시 연결되어 이어서 진행했습니다"
+      },
+      "groupSwitch": "다른 컴퓨터로 자동 전환해 이어서 진행했습니다"
     },
     "modelLabel": "모델",
     "sessionLabel": "세션",

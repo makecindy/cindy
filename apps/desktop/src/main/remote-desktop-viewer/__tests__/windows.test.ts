@@ -5,6 +5,7 @@ const fixture = vi.hoisted(() => ({
   handlers: new Map<string, Function>(),
   calls: [] as any[],
   owner: 'a:1',
+  debug: vi.fn(),
 }));
 vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => null },
@@ -13,7 +14,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: (name: string, fn: Function) => fixture.handlers.set(name, fn) },
 }));
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() }),
+  createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: fixture.debug }),
 }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => fixture.owner,
@@ -42,6 +43,8 @@ vi.mock('../preferences', () => ({
 vi.mock('../../i18n', () => ({ t: (s: string) => s }));
 vi.mock('../../device-link/index', () => ({
   getSelfDeviceId: () => 'local',
+  getDeviceLinkStatus: () => 'online',
+  getUnresponsiveDeviceIds: () => ['a'],
   remoteInvoke: vi.fn(async (...args: any[]) => {
     args[3]?.preSend?.();
     fixture.calls.push(args);
@@ -108,6 +111,7 @@ vi.mock('../../resource-usage-window/window', () => ({
 }));
 import { RemoteDesktopViewerWindows } from '../windows';
 import { REMOTE_VIEWER } from '../../../shared/remoteDesktopViewer';
+import { remoteInvoke } from '../../device-link/index';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
   manager?.reset();
@@ -115,10 +119,112 @@ afterEach(() => {
   fixture.calls = [];
   fixture.handlers.clear();
   fixture.owner = 'a:1';
+  fixture.debug.mockClear();
+  vi.restoreAllMocks();
 });
 const event = (win: any) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
 const call = (channel: string, win: any, ...args: unknown[]) =>
   fixture.handlers.get(channel)!(event(win), ...args);
+it.each([
+  ['DESKTOP_LEASE_EXPIRED', 'DESKTOP_LEASE_EXPIRED', 'DESKTOP_LEASE_EXPIRED'],
+  ['DESKTOP_VIDEO_TIMEOUT', 'DESKTOP_VIDEO_TIMEOUT', 'DESKTOP_VIDEO_TIMEOUT'],
+  ['DESKTOP_DISPLAY_MISSING', 'DESKTOP_DISPLAY_MISSING', 'DESKTOP_DISPLAY_MISSING'],
+  ['DESKTOP_VIDEO_TIMEOUT private-text', 'UNKNOWN_ERROR', 'DESKTOP_UNAVAILABLE'],
+])('records failed request %s without leaking its payload', async (error, code, exposedError) => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'private computer' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+  vi.mocked(remoteInvoke).mockRejectedValueOnce(new Error(error));
+  await expect(
+    call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'heartbeat', lease: 'lease-a' }),
+  ).rejects.toThrow(exposedError);
+  expect(fixture.debug).toHaveBeenCalledWith(
+    'desktop request failed',
+    expect.objectContaining({
+      operation: 'heartbeat',
+      code,
+      signaling: 'online',
+      peerUnresponsive: true,
+    }),
+  );
+  expect(JSON.stringify(fixture.debug.mock.calls)).not.toContain('lease-a');
+  expect(JSON.stringify(fixture.debug.mock.calls)).not.toContain('private computer');
+  expect(JSON.stringify(fixture.debug.mock.calls)).not.toContain('private-text');
+});
+
+it.each([-3600000, 3600000])(
+  'measures request duration independently of a %s ms clock correction',
+  async (jump) => {
+    const sender: any = { id: 100 };
+    manager = new RemoteDesktopViewerWindows((value) => value === sender);
+    manager.register();
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    const win = fixture.windows[0];
+    call(REMOTE_VIEWER.READY, win);
+    call(REMOTE_VIEWER.PRESENTED, win);
+    const { generation } = call(REMOTE_VIEWER.STATE, win);
+    await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(10000000);
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(100);
+    vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
+      wall.mockReturnValue(10000000 + jump);
+      monotonic.mockReturnValue(350);
+      throw new Error('INVOKE_TIMEOUT');
+    });
+    await expect(
+      call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'heartbeat', lease: 'lease-a' }),
+    ).rejects.toThrow('INVOKE_TIMEOUT');
+    expect(fixture.debug).toHaveBeenCalledWith(
+      'desktop request failed',
+      expect.objectContaining({
+        startedAt: 10000000,
+        at: 10000000 + jump,
+        elapsedMs: 250,
+      }),
+    );
+  },
+);
+
+it.each(['resolve', 'reject'])(
+  'closes immediately while stop is pending and ignores its late %s',
+  async (outcome) => {
+    const sender: any = { id: 100 };
+    manager = new RemoteDesktopViewerWindows((value) => value === sender);
+    manager.register();
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    const win = fixture.windows[0];
+    call(REMOTE_VIEWER.READY, win);
+    call(REMOTE_VIEWER.PRESENTED, win);
+    const { generation } = call(REMOTE_VIEWER.STATE, win);
+    await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+    let settle!: () => void;
+    vi.mocked(remoteInvoke).mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = () =>
+            outcome === 'resolve'
+              ? resolve({ ok: true, result: {} })
+              : reject(new Error('INVOKE_TIMEOUT'));
+        }),
+    );
+    call(REMOTE_VIEWER.CLOSE, win, generation);
+    expect(win.isVisible()).toBe(false);
+    expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
+    manager.open(sender, { deviceId: 'a', name: 'A' });
+    expect(win.isVisible()).toBe(true);
+    settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(win.isVisible()).toBe(true);
+    expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
+  },
+);
 it('routes native close and the close shortcut to confirmation without ending the lease', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);

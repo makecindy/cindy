@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
-import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
+import {
+  ghostInstallApprovalToken,
+  type GhostManifest,
+  type InstalledGhost,
+} from '../../../shared/ghost';
 import {
   __resetGhostPanelBubbleStateForTest,
   getGhostPanelBubbleState,
@@ -17,9 +21,11 @@ import {
 } from '../../panels/registry';
 import {
   __resetGhostPanelsForTest,
+  ensureGhostPanelsRegistered,
   pickGhostPanelMediaUri,
   syncGhostPanelRegistrations,
 } from '../ghostPanels';
+import { __resetInstalledGhostsStoreForTest } from '../useInstalledGhosts';
 
 // 仓库同款 i18n mock:t 返回 key(带参拼上,便于断言)。
 vi.mock('react-i18next', () => ({
@@ -32,7 +38,13 @@ vi.mock('react-i18next', () => ({
 // 面板体是 webview 供片,jsdom 渲不了也不该渲 —— 置空,只测宿主壳(标准头/关闭链路)。
 vi.mock('../ghostPanelBody', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ghostPanelBody')>()),
-  GhostChipPanelBody: () => null,
+  GhostChipPanelBody: ({ ghost: installed }: { ghost: InstalledGhost }) => (
+    <div
+      data-testid="ghost-body"
+      data-dir={installed.dir}
+      data-approval={ghostInstallApprovalToken(installed.approval)}
+    />
+  ),
   GhostPanelError: () => null,
 }));
 
@@ -55,10 +67,30 @@ function ghost(id: string, panel?: GhostManifest['panel'] | null, enabled = true
   };
 }
 
+function bridgeGhosts(initial: InstalledGhost[], setEnabled = vi.fn()) {
+  let roster = initial;
+  const listeners = new Set<(event: { ghosts: InstalledGhost[] }) => void>();
+  const api = {
+    setEnabled,
+    listSync: vi.fn(() => ({ ghosts: roster })),
+    onChanged: vi.fn((listener: (event: { ghosts: InstalledGhost[] }) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    change(next: InstalledGhost[]) {
+      roster = next;
+      listeners.forEach((listener) => listener({ ghosts: next }));
+    },
+  };
+  (window as unknown as { electronAPI: unknown }).electronAPI = { ghosts: api };
+  return api;
+}
+
 afterEach(() => {
   cleanup();
   __resetPanelRegistryForTest();
   __resetGhostPanelsForTest();
+  __resetInstalledGhostsStoreForTest();
   __resetGhostPanelBubbleStateForTest();
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
@@ -92,13 +124,53 @@ describe('syncGhostPanelRegistrations · 注册表与已装清单对齐', () => 
     expect(hasPanelKind('ghost:b')).toBe(false);
   });
 
-  it('同步时对齐气泡状态:卸载删条目、停用强制还原(不留死角)', () => {
-    minimizeGhostPanel('gone');
-    minimizeGhostPanel('disabled');
-    syncGhostPanelRegistrations([ghost('disabled', undefined, false)]);
-    const bubbles = getGhostPanelBubbleState();
-    expect(bubbles.gone).toBeUndefined();
-    expect(bubbles.disabled?.minimized).not.toBe(true);
+  it.each(['approval', 'directory', 'manifest'] as const)('广播更新 %s 后使用当前实例,不替换面板组件', (field) => {
+    const installed = ghost('demo');
+    const api = bridgeGhosts([installed]);
+    ensureGhostPanelsRegistered();
+    const Component = getPanelKind('ghost:demo')!.Component;
+    render(<ConfirmDialogProvider><Component paneId="pane-1" /></ConfirmDialogProvider>);
+    const updated: InstalledGhost = {
+      ...installed,
+      ...(field === 'approval'
+        ? { approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } }
+        : {}),
+      ...(field === 'directory' ? { dir: '/other/demo' } : {}),
+      ...(field === 'manifest'
+        ? { manifest: { ...installed.manifest, panel: { ...installed.manifest.panel!, title: 'updated title' } } }
+        : {}),
+    };
+    act(() => {
+      syncGhostPanelRegistrations([updated]);
+      api.change([updated]);
+    });
+    expect(getPanelKind('ghost:demo')!.Component).toBe(Component);
+    expect(screen.getByTestId('ghost-body').getAttribute('data-dir')).toBe(updated.dir);
+    expect(screen.getByTestId('ghost-body').getAttribute('data-approval'))
+      .toBe(ghostInstallApprovalToken(updated.approval));
+    if (field === 'manifest') expect(screen.getByText('updated title')).toBeTruthy();
+    expect(api.listSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('同名 root / 组织面板各自消费物理实例,清单移除后不显示旧实例', () => {
+    const root = { ...ghost('helper'), namespace: null };
+    const organization = { ...ghost('helper'), namespace: 'acme', dir: '/fake/_ns/acme/helper' };
+    const api = bridgeGhosts([root, organization]);
+    ensureGhostPanelsRegistered();
+    const Root = getPanelKind('ghost:helper')!.Component;
+    const Organization = getPanelKind('ghost:_ns__acme__helper')!.Component;
+    render(
+      <ConfirmDialogProvider>
+        <Root paneId="root" />
+        <Organization paneId="organization" />
+      </ConfirmDialogProvider>,
+    );
+    expect(screen.getAllByTestId('ghost-body').map((element) => element.getAttribute('data-dir')))
+      .toEqual([root.dir, organization.dir]);
+    act(() => api.change([root]));
+    expect(screen.getAllByTestId('ghost-body')).toHaveLength(1);
+    expect(screen.getByTestId('ghost-body').getAttribute('data-dir')).toBe(root.dir);
+    expect(api.listSync).toHaveBeenCalledTimes(1);
   });
 
   it('同步时对齐气泡状态:卸载删条目、停用强制还原(不留死角)', () => {
@@ -154,19 +226,22 @@ describe('syncGhostPanelRegistrations · 停用即休眠', () => {
 });
 
 describe('GhostPanel · 标准头关闭按钮(二次确认后停用插件)', () => {
-  function renderPanel(setEnabled: ReturnType<typeof vi.fn>): void {
-    (window as unknown as { electronAPI: unknown }).electronAPI = {
-      ghosts: { setEnabled },
-    };
-    syncGhostPanelRegistrations([ghost('demo')]);
+  function renderPanel(
+    setEnabled: ReturnType<typeof vi.fn>,
+    installed = ghost('demo'),
+    otherGhosts: InstalledGhost[] = [],
+  ) {
+    const api = bridgeGhosts([installed, ...otherGhosts], setEnabled);
+    syncGhostPanelRegistrations([installed, ...otherGhosts]);
     const def = getPanelKind('ghost:demo');
     if (!def) throw new Error('面板未注册');
     const Component = def.Component;
-    render(
+    const view = render(
       <ConfirmDialogProvider>
         <Component paneId="pane-1" />
       </ConfirmDialogProvider>,
     );
+    return { api, view };
   }
 
   it('点关闭 → 弹确认框;确认后 setEnabled(id, false)', async () => {
@@ -177,7 +252,7 @@ describe('GhostPanel · 标准头关闭按钮(二次确认后停用插件)', () 
     await screen.findByText('ghostPanel.disableConfirm.title:{"name":"demo 意识"}');
     expect(setEnabled).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'ghostPanel.disableConfirm.confirm' }));
-    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('demo', false));
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('demo', false, ghostInstallApprovalToken(ghost('demo').approval)));
     expect(setEnabled).toHaveBeenCalledTimes(1);
   });
 
@@ -192,6 +267,95 @@ describe('GhostPanel · 标准头关闭按钮(二次确认后停用插件)', () 
         screen.queryByText('ghostPanel.disableConfirm.title:{"name":"demo 意识"}'),
       ).toBeNull(),
     );
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+
+  it('原实例卸载后取消旧确认,不关闭仍在场的组织同名实例', async () => {
+    const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+    const organization = { ...ghost('demo'), namespace: 'acme', dir: '/fake/_ns/acme/demo' };
+    const { api } = renderPanel(setEnabled, { ...ghost('demo'), namespace: null }, [organization]);
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    const staleConfirm = await screen.findByRole('button', { name: 'ghostPanel.disableConfirm.confirm' });
+
+    act(() => api.change([organization]));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ghostPanel.disableConfirm.confirm' })).toBeNull());
+    fireEvent.click(staleConfirm);
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+
+  it.each(['approval', 'directory', 'namespace', 'disabled', 'panel'] as const)(
+    '原实例 %s 变更后取消旧确认,新确认仍可用',
+    async (field) => {
+      const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+      const installed = ghost('demo');
+      const { api } = renderPanel(setEnabled, installed);
+      fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+      const staleConfirm = await screen.findByRole('button', { name: 'ghostPanel.disableConfirm.confirm' });
+      const updated: InstalledGhost = {
+        ...installed,
+        ...(field === 'approval' ? { approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } } : {}),
+        ...(field === 'directory' ? { dir: '/other/demo' } : {}),
+        ...(field === 'namespace' ? { namespace: 'acme' } : {}),
+        ...(field === 'disabled' ? { enabled: false } : {}),
+        ...(field === 'panel' ? { manifest: { ...installed.manifest, panel: { html: 'panel.html', position: 'tab' } } } : {}),
+      };
+
+      act(() => api.change([updated]));
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'ghostPanel.disableConfirm.confirm' })).toBeNull());
+      fireEvent.click(staleConfirm);
+      expect(setEnabled).not.toHaveBeenCalled();
+
+      if (field === 'disabled' || field === 'panel') act(() => api.change([installed]));
+      fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'ghostPanel.disableConfirm.confirm' }));
+      const confirmed = field === 'disabled' || field === 'panel' ? installed : updated;
+      await waitFor(() => expect(setEnabled).toHaveBeenCalledExactlyOnceWith('demo', false, ghostInstallApprovalToken(confirmed.approval)));
+    },
+  );
+
+  it('面板卸载但全局确认宿主保留时取消旧确认', async () => {
+    const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+    const { view } = renderPanel(setEnabled);
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    const staleConfirm = await screen.findByRole('button', { name: 'ghostPanel.disableConfirm.confirm' });
+
+    view.rerender(<ConfirmDialogProvider><div /></ConfirmDialogProvider>);
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ghostPanel.disableConfirm.confirm' })).toBeNull());
+    fireEvent.click(staleConfirm);
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+
+  it('安装身份未变化的清单刷新不取消用户确认', async () => {
+    const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+    const installed = ghost('demo');
+    const { api } = renderPanel(setEnabled, installed);
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    await screen.findByRole('button', { name: 'ghostPanel.disableConfirm.confirm' });
+
+    act(() => api.change([{ ...installed, manifest: { ...installed.manifest } }]));
+
+    fireEvent.click(screen.getByRole('button', { name: 'ghostPanel.disableConfirm.confirm' }));
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledExactlyOnceWith('demo', false, ghostInstallApprovalToken(installed.approval)));
+  });
+
+  it.each(['uninstall', 'approval'] as const)('确认恢复前原实例 %s 不执行旧关闭', async (change) => {
+    const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+    const installed = ghost('demo');
+    const { api } = renderPanel(setEnabled, installed);
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    const confirmButton = await screen.findByRole('button', { name: 'ghostPanel.disableConfirm.confirm' });
+
+    await act(async () => {
+      fireEvent.click(confirmButton);
+      api.change(change === 'uninstall' ? [] : [{
+        ...installed,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' },
+      }]);
+    });
+
     expect(setEnabled).not.toHaveBeenCalled();
   });
 });

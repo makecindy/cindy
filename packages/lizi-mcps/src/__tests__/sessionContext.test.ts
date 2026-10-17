@@ -787,7 +787,12 @@ describe('dynamic lizi MCP session context', () => {
   });
 
   it('passes host-owned Bot identity to session_search without exposing it as tool input', async () => {
-    const searchSessions = vi.fn(async () => []);
+    const hits = [{
+      sessionId: 'history-session',
+      sessionUrl: 'cindy://session/history-session?device=host-device',
+      messageId: 'm1', role: 'user', snippet: 'release', ts: 1, score: -1,
+    }];
+    const searchSessions = vi.fn(async () => hits);
     const getManager = () => ({
       isEnabled: () => true,
       getStore: vi.fn(),
@@ -804,11 +809,12 @@ describe('dynamic lizi MCP session context', () => {
       vendorOptions: {},
     }) as { type: 'sdk'; instance: unknown };
 
-    await tools(cfg.instance).call_tool.handler({
+    const result = await tools(cfg.instance).call_tool.handler({
       name: 'session_search',
       args: { query: 'release' },
     });
 
+    expect(parse(result as never)).toMatchObject({ ok: true, data: { hits, count: 1 } });
     expect(searchSessions).toHaveBeenCalledWith('release', {
       callerMemoryScopeKey: 'bot:release-helper',
       callerSessionId: 'bot-session-a',

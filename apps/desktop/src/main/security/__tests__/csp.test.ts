@@ -62,7 +62,9 @@ describe('buildContentSecurityPolicy — shared invariants', () => {
       const d = parsePolicy(buildContentSecurityPolicy(ctx));
       expect(d['default-src']).toEqual(["'self'"]);
       expect(d['object-src']).toEqual(["'none'"]);
-      expect(d['frame-src']).toEqual(["'none'"]);
+      // Only host-supplied, separately sandboxed MCP App documents may be framed.
+      expect(d['frame-src']).toEqual(['cindy-mcp-app:']);
+      expect(d['frame-src']).not.toEqual(expect.arrayContaining(['https:', 'http:', 'data:', "'self'"]));
       expect(d['frame-ancestors']).toEqual(["'none'"]);
       expect(d['base-uri']).toEqual(["'self'"]);
       expect(d['form-action']).toEqual(["'self'"]);

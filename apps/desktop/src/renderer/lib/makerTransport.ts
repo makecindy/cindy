@@ -34,6 +34,13 @@ import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
 import type { TurnChangeSetUpdatedPayload } from '../../shared/turnChangeSet';
 import type { LocalPluginOauthRequest, LocalPluginSecretRequest, LocalPluginConnectionRequest } from '../../shared/pluginOauth';
+import {
+  INPUT_HANDOFF_ACTION_ID,
+  INPUT_HANDOFF_GHOST_ID,
+  type InputHandoffPicture,
+  type InputHandoffPresentation,
+  type InputHandoffSubmission,
+} from '@cindy/device-link';
 
 type FullMaker = typeof window.electronAPI.maker;
 
@@ -88,6 +95,77 @@ export function submitRemotePluginConnection(sessionId: string, request: Omit<Lo
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
   return window.electronAPI.maker.submitRemotePluginConnection({ deviceId, ...request });
+}
+
+/**
+ * 代输入 values. Local tasks use the trusted local channel; tasks on another
+ * computer go through Main's signed relay. Never makerApiFor/device-link invoke.
+ */
+export function submitInputHandoff(
+  sessionId: string,
+  request: { submission: InputHandoffSubmission; presentation: InputHandoffPresentation },
+): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId)
+    return window.electronAPI.maker.submitInputHandoff(request.presentation.requestId, request.submission);
+  return window.electronAPI.maker.submitRemoteInputHandoff({
+    deviceId,
+    ghostId: INPUT_HANDOFF_GHOST_ID,
+    requestId: request.presentation.requestId,
+    actionId: INPUT_HANDOFF_ACTION_ID,
+    expectedRevision: request.submission.expectedRevision,
+    submission: request.submission,
+    presentation: request.presentation,
+  });
+}
+
+/** One opened 代输入 screenshot step: its picture, and one answer (or close). */
+export interface InputHandoffPictureSession {
+  picture: InputHandoffPicture;
+  answer(submission: InputHandoffSubmission): Promise<{ accepted: boolean }>;
+  close(): void;
+}
+
+/**
+ * The current screenshot step. On this computer Main hands it over directly;
+ * for a task on another computer it arrives inside the sealed v3 offer, and
+ * the answer goes back on the same exchange.
+ */
+export async function openInputHandoffPicture(
+  sessionId: string,
+  presentation: InputHandoffPresentation,
+): Promise<InputHandoffPictureSession> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) {
+    const picture = await window.electronAPI.maker.getInputHandoffPicture(presentation.requestId, presentation.revision);
+    if (!picture) throw new Error('INPUT_HANDOFF_UNAVAILABLE');
+    return {
+      picture,
+      answer: (submission) => window.electronAPI.maker.submitInputHandoff(presentation.requestId, submission),
+      close: () => undefined,
+    };
+  }
+  const opened = await window.electronAPI.maker.openRemoteInputHandoffPicture({
+    deviceId,
+    ghostId: INPUT_HANDOFF_GHOST_ID,
+    requestId: presentation.requestId,
+    actionId: INPUT_HANDOFF_ACTION_ID,
+    expectedRevision: presentation.revision,
+    presentation,
+  });
+  let open = true;
+  return {
+    picture: opened.picture,
+    answer: (submission) => {
+      open = false;
+      return window.electronAPI.maker.answerRemoteInputHandoffPicture(opened.token, submission);
+    },
+    close: () => {
+      if (!open) return;
+      open = false;
+      void window.electronAPI.maker.answerRemoteInputHandoffPicture(opened.token, null).catch(() => undefined);
+    },
+  };
 }
 
 /**
@@ -908,6 +986,7 @@ export interface RoutableOrcaWorkflows {
   archiveWorker: FullOrca['archiveWorker'];
   endTeam: FullOrca['endTeam'];
   getCollaborationSettings: FullOrca['getCollaborationSettings'];
+  listExecutionDevices: FullOrca['listExecutionDevices'];
 }
 
 /**
@@ -953,6 +1032,7 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
     getCollaborationSettings: t(
       'maker:collaboration-settings:get',
     ) as FullOrca['getCollaborationSettings'],
+    listExecutionDevices: t('maker:orca:execution-devices') as FullOrca['listExecutionDevices'],
   };
 }
 

@@ -921,6 +921,113 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(deps.readReviewerResult).not.toHaveBeenCalled();
   });
 
+  describe('closing the loop with the source task', () => {
+    async function runToCompletion(overrides: Partial<ReviewStartHandlerDeps>) {
+      const harness = new IpcHarness();
+      const reviewer = new FakeReviewer();
+      const deps = makeDeps(reviewer, {
+        forwardResultToSource: vi.fn(async () => undefined),
+        ...overrides,
+      });
+      registerReviewStartHandler(harness, deps);
+      await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+      reviewer.emit({ type: 'done', data: {} });
+      await vi.waitFor(() => expect(deps.closeReviewer).toHaveBeenCalledTimes(1));
+      return deps;
+    }
+
+    it('shows the short summary as the Reviewer input instead of the full prompt', async () => {
+      const deps = await runToCompletion({
+        prepareRun: vi.fn(async () =>
+          makePreparedRun(makeLaunch(), { inputSummary: 'Independent review\nDirectory: /repo' }),
+        ),
+      });
+      expect(deps.persistReviewerPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceSessionId: 'source-1',
+          prompt: 'Independent review\nDirectory: /repo',
+        }),
+      );
+    });
+
+    it('forwards findings after the completed card and strips the count marker', async () => {
+      const deps = await runToCompletion({
+        readReviewerResult: vi.fn(async () => 'P1: real finding\n\n<review-findings count="1"/>'),
+      });
+      expect(deps.updateSourceCard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          result: 'P1: real finding',
+          meta: expect.objectContaining({ status: 'completed' }),
+        }),
+      );
+      expect(deps.forwardResultToSource).toHaveBeenCalledWith({
+        sourceSessionId: 'source-1',
+        reviewerSessionId: 'reviewer-1',
+        runId: 'run-1',
+        result: 'P1: real finding',
+        findingsCount: 1,
+        replyLanguage: null,
+      });
+      expect(vi.mocked(deps.updateSourceCard).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(deps.forwardResultToSource!).mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it('carries the user language detected at preparation into the follow-up', async () => {
+      const deps = await runToCompletion({
+        prepareRun: vi.fn(async () => makePreparedRun(makeLaunch(), { replyLanguage: 'ja' })),
+      });
+      expect(deps.forwardResultToSource).toHaveBeenCalledWith(
+        expect.objectContaining({ replyLanguage: 'ja' }),
+      );
+    });
+
+    it('forwards a conclusion without a usable count so the source agent can judge it', async () => {
+      const deps = await runToCompletion({});
+      expect(deps.forwardResultToSource).toHaveBeenCalledWith(
+        expect.objectContaining({ result: 'P1: real finding', findingsCount: null }),
+      );
+    });
+
+    it('does not start a source turn when the Reviewer reports no findings', async () => {
+      const deps = await runToCompletion({
+        readReviewerResult: vi.fn(async () => '未发现需要修改的问题。\n<review-findings count="0"/>'),
+      });
+      expect(deps.updateSourceCard).toHaveBeenCalledWith(
+        expect.objectContaining({ result: '未发现需要修改的问题。' }),
+      );
+      expect(deps.forwardResultToSource).not.toHaveBeenCalled();
+    });
+
+    it('does not forward a stale conclusion', async () => {
+      const launch = makeLaunch({
+        verifyBeforePublish: vi.fn(async () => ({
+          code: 'source-files-changed' as const,
+          message: 'changed',
+        })),
+      });
+      const deps = await runToCompletion({
+        prepareRun: vi.fn(async () => makePreparedRun(launch)),
+      });
+      expect(deps.forwardResultToSource).not.toHaveBeenCalled();
+    });
+
+    it('keeps the completed card when forwarding fails', async () => {
+      const deps = await runToCompletion({
+        forwardResultToSource: vi.fn(async () => {
+          throw new Error('ARCHIVED: session is archived');
+        }),
+      });
+      expect(deps.updateSourceCard).toHaveBeenCalledWith(
+        expect.objectContaining({ meta: expect.objectContaining({ status: 'completed' }) }),
+      );
+      expect(deps.warn).toHaveBeenCalledWith(
+        'review result forward to source failed',
+        expect.objectContaining({ error: 'ARCHIVED: session is archived' }),
+      );
+    });
+  });
+
   it('preserves a completed result as stale when final freshness verification fails', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();
@@ -949,6 +1056,32 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(vi.mocked(deps.updateSourceCard).mock.calls[0]?.[0].meta).not.toHaveProperty('error');
     expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['returned-failure', 'verification-exception'])(
+    'keeps an existing conclusion when final verification encounters %s', async (mode) => {
+      const harness = new IpcHarness();
+      const reviewer = new FakeReviewer();
+      const launch = makeLaunch({ verifyBeforePublish: vi.fn(async () => {
+        if (mode === 'verification-exception') throw new Error('Git backend unavailable');
+        return { code: 'artifact-unavailable' as const, message: 'Cannot verify source files' };
+      }) });
+      const workspace = { workingDir: '/repo/actual', baseRef: 'main', hasUncommittedChanges: true };
+      const deps = makeDeps(reviewer, {
+        prepareRun: vi.fn(async () => makePreparedRun(launch, { workspace })),
+      });
+      registerReviewStartHandler(harness, deps);
+      await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+      expect(deps.createSourceCard).toHaveBeenCalledWith(expect.objectContaining({
+        meta: expect.objectContaining({ workspace }),
+      }));
+      reviewer.emit({ type: 'done', data: {} });
+      await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
+      expect(deps.updateSourceCard).toHaveBeenCalledWith(expect.objectContaining({
+        result: 'P1: real finding', meta: expect.objectContaining({ status: 'failed', workspace }),
+      }));
+      expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('fails the visible card when evidence changes before reviewer bootstrap', async () => {
     const harness = new IpcHarness();

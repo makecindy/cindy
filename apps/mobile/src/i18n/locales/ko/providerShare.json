@@ -1,6 +1,7 @@
 {
   "picker": {
-    "deviceName": "{{device}} · {{owner}}님의 공유",
+    "shareName": "{{owner}}님의 공유",
+    "numbered": "{{name}} ({{index}})",
     "unavailable": "사용할 수 없는 공유"
   },
   "link": {

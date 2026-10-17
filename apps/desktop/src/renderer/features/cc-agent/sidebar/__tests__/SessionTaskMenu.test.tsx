@@ -116,10 +116,10 @@ it('loads only on open and groups task organization, sharing, viewing and remova
   expect(state.rowClick).not.toHaveBeenCalled();
 });
 
-it('hides moving a task whose agent runs on another computer, since its agent record stays there', () => {
+it('offers moving a task whose agent runs on another computer to another project', () => {
   render(<Harness target={{ ...session, agentDeviceId: 'device-b' } as Session} />);
   openMenu();
-  expect(labels()).not.toContain('moveToProject');
+  expect(labels()).toContain('moveToProject');
   expect(labels()).toContain('openInNewWindow');
 });
 

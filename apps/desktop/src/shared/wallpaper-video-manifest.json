@@ -1,29 +1,237 @@
 {
   "cindy-window": {
-    "delivery": "bundled",
+    "delivery": "cdn",
     "sha256": "10d72d8ab0f39a5ceec6f8746396c36bb6d7dd345ac18af209069678a90d010d",
     "bytes": 6091872,
     "width": 2304,
     "height": 1440,
     "fps": 24,
-    "duration": 12.041666666666666
+    "duration": 12.041666666666666,
+    "image": {
+      "sha256": "bfbb37f4a710e110d39596943bc5d68dfaf88d6989c1bc4e5adfbb2e48612d00",
+      "bytes": 1101332
+    }
   },
   "cindy-studio": {
-    "delivery": "bundled",
+    "delivery": "cdn",
     "sha256": "b33f9b527584ae8c8b085536a0823a346e4879fa845e62e5ac41ae1b7b0097b1",
     "bytes": 3606656,
     "width": 2304,
     "height": 1440,
     "fps": 24,
-    "duration": 12.041666666666666
+    "duration": 12.041666666666666,
+    "image": {
+      "sha256": "7d2af2acb2df6b7fcbb40030299b3518c8de81e138f638b95ca563521f374319",
+      "bytes": 1649522
+    }
   },
   "cindy-dream": {
-    "delivery": "bundled",
+    "delivery": "cdn",
     "sha256": "de9e0dc2235310bdbee30f1bf951d94ce8299b18ba674463df407b76bb162def",
     "bytes": 6312719,
     "width": 2304,
     "height": 1440,
     "fps": 24,
-    "duration": 12.041666666666666
+    "duration": 12.041666666666666,
+    "image": {
+      "sha256": "2a2043b9207c7dfaaed5951b567eba1eb24aeb192c3eb78a3c0ee9a46a732361",
+      "bytes": 1790734
+    }
+  },
+  "cindy-whisper": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "20c6046e462d514b7fc7d4d5b30351c510f395915bb91fdbd23d8e3cd61ba24d",
+      "bytes": 570506
+    }
+  },
+  "cindy-neon": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "e8a38fc4e291e7f3930d1cafd6d0cf73c141be150ffac783754ec83fd28e2069",
+      "bytes": 192046
+    }
+  },
+  "cindy-prism": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "84c73fc02a1232e7178ad22a6034c003f5d657c79f3db2199ae25a1a3b1c5d83",
+      "bytes": 369734
+    }
+  },
+  "cindy-crimson": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "6c5e7c5b21d398745ea833df21e3d6ab32aba12fbbb40ae0d7c73eed69cc0dc9",
+      "bytes": 376348
+    }
+  },
+  "cindy-night-glance": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "091d6d0ad4c64c6d658cce219f35fe72021e3af849512d2cb8c50bdeeb37315d",
+      "bytes": 799156
+    }
+  },
+  "cindy-scarlet-stroll": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "4cecd5b6ebefdc298c881eb17f56445565eea45ebb189dac8b8dc1ed01bb5c7c",
+      "bytes": 677244
+    }
+  },
+  "cloud-roaming": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "36ad77734856a34d4d21c89a8abb62cfbd2dc977d937e0a19ae04183aa8b7ab1",
+      "bytes": 186442
+    }
+  },
+  "night-launch": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "81b6f3807eea9cb989b8873c6daea2345d2fcfb7b6ad03dfdc0f9d73bdeef82f",
+      "bytes": 406080
+    }
+  },
+  "stardust-vortex": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "15961306156ff0d408598dc9679034186ebd0a4a2e424a45a9a90ff565cb7e6b",
+      "bytes": 480212
+    }
+  },
+  "silent-orbits": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "21a4135ae41e7f75f7e4829dce467041bab8c733cdbf588cb76b7605adcc1e75",
+      "bytes": 710060
+    }
+  },
+  "dune-dawn": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "070c9dc925c3a71eb8623db363a3c60d625dae5067446c99c7a179deacecdeee",
+      "bytes": 282116
+    }
+  },
+  "planet-dawn": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "5c0034d6e9e0d341b737568600d70cb8511dfe45aca232b5ad5676d93310a76b",
+      "bytes": 404226
+    }
+  },
+  "neon-valley": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "04dd0f82c890904f47c1198319375c69cfb62ad72e435d65133b6b56f57396e8",
+      "bytes": 655006
+    }
+  },
+  "silent-circuit": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "cad7e877de6c66e711ec2a80cc3f4316a539cdd7694cedf33177bfb6ad27fd11",
+      "bytes": 325584
+    }
+  },
+  "indigo-folds": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "21cb022d1a492809e1c3e2de99e0f4ec697174846c00d3d2a39c04e1643ae2f9",
+      "bytes": 323432
+    }
+  },
+  "wheatfield-watch": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "ae68d0404576c5df0aa5b9e7505737443b93a08c747efab71749b86b659a1880",
+      "bytes": 897422
+    }
+  },
+  "moon-solitude": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "efc5b241a1000d5bcc5edb5eff2eeb2e359f211ae23fa34c5886af0820f1693f",
+      "bytes": 477252
+    }
+  },
+  "teacup-cat": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "73ba1f2175ff328230bec093857c0138b7e5018a9a2fea05b26acfeb39be6f7f",
+      "bytes": 697458
+    }
+  },
+  "dune-sphere": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "5ebc0912b68fd41d4908fc0364841d8a468a401498d3adc7ea2ebd90e0a38eb6",
+      "bytes": 381164
+    }
+  },
+  "amber-light": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "08209831fc2a495b878021862ebc6cd6e036b3509ca7fdcb2e21e81ddf12b0ed",
+      "bytes": 547930
+    }
+  },
+  "ocean-clouds": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "d7852f5046786e9d7f7bf7b28cf5f7bd4c92731a21a2bc8513591c71c09ebc94",
+      "bytes": 261362
+    }
+  },
+  "blush-leaves": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "1bfea5c8b698ba469f20494748a4757bef5f289fe1152752f119385e998fe1cb",
+      "bytes": 322246
+    }
+  },
+  "white-wilderness": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "384009a1ccf1a1310f0318c872161cff2521c2f3aef62b5d4e8d3a312725ed13",
+      "bytes": 256524
+    }
+  },
+  "blue-gaze": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "aa6cc107f477927b344fa5b39e523ac2ca61f85d64f80c164fc64478aa5e4a6b",
+      "bytes": 182562
+    }
+  },
+  "rose-quartz": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "c627ee2ae28c87f19d19cedf4c89002c1a69864d5982e1173fa730eebe41346a",
+      "bytes": 622300
+    }
+  },
+  "silver-veins": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "d824fcacb3bf3627da9eeb27aa9a30451928be9db4997ae1cac6a2bc407a29d0",
+      "bytes": 347328
+    }
+  },
+  "dawn-arc": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "76819a854079bc84c7d7420b3d2821300f64c0084927778bb06571c78ce3257c",
+      "bytes": 400652
+    }
+  },
+  "tidal-lines": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "cf5d38c78dc0da45e5092ef21eff75c3b23f0bbbf1923a7848abd21d8a5e06b0",
+      "bytes": 606158
+    }
   }
 }

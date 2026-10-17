@@ -119,7 +119,7 @@ describe('messagePresentation', () => {
       hasTime: true,
       hasTurnCost: true,
       isStreaming: true,
-    }).items).toEqual(['streaming']);
+    }).items).toEqual([]);
   });
 
   it('summarizes tool groups as desktop-style headers without mobile detail badges', () => {

@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../../shared/ghost';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { FEATURE_RETIREMENTS } from '../../../shared/featureRetirements';
 import type { TabState } from './types';
 
@@ -29,6 +30,7 @@ function retiredTab(
 
 function isUnavailableTab(tab: TabState, availability: RightSidebarTabAvailability): boolean {
   return (
+    (!CINDY_MAKE_ENABLED && tab.kind === 'cindy-make') ||
     retiredTab(tab, availability) === null ||
     (tab.kind === 'subagents' && !availability.subagentsAvailable)
   );

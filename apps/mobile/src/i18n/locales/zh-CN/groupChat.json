@@ -77,6 +77,11 @@
     "planDoneGeneric": "分工做完了",
     "olderOnComputer": "更早的消息请在电脑上查看"
   },
+  "quote": {
+    "label": "引用 {{name}}：{{summary}}",
+    "deleted": "原消息已删除",
+    "attachments": "{{name}} 等 {{total}} 个附件"
+  },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
     "memberFailed": "{{name}}这次没能回复",
@@ -87,7 +92,19 @@
     "workdirUnavailable": "{{name}}找不到工作目录",
     "stepFailed": "{{name}}这一步出错了，没做完",
     "stepTimeout": "{{name}}太久没做完，这一步先停下",
-    "stepUnavailable": "{{name}}现在不可用，这一步没法做"
+    "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+    "runtimeFailure": {
+      "IMAGE_INPUT_UNSUPPORTED": "{{name}}无法回复：当前模型不支持图片。\n请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。",
+      "MODEL_UNAVAILABLE": "{{name}}无法回复：当前没有可用模型。\n请在伙伴设置中选择已连接的可用模型后重新发送。",
+      "AUTH_REQUIRED": "{{name}}无法回复：模型连接需要重新认证。\n请在设置中重新连接对应模型来源后重新发送。",
+      "RATE_LIMITED": "{{name}}无法回复：模型请求过于频繁。\n请稍后重新发送，或选择其他可用模型。",
+      "UPSTREAM_OVERLOADED": "{{name}}无法回复：模型服务暂时繁忙。\n请稍后重新发送，或选择其他可用模型。",
+      "QUOTA_EXCEEDED": "{{name}}无法回复：模型用量已达上限。\n请检查对应来源的配额，或选择其他可用模型。",
+      "NETWORK_ERROR": "{{name}}无法回复：网络连接失败。\n请检查网络或 Proxy 后重新发送。",
+      "RUNTIME_TIMEOUT": "{{name}}本次回复超时。\n请重新发送消息，或选择其他可用模型。",
+      "RUNTIME_ERROR": "{{name}}这次没能回复。\n请重新发送消息；如果仍失败，请查看日志并反馈问题。"
+    },
+    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。"
   },
   "plan": {
     "intro_one": "这件事分 {{count}} 步，我这样分工：",
@@ -123,8 +140,21 @@
     "planning": "正在安排…",
     "step": "正在做…"
   },
+  "task": {
+    "state": {
+      "started": "进行中",
+      "waiting": "等你确认",
+      "completed": "已完成",
+      "failed": "失败了",
+      "cancelled": "已取消",
+      "timed-out": "已超时"
+    }
+  },
   "files": {
-    "onComputer": "文件在电脑上，回电脑打开"
+    "onComputer": "文件在电脑上，回电脑打开",
+    "loading": "加载中…",
+    "unavailable": "暂时无法加载",
+    "untitled": "附件"
   },
   "settings": {
     "open": "群设置",
@@ -135,7 +165,7 @@
     "minMembers": "群里至少要有 {{min}} 位伙伴",
     "maxMembers": "最多 {{max}} 位",
     "noMoreBots": "没有其他可以加入的伙伴了",
-    "nameSaveFailed": "群名称没能保存，已恢复原来的名字",
+    "nameSaveFailed": "群名称没能保存，输入已保留，请重试。",
     "membersSaveFailed": "成员没能更新，请再试一次",
     "replyMode": "没有 @ 人的时候",
     "replyModeAll": "大家都可以接话",
@@ -149,7 +179,7 @@
     "speakingMode": "发言方式",
     "speakingModeAuto": "自动",
     "speakingModeSequential": "始终轮流",
-    "speakingModeAutoNote": "没有 @ 人或 @所有人时，第一圈大家同时想，之后轮流接话；@ 了伙伴就按 @ 的先后轮流。",
+    "speakingModeAutoNote": "未 @ 人或 @所有人时，首轮同时思考，之后轮流；@ 伙伴按提及顺序轮流。",
     "speakingModeSequentialNote": "每次只有一位伙伴发言，后说的能看到前面的回答。",
     "speakingModeSaveFailed": "发言方式没能保存，请再试一次",
     "setOrganizer": "设为负责人",
@@ -161,15 +191,46 @@
     "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
     "add": "添加伙伴",
     "projectDirOnComputer": "在电脑上选择或更换",
-    "memberActions": "{{name}} 的操作"
+    "memberActions": "{{name}} 的操作",
+    "managementComputer": "管理电脑",
+    "retry": "重试",
+    "reconnect": "重连",
+    "conflict": "群设置已更新，请核对后再保存。输入已保留。",
+    "archive": "归档群聊",
+    "archiveConfirmTitle": "归档「{{name}}」？",
+    "archiveNote": "仅群主可归档。归档后不能继续发消息，历史消息保留。",
+    "managementStatus": {
+      "ready": "已连接",
+      "loading": "连接中…",
+      "noHost": "已断开",
+      "permission": "无管理权限",
+      "upgrade": "需更新电脑端",
+      "unavailable": "设置读取失败"
+    }
   },
   "errors": {
     "memberLimit": "一个群需要 2–6 位伙伴",
     "memberUnavailable": "有伙伴现在不可用，换一位再试",
+    "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
     "notFound": "这个群聊已不存在",
     "hostNotReady": "Cindy 还在准备中，请稍后重试",
     "planOpen": "正在分工，做完或停止后才能安排新的",
-    "planClosed": "这个安排已经结束或更新了"
+    "planClosed": "这个安排已经结束或更新了",
+    "invalidAttachment": "附件无法读取，请重新选择后发送。",
+    "attachmentUnavailable": "未能从手机取回附件，请检查设备连接后重试。",
+    "attachmentTooLarge": "附件超过 100 MB，请选择较小的文件。",
+    "mediaUploadFailed": "附件未能上传到群聊服务，请稍后重试。",
+    "authRequired": "登录已失效，请在电脑上重新登录。",
+    "chatUnavailable": "群聊服务暂时无法连接，请检查网络后重试。",
+    "importPending": "群历史记录仍在同步，请稍后重试。",
+    "requestTimeout": "还未确认操作结果，请刷新查看后再重试。",
+    "permissionDenied": "你没有执行此操作的群管理权限。",
+    "serviceError": "群聊服务处理失败，请稍后重试。",
+    "groupArchived": "本群已归档，不能执行此操作。",
+    "quoteUnavailable": "引用的消息已删除或不可见，已取消引用，请再发送一次",
+    "lifecycleUnavailable": "当前服务器或电脑暂不支持此操作。",
+    "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
+    "lastOwner": "请先转让群主或解散群聊，再退出。"
   },
   "followUp": {
     "next": "分工 · 下一步",
@@ -182,5 +243,17 @@
     "attachmentFailed": "附件打开失败，请重试。",
     "previewUnavailable": "暂时无法读取消息预览",
     "endpointUnavailable": "群聊服务配置暂不可用，请重试。"
+  },
+  "lifecycle": {
+    "dissolve": "解散群聊",
+    "dissolveNote": "解散后无法恢复。所有成员将无法发送消息，进行中的工作会停止，邀请会失效。成员仍可查看原本有权访问的历史消息。",
+    "hide": "从我的列表移除",
+    "hideNote": "从你所有设备的列表中移除此群聊。不改变成员关系，不删除历史消息、不停止进行中的工作，也不影响其他成员。",
+    "leave": "退出群聊",
+    "leaveNote": "你和你的伙伴将退出此群聊，不再接收新消息，也无法查看群历史。",
+    "unavailable": "当前服务器或电脑暂不支持此操作。",
+    "dissolved": "群聊已解散，仍可查看有权访问的历史消息。",
+    "failed": "操作未完成，请重试。",
+    "lastOwner": "请先转让群主或解散群聊，再退出。"
   }
 }

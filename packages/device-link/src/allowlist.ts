@@ -25,8 +25,25 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
+import {
+  ORCA_EXECUTION_DEVICES_CHANNEL,
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
+  ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
+} from './orcaRemoteWorker.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
+import {
+  COMPANION_CLOUD_CAPS_CHANNEL,
+  COMPANION_CLOUD_FLUSH_CHANNEL,
+  COMPANION_CLOUD_HAND_OVER_CHANNEL,
+  COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
+  COMPANION_CLOUD_MERGE_CHANNEL,
+  COMPANION_CLOUD_MERGE_TIMEOUT_MS,
+  COMPANION_CLOUD_TARGETS_CHANNEL,
+} from './companionCloud.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
@@ -54,6 +71,13 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
 /** Same-account, linked, read-only history discovery/search. No shared-task or unlinked access. */
 export const DL_HISTORY_QUERY_CHANNEL = 'local-db:history:query';
+/**
+ * 同账号另一台电脑上的任务，把一条消息发给本机的既有任务（Agent 的 send_to_session
+ * 传 `deviceId::sessionId`）。只投递到既有任务，不新建；来源由被控端按服务端认证的
+ * 控制端设备 id 盖章。不进 unlinked / shared-task 白名单。老被控端无此 channel →
+ * CHANNEL_NOT_ALLOWED，发送方明确报「对方版本不支持」。
+ */
+export const DL_SESSION_HANDOFF_CHANNEL = 'maker:session:handoff';
 
 /**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
@@ -161,6 +185,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:close-session',
   'maker:abort-session',
   'maker:send',
+  // Task-bound official MCP App bridge. No credentials or arbitrary endpoint selection.
+  'maker:mcp-apps:v1',
+  DL_SESSION_HANDOFF_CHANNEL,
   'maker:steer',
   'maker:list-active',
   'maker:any-session-in-turn',
@@ -347,6 +374,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
   REMOTE_AGENT_CHANNEL,
+  // 供应商组(被控端 dispatch 拦截执行，不落 ipcMain handler)：同账号电脑问组所在电脑该用组里哪台、
+  // 报告运行中的任务与需要冷却的电脑。只给同账号，分享受邀者与共享任务访客在 dispatch 再拒一次。
+  PROVIDER_GROUP_REMOTE_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。
@@ -414,6 +444,29 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'local-db:orca-workflows:get-by-lead',
   'local-db:orca-workflows:get-by-worker-session',
   'local-db:orca-workflows:list-workers-by-lead',
+  // 协同远端 Worker：本机作为运行设备，承接另一台电脑上 Lead 派来的 Worker 任务。
+  // 准入同 maker:create-session：同账号 + 本机开启远程控制时控制端本就能在这里建任务；
+  // 业务 handler 不依赖 sender、无本机 UI 副作用；来源电脑取 server 盖章的 src。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，控制端提示更新而不回退普通建任务。
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL,
+  ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+  ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
+  // 远程控制 Lead 所在电脑时，读取那台视角下可选的运行设备(只读，真相在被控端)。
+  ORCA_EXECUTION_DEVICES_CHANNEL,
+  // 云端伙伴：交出伙伴前探测目标电脑是否支持接手(只读常量，无 sender 依赖、无本机 UI 副作用)。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，交出方拒绝该目标。
+  COMPANION_CLOUD_CAPS_CHANNEL,
+  // 云端伙伴：在任一台电脑上更换伙伴的主力电脑。只读读取主力电脑视角的可接手电脑，以及请主力电脑
+  // 交出伙伴(写)。准入同本机伙伴设置的「主力电脑」一行：同账号 + 主力电脑开启远程控制时控制端本就
+  // 能远程改这个伙伴；交出走被控端同一业务流程(同步、忙碌检查、比较后改主力电脑)，handler 不依赖
+  // sender、无本机 UI 副作用。仅同账号远控，不进 sharedTask 访客白名单。老版本无 handler →
+  // CHANNEL_NOT_ALLOWED；控制端按 caps 版本隐藏入口。
+  COMPANION_CLOUD_TARGETS_CHANNEL,
+  COMPANION_CLOUD_HAND_OVER_CHANNEL,
+  // 云端伙伴：请保留的那个 Cindy 所在电脑合并其他 Cindy（写；同账号远控，准入同上，业务 handler 只在
+  // 本机运行保留的那个 Cindy 时执行）。合并前请各来源 Cindy 的主力电脑先同步（写，只上传、不改主力电脑）。
+  COMPANION_CLOUD_MERGE_CHANNEL,
+  COMPANION_CLOUD_FLUSH_CHANNEL,
   // —— Rewind / Fork / Title / Context ——
   'maker:rewind:preview',
   'maker:rewind:commit',
@@ -668,6 +721,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // maker-ipc MAKER_PUSH
   'maker:event',
   'maker:history-view-changed',
+  // Running work item replacement for controllers whose latest view read asked for work lines.
+  'maker:history-work-patch',
   // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
   'maker:agents:changed',
   // Host-owned resource provider 的通用失效通知；payload 只含 collection/ref/revision。
@@ -803,6 +858,15 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
   // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
   'maker:worker:dispatch-ui-assignment': 65_000,
+  // 被控端要等目标任务的发送锁、必要时恢复 Agent（冷启动 / SSH 就绪）后才回执；默认 30s 会把
+  // 已经送达的慢恢复报成「结果未知」，调用方重发就成了重复消息。
+  [DL_SESSION_HANDOFF_CHANNEL]: 65_000,
+  // 运行设备准备工作目录并启动 Worker 的 Agent，可能超过默认 30s。
+  [ORCA_REMOTE_WORKER_OPEN_CHANNEL]: ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
+  // 交出伙伴先把积压对话与全部资料传到服务器，再改主力电脑。
+  [COMPANION_CLOUD_HAND_OVER_CHANNEL]: COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
+  [COMPANION_CLOUD_MERGE_CHANNEL]: COMPANION_CLOUD_MERGE_TIMEOUT_MS,
+  [COMPANION_CLOUD_FLUSH_CHANNEL]: COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

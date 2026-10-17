@@ -32,6 +32,7 @@ import {
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
+import { TokenSpeedMeter } from '../shared/token-speed.js';
 import type { UsageSegment } from '../shared/usage-tracker.js';
 import {
   UPSTREAM_OVERLOAD_REASON,
@@ -160,6 +161,10 @@ export interface PiTranslateContext {
   terminalAssistantErrorEmitted: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
+  /** Live tok/s shown in the status bar (Pi extension algorithm). */
+  tokenSpeed: TokenSpeedMeter;
+  /** Last running status text, reused by speed-only refreshes. */
+  lastRunningStatus: string;
   generationDurationMs: number;
   /** Open generation interval start; 0 while tools/user waits own the turn. */
   generationOpenAt: number;
@@ -224,6 +229,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     finalAssistantStopReason: null,
     turnWallClockStartedAt: 0,
+    tokenSpeed: new TokenSpeedMeter(),
+    lastRunningStatus: 'Working…',
     generationDurationMs: 0,
     generationOpenAt: 0,
     generationTimingReliable: true,
@@ -292,9 +299,17 @@ export function rollbackPiHostAbortRequest(
   if (ctx.hostAbortRequestTokens.size === 0) ctx.hostAbortRequestGeneration = null;
 }
 
-export function isCurrentTurnHostAbortRequested(ctx: PiTranslateContext): boolean {
-  return ctx.hostAbortRequestGeneration === ctx.turnGeneration
-    && ctx.hostAbortRequestTokens.size > 0;
+export function isCurrentTurnHostAbortRequested(
+  ctx: PiTranslateContext,
+  includePendingTurn = false,
+): boolean {
+  // Native frames classify the started generation. Executor loss can also
+  // terminate an idle pending prompt whose agent_start will never arrive.
+  return ctx.hostAbortRequestTokens.size > 0 && (
+    ctx.hostAbortRequestGeneration === ctx.turnGeneration ||
+    (includePendingTurn && !ctx.isStreaming && ctx.pendingHostTurnStartToken !== null &&
+      ctx.hostAbortRequestGeneration === ctx.turnGeneration + 1)
+  );
 }
 
 function clearPiHostAbortRequests(ctx: PiTranslateContext): void {
@@ -332,6 +347,7 @@ function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()):
       PI_GENERATION_HEARTBEAT_MS + PI_GENERATION_SUSPEND_GAP_MS
   ) {
     ctx.generationHeartbeatReliable = false;
+    ctx.tokenSpeed.invalidate();
   }
   ctx.generationHeartbeatAt = now;
 }
@@ -356,6 +372,7 @@ export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
       costUsd: ctx.costUsd,
     },
     {
+      tokenSpeed: ctx.tokenSpeed.snapshot(),
       outputTokens: ctx.turnOutput,
       // Pi reports output only at message_end, alongside the closed duration.
       durationMs: ctx.generationDurationMs,
@@ -372,6 +389,7 @@ function pushStatus(
   isRunning: boolean,
   extras?: Pick<AgentEvent, 'turnScope'>,
 ): void {
+  if (isRunning) ctx.lastRunningStatus = text;
   queue.push({
     type: 'status',
     data: { status: text, ...usageSnapshotOf(ctx), isRunning },
@@ -676,6 +694,7 @@ export function translatePiEvent(
       ctx.pendingAssistantError = null;
       ctx.terminalAssistantErrorEmitted = false;
       ctx.turnWallClockStartedAt = Date.now();
+      ctx.tokenSpeed.reset();
       ctx.generationDurationMs = 0;
       ctx.generationTimingReliable = true;
       stopPiGenerationHeartbeat(ctx);
@@ -695,6 +714,10 @@ export function translatePiEvent(
       return;
 
     case 'message_start': {
+      // Pi also starts user prompts and tool results; only assistant messages are
+      // model requests that queue a price tier and open generation timing.
+      const role = (event.message as { role?: string } | undefined)?.role;
+      if (role && role !== 'assistant') return;
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
       const message = event.message as { usage?: PiUsage } | undefined;
@@ -709,6 +732,7 @@ export function translatePiEvent(
     case 'message_update': {
       const delta = event.assistantMessageEvent as Record<string, unknown> | undefined;
       if (!delta || typeof delta.type !== 'string') return;
+      observePiTokenSpeed(delta, queue, ctx);
       handleAssistantDelta(delta, queue, ctx);
       return;
     }
@@ -948,6 +972,7 @@ export function translatePiEvent(
       ctx.turnSettled = true;
       ctx.isStreaming = false;
       ctx.pendingPriceVariants = [];
+      ctx.tokenSpeed.stop(ctx.turnOutput);
       stopPiGenerationHeartbeat(ctx);
       const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
       const pendingAssistantError = hostAbortRequested ? null : ctx.pendingAssistantError;
@@ -1036,6 +1061,8 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      // The backoff wait is not generation time; the retried request's first block resumes.
+      ctx.tokenSpeed.pause();
       // A provider retry may begin without a matching message_end for the
       // failed request. Drop any stale latch so the next request samples its
       // own tariff at message_start.
@@ -1189,6 +1216,32 @@ export function translatePiEvent(
 
     default:
       ctx.logger.warn('pi translator: unhandled event dropped', { type: event.type });
+  }
+}
+
+/** Mirrors pi-token-speed's message_update handlers. */
+function observePiTokenSpeed(
+  delta: Record<string, unknown>,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: PiTranslateContext,
+): void {
+  if (!ctx.isStreaming) return;
+  switch (delta.type) {
+    case 'text_start':
+    case 'thinking_start':
+    case 'toolcall_start':
+      ctx.tokenSpeed.start();
+      return;
+    case 'toolcall_delta':
+    case 'text_delta':
+    case 'thinking_delta':
+      if (typeof delta.delta === 'string' && ctx.tokenSpeed.recordDelta(delta.delta)) {
+        pushStatus(queue, ctx, ctx.lastRunningStatus, true);
+      }
+      return;
+    case 'toolcall_end':
+      ctx.tokenSpeed.pause();
+      return;
   }
 }
 

@@ -607,10 +607,16 @@ export async function buildCindyPersonal(
       if (!published) {
         try {
           if (adopted && original && editingTask) {
-            await restoreBuildSource(recoveryGit, source, original, {
-              commit: baseline,
-              tree: candidateTree,
-            });
+            await restoreBuildSource(
+              recoveryGit,
+              source,
+              original,
+              {
+                commit: baseline,
+                tree: candidateTree,
+              },
+              makeSourceRoot(task.userData),
+            );
             const ref = taskContentRef(editingTask.runId, 'integrated');
             await recoveryGit(
               previousTaskTree ? ['update-ref', ref, previousTaskTree] : ['update-ref', '-d', ref],

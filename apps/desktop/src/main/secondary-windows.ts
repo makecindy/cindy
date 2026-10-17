@@ -98,6 +98,7 @@ export function openSessionInNewWindow(
   mainWindow: BrowserWindow | null,
   deviceId?: string | null,
   anchorPoint?: ScreenPoint,
+  messageClientId?: string | null,
 ): void {
   const createdAt = performance.now();
   // frame 配置复刻主窗(bootstrap-electron.ts createWindow): Mac 隐藏标题栏留红绿灯,
@@ -221,6 +222,7 @@ export function openSessionInNewWindow(
     url.searchParams.set('secondaryWindow', '1');
     url.searchParams.set('bootSession', sessionId);
     if (deviceId) url.searchParams.set('bootDevice', deviceId);
+    if (messageClientId) url.searchParams.set('bootMessage', messageClientId);
     url.hash = hash;
     void win.loadURL(url.toString());
   } else {
@@ -229,6 +231,7 @@ export function openSessionInNewWindow(
         secondaryWindow: '1',
         bootSession: sessionId,
         ...(deviceId ? { bootDevice: deviceId } : {}),
+        ...(messageClientId ? { bootMessage: messageClientId } : {}),
       },
       hash,
     });

@@ -119,7 +119,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   )["image"].naturalHeight = 1080;
   Object.assign(elements.image, { complete: true });
   const intervals: Array<() => void> = [];
-  const frames = new Map<number, () => void>();
+  const frames = new Map<number, (time: number) => void>();
   const videoFrames = new Map<number, () => void>();
   let id = 0;
   const video = Object.assign(elements.video, {
@@ -189,7 +189,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     clearInterval() {},
     setTimeout: () => 1,
     clearTimeout() {},
-    requestAnimationFrame: (fn: () => void) => {
+    requestAnimationFrame: (fn: (time: number) => void) => {
       frames.set(++id, fn);
       return id;
     },
@@ -222,7 +222,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       now += elapsed;
       const pending = [...frames.values()];
       frames.clear();
-      pending.forEach((fn) => fn());
+      pending.forEach((fn) => fn(now));
     },
     pointer: (type: string, pointerId: number, x: number, y: number) =>
       listeners[`stage:${type}`]({
@@ -1266,6 +1266,27 @@ describe("remote desktop viewport", () => {
     expect(
       v.messages.at(-1)?.events?.every((event) => event.kind === "scroll"),
     ).toBe(true);
+  });
+  it("lets a light zoom rest well past the desktop edge to clear overlaid chrome", () => {
+    const v = viewer();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 350, 300);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 350, 300);
+    for (let i = 0; i < 30; i++) v.frame();
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(600);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 1200, 1300);
+    v.pointer("pointerup", 1, 1200, 1300);
+    for (let i = 0; i < 30; i++) v.frame();
+    // 1.5x already allows the full reach: 40% of the 400pt width, and the
+    // 240pt cap beyond the vertically centered 337.5pt-high picture.
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(160);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(131.25 + 240);
   });
 });
 

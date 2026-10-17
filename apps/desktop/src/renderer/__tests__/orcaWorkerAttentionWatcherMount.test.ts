@@ -1,69 +1,45 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { expect, it } from 'vitest';
+import ts from 'typescript';
 
-import { describe, expect, it } from 'vitest';
-
-const sidebarSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
-
-const watcherSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useOrcaWorkerAttentionWatcher.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
-
-const projectionSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'workerProjectionStore.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
-
-const orcaSplitViewSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'OrcaSplitView.tsx'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
-
-describe('Orca worker attention watcher mount', () => {
-  it('mounts the worker attention watcher in CCAgentSidebarUpper root, not inside ExpandedView', () => {
-    const rootBlock = extractBetween(
-      sidebarSource,
-      'export function CCAgentSidebarUpper()',
-      'function ExpandedView(',
-    );
-    const expandedBlock = sidebarSource.slice(sidebarSource.indexOf('function ExpandedView('));
-
-    expect(rootBlock).toContain('useOrcaWorkerAttentionWatcher(sessionsHook.sessions, activeSessionId);');
-    expect(expandedBlock).not.toContain('useOrcaWorkerAttentionWatcher(');
-  });
-
-  it('derives attention from the projection store, whose request sequence rejects stale results', () => {
-    expect(watcherSource).toContain('useWorkerProjectionVersion()');
-    expect(watcherSource).toContain('getWorkerProjectionSnapshot(leadSessionId)');
-    expect(watcherSource).not.toContain('listWorkersByLead(');
-    expect(projectionSource).toContain('if (item.entry.requestSeq !== item.requestId)');
-    expect(projectionSource).toContain('if (entry.requestSeq !== requestId)');
-  });
-
-  it('clears only visible non-done worker attention before paint in doc-mode toggle layout', () => {
-    const splitViewBlock = extractBetween(
-      orcaSplitViewSource,
-      'export function OrcaSplitView({',
-      'const activePane = togglePane;',
-    );
-
-    expect(splitViewBlock).toContain('const attention = useWorkerAttentionSnapshot();');
-    expect(splitViewBlock).toContain('useLayoutEffect(() => {');
-    expect(splitViewBlock).toContain("togglePane === 'worker' &&");
-    expect(splitViewBlock).toContain('reportAgentIslandVisibility &&');
-    expect(splitViewBlock).toContain("selectedWorkerRecord?.status !== 'done'");
-    expect(splitViewBlock).toContain('clearWorkerAttention(selectedWorkerId);');
-  });
-});
-
-function extractBetween(source: string, startNeedle: string, endNeedle: string): string {
-  const start = source.indexOf(startNeedle);
-  const end = source.indexOf(endNeedle, start);
+// Guard tier (engineering-conventions §3.2): the long-lived sidebar owns the
+// worker notification subscription. Moving it into the conditional ExpandedView
+// loses completion/error notifications while collapsed. Hook behavior is tested
+// by useWorkers.test.tsx; no isolated root-sidebar runtime harness exists, and
+// mocking its expanded subtree would hide this mount-ownership regression.
+it('owns worker attention in the sidebar root across collapsed-view unmounts', () => {
+  const source = readFileSync(resolve(__dirname, '../features/cc-agent/CCAgentSidebarUpper.tsx'), 'utf8');
+  const start = source.indexOf('export function CCAgentSidebarUpper()');
+  const end = source.indexOf('function ExpandedView(', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
-}
+  expect(source.slice(start, end)).toContain('useOrcaWorkerAttentionWatcher(sessionsHook.sessions, activeSessionId);');
+  expect(source.slice(end)).not.toContain('useOrcaWorkerAttentionWatcher(');
+});
+
+// Hidden/local/remote metadata must reach the root notification dispatcher.
+it('passes unfiltered local and remote metadata to notification dispatch', () => {
+    const filename = resolve(__dirname, '../features/cc-agent/CCAgentSidebarUpper.tsx');
+    const source = ts.createSourceFile(filename, readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let rawRemote: string | undefined;
+    const props = new Map<string, string>();
+    function visit(node: ts.Node): void {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'remoteProjectSessionsRaw' && !rawRemote) {
+        rawRemote = node.initializer?.getText(source);
+      }
+      if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'ExpandedView') {
+        for (const attribute of node.attributes.properties) {
+          if (ts.isJsxAttribute(attribute) && attribute.initializer && ts.isJsxExpression(attribute.initializer)) {
+            props.set(attribute.name.getText(source), attribute.initializer.expression?.getText(source) ?? '');
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+    expect(rawRemote).toContain('useSyncExternalStore');
+    expect(rawRemote).toContain('remoteProjectsStore.getMergedRemoteSessions');
+    expect(props.get('allSessionsForNotification')).toBe('allSessionsForAttentionRaw');
+    expect(props.get('remoteSessionsForNotification')).toBe('remoteProjectSessionsRaw');
+  });

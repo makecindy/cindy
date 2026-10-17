@@ -60,6 +60,20 @@ describe.skipIf(!fs.existsSync(CODEX))('native exec-server workspace projection'
       expect(output.trim()).toBe(virtual);
       expect(actions).toEqual([expect.objectContaining({ kind: 'exec', cwd: project })]);
       expect(JSON.stringify(messages)).not.toContain(project.replace(/\\/g, '\\\\'));
+
+      // Pinned Codex 0.159.2 writes through fs/writeFile (dataBase64), not fs/writeBlock.
+      // Exercise its real wire contract and verify an edit keeps the file's original path spelling.
+      const target = path.join(project, 'paths.json');
+      const original = { out: path.join(project, 'build', 'out.txt'), label: 'before' };
+      fs.writeFileSync(target, JSON.stringify(original));
+      send({ id: 3, method: 'fs/writeFile', params: {
+        path: 'file://' + virtual + '/paths.json',
+        dataBase64: Buffer.from(JSON.stringify({ out: virtual + '/build/out.txt', label: 'after' })).toString('base64'),
+      } });
+      await expect.poll(() => messages.find((item) => item.id === 3), { timeout: 5000 }).toBeDefined();
+      expect(messages.find((item) => item.id === 3)?.error).toBeUndefined();
+      expect(fs.readFileSync(target, 'utf8')).toBe(JSON.stringify({ ...original, label: 'after' }));
+      expect(actions.at(-1)).toEqual({ kind: 'write', path: target });
     } finally {
       relay.close();
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

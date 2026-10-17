@@ -115,6 +115,17 @@ describe('remote resource discovery', () => {
       .rejects.toThrow('temporarily offline');
   });
 
+  it('commits an authoritative empty manifest even when an uncached sibling fails', async () => {
+    const invoke = vi.fn(async (deviceId: string) => {
+      if (deviceId === 'mac-2') throw new Error('temporarily offline');
+      return { protocolVersion: 1, collections: [] };
+    }) as RemoteInvoke;
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
+    const progress = vi.fn();
+    await expect(discoverRemoteHomeCollections(invoke, targets, 'en', previous, progress)).resolves.toEqual([]);
+    expect(progress).toHaveBeenLastCalledWith([]);
+  });
+
   it('treats an old host as unsupported while retaining collections from newer hosts', async () => {
     const invoke = vi.fn(async (deviceId: string) => {
       if (deviceId === 'mac-1') throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'old desktop');
@@ -167,6 +178,13 @@ describe('remote resource discovery', () => {
 });
 
 describe('remote resource response boundaries', () => {
+  it('retains maximum-length namespace instance refs while bounding malformed ids', () => {
+    const id = '_ns__' + 'a'.repeat(128) + '__' + 'p'.repeat(32);
+    const item = (value: string) => ({ ref: { collectionId: 'plugins', kind: 'plugin', id: value },
+      display: { title: 'Plugin' }, links: [], revision: '1' });
+    expect(normalizeRemoteCollectionItems({ items: [item(id), item('x'.repeat(257))] }, 'plugins')
+      .map((entry) => entry.ref.id)).toEqual([id]);
+  });
   it('keeps valid additive items and drops malformed or cross-collection items', () => {
     expect(normalizeRemoteCollectionItems({ items: [
       {

@@ -11,7 +11,11 @@ import {
   type ConversationSearchJump,
 } from '../../../../shared/conversationSearchJump';
 import type { CreateWorkerForm } from '../CreateWorkerPopover';
-import { getCollaborationStartErrorMessage } from '../collaborationErrors';
+import {
+  executionDeviceErrorMessage,
+  getCollaborationStartErrorMessage,
+  workerAgentDeviceErrorMessage,
+} from '../collaborationErrors';
 import { createWorkerLabel } from '../workerLabel';
 import { useWorkers } from './useWorkers';
 import { clearWorkerAttention } from '../lib/workerAttentionStore';
@@ -312,6 +316,14 @@ export function useOrcaWorkerSelection({
             // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
             providerId: form.providerId ?? undefined,
             workerPermissionMode: form.workerPermissionMode,
+            ...(form.executionDeviceId
+              ? {
+                  executionDeviceId: form.executionDeviceId,
+                  ...(form.workingDir ? { workingDir: form.workingDir } : {}),
+                }
+              : {}),
+            // Worker 的 Agent 所在电脑(远程供应商)；面板只在任务所在电脑支持时才带。
+            ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
             label,
             initialTask: form.initialTask || undefined,
           });
@@ -325,7 +337,10 @@ export function useOrcaWorkerSelection({
             continue;
           }
           toast.error(
-            getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
+            (form.executionDeviceId &&
+              executionDeviceErrorMessage(err, t, form.executionDeviceName, Boolean(form.workingDir)))
+              || (form.agentDeviceId && workerAgentDeviceErrorMessage(err, t))
+              || getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
           );
           return;
         }
@@ -345,7 +360,10 @@ export function useOrcaWorkerSelection({
     (workerId: string) => {
       clearSelectionHints();
       const worker = workersRef.current.find((item) => item.workerId === workerId);
-      const acknowledgeDone = worker?.status === 'done';
+      const isDone = worker?.status === 'done';
+      // 只有对话真的可见才算看过结果；看不到对话(如分离窗只显示占位)时选中不确认、
+      // 不清提醒，等对话可见后由 visibleDoneWorkerId 的 effect 确认。
+      const acknowledgeDone = isDone && viewVisible;
       void (async () => {
         try {
           const workflows = orcaWorkflowsFor(leadSessionId);
@@ -362,7 +380,7 @@ export function useOrcaWorkerSelection({
               toast.error(msg);
             }
           }
-          if (!acknowledgeDone || acknowledged) clearWorkerAttention(workerId);
+          if (!isDone || acknowledged) clearWorkerAttention(workerId);
           await refresh();
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -370,7 +388,7 @@ export function useOrcaWorkerSelection({
         }
       })();
     },
-    [acknowledgeDoneWorker, clearSelectionHints, leadSessionId, refresh],
+    [acknowledgeDoneWorker, clearSelectionHints, leadSessionId, refresh, viewVisible],
   );
 
   const handleArchiveWorker = useCallback(

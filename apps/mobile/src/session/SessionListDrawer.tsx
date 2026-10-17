@@ -140,26 +140,40 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
         .activeOffsetX(-16)
         .failOffsetX(16)
         .failOffsetY([-16, 16])
+        .onStart(() => {
+          'worklet';
+          // A new horizontal drag takes over from the current rebound position.
+          // Do not stop it on touch-down: vertical scrolling must leave it running.
+          cancelAnimation(progress);
+          cancelAnimation(dragX);
+        })
         .onUpdate((event) => {
           'worklet';
           dragX.value = Math.min(0, event.translationX);
         })
         .onEnd((event) => {
           'worklet';
+          // Include the position inherited when a previous rebound was interrupted.
+          const offsetX = (progress.value - 1) * panelWidth + Math.min(0, event.translationX);
           const shouldClose =
-            event.translationX < -panelWidth * DRAWER_CLOSE_DISTANCE_RATIO ||
+            offsetX < -panelWidth * DRAWER_CLOSE_DISTANCE_RATIO ||
             event.velocityX < DRAWER_CLOSE_VELOCITY;
           if (shouldClose) {
             runOnJS(closeFromGesture)();
           } else {
             // 未过阈回弹:位置插值档(fast + move 曲线)。
-            dragX.value = withTiming(0, {
+            const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));
+            cancelAnimation(progress);
+            cancelAnimation(dragX);
+            progress.value = effective;
+            dragX.value = 0;
+            progress.value = withTiming(1, {
               duration: motionDuration.fast,
               easing: Easing.bezier(...motionEasing.move),
             });
           }
         }),
-    [closeFromGesture, dragX, panelWidth, persistent],
+    [closeFromGesture, dragX, panelWidth, persistent, progress],
   );
 
   const scrimStyle = useAnimatedStyle(() => ({

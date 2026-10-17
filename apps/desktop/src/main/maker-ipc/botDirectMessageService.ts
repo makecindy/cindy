@@ -1,4 +1,5 @@
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
+import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
@@ -134,7 +135,8 @@ async function activeRoster(beforeReturn?: () => Promise<void>): Promise<BotRost
     .where(eq(botProfiles.status, 'active'))
     .orderBy(desc(botProfiles.updatedAt));
   await beforeReturn?.();
-  return roster;
+  // Demoted copies run on another computer, where list_agents finds them remotely.
+  return roster.filter(row => !isCompanionShadowed(row.id));
 }
 
 async function failed(

@@ -34,6 +34,24 @@ describe('sessionCreateToRow providerId', () => {
   });
 });
 
+describe('sessionCreateToRow effort', () => {
+  const now = 1_700_000_000_000;
+
+  it('keeps the explicit empty effort for a remote session instead of applying high', () => {
+    expect(
+      sessionCreateToRow(
+        'remote-no-effort',
+        { workingDir: '/remote/repo', remoteHostId: 'remote-mac', effort: '' },
+        now,
+      ).effort,
+    ).toBe('');
+  });
+
+  it('still uses the historical high default when the effort field is omitted', () => {
+    expect(sessionCreateToRow('legacy', { workingDir: '/repo' }, now).effort).toBe('high');
+  });
+});
+
 describe('sessionCreateToRow source', () => {
   const now = 1_700_000_000_000;
 

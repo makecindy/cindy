@@ -31,6 +31,8 @@ export async function openSession<T = void>(input: {
   now?: number;
   body: SessionOpenBody;
   source?: OpenedSessionRow['source'];
+  /** Background task (plugin `agent.hiddenTasks`): committed hidden in the same INSERT. */
+  hiddenAt?: number;
   assertCurrent?: () => void;
   /** Sample effective authority after async preparation, directly before committing. */
   finalize?: () => Pick<SessionOpenBody, 'permissionMode' | 'parentSessionId'>;
@@ -64,7 +66,8 @@ export async function openSession<T = void>(input: {
   assertCurrent();
   const mapped = sessionCreateToRow(id, { ...prepared, ...input.finalize?.() }, now);
   if (!mapped.model) throw new Error('任务模型不可用，请重新选择');
-  const row = { ...mapped, model: mapped.model, ...(input.source ? { source: input.source } : {}) };
+  const row = { ...mapped, model: mapped.model, ...(input.source ? { source: input.source } : {}),
+    ...(input.hiddenAt !== undefined ? { hiddenAt: input.hiddenAt } : {}) };
   input.onPersistenceStarted?.();
   let value: T;
   if (commit) value = await commit(row, assertCurrent);

@@ -325,6 +325,43 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
   });
 
+  it.each([
+    [401, 1],
+    [403, 0],
+  ] as const)('reports the sent token on handshake HTTP %s only when unauthorized', async (status, reports) => {
+    const server = new WebSocketServer({
+      port: 0,
+      verifyClient(_info, done) {
+        done(false, status, 'Rejected');
+      },
+    });
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    const onAuthorizationRejected = vi.fn();
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'gateway-key-sent',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+        model: 'gpt-realtime-whisper',
+        providerKind: 'litellm-gpt-realtime-whisper',
+        connectTimeoutMs: 2_000,
+        onAuthorizationRejected,
+      });
+      provider.onEvent(() => {});
+
+      await expect(provider.start()).rejects.toThrow(`HTTP ${status}`);
+      expect(onAuthorizationRejected).toHaveBeenCalledTimes(reports);
+      if (reports > 0) expect(onAuthorizationRejected).toHaveBeenCalledWith('gateway-key-sent');
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('redacts custom handshake details while preserving the HTTP status for classification', async () => {
     const server = new WebSocketServer({
       port: 0,

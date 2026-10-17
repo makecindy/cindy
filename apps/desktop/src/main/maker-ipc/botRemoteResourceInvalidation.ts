@@ -20,8 +20,19 @@ import {
 
 const log = createLogger('maker-ipc:bot-remote-resource');
 
+const localListeners = new Set<(botId: string) => void>();
+
+/** In-process observers of the same invalidation (e.g. cloud companion sync). */
+export function onBotRemoteResourceChanged(listener: (botId: string) => void): () => void {
+  localListeners.add(listener);
+  return () => { localListeners.delete(listener); };
+}
+
 /** Notify every controller that a host-owned teammate projection must be re-read. */
 export function broadcastBotRemoteResourceChanged(botId: string): void {
+  for (const listener of localListeners) {
+    try { listener(botId); } catch { /* observers never block the broadcast */ }
+  }
   const payload = {
     collectionId: TEAMMATES_REMOTE_COLLECTION_ID,
     resourceRefs: [{

@@ -10,6 +10,7 @@ import {
   type GhostManifestLocales,
 } from '@cindy/plugin-protocol';
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
+import { PLUGIN_STORAGE_PART_RE } from './pluginStoragePartPattern.js';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
 /**
@@ -65,11 +66,12 @@ export function ghostPartition(id: string): string {
   return `${GHOST_PARTITION_PREFIX}${id}`;
 }
 
-/** 从 Renderer claim 解析意识 id；不是合法 claim 返回 null。 */
+
+/** 从 Renderer claim 解析实例 storage part；不是合法 claim 返回 null。 */
 export function parseGhostPartition(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(GHOST_PARTITION_PREFIX)) return null;
   const id = partition.slice(GHOST_PARTITION_PREFIX.length);
-  return isValidGhostId(id) ? id : null;
+  return PLUGIN_STORAGE_PART_RE.test(id) ? id : null;
 }
 
 /**
@@ -193,7 +195,8 @@ export interface GhostCardNeeds {
  * - errand 会话默认跑在专属对话目录、权限档默认 plan(只读);用户可在
  *   设置里按插件放开到 acceptEdits/auto,**永不提供 bypassPermissions**
  *   (2026-07-31 Lizi 定案);
- * - errand 会话在侧边栏可见、可旁观、可随时停,不存在隐身会话;
+ * - errand 会话在侧边栏可见、可旁观、可随时停,不存在隐身会话(errand 不支持
+ *   隐藏;普通任务的后台隐藏只经 `tasks` + `hiddenTasks` 声明,见下);
  * - 每插件同时最多 1 单在途,任务表在内存(重启即丢,查询按"查无此单、
  *   可重新提交"处理)。
  */
@@ -201,6 +204,17 @@ export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
   tasks?: boolean;
+  /**
+   * hiddenTasks = 「可创建不显示在任务列表里的后台任务」(2026-10)。
+   *
+   * 必须与 `tasks: true` 同时声明(清单校验强制)。任务默认仍对用户可见;只有声明
+   * 本项后,插件才能经 `cindy.tasks.create({hidden: true})` / `cindy.tasks.setHidden`
+   * 把**自己创建的**普通任务放到后台:不进任务列表、搜索、未结束提示、新任务通知与
+   * 灵动岛。透明性兜底(全部主机代码强制):用户始终能在插件详情页「后台任务」查看、
+   * 打开并「显示到任务列表」;插件卸载时其后台任务自动恢复显示。不授予其它任务的
+   * 访问权,也不改变任务权限。未声明时 hidden / setHidden 返回 PERMISSION_DENIED。
+   */
+  hiddenTasks?: boolean;
   /**
    * schedule = 「可以请你新建自动化任务」(2026-08-04)。
    *
@@ -542,8 +556,7 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * 自己的 kv / 文件里解决。
  *
  * 为什么与 text.oneshot 分成两档而不是塞进同一个能力键:两者花的是不同的钱
- * (轻量任务模型链 vs embedding 模型),用户在能力偏好里钉的也是两套不同的型号,
- * 合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
+ * (轻量任务模型链 vs embedding 模型),合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
  * 能力,不进会话。
  */
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
@@ -563,9 +576,9 @@ export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number]
 /**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——类目与动作之外只有**意图级**字段(oneshotModel 偏好,
- * 2026-08-05 起),**不构成任何硬依赖**(选型权在主机的解析表:调用时显式点名 >
- * 用户在详情页的钉档(意识专属覆盖)> 意识声明的偏好模型 > 用户能力偏好 >
- * 出厂默认;意识只表达意图,永不腐烂)。插件详情与代办资格审共同消费。
+ * 2026-08-05 起),**不构成任何硬依赖**(选型权在主机:快问快答 = 用户在详情页给
+ * 插件选的模型 > 意识声明的偏好模型 > 系统辅助模型链;媒体/向量 = 调用时显式点名 >
+ * 档位 > 目录默认;意识只表达意图,永不腐烂)。插件详情与代办资格审共同消费。
  */
 export interface GhostCindyNeeds {
   /** 图像类:generate=出图,edit=改图(改图仅限本意识名下媒体)。 */
@@ -583,7 +596,7 @@ export interface GhostCindyNeeds {
   /**
    * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
    * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
-   * 未声明处理;用户在详情页的钉档永远优先于本声明。
+   * 未声明处理;用户在插件详情给插件选的模型永远优先于本声明。
    * 未实现本字段的兼容宿主保留声明但不使用它；插件仍需处理旧宿主差异。
    */
   oneshotModel?: string;
@@ -846,9 +859,9 @@ export interface GhostSecretOauthDecl {
    * 可选:XDT server token broker 的 provider slug(2026-07-14,xd-atlassian
    * 意识化前置)。声明后 code 换 token 与 refresh 不直连 tokenUrl,改经主机
    * 调 XDT server 的授权 broker(带登录 JWT;client secret 在服务端,不随包
-   * 分发)。必须同时声明 redirectPort，并与 clientSecret 互斥。静态官方前缀照旧
-   * 放行；其余资格由装入来源与当前组织事实共同判定。校验层保持纯函数不感知
-   * 装入语境，门控在装入闸与连接闸。
+   * 分发)。必须同时声明 redirectPort，并与 clientSecret 互斥。资格按可信安装
+   * 事实判定，名称前缀不放行。校验层保持纯函数不感知装入语境，门控在装入闸
+   * 与连接闸。
    */
   tokenBroker?: string;
   /**
@@ -887,9 +900,9 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
  *   JWT。当前组织的可信市场安装，或企业作者通过 ghost_forge_install 明确安装且
- *   id 命中本组织登记前缀时可签发；手动导入默认不取得该资格。点名例外：
- *   ghostId 精确等于 mivo-canvas 的组织成员本地安装，在已装清单声明的精确
- *   oidc-token host 仅为 mivo-canvas.dsworks.cn 时可签发；其它本地插件、其它精确 host 仍不签发，已有市场记录（含 installed:false）仍走 digest。市场账本损坏不得当成无记录。
+ *   id 命中本组织登记前缀时可签发；手动导入默认不取得该资格。临时例外，只对 root 实例生效：
+ *   ghostId 精确等于 mivo-canvas、namespace 为 null 或尚未确认的旧 root 安装，在已装清单声明的精确
+ *   oidc-token host 仅为 mivo-canvas.dsworks.cn 时可签发；企业 namespace 下的同名插件、其它本地插件、其它精确 host 仍不签发，已有市场记录（含 installed:false）仍走 digest。市场账本损坏不得当成无记录。
  *   Host 根据当前组织和插件 id 推导 audience，插件不能声明或读取。
  *   令牌只在 networkSlot 发请求时注入，且永不进入 Node Worker。
  *
@@ -1604,8 +1617,17 @@ export interface InstalledGhost {
   /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
   taskCapabilityApproved?: true;
   manifest: GhostManifest;
-  /** 安装目录绝对路径(userData/brain/<id>)。 */
+  /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
+  /**
+   * Host-verified install namespace. Missing is not a confirmed identity.
+   * null is confirmed root; a string is a confirmed organization slug.
+   */
+  namespace?: string | null;
+  /** Registry confirmation. Pending and unconfirmed must not receive new privileges. */
+  namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
+  /** Stable storage key. Absent only on projections built before the registry loads. */
+  instanceKey?: string;
   /**
    * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但插件仍装着、
    * 布局位置保留;重新启用即恢复。批准安装的真身在 Host receipt 中；
@@ -1658,6 +1680,15 @@ export interface GhostTrustInfo {
   unknownReviewer?: boolean;
 }
 
+/** Shared PC/mobile display label; only Host-owned trust facts affect this result. */
+export function ghostTrustLabelKey(trust: GhostTrustInfo | undefined):
+  'official' | 'reviewed' | 'verifiedPublisher' | 'signedUnverified' | 'unsigned' {
+  return trust?.level === 'cindy-official' ? 'official'
+    : trust?.level === 'reviewed' ? 'reviewed'
+    : trust?.level === 'verified-publisher' ? 'verifiedPublisher'
+    : trust?.publisherSigned ? 'signedUnverified' : 'unsigned';
+}
+
 /** 意识面板的 panelKind(布局树寻址用)。 */
 // 返回类型收窄到模板字面量:右侧栏 TabKindId 含 `ghost:${string}` 分支,
 // 调用方无需再 as 断言;对既有 string 消费方完全兼容。
@@ -1698,6 +1729,12 @@ export function isValidGhostId(id: unknown): id is string {
   return typeof id === 'string' && GHOST_ID_RE.test(id);
 }
 
+/** New author ids must start with a letter. Installed legacy ids may start with a digit. */
+const NEW_GHOST_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+export function isValidNewGhostId(id: unknown): id is string {
+  return typeof id === 'string' && NEW_GHOST_ID_RE.test(id);
+}
+
 /**
  * 官方意识历史 id 前缀常量:`cindy-`。完整保留集合与用户装入通道判定以
  * `GHOST_OFFICIAL_ID_PREFIXES` 为准；官方市场可安装命中保留前缀的插件，
@@ -1727,23 +1764,23 @@ export function isOfficialGhostId(id: string): boolean {
 
 /**
  * 用户装入通道（拖入 / 选文件 / forge 转交 / 自定义市场）是否拒装该 id。
- * 当前与 `isOfficialGhostId` 等价；本批不放宽组织前缀。
+ * 仅保留 Cindy 平台前缀；XD/Filo 名字可普通导入，运行时资格另验可信来源。
  */
 export function isUserInstallReservedGhostId(id: string): boolean {
-  return isOfficialGhostId(id);
+  return id.startsWith(GHOST_OFFICIAL_ID_PREFIX);
 }
 
 /**
- * 该 id 是否命中 `oauth.tokenBroker` 的静态官方前缀资格。
- * 非官方资格由运行时 first-party 判据增量放行，不改这张静态表。
+ * 保留命名空间谓词，与 `isOfficialGhostId` 同口径。
+ * **不是** tokenBroker 授权：运行时资格见 ghostFirstPartyPrivilege。
  */
 export function isBrokerEligibleGhostId(id: string): boolean {
   return isOfficialGhostId(id);
 }
 
 /**
- * 该 id 能否拿宿主原语：OAuth 端口回收、身份头像代下载。
- * 仅认静态官方前缀；本轮不随 Broker 资格放宽。
+ * 保留命名空间谓词，与 `isOfficialGhostId` 同口径。
+ * **不是** 宿主原语授权：端口回收 / 头像代下载见 ghostFirstPartyPrivilege。
  */
 export function isFirstPartyHostPrivilegeGhostId(id: string): boolean {
   return isOfficialGhostId(id);
@@ -1899,6 +1936,14 @@ export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): s
   );
 }
 
+/**
+ * 插件是否声明了后台隐藏任务能力。只认 `tasks: true` + `hiddenTasks: true` 组合:
+ * 已安装快照里不成对的历史值只作为未知数据保留,不授予(见 validateGhostManifestInput)。
+ */
+export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> | null | undefined): boolean {
+  return manifest?.agent?.tasks === true && manifest.agent.hiddenTasks === true;
+}
+
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
   for (const [category, actions] of Object.entries(manifest.cindy ?? {})) {
@@ -1975,6 +2020,17 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.tasks === true) {
       items.unshift({ key: 'agent:tasks', kind: 'agent', labelKey: 'agentTasks', detailKey: 'agentTasksDetail' });
+    }
+    // 后台隐藏任务:独立 key 单列(理由同 schedule —— 并进 agent:tasks 会让更新里
+    // 新增 hiddenTasks 时 added 为空,扩权复核拦不住)。排在 agent:tasks 之后。
+    if (ghostDeclaresHiddenTasks(manifest)) {
+      const tasksIndex = items.findIndex((item) => item.key === 'agent:tasks');
+      items.splice(tasksIndex + 1, 0, {
+        key: 'agent:hidden-tasks',
+        kind: 'agent',
+        labelKey: 'agentHiddenTasks',
+        detailKey: 'agentHiddenTasksDetail',
+      });
     }
     // 「可以请你新建自动化任务」:独立 key 单列一档。理由同 badge/errand ——
     // diffGhostPermissionItems 按 key + detail 比对,若并进任何既有 key,已装插件
@@ -2865,10 +2921,14 @@ export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
  * - 否则停在聊天区左侧,宽度占比/最小宽取清单声明。
  * 卸下时**不做**逆操作 —— 树数据保留正是"重装复活"的记忆来源(§6 规则 5)。
  */
-export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): Layout | null {
+export function layoutWithGhostPanel(
+  layout: Layout,
+  manifest: GhostManifest,
+  instanceId: string = manifest.id,
+): Layout | null {
   if (!manifest.panel) return null;
   if (manifest.panel.position === 'tab') return null;
-  const kind = ghostPanelKind(manifest.id);
+  const kind = ghostPanelKind(instanceId);
   if (findSplitChildByPanelKind(layout, kind)) return null;
   // 停靠位置(相对主聊天窗):按 chat-main 的实际下标定插入点,不写死
   // 序号(未来树形态变化不至于错位)。停靠恒在聊天区左侧(2026-07-25 Lizi
@@ -2884,7 +2944,7 @@ export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): L
   const result = insertRootSplitPane(
     layout,
     {
-      id: `ghost-${manifest.id}`,
+      id: `ghost-${instanceId}`,
       panelKind: kind,
       ...(manifest.panel.minWidth !== undefined ? { minWidth: manifest.panel.minWidth } : {}),
     },
@@ -4317,10 +4377,20 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (!preserveHistoricalTasks && agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
       return { ok: false, reason: 'agent.tasks must be boolean' };
     }
+    // hiddenTasks 依赖 tasks。已安装快照(preserveHistoricalTasks)不因历史值拒绝,
+    // 非 true+true 组合只作为未知数据保留,运行期经 ghostDeclaresHiddenTasks 判定不授予。
+    if (!preserveHistoricalTasks && agentRaw.hiddenTasks !== undefined) {
+      if (typeof agentRaw.hiddenTasks !== 'boolean') {
+        return { ok: false, reason: 'agent.hiddenTasks must be boolean' };
+      }
+      if (agentRaw.hiddenTasks === true && agentRaw.tasks !== true) {
+        return { ok: false, reason: 'agent.hiddenTasks: true 需要同时声明 agent.tasks: true' };
+      }
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -4328,10 +4398,11 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
+      ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }
@@ -6631,6 +6702,17 @@ export type GhostPipeWorkspaceResult =
       message: string;
     };
 
+export const GHOST_MEDIA_HANDOVER_MIME = 'application/x-cindy-ghost-handover';
+
+export interface GhostMediaHandover {
+  uri: string;
+  sourceToken?: string;
+}
+
+export interface GhostPanelMediaTarget {
+  ghostId: string;
+  instanceId?: string;
+}
 /**
  * 上行:preview 槽——请主机在右侧栏内置浏览器打开一个预览标签页。
  * url 必须命中身份卡 preview.hosts 白名单(ghostPreviewUrlAllowed);
@@ -6716,6 +6798,11 @@ export interface GhostScheduleDraftPush {
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;
+  /**
+   * 已知身份才带上。待迁移、或还没有 namespace 字段的旧安装省略。
+   * 不写入调度存储：给任务表加列是不可回退的 migration，这里只跟着打开面板的推送走。
+   */
+  namespace?: string | null;
   /** 插件展示名(主机填,用于面板上的来源标注)。 */
   ghostName: string;
   iconDataUrl?: string;
@@ -6761,7 +6848,7 @@ export type GhostAgentModelsResult =
 export const GHOST_MEDIA_MODEL_TYPES = ['image', 'video'] as const;
 export type GhostMediaModelType = (typeof GHOST_MEDIA_MODEL_TYPES)[number];
 
-/** Host「Cindy 能力」区域现有的四项媒体模型配置键。 */
+/** 四项 Cindy 媒体能力键(cindy-preference 只读查询用;插件没有逐项选模,返回系统默认选型)。 */
 export const GHOST_MEDIA_CAPABILITIES = [
   'image.generate',
   'image.edit',
@@ -8488,6 +8575,18 @@ export interface GhostLibraryOverview {
   softLimitExceeded: boolean;
   /** 卸载后未删除的标记(重装自动清除;设置页以横幅提示)。 */
   orphaned: boolean;
+  /**
+   * 裸 id 下还留着这个插件以前的作品库，可以换回当前实例（设置页提供「接回」）。
+   * 没有可接回的旧库时为 null。
+   */
+  legacyLibrary: {
+    usedBytes: number;
+    fileCount: number;
+    /** uninstalled = 卸载时留下；unknown = 没有宿主身份记录，来源无法证明。 */
+    provenance: 'uninstalled' | 'unknown';
+  } | null;
+  /** 裸 id 下的旧作品库还被本机另一个安装（例如本地版）使用着，卸载它后才能接回。 */
+  legacyLibraryInUse: boolean;
 }
 
 /** 上行:主机代理 fetch 请求。 */

@@ -32,3 +32,26 @@ export function normalizeRemoteMoney(value: unknown): RemoteMoney | null {
 export function remoteMoneySymbol(currency: RemoteMoneyCurrency): '¥' | '$' {
   return currency === 'CNY' ? '¥' : '$';
 }
+
+/**
+ * 任务累计金额:优先结构化 totalMoney(区域币种),回退旧 Desktop 的 USD 账本;
+ * 两者都缺或为 0(如订阅模式)时返回 null,调用方不显示。
+ */
+export function resolveSessionTotalMoney(session: {
+  totalMoney?: unknown;
+  totalCostUsd?: unknown;
+}): RemoteMoney | null {
+  const totalMoney = normalizeRemoteMoney(session.totalMoney);
+  if (totalMoney && totalMoney.amount > 0) return totalMoney;
+  const legacy = session.totalCostUsd;
+  return typeof legacy === 'number' && Number.isFinite(legacy) && legacy > 0
+    ? { amount: legacy, currency: 'USD', approximate: false, kind: 'actual-cost' }
+    : null;
+}
+
+export function formatRemoteMoney(money: RemoteMoney): string {
+  const symbol = remoteMoneySymbol(money.currency);
+  if (money.amount >= 10) return `${symbol}${Math.round(money.amount)}`;
+  if (money.amount >= 0.01) return `${symbol}${money.amount.toFixed(2)}`;
+  return `<${symbol}0.01`;
+}

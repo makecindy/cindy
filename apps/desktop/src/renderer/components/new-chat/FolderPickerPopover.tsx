@@ -7,9 +7,10 @@ import {
   Loader2,
   MessageCircle,
   RefreshCw,
+  Search,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -56,6 +57,28 @@ export interface FolderPickerDeviceScope {
 export type FolderPickerSelectSource = 'project' | 'recent' | 'browse' | 'dialogue';
 
 const WHEEL_LINE_HEIGHT = 16;
+
+/** 带路径的项目行高 56px,可视区约放 4 行;超过这个数才有必要搜索。 */
+const PROJECT_SEARCH_MIN_COUNT = 5;
+
+/**
+ * 项目列表的可视高度刻意不取行高(56px)整数倍:4.5 行让第 5 行露出半截,
+ * 用户一眼看出下面还有内容。224px(恰好 4 行)时第 5 行正卡在边界外,看不出能滚动。
+ */
+const PROJECT_LIST_MAX_HEIGHT_CLASS = 'max-h-[252px]';
+
+export function filterFolderPickerOptions(
+  options: readonly FolderPickerOption[],
+  query: string,
+): readonly FolderPickerOption[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return options;
+  return options.filter((option) =>
+    [option.name, option.description, option.path].some((field) =>
+      field?.toLowerCase().includes(needle),
+    ),
+  );
+}
 
 /**
  * Read recent folders from localStorage.
@@ -155,6 +178,56 @@ export function FolderPickerPopover({
   const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
   const selectionPendingRef = useRef(false);
   const [selectionPending, setSelectionPending] = useState(false);
+  const [projectQuery, setProjectQuery] = useState('');
+  const projectSearchRef = useRef<HTMLInputElement>(null);
+  // 用 state 持有列表元素:内容经 Radix Portal 渲染,首个 commit 时还没挂进 DOM,
+  // 普通 ref 配依赖数组的 effect 会在元素出现前测量一次,之后列表不变就再也不测。
+  const [projectScrollEl, setProjectScrollEl] = useState<HTMLDivElement | null>(null);
+  const [scrollFade, setScrollFade] = useState({ top: false, bottom: false });
+  const showProjectSearch =
+    isProjectPicker && effectiveProjectOptions.length >= PROJECT_SEARCH_MIN_COUNT;
+  const activeProjectQuery = showProjectSearch ? projectQuery.trim() : '';
+  const visibleProjectOptions = useMemo(
+    () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
+    [effectiveProjectOptions, activeProjectQuery],
+  );
+
+  // 每次打开都从完整列表开始,不残留上次的搜索词。
+  useEffect(() => {
+    if (!open) setProjectQuery('');
+  }, [open]);
+
+  // 项目异步到达(远程设备首读、本机首次加载)时搜索框晚于弹层出现,onOpenAutoFocus 已错过。
+  // 本次打开内搜索框首次出现时补一次聚焦;只接管仍停在弹层内的焦点,不抢用户已移走的焦点。
+  const searchAutoFocusedRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      searchAutoFocusedRef.current = false;
+      return;
+    }
+    const input = projectSearchRef.current;
+    if (!showProjectSearch || !input || searchAutoFocusedRef.current) return;
+    searchAutoFocusedRef.current = true;
+    const active = document.activeElement;
+    if (active === input) return;
+    const content = input.closest('[role="dialog"]');
+    if (!active || active === document.body || content?.contains(active)) input.focus();
+  }, [open, showProjectSearch]);
+
+  const updateScrollFade = useCallback(() => {
+    const el = projectScrollEl;
+    const next = el
+      ? {
+          top: el.scrollTop > 1,
+          bottom: el.scrollTop + el.clientHeight < el.scrollHeight - 1,
+        }
+      : { top: false, bottom: false };
+    setScrollFade((prev) => (prev.top === next.top && prev.bottom === next.bottom ? prev : next));
+  }, [projectScrollEl]);
+
+  useLayoutEffect(() => {
+    updateScrollFade();
+  }, [visibleProjectOptions, deviceScope?.status, updateScrollFade]);
 
   const handleSelectPath = async (
     folderPath: string,
@@ -187,8 +260,10 @@ export function FolderPickerPopover({
     void recentWorkdirsStore.remove(project.path);
   };
 
-  const renderProject = (project: FolderPickerOption) => {
+  const renderProject = (project: FolderPickerOption, index: number) => {
     const canRemove = !project.remoteDevice || onRemoveRemoteProject !== undefined;
+    // 有搜索词时首个结果常亮:回车选中的就是它。
+    const isEnterTarget = activeProjectQuery !== '' && index === 0;
     return (
       /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
          之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
@@ -202,6 +277,7 @@ export function FolderPickerPopover({
           'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
           'transition-colors',
           'hover:bg-[var(--folder-item-hover)]',
+          isEnterTarget && 'bg-[var(--folder-item-hover)]',
         )}
       >
         <button
@@ -307,6 +383,24 @@ export function FolderPickerPopover({
           'border border-[var(--folder-picker-border)]',
         )}
         onWheel={handleFolderPickerWheel}
+        onOpenAutoFocus={(e) => {
+          // 项目多到需要搜索时,打开后的下一个动作多半是输入:直接聚焦搜索框。
+          const input = projectSearchRef.current;
+          if (!input) return;
+          e.preventDefault();
+          input.focus();
+        }}
+        onEscapeKeyDown={(e) => {
+          // 输入法组合中的 Esc 属于取消候选词,不关闭也不清空。
+          if (e.isComposing) {
+            e.preventDefault();
+            return;
+          }
+          // 有搜索词时 Esc 先清空搜索,再按一次才关闭。
+          if (!projectQuery) return;
+          e.preventDefault();
+          setProjectQuery('');
+        }}
         aria-busy={selectionPending}
       >
         {isProjectPicker && (
@@ -336,9 +430,54 @@ export function FolderPickerPopover({
                 {t('newChat.folderPicker.projects')}
               </span>
             </div>
+            {showProjectSearch && (
+              <div className="px-1 pb-1">
+                <div className="relative">
+                  <Search
+                    size={12}
+                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--folder-item-path)]"
+                  />
+                  <input
+                    ref={projectSearchRef}
+                    type="text"
+                    value={projectQuery}
+                    onChange={(e) => {
+                      setProjectQuery(e.target.value);
+                      if (projectScrollEl) projectScrollEl.scrollTop = 0;
+                    }}
+                    onKeyDown={(e) => {
+                      // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
+                      e.stopPropagation();
+                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                      const first = activeProjectQuery ? visibleProjectOptions[0] : undefined;
+                      if (!first) return;
+                      e.preventDefault();
+                      void handleSelectPath(first.path, 'project', first);
+                    }}
+                    placeholder={t('newChat.folderPicker.searchProjects')}
+                    aria-label={t('newChat.folderPicker.searchProjects')}
+                    className={cn(
+                      'h-8 w-full rounded-full border border-[var(--folder-picker-border)] bg-transparent',
+                      'pl-7 pr-2 text-13 text-[var(--folder-item-name)] outline-none',
+                      // DESIGN.md §4 Inputs & Forms:单行 input 一律 pill;placeholder 与 focus
+                      // 对齐分支选择器的搜索框。
+                      'placeholder:text-[var(--text-placeholder)]',
+                      'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
+                    )}
+                  />
+                </div>
+              </div>
+            )}
             <div
+              ref={setProjectScrollEl}
               data-folder-picker-scroll="true"
-              className="pending-queue-scroll -mr-2 max-h-[224px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2"
+              onScroll={updateScrollFade}
+              className={cn(
+                'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
+                scrollFade.top && 'folder-picker-fade-top',
+                scrollFade.bottom && 'folder-picker-fade-bottom',
+                PROJECT_LIST_MAX_HEIGHT_CLASS,
+              )}
             >
               {deviceScope?.status === 'loading' ? (
                 <div className="flex items-center gap-2 px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
@@ -377,10 +516,17 @@ export function FolderPickerPopover({
                       )}
                     </div>
                   </div>
-                  {effectiveProjectOptions.map(renderProject)}
+                  {visibleProjectOptions.map(renderProject)}
                 </>
-              ) : effectiveProjectOptions.length > 0 ? (
-                effectiveProjectOptions.map(renderProject)
+              ) : visibleProjectOptions.length > 0 ? (
+                visibleProjectOptions.map(renderProject)
+              ) : activeProjectQuery ? (
+                <div
+                  role="status"
+                  className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]"
+                >
+                  {t('newChat.folderPicker.noMatchingProjects')}
+                </div>
               ) : deviceScope && onAddRemoteProject ? (
                 /* 对端设备上一个项目都没有:空态里直接给「浏览文件夹」,并带着设备身份进弹窗 ——
                    否则用户得自己退出去找入口,而这台机器恰恰是最可能需要新建目录的。 */
@@ -410,7 +556,7 @@ export function FolderPickerPopover({
           </>
         )}
 
-        {/* Recent folders — list scrolls when more than 4 items, label and
+        {/* Recent folders — list scrolls past 4.5 rows, label and
             "Choose a different folder" button stay outside the scroll area. */}
         {!isProjectPicker && recentFolders.length > 0 && (
           <>
@@ -421,7 +567,10 @@ export function FolderPickerPopover({
             </div>
             <div
               data-folder-picker-scroll="true"
-              className="pending-queue-scroll -mr-2 max-h-[224px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2"
+              className={cn(
+                'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
+                PROJECT_LIST_MAX_HEIGHT_CLASS,
+              )}
             >
               {recentFolders.map((folder) => (
                 <button

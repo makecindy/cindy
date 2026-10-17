@@ -78,6 +78,9 @@ import { createStorageReconciler } from './storageOpReplay';
 
 let requireDurableWrite = false;
 const STORAGE_KEY = 'xdt:modelFavorites:v1';
+// Shared sources contain two 128-character IDs and a 256-character provider ID.
+// JSON may expand each provider code unit to six characters (unpaired surrogates).
+export const LOCAL_FAVORITE_PROVIDER_ID_MAX_LENGTH = 2048;
 
 /** 一条收藏所描述的完整配置(不含锚点)。 */
 export interface ModelFavoriteConfig {
@@ -732,7 +735,7 @@ export function accessHostModelFavorites(ownerId: string | null, mutation?: Mode
   };
   const base = readDurable();
   if (!mutation) return base.items;
-  const op = parseModelFavoriteMutation(mutation);
+  const op = parseModelFavoriteMutation(mutation, LOCAL_FAVORITE_PROVIDER_ID_MAX_LENGTH);
   if (op.kind !== 'add') {
     const current = base.items.find(item => item.uid === op.expected.uid);
     if (!current || !sameModelFavorite(current, op.expected)) throw new Error('Favorite changed; refresh before retrying');

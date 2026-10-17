@@ -191,12 +191,14 @@ export type CdpActionTimeouts = {
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
+  background?: boolean;
+  navigationPolicy?: ReturnType<typeof withBrowserNavigationPolicy>;
   ssrfPolicy?: SsrFPolicy;
   timeouts?: CdpActionTimeouts;
 }): Promise<{ targetId: string }> {
   await assertBrowserNavigationAllowed({
     url: opts.url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+    ...(opts.navigationPolicy ?? withBrowserNavigationPolicy(opts.ssrfPolicy)),
   });
 
   let wsUrl: string;
@@ -250,7 +252,10 @@ export async function createTargetViaCdp(opts: {
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
-          const created = (await send("Target.createTarget", { url: opts.url })) as {
+          const created = (await send("Target.createTarget", {
+            url: opts.url,
+            background: opts.background === true,
+          })) as {
             targetId?: string;
           };
           const targetId = created?.targetId?.trim() ?? "";

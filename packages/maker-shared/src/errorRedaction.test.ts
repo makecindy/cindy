@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canOfferCodexHistoryRecovery,
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProxyTokenInvalidError,
@@ -10,6 +11,20 @@ import {
   redactSensitiveText,
   parseAgentErrorCode,
 } from './errorRedaction.js';
+
+describe('explicit Codex history recovery offer', () => {
+  const message = 'stream disconnected before completion: stream closed before response.completed';
+  it('offers recovery for the terminal close without classifying it as encryption failure', () => {
+    expect(canOfferCodexHistoryRecovery({ message, agentKind: 'codex' })).toBe(true);
+  });
+  it.each([
+    { running: true }, { remoteHostId: 'ssh' }, { agentDeviceId: 'worker' },
+    { agentKind: 'cc' }, { message: 'Connection reset' },
+    { message: 'stream disconnected before completion: timeout' },
+  ])('does not offer unsupported or unrelated recovery: %s', overrides => {
+    expect(canOfferCodexHistoryRecovery({ message, agentKind: 'codex', ...overrides })).toBe(false);
+  });
+});
 
 describe('Responses Lite request error classification', () => {
   it('recognizes the upstream error inside a JSON envelope', () => {
@@ -41,6 +56,7 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'exceeded_budget',
     '账户余额不足，请充值',
     '账户欠费',
+    'You hit your spend cap set by the owner of your workspace. Ask them to raise it.',
   ])('recognizes deterministic usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(true);
   });

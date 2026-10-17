@@ -108,8 +108,36 @@ const ACT_KINDS = [
   'close',
 ] as const;
 
+/** Tools that read page script state, network traffic or console output. */
+function readsPageState(request: BrowserControlRequest): boolean {
+  if (request.action === 'console' || request.action === 'requests' || request.action === 'responseBody') return true;
+  const act = request.request as { kind?: unknown; fn?: unknown } | undefined;
+  return request.action === 'act' && (act?.kind === 'evaluate' || (act?.kind === 'wait' && act.fn !== undefined));
+}
+
 function getRuntime(deps: BrowserMcpDeps): BrowserControlRuntime {
-  return deps.getRuntime();
+  const runtime = deps.getRuntime();
+  const restricted = deps.pageReadsRestricted;
+  if (!restricted) return runtime;
+  // Every path (tool actions, extract, recipes, hints) goes through this check.
+  return {
+    call: async (request) => {
+      if (readsPageState(request)
+        && await restricted({
+          ...(request.profile ? { profile: request.profile } : {}),
+          ...(request.targetId ? { targetId: request.targetId } : {}),
+        }).catch(() => true)) {
+        return {
+          ok: false,
+          action: request.action,
+          errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST',
+          message: 'The owner just entered a password on this page through Cindy. Script evaluation, network and console reads are paused here until the tab leaves this page. Use snapshot or screenshot, or navigate on.',
+          data: { reason: 'secret_entered' },
+        };
+      }
+      return runtime.call(request);
+    },
+  };
 }
 
 function actKindSchema(deps: BrowserMcpDeps) {
@@ -165,6 +193,47 @@ function elementQuerySchema(deps: BrowserMcpDeps) {
 // tool-result token budget with zero truncation — `responseBody.maxChars` and
 // `extract.limit` are optional + agent-controlled, so this is the backstop.
 const MAX_RESULT_BYTES = 200_000;
+
+/**
+ * 代输入 hint on a page that asks for a password or a one-time code: the
+ * owner should fill it from their own device. A cheap DOM check after a
+ * snapshot; any failure means no hint.
+ */
+const LOGIN_WALL_FN = `() => {
+  const docs = [document];
+  for (const frame of document.querySelectorAll('iframe')) {
+    try { if (frame.contentDocument) docs.push(frame.contentDocument); } catch {}
+  }
+  const has = (selector) => docs.some((doc) => doc.querySelector(selector));
+  return {
+    password: !!has('input[type=password]'),
+    code: !!has('input[autocomplete="one-time-code"]'),
+  };
+}`;
+
+async function detectLoginWall(runtime: BrowserControlRuntime, profile: unknown, targetId: unknown) {
+  try {
+    const checked = await runtime.call({
+      action: 'act',
+      ...(typeof profile === 'string' ? { profile } : {}),
+      ...(typeof targetId === 'string' ? { targetId } : {}),
+      request: { kind: 'evaluate', fn: LOGIN_WALL_FN, timeoutMs: 2000 },
+    } as BrowserControlRequest);
+    const found = (checked.data as { result?: { password?: unknown; code?: unknown } } | undefined)?.result;
+    if (!checked.ok || (found?.password !== true && found?.code !== true)) return null;
+    return {
+      fields: [found.password === true ? 'password' : null, found.code === true ? 'one-time-code' : null].filter(Boolean),
+      hint: 'This page asks for a password or verification code. Do not type it yourself: call request_input_handoff with this browser window so the owner completes the sign-in from their phone or another computer, then continue when it ends.',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readTargetId(result: { data?: unknown }): string | undefined {
+  const id = (result.data as { targetId?: unknown } | undefined)?.targetId;
+  return typeof id === 'string' && id ? id : undefined;
+}
 
 function resultText(value: unknown): string {
   const json = JSON.stringify(value);
@@ -668,6 +737,11 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           } as BrowserControlRequest);
         } else {
           result = await runtime.call(toRuntimeRequest(args));
+        }
+        if (args.action === 'snapshot' && result.ok) {
+          const loginWall = await detectLoginWall(runtime, args.profile, readTargetId(result) ?? args.targetId);
+          // First key, so it survives truncation of a large snapshot.
+          if (loginWall) result = { loginWall, ...result } as typeof result;
         }
         // For extract, the runtime call may succeed (evaluate ran) while the
         // in-page extract reports ok:false (invalid selector); surface that as an

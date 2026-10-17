@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
+import { Stack } from 'expo-router';
+import { nativeToolbarMenuItems } from '@/platform/chrome/nativeToolbarMenuItems';
 import { Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { RemoteResourceRef } from '@cindy/device-link';
@@ -26,7 +28,7 @@ type Choice = { kind: CreateKind; host: RemoteResourceHostTarget };
 export function TeammateCreateButton({ targets, groupTargets = [], preferredDeviceId, onCreated, onGroupCreated, appearance = 'glass' }: {
   targets: readonly RemoteResourceHostTarget[];
   /** `cta`: the empty list's primary button; it only creates a teammate. */
-  appearance?: 'glass' | 'cta';
+  appearance?: 'glass' | 'cta' | 'toolbar';
   /** Online computers that support group chats; empty keeps the single-purpose button. */
   groupTargets?: readonly RemoteResourceHostTarget[];
   preferredDeviceId?: string;
@@ -101,8 +103,15 @@ function CreateButton({ targets, groupTargets = [], preferredDeviceId, onCreated
     return (choice.kind === 'bot' ? ordered : orderedGroups).length > 1 ? `${verb} · ${choice.host.deviceName}` : verb;
   };
   const groupOpen = open?.kind === 'group' ? open : null;
+  const menu = needsMenu && menuActions.length > 0;
+  let trigger = button;
+  if (appearance === 'toolbar') trigger = <Stack.Toolbar placement="right">
+    {menu ? <Stack.Toolbar.Menu icon="plus" accessibilityLabel={label}>{nativeToolbarMenuItems(menuActions, onMenu)}</Stack.Toolbar.Menu>
+      : <Stack.Toolbar.Button icon="plus" accessibilityLabel={label} onPress={press} />}
+  </Stack.Toolbar>;
+  else if (!cta && menu) trigger = <NativePullDownMenu actions={menuActions} onAction={onMenu} testID="teammates.createMenu">{button}</NativePullDownMenu>;
   return <>
-    {!cta && needsMenu && menuActions.length ? <NativePullDownMenu actions={menuActions} onAction={onMenu} testID="teammates.createMenu">{button}</NativePullDownMenu> : button}
+    {trigger}
     <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser" onClose={() => { pendingChoice.current = null; setChoosing(false); }}
       onClosed={() => { const choice = pendingChoice.current; pendingChoice.current = null; if (choice) start(choice.kind, choice.host.deviceId); }}>
       {/* Same choice as the header's native menu: one plain row per choice, not full-width buttons. */}

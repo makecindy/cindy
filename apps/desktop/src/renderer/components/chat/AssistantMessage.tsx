@@ -412,7 +412,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       </div>
       {simplifiedBotConversation && !isStreaming && content.trim() && <BotLearningFooter receipts={botLearning} />}
       {simplifiedBotConversation && !isStreaming && botTaskResults?.length ? (
-        <div className="w-full max-w-[440px] min-w-0 space-y-2" data-bot-task-results>
+        <div className="w-full max-w-[560px] min-w-0" data-bot-task-results>
           {botTaskResults.map(card => <BotSessionTaskResultCard key={botTaskResultKey(card)}
             data={{ ...card }} sessionId={currentSessionId} attached />)}
         </div>

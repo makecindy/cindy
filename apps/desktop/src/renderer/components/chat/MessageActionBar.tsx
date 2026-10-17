@@ -34,8 +34,7 @@ import {
   Ellipsis,
   Link2,
   MessageSquarePlus,
-  MessageSquareReply,
-  MessageSquare,
+  MessagesSquare,
   SmilePlus,
   Pencil,
   Share,
@@ -47,6 +46,7 @@ import { useStableTranslation as useTranslation } from '@/hooks/useStableTransla
 import { cn } from '@/lib/utils';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
+import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
@@ -95,6 +95,10 @@ interface MessageActionBarProps {
   onShareAsImage?: () => void;
   /** Thread replies use the same toolbar geometry as private-chat replies. */
   replyAction?: { onClick: () => void; label: string; count?: number };
+  /** Quote this message into the current timeline's composer (group 引用回复); never opens a Thread. */
+  quoteAction?: { onClick: () => void; label: string };
+  /** Extra More-menu items owned by the caller, listed before link copy. */
+  menuActions?: Array<{ key: string; label: string; icon: ReactNode; onSelect: () => void; disabled?: boolean }>;
   /** The caller owns reaction persistence; the toolbar owns its trigger and placement. */
   reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; disabled?: boolean; content: ReactNode };
   /** When provided, the More menu exposes single-message deletion. The
@@ -150,6 +154,8 @@ export function MessageActionBar({
   onAddToChat,
   onShareAsImage,
   replyAction,
+  quoteAction,
+  menuActions,
   reactionAction,
   onDelete,
   onEdit,
@@ -377,13 +383,30 @@ export function MessageActionBar({
           className={cn(actionButtonClass, replyAction?.count && 'w-auto min-w-6 gap-1 px-1')}
           aria-label={replyAction?.label ?? t('chat.messageActionBar.reply')}
         >
-          {replyAction ? <MessageSquare size={14} strokeWidth={2} className={actionIconClass} />
-            : <MessageSquareReply size={14} strokeWidth={2} className={actionIconClass} />}
+          {replyAction ? <MessagesSquare size={14} strokeWidth={2} className={actionIconClass} />
+            : <ChatReplyIcon size={14} strokeWidth={2} className={actionIconClass} />}
           {!!replyAction?.count && <span className={cn('text-12 tabular-nums', actionIconClass)}>{replyAction.count}</span>}
         </button>
       </Tooltip.Trigger>
       <Tooltip.Content>{replyAction?.label ?? t('chat.messageActionBar.reply')}</Tooltip.Content>
     </Tooltip.Root>
+  );
+
+  const quoteBtn = quoteAction && (
+    <Tip key="quote" text={quoteAction.label}>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          quoteAction.onClick();
+        }}
+        disabled={inFlight}
+        className={actionButtonClass}
+        aria-label={quoteAction.label}
+      >
+        <ChatReplyIcon size={14} strokeWidth={2} className={actionIconClass} />
+      </button>
+    </Tip>
   );
 
   const reactionBtn = reactionAction && (
@@ -550,7 +573,7 @@ export function MessageActionBar({
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind);
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
-  const moreMenu = (addToChatInMenu || copyLinkText || canRewind || onDelete) && (
+  const moreMenu = (addToChatInMenu || menuActions?.length || copyLinkText || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('chat.messageActionBar.moreActions')}>
@@ -608,6 +631,20 @@ export function MessageActionBar({
             {t('chat.quote.addToChat')}
           </DropdownMenuItem>
         )}
+        {menuActions?.map((action) => (
+          <DropdownMenuItem
+            key={action.key}
+            disabled={action.disabled}
+            onSelect={(event) => {
+              event.stopPropagation();
+              action.onSelect();
+            }}
+            className={MENU_ITEM_CLASS}
+          >
+            {action.icon}
+            {action.label}
+          </DropdownMenuItem>
+        ))}
         {copyLinkText && (
           <DropdownMenuItem
             onSelect={(event) => {
@@ -635,7 +672,7 @@ export function MessageActionBar({
         )}
         {onDelete && (
           <>
-            {(addToChatInMenu || copyLinkText || canRewind) && (
+            {(addToChatInMenu || menuActions?.length || copyLinkText || canRewind) && (
               <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
@@ -660,12 +697,14 @@ export function MessageActionBar({
   // align='left'  → [copy][share][fork][edit][more][time][cost]
   // align='right' → [time][copy][share][fork][edit][more]   (user)
   // 伙伴对话:[copy][share][reply][more][time] / [time][copy][share][reply][edit][more]
+  // 群聊:[copy][share][引用回复][话题][表情][time]
   const items =
     align === 'left'
       ? [
           copyBtn,
           shareBtn,
           forkBtn,
+          quoteBtn,
           replyBtn,
           reactionBtn,
           editBtn,
@@ -673,7 +712,7 @@ export function MessageActionBar({
           timeText,
           simplifiedBotConversation ? null : costText || tokensText,
         ]
-      : [timeText, copyBtn, shareBtn, forkBtn, replyBtn, reactionBtn, editBtn, moreMenu];
+      : [timeText, copyBtn, shareBtn, forkBtn, quoteBtn, replyBtn, reactionBtn, editBtn, moreMenu];
 
   return (
     <div

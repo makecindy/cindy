@@ -1,3 +1,4 @@
+import { cloudQuotaOwnerKey, noteQuotaCredentialStatus, setQuotaCredentialStatusReader } from './quotaCredentialState.js';
 import { createByokCache } from './byokCache.js';
 import { byokSnapshotSecretIo } from '../secrets/providerSecretStore.js';
 import { registerByokIpc } from './byokIpc.js';
@@ -8,13 +9,13 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isExternalOrganizationByokUser } from './organizationManaged.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
-import { getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
 import {
-  prepareCodexForAuthModeChange,
+  scheduleCodexGatewayKeyRefresh,
   prepareCodexForCustomProviderHostChange,
   finalizeCodexAfterAuthModeChange,
   cancelCodexAuthModeChange,
@@ -36,6 +37,7 @@ import {
 } from '../../shared/modelAccess.js';
 import { getModelAccessCredentialsStore } from './credentialsStore.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { installCindyGatewayKeyRejectionReporter } from './gatewayKeyRejection.js';
 import {
   createCredentialsSync,
   type CredentialsPayload,
@@ -68,9 +70,8 @@ const log = createLogger('modelAccess');
  *    自动触发同步,登出复位;
  *  - serverApiFetch + 独立 base(clientEndpoints 'modelAccessApiBaseUrl'):
  *    自动带 Bearer access token + 401 refresh;
- *  - providerSecretStore('xd')写 key,值变化时复用 codex env-key 重启副作用
- *    (与 safe-storage IPC 层同一套 prepare/finalize,见 bootstrap-electron 注释)
- *    ——main 侧自动写 key 的副作用缺口在此补齐(providerSecretStore.ts 顶注预告过);
+ *  - providerSecretStore('xd')先写 key，再按 host 实际凭据登记 Codex 刷新；
+ *    忙碌或启动中的 gateway host 通过既有空闲重试机制兑现，不阻塞凭据保存；
  *  - 状态经 MODEL_ACCESS_STATUS_CHANNEL 推给所有窗口,IPC 提供
  *    get-status / retry / rotate 三个通道(仅本机设置页使用,不进 device-link
  *    allowlist)。
@@ -101,35 +102,24 @@ function rotateCredentials(): Promise<CredentialsPayload> {
 /**
  * 写 XD key(main 侧自动下发路径),带 codex env-key 重启副作用:
  * env-key spawn 的 codex app-server 把 gateway key 冻在子进程 env 里,写盘后
- * 必须重建才生效——与 renderer 手填走的 safe-storage IPC 同一套语义。
- * 非 env-key 形态零副作用(Claude 每 session 现读 key,天然跟随)。
+ * 必须重建才生效。服务端可能已经撤销旧 key，不能因进程忙碌而拒绝保存新 key。
+ * 写入同步完成，相关 host 的刷新独立登记，忙碌或启动中的 host 延后到空闲。
  */
 async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
-  const needRestart = getCodexProxyAuthInjectionState() === 'env-key';
-  if (!needRestart) {
-    const stored = getProviderSecretStore().set('xd', key);
-    if (stored) notifyXdProviderKeyChanged();
-    return stored;
-  }
-  try {
-    await prepareCodexForAuthModeChange();
-  } catch (err) {
-    log.warn('prepare codex before auto key write failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  if (isAppSessionBoundaryPending()) return false;
+  const ownerScope = activeOwnerScopeKey();
+  const store = getProviderSecretStore();
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
     return false;
   }
-  const ok = getProviderSecretStore().set('xd', key);
-  if (!ok) {
-    cancelCodexAuthModeChange();
-    return false;
-  }
+  const ok = store.set('xd', key);
+  if (!ok) return false;
   notifyXdProviderKeyChanged();
   try {
-    await finalizeCodexAfterAuthModeChange();
+    scheduleCodexGatewayKeyRefresh();
   } catch (err) {
-    // key 已写盘(新值有效);codex 重建失败只记日志,下次 spawn 自然用新 key。
-    log.warn('finalize codex after auto key write failed', {
+    // 已保存的 key 供所有现读调用方使用，不能把进程刷新失败伪报为存储失败。
+    log.warn('schedule codex refresh after auto key write failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -405,6 +395,11 @@ function getSync(): CredentialsSync {
       writeXdKey: writeXdKeyWithCodexSideEffect,
       store: getModelAccessCredentialsStore(),
       onStatusChange: (status) => {
+        const auth = authManager.getAuthState();
+        noteQuotaCredentialStatus(
+          cloudQuotaOwnerKey(auth),
+          status,
+        );
         if (['failed', 'disabled', 'unsupported', 'idle'].includes(status.state)) {
           accountTier = null;
         }
@@ -510,6 +505,15 @@ function mapServerError(err: unknown): never {
  */
 export function initModelAccess(): void {
   const sync = getSync();
+  setQuotaCredentialStatusReader(() => {
+    const auth = authManager.getAuthState();
+    if (auth.mode !== 'cloud' || !auth.user?.id || auth.user.id !== lastAuthUserId
+      || authManager.getActiveAuthRealm() !== lastAuthRealm) return null;
+    return sync.getStatus();
+  });
+  // 主进程各调用方遇到 Cindy 网关 401 时经此重新拉取凭据(服务端会探测并换发失效 Key)。
+  // 用静默同步:失败不降级状态、不清空模型列表(见 credentialsSync.resyncAfterKeyRejection)。
+  installCindyGatewayKeyRejectionReporter(() => getSync().resyncAfterKeyRejection());
   const byok = createByokRuntime(
     broadcastReferenceModelPricing,
     createByokCache(byokSnapshotSecretIo),
@@ -603,6 +607,7 @@ export function resetModelAccessForTest(): void {
     app.removeListener('browser-window-focus', foregroundRefreshListener);
     foregroundRefreshListener = null;
   }
+  installCindyGatewayKeyRejectionReporter(null);
   syncInstance = null;
   modelsSyncInflight = null;
   modelsSyncGen = -1;

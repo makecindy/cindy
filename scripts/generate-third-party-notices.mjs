@@ -687,6 +687,35 @@ function readBundledLicense(relativePath) {
   );
 }
 
+function buildSpeakerModelEntries(apacheText) {
+  return [
+    bundledComponent({
+      name: "Silero VAD (runtime-downloaded model)",
+      version: "sha256:9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      license: "MIT",
+      url: "https://github.com/snakers4/silero-vad",
+      licenseText: MIT_TEXT("Copyright (c) 2020-present Silero Team"),
+    }),
+    bundledComponent({
+      name: "3D-Speaker CAM++ zh-en advanced (runtime-downloaded model)",
+      version: "sha256:aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+      license: "Apache-2.0",
+      url: "https://modelscope.cn/models/iic/speech_campplus_sv_zh_en_16k-common_advanced",
+      licenseText: apacheText,
+    }),
+  ];
+}
+
+function onnxRuntimeEntry(version) {
+  return bundledComponent({
+    name: "ONNX Runtime (native inference library)",
+    version,
+    license: "MIT",
+    url: "https://github.com/microsoft/onnxruntime",
+    licenseText: MIT_TEXT("Copyright (c) Microsoft Corporation"),
+  });
+}
+
 /**
  * 桌面三平台共有的非 npm 分发组件声明（含安装包内资产与运行时受管下载资产）。
  *
@@ -696,7 +725,10 @@ function readBundledLicense(relativePath) {
  *   的 productName 同样是 x64/arm64 但目前只传 arm64,属既存缺口,记在 issue #452。
  */
 function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
-  const entries = [];
+  const entries = [
+    ...buildSpeakerModelEntries(apacheText),
+    onnxRuntimeEntry("bundled with sherpa-onnx-node 1.13.8"),
+  ];
 
   // ripgrep — 随包分发的搜索二进制
   entries.push(
@@ -973,6 +1005,16 @@ function buildMacEntries() {
       url: "https://github.com/wxtsky/CodeIsland",
       licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 wxtsky"),
     }),
+    // 菜单栏余量面板的数字字体，随 menubar helper 一起分发。
+    bundledComponent({
+      name: "Barlow Condensed fonts",
+      version: "bundled",
+      license: "OFL-1.1",
+      url: "https://github.com/jpt/barlow",
+      licenseText: readBundledLicense(
+        "apps/desktop/native/menubar/BarlowCondensed-OFL.txt",
+      ),
+    }),
   ];
 }
 
@@ -992,6 +1034,8 @@ function buildWindowsEntries() {
 
 function buildMobileEntries(apacheText, platform) {
   const entries = [
+    ...buildSpeakerModelEntries(apacheText),
+    onnxRuntimeEntry("1.30.0"),
     ...buildProviderBrandingEntries(),
     bundledComponent({
       name: "JetBrains Mono fonts",
@@ -1474,6 +1518,7 @@ function assertTrackedBinariesRegistered() {
     "apps/android-platform-tools-bin/",
     "apps/desktop/native/sqlite-vec/",
     "apps/mobile/assets/fonts/JetBrainsMono-",
+    "apps/desktop/native/menubar/BarlowCondensed-",
   ];
   // Windows updater 内置 VC++ Runtime 按精确文件登记(披露条目见
   // restrictedManualEntries):目录内新增其它二进制时这里会重新拦下要求补披露。

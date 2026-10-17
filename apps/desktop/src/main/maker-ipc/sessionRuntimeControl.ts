@@ -3,6 +3,7 @@ import type { Session as RendererSession } from '../../renderer/lib/ccAgent.type
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
+  resolveCodexCompatibilityWireProtocol,
   type CatalogModel,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -458,6 +459,27 @@ export function pickSessionRuntimeFallback(params: {
   visited.add(routeKey(params.current));
   const rail = connectedProvidersForAgent([...params.providers], params.current.agentKind);
   const candidates: Array<{ providerId: string; model: CatalogModel }> = [];
+  const currentProvider = params.providers.find((provider) => provider.id === params.current.providerId);
+  const currentModel = currentProvider?.models[params.current.agentKind]?.find(
+    (model) => model.id === params.current.model,
+  );
+  // Model names do not establish wire compatibility. In particular, a completed
+  // web_search_call may be serializable by a bridge while the next native search
+  // remains unsupported. Generic fallback has no task/request capability proof,
+  // so keep Codex on its current transport instead of silently introducing a bridge.
+  // Explicit model routes override provider defaults in the actual Codex route.
+  const effectiveWireProtocol = (provider: ProviderView, model: CatalogModel): string =>
+    model.route?.wireProtocol ??
+    resolveCodexCompatibilityWireProtocol(provider, params.current.agentKind, model) ??
+    provider.routing.codex?.wireProtocol ?? 'openai-responses';
+  const currentCompatibility = currentProvider && currentModel
+    ? effectiveWireProtocol(currentProvider, currentModel)
+    : null;
+  const compatibleProvider = (provider: ProviderView, model: CatalogModel): boolean =>
+    params.current.agentKind !== 'codex' || (
+      currentProvider !== undefined && currentModel !== undefined &&
+      effectiveWireProtocol(provider, model) === currentCompatibility
+    );
 
   for (const provider of rail) {
     for (const model of provider.models[params.current.agentKind] ?? []) {
@@ -468,7 +490,7 @@ export function pickSessionRuntimeFallback(params: {
       ) {
         continue;
       }
-      if (model.id === params.current.model && provider.id !== params.current.providerId) {
+      if (compatibleProvider(provider, model) && model.id === params.current.model && provider.id !== params.current.providerId) {
         candidates.push({ providerId: provider.id, model });
       }
     }
@@ -482,7 +504,7 @@ export function pickSessionRuntimeFallback(params: {
       ) {
         continue;
       }
-      if (!model.newSessionDefault?.includes(params.current.agentKind)) continue;
+      if (!compatibleProvider(provider, model) || !model.newSessionDefault?.includes(params.current.agentKind)) continue;
       candidates.push({ providerId: provider.id, model });
     }
   }

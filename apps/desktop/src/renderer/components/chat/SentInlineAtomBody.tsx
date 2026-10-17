@@ -88,7 +88,6 @@ export function SentInlineAtomBody({
               localPastedRanges,
               localSlashRanges,
               undefined,
-              undefined,
               localAgentReferences,
               false,
             )}

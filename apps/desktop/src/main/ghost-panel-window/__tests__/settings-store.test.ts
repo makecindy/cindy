@@ -67,6 +67,23 @@ describe('normalizeGhostPanelWindowsSettings', () => {
       }),
     ).toEqual({ windows: { good: { detached: false, lastOpen: true } } });
   });
+
+  it('企业实例 storage part 是合法键,斜杠目录 id 丢弃', () => {
+    expect(
+      normalizeGhostPanelWindowsSettings({
+        windows: {
+          '_ns__acme__helper': { detached: true, lastOpen: true },
+          '_ns/acme/helper': { detached: true, lastOpen: true },
+          helper: { detached: false, lastOpen: false },
+        },
+      }),
+    ).toEqual({
+      windows: {
+        '_ns__acme__helper': { detached: true, lastOpen: true },
+        helper: { detached: false, lastOpen: false },
+      },
+    });
+  });
 });
 
 describe('runtime state', () => {

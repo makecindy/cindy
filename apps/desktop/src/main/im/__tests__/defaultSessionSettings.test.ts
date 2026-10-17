@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getCapabilities: vi.fn(),
   listProviders: vi.fn(),
   readImDefaultSettings: vi.fn(),
+  readRemoteRoute: vi.fn(),
   logger: {
     warn: vi.fn(),
     info: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('../../maker-host/createDesktopProviderService', () => ({
 vi.mock('../defaultSettingsStore', () => ({
   readImDefaultSettings: mocks.readImDefaultSettings,
 }));
+vi.mock('../remoteProviderRoute', () => ({ readImRemoteProviderRoute: mocks.readRemoteRoute }));
 
 import { resolveImSessionDefaults } from '../defaultSessionSettings';
 import type { ImOrchestratorConfig } from '../shared/types';
@@ -111,6 +113,19 @@ const customCodexModel = {
 };
 
 describe('resolveImSessionDefaults', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('resolves a shared %s model only against its own catalog', async (agentKind) => {
+    mocks.readImDefaultSettings.mockReturnValue({ agentKind, permissionMode: 'auto', agents: {
+      [agentKind]: { agentDeviceId: 'share:owner', providerId: 'owner-only', model: 'remote-model', effort: 'high' },
+    } });
+    mocks.readRemoteRoute.mockResolvedValue({ model: { efforts: ['low'], defaultEffort: 'low' } });
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind, agentDeviceId: 'share:owner', providerId: 'owner-only', model: 'remote-model', effort: 'low',
+    });
+    expect(mocks.listProviders).not.toHaveBeenCalled();
+    mocks.readRemoteRoute.mockRejectedValue(new Error('[REMOTE_AGENT_SHARE_PAUSED] paused'));
+    await expect(resolveImSessionDefaults(config)).rejects.toThrow('REMOTE_AGENT_SHARE_PAUSED');
+    expect(mocks.listProviders).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getCapabilities.mockImplementation((agentKind: string) => ({

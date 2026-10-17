@@ -18,13 +18,10 @@ function normalize(raw: unknown): CindyMakeSettings {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ...DEFAULT_CINDY_MAKE_SETTINGS };
   }
-  const value = raw as Record<string, unknown>;
-  return {
-    syncLatestBeforeBuild:
-      typeof value.syncLatestBeforeBuild === 'boolean'
-        ? value.syncLatestBeforeBuild
-        : DEFAULT_CINDY_MAKE_SETTINGS.syncLatestBeforeBuild,
-  };
+  // Retired 2026-10-01: Sync is the one place the personal version moves to a newer
+  // official version, so a build always uses the source as Sync left it. A stored ON
+  // from an older version is read as off.
+  return { syncLatestBeforeBuild: false };
 }
 
 const store = createOverrideSettingsFile<CindyMakeSettings>({

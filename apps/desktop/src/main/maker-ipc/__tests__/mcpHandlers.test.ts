@@ -123,9 +123,8 @@ describe('mcp:custom:* CRUD handlers', () => {
       const result = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST, { agentKind });
       expect(deps.listMcpServers).toHaveBeenCalledWith({ agentKind });
       expect(result).toEqual({ agentKind, servers: rawList.map((server) => ({
-        ...server, available: ['mytools', 'local-http'].includes(server.id)
-          || (server.id === 'events' && agentKind === 'claude-code')
-          || (server.id === 'public-http' && agentKind !== 'pi'),
+        // Registered custom MCPs now use the Main-owned Apps facade for every harness.
+        ...server, available: ['mytools', 'local-http', 'events', 'public-http'].includes(server.id),
       })) });
     },
   );
@@ -174,7 +173,7 @@ describe('mcp:custom:* CRUD handlers', () => {
       agentKind: 'claude-code', botSessionId: 'canonical',
     });
     expect(deps.listMcpServers).toHaveBeenCalledWith({ agentKind, remoteHostId: 'ssh-host' });
-    expect(result).toEqual({ agentKind, servers: [expect.objectContaining({ id: 'mytools', available: agentKind !== 'codex' })] });
+    expect(result).toEqual({ agentKind, servers: [expect.objectContaining({ id: 'mytools', available: true })] });
   });
 
   it.each([null, {}, { agentKind: 'unknown' },

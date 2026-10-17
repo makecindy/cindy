@@ -64,9 +64,17 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
   正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
-- **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
-  时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
-  并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
+- **plan 模式**:自动挂载 Pi 分发包自带的 plan-mode 扩展，无需用户另装。UI 勾选是下一条
+  消息的一次性意图，与原生运行态分开；`StartSessionOptions.planMode` 设置起始档，
+  `SendOptions.planMode` 快照决定本轮，切档与 prompt 在同一 RPC 串行段执行。发送后消耗
+  勾选不关闭在途计划轮；下一条普通消息恢复普通工具。扩展缺失或切档失败时拒绝计划请求，
+  不悄悄按普通模式执行。缺失扩展不阻止会话启动，启动计划意图保留到发送时拒绝；
+  取消计划后普通消息仍可发送。resume 和原生 Execute/Refine 续轮从本机 session JSONL
+  校正运行态；远端仍走 `get_entries`。原生续轮校正期间 Host 写操作保持不可用。
+  启动校正失败且没有显式计划意图时，发送前重新读取原生状态；仍未知则拒绝发送及包变更，
+  读回后沿用原生档位并按正常接受边界消耗一次性计划意图，不默认关闭计划模式。
+
+> Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
 
 ### 原生请求 Fast 偏好
 
@@ -83,6 +91,10 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 提前拦截。目录、原生模型资料或用户配置明确声明 `supportsImageInput: false` / `input: ['text']`
 时仍保持仅文本；此默认值不写回用户配置，也不代表上游接口保证支持图片。活动任务沿用启动时
 能力快照。回归见 `pi-provider-routing.test.ts` 与 `piNativeProviders.test.ts`。
+
+Codex / Claude Code 复用的 `pi-provider-transport.ts` 原生桥接也沿用此缺省口径：
+活动目录的显式图片开关或模态声明优先于原生兜底资料，只有均未声明时才允许图片。
+此行为只决定图片是否进入原生 SDK 请求，不保证上游识图；回归见 `piProviderTransport.test.ts`。
 
 Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
@@ -329,6 +341,24 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - provider idle、进程退出、事件流结束都不是成功证明。Session 用已有 turn generation／
   control 判断未结算工作，保留缺终态时的有界 watchdog；已送达的成功终态不能被后续退出
   改判成失败，provider continuation claim 也不能被当作最终结束。
+- 本机 stdio 的 stdout EOF／关闭／错误或 stdin 错误是明确 RPC 失联，不等同于
+  正常长工具静默，也不是进程退出证明。EOF 的写栅栏先于 JSONL reader 的无换行尾帧
+  flush 生效，尾帧不得再写响应或启动 Host 包 mutation。在 250ms 退出确认窗口内
+  继续读取已写出的 stdout 尾帧；未确认退出且轮次仍未结算时才报 `pi-rpc-disconnected`，
+  工具结果保持未知。待开始的新 prompt 不继承上一轮 retry 耗尽的终态判重标记；
+  窗口内 Stop 仍登记对应 generation 的取消意图，不向失联管道写 abort。
+  已收到的 settled 成功结果、最终正文与用量不改判。管道失联／关闭中的 executor
+  即使已送达成功或取消尾帧，也保持 Session 下一轮准入关闭，直到退出或显式 close
+  完成；用户跟发与 Host 续跑沿用既有排队／重建流程。此清理栅栏不是 steer 准入：
+  steer 在准备前、异步准备后和串行 RPC 边界检查可用性，Host 包 mutation 不得先行。
+  已 settled 的不可用 turn 用既有 `NO_ACTIVE_TURN` 路径回到普通排队／重建；仍未结算
+  的 turn 保留失联失败，不仅凭断管道宣称已结束。派发准备或串行 RPC 等待后
+  若已确定管道不可用且未接受任何工作，按未派发拒绝，不伪报接受结果未知；pending
+  轮次标记仅在实际 prompt RPC 边界登记。已完成的 Host 包 mutation 不退回可重放状态。
+  复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
+  退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
+  缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
+  回归见 `pi-long-tool-lifecycle.test.ts`、`transport.test.ts` 与 `rpc-client.test.ts`。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
 - Pi 未归类的缺码临时服务故障（如 `Service temporarily unavailable` 或明确的模型
@@ -339,6 +369,12 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
+
+- 代输入 askpass(2026-10-13):Pi 本机任务的 Agent 进程 env 合入 `runtimeConfig.taskShellEnv`,
+  只在 `!remote && !hosted && !reviewMode` 时合入,且按 sessionId 确定(respawn 字节一致)。这只是给
+  sudo/ssh/git 提供口令来源,不改 Pi 原生命令、扩展或权限行为;Pi 自身的 bash 工具照常执行,口令由宿主
+  核验进程链后写回发起进程。见 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md)
+  「代输入：任务 shell 环境与工具说明」。
 
 ## 5. 已交付(2026-07 里程碑)
 

@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   closeSession: vi.fn(async () => {}),
   getDesktopCcPrefs: vi.fn<() => DesktopCcPrefs | null>(() => null),
   resolveLenientSessionRoute: vi.fn(),
+  // 桌面偏好缺省时 control:new 按新建任务口径解析默认模型;本 harness 不搭目录,固定返回。
+  resolveNewTaskDefaultModelRoute: vi.fn(async () => ({ model: 'claude-sonnet-4-6', providerId: null })),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
   applyPiImModelSelectionUnderLock: vi.fn(async (): Promise<{
@@ -61,6 +63,7 @@ vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/model-route-guard-live', () => ({
   resolveLenientSessionRoute: mocks.resolveLenientSessionRoute,
+  resolveNewTaskDefaultModelRoute: mocks.resolveNewTaskDefaultModelRoute,
 }));
 vi.mock('../../index', () => ({ getDesktopCcPrefs: mocks.getDesktopCcPrefs }));
 vi.mock('../controlProjects', () => ({

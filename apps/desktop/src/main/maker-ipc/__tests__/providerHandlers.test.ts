@@ -186,6 +186,44 @@ afterEach(() => {
 });
 
 describe('provider:list IPC handler', () => {
+  it('projects explicit effort capability markers without mutating the catalog or exposing credentials', async () => {
+    const harness = new IpcHarness();
+    const models: ProviderView['models'] = {
+      codex: [
+        { id: 'known-empty', name: 'Known empty', contextWindow: 200_000, efforts: [], defaultEffort: null },
+        { id: 'known-efforts', name: 'Known efforts', contextWindow: 200_000, efforts: ['low', 'high'], defaultEffort: 'high' },
+        { id: 'unknown', name: 'Unknown', contextWindow: 200_000, efforts: [], defaultEffort: null, effortsUnknown: true },
+      ],
+    };
+    const provider = {
+      ...fakeView('custom', true),
+      models,
+      routing: {
+        codex: {
+          upstream: 'https://custom.example/v1',
+          authStrategy: 'api-key-header',
+          headerOverride: { Authorization: 'Bearer secret' },
+          headerOverrideState: 'configured',
+        },
+      },
+    } as ProviderView;
+    const original = structuredClone(provider);
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [provider],
+      getRemoteProviderInvocationEnabled: () => false,
+    }));
+
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_LIST) as { providers: ProviderView[] };
+    expect(result.providers[0].models.codex).toEqual(models.codex!.map((model) => ({
+      ...model,
+      effortsUnknown: model.effortsUnknown === true,
+    })));
+    expect(result.providers[0].remoteInvocationEnabled).toBe(false);
+    expect(result.providers[0].routing.codex?.headerOverride).toBeUndefined();
+    expect(result.providers[0].routing.codex?.headerOverrideState).toBe('configured');
+    expect(provider).toEqual(original);
+  });
+
   it('keeps providers in catalog order and returns display order as owner-scoped metadata', async () => {
     const harness = new IpcHarness();
     const views = [fakeView('xd', true), fakeView('anthropic', false)];
@@ -3310,7 +3348,9 @@ describe('provider:custom:* CRUD handlers', () => {
     const harness = new IpcHarness();
     const calls: string[] = [];
     const keys = new Map<AgentKind, string>();
+    const kickProviderGroupReshare = vi.fn();
     const deps = makeDeps({
+      kickProviderGroupReshare,
       oauthCancel: vi.fn(() => calls.push('cancel')),
       removeOAuthCredentials: vi.fn(() => {
         calls.push('clear');
@@ -3340,6 +3380,7 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await listCustomProviders()).toEqual([]);
     expect(keys.size).toBe(0);
     expect(calls).toEqual(['cancel', 'clear']);
+    expect(kickProviderGroupReshare).toHaveBeenCalledWith('provider-delete');
     expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledWith('openrouter');
     expect(deps.broadcastPricingChanged).toHaveBeenCalled();
 

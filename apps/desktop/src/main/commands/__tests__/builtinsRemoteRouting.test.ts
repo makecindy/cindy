@@ -57,13 +57,9 @@ beforeEach(() => {
 });
 
 describe('/cindy-make composer entry', () => {
-  it('appears in the built-in catalog under the final command name', () => {
+  it('stays out of the built-in catalog while Cindy Make is disabled', () => {
     const { registry } = makeHarness();
-    expect(registry.list()).toContainEqual({
-      kind: 'desktop',
-      name: 'cindy-make',
-      description: expect.stringContaining('/cindy-make'),
-    });
+    expect(registry.list().some((command) => command.name === 'cindy-make')).toBe(false);
     expect(registry.list().some((command) => command.name === 'cindy-maker')).toBe(false);
     expect(registry.list().some((command) => command.name === 'learn')).toBe(true);
   });
@@ -73,7 +69,7 @@ describe('/cindy-make composer entry', () => {
     async (deviceId) => {
       const { registry, remoteInvoke } = makeHarness();
       await expect(registry.execute('cindy-make', { sessionId: 'source', deviceId })).rejects.toThrow(
-        '[INVALID_PARAMS]',
+        'unknown command "/cindy-make"',
       );
       expect(h.webContentsSend).not.toHaveBeenCalled();
       expect(remoteInvoke).not.toHaveBeenCalled();

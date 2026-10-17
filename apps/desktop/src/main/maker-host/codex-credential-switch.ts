@@ -86,6 +86,8 @@ interface LocalCredentialModeSwitchMaker {
 export interface PrepareLocalCodexCredentialModeSwitchInput {
   /** Restrict arbitration to the host being replaced, preserving sibling hosts. */
   hostKey?: string;
+  /** Hosts selected by the credential-change guard, including isolated hosts. */
+  hostKeys?: readonly string[];
   maker: LocalCredentialModeSwitchMaker;
   isSessionInTurn?: (sessionId: string) => boolean;
   signal?: AbortSignal;
@@ -421,7 +423,8 @@ export async function prepareLocalCodexCredentialModeSwitch(
   throwIfCredentialSwitchAborted(input.signal);
   const localCodexSessions = input.maker.listActiveSessions().filter((session) =>
     isLocalCodexSession(session) &&
-    (input.hostKey === undefined || (session.codexHostKey ?? 'local') === input.hostKey),
+    (input.hostKey === undefined || (session.codexHostKey ?? 'local') === input.hostKey)
+    && (input.hostKeys === undefined || input.hostKeys.includes(session.codexHostKey ?? 'local')),
   );
   const busySessions = localCodexSessions.filter((session) =>
     isSessionBusy(session, input.isSessionInTurn),

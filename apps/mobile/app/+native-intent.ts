@@ -2,7 +2,7 @@
 //
 // auth-server 回调 cindycn://auth / cindy://auth 与 Share Extension 的
 // cindycn://expo-sharing / cindy://expo-sharing 都没有对应路由页,默认会落到
-// expo-router 的 +not-found(「Unmatched Route」白屏)。这里分别把它们重定向到首页与
+// expo-router 的 +not-found(「Unmatched Route」白屏)。这里在冷启动时把认证回跳重定向到首页，热回跳保留当前页面；分享跳到
 // 新建任务页；分享 payload 由根级 IncomingShareBridge 独立领取。
 //
 // 实际的 PKCE code 交换**不依赖路由**:由 src/auth/AuthContext.tsx 的 Linking.addEventListener /
@@ -23,7 +23,7 @@ import {
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 
-export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string {
+export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
     // OpenSDK 的授权及 Universal Link 校验回调也会被 Expo Linking 广播给 Router。
     // 它们由原生 delegate 消费，不能当页面显示（更不能在 404 中展示 code）。
@@ -40,8 +40,9 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
-    // 命中 OAuth 回调 → 回首页；Share Extension → 新建任务；其余深链原样放行。
-    if (pathname === '/auth') return '/';
+    // OAuth 冷启动回首页；热回跳不导航，保留正在处理授权的页面。
+    // PKCE 仍由 AuthProvider 的独立 Linking 监听处理。其余深链沿用原规则。
+    if (pathname === '/auth') return initial ? '/' : null;
     // A restored launch URL is not proof of an unconsumed share. On cold start,
     // let IncomingShareBridge navigate only after reading an actual pending batch.
     if (pathname === '/expo-sharing') return initial ? '/' : '/sessions/new';

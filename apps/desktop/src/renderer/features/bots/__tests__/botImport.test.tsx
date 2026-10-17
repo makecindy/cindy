@@ -6,7 +6,7 @@ import { BotImportForm } from '../BotImportForm';
 
 const portraits = vi.hoisted(() => ({ load: vi.fn(async (index: number) => `data:image/png;base64,portrait-${index}`) }));
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, string>) => options ? `${key} ${Object.values(options).join(' ')}` : key }) }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => [] }));
 vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 17, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
 beforeEach(() => portraits.load.mockClear());
@@ -196,4 +196,30 @@ it('distinguishes partial saves, setup-only checks and failed automations while 
   expect(screen.getByRole('button', { name: 'bots.import.retry' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.open' }));
   expect(created).toHaveBeenCalledWith('bot');
+});
+
+it('shows messaging bots as their own row with the source handover note, owner alternatives and source-disabled bots', async () => {
+  const bot = { category: 'bots' as const, name: 'Ada', platform: 'telegram' as const };
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }],
+    preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries: [
+      { ...bot, id: 'owner-a', owner: '1111', selected: false, exclusiveWith: ['owner-b'] },
+      { ...bot, id: 'owner-b', owner: '2222', selected: false, exclusiveWith: ['owner-a'] },
+      { id: 'lark', category: 'bots', name: 'Ada Lark', platform: 'feishu', owner: 'ou_fixture', selected: false, enabled: false },
+    ] }), status: async () => undefined,
+    start: vi.fn(async input => ({ requestId: input.requestId, botId: 'bot', status: 'complete' as const, checks: [] })) };
+  render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /bots\.import\.bots.*bots\.import\.botsNote Hermes/ }));
+  // A short list needs no search box.
+  expect(screen.queryByRole('searchbox')).toBeNull();
+  expect(screen.getByText('bots.import.botOwner 1111')).toBeTruthy();
+  expect(screen.queryByText('bots.import.botOwner ou_fixture')).toBeNull();
+  expect(screen.getByText('bots.import.sourceDisabled')).toBeTruthy();
+  fireEvent.click(screen.getByLabelText('bots.channels.platform.feishu · Ada Lark'));
+  fireEvent.click(screen.getAllByLabelText('bots.channels.platform.telegram · Ada')[0]!);
+  fireEvent.click(screen.getAllByLabelText('bots.channels.platform.telegram · Ada')[1]!);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
+  // Choosing the other owner replaces the first one.
+  await waitFor(() => expect(api.start).toHaveBeenCalledWith(expect.objectContaining({ entryIds: ['lark', 'owner-b'] })));
 });

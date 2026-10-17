@@ -413,3 +413,46 @@ it('keeps Linux whole-desktop coordinates normalized and releases input before r
     c.exit();
   }
 });
+
+describe('代输入 window input', () => {
+  it('starts the helper confined to one window and passes fractions through untouched', async () => {
+    const c = childProcess();
+    const spawn = vi.fn((_binary: string, _args?: string[]) => {
+      void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    });
+    const host = new DesktopInputHost(vi.fn(), {
+      platform: 'darwin',
+      resolveBinary: async () => '/test/helper',
+      spawn,
+    });
+    try {
+      // A display the screen does not know is fine: the window, not a display, is the target.
+      await host.start('9', { windowId: 4242, pid: 77 });
+      expect(spawn).toHaveBeenCalledWith('/test/helper', ['--window', '4242', '77']);
+      host.input([{ kind: 'button', button: 0, down: true, x: 0.25, y: 0.75 }]);
+      await flush();
+      expect(c.child.stdin.write).toHaveBeenCalledWith(
+        '[{"kind":"button","button":0,"down":true,"x":0.25,"y":0.75}]\n',
+        expect.any(Function),
+      );
+    } finally {
+      host.stop();
+      c.exit();
+      await flush();
+    }
+  });
+
+  it('refuses a window it cannot confine', async () => {
+    const spawn = vi.fn();
+    for (const [platform, window] of [
+      ['win32', { windowId: 1, pid: 2 }],
+      ['darwin', { windowId: 0, pid: 2 }],
+      ['darwin', { windowId: 1, pid: -1 }],
+    ] as const) {
+      const host = new DesktopInputHost(vi.fn(), { platform, resolveBinary: async () => '/x', spawn });
+      await expect(host.start('1', window)).rejects.toThrow('DESKTOP_INPUT_UNSUPPORTED');
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});

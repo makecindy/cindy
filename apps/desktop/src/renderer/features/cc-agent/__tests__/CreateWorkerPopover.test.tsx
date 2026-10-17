@@ -13,7 +13,11 @@ import {
   setProviderModelChoice,
   setProviderModelFast,
 } from '@/state/providerModelMemory';
-import { CreateWorkerPopover } from '../CreateWorkerPopover';
+import {
+  CreateWorkerPopover,
+  isAbsoluteRemoteDir,
+  parseExecutionDevices,
+} from '../CreateWorkerPopover';
 
 const mocks = vi.hoisted(() => ({
   modelsByAgent: {
@@ -83,6 +87,20 @@ const mocks = vi.hoisted(() => ({
   }>,
   sidebarWindow: false,
   confirm: vi.fn(async () => true),
+  directoryPath: '/Users/demo/Interviews',
+  // useDeviceProviders 最近一次读的电脑(Worker 的模型目录按哪台读)。
+  deviceProvidersFor: undefined as string | undefined,
+}));
+
+vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
+  AddRemoteProjectDialog: (props: {
+    open: boolean; fixedDeviceId: string; onOpenChange(open: boolean): void;
+    onProjectAdded(target: { kind: 'device-link'; deviceId: string; deviceName: string; path: string }): void;
+  }) => props.open ? <button data-testid="choose-worker-folder" data-device={props.fixedDeviceId}
+    onClick={() => {
+      props.onProjectAdded({ kind: 'device-link', deviceId: props.fixedDeviceId, deviceName: 'Mac mini', path: mocks.directoryPath });
+      props.onOpenChange(false);
+    }}>Choose worker folder</button> : null,
 }));
 
 function model(id: string, efforts = ['high'], defaultEffort = 'high') {
@@ -112,7 +130,8 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({
+  useDeviceProviders: (deviceId?: string) => ({
+    ...((mocks.deviceProvidersFor = deviceId), {}),
     unsupported: mocks.remoteUnsupported,
     providers: mocks.remoteProviders.map((provider) => ({
       ...provider,
@@ -146,9 +165,14 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onFastModeChange?: (enabled: boolean) => void;
     onNavigateToProviders?: () => void;
     modelMemory?: unknown;
+    remoteAgent?: { selectedDeviceId: string | null; homeDeviceId?: string; devices: Array<{ deviceId: string }> };
+    agentDevice?: { deviceId: string } | null;
   }) => (
     <div
       data-testid="model-selector"
+      data-remote-selected={props.remoteAgent ? String(props.remoteAgent.selectedDeviceId) : 'none'}
+      data-remote-home={props.remoteAgent?.homeDeviceId ?? ''}
+      data-agent-device={props.agentDevice?.deviceId ?? ''}
       // onProviderChange 是「供应商分段模式」的开关(面板内部 sourcesEnabled 判据),
       // fastMode/onFastModeChange 是行级配置列的 Fast 开关(替代外置 FastModeToggle)。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
@@ -162,6 +186,9 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       {props.modelId}
       <button data-testid="pick-claude-model" onClick={() => props.onUnifiedSelect?.({ engine: 'cc', modelId: 'claude-sonnet-4-6', providerId: 'anthropic', effort: 'high', fast: false, favoriteUid: null })} />
       <button data-testid="pick-codex-config" onClick={() => props.onUnifiedSelect?.({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false, favoriteUid: null })} />
+      {/* 远程供应商栏里的行带着它所属的电脑(null = 任务所在电脑)。 */}
+      <button data-testid="pick-remote-codex" onClick={() => (props.onUnifiedSelect as ((selection: unknown) => void) | undefined)?.({ engine: 'codex', modelId: 'codex/gpt-5.5', providerId: 'openai', effort: 'high', fast: false, favoriteUid: null, agentDevice: { deviceId: 'agent-pc', name: 'Agent PC' } })} />
+      <button data-testid="pick-home-codex" onClick={() => (props.onUnifiedSelect as ((selection: unknown) => void) | undefined)?.({ engine: 'codex', modelId: 'codex/gpt-5.5', providerId: 'xd', effort: 'high', fast: false, favoriteUid: null, agentDevice: null })} />
       <button
         type="button"
         data-testid="pick-openai-row"
@@ -1546,6 +1573,20 @@ describe('CreateWorkerPopover', () => {
     );
   });
 
+  it('keeps the modal scrim out of the Electron window drag region', () => {
+    // 遮罩标 drag = 整块视口都是拖拽命中区,只给 500px 的 Content 挖洞:模型选择器面板
+    // 按 align=end 贴 trigger、向左探出弹窗边框,探出部分被拖拽区吞掉(2026-10 实测:
+    // 左半点不动、左侧来源 rail 选不了)。同口径见 windowDrag.tsx。
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const overlay = document.querySelector('.modal-scrim') as HTMLElement | null;
+    const panel = document.querySelector('.modal-panel') as HTMLElement | null;
+    const appRegion = (element: HTMLElement) =>
+      (element.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion;
+    expect(overlay).not.toBeNull();
+    expect(appRegion(overlay!)).toBe('no-drag');
+    expect(appRegion(panel!)).toBe('no-drag');
+  });
+
   it('does not wire provider navigation inside the detached sidebar window', async () => {
     // 分离侧栏窗口固定 /sidebar-window 壳路由:本地 navigate 会把辅助窗口整壳替换
     // 成主设置路由,与 OrcaWorkerPanel 的 settingsEnabled={!isSidebarWindow()} 同
@@ -1598,5 +1639,375 @@ describe('CreateWorkerPopover', () => {
         expect.objectContaining({ model: 'gpt-5.5', effort: 'low' }),
       ),
     );
+  });
+});
+
+describe('CreateWorkerPopover execution device', () => {
+  const listExecutionDevices = vi.fn();
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    'scrollIntoView',
+  );
+
+  beforeEach(() => {
+    // Radix Select scrolls the focused option; jsdom does not implement scrolling.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    window.localStorage.clear();
+    resetProviderModelMemoryForTest();
+    mocks.modelsByAgent.codex = [model('codex/gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
+    mocks.localProviders = [];
+    mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
+    listExecutionDevices.mockReset();
+    listExecutionDevices.mockResolvedValue({
+      devices: [
+        { deviceId: 'mac-mini', name: 'Mac mini', platform: 'darwin', supported: true },
+        { deviceId: 'old-pc', name: 'Old PC', platform: 'win32', supported: false },
+      ],
+    });
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localDb: { orcaWorkflows: { listExecutionDevices } },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+    } else {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('offers other computers only when enabled and the list is not empty', async () => {
+    const { unmount } = render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    expect(listExecutionDevices).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('worker-execution-device')).toBeNull();
+    unmount();
+
+    listExecutionDevices.mockResolvedValueOnce({ devices: [] });
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={vi.fn()} />,
+    );
+    await waitFor(() => expect(listExecutionDevices).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('worker-execution-device')).toBeNull();
+  });
+
+  it('creates on the chosen computer with its folder and leaves outdated computers unselectable', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />,
+    );
+
+    const devicePicker = await screen.findByRole('combobox', {
+      name: 'orca.createWorker.executionDeviceLabel',
+    });
+    expect(devicePicker.textContent).toContain('orca.createWorker.thisComputer');
+    expect(screen.queryByRole('option')).toBeNull();
+    fireEvent.keyDown(devicePicker, { key: 'ArrowDown' });
+    const oldDevice = await screen.findByRole('option', { name: /Old PC/ });
+    expect(oldDevice.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(oldDevice);
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(devicePicker.textContent).toContain('orca.createWorker.thisComputer');
+
+    fireEvent.click(screen.getByRole('option', { name: /Mac mini/ }));
+    // 另一台电脑的模型目录：不接本机来源记忆，也不跳本机供应商设置。
+    expect(screen.getByTestId('model-selector').dataset.memoryWired).toBe('false');
+    expect(screen.getByTestId('model-selector').dataset.navigateWired).toBe('false');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    const dirPicker = screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' });
+    const submit = screen.getByRole('button', {
+      name: 'orca.createWorker.submit',
+    }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    mocks.directoryPath = 'Interviews';
+    fireEvent.click(dirPicker);
+    expect(screen.getByTestId('choose-worker-folder').dataset.device).toBe('mac-mini');
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByText('orca.createWorker.remoteDirInvalid')).toBeTruthy();
+
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(dirPicker);
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionDeviceId: 'mac-mini',
+          executionDeviceName: 'Mac mini',
+          workingDir: '/Users/demo/Interviews',
+        }),
+      ),
+    );
+  });
+
+  it('creates a chat on the chosen computer without leaking a previously specified folder', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />,
+    );
+    const picker = await screen.findByRole('combobox', {
+      name: 'orca.createWorker.executionDeviceLabel',
+    });
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    expect(
+      screen
+        .getByRole('radio', { name: 'orca.createWorker.remoteDirChat' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' }));
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirChat' }));
+    expect(screen.queryByRole('textbox', { name: 'orca.createWorker.remoteDirLabel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'mac-mini' });
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'orca.createWorker.thisComputer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    expect(onCreate.mock.calls[1]![0]).not.toHaveProperty('executionDeviceId');
+    expect(onCreate.mock.calls[1]![0]).not.toHaveProperty('workingDir');
+  });
+
+  it('clears the selected folder and resets to chat when switching remote computers', async () => {
+    listExecutionDevices.mockResolvedValueOnce({ devices: [
+      { deviceId: 'mac-mini', name: 'Mac mini', platform: 'darwin', supported: true },
+      { deviceId: 'windows-pc', name: 'Windows PC', platform: 'win32', supported: true },
+    ] });
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    const picker = await screen.findByRole('combobox', { name: 'orca.createWorker.executionDeviceLabel' });
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' }));
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Windows PC/ }));
+    expect(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirChat' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'windows-pc' });
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    expect((screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps a large device list in the dropdown and locates a device by keyboard typeahead', async () => {
+    listExecutionDevices.mockResolvedValueOnce({
+      devices: Array.from({ length: 100 }, (_, index) => ({
+        deviceId: `device-${index}`,
+        name: `Computer ${String(index).padStart(3, '0')}`,
+        supported: true,
+      })),
+    });
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />,
+    );
+    const picker = await screen.findByRole('combobox', {
+      name: 'orca.createWorker.executionDeviceLabel',
+    });
+    expect(screen.queryByText('Computer 099')).toBeNull();
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    await screen.findByRole('option', { name: /Computer 099/ });
+    await userEvent.keyboard('Computer 099');
+    await waitFor(() => expect(document.activeElement?.textContent).toContain('Computer 099'));
+    await userEvent.keyboard('{Enter}');
+    expect(picker.textContent).toContain('Computer 099');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionDeviceId: 'device-99',
+        }),
+      ),
+    );
+  });
+});
+
+// 远程供应商与本机供应商一视同仁(2026-10-10)：Worker 的 Agent 可以放到另一台电脑或分享上。
+describe('CreateWorkerPopover remote providers', () => {
+  const devices = [{ deviceId: 'agent-pc', name: 'Agent PC' }];
+  const submit = () => fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetProviderModelMemoryForTest();
+    mocks.modelsByAgent.codex = [model('codex/gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
+    mocks.localProviders = [];
+    mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
+    mocks.deviceProvidersFor = undefined;
+  });
+
+  afterEach(() => cleanup());
+
+  // 模型面板底部「配置模型」：Worker 的 Agent 已选在分享上时也要能跳设置(由面板决定显示)；
+  // 只有任务在远程控制的电脑上时不接线。
+  it('keeps provider navigation wired while the Worker agent already uses a share', async () => {
+    render(
+      <CreateWorkerPopover
+        open
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+        leadAgentDeviceId="share:abc"
+        remoteAgentDevices={[{ deviceId: 'share:abc', name: '来自 Magi 的分享' }]}
+      />,
+    );
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.agentDevice).toBe('share:abc');
+    expect(selector.dataset.navigateWired).toBe('true');
+  });
+
+  it("does not wire provider navigation for a Lead on a remote-controlled computer", async () => {
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} deviceId="lead-pc" />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.navigateWired).toBe('false');
+  });
+
+  it("reads the Lead's remote computer by default and submits that location", async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId="agent-pc" remoteAgentDevices={devices} />,
+    );
+    // 模型目录按 Lead 的 Agent 所在电脑读，面板列出远程供应商并选中那台，按钮带远程标识。
+    expect(mocks.deviceProvidersFor).toBe('agent-pc');
+    const selector = screen.getByTestId('model-selector');
+    expect(selector.dataset.remoteSelected).toBe('agent-pc');
+    expect(selector.dataset.agentDevice).toBe('agent-pc');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'agent-pc' })));
+  });
+
+  it('moves the Worker between this computer and another one from the panel', async () => {
+    const onCreate = vi.fn();
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} remoteAgentDevices={devices} />,
+    );
+    expect(mocks.deviceProvidersFor).toBeUndefined();
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('null');
+
+    fireEvent.click(screen.getByTestId('pick-remote-codex'));
+    expect(mocks.deviceProvidersFor).toBe('agent-pc');
+    // 那台电脑的档位记在那台的那份记忆里，不写本机的 Worker 偏好。
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentDeviceId: 'agent-pc', model: 'codex/gpt-5.5',
+    })));
+    expect(window.localStorage.getItem('workerCreationPrefs') ?? '').not.toContain('openai');
+
+    fireEvent.click(screen.getByTestId('pick-home-codex'));
+    expect(mocks.deviceProvidersFor).toBeUndefined();
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null })));
+  });
+
+  it("keeps following the Lead's location until the user picks one, without wiping the form", async () => {
+    const onCreate = vi.fn();
+    const view = render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId={null} remoteAgentDevices={devices} />,
+    );
+    fireEvent.change(screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder'), {
+      target: { value: 'review the diff' },
+    });
+    // Lead 的位置稍后才解析出来：Worker 的位置跟过去，已填的初始任务不清掉。
+    view.rerender(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId="agent-pc" remoteAgentDevices={devices} />,
+    );
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('agent-pc');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      agentDeviceId: 'agent-pc', initialTask: 'review the diff',
+    })));
+    // 用户自己选过之后不再跟着变。
+    fireEvent.click(screen.getByTestId('pick-home-codex'));
+    view.rerender(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} leadAgentDeviceId="other-pc" remoteAgentDevices={devices} />,
+    );
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('null');
+  });
+
+  it('blocks creation instead of dropping a chosen location the computer can no longer accept', () => {
+    const view = render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} remoteAgentDevices={devices} />,
+    );
+    fireEvent.click(screen.getByTestId('pick-remote-codex'));
+    // 候选消失(例如任务所在电脑降级)：选中的位置发不出去，不能悄悄按 Lead 的位置建。
+    view.rerender(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const button = screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('does not offer Worker locations on a controlled computer that cannot honor them', async () => {
+    const onCreate = vi.fn();
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'codex/gpt-5.5' }],
+      supportsOrcaWorkerPermissionMode: true,
+    };
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} deviceId="dev-1" remoteAgentDevices={devices} />,
+    );
+    expect(screen.getByTestId('model-selector').dataset.remoteSelected).toBe('none');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('agentDeviceId');
+  });
+
+  it('lists the controlled computer as home when it supports Worker locations', () => {
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'codex/gpt-5.5' }],
+      supportsOrcaWorkerPermissionMode: true,
+    } as typeof mocks.capabilitiesByAgent.codex;
+    // 整台电脑的协议位按那台一定注册的 Claude Code 读，不按 Worker 选的 Agent 读。
+    mocks.capabilitiesByAgent['claude-code'] = {
+      ...mocks.capabilitiesByAgent['claude-code'],
+      supportsOrcaWorkerPermissionMode: true,
+      supportsOrcaWorkerAgentDevice: true,
+    } as typeof mocks.capabilitiesByAgent['claude-code'];
+    render(
+      <CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} deviceId="dev-1" remoteAgentDevices={devices} />,
+    );
+    const selector = screen.getByTestId('model-selector');
+    expect(selector.dataset.remoteSelected).toBe('null');
+    expect(selector.dataset.remoteHome).toBe('dev-1');
+  });
+});
+
+describe('execution device helpers', () => {
+  it('parses the device list defensively', () => {
+    expect(parseExecutionDevices(null)).toEqual([]);
+    expect(
+      parseExecutionDevices({
+        devices: [{ deviceId: 'a', name: '', platform: 1, supported: 'yes' }, { name: 'no id' }],
+      }),
+    ).toEqual([{ deviceId: 'a', name: 'a', platform: null, supported: false }]);
+  });
+
+  it('accepts absolute paths for any operating system', () => {
+    expect(isAbsoluteRemoteDir('/Users/demo')).toBe(true);
+    expect(isAbsoluteRemoteDir('D:\\work')).toBe(true);
+    expect(isAbsoluteRemoteDir('C:/work')).toBe(true);
+    expect(isAbsoluteRemoteDir('\\\\nas\\share')).toBe(true);
+    expect(isAbsoluteRemoteDir('~/work')).toBe(false);
+    expect(isAbsoluteRemoteDir('work')).toBe(false);
   });
 });

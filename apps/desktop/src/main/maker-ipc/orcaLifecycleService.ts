@@ -34,6 +34,12 @@ export interface OrcaEnableTeamParams {
   deferDelegateTask?: boolean;
   /** 本次首个 Worker 权限；缺省读取 Worker 创建偏好。显式值同时更新后续默认。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /** 首个 Worker 放到同账号另一台电脑运行；语义见 OrcaWorkerCreateParams.executionDeviceId。 */
+  executionDeviceId?: string;
+  /** 运行设备上的工作目录；只在指定运行设备时生效。 */
+  workingDir?: string;
+  /** 首个 Worker 的 Agent 所在位置(远程供应商)；语义见 OrcaWorkerCreateParams.agentDeviceId。 */
+  agentDeviceId?: string | null;
 }
 
 /** MCP start_team 只建立 lead team，不创建 worker；worker 后续由 create_worker 添加。 */
@@ -154,6 +160,13 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
     fast: params.fast,
     providerId: params.providerId,
     initialTask: delegateTask,
+    ...(params.executionDeviceId
+      ? {
+          executionDeviceId: params.executionDeviceId,
+          ...(params.workingDir ? { workingDir: params.workingDir } : {}),
+        }
+      : {}),
+    ...(params.agentDeviceId !== undefined ? { agentDeviceId: params.agentDeviceId } : {}),
   };
 }
 
@@ -461,10 +474,13 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       if (normalized.initialTask && !params.deferDelegateTask) {
         dispatchResult = await dispatchInitialTask({
           workerSessionId: created.workerSessionId,
-          message: buildUiAssignmentInitialTask({
-            leadSessionId: params.leadSessionId,
-            initialTask: normalized.initialTask,
-          }),
+          // 远端 Worker 没有读取 Lead 历史的 Worker 桥，只发任务原文。
+          message: created.executionDeviceId
+            ? normalized.initialTask
+            : buildUiAssignmentInitialTask({
+                leadSessionId: params.leadSessionId,
+                initialTask: normalized.initialTask,
+              }),
           context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
         }, assertCreatedCurrent);
       } else {

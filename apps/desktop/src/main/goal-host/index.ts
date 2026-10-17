@@ -14,6 +14,8 @@ import { createLogger } from '../logger.js';
 import {
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
+  ensureGoalInputReady,
+  isGoalInputBlocked,
   resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
 } from '../maker-ipc/register.js';
@@ -64,6 +66,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       }),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     isSessionInTurn,
+    ensureInputReady: ensureGoalInputReady,
+    isInputBlocked: isGoalInputBlocked,
     stopActiveGoalTurn: stopActiveGoalTurnForClear,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,

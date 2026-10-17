@@ -61,6 +61,20 @@ it.each(['status', 'peer', 'responsive'])('retains keyed favorites on failed %s 
   expect(view.items).toEqual([]);
   expect(view.error).toBe(false);
 });
+it('records DEVICE_LINK connection error codes and clears them after a successful refresh', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  invoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+  await act(async () => statusChanged());
+  expect(view.error).toBe(true);
+  expect(view.errorCode).toBe('DEVICE_LINK_NOT_CONNECTED');
+  invoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old host'));
+  await act(async () => statusChanged());
+  expect(view.errorCode).toBe('DEVICE_LINK_CHANNEL_NOT_ALLOWED');
+  invoke.mockResolvedValue([]);
+  await act(async () => statusChanged());
+  expect(view.error).toBe(false);
+  expect(view.errorCode).toBeNull();
+});
 it('remote favorite add/update/remove use remote operations, never browser storage', async () => {
   const local = vi.spyOn(Storage.prototype, 'setItem');
   await act(async () => root.render(createElement(Probe, {})));

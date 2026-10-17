@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: mocks.getDbClient,
 }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
+vi.mock('electron', () => ({ app: {}, BrowserWindow: class {} }));
 
 import { searchSessionsFn, searchSessionsWithBotScope } from '../session-search.js';
 
@@ -20,6 +22,20 @@ describe('session_search Bot ownership boundary', () => {
       query: mocks.query,
     });
     mocks.query.mockResolvedValue([]);
+  });
+
+  it('returns a task URL targeting the history host with an encoded session ID', async () => {
+    mocks.query.mockResolvedValue([
+      { messageId: 'm1', sessionId: 'task /?#中文', role: 'user', ts: 1, content: 'release', score: -1 },
+      { messageId: 'm2', sessionId: 'task-2', role: 'assistant', ts: 2, content: 'release', score: -2 },
+    ]);
+
+    const hits = await searchSessionsFn('release');
+
+    expect(hits.map((hit) => hit.sessionUrl)).toEqual([
+      'cindy://session/task%20%2F%3F%23%E4%B8%AD%E6%96%87?device=host-device',
+      'cindy://session/task-2?device=host-device',
+    ]);
   });
 
   it('restricts a Bot caller to Sessions linked to the same Bot', async () => {

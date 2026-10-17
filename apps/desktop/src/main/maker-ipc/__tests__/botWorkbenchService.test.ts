@@ -18,6 +18,8 @@ import {
   rekeyBotWorkbenchJudgment,
   removeBotWorkbenchDirectory,
   setBotWorkbenchJudgment,
+  mergeCompanionWorkbench,
+  readCompanionWorkbench,
 } from '../botWorkbenchService.js';
 
 let root: string | null = null;
@@ -233,5 +235,73 @@ describe('bot workbench directory removal normalization', () => {
     // 等价写法:inner/.. 投影回 proj, 再补一个尾分隔符。
     await removeBotWorkbenchDirectory(root, 'bot-1', `${nested}${path.sep}..${path.sep}`);
     expect((await readBotWorkbenchState(root, 'bot-1')).directories).toEqual([]);
+  });
+});
+
+describe('workbench moving with the companion', () => {
+  it('names each folder\'s computer, keeps other computers\' folders out of the local scope, and brings portable judgments', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const here = path.join(root, 'here');
+    await mkdir(here);
+    expect(await addBotWorkbenchDirectory(root, 'bot-1', here)).toEqual({ ok: true });
+    await mergeCompanionWorkbench(root, 'bot-1', 'desk', {
+      directories: [{ path: 'C:\\Users\\dash\\game', addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'laptop' },
+        { path: '/Users/dash/back-home', addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'desk' }],
+      tasks: {
+        'pr:makecindy/cindy#1': { title: 'Review', verdict: 'unfinished', next: null, project: here, updatedAt: '2026-10-01T00:00:00.000Z' },
+        'session:abc': { title: 'Local task', verdict: 'unfinished', next: null, project: here, updatedAt: '2026-10-01T00:00:00.000Z' },
+      },
+    });
+    const workbench = await readBotWorkbench(root, 'bot-1');
+    expect(workbench.directories.find((dir) => dir.deviceId === 'laptop')).toMatchObject({ name: 'game', exists: false });
+    // A folder that was on this computer comes back as local.
+    expect(workbench.directories.find((dir) => dir.path === '/Users/dash/back-home')?.deviceId).toBeUndefined();
+    expect((await readBotWorkbenchState(root, 'bot-1')).directories).not.toContain('C:\\Users\\dash\\game');
+    expect(Object.keys(workbench.tasks)).toEqual(['pr:makecindy/cindy#1']);
+    const travelling = await readCompanionWorkbench(root, 'bot-1', 'desk');
+    expect(travelling.directories.find((dir) => dir.path === here)?.deviceId).toBe('desk');
+    // By path, not by drive: on Windows this computer's own folder is on C: too.
+    expect(travelling.directories.find((dir) => dir.path !== here && dir.path.startsWith('C:'))?.deviceId).toBe('laptop');
+  });
+
+  it('lets the cloud replace a workbench this computer synced before, keeping judgments that never travel', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const here = path.join(root, 'here');
+    await mkdir(here);
+    expect(await addBotWorkbenchDirectory(root, 'bot-1', here)).toEqual({ ok: true });
+    await setBotWorkbenchJudgment(root, 'bot-1', 'session:abc', { title: 'Local task', verdict: 'unfinished', next: null, project: here });
+    await setBotWorkbenchJudgment(root, 'bot-1', 'pr:makecindy/cindy#1', { title: 'Review', verdict: 'unfinished', next: null, project: here });
+    await mergeCompanionWorkbench(root, 'bot-1', 'desk', null, { replace: true });
+    const workbench = await readBotWorkbench(root, 'bot-1');
+    expect(workbench.directories).toEqual([]);
+    expect(Object.keys(workbench.tasks)).toEqual(['session:abc']);
+  });
+
+  it('reads a damaged workbench as unreadable for the cloud, never as an empty one', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    expect(await readCompanionWorkbench(root, 'bot-1', 'desk')).toEqual({ directories: [], tasks: {} });
+    await mkdir(botProfileDir(root, 'bot-1'), { recursive: true });
+    await writeFile(path.join(botProfileDir(root, 'bot-1'), 'workbench.json'), '{not json', 'utf8');
+    await expect(readCompanionWorkbench(root, 'bot-1', 'desk')).rejects.toThrow();
+  });
+
+  it('removes a folder by its computer and path, never another computer\'s same path, and never rewrites a foreign path', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const here = path.join(root, 'here');
+    await mkdir(here);
+    expect(await addBotWorkbenchDirectory(root, 'bot-1', here)).toEqual({ ok: true });
+    const windows = 'C:\\work\\game';
+    await mergeCompanionWorkbench(root, 'bot-1', 'desk', { directories: [
+      { path: windows, addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'pc' },
+      { path: here, addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'laptop' }], tasks: {} });
+    const dir0 = root;
+    const listed = async () => (await readBotWorkbench(dir0, 'bot-1')).directories.map((dir) => `${dir.deviceId ?? 'here'}:${dir.path}`).sort();
+    expect(await listed()).toEqual([`here:${here}`, `laptop:${here}`, `pc:${windows}`].sort());
+    await removeBotWorkbenchDirectory(root, 'bot-1', windows, 'pc');
+    expect(await listed()).toEqual([`here:${here}`, `laptop:${here}`].sort());
+    await removeBotWorkbenchDirectory(root, 'bot-1', here);
+    expect(await listed()).toEqual([`laptop:${here}`]);
+    await removeBotWorkbenchDirectory(root, 'bot-1', here, 'laptop');
+    expect(await listed()).toEqual([]);
   });
 });

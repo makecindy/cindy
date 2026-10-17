@@ -105,6 +105,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     recurring: true,
     manual: false,
     agentKind: 'codex',
+    // 留空模型要靠默认解析(本 harness 未接),这里显式给模型。
+    model: 'gpt-6-astra',
     workspaceKind: 'project',
     useWorktree: false,
     notify: { desktop: true, feishu: false },

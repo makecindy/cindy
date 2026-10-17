@@ -37,6 +37,13 @@
   只写已声明的单个 user Secret，不读回、不批量同步、不开放账号 vault。值只短暂存在于
   输入组件/Main 调用中，不进入 Renderer store、Agent、普通远控、日志或历史。CLI PKCE
   的私有回调也只交给发起的可信 Node RPC，不能返回沙箱 main.js 或业务 stdout。
+- 代输入（[产品规则](../product-rules/input-handoff.md)）复用同一签名输入桥：每一步按
+  (requestId, revision) 绑定，主人填写的**所有**值（不只密码）只在 Main 执行输入那一下存在，
+  提交对象用后逐键删除；不进 Renderer store、续接消息、任务记录、数据库、日志、IM 或推送。
+  卡片快照只含界面结构与界面上显示的文字；截图像素只走本地受信 IPC 或加密 offer。
+  宿主注入任务 shell 的 askpass（`SUDO_ASKPASS` / `SSH_ASKPASS` / `GIT_ASKPASS`，经
+  `taskShellEnv`）只携带本机一次性路由，不携带秘密；口令只写回发起的那个进程。
+  设备码「复制代码」写入的是界面上本就显示的短期代码，不属于主人填写的值。
 - access token 等只需短期使用的秘密优先保留在内存中。日志、错误、遥测和调试输出不得
   包含凭证明文、完整鉴权头或可直接复用的授权材料。
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
@@ -175,6 +182,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 Desktop 的运行时 refresh 遇到瞬时失败后，主动调用与定时重试共用至少 60 秒的等待；
 429 的有效 `Retry-After` 更长时按服务器等待时间执行。等待期间的调用不发请求、不延长
 原期限，也不清除凭证。成功续期/登录清除等待，登录代次改变后旧等待不约束新账号。
+唯一提前结束等待的情形是：此前失败为无服务端响应的网络错误（status 0），且 relay
+随后明确返回鉴权拒绝，证明网络路径已可达。同登录代次的自救可提前续期，仍复用在途
+refresh 与 relay 自救节流。在途 refresh 尚未返回时收到的恢复信号等待其结束；若同代次
+请求随后以网络错误失败，只补一次续期，并发恢复调用仍共享该次请求，新失败保留自己的
+等待期限。网卡变化提示不能触发该例外，429、Retry-After 和服务端错误
+仍遵守原期限。续期完成后的立即重连须复验 client、owner 与持有权，不能唤醒旧实例。
 冷启动、确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
 实现见 `main/authRefreshBackoff.ts`、`main/authManager.ts`；回归见
 `main/__tests__/authRefreshBackoff.test.ts`。
@@ -192,11 +205,26 @@ Desktop 的运行时 refresh 遇到瞬时失败后，主动调用与定时重试
 | 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁                                                                                                                                                                                                              |
 | 跨 profile 的共享 Skill 文件互斥    | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称                                                                                                                                                                                             |
 | 旧跨 profile 的 worktree 借用租约   | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，内置模拟器下线后不再创建共享租约；回收器仍读取旧证据并重试已有 `.release` 回执，不能因进程退出就移除保护。普通 Agent 的当前 profile 租约照常创建与释放                                                                                                                                                                                           |
-| 旧版 worktree 回收器兼容锁          | 不再创建新的跨 profile Git 锁；保留旧回执对 `<commonGitDir>/worktrees/<id>/locked` 及更早 `.worktree-keep` 的清理。仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除，不覆盖用户锁；失败沿用 `.release` 重试                                                                                                                                                                                             |
+| 旧版 worktree 回收器兼容锁          | 不再创建新的跨 profile Git 锁；保留旧回执对 `<commonGitDir>/worktrees/<id>/locked` 及更早 `.worktree-keep` 的清理。仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除，不覆盖用户锁；失败沿用 `.release` 重试。支持精确的 `bigint:dev:ino:birthtimeNs` 身份；旧数字编号为 0 或超过安全整数范围时无法证明归属，保留锁但仍释放已结束的租约，避免 Windows 编号精度丢失误删用户替换文件 |
 | 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，仍按日志目录哈希发布原 profile 日志位置，兼容可能同时运行的旧客户端；新客户端不再读取其他 profile 的日志来借用工程。不复制恢复状态、不代替 owner 执行恢复                                                                                                                                                                                      |
-| 供应商分享：分享者电脑上的受邀者用量 | `userData/remote-agent/provider-share-usage.json`，按（日期、分享、成员、Agent、供应商、模型）聚合 token 与轮次，原子替换写入，保留 400 天；只含服务端生成的分享与成员 id，不含昵称、对话或凭证。成员删除后保留（管理页不再显示），同一人重新加入时接续 |
+| 供应商分享：分享者电脑上的受邀者用量 | `userData/remote-agent/provider-share-usage.json`，按（日期、分享、成员、Agent、供应商、模型）聚合 token 与轮次，行内 `byMember` 按组内电脑的键再分（2026-10-11 加；行键与合计不变，旧版本照常累计并原样写回，合计多出各台之和的部分算没区分电脑），原子替换写入，保留 400 天；只含服务端生成的分享与成员 id，不含昵称、对话或凭证。成员删除后保留（管理页不再显示），同一人重新加入时接续 |
+| 供应商分享：转分享的同意 | `userData/owners/<账号>/provider-share-reshare.json`，分享者电脑上记下受邀者的组所在电脑报来的、请求经组使用的人（`provider-sharing.md` §4.3）：服务端生成的分享与成员 id、那台组所在电脑的设备 id、组所在电脑给的不透明键、主人的决定与时间，以及组所在电脑转述的昵称与头像地址（只用于管理页认人，不进日志）。不含对话或凭证。原子替换写入；成员被删除或退出、启动后核对已不在这台的分享与成员时删除对应记录 |
+| 供应商分享：短期审批弹窗归属 | `userData/owners/<账号>/provider-share-approval-windows.json`，只记供应商 id、生成端关注的供应商所在电脑 id、非秘密链接标识 `linkId`（随机邀请口令的 SHA-256 摘要）与七分钟截止时刻，不含链接口令、申请、配对码或身份。复用设置文件跨进程锁与原子替换；生成链接返回前完成保存，静默与关注均按链接区分。本机新链接仅清除旧版按供应商静默的窗口，不影响其它链接的精确归属。旧记录仍可读，无标识的旧关注只接无标识申请。完整应用重启的第一轮快照前恢复；远端读取使用新运行时的同账号只读管理通道，不恢复旧回调或重放写操作。过期记录读时忽略、下次写入清理；账号切换隔离，损坏文件保留且拒绝覆写。见 `device-link/providerShareApprovalWindows.ts`、`providerShareHost.ts` 与 `__tests__/providerShareApprovalWindows.test.ts` |
+| 供应商组：本机组绑定待清理记录 | 复用 `userData/owners/<账号>/provider-group-prefs.json` 的可选 `bindingCleanups`，只记供应商 id、保留的组员键（整组删除为 null）、时间与不透明代次，不含消息、凭证或用户身份。与组修改共用文件锁和原子替换；组修改、清理回放与新绑定写入另共用同账号目录的 `provider-group-mutation.lock`（先取该锁，再取各文件锁），防止迟到清理误删新分配。账号切换或重启后仍使旧绑定失效；重新加入不撤销清理，多次移出的保留键取交集。新写绑定前先将旧绑定删除与解除记录原子提交，再按代次确认；写盘失败或确认中断保留意图重试，迟到确认不删除新一代记录。旧文件缺字段视为空，旧版写组设置保留未知根字段。见 `provider-group/store.ts`、`bindings.ts`、`managementScope.ts` 与 `__tests__/stores.test.ts` |
+| 供应商组：本机组的绑定解除记录 | 复用 `userData/owners/<账号>/provider-group-bindings.json` 的可选 `released`，按任务 id 只记供应商 id 与解除时间，不含消息、凭证或用户身份。删组或移出组员时，与对应绑定删除共用文件锁和原子替换；账号切换前已提交的两部分一同保留。旧文件缺字段视为空，旧版写绑定保留未知根字段，升级后解除记录优先于旧版恢复的绑定；显式重新分配给同一个组时原子清除记录。其他解除路径仍读写 `provider-group-released.json`，读方合并两处记录；损坏绑定文件保留并拒绝覆写。见 `provider-group/bindings.ts` 与 `__tests__/stores.test.ts` |
+| 供应商组：转分享待清空记录 | 复用 `userData/owners/<账号>/provider-group-prefs.json` 的可选 `reshareCleanups`，只含分享来的电脑逻辑 id 与随机清理代次，不含昵称、头像、对话或凭证。最后一个组引用移出时，与组设置在同一跨进程锁内原子写入；对端确认空名单后按代次删除，失败每分钟重试，重启继续，重新加入先清空旧同意。旧文件缺字段视为空，旧版改写组设置仍保留未知字段；损坏文件保留并拒绝覆写。见 `provider-group/store.ts` 与 `__tests__/stores.test.ts` |
+| 供应商按使用方的用量 | `userData/owners/<账号>/provider-usage-by-party.json`，按（日期、供应商、使用方、设备 id、组内电脑的键、Agent、模型）聚合 token 与轮次。使用方：本机、同账号另一台电脑、经同账号组所在电脑转来的受邀者任务、本机经另一台电脑的组在别的组内电脑上运行的（只用来报告给那台组所在电脑）、同账号电脑报告来的（每次报告整体替换那台从某天起的行）；没有使用方字段的旧行按设备 id 推出。原子替换写入，保留 400 天；只含供应商 id、设备 id、组内电脑的键与模型名，不含对话或凭证。按账号存放（供应商 id 在不同账号下会重复），从开始记录起不补历史 |
+| macOS 菜单栏余量设置 | `userData/menubar-settings.json`，本机偏好：是否显示、来源顺序与显隐、菜单栏文字、快见底通知、隐藏个人信息、统计范围；只含供应商 id，不含凭证或用量数值 |
+| macOS 菜单栏 Cindy 余额样本 | `userData/owners/<账号>/menubar-credit-samples.json`，只记录观测到的余额数值与时间（按区域与币种分组），用于估算日均消耗；保留 30 天、原子替换写入，不含凭证或账号标识 |
+| 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑例行任务）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| macOS 菜单栏 helper（开发构建） | `userData/menubar/`，开发时由 `swiftc` 编译的 helper 及其 wordmark 图片和源码哈希；打包版改用 `resources/tools/menubar/`，不在 userData 落盘 |
 | 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
 | 供应商分享：跨区域标记 | `userData/remote-agent/provider-share-regions.json`，账号摘要 → 对方区域；**不含凭证**。跨区连接凭证只在内存里，用新身份名片重新换取；没有标记的账号从不联系对方区域 |
+| 供应商分享：受邀者对分享的本机偏好 | `userData/owners/<账号>/provider-share-guest-prefs.json`，分享 id → 分享所属区域与「信任 {分享者}」（凭证操作不再确认）；只存显式打开的项，在同路径 `.lock` 跨进程安全锁内重读、修改和原子替换，拿不到锁不保存。持有权切换使排队和在途写入失效；已进入文件系统的替换在新持有者保存前完成，不能覆盖其撤销。不含昵称、对话或凭证。退出分享或分享从已确认区域的权威名单里消失时立即在内存撤销，并取消对应的在途启用；清理落盘失败也不恢复信任。实现与回归见 `providerShareGuestPrefs.ts` 及其同名单测 |
+| 语音输入声纹（生物特征） | `userData/owners/<账号>/voice-speaker-profile.json`，「识别我的声音」录入的声纹向量与录入时间，经 `safeStorage` 加密后整体落盘（钥匙串不可用时拒绝写入，不降级明文）；记录生成它的模型哈希，换模型后视为未录入。只在本机，不同步、不上传、不进日志（日志只记分数与次数）；用户删除即删文件。录入用的朗读音频只在内存中处理，不落盘 |
+| 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
+| Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
+| Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
 | 用户明确导出的文件                  | 用户选择或任务明确指定的目标路径                                                                                                                                                                                                                                                                                                                                                                                |
 
 - 内置 Skill 的官方身份只授予当前 manifest 已提交且指纹匹配的 bundle：`.active` 必须是

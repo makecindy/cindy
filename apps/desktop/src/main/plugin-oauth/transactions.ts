@@ -14,6 +14,9 @@ import {
   type PluginDeviceOpened,
   type PluginOauthCallback,
   parsePluginOauthRequest,
+  parseInputHandoffOffer,
+  parseInputHandoffValueReply,
+  type InputHandoffValueReply,
   type PluginOauthAction,
   type PluginOauthPhase,
   type PluginOauthRequest,
@@ -34,8 +37,19 @@ export interface OauthTransactionDeps {
   now?: () => number;
 }
 type TransactionReply =
-  PluginOauthCallback | PluginDeviceOpened | PluginSecretValue | PluginConnectionValue;
-type ReplyMode = 'loopback' | 'device' | 'secret' | 'connection';
+  | PluginOauthCallback
+  | PluginDeviceOpened
+  | PluginSecretValue
+  | PluginConnectionValue
+  | InputHandoffValueReply;
+type ReplyMode = 'loopback' | 'device' | 'secret' | 'connection' | 'input';
+const parseOrNull = <T>(parse: (raw: unknown) => T) => (raw: unknown): T | null => {
+  try {
+    return parse(raw);
+  } catch {
+    return null;
+  }
+};
 interface OfferExchange<T> {
   offer: { state: string };
   mode: ReplyMode;
@@ -147,6 +161,7 @@ export class OauthTransactions {
   ): RemoteOauthContext {
     return {
       scope: t.id,
+      peer: t.peer,
       cancelled: t.lifetime.signal,
       assertCurrent: () => this.assertCurrent(t),
       authorize: (offer, signal) =>
@@ -203,6 +218,15 @@ export class OauthTransactions {
           parse: parsePluginConnectionValue,
         }).then((reply) => reply.value);
       },
+      submitInput: (rawOffer) => {
+        if (request.inputHandoff !== true) throw failure();
+        const offer = parseInputHandoffOffer(rawOffer);
+        return this.waitForReply(t, {
+          offer,
+          mode: 'input',
+          parse: parseOrNull(parseInputHandoffValueReply),
+        }).then((reply) => reply.submission);
+      },
       finish: (ok) => {
         if (!terminal(t.phase)) this.finish(t, ok && this.current(t) ? 'succeeded' : 'failed');
       },
@@ -239,6 +263,7 @@ export class OauthTransactions {
         authorizationV1: true,
         secretSubmission: true,
         connectionSubmission: true,
+        inputHandoff: true,
       };
     if (request.op === 'start') {
       const owner = this.deps.owner()!;
@@ -311,7 +336,9 @@ export class OauthTransactions {
     if (t.phase !== 'authorizing' || !t.key) throw failure();
     const rawCallback = t.key.open(t.publicKey, t.id, 'callback', request.box);
     const callback =
-      t.mode === 'connection'
+      t.mode === 'input'
+        ? parseOrNull(parseInputHandoffValueReply)(rawCallback)
+        : t.mode === 'connection'
         ? parsePluginConnectionValue(rawCallback)
         : t.mode === 'secret'
           ? parsePluginSecretValue(rawCallback)

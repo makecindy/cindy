@@ -81,6 +81,7 @@ import {
   buildSessionMenuHeader,
   removeSessionExtraDir,
   sessionInfoShowsExtraDirs,
+  sessionMenuAllowsRename,
   sessionMenuCopyLink,
   settleSessionMenuBack,
   type SessionMenuAction,
@@ -223,12 +224,13 @@ export function SessionMenuSheet({
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
-  const [view, setView] = useState<SessionMenuView>(initialView);
+  // 'rename' 只是打开位置(落在一级菜单的重命名编辑态),视图本身仍是 menu / info 两级。
+  const [view, setView] = useState<SessionMenuView>(initialView === 'info' ? 'info' : 'menu');
   const [opening, setOpening] = useState({ visible, initialView });
   // Reset before effects: reopening the primary menu must not inspect the old info view.
   if (opening.visible !== visible || opening.initialView !== initialView) {
     setOpening({ visible, initialView });
-    if (visible) setView(initialView);
+    if (visible) setView(initialView === 'info' ? 'info' : 'menu');
   }
   const { contextUsage, contextLoading, refresh: onRefreshContextUsage } = useSessionMenuContextUsage(
     session, usageReader, visible && !messageOnly && view === 'info', onContextError,
@@ -236,6 +238,9 @@ export function SessionMenuSheet({
   const [primarySnap, setPrimarySnap] = useState<ContextSheetSnap>('half');
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [renaming, setRenaming] = useState(false);
+  // 双击标题直达的重命名:确定 / 取消后直接收起菜单,不退回一级菜单。
+  const [renameOnly, setRenameOnly] = useState(false);
+  const renameAllowed = sessionMenuAllowsRename(session, messageOnly);
   const [renameGenerating, setRenameGenerating] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   // 重命名输入框的预填值:哨兵先过投影,输入框里不能出现内部哨兵 "New Maker"
@@ -278,20 +283,31 @@ export function SessionMenuSheet({
     setPrimarySnap('half');
     setSecondarySnap('half');
     renameSeqRef.current += 1;
-    setRenaming(false);
+    const startRenaming = initialView === 'rename' && renameAllowed && !busy;
+    setRenaming(startRenaming);
+    setRenameOnly(startRenaming);
+    if (startRenaming) setTitleDraft(renamePrefill);
     setRenameGenerating(false);
     setRenameError(null);
     setCopiedKey(null);
     setExtraDirsNotice(null);
     secondaryAnimatingRef.current = false;
     secondaryTranslate.setValue(initialView === 'info' ? 0 : windowHeightRef.current);
+    // 只在打开时决定落点;打开期间 busy / 标题变化不重跑整段重置。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, initialView, secondaryTranslate]);
 
-  // 会话切换 / 远端改名后同步标题草稿,并退出编辑态。
+  // 会话切换 / 远端改名后同步标题草稿,并退出编辑态。首次挂载跳过:浮窗由
+  // MountOnFirstOpen 首开即挂载,此时上面的打开重置可能刚进入重命名编辑态。
+  const renameSourceRef = useRef({ id: session.id, prefill: renamePrefill });
   useEffect(() => {
+    const source = renameSourceRef.current;
+    if (source.id === session.id && source.prefill === renamePrefill) return;
+    renameSourceRef.current = { id: session.id, prefill: renamePrefill };
     renameSeqRef.current += 1;
     setTitleDraft(renamePrefill);
     setRenaming(false);
+    setRenameOnly(false);
     setRenameGenerating(false);
     setRenameError(null);
   }, [session.id, renamePrefill]);
@@ -393,6 +409,7 @@ export function SessionMenuSheet({
     setRenaming(false);
     setRenameGenerating(false);
     setRenameError(null);
+    if (renameOnly) onClose();
     // 「没改就不落库」要同时比原始标题**和**预填的投影值:未起名会话预填的是本地化
     // 兜底文案,只比原始标题会把这个文案写进 DB,哨兵被毁 → 自动起名永久跳过该会话。
     if (!next || next === session.title || next === renamePrefill) {
@@ -400,7 +417,7 @@ export function SessionMenuSheet({
       return;
     }
     onRename(next);
-  }, [onRename, renamePrefill, session.title, titleDraft]);
+  }, [onClose, onRename, renameOnly, renamePrefill, session.title, titleDraft]);
 
   const cancelRename = useCallback(() => {
     renameSeqRef.current += 1;
@@ -408,7 +425,8 @@ export function SessionMenuSheet({
     setRenameGenerating(false);
     setRenameError(null);
     setTitleDraft(renamePrefill);
-  }, [renamePrefill]);
+    if (renameOnly) onClose();
+  }, [onClose, renameOnly, renamePrefill]);
 
   // 自动起名:生成结果只回填输入框,停留在编辑态等用户按「确定」提交(2026-07-06
   // 产品确认,与桌面「生成即提交」刻意不同);生成期间用户手动提交 / 取消 →

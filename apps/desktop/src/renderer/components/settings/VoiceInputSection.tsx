@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { VoiceSpeakerFilterCard } from './VoiceSpeakerFilterCard';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -1049,6 +1050,9 @@ export function VoiceInputSection() {
     setAutoDictionaryEnabled,
     setDictionarySyncEnabled,
     resetDictionarySyncEnabled,
+    setSpeakerFilterEnabled,
+    setSpeakerFilterStrictness,
+    resetSpeakerFilterStrictness,
     addDictionaryEntry: addDictionarySettingEntry,
     importDictionaryEntries: importDictionarySettingEntries,
     editDictionaryEntry: editDictionarySettingEntry,
@@ -2746,6 +2750,16 @@ export function VoiceInputSection() {
           />
         </div>
       </VoiceInputCard>
+
+      <VoiceSpeakerFilterCard
+        enabled={settings.speakerFilterEnabled}
+        strictness={settings.speakerFilterStrictness}
+        strictnessCustomized={settings.speakerFilterStrictnessOverride != null}
+        microphoneDeviceId={settings.microphoneDeviceId}
+        onEnabledChange={setSpeakerFilterEnabled}
+        onStrictnessChange={setSpeakerFilterStrictness}
+        onStrictnessReset={resetSpeakerFilterStrictness}
+      />
 
       <VoiceInputCard
         id="settings-search-voice-usage-data"

@@ -16,9 +16,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -76,14 +78,18 @@ export function ImDefaultSettingsSection({
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
   const { t } = useTranslation();
-  const { providers } = useProviders();
-  const cc = useAgentCapabilities('claude-code');
-  const codex = useAgentCapabilities('codex');
-  const pi = useAgentCapabilities('pi');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
+  const agentDeviceId = settings?.agents[settings.agentKind].agentDeviceId ?? null;
+  const local = useProviders();
+  const remote = useDeviceProviders(agentDeviceId ?? undefined);
+  const providers = agentDeviceId ? remote.providers : local.providers;
+  const cc = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
+  const codex = useAgentCapabilities('codex', agentDeviceId ?? undefined);
+  const pi = useAgentCapabilities('pi', agentDeviceId ?? undefined);
+  const sharedDevices = useProviderShareAgentDevices([agentDeviceId]);
 
-  const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code');
+  const pickerAgents = useModelPickerAgents(settings?.agentKind ?? 'claude-code', agentDeviceId);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,7 +268,7 @@ export function ImDefaultSettingsSection({
     providerId: string | null = activeSettings.providerId,
     reconciledEffort?: Effort,
   ) => {
-    const nextProviderId = resolveProviderId(settings.agentKind, model, providerId);
+    const nextProviderId = agentDeviceId ? providerId : resolveProviderId(settings.agentKind, model, providerId);
     const effort = isImDefaultEffort(reconciledEffort)
       ? reconciledEffort
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
@@ -327,9 +333,10 @@ export function ImDefaultSettingsSection({
             {t('settings.imBot.defaults.modelLabel')}
           </span>
           <ModelSelector
+            remoteAgent={{ devices: sharedDevices.devices, selectedDeviceId: agentDeviceId }}
             fastModeConfigurable={false}
             unifiedAgents={pickerAgents}
-            onUnifiedSelect={({ engine, modelId, providerId, effort }) => {
+            onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
               const agentKind = agentKindOfVendor(engine);
               return persist({
                 agentKind,
@@ -337,6 +344,7 @@ export function ImDefaultSettingsSection({
                   ...settings.agents[agentKind],
                   model: modelId,
                   providerId,
+                  agentDeviceId: agentDevice?.deviceId ?? null,
                   effort: isImDefaultEffort(effort)
                     ? effort
                     : resolveEffort(agentKind, modelId, ''),

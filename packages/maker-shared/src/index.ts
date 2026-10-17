@@ -5,6 +5,7 @@ export * from './branding.js';
 export * from './brandIdentity.js';
 export * from './commandIntent.js';
 export * from './commandDisplay.js';
+export * from './cindyMakeFeature.js';
 export * from './composerPalette.js';
 export * from './deviceList.js';
 export * from './fileBrowser.js';
@@ -65,3 +66,4 @@ export * from './taskTags';
 
 export * from './workingStatus.js';
 export * from './runningTokenRateHistory.js';
+export * from './userBubbleAppearance.js';
