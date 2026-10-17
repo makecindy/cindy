@@ -8,6 +8,18 @@
  * 协同 team 工具由 cindy_orca server(src/orca/)托管,通过本目录的 register*Tool 注册。
  */
 
+export type {
+  SessionOpErrorCode,
+  SessionOpItem,
+  SessionOpResult,
+} from './_session_ops.js';
+export { hostErrorPayload, sessionOpItemToPayload } from './_session_ops.js';
+export { registerPinSessionsTool, registerUnpinSessionsTool, type PinSessionsDeps, type SetSessionsPinnedResult } from './pin_sessions.js';
+export { registerDeleteSessionsTool, type DeleteSessionPreviewItem, type DeleteSessionsDeps, type DeleteSessionsResult } from './delete_sessions.js';
+export { registerExportSessionTool, type ExportSessionDeps, type ExportSessionOk, type ExportSessionResult } from './export_session.js';
+export { registerOpenSessionInNewWindowTool, type OpenSessionInNewWindowDeps, type OpenSessionInNewWindowResult } from './open_session_in_new_window.js';
+export { registerGetSessionBranchesTool, type GetSessionBranchesDeps, type GetSessionBranchesResult, type SessionBranchItem } from './get_session_branches.js';
+export { registerForkSessionTool, type ForkSessionDeps, type ForkSessionResult } from './fork_session.js';
 export { registerGetCapabilitiesTool } from './get_capabilities.js';
 export { registerAppUpdateTools, type AppUpdateCallbacks } from './app_update.js';
 export { registerGrokLoginTools, type GrokLoginCallbacks, type GrokLoginState } from './grok_login.js';

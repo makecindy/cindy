@@ -304,19 +304,36 @@ async function writeSessionPatch(
   sessionId: string,
   setObj: ReturnType<typeof sessionPatchToRow>,
   status: unknown,
-): Promise<void> {
-  if (Object.keys(setObj).length === 0) return;
+  skipIfPinnedUnchanged = false,
+): Promise<boolean> {
+  if (Object.keys(setObj).length === 0) return true;
   const deletedIsTerminal = status === 'active' || status === 'archived';
   const result = await db
     .update(sessions)
     .set(setObj)
     .where(
-      deletedIsTerminal
-        ? and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'))
-        : eq(sessions.id, sessionId),
+      and(
+        eq(sessions.id, sessionId),
+        ...(deletedIsTerminal ? [ne(sessions.status, 'deleted')] : []),
+        ...(skipIfPinnedUnchanged
+          ? [eq(sessions.status, 'active'), setObj.pinnedAt == null ? isNotNull(sessions.pinnedAt) : isNull(sessions.pinnedAt)]
+          : []),
+      ),
     )
     .run();
-  if (!deletedIsTerminal || result.changes > 0) return;
+  if (result.changes > 0) return true;
+  if (skipIfPinnedUnchanged) {
+    const [existing] = await db
+      .select({ id: sessions.id, status: sessions.status })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId));
+    if (!existing) throwIpcError('NOT_FOUND', 'Session 不存在');
+    if (existing.status !== 'active') {
+      throwIpcError('PRECONDITION_FAILED', '已归档或删除的任务不能置顶');
+    }
+    return false;
+  }
+  if (!deletedIsTerminal) return true;
 
   const [existing] = await db
     .select({ id: sessions.id })
@@ -325,6 +342,12 @@ async function writeSessionPatch(
   if (!existing) throwIpcError('NOT_FOUND', 'Session 不存在');
   throwIpcError('PRECONDITION_FAILED', '已删除的任务不能恢复或归档');
 }
+
+/** Private no-op signal used by the MCP pin adapter; no broadcast or summary work follows it. */
+export const SESSION_PIN_UNCHANGED = Object.assign(
+  new Error('[SESSION_PIN_UNCHANGED] pin state already matches'),
+  { code: 'SESSION_PIN_UNCHANGED' },
+);
 
 async function setTerminalSessionStatus(
   dbClient: DbClient,
@@ -1821,14 +1844,19 @@ export async function updateSessionInDb(
   moveGuard?: {
     /** Identity only: also used after commit and inside transcript relocation. */
     assertCurrent: () => void;
-    /** Runs inside the existing route/worktree locks, including dialogue moves. */
+    /** Runs before the patch; moves retain route/worktree locks, conditional pins need neither. */
     beforeUpdate: () => Promise<void>;
     /** Mutable running/IM preconditions must not reject an already committed move. */
     beforeWrite?: () => void | Promise<void>;
+    /** Only for a pinnedAt-only patch: compare and update in one SQL statement. */
+    skipIfPinnedUnchanged?: boolean;
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
   moveGuard?.assertCurrent();
   const ownerScope = captureOwnerScope();
+  if (moveGuard?.skipIfPinnedUnchanged && (Object.keys(p).length !== 1 || p.pinnedAt === undefined)) {
+    throwIpcError('INVALID_PARAMS', 'conditional pin update requires a pinnedAt-only patch');
+  }
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
     throwIpcError(
       'UNSUPPORTED_CAPABILITY',
@@ -2013,7 +2041,8 @@ export async function updateSessionInDb(
             await finalizeSharedTaskClosure(dbClient, prepared);
           }
         } else {
-          await writeSessionPatch(db, sid, setObj, p.status);
+          const wrote = await writeSessionPatch(db, sid, setObj, p.status, moveGuard?.skipIfPinnedUnchanged);
+          if (!wrote) throw SESSION_PIN_UNCHANGED;
         }
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
         if (terminal) {
@@ -2132,7 +2161,10 @@ export async function updateSessionInDb(
     compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
   };
-  if (p.workingDir === undefined && !moveGuard) return update();
+  // A running IM turn holds the send/route lock until its tools return. Pinning
+  // changes only metadata: the validated conditional pin path checks active
+  // status and pin state atomically in SQL, while retaining the account fence.
+  if (p.workingDir === undefined && (!moveGuard || moveGuard.skipIfPinnedUnchanged)) return update();
   return withSessionRouteLock(sid, async () => {
     const [binding] = await db
       .select({ remoteHostId: sessions.remoteHostId })

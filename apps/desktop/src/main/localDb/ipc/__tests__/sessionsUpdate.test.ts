@@ -174,6 +174,7 @@ vi.mock('../../../cindy-brain/index.js', () => ({
 }));
 
 import {
+  SESSION_PIN_UNCHANGED,
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
@@ -1246,6 +1247,100 @@ describe('local-db:sessions:update handler wiring', () => {
       patch: { pinnedAt: null, summary: null },
     });
     expect(h.summarizeSession).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('does not reacquire the IM send route lock when pinned=%s', async (pinned) => {
+    h.sqlite!.prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?').run(
+      pinned ? null : 1, 'codex-local',
+    );
+    // The IM turn owns this non-reentrant lock until the tool returns.
+    h.routeLock.mockImplementation(async () => { throw new Error('IM send lock is already held'); });
+    const assertCurrent = vi.fn();
+    const beforeWrite = vi.fn();
+    const pinnedAt = pinned ? '2026-01-02T00:00:00.000Z' : null;
+    await updateSessionInDb('codex-local', { pinnedAt }, undefined, {
+      assertCurrent,
+      beforeUpdate: async () => undefined,
+      beforeWrite,
+      skipIfPinnedUnchanged: true,
+    });
+    expect(h.routeLock).not.toHaveBeenCalled();
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(beforeWrite).toHaveBeenCalledOnce();
+    expect(h.sqlite!.prepare('SELECT pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ pinned_at: pinned ? Date.parse(pinnedAt!) : null });
+    expect(h.tapWindowBroadcast).toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 'archived', pinned: true }, { status: 'deleted', pinned: true },
+    { status: 'archived', pinned: false }, { status: 'deleted', pinned: false },
+  ])('rejects a conditional pin after terminal transition %j', async ({ status, pinned }) => {
+    h.sqlite!.prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?').run(
+      pinned ? null : 1, 'codex-local',
+    );
+    await expect(updateSessionInDb('codex-local', { pinnedAt: pinned ? '2026-01-02T00:00:00.000Z' : null }, undefined, {
+      assertCurrent: () => undefined,
+      beforeUpdate: async () => undefined,
+      beforeWrite: () => {
+        h.sqlite!.prepare('UPDATE sessions SET status = ? WHERE id = ?').run(status, 'codex-local');
+      },
+      skipIfPinnedUnchanged: true,
+    })).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(h.sqlite!.prepare('SELECT status, pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ status, pinned_at: pinned ? null : 1 });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the account fence immediately before a conditional pin write', async () => {
+    let current = true;
+    await expect(updateSessionInDb('codex-local', { pinnedAt: '2026-01-02T00:00:00.000Z' }, undefined, {
+      assertCurrent: () => {
+        if (!current) throw Object.assign(new Error('[PRECONDITION_FAILED] account changed'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      },
+      beforeUpdate: async () => undefined,
+      beforeWrite: () => { current = false; },
+      skipIfPinnedUnchanged: true,
+    })).rejects.toThrow('account changed');
+    expect(h.sqlite!.prepare('SELECT pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ pinned_at: null });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('skips a concurrent pin in the conditional SQL write without broadcasting', async () => {
+    const pinnedAt = '2026-01-02T00:00:00.000Z';
+    await expect(updateSessionInDb('codex-local', { pinnedAt }, undefined, {
+      assertCurrent: () => undefined,
+      beforeUpdate: async () => undefined,
+      beforeWrite: () => {
+        h.sqlite!.prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?').run(
+          Date.parse('2026-01-01T00:00:00.000Z'), 'codex-local',
+        );
+      },
+      skipIfPinnedUnchanged: true,
+    })).rejects.toBe(SESSION_PIN_UNCHANGED);
+    expect(h.sqlite!.prepare('SELECT pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ pinned_at: Date.parse('2026-01-01T00:00:00.000Z') });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+  });
+
+  it('applies a pin after a concurrent unpin inside the write path', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET pinned_at = ? WHERE id = ?').run(1, 'codex-local');
+    const pinnedAt = '2026-01-02T00:00:00.000Z';
+    await updateSessionInDb('codex-local', { pinnedAt }, undefined, {
+      assertCurrent: () => undefined,
+      beforeUpdate: async () => undefined,
+      beforeWrite: () => {
+        h.sqlite!.prepare('UPDATE sessions SET pinned_at = NULL WHERE id = ?').run('codex-local');
+      },
+      skipIfPinnedUnchanged: true,
+    });
+    expect(h.sqlite!.prepare('SELECT pinned_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ pinned_at: Date.parse(pinnedAt) });
   });
 
   it('relocates transcripts when workingDir actually changes on a local cc session', async () => {

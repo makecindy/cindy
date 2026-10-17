@@ -76,6 +76,7 @@ const log = createLogger('session-share-export');
  * 可到 2GB+)。更大的会话走「排除媒体重试」;流式落盘作为后续优化。
  */
 export const SHARE_EXPORT_SIZE_LIMIT_BYTES = 256 * 1024 * 1024;
+const LINK_UNSUPPORTED_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
 
 export interface SessionShareExportOptions {
   sessionId: string;
@@ -83,6 +84,8 @@ export interface SessionShareExportOptions {
   password?: string | null;
   /** 超限重试时由 renderer 显式传入:跳过全部媒体,只保消息文本与转录。 */
   excludeMedia?: boolean;
+  /** MCP export must publish only when the target path is still absent. */
+  noOverwrite?: boolean;
   /** Host resource budget override; ordinary sharing retains its default limit. */
   sizeLimitBytes?: number;
   /** Host-only migration includes archived members without reviving them. */
@@ -904,7 +907,22 @@ export async function exportSessionShare(
   const tmpPath = `${opts.targetPath}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await fsp.writeFile(tmpPath, fileBytes, { flag: 'wx' });
-    await fsp.rename(tmpPath, opts.targetPath);
+    if (opts.noOverwrite) {
+      // Both paths are in the same directory. link fails with EEXIST if another
+      // export or user created the destination while the archive was built.
+      try {
+        await fsp.link(tmpPath, opts.targetPath);
+      } catch (error) {
+        if (!LINK_UNSUPPORTED_CODES.has((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        // An exclusive copy writes directly to the final path and can leave a
+        // truncated share after a crash. Without hard links there is no safe
+        // atomic, no-replace publish through Node's file APIs; fail closed.
+        throw codedError('SHARE_EXPORT_FAILED', 'target file system cannot safely publish an exclusive share');
+      }
+      await fsp.unlink(tmpPath);
+    } else {
+      await fsp.rename(tmpPath, opts.targetPath);
+    }
   } catch (err) {
     await fsp.rm(tmpPath, { force: true }).catch(() => undefined);
     throw err;

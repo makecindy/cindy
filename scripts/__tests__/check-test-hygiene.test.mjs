@@ -429,7 +429,8 @@ test("compareWithBaseline only lets counts stay or shrink", () => {
 
 	// Exercise the real CLI in its own Git repository. A same-PR JSON edit must
 	// not become trusted merely because it was committed or --update was used.
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-hygiene-ratchet-"));
+	// Match Node's canonical import.meta.url when macOS exposes tmpdir through /var.
+	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cindy-hygiene-ratchet-")));
 	const baselinePath = path.join(root, "scripts", "test-hygiene-baseline.json");
 	const testPath = path.join(root, "apps", "sample", "sample.test.ts");
 	const relativeTestPath = "apps/sample/sample.test.ts";

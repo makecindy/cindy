@@ -351,6 +351,49 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
   });
 
+  it('reviews each real delete while previews stay silent', () => {
+    const cases: Array<[unknown, string]> = [
+      [{ session_ids: ['a'], dry_run: false, confirmation_token: 't' }, 'prompt-each-time'],
+      [{ session_ids: ['a'], dry_run: 'false' }, 'prompt-each-time'],
+      [{ session_ids: ['a'], dry_run: true }, 'auto-approve'],
+      [{ session_ids: ['a'] }, 'auto-approve'],
+    ];
+    for (const [input, expected] of cases) {
+      for (const args of [input, JSON.stringify(input)]) {
+        expect(policy('delete_sessions', args)).toBe(expected);
+        const params = { name: 'delete_sessions', args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe(expected);
+          expect(policy(toolName, JSON.stringify(params))).toBe(expected);
+        }
+      }
+    }
+  });
+
+  it('reviews each session export across payload representations', () => {
+    const input = { session_id: 'a', target_path: '/tmp/a.cshare' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('export_session', args)).toBe('prompt-each-time');
+      const params = { name: 'export_session', args };
+      for (const toolName of ['call_tool', undefined]) {
+        expect(policy(toolName, params)).toBe('prompt-each-time');
+        expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+      }
+    }
+  });
+
+  it('reviews each session fork across payload representations', () => {
+    const input = { session_id: 'a', message_id: 'm' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('fork_session', args)).toBe('prompt-each-time');
+      const params = { name: 'fork_session', args };
+      for (const toolName of ['call_tool', undefined]) {
+        expect(policy(toolName, params)).toBe('prompt-each-time');
+        expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+      }
+    }
+  });
+
   it('lets the task permission mode decide moving a teammate to another computer, but not reading its home', () => {
     const move = { name: 'move_teammate_home', args: { teammate_id: 'mia', target_device_id: 'laptop' } };
     expect(policy('call_tool', move)).toBe('prompt-each-time');

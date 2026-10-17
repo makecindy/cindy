@@ -7,6 +7,14 @@ import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
+import {
+  createDeleteSessions,
+  createExportSession,
+  createForkSession,
+  createGetSessionBranches,
+  createOpenSessionInNewWindow,
+  createSetSessionsPinned,
+} from './sessionOperationsHost.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
@@ -608,6 +616,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
+      setSessionsPinned: createSetSessionsPinned(isSessionInTurn),
+      deleteSessions: createDeleteSessions(isSessionInTurn),
+      exportSession: createExportSession(isSessionInTurn),
+      openSessionInNewWindow: createOpenSessionInNewWindow(isSessionInTurn),
+      getSessionBranches: createGetSessionBranches(isSessionInTurn),
+      forkSession: createForkSession(isSessionInTurn),
       projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },
       authorizeSkillLearning: async (request, context) => {
         if (!isCindyLearnSkillEnabled()) {
