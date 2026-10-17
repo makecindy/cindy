@@ -22,6 +22,7 @@ import {
 } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
 import { getActiveAppSession } from '../appSessionState.js';
+import { isPassiveSharedUserDataInstance } from '../authManager.js';
 import { markGhostRecommendationInstalled } from '../cindy-brain/ghostRecommendationStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
@@ -91,12 +92,34 @@ export function defaultMarketPluginSyncOutcome(
 
 export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome> {
   try {
+    const owner = getActiveAppSession();
     let reconciliationOutcome: 'completed' | 'failed' | null = null;
     const snapshot = await snapshotAndSignalRemovalNotice({
       onDefaultReconciliationOutcome: (outcome) => {
         reconciliationOutcome = outcome;
       },
     });
+    const currentOwner = getActiveAppSession();
+    if (currentOwner.mode !== owner.mode || currentOwner.dataOwnerId !== owner.dataOwnerId ||
+        currentOwner.generation !== owner.generation ||
+        snapshot.unavailableReason === 'session-switching' ||
+        snapshot.unavailableReason === 'authentication-required') return 'deferred';
+    // Reconcile the official market/current cache first, so an unreachable Git
+    // source cannot prevent that work. Page reads never trigger this network step.
+    // Authentication waits for the existing cache reconciliation, never Git fetch.
+    // Focus/periodic callers bypass the auth startup passive gate. Cache leases
+    // are process-local, so a shared preview must leave Git writes to primary.
+    if (!isPassiveSharedUserDataInstance()) {
+      void service().refreshCustomGitSourcesForBackground({
+        onDefaultReconciliationOutcome: (outcome) => {
+          if (outcome === 'failed') log.warn('custom marketplace background reconciliation incomplete');
+        },
+      }).finally(signalRemovalNoticeAvailable).catch(error => {
+        log.warn('custom marketplace background refresh deferred', {
+          code: isIpcError(error) ? error.code : 'INTERNAL',
+        });
+      });
+    }
     const outcome = defaultMarketPluginSyncOutcome(
       snapshot,
       reconciliationOutcome ?? 'completed',
