@@ -43,6 +43,8 @@ import {
   dumpCodexThreadStateRows,
   classifyCodexHistoryOversized,
 } from '../maker-host/codex-local-sessions';
+import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote';
+import { SUPPORTED_LOCALES } from '../../shared/locale';
 import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import * as schema from '../localDb/schema';
@@ -453,6 +455,46 @@ describe('Codex local session import', () => {
     });
     expect(ideOnly).toBeNull();
     expect(malformed).toMatchObject({ text: 'Keep <ide_opened_file>unfinished context' });
+  });
+
+  it('removes the per-turn UI language note Cindy sent with Codex user messages', () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      const note = buildUiLanguageErrorNote(locale);
+      // String wire form: `${note}\n\n${text}` lands in a single input_text block.
+      expect(
+        parseCodexRolloutMessageLine(
+          rolloutLine('n1', 'user', `${note}\n\n测试消息`, '2026-05-13T00:00:01.000Z'),
+          1,
+        ),
+      ).toMatchObject({ role: 'user', text: '测试消息', content: '测试消息' });
+    }
+    // Block wire form: the note is its own text block before the user's blocks.
+    const note = buildUiLanguageErrorNote('zh-CN');
+    const blocks = JSON.stringify({
+      timestamp: '2026-05-13T00:00:02.000Z',
+      type: 'response_item',
+      payload: {
+        id: 'n2-user',
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: note },
+          { type: 'input_text', text: '测试消息' },
+        ],
+      },
+    });
+    expect(parseCodexRolloutMessageLine(blocks, 2)).toMatchObject({ text: '测试消息' });
+    // A note-only user item carries no user input.
+    expect(
+      parseCodexRolloutMessageLine(rolloutLine('n3', 'user', note, '2026-05-13T00:00:03.000Z'), 3),
+    ).toBeNull();
+    // The assistant side and look-alike user text are untouched.
+    expect(
+      parseCodexRolloutMessageLine(
+        rolloutLine('n4', 'user', '[UI language] reply in English', '2026-05-13T00:00:04.000Z'),
+        4,
+      ),
+    ).toMatchObject({ text: '[UI language] reply in English' });
   });
 
   it('applies the import cap after filtering subagent threads', async () => {
@@ -1135,6 +1177,37 @@ describe('importExternalCodexMessagesForSession', () => {
     expect(tx).toHaveBeenCalledTimes(1);
     const count = db.prepare('SELECT COUNT(*) AS count FROM messages').get() as { count: number };
     expect(count.count).toBe(1);
+  });
+
+  it('stores imported Codex user rows without the per-turn UI language note', async () => {
+    const note = buildUiLanguageErrorNote('zh-CN');
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(
+      rolloutPath,
+      [
+        rolloutLine('m1', 'user', `${note}\n\n测试消息`, '2026-05-13T00:00:01.000Z'),
+        rolloutLineWithImage('m2', `${note}\n\nlook at this`, '2026-05-13T00:00:02.000Z'),
+        rolloutLine('m3', 'user', note, '2026-05-13T00:00:03.000Z'),
+      ].join('\n') + '\n',
+    );
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+
+    const db = currentTestDb();
+    insertImportedCodexSession(db, `codex-${threadId}`, threadId);
+    setCurrentDbClient(makeTestDbClient(db), 'test-user');
+
+    await importExternalCodexMessagesForSession(`codex-${threadId}`);
+
+    const rows = db
+      .prepare("SELECT content FROM messages WHERE role = 'user' ORDER BY created_at")
+      .all() as Array<{ content: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => !row.content.includes('[UI language]'))).toBe(true);
+    expect(rows[0]!.content).toContain('测试消息');
+    expect(rows[1]!.content).toContain('look at this');
+    expect(rows[1]!.content).toContain('images');
   });
 
   it('does not reuse unchanged rollout cache across current DB users', async () => {
