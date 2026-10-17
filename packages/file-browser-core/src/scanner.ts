@@ -382,9 +382,27 @@ export async function readFile(
   const truncated = st.size > MAX_FILE_BYTES;
   const handle = await fs.open(realAbs, 'r');
   try {
-    const buf = Buffer.alloc(Math.min(st.size, MAX_FILE_BYTES));
-    if (buf.length > 0) {
-      await handle.read(buf, 0, buf.length, 0);
+    // fs.read 可能短读(bytesRead < 请求长度, NFS/FUSE 等挂载下真实发生),
+    // 必须循环读满 —— 与 readFileChunk 同因:未填充的尾部以 0x00 混进结果,
+    // 且补零字节多半落在前 4KiB 二进制探测窗口之外,内容静默损坏。
+    const readLen = Math.min(st.size, MAX_FILE_BYTES);
+    let buf = Buffer.alloc(readLen);
+    let filled = 0;
+    while (filled < readLen) {
+      const { bytesRead } = await handle.read(buf, filled, readLen - filled, filled);
+      if (bytesRead === 0) break; // 真 EOF(文件被并发截断):按实际读到的返回
+      filled += bytesRead;
+    }
+    let size = st.size;
+    let isTruncated = truncated;
+    if (filled < readLen) {
+      // 提前 EOF = 文件在 stat 之后被并发缩短。此时返回的 content 已是当前
+      // 文件的全部内容,必须同步修正元数据:保留旧 stat 的 truncated:true /
+      // size 会让渲染端错误显示截断提示、禁止编辑,远程路径还会触发多余的
+      // 完整文件拉取(Greptile review P1)。
+      buf = buf.subarray(0, filled);
+      size = filled;
+      isTruncated = false;
     }
     // Quick binary detection: NULL byte in first 4 KiB (PNG/FBX/DLL etc.) or a
     // PDF header in a `.pdf` file (see isBinaryProbe). UTF-16 text files contain
@@ -399,9 +417,9 @@ export async function readFile(
     return {
       relPath: sub,
       content: buf.toString('utf8'),
-      size: st.size,
+      size,
       mtimeMs: st.mtimeMs,
-      truncated,
+      truncated: isTruncated,
     };
   } finally {
     await handle.close();
