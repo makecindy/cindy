@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 568,
+  "count": 569,
   "colors": [
     {
       "id": "surface",
@@ -2436,6 +2436,11 @@
       "id": "lightbox-toolbar-hover-bg",
       "light": "rgba(255, 255, 255, 0.1)",
       "dark": "rgba(255, 255, 255, 0.1)"
+    },
+    {
+      "id": "region-capture-selection-border",
+      "light": "rgba(255, 255, 255, 0.9)",
+      "dark": "rgba(255, 255, 255, 0.9)"
     },
     {
       "id": "error-bg",

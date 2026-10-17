@@ -176,7 +176,7 @@ describe("DS-8 production source", () => {
       ts.forEachChild(node, visit);
     };
     visit(source);
-    expect(new Set(ids).size).toBe(568);
+    expect(new Set(ids).size).toBe(569);
     expect(
       [
         ...Object.keys(bindings.defaults),
