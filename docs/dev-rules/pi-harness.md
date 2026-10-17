@@ -16,6 +16,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   (`anthropic-compat-proxy-host.ts`)。凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。
 - **system prompt**:`--append-system-prompt` 追加 host 产品段 + 用户段,**保留 pi 默认
   prompt**(不用 `--system-prompt` 整体替换 —— 那会丢掉 pi 自己调好的工具用法/工程约定)。
+  追加段的文本写在会话 `configHome/append-system-prompt.md`,命令行只传该文件路径(pi 接受
+  `<text|path>`):伙伴提示词轻易两三万字符,内联会顶穿 Windows 的 spawn 命令行预算。
 - **权限执行**:pi 原生无工具审批(security.md 明确:非沙箱、不限制工具)。Cindy 用注入的
   `cindy-bridge.ts` 扩展在 pi 进程内 `pi.on('tool_call')` 拦截,经 `extension_ui_request`
   子协议冒泡到 `index.ts handleExtensionUiRequest`,映射成 `InteractionRequest` 交 Cindy

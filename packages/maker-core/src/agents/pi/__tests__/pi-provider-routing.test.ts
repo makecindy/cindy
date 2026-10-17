@@ -6708,6 +6708,69 @@ describe("Pi provider-aware model routing", () => {
     expect(expected).toMatch(/^[0-9a-f]{16}$/);
   });
 
+  // The append system prompt rides in a configHome file, so the command line no
+  // longer carries its text. Remote launch identity therefore has to hash the
+  // content itself, or a changed prompt would attach to the process that booted
+  // with the old one.
+  it("hashes the append system prompt into remote spawn env so a changed prompt restarts", async () => {
+    const remoteStub: import("../transport.js").PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: "/remote/pi",
+      killRemoteSession: async () => {},
+    };
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    let systemPrompt = 'remote product prompt v1';
+    const startRemote = async () => {
+      const base = byomDeps(async () => ({ providers: [], env: {} }));
+      const agent = new PiAgent({
+        ...base,
+        runtimeConfig: {
+          ...base.runtimeConfig,
+          remoteEndpoint: "https://gateway.example.test",
+          systemPrompt,
+        },
+        resolveRemotePiBinaryPath: async () => "/remote/pi",
+        getRemotePiTransport: async (_hostId, opts) => {
+          capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+          return remoteStub;
+        },
+        getRemotePiFileOps: () => ({
+          mkdirp: async () => {},
+          writeFile: async () => {},
+          stat: async () => ({ isFile: true }),
+          rm: async () => {},
+          listDir: async () => [],
+          readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+          sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
+        }),
+      });
+      const handle = await agent.startSession({
+        sessionId: "remote-prompt-hash",
+        workingDir: cwd,
+        model: "local-model",
+        remoteHostId: "remote-host",
+      });
+      await handle.close();
+    };
+
+    await startRemote();
+    await startRemote();
+    systemPrompt = 'remote product prompt v2';
+    await startRemote();
+
+    expect(capturedRemoteEnvs).toHaveLength(3);
+    const hashes = capturedRemoteEnvs.map((env) => env.CINDY_PI_APPEND_SYSTEM_PROMPT_HASH);
+    expect(hashes[0]).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashes[1]).toBe(hashes[0]);
+    expect(hashes[2]).not.toBe(hashes[0]);
+  });
+
   it("isolates remote configHome by models.json hash so a later route change does not overwrite the live child", async () => {
     const remoteStub: import("../transport.js").PiTransport = {
       writeLine: async () => {},

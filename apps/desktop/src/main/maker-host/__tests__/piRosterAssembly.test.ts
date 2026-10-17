@@ -219,7 +219,7 @@ describe('buildPiAgent roster prompt assembly', () => {
     });
     const promptIndex = state.args.indexOf('--append-system-prompt');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(state.args[promptIndex + 1]).toContain(
+    expect(readFileSync(state.args[promptIndex + 1]!, 'utf8')).toContain(
       '<ghost-roster>\n{"id":"art"}\n</ghost-roster>',
     );
     expect(getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir });

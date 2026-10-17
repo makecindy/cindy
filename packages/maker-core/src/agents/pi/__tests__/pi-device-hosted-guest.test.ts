@@ -20,6 +20,13 @@ const knobs = vi.hoisted(() => ({
   spawnedArgs: [] as string[][],
 }));
 
+/** 追加提示词走 configHome 内的文件(见 pi/index.ts 的 --append-system-prompt),argv 不再内联长文本。 */
+const readAppendedSystemPrompt = (args: string[]): string => {
+  const index = args.indexOf('--append-system-prompt');
+  if (index < 0) return '';
+  return readFileSync(args[index + 1]!, 'utf8');
+};
+
 vi.mock('../transport.js', () => ({
   createPiStdioTransport: (opts: { args: string[]; env: Record<string, string | undefined>; onProcessSpawned?: (pid: number) => void }) => {
     knobs.spawnedEnvs.push({ ...(opts.env ?? {}) });
@@ -247,7 +254,7 @@ describe('Pi device-hosted guest sessions', () => {
       expect(settings.packages).toBeUndefined();
       expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
       expect(JSON.parse(env.CINDY_PI_HOSTED!)).toMatchObject({ guest: true });
-      expect(args[args.indexOf('--append-system-prompt') + 1] ?? '').not.toContain('HOST GHOST ROSTER');
+      expect(readAppendedSystemPrompt(args)).not.toContain('HOST GHOST ROSTER');
       expect(spies.getGhostRosterPrompt).not.toHaveBeenCalled();
       expect(spies.getManagedSkills).not.toHaveBeenCalled();
       expect(spies.getDisabledSkillPaths).not.toHaveBeenCalled();
@@ -415,7 +422,7 @@ describe('Pi device-hosted guest sessions', () => {
       expect(settings.packages).toEqual(['npm:host-package']);
       expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeTruthy();
       expect(JSON.parse(env.CINDY_PI_HOSTED!).guest).toBeUndefined();
-      expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('HOST GHOST ROSTER');
+      expect(readAppendedSystemPrompt(args)).toContain('HOST GHOST ROSTER');
       expect(spies.getManagedSkills).toHaveBeenCalled();
       expect(spies.resolvePiNativePackagePaths).toHaveBeenCalled();
       expect(args[args.indexOf('--session-dir') + 1]).toBe(path.posix.join(agentHome, 'sessions'));

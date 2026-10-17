@@ -164,8 +164,17 @@ export const PI_WINDOWS_SPAWN_ARGV_BUDGET = 30_000;
 /** Leave headroom under typical macOS/Linux ARG_MAX, which is shared with env. */
 export const PI_POSIX_SPAWN_ARGV_BUDGET = 128_000;
 
-export function estimateSpawnArgvLength(args: readonly string[]): number {
-  return args.reduce((total, arg) => total + arg.length + 3, 0);
+export function estimateSpawnArgvLength(
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): number {
+  // 两种口径不一样，不能统一：Windows CreateProcess 的命令行上限是 32767 个
+  // UTF-16 字符（lpCommandLine 是 LPCWSTR），按 UTF-8 字节算会把中文路径放大三倍、
+  // 误判成超限而拒绝本来能起的会话；POSIX 的 ARG_MAX / MAX_ARG_STRLEN 按字节算，
+  // 用字符数算会漏检中文长提示词。
+  return args.reduce((total, arg) => total
+    + (platform === 'win32' ? arg.length : Buffer.byteLength(arg, 'utf8'))
+    + 3, 0);
 }
 
 export function piSpawnArgvBudget(platform: NodeJS.Platform): number | null {
@@ -179,7 +188,7 @@ export function assertPiSpawnArgvFitsPlatform(
   platform: NodeJS.Platform = process.platform,
 ): void {
   const budget = piSpawnArgvBudget(platform);
-  if (budget === null || estimateSpawnArgvLength(args) <= budget) return;
+  if (budget === null || estimateSpawnArgvLength(args, platform) <= budget) return;
   throw new Error(
     'This project has too many Pi skills, prompts, or extensions to start a task. Remove some and try again.',
   );

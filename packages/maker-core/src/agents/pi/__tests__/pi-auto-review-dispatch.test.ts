@@ -67,6 +67,12 @@ const captured = vi.hoisted(() => ({
   closed: false,
 }));
 
+/** 追加提示词走 configHome 内的文件(见 pi/index.ts 的 --append-system-prompt),argv 不再内联长文本。 */
+const readAppendedSystemPrompt = (): string => {
+  const index = captured.args.indexOf('--append-system-prompt');
+  return index >= 0 ? readFileSync(captured.args[index + 1]!, 'utf8') : '';
+};
+
 vi.mock('../transport.js', () => ({
   createPiStdioTransport: (opts: {
     args: string[];
@@ -628,9 +634,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
     await start();
     expect(captured.args).not.toContain('--system-prompt');
-    const idx = captured.args.indexOf('--append-system-prompt');
-    expect(idx).toBeGreaterThan(-1);
-    expect(captured.args[idx + 1]).toBe('You are Cindy.');
+    expect(captured.args).toContain('--append-system-prompt');
+    expect(readAppendedSystemPrompt()).toBe('You are Cindy.');
     expect(captured.args).not.toContain('--tools');
     expect(captured.env.PI_OFFLINE).toBe('1');
     expect(captured.env.PI_CACHE_RETENTION).toBe('long');
@@ -3180,8 +3185,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
       expect(deps.resolvePiProjectTrustInput).not.toHaveBeenCalled();
 
-      const promptIndex = captured.args.indexOf('--append-system-prompt');
-      const appendedPrompt = promptIndex >= 0 ? captured.args[promptIndex + 1] : '';
+      const appendedPrompt = readAppendedSystemPrompt();
       expect(appendedPrompt).not.toContain('PRIVATE ROSTER');
       expect(appendedPrompt).not.toContain('PRIVATE USER PROMPT');
 
@@ -3272,15 +3276,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       // 不从 cwd 链加载项目/全局 AGENTS.md。
       expect(captured.args).toContain('--no-context-files');
       expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
-      const promptIndex = captured.args.indexOf('--append-system-prompt');
-      expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
-      expect(captured.args[promptIndex + 1]).not.toContain('BOT ROSTER');
-      expect(captured.args[promptIndex + 1]).not.toContain('You are Cindy.');
-      expect(captured.args[promptIndex + 1]).not.toContain('GLOBAL USER PROMPT');
-      expect(captured.args[promptIndex + 1]).toContain('frozen memory');
-      expect(captured.args[promptIndex + 1]).toContain('Call the user Chris');
-      expect(captured.args[promptIndex + 1].indexOf('frozen memory')).toBeLessThan(
-        captured.args[promptIndex + 1].indexOf('Call the user Chris'),
+      const botPrompt = readAppendedSystemPrompt();
+      expect(botPrompt).toContain('BOT SOUL');
+      expect(botPrompt).not.toContain('BOT ROSTER');
+      expect(botPrompt).not.toContain('You are Cindy.');
+      expect(botPrompt).not.toContain('GLOBAL USER PROMPT');
+      expect(botPrompt).toContain('frozen memory');
+      expect(botPrompt).toContain('Call the user Chris');
+      expect(botPrompt.indexOf('frozen memory')).toBeLessThan(
+        botPrompt.indexOf('Call the user Chris'),
       );
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
@@ -3298,6 +3302,41 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  // 真实事故：伙伴的 teammate-guide + 记忆索引让 --append-system-prompt 逼近 3 万字符，
+  // 内联进 argv 就会顶穿 Windows 的 spawn 命令行上限，整个会话起不来。
+  it('把超长的伙伴提示词写进 configHome 文件，argv 只带路径', async () => {
+    const deps = buildDeps();
+    const botProfileContextPrompt = '## teammate-guide\n' + 'Todo discipline. '.repeat(3000);
+    expect(botProfileContextPrompt.length).toBeGreaterThan(30_000);
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'bot-long-prompt-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      botProfileContextPrompt,
+      botRuntimeProfile: {
+        botId: 'bot-long-prompt',
+        profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      },
+    });
+    try {
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      expect(promptIndex).toBeGreaterThan(-1);
+      const promptPath = captured.args[promptIndex + 1]!;
+      expect(promptPath.length).toBeLessThan(200);
+      expect(promptPath).toContain(path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'append-system-prompt.md'));
+      expect(readFileSync(promptPath, 'utf8')).toContain(botProfileContextPrompt.slice(0, 64));
+      // 整条命令行必须留在平台上限内（30k / 128k）。
+      expect(captured.args.reduce((total, arg) => total + arg.length + 3, 0))
+        .toBeLessThanOrEqual(process.platform === 'win32' ? 30_000 : 128_000);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('把 session 花名册快照追加到 Pi system prompt', async () => {
     const deps = buildDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');
@@ -3307,8 +3346,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       workingDir: cwd,
       model: 'm',
     });
-    const idx = captured.args.indexOf('--append-system-prompt');
-    expect(captured.args[idx + 1]).toContain('GHOST ROSTER PROMPT');
+    expect(readAppendedSystemPrompt()).toContain('GHOST ROSTER PROMPT');
     expect(deps.getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir: cwd });
     await handle.close();
   });

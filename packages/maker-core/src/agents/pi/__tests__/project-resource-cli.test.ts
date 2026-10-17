@@ -138,4 +138,25 @@ describe('pi project resource path order and spawn argv budget', () => {
     expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).toThrow(/too many Pi skills/);
     expect(() => assertPiSpawnArgvFitsPlatform(args, 'linux')).toThrow(/too many Pi skills/);
   });
+
+  // POSIX 侧按 UTF-8 字节：按字符数估会让一段中文提示词「看起来没超」，
+  // 实际字节已超（汉字 3 字节/字），守卫就会漏过。
+  it('measures the POSIX command line in UTF-8 bytes', () => {
+    const cjk = '技'.repeat(50_000);
+    expect(cjk.length).toBeLessThan(PI_POSIX_SPAWN_ARGV_BUDGET);
+    expect(estimateSpawnArgvLength(['--append-system-prompt', cjk], 'linux'))
+      .toBeGreaterThan(PI_POSIX_SPAWN_ARGV_BUDGET);
+    expect(() => assertPiSpawnArgvFitsPlatform(['--append-system-prompt', cjk], 'linux'))
+      .toThrow(/too many Pi skills/);
+  });
+
+  // Windows 侧必须按 UTF-16 字符：CreateProcess 的 32767 上限是字符数，不是字节。
+  // 用字节估会把中文路径放大三倍，把本来能起的会话拒了。
+  it('measures the Windows command line in characters, not UTF-8 bytes', () => {
+    const cjkPath = `C:\\Users\\用户名\\项目\\.pi\\skills\\${'技'.repeat(200)}`.repeat(100);
+    expect(cjkPath.length).toBeLessThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(Buffer.byteLength(cjkPath, 'utf8')).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(estimateSpawnArgvLength([cjkPath], 'win32')).toBeLessThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(() => assertPiSpawnArgvFitsPlatform([cjkPath], 'win32')).not.toThrow();
+  });
 });
