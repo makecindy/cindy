@@ -126,3 +126,37 @@ describe('cindy_wechat proactive routing', () => {
     }
   });
 });
+
+describe('cindy_wechat workingDir fallback', () => {
+  it('falls back to the static workingDir when the lazy resolver comes up empty', async () => {
+    // Greptile review:deps 契约声明 getWorkingDir 解析为空时回落静态 workingDir。
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-wechat-fallback-'));
+    const absPath = path.join(workingDir, 'note.txt');
+    await fs.writeFile(absPath, 'data');
+    const sendFile = vi.fn(async () => ({ ok: true, messageId: 'media-fb' }));
+    const server = createWechatMcpServer({
+      getActivePeerIdForSession: () => null,
+      getMostRecentPeerId: () => 'peer-recent',
+      getPeerId: () => 'peer-session',
+      sendMessage: vi.fn(),
+      sendFile,
+      getWorkingDir: () => undefined,
+      workingDir,
+    });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'wechat-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    try {
+      const call = await client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'send_file_to_user', args: { absPath, displayName: 'note.txt' } },
+      });
+      expect(JSON.stringify(call)).not.toContain('WORKING_DIR_UNAVAILABLE');
+      expect(sendFile).toHaveBeenCalledWith('peer-session', await fs.realpath(absPath), 'note.txt');
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(workingDir, { recursive: true, force: true });
+    }
+  });
+});
