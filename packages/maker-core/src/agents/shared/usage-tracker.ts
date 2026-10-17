@@ -273,6 +273,17 @@ export class UsageTracker {
   }
 
   /**
+   * 显式失效当前窗口 (恢复到"未知")。`setContextWindow(0)` 是刻意的 no-op
+   * (防误清), 但 codex 在 resume 后的首个 root turn / context settings 刷新后
+   * 需要把旧 runtime 写入的窗口作废 —— 旧容量不能冒充新 runtime 接受的配置。
+   * 在下一个 tokenUsage 事件带回新窗口之前, snapshot 按 0 ("未知") 报告,
+   * renderer 的 model-prefix fallback 兜底。
+   */
+  resetContextWindow(): void {
+    this.contextWindow = 0;
+  }
+
+  /**
    * 上下文超限错误(400 context_length_exceeded / prompt is too long 等)终态时调。
    *
    * 超限请求被上游整体拒绝, 不返回任何 usage —— lastApi 停在上一次成功值(会话重启后
