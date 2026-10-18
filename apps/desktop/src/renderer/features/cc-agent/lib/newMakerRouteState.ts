@@ -6,6 +6,8 @@ export interface NewMakerDialogueTargetRequest {
   deviceName: string | null;
   /** 通用新建只继承电脑；同机时保留草稿项目及用户选择。 */
   preserveWorkspaceIfSameDevice?: boolean;
+  /** ⌘N uses the visible task's project; null explicitly clears a saved draft project. */
+  projectWorkingDir?: string | null;
 }
 
 export interface NewMakerFolderPickerRequest {
@@ -71,7 +73,8 @@ export function readNewMakerFolderPickerRequest(
 export function consumeNewMakerFolderPickerRequest(state: unknown): unknown {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
   if (!Object.prototype.hasOwnProperty.call(state, 'folderPickerRequest')) return state;
-  const { folderPickerRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  const remainingState = { ...(state as Record<string, unknown>) };
+  delete remainingState.folderPickerRequest;
   return remainingState;
 }
 
@@ -88,12 +91,23 @@ export function readNewMakerDialogueTargetRequest(
   if (deviceId !== null && (typeof deviceId !== 'string' || deviceId.length === 0)) return null;
   if (deviceName !== null && typeof deviceName !== 'string') return null;
   if (deviceId === null && deviceName !== null) return null;
+  const projectWorkingDir = record.projectWorkingDir;
+  if (
+    projectWorkingDir !== undefined &&
+    projectWorkingDir !== null &&
+    (typeof projectWorkingDir !== 'string' || projectWorkingDir.trim().length === 0)
+  ) {
+    return null;
+  }
   return {
     requestId: record.requestId,
     deviceId,
     deviceName,
     ...(record.preserveWorkspaceIfSameDevice === true
       ? { preserveWorkspaceIfSameDevice: true }
+      : {}),
+    ...(projectWorkingDir === null || typeof projectWorkingDir === 'string'
+      ? { projectWorkingDir }
       : {}),
   };
 }
@@ -105,6 +119,7 @@ export function readNewMakerDialogueTargetRequest(
 export function consumeNewMakerDialogueTargetRequest(state: unknown): unknown {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
   if (!Object.prototype.hasOwnProperty.call(state, 'dialogueTargetRequest')) return state;
-  const { dialogueTargetRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  const remainingState = { ...(state as Record<string, unknown>) };
+  delete remainingState.dialogueTargetRequest;
   return remainingState;
 }

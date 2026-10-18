@@ -1107,7 +1107,9 @@ export function MainLayout() {
         }
         applicationMenuLog.info('new-maker shortcut invoked, navigating to /cc-agent/new');
         navigate('/cc-agent/new', {
-          state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
+          state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0], {
+            inheritCurrentProject: true,
+          }),
         });
       })
       .catch((err: unknown) => {

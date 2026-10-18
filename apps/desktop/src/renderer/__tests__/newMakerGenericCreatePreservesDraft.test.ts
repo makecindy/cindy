@@ -31,6 +31,11 @@ const draftRouteSource = readFileSync(
   'utf8',
 );
 
+const mainLayoutSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'layout', 'MainLayout.tsx'),
+  'utf8',
+);
+
 /** 抽出某个 handler 的实现体(从 `const <name> =` 到该 handler 结束的 `}, [` / `};`)。 */
 function extractHandlerBlock(source: string, name: string): string {
   const re = new RegExp(`const ${name}\\s*=\\s*[\\s\\S]*?(?:\\}, \\[|\\};)`);
@@ -42,11 +47,35 @@ function extractHandlerBlock(source: string, name: string): string {
 describe('通用「新建」保留 newMakerDraft 选择', () => {
   it('草稿保留与目标迁移共用包含 SSH 身份的同机判据', () => {
     expect(draftRouteSource).toContain(
-      '!isSameNewMakerDevice(dialogueTargetRequest.deviceId, getDraft())',
+      '!isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft)',
     );
     expect(draftRouteSource).toContain(
       'const deviceChanged = !isSameNewMakerDevice(req.deviceId, {',
     );
+    expect(draftRouteSource).toContain(
+      'dialogueTargetRequest.projectWorkingDir !== undefined',
+    );
+    expect(draftRouteSource).toContain(
+      'workingDir: dialogueTargetRequest.projectWorkingDir ?? null',
+    );
+  });
+
+  it('⌘N 的普通新建分支优先使用当前项目，协同接管仍提前返回', () => {
+    const start = mainLayoutSource.indexOf('const handleNewMakerShortcut = useCallback');
+    const end = mainLayoutSource.indexOf('  useEffect(() => {', start);
+    const block = mainLayoutSource.slice(start, end);
+    expect(start).toBeGreaterThan(-1);
+    expect(block).toContain('inheritCurrentProject: true');
+    expect(block).toContain('if (handled)');
+  });
+
+  it('应用菜单的普通新建仍使用原通用目标，不继承当前项目', () => {
+    const start = mainLayoutSource.indexOf("case 'new-maker':");
+    const end = mainLayoutSource.indexOf("case 'new-maker-shortcut':", start);
+    const block = mainLayoutSource.slice(start, end);
+    expect(start).toBeGreaterThan(-1);
+    expect(block).toContain("makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0])");
+    expect(block).not.toContain('inheritCurrentProject');
   });
   it('旋钮的新建站使用与侧栏相同的当前任务设备请求', () => {
     const start = sidebarUpperSource.indexOf("if (target.kind === 'new-task')");
@@ -80,7 +109,7 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
     expect(block).toContain("selectedDialogueDeviceResolution.status === 'pending'");
     expect(block).not.toContain('resetDraftWorkspaceTargets');
     expect(draftRouteSource).toMatch(
-      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: dialogueTargetRequest\.projectWorkingDir \?\? null,/,
     );
   });
 

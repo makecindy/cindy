@@ -2268,7 +2268,7 @@ export function NewMakerDraftRoute() {
     ],
   );
 
-  // 通用新建继承当前任务电脑；“对话”分组还可能在 /cc-agent/new 已经打开时再次导航。
+  // 通用新建继承当前任务电脑；⌘N 还显式继承当前项目（全局对话显式清空旧草稿项目）；“对话”分组还可能在 /cc-agent/new 已经打开时再次导航。
   // 目标因此随 location.state 交给本页消费，而不是让侧栏直接 patch device 字段；无论首次进入
   // 还是重复导航，local ↔ remote / remote A ↔ B / 项目 → 对话都统一经过 applyDraftTarget，
   // mention、路径型附件、远程运行配置和 worktree 三态才不会绕过集中迁移。
@@ -2283,15 +2283,18 @@ export function NewMakerDraftRoute() {
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
+    const currentDraft = getDraft();
     if (
+      (dialogueTargetRequest.projectWorkingDir !== undefined &&
+        dialogueTargetRequest.projectWorkingDir !== currentDraft.workingDir) ||
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
-      !isSameNewMakerDevice(dialogueTargetRequest.deviceId, getDraft())
+      !isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft)
     ) {
       patchCollab({ enabled: false });
       applyDraftTarget({
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
-        workingDir: null,
+        workingDir: dialogueTargetRequest.projectWorkingDir ?? null,
       });
     }
     navigate(`${location.pathname}${location.search}${location.hash}`, {

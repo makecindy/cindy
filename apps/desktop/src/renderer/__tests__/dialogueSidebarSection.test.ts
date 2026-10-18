@@ -162,10 +162,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     // A partial loading notice in the scroll flow makes every row jump when it mounts/unmounts.
     expect(sidebarSource).toContain('远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示');
     expect(sidebarSource).not.toMatch(
-      /remoteDeviceDirectoryStatus === 'loading'\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\/\>\s*\)/,
+      /remoteDeviceDirectoryStatus === 'loading'\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\/>\s*\)/,
     );
     expect(sidebarSource).not.toMatch(
-      /remoteSessionBootstrapLoadingDevices\.length > 0\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\n?\s*\/\>\s*\)/,
+      /remoteSessionBootstrapLoadingDevices\.length > 0\s*&&\s*\n?\s*\(\s*<RemoteSidebarLoadNotice[\s\S]*?partial\s*\n?\s*\/>\s*\)/,
     );
   });
 
@@ -187,7 +187,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     );
     expect(newMakerDraftRouteSource).toContain('patchCollab({ enabled: false });');
     expect(newMakerDraftRouteSource).toMatch(
-      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: dialogueTargetRequest\.projectWorkingDir \?\? null,/,
     );
     expect(newMakerDraftRouteSource).toContain(
       'state: consumeNewMakerDialogueTargetRequest(location.state)',

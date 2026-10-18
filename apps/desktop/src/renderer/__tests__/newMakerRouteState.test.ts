@@ -82,6 +82,19 @@ describe('new maker dialogue route target request', () => {
     expect(first?.requestId).not.toBe(second?.requestId);
   });
 
+  it('preserves an explicit project-clear request', () => {
+    expect(
+      readNewMakerDialogueTargetRequest({
+        dialogueTargetRequest: {
+          requestId: 'clear-project',
+          deviceId: null,
+          deviceName: null,
+          projectWorkingDir: null,
+        },
+      }),
+    ).toMatchObject({ projectWorkingDir: null });
+  });
+
   it('rejects malformed route state instead of guessing a target', () => {
     expect(readNewMakerDialogueTargetRequest(null)).toBeNull();
     expect(readNewMakerDialogueTargetRequest({ dialogueTargetRequest: {} })).toBeNull();
