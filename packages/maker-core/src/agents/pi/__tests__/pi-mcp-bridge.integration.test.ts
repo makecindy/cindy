@@ -883,6 +883,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     bridgeMode:
         | 'local' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
+    // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
+    // 否则同文件前序用例已落盘的披露会让首次调用直接执行，掩盖门的行为。
+    sessionId = `mcp-itest-${permissionMode}`,
   ): Promise<{
     events: AgentEvent[];
     permissionAsked: boolean;
@@ -897,7 +900,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     let permissionAsked = false;
     try {
       handle = await agent.startSession({
-        sessionId: `mcp-itest-${permissionMode}`,
+        sessionId,
         workingDir: cwd,
         model: 'pi-test-model',
         permissionMode,
@@ -1353,18 +1356,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-    'known tools cannot execute or prompt until their exact input schema has been inspected',
+    'an uninspected tool call is blocked once, then executes once on the re-send',
     { timeout: 90_000 },
     async () => {
       echoCalls.length = 0;
       opaqueTurnCaptures.length = 0;
       let permissionCount = 0;
+      const sessionId = 'mcp-itest-uninspected-first-call';
       const { permissionAsked, requestBodies } = await runOneTurn(
         'ask',
         async (req) => {
           permissionCount += 1;
           expect(req.kind).toBe('permission');
           if (req.kind === 'permission') {
+            // 首次调用即便未 inspect 也要按完整 gateway 工具身份过权限（分类只认解析成功）。
             expect(req.toolName).toBe('mcp__cindy_echo__echo');
             expect(req.input).toEqual({ text: 'hello-pi' });
           }
@@ -1372,14 +1377,22 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         },
         'local',
         'call without schema inspection',
+        sessionId,
       );
 
       expect(permissionAsked).toBe(true);
-      expect(permissionCount).toBe(1);
+      // 剧本：首次盲调被门拦下（已记账、不执行工具，只回一条指名路标的错误），模型
+      // 照路标补 list_tools 后重发。两次都过权限门，但只有重发真正落到 MCP。
+      expect(permissionCount).toBe(2);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
-      expect(requestBodies[1]).toContain('Inspect this tool before execution');
-      expect(requestBodies[2]).toContain('inputSchema');
-      await waitFor(() => opaqueTurnCaptures.length === 1);
+      expect(requestBodies.some((body) => body.includes('Inspect this tool before execution'))).toBe(true);
+      // 披露记录已按当前 schema 写入，模型随后补的 list_tools 仍返回 schema。
+      expect(requestBodies.some((body) => body.includes('inputSchema'))).toBe(true);
+      await waitFor(() => opaqueTurnCaptures.length >= 1);
+      expect(opaqueTurnCaptures[0]).toMatchObject({
+        sessionId,
+        provider: 'pi',
+      });
     },
   );
 
