@@ -95,6 +95,25 @@ describe('localModelRuntime', () => {
     expect(classifyOllamaPullError('connection refused')).toBe('refused');
   });
 
+  // #6311 / maintainer comment6230690779: explicit DNS failures take priority
+  // over model/permission guesses, including status-like numbers inside a hostname.
+  it.each([
+    ['lookup huggingface.co: no such host', undefined],
+    ['getaddrinfo ENOTFOUND huggingface.co', undefined],
+    ['lookup models404.example: no such host', undefined],
+    ['getaddrinfo ENOTFOUND models401.example', undefined],
+    ['lookup huggingface.co: no such host', 'hf.co/example/Example-MLX'],
+  ])('keeps DNS failure %s generic', (message, pullName) => {
+    expect(classifyOllamaPullError(new Error(message), pullName)).toBe('generic');
+  });
+
+  it.each([
+    ['pull model manifest: 404: file does not exist', 'not-found'],
+    ['pull model manifest: 401: unauthorized', 'unauthorized'],
+  ] as const)('preserves model response %s as %s', (message, expected) => {
+    expect(classifyOllamaPullError(message)).toBe(expected);
+  });
+
   it('picks mlx then mxfp8 by unified memory', () => {
     expect(
       recommendForHost({ platform: 'darwin', arch: 'arm64', totalmemBytes: 36 * 1024 ** 3 }).primary
