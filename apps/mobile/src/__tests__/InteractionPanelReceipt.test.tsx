@@ -56,7 +56,7 @@ vi.mock('@/components/AppText', async () => {
   };
 });
 vi.mock('lucide-react-native', () => ({ ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
-  Maximize2: () => null, Minimize2: () => null, Minus: () => null, Pencil: () => null, Plus: () => null }));
+  Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: () => null, Pencil: () => null, Plus: () => null }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
