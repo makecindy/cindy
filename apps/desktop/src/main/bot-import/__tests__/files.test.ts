@@ -209,9 +209,15 @@ it('accounts a near-budget binary snapshot without serializing or copying its bu
     view: { id: `fixture-${index}`, name: 'Fixture', category: 'memory' as const, selected: true },
     asset: { name: `${index}.bin`, bytes },
   }));
-  const toJSON = vi.spyOn(Buffer.prototype, 'toJSON').mockImplementation(() => { throw new Error('buffer copied'); });
+  const toJSON = vi.spyOn(bytes, 'toJSON').mockImplementation(() => { throw new Error('buffer copied'); });
   try {
-    await reserveSnapshotItems(items, createImportBudget());
+    // Vitest IPC may serialize unrelated buffers while accounting yields.
+    const turn = new Promise<void>(resolve => setImmediate(resolve));
+    const [, serialized] = await Promise.all([
+      reserveSnapshotItems(items, createImportBudget()),
+      turn.then(() => Buffer.from([1, 2, 3]).toJSON()),
+    ]);
+    expect(serialized).toEqual({ type: 'Buffer', data: [1, 2, 3] });
     expect(items.every(item => item.asset.bytes === bytes)).toBe(true);
     await expect(reserveSnapshotItems([...items, ...items.slice(0, 2)], createImportBudget())).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
     expect(toJSON).not.toHaveBeenCalled();
