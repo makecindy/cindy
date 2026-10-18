@@ -31,7 +31,7 @@ const payload = {
 };
 
 const getHistory = vi.fn<
-  (opts?: { device?: string; includeTasks?: boolean }) => Promise<typeof payload>
+  (opts?: { device?: string; includeTasks?: boolean; includeHourly?: boolean }) => Promise<typeof payload>
 >(async () => payload);
 
 beforeEach(() => {
@@ -58,6 +58,13 @@ const callsFor = (device: string | undefined) =>
   getHistory.mock.calls.filter(([opts]) => opts?.device === device).length;
 
 describe('useUsageHistory peer refresh', () => {
+  it('keeps hourly requests separate from the lightweight shared history cache', async () => {
+    renderHook(() => useUsageHistory({ userId: 'hourly-cache', includeHourly: true }));
+    renderHook(() => useUsageHistory({ userId: 'hourly-cache' }));
+    await act(async () => {});
+    expect(getHistory.mock.calls.map(([opts]) => opts?.includeHourly === true)).toEqual([true, false]);
+  });
+
   it('re-reads a multi-device scope periodically while mounted and stops on unmount', async () => {
     const view = renderHook(() => useUsageHistory({ userId: 'peer-refresh', device: 'all' }));
     await act(async () => {});

@@ -10,10 +10,11 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  * 也可切到单台设备。页面上每个数字仍来自 useUsageHistory → maker:usage:history, 不读任何
  * 账号快照。「最耗 token 的任务」只有本机任务数据, 选中其它电脑时隐藏。
  *
- * 两个窗口不同, 标题里分别写明:
+ * 各图表的时间窗口在标题里分别写明:
  *   - 热力图走完整 days[]，按卡片实际宽度显示至少 20 周；连续活跃天数也走同一份历史
  *   - 按模型 / 按 agent 走按筛选范围重聚合的 models[] 与 modelDaily
  *   - 每日柱图固定展示近 30 天, 与筛选范围无关
+ *   - 小时分布展示所选日期的 24 小时; 没有选择单日时展示今天
  *
  * 首页的 HomeUsageDashboard 是金额口径的姊妹实现, 本页不复用它的外壳组件
  * (见 UsageTokenBars 的注释), 但共享同一条聚合链路。配色仅在用量历史页内统一。
@@ -34,6 +35,7 @@ import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 import { UsageStatRow } from './UsageStatRow';
 import { UsageTokenBars } from './UsageTokenBars';
+import { UsageHourlyTokens } from './UsageHourlyTokens';
 import { UsageAgentTable, UsageModelTable } from './UsageBreakdownTables';
 import { UsageTaskTable, buildUsageTaskRows, usageTaskCoverageStart } from './UsageTaskTable';
 import {
@@ -106,6 +108,7 @@ export function UsageHistorySection(): React.JSX.Element {
     allowPendingEstimates: true,
     device,
     includeTasks: true,
+    includeHourly: true,
   });
   // 切换设备时新范围首帧可能还没有 payload; 沿用上次读到的设备列表, 选择器不闪没。
   const [known, setKnown] = useState<{
@@ -330,6 +333,17 @@ export function UsageHistorySection(): React.JSX.Element {
               selectedDay={selectedDay}
               highlightRecentWeek={range === '7d'}
               onDayClick={handleDayClick}
+            />
+          </Card>
+
+          <Card
+            title={t('usageHistory.hourly.title')}
+            subtitle={selectedDay ? rangeLabel : t('usageHistory.range.today')}
+          >
+            <UsageHourlyTokens
+              rows={history?.hourlyDaily}
+              day={selectedDay ?? history?.todayKey ?? ''}
+              incomplete={history?.hourlyIncomplete}
             />
           </Card>
 

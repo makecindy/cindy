@@ -22,6 +22,7 @@ import { promisify } from 'node:util';
 import { normalizeRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 import type { DailyModelUsageRow } from '../localDb/dailyModelUsage.js';
 import type { DailySessionUsageRow, UsageTaskMeta } from '../localDb/dailySessionUsage.js';
+import { normalizeHourlyTokenUsage, type HourlyTokenUsageRow } from '../../shared/hourlyTokenUsage.js';
 
 const gzipAsync = promisify(gzipCb);
 const gunzipAsync = promisify(gunzipCb);
@@ -39,6 +40,8 @@ export interface UsageSpendDayRow {
 }
 
 export interface UsageDeviceRows {
+  /** Missing on older peers; local calendar semantics match the daily ledger. */
+  hourlyRows?: HourlyTokenUsageRow[];
   spendDays: UsageSpendDayRow[];
   modelRows: DailyModelUsageRow[];
   /** 每日 × 任务 token(「最耗 token 的任务」按范围统计用)。 */
@@ -57,6 +60,7 @@ export type UsageDeviceRowsResponse =
   | { format: typeof USAGE_DEVICE_ROWS_FORMAT; oversize: true };
 
 export interface UsageDeviceRowsReaderDeps {
+  getHourlyTokenUsageSince?(sinceDay: string): Promise<HourlyTokenUsageRow[]>;
   getAllSpendDays(): Promise<UsageSpendDayRow[]>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
   getSessionUsageSince(
@@ -90,13 +94,15 @@ export async function readUsageDeviceRows(
 ): Promise<UsageDeviceRowsResponse> {
   const todayKey = deps.todayKey();
   const sinceDay = request.sinceDay;
-  const [spendDays, modelRows, sessionUsage] = await Promise.all([
+  const [spendDays, modelRows, sessionUsage, hourlyRows] = await Promise.all([
     deps.getAllSpendDays(),
     deps.getModelUsageSince(sinceDay ?? '0000-01-01'),
     deps.getSessionUsageSince(sinceDay ?? '0000-01-01'),
+    deps.getHourlyTokenUsageSince?.(sinceDay ?? '0000-01-01'),
   ]);
   const visible = await deps.remoteVisibleTaskIds(sessionUsage.tasks.map((task) => task.sessionId));
   const rows: UsageDeviceRows = {
+    ...(hourlyRows ? { hourlyRows } : {}),
     spendDays: sinceDay ? spendDays.filter((row) => row.day >= sinceDay) : spendDays,
     modelRows,
     sessionRows: sessionUsage.rows.filter((row) => visible.has(row.sessionId)),
@@ -133,6 +139,7 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
     modelRows?: unknown;
     sessionRows?: unknown;
     tasks?: unknown;
+    hourlyRows?: unknown;
   };
   if (!Array.isArray(raw.spendDays) || !Array.isArray(raw.modelRows)) return null;
   const spendDays: UsageSpendDayRow[] = [];
@@ -182,7 +189,8 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
       lastActiveAt: isUnixMs(task.lastActiveAt) ? task.lastActiveAt : 0,
     });
   }
-  return { spendDays, modelRows, sessionRows, tasks };
+  const hourlyRows = normalizeHourlyTokenUsage(raw.hourlyRows);
+  return { spendDays, modelRows, sessionRows, tasks, ...(hourlyRows ? { hourlyRows } : {}) };
 }
 
 function isShortString(value: unknown): value is string {

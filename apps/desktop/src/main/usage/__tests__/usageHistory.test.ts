@@ -131,7 +131,7 @@ import {
   configurePeerUsageSync,
   type PeerUsageSyncDeps,
 } from '../peerUsageSync';
-import { readUsageDeviceRows } from '../usageDeviceRows';
+import { readUsageDeviceRows, type UsageDeviceRows } from '../usageDeviceRows';
 import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getGatewayModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
@@ -219,6 +219,37 @@ function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
     ...overrides,
   };
 }
+
+describe('hourly token distribution', () => {
+  it('only reads hourly rows when requested, and combines the same hour', async () => {
+    const getHourlyTokenUsageSince = vi.fn(async () => [
+      { day: TODAY, hour: 8, tokens: 10 },
+      { day: TODAY, hour: 8, tokens: 20 },
+      { day: TODAY, hour: 10, tokens: 7 },
+    ]);
+    const deps = makeDeps({ getHourlyTokenUsageSince });
+    expect((await readUsageHistoryWith(deps)).hourlyDaily).toBeUndefined();
+    expect(getHourlyTokenUsageSince).not.toHaveBeenCalled();
+    expect((await readUsageHistoryWith(deps, { includeHourly: true, modelDays: 'all' })).hourlyDaily)
+      .toEqual([{ day: TODAY, hour: 8, tokens: 30 }, { day: TODAY, hour: 10, tokens: 7 }]);
+    expect(getHourlyTokenUsageSince).toHaveBeenCalledWith('0000-01-01');
+  });
+
+  it('merges device hours, filters a selected device and flags older peers', async () => {
+    const base = makeDeps({ getHourlyTokenUsageSince: async () => [{ day: TODAY, hour: 8, tokens: 10 }] });
+    const peer = { spendDays: [], modelRows: [], sessionRows: [], tasks: [],
+      hourlyRows: [{ day: TODAY, hour: 8, tokens: 20 }, { day: '2026-06-12', hour: 9, tokens: 5 }] };
+    const snapshot = { peerRows: new Map<string, UsageDeviceRows>([['new', peer], ['old', { spendDays: [], modelRows: [], sessionRows: [], tasks: [] }]]) };
+    const opts = { includeHourly: true, modelDays: 'all' as const };
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), opts);
+    expect(all.hourlyDaily).toEqual([{ day: TODAY, hour: 8, tokens: 30 }, { day: TODAY, hour: 9, tokens: 5 }]);
+    expect(all.hourlyIncomplete).toBe(true);
+    const one = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'new', snapshot), opts);
+    expect(one.hourlyDaily).toEqual([{ day: TODAY, hour: 8, tokens: 20 }, { day: TODAY, hour: 9, tokens: 5 }]);
+    expect(one.hourlyIncomplete).toBe(false);
+    expect((await readUsageHistoryWith(usageHistoryDepsForScope(base, 'old', snapshot), opts)).hourlyIncomplete).toBe(true);
+  });
+});
 
 beforeEach(async () => {
   mocks.electronAppGetPath.mockReturnValue(

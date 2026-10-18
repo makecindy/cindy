@@ -47,6 +47,34 @@ function rowsFor(days: string[], tokens = 10): UsageDeviceRows {
   };
 }
 
+describe('hourly device rows', () => {
+  it('replaces the synchronized days instead of adding already counted tokens', () => {
+    const cached = { ...rowsFor([]), hourlyRows: [
+      { day: '2026-10-15', hour: 8, tokens: 10 },
+      { day: '2026-10-16', hour: 8, tokens: 20 },
+    ] };
+    const incoming = { ...rowsFor([]), hourlyRows: [{ day: '2026-10-16', hour: 8, tokens: 30 }] };
+    const merged = mergeIncrementalRows(cached, '2026-10-16', incoming);
+    expect(merged.hourlyRows).toEqual([cached.hourlyRows[0], incoming.hourlyRows[0]]);
+    expect(mergeIncrementalRows(merged, '2026-10-16', incoming).hourlyRows).toEqual(merged.hourlyRows);
+    expect(mergeIncrementalRows(merged, '2026-10-16', rowsFor([])).hourlyRows).toBeUndefined();
+  });
+
+  it('transports anonymous hourly aggregates and preserves old peer detection', async () => {
+    const row = { day: '2026-10-16', hour: 8, tokens: 30 };
+    const result = await readUsageDeviceRows({
+      getAllSpendDays: async () => [], getModelUsageSince: async () => [],
+      getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+      remoteVisibleTaskIds: async () => new Set(), todayKey: () => row.day,
+      getHourlyTokenUsageSince: async () => [row],
+    }, { sinceDay: null });
+    const decoded = await decodeUsageDeviceRowsResponse(result);
+    expect(decoded).toMatchObject({ rows: { hourlyRows: [row] } });
+    expect(sanitizeUsageDeviceRows(rowsFor([]))?.hourlyRows).toBeUndefined();
+    expect(sanitizeUsageDeviceRows({ ...rowsFor([]), hourlyRows: [] })?.hourlyRows).toEqual([]);
+  });
+});
+
 function device(over: Partial<DeviceLinkDeviceView> & { deviceId: string }): DeviceLinkDeviceView {
   return {
     name: over.deviceId,

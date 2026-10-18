@@ -51,6 +51,7 @@ import {
 } from '../usage/peerUsageSync.js';
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend.js';
 import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
+import { getHourlyTokenUsageSince } from '../localDb/hourlyTokenUsage.js';
 import { getSessionUsageSince } from '../localDb/dailySessionUsage.js';
 import { readRemoteBotSessionAccessBatch } from '../localDb/ipc/botRemoteSessionAccess.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
@@ -340,6 +341,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
         {
           getAllSpendDays,
           getModelUsageSince,
+          getHourlyTokenUsageSince,
           getSessionUsageSince,
           // 与 local-db:sessions:list 的远端投影同一判据:hidden(含账号切换中的全拒)不外发。
           remoteVisibleTaskIds: async (ids) => {

@@ -7820,6 +7820,19 @@
     }
   },
   "usageHistory": {
+    "hourly": {
+      "title": "Daily Token distribution by hour",
+      "description": "Each turn is recorded in the hour it is accounted for, using each device’s local time. Only usage recorded after the update is included. Use this view to spread out scheduled automations.",
+      "partial": "Some devices do not support hourly statistics yet. This distribution may be incomplete.",
+      "peak": "Busiest hours: {{hours}}, {{tokens}} Token each ({{share}} of the day’s recorded usage)",
+      "chartLabel": "Hourly Token usage for {{day}}",
+      "details": "Show hourly details",
+      "hour": "Hour",
+      "tokens": "Token",
+      "share": "Share of day",
+      "empty": "No hourly usage was recorded for this date. Hourly distribution from before the update cannot be reconstructed."
+    },
+
     "description": "Token usage produced inside Cindy across your computers, combined by default; you can also view one device at a time. Other computers must be online and allow remote control to be read; when one can't be reached, its last-read data is used. Records start accumulating when the feature ships; earlier history is not backfilled.",
     "empty": "No usage recorded yet. This fills in once you start a chat.",
     "loadFailed": "Unable to load usage history. Reopen Settings to try again.",

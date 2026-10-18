@@ -6986,6 +6986,7 @@ interface ElectronAPI {
         device?: string;
         /** 附带「最耗 token 的任务」数据;只有设置 → 用量历史需要。 */
         includeTasks?: boolean;
+        includeHourly?: boolean;
         forceRefresh?: boolean;
       }) => Promise<import('../main/usage/usageHistory').UsageHistoryPayload>;
       onTodaySpendChanged: (

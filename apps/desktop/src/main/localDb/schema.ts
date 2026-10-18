@@ -1860,6 +1860,17 @@ export const dailyModelUsage = sqliteTable(
   }),
 );
 
+/** Incremental ledger maintained atomically by daily_model_usage SQL triggers; no backfill. */
+export const hourlyTokenUsage = sqliteTable(
+  'hourly_token_usage',
+  {
+    day: text('day').notNull(),
+    hour: integer('hour').notNull(),
+    tokens: integer('tokens').notNull().default(0),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.day, t.hour] }) }),
+);
+
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
  * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),

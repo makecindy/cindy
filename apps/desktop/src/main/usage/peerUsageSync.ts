@@ -145,6 +145,12 @@ export function mergeIncrementalRows(
             ...incoming.sessionRows,
           ],
           tasks: incoming.tasks,
+          ...(incoming.hourlyRows ? {
+            hourlyRows: [
+              ...(cached.hourlyRows ?? []).filter((row) => row.day < sinceDay),
+              ...incoming.hourlyRows,
+            ],
+          } : {}),
         };
   return {
     ...merged,

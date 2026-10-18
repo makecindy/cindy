@@ -29,6 +29,8 @@ import { app } from 'electron';
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend';
 import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyModelUsage';
 import { getSessionUsageSince, getUsageTaskMeta } from '../localDb/dailySessionUsage';
+import { getHourlyTokenUsageSince } from '../localDb/hourlyTokenUsage';
+import { normalizeHourlyTokenUsage, type HourlyTokenUsageRow } from '../../shared/hourlyTokenUsage.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
@@ -122,6 +124,9 @@ export interface UsageHistoryModelDay {
 }
 
 export interface UsageHistoryPayload {
+  hourlyDaily?: HourlyTokenUsageRow[];
+  /** Some selected peers predate hourly recording. Do not present the sum as complete. */
+  hourlyIncomplete?: boolean;
   generatedAt: number;
   /** 本地时区今日 key — renderer 所有日期推算以此为锚。 */
   todayKey: string;
@@ -329,6 +334,8 @@ export function computeAnomaly(
 
 /** 测试注入用的数据读取依赖。 */
 export interface UsageHistoryDeps {
+  getHourlyTokenUsageSince?(sinceDay: string): Promise<HourlyTokenUsageRow[]>;
+  hourlyIncomplete?: boolean;
   getAllSpendDays(): Promise<Array<{ day: string; monies: RegionalMoney[] }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
   /** 每日 × 任务用量;缺省(旧测试替身)视为没有任务数据。 */
@@ -369,6 +376,7 @@ function tagTaskUsage(
 }
 
 const defaultDeps: UsageHistoryDeps = {
+  getHourlyTokenUsageSince,
   getAllSpendDays,
   getModelUsageSince,
   getTaskUsageSince: async (sinceDayKey) => localTaskUsage(await getSessionUsageSince(sinceDayKey)),
@@ -416,8 +424,8 @@ function optsKey(opts?: UsageHistoryReadOptions): string {
   const modelSuffix = modelDays === MODEL_WINDOW_DAYS ? '' : `|modelDays=${modelDays}`;
   // 'local' 沿用旧 key, 升级后首页与已有磁盘快照照常命中。
   const deviceSuffix = device === 'local' ? '' : `|device=${encodeURIComponent(device)}`;
-  const taskSuffix = opts?.includeTasks ? '|tasks=1' : '';
-  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}`;
+  const detailSuffix = `${opts?.includeTasks ? '|tasks=1' : ''}${opts?.includeHourly ? '|hourly=1' : ''}`;
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${detailSuffix}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -466,6 +474,12 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
     totals: payload.totals,
     anomaly: payload.anomaly,
     ...(Array.isArray(payload.devices) ? { devices: payload.devices } : {}),
+    ...(Array.isArray(payload.hourlyDaily)
+      ? {
+          hourlyDaily: normalizeHourlyTokenUsage(payload.hourlyDaily),
+          hourlyIncomplete: payload.hourlyIncomplete === true,
+        }
+      : {}),
     ...(Array.isArray(payload.taskDaily) && Array.isArray(payload.tasks)
       ? { taskDaily: payload.taskDaily, tasks: payload.tasks }
       : {}),
@@ -622,6 +636,8 @@ export interface UsageHistoryReadOptions {
    * 每次用量变化都会刷新,不承担任务全量查询。
    */
   includeTasks?: boolean;
+  /** Hourly token distribution is requested only by Settings, never the home dashboard. */
+  includeHourly?: boolean;
   /**
    * true = 事件触发的刷新, 需要绕过 10s 内存快返, 立即重新聚合 DB。
    * mount / 展开仍使用 stale-while-refresh 快路径保证首帧速度。
@@ -757,6 +773,15 @@ export async function readUsageHistoryWith(
   const taskUsage = opts?.includeTasks && deps.getTaskUsageSince
     ? await deps.getTaskUsageSince(modelCutoff ?? '0000-01-01')
     : null;
+  const hourlyRows = opts?.includeHourly && deps.getHourlyTokenUsageSince
+    ? await deps.getHourlyTokenUsageSince(modelCutoff ?? '0000-01-01')
+    : undefined;
+  const hourlyByKey = new Map<string, HourlyTokenUsageRow>();
+  for (const row of hourlyRows ?? []) {
+    const key = `${row.day}:${row.hour}`;
+    const previous = hourlyByKey.get(key);
+    hourlyByKey.set(key, { ...row, tokens: (previous?.tokens ?? 0) + row.tokens });
+  }
 
   // 每日 token 合计 → days 的 tooltip 数据。codex-only 日 daily_spend 无行 ($ 只有
   // Claude 记), 也要并进 days, 否则热力图那天 hover 不到 token。
@@ -978,6 +1003,10 @@ export async function readUsageHistoryWith(
     modelDaily,
     models,
     ...(taskUsage ? { taskDaily: taskUsage.rows, tasks: taskUsage.tasks } : {}),
+    ...(hourlyRows ? {
+      hourlyDaily: [...hourlyByKey.values()],
+      hourlyIncomplete: deps.hourlyIncomplete === true,
+    } : {}),
     streak: computeStreaks(activeDays, todayKey),
     totals: {
       today,
@@ -1006,7 +1035,7 @@ export async function readUsageHistoryWith(
 }
 
 /**
- * 其它电脑的行按它自己的本地日历记账,只精确到天,无法按小时换算到本机日历。
+ * 其它电脑的日汇总按它自己的本地日历记账,不含时区偏移,无法换算到本机日历。
  * 合并口径:各设备按本地日期计;对方已跨入本机的「明天」时,超出本机今天的行归到本机
  * 今天 —— 否则那部分用量既不进今日合计,也不会出现在以本机今天为锚的图表里。
  */
@@ -1051,6 +1080,23 @@ export function usageHistoryDepsForScope(
   };
   return {
     ...base,
+    hourlyIncomplete: [...snapshot.peerRows.entries()].some(
+      ([deviceId, peerRows]) => (scope === 'all' || scope === deviceId) && !peerRows.hourlyRows,
+    ) || (scope !== 'all' && !snapshot.peerRows.has(scope)),
+    getHourlyTokenUsageSince: async (sinceDay) => {
+      const todayKey = base.todayKey();
+      const local = scope === 'all' ? (await base.getHourlyTokenUsageSince?.(sinceDay) ?? []) : [];
+      return [
+        ...local,
+        ...[...snapshot.peerRows.entries()].flatMap(([deviceId, peerRows]) =>
+          scope === 'all' || scope === deviceId
+            ? (peerRows.hourlyRows ?? [])
+                .map((row) => ({ ...row, day: row.day > todayKey ? todayKey : row.day }))
+                .filter((row) => row.day >= sinceDay)
+            : [],
+        ),
+      ];
+    },
     getAllSpendDays: async () => (await rows()).spendDays,
     getModelUsageSince: async (sinceDayKey) =>
       (await rows()).modelRows.filter((row) => row.day >= sinceDayKey),

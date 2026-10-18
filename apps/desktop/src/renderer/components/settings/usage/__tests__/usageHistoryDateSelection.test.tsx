@@ -83,6 +83,20 @@ function history(): UsageHistoryPayload {
 }
 
 describe('Usage history selection behavior', () => {
+  it('uses the existing date input to select the hourly distribution day', () => {
+    state.history = history();
+    state.history.hourlyDaily = [
+      { day: '2026-08-22', hour: 8, tokens: 10 },
+      { day: '2026-08-21', hour: 20, tokens: 20 },
+    ];
+    const view = render(<UsageHistorySection />);
+    expect(view.getAllByRole('img').some((image) => image.getAttribute('aria-label') === 'usageHistory.hourly.chartLabel')).toBe(true);
+    fireEvent.click(view.getByText('usageHistory.hourly.details'));
+    expect(view.getByRole('rowheader', { name: '08:00–09:00' }).parentElement?.textContent).toContain('10');
+    fireEvent.change(view.getByLabelText('usageHistory.range.date'), { target: { value: '2026-08-21' } });
+    expect(view.getByRole('rowheader', { name: '20:00–21:00' }).parentElement?.textContent).toContain('20');
+  });
+
   it('waits for the history date anchor before accepting a day, then rejects future dates', () => {
     state.history = null;
     const view = render(<UsageHistorySection />);

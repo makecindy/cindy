@@ -32,6 +32,7 @@ import {
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
+import { normalizeHourlyTokenUsage, type HourlyTokenUsageRow } from '../../shared/hourlyTokenUsage';
 
 export interface UsageHistoryModel {
   agentKind: 'claude-code' | 'codex' | 'pi';
@@ -80,6 +81,8 @@ const DEVICE_STATUSES = new Set<UsageHistoryDevice['status']>([
 ]);
 
 export interface UsageHistoryPayload {
+  hourlyDaily?: HourlyTokenUsageRow[];
+  hourlyIncomplete?: boolean;
   generatedAt: number;
   todayKey: string;
   stale?: boolean;
@@ -184,6 +187,8 @@ interface StoredUsageHistoryModel {
 }
 
 interface StoredUsageHistoryPayload {
+  hourlyDaily?: unknown;
+  hourlyIncomplete?: unknown;
   generatedAt?: unknown;
   todayKey?: unknown;
   stale?: unknown;
@@ -350,6 +355,10 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
     const devices = parseDevices(parsed.devices);
     return {
       ...(devices ? { devices } : {}),
+      ...(Array.isArray(parsed.hourlyDaily) ? {
+        hourlyDaily: normalizeHourlyTokenUsage(parsed.hourlyDaily),
+        hourlyIncomplete: parsed.hourlyIncomplete === true,
+      } : {}),
       generatedAt: finiteNumber(parsed.generatedAt, Date.now()),
       todayKey: typeof parsed.todayKey === 'string' ? parsed.todayKey : '',
       stale: parsed.stale === true,
@@ -414,6 +423,7 @@ interface UsageHistoryRequest {
   device: string;
   /** 附带「最耗 token 的任务」数据。 */
   includeTasks: boolean;
+  includeHourly: boolean;
 }
 
 const scopes = new Map<string, UsageHistoryScopeState>();
@@ -430,6 +440,7 @@ function getScope(
     allowPendingEstimates: false,
     device: 'local',
     includeTasks: false,
+    includeHourly: false,
   },
 ): UsageHistoryScopeState {
   let state = scopes.get(scopeKey);
@@ -491,6 +502,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
       modelDays: scope.request.modelDays,
       ...(scope.request.device === 'local' ? {} : { device: scope.request.device }),
       ...(scope.request.includeTasks ? { includeTasks: true } : {}),
+      ...(scope.request.includeHourly ? { includeHourly: true } : {}),
       ...(opts?.forceRefresh ? { forceRefresh: true } : {}),
     })
     .then((res) => {
@@ -570,14 +582,15 @@ function scopeKeyForRequest(scopeKey: string, request: UsageHistoryRequest): str
     request.modelDays === MODEL_WINDOW_DAYS &&
     !request.allowPendingEstimates &&
     request.device === 'local' &&
-    !request.includeTasks
+    !request.includeTasks &&
+    !request.includeHourly
   ) {
     return scopeKey;
   }
   // 'local' 沿用旧 key, 升级后已有的本机快照照常 hydrate。
   const deviceSuffix = request.device === 'local' ? '' : `|device=${encodeURIComponent(request.device)}`;
-  const taskSuffix = request.includeTasks ? '|tasks=1' : '';
-  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}`;
+  const detailSuffix = `${request.includeTasks ? '|tasks=1' : ''}${request.includeHourly ? '|hourly=1' : ''}`;
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${detailSuffix}`;
 }
 
 export function useUsageHistory(opts?: {
@@ -591,6 +604,7 @@ export function useUsageHistory(opts?: {
   device?: string;
   /** 附带「最耗 token 的任务」数据;只有设置 → 用量历史需要(首页看板不读)。 */
   includeTasks?: boolean;
+  includeHourly?: boolean;
 }): {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
@@ -603,6 +617,7 @@ export function useUsageHistory(opts?: {
     allowPendingEstimates: opts?.allowPendingEstimates ?? false,
     device: opts?.device || 'local',
     includeTasks: opts?.includeTasks ?? false,
+    includeHourly: opts?.includeHourly ?? false,
   };
   const scopedKey = scopeKeyForRequest(scopeKey, request);
   const scope = getScope(scopedKey, request);
