@@ -12,6 +12,9 @@ import {
   isContextOverflowErrorMessage,
   isDeterministicHostCompactFailure,
   isRemoteCompactEncryptedContentError,
+  isUnsupportedRequestOptionErrorMessage,
+  unsupportedRequestOptionCompatOverride,
+  UNSUPPORTED_REQUEST_OPTION_REASON,
 } from '@cindy/maker-core';
 import {
   projectAgentFacingText,
@@ -99,6 +102,28 @@ function isCompanionCompactFailure(data: unknown): boolean {
     typeof value === 'string'
     && /error during compaction|pi compact failed|error running remote compact task/i.test(value)
     && isDeterministicHostCompactFailure(value.replace(/error running remote compact task/ig, 'Error during compaction')));
+}
+
+/**
+ * 上游拒收「可选请求增强字段」的终态错误（PI 专属自愈对象）。
+ * 只认结构化 reason，或「被点名字段 + not supported + 替代字段建议」的错误文案；
+ * 普通 400 / 鉴权失败不满足，不得拿来自愈。
+ */
+export function isUnsupportedRequestOptionErrorData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { reason?: unknown; message?: unknown; sdkError?: unknown };
+  if (rec.reason === UNSUPPORTED_REQUEST_OPTION_REASON) return true;
+  return [rec.message, rec.sdkError].some(
+    (value) => typeof value === 'string' && isUnsupportedRequestOptionErrorMessage(value),
+  );
+}
+
+function unsupportedRequestOptionErrorText(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].find(
+    (value): value is string => typeof value === 'string' && value.length > 0,
+  ) ?? '';
 }
 
 export interface NativeSessionRecoveryTarget {
@@ -466,6 +491,21 @@ export interface ContextOverflowRolloverDeps {
     },
   ): Promise<{ accepted: boolean }>;
   getRecoveryAbortSignal?(sessionId: string): AbortSignal;
+  /**
+   * PI provider compat 自愈：读取已学到的 per-model compat 修正。
+   * 已存在 = 这台机器已经学过这个 provider/model 的拒收，不再自动重试（避免循环）。
+   */
+  readPiNativeCompatOverride?(
+    providerId: string,
+    modelId: string,
+  ): Record<string, unknown> | undefined;
+  /** PI provider compat 自愈：把本次学习到的 compat 修正落盘，供重建的 models.json 合并。
+   *  返回 true 仅当条目确实落盘；false 时调用方不得重放（否则闩锁永远是假、无限重试）。 */
+  recordPiNativeCompatOverride?(
+    providerId: string,
+    modelId: string,
+    compat: Record<string, unknown>,
+  ): Promise<boolean> | boolean;
   /** Synchronous: external dispatch may release its turn marker on this same terminal event. */
   hasExternalRecoveryOwner?(sessionId: string): boolean;
   onRebuilt?(sessionId: string): void;
@@ -577,7 +617,12 @@ export function shouldRebuildForModelWindowSwitch(input: {
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string): OverflowClaimResult;
   cancelRecovery(sessionId: string): void;
-  tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
+  tryRecover(
+    sessionId: string,
+    errorData: unknown,
+    /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
+    turnIdentity?: { instanceId?: string; generation?: number },
+  ): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
@@ -601,6 +646,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   const inFlight = new Map<string, AbortController | undefined>();
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
+  // 自愈成功时那一轮的 turn 身份：同身份再次到达 = 同一轮的重复终态投递（丢弃）；
+  // 新身份 = 重放后的新一轮失败（必须 surface，不能静默吞掉）。
+  const healedCompatTurns = new Map<string, { instanceId?: string; generation?: number }>();
+  /**
+   *  (会话, provider, model) 已经用「已学覆盖」重建过：再失败就不再自动重建，交常规
+   *  错误面。必须带上 pair：同一会话换模型后，旧模型的记录不能挡住新模型的自愈。
+   */
+  const rebuiltWithLearnedCompat = new Set<string>();
 
   // 账本是增强:读不到、抛错都按没有,绝不挡住换窗。
   const readWorkingMemoryNote = async (sessionId: string): Promise<string | null> => {
@@ -635,16 +688,21 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     errorData: unknown,
     signal?: AbortSignal,
+    turnIdentity?: { instanceId?: string; generation?: number },
   ): Promise<boolean> => {
     if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
-    if (!isContextOverflowErrorData(errorData) && !oversized) return false;
+    const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
+    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     signal?.throwIfAborted();
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
+    // compat 自愈只服务本机桌面会话（与 replayUserMessage 的 continueFromHistory 一致）：
+    // 外部派单方有自己的重试语义，canonical bot 的派单走 owner 路径，不在这里代播。
+    if (unsupportedOption && sessionRow.source !== 'desktop') return false;
     if (oversized && (!canContinueContextRecovery(sessionRow) || sessionRow.agentKind !== 'codex')) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
@@ -656,6 +714,128 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       const tokens: 'violated' | 'unknown' = isContextOverflowErrorData(errorData)
         ? 'violated'
         : 'unknown';
+      // ── PI provider compat 自愈：上游拒收可选请求字段（如 prompt_cache_retention）──
+      // 失败轮零产出，学习该 provider/model 的 compat 修正后关会话重建（新 models.json
+      // 不再带该字段），并重放同一轮用户消息。只做一次：已学过的 (provider, model)
+      // 再失败就交给常规错误面，绝不循环重试。
+      if (unsupportedOption) {
+        const compat = unsupportedRequestOptionCompatOverride(
+          unsupportedRequestOptionErrorText(errorData),
+        );
+        const providerId = sessionRow.providerId ?? null;
+        const modelId = sessionRow.model ?? null;
+        // providerId 为 null（老会话/远端控制端未持久化）时无法确定学习键，不自愈。
+        if (!compat || !providerId || !modelId || !deps.recordPiNativeCompatOverride) {
+          return false;
+        }
+        const source = await deps.listMessages(sessionId);
+        signal?.throwIfAborted();
+        const plan = planContextOverflowRollover(source, null);
+        // 同一轮重复终态 error：上一次自愈已经重放并续跑过，这次直接丢弃（不重放、
+        // 不落错误行）。必须用「实例 + 轮次」身份区分：重放失败是新一轮（新 instanceId /
+        // 新 generation），必须照常 surface，否则真实的重试失败会被静默吞掉。
+        const sourceUser =
+          plan.action === 'rebuild'
+            ? { clientId: plan.sourceUserClientId }
+            : [...source].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message));
+        const healedTurn = healedCompatTurns.get(sessionId);
+        if (
+          sourceUser &&
+          healedTurn?.generation !== undefined &&
+          healedTurn.generation === turnIdentity?.generation &&
+          healedTurn.instanceId === turnIdentity?.instanceId &&
+          continuedInputs.get(sessionId) === sourceUser.clientId
+        ) {
+          return true;
+        }
+        const learnedBefore = deps.readPiNativeCompatOverride?.(providerId, modelId) ?? false;
+        const rebuiltKey = `${sessionId}\u0000${providerId}\u0000${modelId}`;
+        // 磁盘上已学过（别的会话先学到、或用户在别处修好）时，还要区分「已学过」和
+        // 「当前 runtime 已应用」：启动时 models.json 里没有该覆盖的旧 runtime 仍然会一直
+        // 400，普通发送不会刷新模型配置，所以这里要允许它应用覆盖并重建一次。已经用覆盖
+        // 重建过的 runtime 再收到同一类 400 说明覆盖没解决问题，直接交常规错误面，绝不
+        // 反复 close/重放。判据按 pair 记：换过模型的会话不能被旧模型的记录挡住。
+        if (learnedBefore && rebuiltWithLearnedCompat.has(rebuiltKey)) {
+          return false;
+        }
+        // 外部派单方（Orca / scheduler / IM / ghost setup）拥有自己的重试语义：不能代它
+        // 重放用户消息 —— 派单正文经 wire 投影可能退化为空，重复发送还可能让两方各跑一次。
+        const externalOwner =
+          plan.action !== 'stop' &&
+          (plan.skipGenericReplay || (deps.hasExternalRecoveryOwner?.(sessionId) ?? false));
+        // 先关掉旧 runtime，再置学习闩锁：闩锁置了而 runtime 没换掉的话，后续同 pair 的
+        // 请求会命中闩锁直接放弃，永久停在旧 models.json 上反复 400。
+        if (live) await deps.closeSession(sessionId);
+        signal?.throwIfAborted();
+        const learned =
+          learnedBefore || (await deps.recordPiNativeCompatOverride(providerId, modelId, compat));
+        signal?.throwIfAborted();
+        if (learned) {
+          // 关掉之后，该会话下一次发送／重放就会用带覆盖的 models.json 重建 runtime。
+          rebuiltWithLearnedCompat.add(rebuiltKey);
+        }
+        if (!learned) {
+          // 没学到就不重放：否则闩锁永远为假，同一个 400 会被无上限重放。
+          deps.log.warn('pi provider compat was not persisted; leaving the error to surface', {
+            sessionId,
+            providerId,
+            modelId,
+          });
+          return false;
+        }
+        // 零产出守卫判定不能重放（无用户消息/已有副作用）或外部 owner：只学不重放，
+        // 让下一次发送用修好的 models.json 重建。
+        if (plan.action === 'stop' || externalOwner) {
+          deps.log.info('pi provider compat learned without replay', {
+            sessionId,
+            providerId,
+            modelId,
+            compat,
+            ...(plan.action === 'stop' ? { stopReason: plan.reason } : { externalOwner: true }),
+          });
+          return false;
+        }
+        const sourceWire = persistedUserContentToWireMessage(
+          plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
+        );
+        const sourceText = typeof sourceWire === 'string' ? sourceWire : sourceWire.content;
+        const replay = await deps.replayUserMessage(
+          sessionId,
+          plan.sourceUserContent,
+          plan.sourceUserAgentFacingWireContent,
+          {
+            signal,
+            // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
+            // 跳过，模型看到的仍是同一条用户请求，重放即重试。
+            continueFromHistory: true,
+            sourceUserContent: plan.sourceUserContent,
+            sourceUserClientId: plan.sourceUserClientId,
+            sourceCapabilitySelectionText:
+              typeof sourceText === 'string' ? sourceText : extractPlainText(sourceText),
+          },
+        );
+        signal?.throwIfAborted();
+        if (!replay.accepted) {
+          deps.log.warn('pi provider compat replay was not accepted', {
+            sessionId,
+            providerId,
+            modelId,
+          });
+          return false;
+        }
+        deps.onRebuilt?.(sessionId);
+        continuedInputs.set(sessionId, plan.sourceUserClientId);
+        if (turnIdentity?.generation !== undefined) {
+          healedCompatTurns.set(sessionId, turnIdentity);
+        }
+        deps.log.info('pi provider compat learned; replayed the user message', {
+          sessionId,
+          providerId,
+          modelId,
+          compat,
+        });
+        return true;
+      }
       const action = decideCindyCompression({
         local: true,
         bytes: oversized ? 'violated' : 'unknown',
@@ -1169,7 +1349,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       inFlight.get(sessionId)?.abort();
     },
 
-    async tryRecover(sessionId: string, errorData: unknown): Promise<boolean> {
+    async tryRecover(
+      sessionId: string,
+      errorData: unknown,
+      turnIdentity?: { instanceId?: string; generation?: number },
+    ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
         // IM may not persist this input (protected content), and an attached IM
@@ -1180,9 +1364,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
-          return await deps.withSessionLock(sessionId, () => runRecover(sessionId, errorData, signal));
+          return await deps.withSessionLock(sessionId, () =>
+            runRecover(sessionId, errorData, signal, turnIdentity),
+          );
         }
-        return await runRecover(sessionId, errorData, signal);
+        return await runRecover(sessionId, errorData, signal, turnIdentity);
       } catch (error) {
         if (signal?.aborted) return true;
         deps.log.warn('context overflow rollover failed', {
