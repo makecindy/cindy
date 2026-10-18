@@ -15,7 +15,7 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost.js';
 const runtime = vi.hoisted(() => ({
-  confirmLegacyLibraryReattach: vi.fn(async (_plugin: unknown) => false),
+  confirmLegacyLibraryReattach: vi.fn<(plugin: unknown) => Promise<boolean>>(async () => false),
   ghosts: [] as Array<{
     manifest: Record<string, unknown>;
     dir: string;
@@ -209,11 +209,12 @@ vi.mock('../download.js', () => ({
   downloadVerifiedPlugin: vi.fn(async () => undefined),
 }));
 
-import type {
-  PluginDownloadResponse,
-  PluginRemovalNotice,
-  VisiblePluginDetail,
-  VisiblePluginSummary,
+import {
+  parseGetPluginResponse,
+  type PluginDownloadResponse,
+  type PluginRemovalNotice,
+  type VisiblePluginDetail,
+  type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
 
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
@@ -399,6 +400,17 @@ function detail(
       manifest: manifest(item.ghostId, item.currentRelease.version, slots),
     },
   };
+}
+
+/** Exercise the wire parser so service fixtures contain the API's normalized setup. */
+function parsedDetail(item: VisiblePluginSummary, rawManifest: unknown): VisiblePluginDetail {
+  return parseGetPluginResponse({
+    schemaVersion: 2,
+    plugin: {
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: rawManifest },
+    },
+  }).plugin;
 }
 
 function reviewedInstallOptions(item: VisiblePluginSummary, allowSourceReplacement = false) {
@@ -1377,6 +1389,44 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it.each(['cloud', 'local', 'signed-out'] as const)(
+    'shows detail with API-normalized setup in %s mode',
+    async (mode) => {
+      runtime.session = {
+        mode,
+        dataOwnerId: mode === 'signed-out' ? null : mode === 'local' ? 'local-v1' : 'user-1',
+        generation: 2,
+      };
+      const item = summary();
+      const h = harness([item]);
+      h.api.detail.mockResolvedValueOnce(parsedDetail(item, setupSecretManifest()));
+
+      await expect(h.service.detail(item.id)).resolves.toMatchObject({
+        pluginId: item.id,
+        manifest: {
+          setup: { requires: [{ anyOf: [{ kind: 'secret', key: 'api_key' }] }] },
+        },
+      });
+    },
+  );
+
+  it('rejects invalid normalized setup references before downloading or installing', async () => {
+    const item = summary();
+    const h = harness([item]);
+    const invalid = parsedDetail(item, setupSecretManifest());
+    invalid.currentRelease.manifest.setup = {
+      requires: [{ anyOf: [{ kind: 'secret', key: 'undeclared_key' }] }],
+    };
+    h.api.detail.mockResolvedValue(invalid);
+
+    await expect(h.service.detail(item.id)).rejects.toThrow('[GHOST_FILE_INVALID]');
+    await expect(
+      h.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT),
+    ).rejects.toThrow('[GHOST_FILE_INVALID]');
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('keeps signed-out detail blocked while the account boundary is pending', async () => {
     runtime.boundaryPending = true;
     runtime.session = {
@@ -1989,10 +2039,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const approvedManifest = normalizedManifest(rawManifest);
     const h = harness([item]);
     runtime.inspectedManifest = approvedManifest;
-    h.api.detail.mockResolvedValueOnce({
-      ...item,
-      currentRelease: { ...item.currentRelease, manifest: rawManifest },
-    } as unknown as VisiblePluginDetail);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
     runtime.install.mockImplementation(async () => {
       const ghost = {
         manifest: { ...approvedManifest },
@@ -2336,10 +2383,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const rawManifest = setupSecretManifest();
     const reviewedManifest = normalizedManifest(rawManifest);
     const h = harness([item]);
-    h.api.detail.mockResolvedValueOnce({
-      ...item,
-      currentRelease: { ...item.currentRelease, manifest: rawManifest },
-    } as unknown as VisiblePluginDetail);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
     runtime.inspectedManifest = reviewedManifest;
     runtime.install.mockResolvedValue({
       manifest: reviewedManifest,
@@ -3155,47 +3199,54 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(snapshot.items[0]).toMatchObject({ installState: 'installed', enabled: false });
   });
 
-  it('silently upgrades a default package whose detail manifest contains normalized setup', async () => {
-    const item = summary({
-      scope: 'organization',
-      organizationId: 'org-1',
-      defaultInstall: true,
-      currentRelease: {
-        ...summary().currentRelease,
-        id: 'release-2',
-        version: '2.0.0',
-      },
-    });
-    const oldManifest = manifest(item.ghostId, '1.0.0');
-    const rawManifest = setupSecretManifest(item.ghostId, '2.0.0');
-    const upgradedManifest = normalizedManifest(rawManifest);
-    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-setup-upgrade-'));
-    roots.push(installDir);
-    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
-    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
-    const h = harness([item]);
-    h.ledger.upsertInstallation({
-      ...recordForTest(item),
-      releaseId: 'release-1',
-      version: '1.0.0',
-      manifestDigest: ghostManifestDigest(oldManifest),
-    });
-    h.api.detail.mockResolvedValueOnce({
-      ...item,
-      currentRelease: { ...item.currentRelease, manifest: rawManifest },
-    } as unknown as VisiblePluginDetail);
-    runtime.inspectedManifest = upgradedManifest;
-    runtime.install.mockImplementationOnce(async () => {
-      const ghost = { manifest: { ...upgradedManifest }, dir: installDir, enabled: true };
-      runtime.ghosts = [ghost];
-      return ghost;
-    });
+  it.each([false, true])(
+    'silently upgrades v2 setup through the API parser (defaultInstall=%s)',
+    async (defaultInstall) => {
+      const item = summary({
+        scope: defaultInstall ? 'organization' : 'public',
+        organizationId: defaultInstall ? 'org-1' : null,
+        defaultInstall,
+        currentRelease: {
+          ...summary().currentRelease,
+          id: 'release-2',
+          version: '2.0.0',
+        },
+      });
+      const oldManifest = normalizedManifest({
+        ...setupSecretManifest(item.ghostId, '1.0.0'),
+        schemaVersion: 2,
+        slots: ['notify', 'network'],
+      });
+      const rawManifest = setupSecretManifest(item.ghostId, '2.0.0');
+      const upgradedManifest = normalizedManifest(rawManifest);
+      const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-setup-upgrade-'));
+      roots.push(installDir);
+      fs.writeFileSync(
+        path.join(installDir, 'ghost.json'),
+        JSON.stringify(ghostManifestToAuthorFormat(oldManifest)),
+      );
+      runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+      const h = harness([item]);
+      h.ledger.upsertInstallation({
+        ...recordForTest(item),
+        releaseId: 'release-1',
+        version: '1.0.0',
+        manifestDigest: ghostManifestDigest(oldManifest),
+      });
+      h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
+      runtime.inspectedManifest = upgradedManifest;
+      runtime.install.mockImplementationOnce(async () => {
+        const ghost = { manifest: { ...upgradedManifest }, dir: installDir, enabled: true };
+        runtime.ghosts = [ghost];
+        return ghost;
+      });
 
-    await expect(h.service.snapshot()).resolves.toMatchObject({
-      items: [{ installState: 'installed', version: '2.0.0' }],
-    });
-    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
-  });
+      await expect(h.service.snapshot()).resolves.toMatchObject({
+        items: [{ installState: 'installed', version: '2.0.0' }],
+      });
+      expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
+    },
+  );
 
   it('integration: snapshot upgrades an organization defaultInstall release', async () => {
     const item = summary({
