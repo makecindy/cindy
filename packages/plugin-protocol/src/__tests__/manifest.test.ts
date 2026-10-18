@@ -31,6 +31,32 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
+    const base = {
+      ...validManifest,
+      schemaVersion,
+      ...(schemaVersion === 3 ? { minCindyVersion: '0.1.0' } : {}),
+      slots: schemaVersion === 2 ? ['agent'] : undefined,
+      tools: undefined,
+      agent: { tasks: true },
+    };
+    for (const showTaskPreferences of [undefined, true, false]) {
+      const result = validateGhostManifest({ ...base, showTaskPreferences });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.manifest.showTaskPreferences).toBe(showTaskPreferences);
+      expect(Object.hasOwn(result.manifest, 'showTaskPreferences')).toBe(showTaskPreferences !== undefined);
+      expect(result.manifest.agent?.tasks).toBe(true);
+      expect(validateGhostManifest(result.manifest)).toEqual(result);
+    }
+    for (const showTaskPreferences of [null, 0, 1, 'false', {}, []]) {
+      expect(validateGhostManifest({ ...base, showTaskPreferences })).toMatchObject({
+        ok: false,
+        reason: 'showTaskPreferences 必须是布尔值',
+      });
+    }
+  });
+
   it('keeps main-view in the v2 compatibility contract', () => {
     expect(LEGACY_GHOST_SLOTS).toContain('main-view');
     expect(GHOST_MAIN_VIEW_ICONS).toEqual([

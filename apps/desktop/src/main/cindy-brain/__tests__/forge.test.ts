@@ -1705,6 +1705,12 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('documents optional Host task card visibility separately from task capabilities', () => {
+    expect(FORGE_GUIDE).toContain('"showTaskPreferences": false');
+    expect(FORGE_GUIDE).toContain('"showTaskPreferences": true');
+    expect(FORGE_GUIDE).toContain('任务 API、已有配置的读取和执行规则、权限检查均保持原样');
+  });
+
   it('账号业务元数据使用插件 KV，不声明 Host 昵称接口', () => {
     expect(FORGE_GUIDE).toContain('昵称等自定义账号元数据由插件通过 `/kv` 保存');
     expect(FORGE_GUIDE).toContain('执行仍传账号 id，不把昵称当作指令或授权');

@@ -114,6 +114,21 @@ function setup(
   };
 }
 describe('mobile plugin pages', () => {
+  it.each([undefined, true, false])('projects task card visibility without removing task settings access: %s', async (showTaskPreferences) => {
+    const h = setup();
+    h.ghost.manifest.agent = { tasks: true };
+    h.ghost.manifest.showTaskPreferences = showTaskPreferences;
+    const context = { controllerDeviceId: 'phone-a' };
+    const client = { protocolVersion: 1, primitives: ['plugin-capabilities'] };
+    const ref = { collectionId: 'plugins', kind: 'plugin', id: 'practice' };
+    const detail = await h.provider.get!(context, { ref, client });
+    expect(detail.blocks?.find(block => block.id === 'capabilities')?.data)
+      .toMatchObject({ tasks: showTaskPreferences !== false });
+    expect(h.ghost.manifest.agent.tasks).toBe(true);
+    await h.invoke('task-settings:get');
+    expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
+  });
+
   it('adds usage facts to the existing capabilities block and preserves unknown setup on a failed read', async () => {
     const h = setup({
       setupAssessment: () => {

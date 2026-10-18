@@ -436,7 +436,7 @@ export class MobilePluginPages {
                   })) ?? [],
                 permissions,
                 details: detailFacts,
-                tasks: Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
+                tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
                 mobile: parsePluginMobileDeclaration(ghost.manifest.mobile) !== null,
                 usage: mobilePluginUsage(
                   ghost,

@@ -3759,6 +3759,36 @@ describe('ghost · 交互卡 action id 形状(v2)', () => {
 });
 
 describe('ghost · settingsHtml 自绘设置区 + settingsHeight', () => {
+  it.each([2, 3])('showTaskPreferences 在 schema v%s 中只声明卡片显示，不改变任务能力或权限', (schemaVersion) => {
+    const base = {
+      ...goodManifest(),
+      schemaVersion,
+      ...(schemaVersion === 3 ? { minCindyVersion: '0.1.0' } : {}),
+      slots: schemaVersion === 2 ? ['agent'] : undefined,
+      panel: undefined,
+      agent: { tasks: true },
+    };
+    const original = validateGhostManifest(base);
+    expect(original.ok).toBe(true);
+    if (!original.ok) return;
+    for (const showTaskPreferences of [undefined, true, false]) {
+      const result = validateGhostManifest({ ...base, showTaskPreferences });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.manifest.showTaskPreferences).toBe(showTaskPreferences);
+      expect(Object.hasOwn(result.manifest, 'showTaskPreferences')).toBe(showTaskPreferences !== undefined);
+      expect(result.manifest.agent?.tasks).toBe(true);
+      expect(ghostPermissionItems(result.manifest)).toEqual(ghostPermissionItems(original.manifest));
+      expect(validateNormalizedGhostManifest(result.manifest)).toEqual(result);
+    }
+    for (const showTaskPreferences of [null, 0, 1, 'false', {}, []]) {
+      expect(validateGhostManifest({ ...base, showTaskPreferences })).toMatchObject({
+        ok: false,
+        reason: 'showTaskPreferences 必须是布尔值',
+      });
+    }
+  });
+
   it('settingsHtml 合法相对路径通过并透传;非法路径拒', () => {
     const ok = validateGhostManifest({ ...goodManifest(), settingsHtml: 'ui/settings.html' });
     expect(ok.ok && ok.manifest.settingsHtml).toBe('ui/settings.html');

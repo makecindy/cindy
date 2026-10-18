@@ -1,5 +1,5 @@
 /**
- * Regression coverage for Plugin detail sections, shared Switch wiring and interaction behavior.
+ * Regression coverage for Plugin detail sections, optional Host task settings and interaction behavior.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -852,9 +852,16 @@ describe('Ghost plugin detail sections', () => {
   });
 
   it.each([
-    { name: 'quick answers only', manifest: { cindy: { text: ['oneshot'] } }, taskRows: false },
-    { name: 'plugin tasks', manifest: { agent: { tasks: true } }, taskRows: true },
-  ])('shows one model field for $name and no per-ability model card', ({ manifest, taskRows }) => {
+    { name: 'quick answers only', manifest: { cindy: { text: ['oneshot'] } }, taskRows: false, showCard: true },
+    { name: 'plugin tasks', manifest: { agent: { tasks: true } }, taskRows: true, showCard: true },
+    { name: 'legacy errands', manifest: { agent: { errand: true } }, taskRows: true, showCard: true },
+    { name: 'workspaces', manifest: { workspace: true }, taskRows: true, showCard: true },
+    { name: 'explicitly enabled tasks', manifest: { agent: { tasks: true }, showTaskPreferences: true }, taskRows: true, showCard: true },
+    { name: 'opted-out tasks', manifest: { agent: { tasks: true }, showTaskPreferences: false }, taskRows: true, showCard: false },
+    { name: 'opted-out quick answers', manifest: { cindy: { text: ['oneshot'] }, showTaskPreferences: false }, taskRows: false, showCard: false },
+    { name: 'opted-out legacy errands', manifest: { agent: { errand: true }, showTaskPreferences: false }, taskRows: true, showCard: false },
+    { name: 'opted-out workspaces', manifest: { workspace: true, showTaskPreferences: false }, taskRows: true, showCard: false },
+  ])('respects Host task card visibility for $name', ({ manifest, taskRows, showCard }) => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     Object.assign(window.electronAPI, {
       ghosts: {
@@ -877,7 +884,7 @@ describe('Ghost plugin detail sections', () => {
       trust: detail.trust,
     };
     const projected = toGhostPluginDetail(ghost);
-    expect(projected).toMatchObject({ hasTaskPreferences: true, hasPluginTasks: taskRows });
+    expect(projected).toMatchObject({ hasTaskPreferences: showCard, hasPluginTasks: taskRows });
     render(
       <GhostPluginDetailView
         ghost={ghost}
@@ -892,8 +899,15 @@ describe('Ghost plugin detail sections', () => {
         toggleDisabled={false}
       />,
     );
-    expect(screen.getByText('settings.ghosts.detail.errandPrefs.title')).toBeTruthy();
     expect(screen.queryByText('settings.ghosts.detail.cindyPrefs.title')).toBeNull();
+    if (!showCard) {
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.title')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.model')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.permission')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.workdir')).toBeNull();
+      return;
+    }
+    expect(screen.getByText('settings.ghosts.detail.errandPrefs.title')).toBeTruthy();
     expect(screen.getAllByText('settings.ghosts.detail.errandPrefs.model')).toHaveLength(1);
     expect(screen.getByText(`settings.ghosts.detail.errandPrefs.${taskRows ? 'desc' : 'descModelOnly'}`)).toBeTruthy();
     expect(Boolean(screen.queryByText('settings.ghosts.detail.errandPrefs.permission'))).toBe(taskRows);
@@ -905,6 +919,7 @@ describe('Ghost plugin detail sections', () => {
       manifest: {
         schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip', id: 'art', name: 'Art',
         version: '1.0.0', entry: 'main.js', cindy: { image: ['generate', 'edit'], embed: ['text'] },
+        showTaskPreferences: true,
       },
       dir: '/plugins/art',
       namespace: null,
