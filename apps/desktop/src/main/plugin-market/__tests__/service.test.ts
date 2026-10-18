@@ -209,11 +209,12 @@ vi.mock('../download.js', () => ({
   downloadVerifiedPlugin: vi.fn(async () => undefined),
 }));
 
-import type {
-  PluginDownloadResponse,
-  PluginRemovalNotice,
-  VisiblePluginDetail,
-  VisiblePluginSummary,
+import {
+  parseGetPluginResponse,
+  type PluginDownloadResponse,
+  type PluginRemovalNotice,
+  type VisiblePluginDetail,
+  type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
 
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
@@ -336,6 +337,20 @@ function setupSecretManifest(id = 'cindy-test', version = '1.0.0') {
   };
 }
 
+/** Same setup/Node protocol shape as the Tongcheng Chengxin release. */
+function setupNodeSecretManifest(id = 'tongcheng-chengxin', version = '0.2.6') {
+  return {
+    ...manifest(id, version),
+    settingsHtml: 'settings.html',
+    node: {
+      entry: 'node/worker.cjs',
+      protocol: 'mcp-stdio',
+      secretBindings: [{ key: 'tongcheng_api_key', label: 'API key', methods: ['tools/call'] }],
+    },
+    setup: { requires: [{ anyOf: ['secret:tongcheng_api_key'] }] },
+  };
+}
+
 function brokerManifestWithoutPort(id = 'cindy-test', version = '1.0.0') {
   return {
     ...manifest(id, version),
@@ -399,6 +414,17 @@ function detail(
       manifest: manifest(item.ghostId, item.currentRelease.version, slots),
     },
   };
+}
+
+/** Match PluginMarketApi.detail: the wire manifest is validated and normalized first. */
+function parsedDetail(item: VisiblePluginSummary, rawManifest: unknown): VisiblePluginDetail {
+  return parseGetPluginResponse({
+    schemaVersion: 2,
+    plugin: {
+      ...item,
+      currentRelease: { ...item.currentRelease, manifest: rawManifest },
+    },
+  }).plugin;
 }
 
 function reviewedInstallOptions(item: VisiblePluginSummary, allowSourceReplacement = false) {
@@ -1989,10 +2015,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const approvedManifest = normalizedManifest(rawManifest);
     const h = harness([item]);
     runtime.inspectedManifest = approvedManifest;
-    h.api.detail.mockResolvedValueOnce({
-      ...item,
-      currentRelease: { ...item.currentRelease, manifest: rawManifest },
-    } as unknown as VisiblePluginDetail);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
     runtime.install.mockImplementation(async () => {
       const ghost = {
         manifest: { ...approvedManifest },
@@ -2336,10 +2359,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const rawManifest = setupSecretManifest();
     const reviewedManifest = normalizedManifest(rawManifest);
     const h = harness([item]);
-    h.api.detail.mockResolvedValueOnce({
-      ...item,
-      currentRelease: { ...item.currentRelease, manifest: rawManifest },
-    } as unknown as VisiblePluginDetail);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
     runtime.inspectedManifest = reviewedManifest;
     runtime.install.mockResolvedValue({
       manifest: reviewedManifest,
@@ -3180,10 +3200,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       version: '1.0.0',
       manifestDigest: ghostManifestDigest(oldManifest),
     });
-    h.api.detail.mockResolvedValueOnce({
-      ...item,
-      currentRelease: { ...item.currentRelease, manifest: rawManifest },
-    } as unknown as VisiblePluginDetail);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
     runtime.inspectedManifest = upgradedManifest;
     runtime.install.mockImplementationOnce(async () => {
       const ghost = { manifest: { ...upgradedManifest }, dir: installDir, enabled: true };
@@ -5838,6 +5855,82 @@ describe('organization default Plugin takeover', () => {
     expect(runtime.install).toHaveBeenCalledTimes(2);
     expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({ installed: true });
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+  });
+});
+
+describe('market normalized manifest validation', () => {
+  it.each(['cloud', 'local', 'signed-out'] as const)(
+    'opens Tongcheng details after API setup normalization in %s mode',
+    async (mode) => {
+      runtime.session = { mode, dataOwnerId: mode === 'signed-out' ? null : 'user-1', generation: 1 };
+      const rawManifest = setupNodeSecretManifest();
+      const item = summary({
+        ghostId: rawManifest.id,
+        currentRelease: { ...summary().currentRelease, version: rawManifest.version },
+      });
+      const h = harness([item]);
+      h.api.detail.mockResolvedValueOnce(parsedDetail(item, rawManifest));
+
+      await expect(h.service.detail(item.id)).resolves.toMatchObject({
+        ghostId: item.ghostId,
+        manifest: {
+          node: { protocol: 'mcp-stdio' },
+          setup: { requires: [{ anyOf: [{ kind: 'secret', key: 'tongcheng_api_key' }] }] },
+        },
+      });
+      expect(h.api.download).not.toHaveBeenCalled();
+      expect(runtime.install).not.toHaveBeenCalled();
+    },
+  );
+
+  it('installs the Tongcheng Node package after opening its normalized details', async () => {
+    const rawManifest = setupNodeSecretManifest();
+    const item = summary({
+      ghostId: rawManifest.id,
+      currentRelease: { ...summary().currentRelease, version: rawManifest.version },
+    });
+    const h = harness([item]);
+    const response = parsedDetail(item, rawManifest);
+    h.api.detail.mockResolvedValue(response);
+    runtime.inspectedManifest = normalizedManifest(rawManifest);
+    runtime.install.mockImplementation(async () => {
+      const ghost = {
+        manifest: normalizedManifest(rawManifest),
+        dir: `/userData/cindy-brain/${item.ghostId}`,
+        enabled: true,
+      };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const prompt = vi.fn(async () => true);
+
+    const reviewed = await h.service.detail(item.id);
+    await expect(h.service.install(item.id, {
+      expectedReleaseId: reviewed.releaseId,
+      expectedManifest: reviewed.manifest,
+    }, { consent: { prompt, initiator: 'user' } })).resolves.toMatchObject({
+      ghost: { manifest: { id: item.ghostId, version: '0.2.6' }, enabled: true },
+    });
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      source: 'market', installed: true, version: '0.2.6',
+    });
+  });
+
+  it('still rejects normalized setup references to undeclared secrets before downloading', async () => {
+    const item = summary();
+    const h = harness([item]);
+    const response = parsedDetail(item, setupSecretManifest());
+    response.currentRelease.manifest.setup = {
+      requires: [{ anyOf: [{ kind: 'secret', key: 'undeclared' }] }],
+    };
+    h.api.detail.mockResolvedValue(response);
+
+    await expect(h.service.detail(item.id)).rejects.toThrow('[GHOST_FILE_INVALID]');
+    await expect(h.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT))
+      .rejects.toThrow('[GHOST_FILE_INVALID]');
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 });
 
