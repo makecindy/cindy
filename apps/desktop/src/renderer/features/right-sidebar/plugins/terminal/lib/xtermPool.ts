@@ -25,6 +25,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
 import { createLogger } from '@/lib/logger';
+import type { TerminalExitInfo } from '../../../../../../shared/terminal-bridge';
 
 const log = createLogger('terminal');
 
@@ -37,10 +38,12 @@ export interface XtermEntry {
    * 本 renderer 是否已对该 tab 调过 terminal.create(PTY sink 绑到本窗口)。
    * per-renderer 标记:侧边栏在"内嵌 ↔ 独立子窗口"间迁移时,PTY 在 main 仍活着
    * (state.created 持久化为 true),但新窗口的 renderer 从未 attach 过 —— 此时
-   * 必须再调一次 create 做幂等 re-attach(ptyManager.create 支持换 owner),
+   * 每次挂载都调 create 做幂等 re-attach 并核对退出快照(支持换 owner),
    * 否则 PTY 输出仍推给旧窗口。见 TerminalTabBody effect #2。
    */
   ptyAttached: boolean;
+  /** Process-local exit snapshot; survives tab remounts, never restored from disk. */
+  exit: TerminalExitInfo | null;
 }
 
 const pool = new Map<string, XtermEntry>();
@@ -85,6 +88,7 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     fitAddon,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: false,
+    exit: null,
   };
   pool.set(tabId, entry);
   return entry;
@@ -113,10 +117,9 @@ export function openTerminalExternalLink(_event: MouseEvent, uri: string): void 
 
 /**
  * 侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时调用(MainLayout detach/attach 转换清理,
- * 两个方向都要):把所有 entry 的 ptyAttached 复位为 false,强制下次 mount 重新走
- * terminal.create 幂等 re-attach,把 PTY 输出 sink 切回本窗口。不复位的话,
- * "弹出 → 合并回主窗"往返后本 renderer 的 entry 残留 ptyAttached=true,
- * TerminalTabBody 的 guard 会跳过 re-attach,终端输入输出失活。
+ * 两个方向都要):把所有 entry 的 ptyAttached 复位为 false，记录本窗口已交出
+ * PTY 输出 sink；下次 mount 通过 terminal.create 重新接管。该标记只表示
+ * 本窗口的连接记录，不代表 main 的最新状态；TerminalTabBody 每次挂载都会核对。
  * 只改标记不 dispose xterm 实例 —— scrollback 保留。
  */
 export function markAllPtyDetached(): void {

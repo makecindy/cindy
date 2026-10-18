@@ -39,6 +39,8 @@ export interface TerminalCreateResult {
   shellId: Exclude<ShellId, 'auto'>;
   shellDisplayName: string;
   pid: number;
+  /** Current PTY snapshot on create/reattach; older responses may omit it. */
+  exit?: TerminalExitInfo | null;
 }
 
 export interface TerminalExitInfo {

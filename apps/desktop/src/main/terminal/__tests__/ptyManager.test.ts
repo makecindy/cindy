@@ -174,6 +174,7 @@ describe('PtyManager.create', () => {
     expect(lastSpawn!.cols).toBe(100);
     expect(lastSpawn!.rows).toBe(30);
     expect(result.pid).toBe(12345);
+    expect(result.exit).toBeNull();
     expect(typeof result.shellId).toBe('string');
     expect(mgr.has('t1')).toBe(true);
   });
@@ -229,12 +230,42 @@ describe('PtyManager.create', () => {
     expect(dataPayloads[0].target).toBe(ownerNew);
   });
 
-  it('同 id 已 exit 时再 create 抛错(需走显式 restart)', () => {
+  it.each([
+    { exitCode: 0, signal: 0 },
+    { exitCode: 42, signal: undefined },
+    { exitCode: 0, signal: 15 },
+  ])('reattaches an exited PTY with its snapshot without respawning: %j', (exit) => {
     const mgr = makeManager();
     const owner = makeFakeWebContents() as unknown as WebContents;
+    const newOwner = makeFakeWebContents() as unknown as WebContents;
     mgr.create({ id: 't1', cwd: '/tmp', owner });
-    lastSpawn!.__triggerExit({ exitCode: 0 });
-    expect(() => mgr.create({ id: 't1', cwd: '/tmp', owner })).toThrow(/already exists/);
+    lastSpawn!.__triggerExit(exit);
+    const result = mgr.create({ id: 't1', cwd: '/tmp', owner: newOwner });
+    expect(result).toMatchObject({ pid: 12345, exit: {
+      code: exit.exitCode, signal: exit.signal === undefined ? null : String(exit.signal),
+    } });
+    expect(allSpawns).toHaveLength(1);
+    (owner as unknown as FakeWC).__triggerDestroyed();
+    expect(mgr.has('t1')).toBe(true);
+    mgr.restart('t1', newOwner);
+    expect(allSpawns).toHaveLength(2);
+  });
+
+  it('returns the running shell after a detached owner restarts it', () => {
+    const mgr = makeManager();
+    const main = makeFakeWebContents() as unknown as WebContents;
+    const sidebar = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 't1', cwd: '/tmp', owner: main });
+    lastSpawn!.__triggerExit({ exitCode: 2 });
+    mgr.create({ id: 't1', cwd: '/tmp', owner: sidebar });
+    mgr.restart('t1', sidebar);
+    const result = mgr.create({ id: 't1', cwd: '/tmp', owner: main });
+    expect(result.exit).toBeNull();
+    expect(allSpawns).toHaveLength(2);
+    lastSpawn!.__triggerData('new shell output');
+    expect(dataPayloads.at(-1)).toEqual({
+      target: main, payload: { id: 't1', chunk: 'new shell output' },
+    });
   });
 });
 
