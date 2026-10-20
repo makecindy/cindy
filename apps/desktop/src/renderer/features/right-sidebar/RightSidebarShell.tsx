@@ -66,7 +66,11 @@ import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useRetainedBrowserTabHosts } from './hooks/useRetainedBrowserTabHosts';
-import { castingKeepAliveStyle, type KeepAliveSize } from './lib/castingKeepAlive';
+import {
+  castingKeepAliveStyle,
+  suspendFocusInside,
+  type KeepAliveSize,
+} from './lib/castingKeepAlive';
 import { usePreviewCastingTab } from './lib/previewCasting';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -1102,6 +1106,13 @@ function PluginBodyHost({
     observer.observe(el);
     return () => observer.disconnect();
   }, [casting, keepAlive]);
+
+  useLayoutEffect(() => {
+    // 保活层不可见:退出 Tab 序并让出焦点,键盘用户不会落进透明 webview。
+    const el = hostRef.current;
+    if (!keepAlive || !el) return;
+    return suspendFocusInside(el);
+  }, [keepAlive]);
 
   return (
     <div
