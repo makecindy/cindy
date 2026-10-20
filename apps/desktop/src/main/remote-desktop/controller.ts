@@ -960,6 +960,8 @@ export class RemoteDesktopController {
     const preview = this.requirePreview();
     const authenticationSession = this.authenticationSession(peer);
     if (!isPreviewGrant(grant)) throw new Error('PREVIEW_GRANT_INVALID');
+    // The desktop's own Disconnect holds until the phone starts over by itself, like any lease.
+    if (this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
     // A display lease being wound down still owns its restoration: starting over it would cancel that.
     if (
       this.locking ||
@@ -993,7 +995,6 @@ export class RemoteDesktopController {
       if (!this.authenticationCurrent(peer, authenticationSession))
         throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
       if (this.active) throw new Error('DESKTOP_BUSY');
-      this.userStopped.delete(peer);
       this.previewEnded = null;
       const lease: RemoteDesktopLease = {
         lease: randomUUID(),

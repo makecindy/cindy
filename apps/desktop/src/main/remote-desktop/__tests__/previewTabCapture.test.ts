@@ -117,12 +117,46 @@ describe('TabCaptureSource', () => {
     clock = 1_000;
     expect(await source.frame()).toBeNull();
     expect(onUnavailable).not.toHaveBeenCalled();
-    clock = PREVIEW_CAPTURE_UNAVAILABLE_MS + 1;
+    clock = 1_000 + PREVIEW_CAPTURE_UNAVAILABLE_MS + 1;
     expect(await source.frame()).toBeNull();
     expect(onUnavailable).toHaveBeenCalledOnce();
     expect(await source.frame()).toBeNull();
     expect(onUnavailable).toHaveBeenCalledOnce();
     expect(capturePage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count time before a capture was attempted as a failure', async () => {
+    const { source, onUnavailable } = setup(async () => image(100, 100));
+    // A slow offer, or a pause before the next one, is not the tab failing.
+    clock = 10 * PREVIEW_CAPTURE_UNAVAILABLE_MS;
+    expect(await source.frame()).not.toBeNull();
+    expect(onUnavailable).not.toHaveBeenCalled();
+    clock += 10 * PREVIEW_CAPTURE_UNAVAILABLE_MS;
+    expect(await source.frame()).not.toBeNull();
+    expect(onUnavailable).not.toHaveBeenCalled();
+
+    let broken = false;
+    const failing = setup(async () => {
+      if (broken) throw new Error('boom');
+      return image(100, 100);
+    });
+    clock += 10 * PREVIEW_CAPTURE_UNAVAILABLE_MS;
+    broken = true;
+    expect(await failing.source.frame()).toBeNull();
+    expect(failing.onUnavailable).not.toHaveBeenCalled();
+    // The budget runs from the first failed capture, and a success clears it.
+    clock += PREVIEW_CAPTURE_UNAVAILABLE_MS - 1;
+    expect(await failing.source.frame()).toBeNull();
+    expect(failing.onUnavailable).not.toHaveBeenCalled();
+    broken = false;
+    expect(await failing.source.frame()).not.toBeNull();
+    clock += 3 * PREVIEW_CAPTURE_UNAVAILABLE_MS;
+    broken = true;
+    expect(await failing.source.frame()).toBeNull();
+    expect(failing.onUnavailable).not.toHaveBeenCalled();
+    clock += PREVIEW_CAPTURE_UNAVAILABLE_MS + 1;
+    expect(await failing.source.frame()).toBeNull();
+    expect(failing.onUnavailable).toHaveBeenCalledOnce();
   });
 
   it('reports a wedged tab (too many abandoned captures) and ignores a replaced tab', async () => {

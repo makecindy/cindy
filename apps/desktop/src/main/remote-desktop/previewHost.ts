@@ -30,7 +30,13 @@ export interface PreviewHostEnv {
   /** Most simultaneous touches injected; advertised in the capability. */
   maxTouchPoints?: number;
   now?(): number;
+  /** Pause between layout measurements; tests inject an immediate one. */
+  delay?(ms: number): Promise<void>;
 }
+
+/** How long a just-uncovered tab gets to lay out before it is measured again. */
+const LAYOUT_SETTLE_MS = 120;
+const LAYOUT_SETTLE_TRIES = 5;
 
 export const PREVIEW_MAX_TOUCH_POINTS_HOSTED = 5;
 /** Tabs offered in one `previewTabs` reply. */
@@ -52,7 +58,30 @@ interface Session {
  */
 export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
   const sessions = new Map<DesktopPreviewSource, Session>();
-  const castingTabs = () => [...new Set([...sessions.keys()].map((source) => source.tabId))];
+  /** Tabs being opened: already asked to keep painting, not yet a lease. */
+  const opening = new Set<string>();
+  const castingTabs = () => [
+    ...new Set([...[...sessions.keys()].map((source) => source.tabId), ...opening]),
+  ];
+  const pause =
+    env.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  /**
+   * A tab that was hidden reports a collapsed size until its keep-alive layer is laid out.
+   * Measure until two readings in a row agree; a layout that keeps moving gets its last size.
+   */
+  const measureSettled = async (injector: TabInputInjector) => {
+    let previous = await injector.measure();
+    for (let attempt = 0; attempt < LAYOUT_SETTLE_TRIES; attempt++) {
+      await pause(LAYOUT_SETTLE_MS);
+      const next = await injector.measure();
+      const settled =
+        Math.abs(next.width - previous.width) < 1 && Math.abs(next.height - previous.height) < 1;
+      previous = next;
+      if (settled) break;
+    }
+    return previous;
+  };
 
   const isCurrent = (source: DesktopPreviewSource) =>
     env.index.current(source.tabId, source.webContentsId)?.generation === source.generation &&
@@ -119,17 +148,25 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       )
         return null;
       const injector = new TabInputInjector(guest);
+      // Keep the tab painting first, then measure it: a background tab has no real size.
+      opening.add(tab.tabId);
+      env.setCastingTabs?.(castingTabs());
+      const abandon = () => {
+        opening.delete(tab.tabId);
+        env.setCastingTabs?.(castingTabs());
+        void injector.dispose();
+      };
       let viewport;
       try {
-        viewport = await injector.measure();
+        viewport = await measureSettled(injector);
       } catch (error) {
-        void injector.dispose();
+        abandon();
         throw error;
       }
       // The tab may have been replaced or closed while it was measured.
       const alive = env.index.current(tab.tabId, tab.webContentsId);
       if (!alive || alive.generation !== tab.generation || guest.isDestroyed()) {
-        void injector.dispose();
+        abandon();
         return null;
       }
       const source: DesktopPreviewSource = {
@@ -137,6 +174,8 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         width: Math.max(1, Math.round(viewport.width)),
         height: Math.max(1, Math.round(viewport.height)),
       };
+      // Touches arrive relative to the size the phone is told here.
+      injector.bindLease({ width: source.width, height: source.height });
       const session: Session = {
         source,
         injector,
@@ -151,6 +190,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         }),
       };
       sessions.set(source, session);
+      opening.delete(tab.tabId);
       env.setCastingTabs?.(castingTabs());
       return source;
     },

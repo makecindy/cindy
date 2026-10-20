@@ -217,6 +217,23 @@ describe('preview tab leases', () => {
     expect(h.preview.end).toHaveBeenCalledOnce();
   });
 
+  it('does not undo the desktop Disconnect when the phone starts a preview again', async () => {
+    const h = harness();
+    const { lease } = await h.open();
+    h.controller.stopByUser();
+    expect(h.controller.state).toBeNull();
+    const grant = await h.grantFor();
+    await expect(send(h, { op: 'previewStart', grant })).rejects.toThrow('DESKTOP_STOPPED');
+    expect(h.preview.open).toHaveBeenCalledOnce();
+    // The old lease reads the same way, and a refused start keeps the grant.
+    await expect(send(h, { op: 'heartbeat', lease })).rejects.toThrow('DESKTOP_STOPPED');
+    await expect(send(h, { op: 'previewStart', grant })).rejects.toThrow('DESKTOP_STOPPED');
+    // An explicit new start by the phone (not a resume) lifts the stop, as for any lease.
+    const screen = (await send(h, { op: 'start', displayId: '1' })) as RemoteDesktopLease;
+    await send(h, { op: 'stop', lease: screen.lease });
+    expect(await send(h, { op: 'previewStart', grant })).toMatchObject({ controlling: false });
+  });
+
   it('lets the same phone re-enter its own preview, replacing the old lease', async () => {
     const h = harness();
     const first = await h.open();

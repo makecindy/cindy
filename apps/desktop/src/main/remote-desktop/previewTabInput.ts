@@ -1,4 +1,9 @@
-import type { DesktopKeyCode, PreviewInputEvent, PreviewTouchPoint } from '@cindy/device-link';
+import type { DesktopKeyCode, PreviewInputEvent } from '@cindy/device-link';
+import {
+  acquireDebuggerLease,
+  releaseDebuggerLease,
+  type DebuggerLease,
+} from '../rsb-browser-bridge/debuggerLease';
 
 /** The slice of Electron's Debugger the injector uses. */
 export interface GuestDebugger {
@@ -6,6 +11,8 @@ export interface GuestDebugger {
   attach(protocolVersion?: string): void;
   detach(): void;
   sendCommand(method: string, params?: object): Promise<unknown>;
+  on?(event: 'detach', listener: (...args: unknown[]) => void): unknown;
+  removeListener?(event: 'detach', listener: (...args: unknown[]) => void): unknown;
 }
 export interface InputGuest {
   isDestroyed(): boolean;
@@ -23,7 +30,10 @@ export interface InputGuest {
 export const PREVIEW_INPUT_TIMEOUT_MS = 2_000;
 /** Release after a failure must not hang the lease teardown. */
 const RELEASE_TIMEOUT_MS = 1_000;
-const CDP_VERSION = '1.3';
+/** A point this far outside the picture still counts as on it (rounding of the shared size). */
+const EDGE_TOLERANCE = 0.01;
+/** Aspect ratios this close are the same shape; no bars are assumed. */
+const ASPECT_TOLERANCE = 0.005;
 
 export interface TabViewport {
   /** CSS pixels. */
@@ -60,9 +70,9 @@ const NAMED_KEYS: Record<string, string> = {
   ArrowLeft: 'Left',
   ArrowRight: 'Right',
 };
-/** Printable keys that also produce a character when pressed alone. */
+/** Keys that also produce a character when pressed alone. */
+const NAMED_CHARS: Record<string, string> = { Space: ' ', Enter: '\r' };
 const PUNCTUATION: Record<string, string> = {
-  Space: ' ',
   Minus: '-',
   Equal: '=',
   BracketLeft: '[',
@@ -86,7 +96,7 @@ interface KeyStroke {
 function strokeFor(code: DesktopKeyCode): KeyStroke | null {
   if (code in MODIFIER_KEY_CODE) return { keyCode: MODIFIER_KEY_CODE[code] };
   if (code in NAMED_KEYS) {
-    const char = PUNCTUATION[code];
+    const char = NAMED_CHARS[code];
     return { keyCode: NAMED_KEYS[code], ...(char ? { char } : {}) };
   }
   const letter = /^Key([A-Z])$/.exec(code);
@@ -122,21 +132,61 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+interface Placement {
+  x0: number;
+  y0: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where the tab's picture sits inside the rectangle the phone laid out for the lease, as
+ * fractions of that rectangle. The phone fits the video into its rectangle with `contain`,
+ * so a tab whose shape changed since the lease began is pillar- or letterboxed there.
+ */
+export function pictureInLeaseRect(lease: TabViewport | null, view: TabViewport): Placement {
+  const full = { x0: 0, y0: 0, width: 1, height: 1 };
+  if (!lease || lease.width <= 0 || lease.height <= 0) return full;
+  const leaseAspect = lease.width / lease.height;
+  const viewAspect = view.width / view.height;
+  if (Math.abs(viewAspect - leaseAspect) / leaseAspect <= ASPECT_TOLERANCE) return full;
+  if (viewAspect > leaseAspect) {
+    const height = leaseAspect / viewAspect;
+    return { x0: 0, y0: (1 - height) / 2, width: 1, height };
+  }
+  const width = viewAspect / leaseAspect;
+  return { x0: (1 - width) / 2, y0: 0, width, height: 1 };
+}
+
+interface CssPoint {
+  id: number;
+  x: number;
+  y: number;
+}
+
 /**
  * Injects phone input into one preview tab: touch through the guest's debugger
  * (`Input.dispatchTouchEvent`), keys through `sendInputEvent`, committed text through
  * `insertText`. Never reaches the OS input stack. Every pressed touch and key is
  * accounted for so `release` / `dispose` can cancel them idempotently.
  *
- * The debugger is only detached when this injector attached it; an attachment that was
- * already there (DevTools, the browser automation) is left alone, and an attachment lost
- * to someone else's detach is re-established on the next command.
+ * Touch points arrive normalized to the rectangle the phone laid out for the lease
+ * (`bindLease`); they are mapped back into the tab's picture and scaled by its CSS viewport.
+ *
+ * The debugger is shared by lease (see `debuggerLease`): this injector joins the browser
+ * automation's ownership instead of racing it, and only the last lease out detaches. An
+ * attachment nobody leased (DevTools) is left alone, and a session replaced underneath is
+ * re-established on the next command with its focus emulation switched on again.
  */
 export class TabInputInjector {
-  private touches = new Map<number, PreviewTouchPoint>();
+  private touches = new Map<number, CssPoint>();
+  /** Fingers that landed outside the picture: they stay ignored until they lift. */
+  private ignored = new Set<number>();
   private keys: DesktopKeyCode[] = [];
   private viewport: TabViewport | null = null;
-  private ownsAttachment = false;
+  private leaseSize: TabViewport | null = null;
+  private leases: DebuggerLease[] = [];
+  private detachListener: ((...args: unknown[]) => void) | null = null;
   private focusEmulated = false;
   private throttlingLifted = false;
   private queue: Promise<unknown> = Promise.resolve();
@@ -145,6 +195,11 @@ export class TabInputInjector {
   private disposed = false;
 
   constructor(private readonly guest: InputGuest) {}
+
+  /** The size the phone was told for this lease; touch coordinates are relative to it. */
+  bindLease(size: TabViewport): void {
+    this.leaseSize = { width: size.width, height: size.height };
+  }
 
   /** The tab's current CSS viewport. */
   async measure(): Promise<TabViewport> {
@@ -229,41 +284,71 @@ export class TabInputInjector {
     epoch: number,
   ): Promise<void> {
     if (event.phase === 'cancel') {
+      this.ignored.clear();
       if (this.touches.size === 0) return;
       this.touches.clear();
       await this.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
       return;
     }
     // Geometry may change between gestures (the side panel is resized); within one it holds.
-    if (this.touches.size === 0 || !this.viewport) await this.measure();
+    if ((this.touches.size === 0 && this.ignored.size === 0) || !this.viewport)
+      await this.measure();
     if (epoch !== this.epoch) throw failure();
     const viewport = this.viewport!;
-    const touchPoints = event.points.map((point) => ({
-      id: point.id,
-      x: point.x * viewport.width,
-      y: point.y * viewport.height,
-      radiusX: 3,
-      radiusY: 3,
-      force: 1,
-    }));
+    const picture = pictureInLeaseRect(this.leaseSize, viewport);
+    const present = new Set(event.points.map((point) => point.id));
+    for (const id of [...this.ignored]) if (!present.has(id)) this.ignored.delete(id);
+
+    const points: CssPoint[] = [];
+    for (const point of event.points) {
+      if (this.ignored.has(point.id)) continue;
+      const u = (point.x - picture.x0) / picture.width;
+      const v = (point.y - picture.y0) / picture.height;
+      const inside =
+        u >= -EDGE_TOLERANCE &&
+        u <= 1 + EDGE_TOLERANCE &&
+        v >= -EDGE_TOLERANCE &&
+        v <= 1 + EDGE_TOLERANCE;
+      // A finger that lands on a black bar never was on the picture; one already down slides
+      // along the edge instead of vanishing mid-gesture.
+      if (!inside && !this.touches.has(point.id)) {
+        this.ignored.add(point.id);
+        continue;
+      }
+      points.push({
+        id: point.id,
+        x: Math.min(1, Math.max(0, u)) * viewport.width,
+        y: Math.min(1, Math.max(0, v)) * viewport.height,
+      });
+    }
+    const unchanged =
+      points.length === this.touches.size && points.every((point) => this.touches.has(point.id));
+    if (points.length === 0 && this.touches.size === 0) return;
     // CDP releases the touches that are missing from a move; only a full release is an end.
-    const type =
-      event.phase === 'start'
-        ? 'touchStart'
-        : event.phase === 'move'
-          ? 'touchMove'
-          : touchPoints.length === 0
-            ? 'touchEnd'
-            : 'touchMove';
-    const next = new Map(event.points.map((point) => [point.id, point] as const));
+    let type: 'touchStart' | 'touchMove' | 'touchEnd';
+    if (event.phase === 'start') {
+      if (unchanged) return; // the only new finger was on a bar
+      type = 'touchStart';
+    } else if (event.phase === 'move') {
+      type = 'touchMove';
+    } else if (points.length === 0) {
+      type = 'touchEnd';
+    } else {
+      if (unchanged) return; // the finger that lifted was an ignored one
+      type = 'touchMove';
+    }
     try {
-      await this.send('Input.dispatchTouchEvent', { type, touchPoints });
+      await this.send('Input.dispatchTouchEvent', {
+        type,
+        touchPoints: points.map((point) => ({ ...point, radiusX: 3, radiusY: 3, force: 1 })),
+      });
     } catch (error) {
       // A sequence the page never saw begin cannot be continued; start over.
       this.touches.clear();
+      this.ignored.clear();
       throw error;
     }
-    this.touches = next;
+    this.touches = new Map(points.map((point) => [point.id, point] as const));
   }
 
   private async key(code: DesktopKeyCode, down: boolean): Promise<void> {
@@ -272,15 +357,12 @@ export class TabInputInjector {
     const held = this.keys.includes(code);
     if (!down && !held) return;
     await this.focus();
-    const modifiers = this.modifiers();
     if (down) {
       if (!held) this.keys.push(code);
-      this.guest.sendInputEvent({
-        type: 'keyDown',
-        keyCode: stroke.keyCode,
-        modifiers: this.modifiers(),
-      });
-      // A plain press types its character (and repeats while held); shortcuts do not.
+      const modifiers = this.modifiers();
+      this.guest.sendInputEvent({ type: 'keyDown', keyCode: stroke.keyCode, modifiers });
+      // A plain press types its character (and repeats while held); shortcuts do not. The
+      // page sees the keydown first, and Chromium drops the char of a keydown it handled.
       if (stroke.char && !modifiers.some((m) => m === 'control' || m === 'meta' || m === 'alt'))
         this.guest.sendInputEvent({
           type: 'char',
@@ -316,15 +398,25 @@ export class TabInputInjector {
     this.focusEmulated = true;
   }
 
+  /** Joins the debugger lease scheme; re-attaches (under a new lease) if the session was lost. */
   private ensureAttached(): GuestDebugger {
     if (this.guest.isDestroyed()) throw failure('PREVIEW_SOURCE_ENDED');
     const transport = this.guest.debugger;
-    if (!transport.isAttached()) {
-      transport.attach(CDP_VERSION);
-      this.ownsAttachment = true;
-      this.focusEmulated = false; // a fresh session starts without it
+    if (this.leases.length === 0 || !transport.isAttached()) {
+      if (this.leases.length === 0) this.watchDetach(transport);
+      this.leases.push(acquireDebuggerLease(transport));
+      this.focusEmulated = false; // a session we did not just prove starts without it
     }
     return transport;
+  }
+
+  /** A replaced session takes its focus emulation with it. */
+  private watchDetach(transport: GuestDebugger): void {
+    if (!transport.on) return;
+    this.detachListener = () => {
+      this.focusEmulated = false;
+    };
+    transport.on('detach', this.detachListener);
   }
 
   private async send(method: string, params?: object): Promise<unknown> {
@@ -350,6 +442,7 @@ export class TabInputInjector {
     const hadTouches = this.touches.size > 0;
     const keys = [...this.keys].reverse();
     this.touches.clear();
+    this.ignored.clear();
     this.keys = [];
     if (this.guest.isDestroyed()) return;
     if (hadTouches) {
@@ -380,16 +473,27 @@ export class TabInputInjector {
   }
 
   private restore(): void {
+    const leases = this.leases;
+    this.leases = [];
     if (this.guest.isDestroyed()) return;
     const transport = this.guest.debugger;
-    if (transport.isAttached()) {
-      // A session this injector opened takes its emulation with it when it goes.
-      if (this.focusEmulated && !this.ownsAttachment) {
-        void transport
-          .sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false })
-          .catch(() => undefined);
+    if (this.detachListener) {
+      try {
+        transport.removeListener?.('detach', this.detachListener);
+      } catch {
+        // Already gone with the guest.
       }
-      if (this.ownsAttachment) {
+      this.detachListener = null;
+    }
+    if (this.focusEmulated && transport.isAttached()) {
+      void transport
+        .sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false })
+        .catch(() => undefined);
+    }
+    this.focusEmulated = false;
+    // Every lease is given back; the debugger goes only with the last one out of everyone.
+    for (const lease of leases) {
+      if (releaseDebuggerLease(transport, lease) && transport.isAttached()) {
         try {
           transport.detach();
         } catch {
@@ -397,8 +501,6 @@ export class TabInputInjector {
         }
       }
     }
-    this.focusEmulated = false;
-    this.ownsAttachment = false;
     if (this.throttlingLifted) {
       this.throttlingLifted = false;
       this.guest.setBackgroundThrottling(true);

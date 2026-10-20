@@ -329,23 +329,36 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   credential.
 - **Capture** (`previewTabCapture.ts`): `capturePage()` of the guest, long edge ≤ 1280,
   JPEG ≤ `REMOTE_DESKTOP_MAX_FRAME_BYTES`. One capture in flight; a capture over 2 s is
-  abandoned by generation and its late result dropped (the tab is never touched). No
-  successful frame for 6 s, or three abandoned captures still pending, ends the lease with
-  `PREVIEW_CAPTURE_UNAVAILABLE`. Frames reach WebRTC through the existing native frame
+  abandoned by generation and its late result dropped (the tab is never touched). Captures
+  that keep failing or hanging for 6 s from the first failure, or three abandoned captures
+  still pending, end the lease with `PREVIEW_CAPTURE_UNAVAILABLE`; time in which no capture
+  was attempted (a slow offer, a pause before re-offering) never counts. Frames reach WebRTC through the existing native frame
   stream (`nativeCapture` + `NATIVE_FRAME`), and relay `frame` uses the same source.
 - **Input** (`previewTabInput.ts`): touches through the guest debugger
   (`Input.dispatchTouchEvent`; a partial release is a `touchMove` with the remaining
   points, a full release `touchEnd`), keys through `sendInputEvent`, text through
   `insertText` with focus emulation on. Pressed touches and keys are tracked, so `release`,
-  stop, PiP and a failed batch cancel them idempotently. A debugger the injector did not
-  attach (DevTools, browser automation) is never detached by it. A command that does not
+  stop, PiP and a failed batch cancel them idempotently. Enter types `\r` like other
+  printable keys (not inside a shortcut); Chromium drops that char when the page handled the
+  keydown. Touch points are relative to the rectangle the phone laid out for the lease
+  (`display.width/height` at start, `bindLease`); the host maps them back through the
+  contain-fit of the tab's *current* shape, ignores a finger that lands on a black bar (it
+  stays ignored until it lifts), slides one already down along the edge, then scales by the
+  current CSS viewport. The debugger is shared by lease with the browser automation
+  (`rsb-browser-bridge/debuggerLease.ts`): whoever finds it detached attaches, others join,
+  the last lease out detaches, an attachment nobody leased (DevTools) is never detached, and
+  a session replaced underneath is re-attached with focus emulation re-enabled
+  (`detach` event). A command that does not
   answer within 2 s is abandoned (outcome unknown, state released) and lifts background
   throttling for that guest until the lease ends.
 - **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
   `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.
-  Stopping never locks the screen. While a preview lease is active its tab is passed to
-  `setCastingTabs` so it keeps painting while hidden.
+  Stopping never locks the screen, and the desktop's own Disconnect (`stopByUser`) is not
+  undone by the phone starting a preview again: `previewStart` answers `DESKTOP_STOPPED`
+  until the phone starts over with a normal `start`. While a preview lease is active (and
+  while it opens) its tab is passed to `setCastingTabs` so it keeps painting while hidden;
+  the tab is measured only after that, once two readings in a row agree.
 
 ### Preview tab view on the phone
 

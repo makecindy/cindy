@@ -20,7 +20,7 @@ export interface CaptureGuest {
 export const PREVIEW_FRAME_MAX_EDGE = 1280;
 /** One `capturePage` that takes longer than this is abandoned (the call itself cannot be cancelled). */
 export const PREVIEW_CAPTURE_TIMEOUT_MS = 2_000;
-/** No successful frame for this long means the tab can no longer be captured. */
+/** Captures that keep failing or hanging for this long (from the first failure) mean the tab can no longer be captured. */
 export const PREVIEW_CAPTURE_UNAVAILABLE_MS = 6_000;
 /** Abandoned `capturePage` calls still pending in Chromium; more than this means it is wedged. */
 const MAX_PENDING_CAPTURES = 3;
@@ -83,13 +83,12 @@ export class TabCaptureSource {
   private inFlight = false;
   private pending = 0;
   private stopped = false;
-  private lastSuccessAt: number;
+  /** When the current run of failed captures began; null while captures succeed. */
+  private failingSince: number | null = null;
   private sequence = 0;
   private lastFrameAt = 0;
 
-  constructor(private readonly options: TabCaptureOptions) {
-    this.lastSuccessAt = this.now();
-  }
+  constructor(private readonly options: TabCaptureOptions) {}
 
   /** Source frame counter and the time the last frame was produced (diagnostics). */
   get stats(): { sequence: number; lastFrameAt: number } {
@@ -116,7 +115,7 @@ export class TabCaptureSource {
     } catch {
       this.inFlight = false;
       this.pending--;
-      return this.expired() ? this.fail() : null;
+      return this.failed();
     }
     // Always settles the bookkeeping, even for an abandoned call that returns much later.
     const settle = () => {
@@ -137,19 +136,19 @@ export class TabCaptureSource {
       if (generation !== this.generation || this.stopped) return null; // late or stopped
       if (image === null) {
         this.generation++; // abandon: whatever this call returns later is dropped
-        return this.pending >= MAX_PENDING_CAPTURES || this.expired() ? this.fail() : null;
+        return this.failed();
       }
       const jpeg = this.options.isCurrent()
         ? encodeTabFrame(image, this.options.jpegQuality)
         : null;
-      if (jpeg === null) return this.expired() ? this.fail() : null;
-      this.lastSuccessAt = this.now();
-      this.lastFrameAt = this.lastSuccessAt;
+      if (jpeg === null) return this.failed();
+      this.failingSince = null;
+      this.lastFrameAt = this.now();
       this.sequence++;
       return jpeg;
     } catch {
       if (generation !== this.generation || this.stopped) return null;
-      return this.expired() ? this.fail() : null;
+      return this.failed();
     } finally {
       if (timer) clearTimeout(timer);
       this.inFlight = false;
@@ -160,11 +159,18 @@ export class TabCaptureSource {
     return this.options.now?.() ?? Date.now();
   }
 
+  /** Only a capture that was started and failed or hung counts; idle time never does. */
   private expired(): boolean {
     return (
-      this.now() - this.lastSuccessAt >
-      (this.options.unavailableAfterMs ?? PREVIEW_CAPTURE_UNAVAILABLE_MS)
+      this.failingSince !== null &&
+      this.now() - this.failingSince >
+        (this.options.unavailableAfterMs ?? PREVIEW_CAPTURE_UNAVAILABLE_MS)
     );
+  }
+
+  private failed(): null {
+    this.failingSince ??= this.now();
+    return this.expired() || this.pending >= MAX_PENDING_CAPTURES ? this.fail() : null;
   }
 
   private fail(): null {

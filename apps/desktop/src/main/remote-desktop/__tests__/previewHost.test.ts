@@ -16,8 +16,10 @@ function binding(extra: Partial<PreviewTabBinding> = {}): PreviewTabBinding {
   };
 }
 
-function setup() {
+function setup(metrics: Array<{ w: number; h: number }> = [{ w: 800, h: 500 }]) {
   let bindings = [binding()];
+  const order: string[] = [];
+  let measured = 0;
   const listeners = new Set<(event: PreviewTabEnded) => void>();
   const attached = { value: false };
   const guest: PreviewGuest = {
@@ -38,18 +40,25 @@ function setup() {
       detach: () => {
         attached.value = false;
       },
-      sendCommand: vi.fn(async (method: string) =>
-        method === 'Page.getLayoutMetrics'
-          ? { cssVisualViewport: { clientWidth: 800, clientHeight: 500 } }
-          : {},
-      ),
+      sendCommand: vi.fn(async (method: string, params?: object) => {
+        order.push(method);
+        if (method === 'Page.getLayoutMetrics') {
+          const size = metrics[Math.min(measured++, metrics.length - 1)];
+          return { cssVisualViewport: { clientWidth: size.w, clientHeight: size.h } };
+        }
+        if (method === 'Input.dispatchTouchEvent') order.push(JSON.stringify(params));
+        return {};
+      }),
     },
     sendInputEvent: vi.fn(),
     insertText: vi.fn(async () => {}),
     setBackgroundThrottling: vi.fn(),
   };
   const guests = new Map<string, PreviewGuest>([['tab1', guest]]);
-  const setCastingTabs = vi.fn();
+  const setCastingTabs = vi.fn((tabIds: string[]) => {
+    order.push(`casting:${tabIds.join(',')}`);
+  });
+  const delay = vi.fn(async () => {});
   const index = {
     list: vi.fn((sessionId?: string) =>
       bindings.filter((item) => sessionId === undefined || item.sessionId === sessionId),
@@ -68,6 +77,7 @@ function setup() {
     index,
     guest: (tabId) => guests.get(tabId) ?? null,
     setCastingTabs,
+    delay,
   });
   return {
     host,
@@ -75,6 +85,8 @@ function setup() {
     guests,
     index,
     setCastingTabs,
+    delay,
+    order,
     attached,
     end: (reason: PreviewTabEnded['reason'] = 'released') => {
       const [first] = bindings;
@@ -125,6 +137,64 @@ describe('preview host', () => {
     await expect(h.host.input(source, [{ kind: 'release' }])).rejects.toThrow(
       'PREVIEW_SOURCE_ENDED',
     );
+  });
+
+  it('keeps the tab painting before it measures, and measures once the layout has settled', async () => {
+    // A hidden tab first reports a collapsed size; the keep-alive layer then restores it.
+    const h = setup([
+      { w: 300, h: 150 },
+      { w: 640, h: 400 },
+      { w: 800, h: 500 },
+      { w: 800, h: 500 },
+    ]);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    expect(source).toMatchObject({ width: 800, height: 500 });
+    const firstMeasure = h.order.indexOf('Page.getLayoutMetrics');
+    expect(h.order.indexOf('casting:tab1')).toBeGreaterThanOrEqual(0);
+    expect(h.order.indexOf('casting:tab1')).toBeLessThan(firstMeasure);
+    expect(h.delay).toHaveBeenCalledTimes(3);
+    // Idempotent: the same set is pushed again once the lease owns the tab.
+    expect(h.setCastingTabs.mock.calls.map(([ids]) => ids)).toEqual([['tab1'], ['tab1']]);
+  });
+
+  it('gives up waiting for a layout that never settles and takes the last size', async () => {
+    const h = setup(Array.from({ length: 12 }, (_, i) => ({ w: 400 + i * 20, h: 300 })));
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    expect(h.delay.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(source.width).toBeGreaterThan(400);
+  });
+
+  it('does not keep casting a tab that failed to open', async () => {
+    const h = setup();
+    h.guest.debugger.sendCommand = vi.fn(async () => ({}));
+    const [tab] = h.host.list();
+    await expect(h.host.open(tab)).rejects.toThrow('PREVIEW_CAPTURE_UNAVAILABLE');
+    expect(h.setCastingTabs).toHaveBeenLastCalledWith([]);
+    // Never opened because the tab was already gone: nothing was asked to stay painted.
+    const gone = setup();
+    const [stale] = gone.host.list();
+    gone.setBindings([]);
+    expect(await gone.host.open(stale)).toBeNull();
+    expect(gone.setCastingTabs).not.toHaveBeenCalled();
+  });
+
+  it('maps touches through the size the phone was given, not the tab size at touch time', async () => {
+    // Opened at 800x500; the panel is later resized so the tab becomes square.
+    const h = setup([
+      { w: 800, h: 500 },
+      { w: 800, h: 500 },
+      { w: 800, h: 800 },
+    ]);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    await h.host.input(source, [
+      { kind: 'touch', phase: 'start', points: [{ id: 1, x: 0.5, y: 0.5 }] },
+      { kind: 'touch', phase: 'end', points: [] },
+    ]);
+    const start = h.order.find((entry) => entry.includes('touchStart'))!;
+    expect(JSON.parse(start).touchPoints[0]).toMatchObject({ id: 1, x: 400, y: 400 });
   });
 
   it('refuses to open a tab whose guest was rebuilt or whose binding moved on', async () => {

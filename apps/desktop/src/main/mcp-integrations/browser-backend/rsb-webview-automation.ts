@@ -4,6 +4,7 @@ import type {
   BrowserElementQuery,
 } from '@cindy/browser-control-runtime';
 import type { WebContents } from 'electron';
+import { acquireDebuggerLease, releaseDebuggerLease } from '../../rsb-browser-bridge/debuggerLease';
 
 interface AutomationLogger {
   warn(message: string, ...args: unknown[]): void;
@@ -1608,6 +1609,9 @@ async function dispatchKey(
   );
 }
 
+/** Leases counted per instance are all owning ones. */
+const OWNED_LEASE = { owns: true } as const;
+
 export class RsbWebviewAutomation {
   private readonly refsByTab = new Map<string, Map<string, SnapshotRef>>();
   private readonly resourcesByTab = new Map<string, Set<string>>();
@@ -1626,9 +1630,13 @@ export class RsbWebviewAutomation {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const transport of this.ownedDebuggerLeases.keys()) {
+    for (const [transport, count] of this.ownedDebuggerLeases) {
+      // Give back this instance's leases; the debugger goes only with the last lease anyone
+      // holds on it (another feature, such as a phone viewing a preview, may still use it).
       try {
-        if (transport.isAttached()) transport.detach();
+        let last = false;
+        for (let i = 0; i < count; i++) last = releaseDebuggerLease(transport, OWNED_LEASE);
+        if (last && transport.isAttached()) transport.detach();
       } catch (err) {
         this.logger.warn('failed to detach embedded browser debugger during dispose', err);
       }
@@ -1648,17 +1656,17 @@ export class RsbWebviewAutomation {
   ): Promise<T> {
     this.assertActive();
     const transport = getDebugger(wc);
-    const existingLeases = this.ownedDebuggerLeases.get(transport);
-    const ownsAttachment = existingLeases !== undefined || !transport.isAttached();
-    if (!transport.isAttached()) transport.attach('1.3');
+    const lease = acquireDebuggerLease(transport);
+    const ownsAttachment = lease.owns;
     if (ownsAttachment) {
-      this.ownedDebuggerLeases.set(transport, (existingLeases ?? 0) + 1);
+      this.ownedDebuggerLeases.set(transport, (this.ownedDebuggerLeases.get(transport) ?? 0) + 1);
     }
     const send: DebuggerTransport['sendCommand'] = async (method, params) => {
       this.assertActive();
-      const result = params === undefined
-        ? await transport.sendCommand(method)
-        : await transport.sendCommand(method, params);
+      const result =
+        params === undefined
+          ? await transport.sendCommand(method)
+          : await transport.sendCommand(method, params);
       this.assertActive();
       return result;
     };
@@ -1671,7 +1679,11 @@ export class RsbWebviewAutomation {
           this.ownedDebuggerLeases.set(transport, remaining);
         } else {
           this.ownedDebuggerLeases.delete(transport);
-          if (!this.disposed && transport.isAttached()) transport.detach();
+        }
+        // After dispose the leases were already given back; a late finally must not detach
+        // a replacement generation's session.
+        if (!this.disposed && releaseDebuggerLease(transport, lease) && transport.isAttached()) {
+          transport.detach();
         }
       }
     }

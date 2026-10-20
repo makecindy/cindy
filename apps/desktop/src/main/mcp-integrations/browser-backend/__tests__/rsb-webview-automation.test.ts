@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
 
+import {
+  acquireDebuggerLease,
+  releaseDebuggerLease,
+} from '../../../rsb-browser-bridge/debuggerLease.js';
 import { RsbWebviewAutomation } from '../rsb-webview-automation.js';
 
 interface DebuggerHarness {
@@ -76,6 +80,60 @@ describe('RsbWebviewAutomation lifecycle', () => {
     finishReplacement?.({ result: { value: 2 } });
     await expect(replacementCall).resolves.toBe(2);
     expect(harness.detach).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('RsbWebviewAutomation shares the debugger with other lease holders', () => {
+  // A phone viewing a plugin preview holds its own lease on the same guest.
+  const leaseOn = (harness: DebuggerHarness) =>
+    acquireDebuggerLease(
+      harness.wc.debugger as unknown as Parameters<typeof acquireDebuggerLease>[0],
+    );
+  const releaseOn = (harness: DebuggerHarness, lease: ReturnType<typeof leaseOn>) =>
+    releaseDebuggerLease(harness.wc.debugger, lease);
+
+  it('does not detach a session another lease holder started first', async () => {
+    const harness = debuggerHarness(() => ({ result: { value: 1 } }));
+    const other = leaseOn(harness);
+    expect(harness.attach).toHaveBeenCalledOnce();
+    await automation().evaluate('tab-1', harness.wc, { fn: '() => 1' });
+    expect(harness.attach).toHaveBeenCalledOnce();
+    expect(harness.detach).not.toHaveBeenCalled();
+    expect(releaseOn(harness, other)).toBe(true);
+  });
+
+  it('leaves the session to a lease holder that outlives it, including on dispose', async () => {
+    let finish: ((value: unknown) => void) | undefined;
+    const harness = debuggerHarness(() => new Promise((resolve) => (finish = resolve)));
+    const running = automation();
+    const call = running.evaluate('tab-1', harness.wc, { fn: '() => 1' });
+    await vi.waitFor(() => expect(harness.sendCommand).toHaveBeenCalledTimes(1));
+    const other = leaseOn(harness); // joins the session the automation started
+    expect(other.owns).toBe(true);
+    running.dispose();
+    expect(harness.detach).not.toHaveBeenCalled();
+    finish?.({ result: { value: 1 } });
+    await expect(call).rejects.toThrow(/generation was replaced/);
+    expect(harness.detach).not.toHaveBeenCalled();
+    // The last lease out detaches.
+    expect(releaseOn(harness, other)).toBe(true);
+  });
+
+  it('detaches when its own lease is the last one', async () => {
+    const harness = debuggerHarness(() => ({ result: { value: 1 } }));
+    const other = leaseOn(harness);
+    await automation().evaluate('tab-1', harness.wc, { fn: '() => 1' });
+    expect(releaseOn(harness, other)).toBe(true);
+    const solo = debuggerHarness(() => ({ result: { value: 2 } }));
+    await automation().evaluate('tab-1', solo.wc, { fn: '() => 2' });
+    expect(solo.detach).toHaveBeenCalledOnce();
+  });
+
+  it('never owns an attachment nobody leased', async () => {
+    const harness = debuggerHarness(() => ({ result: { value: 1 } }), true);
+    await automation().evaluate('tab-1', harness.wc, { fn: '() => 1' });
+    expect(harness.attach).not.toHaveBeenCalled();
+    expect(harness.detach).not.toHaveBeenCalled();
   });
 });
 
@@ -419,10 +477,9 @@ describe('RsbWebviewAutomation act', () => {
       '"method":"Input.dispatchMouseEvent","params":{"type":"mouseReleased"',
     );
     expect(harness.executeJavaScript.mock.calls[1][1]).toBe(true);
-    expect(harness.sendCommand).toHaveBeenCalledWith(
-      'Runtime.releaseObject',
-      { objectId: 'button-object' },
-    );
+    expect(harness.sendCommand).toHaveBeenCalledWith('Runtime.releaseObject', {
+      objectId: 'button-object',
+    });
   });
 
   it('types into a selector and optionally submits', async () => {

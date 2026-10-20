@@ -1,5 +1,6 @@
 import type { PreviewInputEvent } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { acquireDebuggerLease, releaseDebuggerLease } from '../../rsb-browser-bridge/debuggerLease';
 import {
   PREVIEW_INPUT_TIMEOUT_MS,
   TabInputInjector,
@@ -12,7 +13,17 @@ function setup(options: { attached?: boolean; viewport?: { w: number; h: number 
   const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
   const handlers = new Map<string, (params?: Record<string, unknown>) => Promise<unknown>>();
   const viewport = options.viewport ?? { w: 800, h: 500 };
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const transport: GuestDebugger = {
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event)!.add(listener);
+      return transport;
+    }),
+    removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      listeners.get(event)?.delete(listener);
+      return transport;
+    }),
     isAttached: () => state.attached,
     attach: vi.fn(() => {
       state.attached = true;
@@ -39,6 +50,7 @@ function setup(options: { attached?: boolean; viewport?: { w: number; h: number 
     insertText: vi.fn(async () => {}),
     setBackgroundThrottling: vi.fn(),
   };
+  const emit = (event: string) => listeners.get(event)?.forEach((listener) => listener());
   return {
     injector: new TabInputInjector(guest),
     guest,
@@ -47,6 +59,8 @@ function setup(options: { attached?: boolean; viewport?: { w: number; h: number 
     handlers,
     keyEvents,
     state,
+    emit,
+    listeners,
   };
 }
 const touches = (commands: ReturnType<typeof setup>['commands']) =>
@@ -250,5 +264,193 @@ describe('TabInputInjector', () => {
       cssVisualViewport: { clientWidth: 0 },
     }));
     await expect(h.injector.measure()).rejects.toThrow('PREVIEW_CAPTURE_UNAVAILABLE');
+  });
+});
+
+describe('TabInputInjector lease geometry', () => {
+  const dispatched = (h: ReturnType<typeof setup>) =>
+    touches(h.commands).map((c) => [
+      c?.type,
+      (c?.touchPoints as Array<{ id: number; x: number; y: number }>).map((p) => [p.id, p.x, p.y]),
+    ]);
+
+  it('maps through the contain-fit of the current frame inside the lease rectangle', async () => {
+    // The phone laid out 800x500; the tab is now square, so the picture is pillarboxed.
+    const h = setup({ viewport: { w: 800, h: 800 } });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    // The frame spans x 0.1875..0.8125 of the rectangle, all of y.
+    await h.injector.inject([touch('start', [[2, 0.1875, 0]]), touch('end', [])]);
+    await h.injector.inject([touch('start', [[3, 0.8125, 1]]), touch('end', [])]);
+    expect(dispatched(h)).toEqual([
+      ['touchStart', [[1, 400, 400]]],
+      ['touchEnd', []],
+      ['touchStart', [[2, 0, 0]]],
+      ['touchEnd', []],
+      ['touchStart', [[3, 800, 800]]],
+      ['touchEnd', []],
+    ]);
+    // A wide tab in a tall rectangle is letterboxed instead.
+    const wide = setup({ viewport: { w: 800, h: 400 } });
+    wide.injector.bindLease({ width: 400, height: 800 });
+    await wide.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(dispatched(wide)[0]).toEqual(['touchStart', [[1, 400, 200]]]);
+  });
+
+  it('uses the lease size as is when the shape did not change, rounding included', async () => {
+    const h = setup({ viewport: { w: 800.4, h: 500.2 } });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0.001, 0.999]]), touch('end', [])]);
+    const [start] = dispatched(h);
+    expect(start[0]).toBe('touchStart');
+    const point = (start[1] as number[][])[0];
+    expect(point[1]).toBeGreaterThan(0);
+    expect(point[1]).toBeLessThan(2);
+    expect(point[2]).toBeGreaterThan(498);
+  });
+
+  it('drops a gesture that starts on a black bar, finger by finger, and follows the rest', async () => {
+    const h = setup({ viewport: { w: 800, h: 800 } });
+    h.injector.bindLease({ width: 800, height: 500 });
+    // Starts in the left bar: nothing is sent, now or for its move / end.
+    await h.injector.inject([
+      touch('start', [[1, 0.05, 0.5]]),
+      touch('move', [[1, 0.5, 0.5]]),
+      touch('end', []),
+    ]);
+    expect(dispatched(h)).toEqual([]);
+    expect(h.injector.pressed.touches).toBe(0);
+    // A second finger landing in the bar is ignored; the first carries on.
+    await h.injector.inject([
+      touch('start', [[1, 0.5, 0.5]]),
+      touch('start', [
+        [1, 0.5, 0.5],
+        [2, 0.95, 0.5],
+      ]),
+      touch('move', [
+        [1, 0.6, 0.5],
+        [2, 0.9, 0.5],
+      ]),
+      touch('end', [[1, 0.6, 0.5]]),
+      touch('end', []),
+    ]);
+    expect(dispatched(h)).toEqual([
+      ['touchStart', [[1, 400, 400]]],
+      ['touchMove', [[1, 800 * ((0.6 - 0.1875) / 0.625), 400]]],
+      ['touchEnd', []],
+    ]);
+  });
+
+  it('keeps a finger that was already down on the edge when it slides into a bar', async () => {
+    const h = setup({ viewport: { w: 800, h: 800 } });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([
+      touch('start', [[1, 0.5, 0.5]]),
+      touch('move', [[1, 0.02, 0.5]]),
+      touch('move', [[1, 0.99, 2 / 3]]),
+      touch('end', []),
+    ]);
+    expect(dispatched(h)).toEqual([
+      ['touchStart', [[1, 400, 400]]],
+      ['touchMove', [[1, 0, 400]]],
+      ['touchMove', [[1, 800, 800 * (2 / 3)]]],
+      ['touchEnd', []],
+    ]);
+  });
+
+  it('re-measures between gestures, so a resized panel maps with its new shape', async () => {
+    const h = setup({ viewport: { w: 800, h: 500 } });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    h.handlers.set('Page.getLayoutMetrics', async () => ({
+      cssVisualViewport: { clientWidth: 800, clientHeight: 800 },
+    }));
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(dispatched(h).filter(([type]) => type === 'touchStart')).toEqual([
+      ['touchStart', [[1, 400, 250]]],
+      ['touchStart', [[1, 400, 400]]],
+    ]);
+  });
+});
+
+describe('TabInputInjector keys', () => {
+  it('types a newline for Enter, except in a shortcut', async () => {
+    const h = setup();
+    await h.injector.inject([
+      { kind: 'key', code: 'Enter', down: true },
+      { kind: 'key', code: 'Enter', down: false },
+      { kind: 'key', code: 'ControlLeft', down: true },
+      { kind: 'key', code: 'Enter', down: true },
+      { kind: 'key', code: 'Enter', down: false },
+      { kind: 'key', code: 'ControlLeft', down: false },
+    ]);
+    const types = h.keyEvents.map((e) => `${e.type}:${JSON.stringify(e.keyCode)}`);
+    expect(types).toEqual([
+      'keyDown:"Enter"',
+      'char:"\\r"',
+      'keyUp:"Enter"',
+      'keyDown:"Control"',
+      'keyDown:"Enter"',
+      'keyUp:"Enter"',
+      'keyUp:"Control"',
+    ]);
+  });
+});
+
+describe('TabInputInjector debugger lease', () => {
+  it('shares the debugger with another user: the last one out detaches', async () => {
+    const h = setup();
+    await h.injector.measure(); // attaches
+    expect(h.state.attached).toBe(true);
+    // The browser automation joins and leaves while a preview lease is live.
+    const automation = acquireDebuggerLease(h.transport);
+    expect(automation.owns).toBe(true);
+    if (releaseDebuggerLease(h.transport, automation)) h.transport.detach();
+    expect(h.state.attached).toBe(true);
+    await h.injector.dispose();
+    expect(h.state.attached).toBe(false);
+  });
+
+  it('does not tear down an automation session that outlives the preview', async () => {
+    const h = setup();
+    const automation = acquireDebuggerLease(h.transport); // attaches first
+    await h.injector.inject([{ kind: 'text', text: 'x' }]);
+    await h.injector.dispose();
+    expect(h.state.attached).toBe(true);
+    expect(releaseDebuggerLease(h.transport, automation)).toBe(true);
+  });
+
+  it('does not own an attachment that was already there (DevTools)', async () => {
+    const h = setup({ attached: true });
+    await h.injector.inject([{ kind: 'text', text: 'x' }]);
+    await h.injector.dispose();
+    expect(h.transport.detach).not.toHaveBeenCalled();
+    expect(h.state.attached).toBe(true);
+  });
+
+  it('enables focus again after the session was replaced, and releases the re-attach it made', async () => {
+    const h = setup({ attached: true });
+    await h.injector.inject([{ kind: 'text', text: 'one' }]);
+    const enables = () =>
+      h.commands.filter(
+        (c) => c.method === 'Emulation.setFocusEmulationEnabled' && c.params?.enabled === true,
+      );
+    expect(enables()).toHaveLength(1);
+    // Someone detaches and a new session starts underneath: the emulation went with the old one.
+    h.state.attached = false;
+    h.emit('detach');
+    h.state.attached = true;
+    await h.injector.inject([{ kind: 'text', text: 'two' }]);
+    expect(enables()).toHaveLength(2);
+    // The DevTools-style attachment goes away for good; the injector has to re-attach itself ...
+    h.state.attached = false;
+    h.emit('detach');
+    await h.injector.inject([{ kind: 'text', text: 'three' }]);
+    expect(h.transport.attach).toHaveBeenCalledOnce();
+    expect(enables()).toHaveLength(3);
+    // ... and gives that attachment back, and stops listening, when the lease ends.
+    await h.injector.dispose();
+    expect(h.state.attached).toBe(false);
+    expect(h.listeners.get('detach')?.size ?? 0).toBe(0);
   });
 });
