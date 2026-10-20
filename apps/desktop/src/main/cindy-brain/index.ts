@@ -3858,6 +3858,20 @@ async function syncMivoLibraryExtraDirFromSlot(
 }
 
 let previewSlotSingleton: GhostPreviewSlot | null = null;
+let ghostPreviewRequestIssuer:
+  | ((input: { ghostId: string; sessionId: string; url: string }) => string | null)
+  | null = null;
+
+/**
+ * bootstrap 注入:桌面预览开页时签发 previewRequestId 的签发器(PreviewTabIndex.issue)。
+ * 保持 cindy-brain 不反向依赖 rsb-browser-bridge(与 setGhostsChangedObserver 同款倒置);
+ * 未注入时开页照常、只是不带凭据。
+ */
+export function setGhostPreviewRequestIssuer(
+  issuer: ((input: { ghostId: string; sessionId: string; url: string }) => string | null) | null,
+): void {
+  ghostPreviewRequestIssuer = issuer;
+}
 
 /** 插件预览开页通道(main → 全窗口 renderer;右侧栏开 web-browser 标签)。 */
 export const GHOST_PREVIEW_OPEN_CHANNEL = 'ghosts:preview-open';
@@ -3872,6 +3886,7 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
       getGhost: findGhostForInstanceId,
       focusedSessionId: () => ghostSessionFocusTracker.current(),
       openMobile: (pageId, ghostId, url) => mobilePluginPages?.present(pageId, ghostId, { kind: 'preview', url }) ?? false,
+      issuePreviewRequest: (input) => ghostPreviewRequestIssuer?.(input) ?? null,
       broadcast: (payload) => {
         const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
         windows.forEach((window) => {

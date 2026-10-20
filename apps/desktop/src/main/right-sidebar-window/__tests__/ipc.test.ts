@@ -294,6 +294,50 @@ describe('right-sidebar-window IPC', () => {
       allowOpen: true,
     });
 
+    // previewRequestId:形状合法才透传;非法值被丢弃而不是拒绝整条命令。
+    const previewRequestId = 'Z'.repeat(43);
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-web-browser',
+          sessionId: 'lead-1',
+          url: 'https://example.com/',
+          previewRequestId,
+        },
+        allowOpen: true,
+      },
+    );
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-web-browser',
+          sessionId: 'lead-1',
+          url: 'https://example.com/',
+          previewRequestId: 'not-a-valid-id',
+        },
+        allowOpen: true,
+      },
+    );
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(3, {
+      command: {
+        type: 'open-web-browser',
+        sessionId: 'lead-1',
+        url: 'https://example.com/',
+        previewRequestId,
+      },
+      allowOpen: true,
+    });
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(4, {
+      command: {
+        type: 'open-web-browser',
+        sessionId: 'lead-1',
+        url: 'https://example.com/',
+      },
+      allowOpen: true,
+    });
+
     await expect(
       handler(
         { sender: mainWebContents },

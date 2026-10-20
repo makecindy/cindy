@@ -5998,6 +5998,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string;
       tabId: string;
       webContentsId: number;
+      previewRequestId?: string;
     }): Promise<unknown> => ipcRenderer.invoke('rsb-browser-bridge:report', input),
     release: (input: { tabId: string; webContentsId?: number }): Promise<unknown> =>
       ipcRenderer.invoke('rsb-browser-bridge:release', input),

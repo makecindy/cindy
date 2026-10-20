@@ -121,6 +121,45 @@ describe('previewSlot · 落点会话与广播', () => {
     ).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
   });
 
+  it('注入了签发器:推送带 previewRequestId,签发入参是已解析的 ghostId / 会话 / url', () => {
+    const issuePreviewRequest = vi.fn(() => 'R'.repeat(43));
+    const { slot, pushes } = makeSlot({ issuePreviewRequest });
+    expect(
+      slot.handleRequest('preview-ghost', { url: 'https://a.example.dev/', sessionId: 'sess-1' }),
+    ).toEqual({ ok: true });
+    expect(issuePreviewRequest).toHaveBeenCalledWith({
+      ghostId: 'preview-ghost',
+      sessionId: 'sess-1',
+      url: 'https://a.example.dev/',
+    });
+    expect(pushes[0]).toMatchObject({ previewRequestId: 'R'.repeat(43) });
+  });
+
+  it('签发器缺席或返回 null:推送不带 previewRequestId,开页照常', () => {
+    const none = makeSlot();
+    none.slot.handleRequest('preview-ghost', { url: 'https://a.example.dev/' });
+    expect(none.pushes[0]).not.toHaveProperty('previewRequestId');
+    const nullIssuer = makeSlot({ issuePreviewRequest: () => null });
+    expect(
+      nullIssuer.slot.handleRequest('preview-ghost', { url: 'https://a.example.dev/' }).ok,
+    ).toBe(true);
+    expect(nullIssuer.pushes[0]).not.toHaveProperty('previewRequestId');
+  });
+
+  it('被拒绝的请求(白名单 / 限速 / 无落点)不签发凭据', () => {
+    const issuePreviewRequest = vi.fn(() => 'R'.repeat(43));
+    let clock = 0;
+    const { slot } = makeSlot({
+      issuePreviewRequest,
+      focusedSessionId: () => null,
+      now: () => (clock += 1000),
+    });
+    slot.handleRequest('preview-ghost', { url: 'https://evil.com/' });
+    slot.handleRequest('preview-ghost', { url: 'https://a.example.dev/' }); // 无落点会话
+    slot.handleRequest('preview-ghost', { url: 'https://a.example.dev/', sessionId: 's' }); // 限速
+    expect(issuePreviewRequest).not.toHaveBeenCalled();
+  });
+
   it('限速按尝试记账:间隔不足 = RATE_LIMITED', () => {
     let clock = 0;
     const { slot } = makeSlot({ now: () => (clock += 1000) });
