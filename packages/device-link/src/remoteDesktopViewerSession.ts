@@ -1,8 +1,10 @@
-import type {
-  RemoteDesktopCapabilities,
-  RemoteDesktopDisplayMode,
-  RemoteDesktopLease,
-  RemoteDesktopRequest,
+import {
+  remoteDesktopPreviewTabCapability,
+  type PreviewLease,
+  type RemoteDesktopCapabilities,
+  type RemoteDesktopDisplayMode,
+  type RemoteDesktopLease,
+  type RemoteDesktopRequest,
 } from "./remoteDesktop.js";
 
 // Whole foreground connection/recovery budget, including retries and first frame.
@@ -27,6 +29,12 @@ interface ViewerConnectOptions {
    * to a single window.
    */
   handoff?: string;
+  /**
+   * View one plugin preview tab with a grant from `previewTabs`. Needs a host
+   * advertising `previewTab`. Exclusive with `handoff`, `resume` and
+   * `takeover`; `displayId` and `control` do not apply and are never sent.
+   */
+  preview?: { grant: string };
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
@@ -79,6 +87,11 @@ export class RemoteDesktopViewerSession {
       if (generation !== this.generation || !options.isCurrent())
         throw new Error("DESKTOP_VIDEO_STOPPED");
     };
+    if (
+      options.preview &&
+      (options.handoff !== undefined || options.resume || options.takeover)
+    )
+      throw new Error("INVALID_REQUEST");
     check();
     let caps = await this.request<RemoteDesktopCapabilities>(
       { op: "capabilities" },
@@ -87,6 +100,32 @@ export class RemoteDesktopViewerSession {
     check();
     if (caps?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
     if (!caps.enabled) throw new Error("DESKTOP_DISABLED");
+    if (options.preview) {
+      if (!remoteDesktopPreviewTabCapability(caps))
+        throw new Error("CHANNEL_NOT_ALLOWED");
+      caps = previewTabCapabilities(caps);
+      await options.onCapabilities?.(caps);
+      check();
+      options.onStart?.();
+      const lease = await this.request<PreviewLease>(
+        { op: "previewStart", grant: options.preview.grant },
+        check,
+      );
+      if (generation !== this.generation || !options.isCurrent()) {
+        await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
+        throw new Error("DESKTOP_VIDEO_STOPPED");
+      }
+      // A host that answered with anything but a preview view must not be shown.
+      const preview: unknown = lease.preview;
+      if (!preview || typeof preview !== "object" || Array.isArray(preview)) {
+        await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
+        throw new Error("INVALID_RESPONSE");
+      }
+      // A preview never carries input authority, whatever the host says.
+      (lease as RemoteDesktopLease).controlling = false;
+      this.active = lease;
+      return { caps, lease };
+    }
     if (options.resume && !caps.automaticReconnect)
       throw new Error("CHANNEL_NOT_ALLOWED");
     if (options.handoff !== undefined) {
@@ -133,6 +172,7 @@ export class RemoteDesktopViewerSession {
   async control(enabled: boolean): Promise<{ controlling: boolean }> {
     const lease = this.active;
     if (!lease) throw new Error("DESKTOP_LEASE_EXPIRED");
+    if (lease.preview) throw new Error("DESKTOP_PREVIEW_ONLY");
     if (this.controlPending) throw new Error("DESKTOP_INPUT_BUSY");
     if (enabled && this.releaseUnconfirmed)
       throw new Error("DESKTOP_INPUT_BUSY");
@@ -326,6 +366,31 @@ export function handoffWindowCapabilities(
   };
 }
 
+/**
+ * What a preview tab view may use. A preview is view-and-touch only: display
+ * modes, system audio, clipboard, privacy screen, window actions, resume and
+ * takeover are left out, so the viewer hides those controls; the host refuses
+ * them on a preview lease with `DESKTOP_PREVIEW_ONLY` either way.
+ */
+export function previewTabCapabilities(
+  caps: RemoteDesktopCapabilities,
+): RemoteDesktopCapabilities {
+  return {
+    version: caps.version,
+    enabled: caps.enabled,
+    canControl: false,
+    platform: caps.platform,
+    displays: caps.displays,
+    ...(caps.permissions ? { permissions: caps.permissions } : {}),
+    ...(caps.videoSettings ? { videoSettings: true } : {}),
+    ...(caps.trickleIce ? { trickleIce: true } : {}),
+    ...(caps.channelRequests ? { channelRequests: true } : {}),
+    ...(caps.backgroundViewing ? { backgroundViewing: true } : {}),
+    ...(caps.viewerHidden ? { viewerHidden: true } : {}),
+    ...(caps.previewTab ? { previewTab: caps.previewTab } : {}),
+  };
+}
+
 /** Layout points determine the ratio; cap the long edge instead of sending phone DPR pixels. */
 export function viewerDisplaySize(
   width: number,
@@ -401,6 +466,13 @@ export function remoteDesktopFailureKey(code: string): string | null {
   if (/DESKTOP_BUSY/.test(code)) return "connectionBusy";
   if (/DESKTOP_HANDOFF_ENDED/.test(code)) return "handoffEnded";
   if (/DESKTOP_HANDOFF_(UNAVAILABLE|WINDOW_ONLY)/.test(code)) return "handoffUnavailable";
+  // PREVIEW_INPUT_INVALID is a per-gesture error: the viewer releases the
+  // gesture instead of ending the view, so only connection paths should map it.
+  if (/PREVIEW_GRANT_INVALID/.test(code)) return "previewGrantInvalid";
+  if (/PREVIEW_SOURCE_ENDED/.test(code)) return "previewEnded";
+  if (/PREVIEW_CAPTURE_UNAVAILABLE/.test(code)) return "previewCaptureUnavailable";
+  if (/PREVIEW_INPUT_INVALID/.test(code)) return "previewInputInvalid";
+  if (/DESKTOP_PREVIEW_ONLY/.test(code)) return "previewOnly";
   if (/CHANNEL_NOT_ALLOWED/.test(code)) return "upgrade";
   if (/DESKTOP_DISABLED/.test(code)) return "disabled";
   if (/PERMISSION|ACCESSIBILITY/.test(code)) return "permissionHint";

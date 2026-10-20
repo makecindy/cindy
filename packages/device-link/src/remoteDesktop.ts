@@ -58,6 +58,7 @@ export const DESKTOP_KEY_CODES = [
   "Period",
   "Slash",
 ] as const;
+export type DesktopKeyCode = (typeof DESKTOP_KEY_CODES)[number];
 const codes = new Set<string>(DESKTOP_KEY_CODES);
 const unit = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
@@ -92,6 +93,162 @@ export function isDesktopInput(value: unknown): value is DesktopInput {
     default:
       return false;
   }
+}
+
+// ---- Plugin preview tab view ------------------------------------------------
+// A preview lease shows one plugin preview tab. It is not a display: the host
+// never falls back to the whole screen, an OS window or OS input.
+
+export const PREVIEW_MAX_TOUCH_POINTS = 10;
+export const PREVIEW_MAX_INPUT_EVENTS = 64;
+export const PREVIEW_MAX_INPUT_BYTES = 16_384;
+export const PREVIEW_MAX_TEXT_CHARS = 4096;
+export const PREVIEW_MAX_TITLE_CHARS = 200;
+const PREVIEW_MAX_TOUCH_ID = 2_147_483_647;
+const PREVIEW_GRANT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** 32 random bytes as unpadded base64url. Hosts answer a malformed grant with `PREVIEW_GRANT_INVALID`. */
+export function isPreviewGrant(value: unknown): value is string {
+  return typeof value === "string" && PREVIEW_GRANT_PATTERN.test(value);
+}
+
+export interface PreviewTabSummary {
+  /** One-time opaque token: 60 s, bound to the requesting peer. */
+  grant: string;
+  sessionId: string;
+  pluginName: string;
+  title: string;
+}
+export type PreviewTabsRequest = { op: "previewTabs"; sessionId?: string };
+export type PreviewTabsReply = { tabs: PreviewTabSummary[] };
+export type PreviewStartRequest = { op: "previewStart"; grant: string };
+
+export interface PreviewTouchPoint {
+  id: number;
+  /** 0..1 of the picture. The host scales by the tab's CSS viewport, never by DPR. */
+  x: number;
+  y: number;
+}
+export type PreviewInputEvent =
+  | {
+      kind: "touch";
+      phase: "start" | "move" | "end" | "cancel";
+      /** Every touch still down after this event; may be empty after end / cancel. */
+      points: PreviewTouchPoint[];
+    }
+  | { kind: "key"; code: DesktopKeyCode; down: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "release" };
+export type PreviewInputRequest = {
+  op: "previewInput";
+  lease: string;
+  /** Positive safe integer, increasing. Repeated or older batches are ignored. */
+  sequence: number;
+  events: PreviewInputEvent[];
+};
+/** Reply to `previewInput`, sent once the batch has actually been injected. */
+export interface PreviewInputReply {
+  sequence: number;
+}
+
+const touchPoint = (v: unknown): v is PreviewTouchPoint => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const p = v as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(p.id) &&
+    (p.id as number) >= 0 &&
+    (p.id as number) <= PREVIEW_MAX_TOUCH_ID &&
+    unit(p.x) &&
+    unit(p.y)
+  );
+};
+
+/** `maxTouchPoints` is the host's advertised limit; the protocol ceiling is {@link PREVIEW_MAX_TOUCH_POINTS}. */
+export function isPreviewInputEvent(
+  value: unknown,
+  maxTouchPoints: number = PREVIEW_MAX_TOUCH_POINTS,
+): value is PreviewInputEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  switch (v.kind) {
+    case "release":
+      return true;
+    case "key":
+      return (
+        typeof v.code === "string" &&
+        codes.has(v.code) &&
+        typeof v.down === "boolean"
+      );
+    case "text":
+      return (
+        typeof v.text === "string" &&
+        v.text.length >= 1 &&
+        v.text.length <= PREVIEW_MAX_TEXT_CHARS
+      );
+    case "touch": {
+      if (
+        v.phase !== "start" &&
+        v.phase !== "move" &&
+        v.phase !== "end" &&
+        v.phase !== "cancel"
+      )
+        return false;
+      const points = v.points;
+      if (
+        !Array.isArray(points) ||
+        points.length > Math.min(maxTouchPoints, PREVIEW_MAX_TOUCH_POINTS) ||
+        !points.every(touchPoint) ||
+        new Set(points.map((point) => point.id)).size !== points.length
+      )
+        return false;
+      // Something is still down while a touch starts or moves.
+      return (v.phase !== "start" && v.phase !== "move") || points.length > 0;
+    }
+    default:
+      return false;
+  }
+}
+
+/** Requests allowed on a preview lease; everything else answers `DESKTOP_PREVIEW_ONLY`. */
+export const PREVIEW_LEASE_OPS: ReadonlySet<string> = new Set([
+  "stop",
+  "heartbeat",
+  "presentation",
+  "offer",
+  "ice",
+  "viewerHidden",
+  "frame",
+  "previewInput",
+]);
+export function isPreviewLeaseOp(op: string): boolean {
+  return PREVIEW_LEASE_OPS.has(op);
+}
+
+/** Fields `previewStart` must never carry: they would name or take a display. */
+const PREVIEW_START_FORBIDDEN = [
+  "displayId",
+  "takeover",
+  "resume",
+  "control",
+  "lockOnExit",
+  "handoff",
+] as const;
+
+/** Null unless the host advertises a well-formed `previewTab` capability. */
+export function remoteDesktopPreviewTabCapability(
+  caps: Pick<RemoteDesktopCapabilities, "previewTab"> | null | undefined,
+): RemoteDesktopPreviewTabCapability | null {
+  const value: unknown = caps?.previewTab;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (
+    v.version !== 1 ||
+    !Number.isSafeInteger(v.maxTouchPoints) ||
+    (v.maxTouchPoints as number) < 1 ||
+    (v.maxTouchPoints as number) > PREVIEW_MAX_TOUCH_POINTS
+  )
+    return null;
+  return { version: 1, maxTouchPoints: v.maxTouchPoints as number };
 }
 
 /** Viewer intent; the host owns the concrete encoder and capture parameters. */
@@ -202,6 +359,18 @@ export interface RemoteDesktopCapabilities {
    * window; a viewer can never name one.
    */
   handoffWindow?: boolean;
+  /**
+   * Accepts `previewTabs` / `previewStart`: a live, touch-capable view of one
+   * plugin preview tab (never a display or an OS window). Anything that is not
+   * an object with `version === 1` and a valid `maxTouchPoints` means
+   * unsupported; read it with {@link remoteDesktopPreviewTabCapability}.
+   */
+  previewTab?: RemoteDesktopPreviewTabCapability;
+}
+export interface RemoteDesktopPreviewTabCapability {
+  version: 1;
+  /** Most simultaneous touch points the host injects, 1..{@link PREVIEW_MAX_TOUCH_POINTS}. */
+  maxTouchPoints: number;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -230,7 +399,22 @@ export interface RemoteDesktopLease {
   videoKept?: boolean;
   /** A 代输入 live view: the video is this one window, and input stays inside it. */
   window?: RemoteDesktopLeaseWindow;
+  /** A plugin preview tab view; see {@link PreviewLease}. */
+  preview?: RemoteDesktopLeasePreview;
 }
+/** Host-verified description of the preview tab a preview lease shows. */
+export interface RemoteDesktopLeasePreview {
+  pluginName: string;
+  title: string;
+}
+/**
+ * Reply to `previewStart`. `display.id` is an opaque preview source id (never a
+ * real displayId); `display.width/height` are the tab's CSS viewport size.
+ */
+export type PreviewLease = RemoteDesktopLease & {
+  controlling: false;
+  preview: RemoteDesktopLeasePreview;
+};
 /** Host-verified description of the single window a 代输入 live view shows. */
 export interface RemoteDesktopLeaseWindow {
   app: string;
@@ -257,6 +441,9 @@ export type RemoteDesktopRequest =
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
+  | PreviewTabsRequest
+  | PreviewStartRequest
+  | PreviewInputRequest
   | { op: "permissions"; action: "check" | "guide" }
   | {
       op: "start";
@@ -353,6 +540,26 @@ export function parseRemoteDesktopRequest(
       ...control(),
       ...lockOnExit(),
     };
+  }
+  if (v.op === "previewTabs") {
+    if (
+      v.sessionId !== undefined &&
+      (typeof v.sessionId !== "string" ||
+        v.sessionId.length < 1 ||
+        v.sessionId.length > 128)
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      ...(typeof v.sessionId === "string" ? { sessionId: v.sessionId } : {}),
+    };
+  }
+  if (v.op === "previewStart") {
+    if (PREVIEW_START_FORBIDDEN.some((key) => key in v))
+      throw new Error("INVALID_REQUEST");
+    if (typeof v.grant !== "string" || !v.grant || v.grant.length > 128)
+      throw new Error("INVALID_REQUEST");
+    return { op: v.op, grant: v.grant };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
     throw new Error("INVALID_LEASE");
@@ -540,6 +747,23 @@ export function parseRemoteDesktopRequest(
       events: v.events,
     };
   }
+  if (
+    v.op === "previewInput" &&
+    Number.isSafeInteger(v.sequence) &&
+    (v.sequence as number) >= 1 &&
+    Array.isArray(v.events) &&
+    v.events.length >= 1 &&
+    v.events.length <= PREVIEW_MAX_INPUT_EVENTS &&
+    v.events.every((event) => isPreviewInputEvent(event)) &&
+    JSON.stringify(v.events).length <= PREVIEW_MAX_INPUT_BYTES
+  ) {
+    return {
+      op: v.op,
+      lease,
+      sequence: v.sequence as number,
+      events: v.events as PreviewInputEvent[],
+    };
+  }
   throw new Error("INVALID_REQUEST");
 }
 
@@ -558,6 +782,7 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "displayModes",
   "clipboardSync",
   "clipboardVersion",
+  "previewInput",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */

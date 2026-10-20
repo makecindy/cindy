@@ -819,6 +819,47 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 被控端仍持有操作权。退出仅查看时若被控端已不再给操作权（输入失败、溢出释放、后台观看），才重新请求。
 不修改 relay、服务端或 IPC allowlist；需被控端和控制端都更新才省掉这次往返。
 
+## 预览标签投屏（2026-10-20）
+
+手机实时查看、操作电脑上插件预览标签的协议层。沿用远程桌面业务通道 `device-link:remote-desktop:v1`，
+不改 relay、服务端、IPC allowlist 或协议版本；新字段全部可选，`input-v1` 普通输入语义不变。协议正文见 [`../remote-desktop.md`](../remote-desktop.md) 的「Preview tab view」。
+类型与 parser 在 `packages/device-link/src/remoteDesktop.ts`，会话门在 `remoteDesktopViewerSession.ts`。
+
+- **能力** `capabilities.previewTab: { version: 1, maxTouchPoints: 1..10 }`。缺失、非对象、`version !== 1`
+  或 `maxTouchPoints` 非法，一律视为不支持（`remoteDesktopPreviewTabCapability` 返回 null）。
+- **请求**：`previewTabs { sessionId? }`（列出可投屏标签，回 `{ tabs: [{ grant, sessionId, pluginName, title }] }`）、
+  `previewStart { grant }`（开预览 lease）、`previewInput { lease, sequence, events }`（触摸 / 按键 / 文字）。
+  `previewTabs`、`previewStart` 与 `capabilities`、`start` 一样不带 lease；`previewStart` 带
+  `displayId` / `takeover` / `resume` / `control` / `lockOnExit` / `handoff` 任一字段即 `INVALID_REQUEST`，
+  预览不可能落到整屏。grant 是 32 字节 base64url（43 字符），parser 只限长度，格式由 `isPreviewGrant` 复核，
+  被控端对格式不符的 grant 回 `PREVIEW_GRANT_INVALID`。
+- **预览 lease**：`controlling` 恒为 `false`，附 `preview: { pluginName, title }`；`display.id` 是不透明预览来源 id。
+  只允许 `stop` / `heartbeat` / `presentation` / `offer` / `ice` / `viewerHidden` / `frame` / `previewInput`
+  （`PREVIEW_LEASE_OPS`），其余回 `DESKTOP_PREVIEW_ONLY`。
+- **数据通道**：`previewInput` 加入 `REMOTE_DESKTOP_CHANNEL_OPS`（走既有 `{type:"request"}` 封装与 relay 回退）；
+  `previewTabs` / `previewStart` 仍只走 relay。
+- **错误码**：`PREVIEW_GRANT_INVALID`、`PREVIEW_SOURCE_ENDED`、`PREVIEW_CAPTURE_UNAVAILABLE`、
+  `PREVIEW_INPUT_INVALID`、`DESKTOP_PREVIEW_ONLY`，`remoteDesktopFailureKey` 分别映射到 `previewGrantInvalid` /
+  `previewEnded` / `previewCaptureUnavailable` / `previewInputInvalid` / `previewOnly`。
+  `PREVIEW_INPUT_INVALID` 是单次手势错误（控制端释放手势，不结束预览），只应在输入路径上处理。
+
+### 新旧端矩阵
+
+| 控制端 / 被控端 | 旧被控端 | 新被控端 |
+| --- | --- | --- |
+| 旧控制端 | 不变 | 不宣告也不会收到预览请求；原功能不变 |
+| 新控制端 | 无 `previewTab` 能力：控制端不显示入口、**不发** `previewStart`，会话层报 `CHANNEL_NOT_ALLOWED` | 能力为真才可用 |
+
+- 新控制端对旧被控端：能力门先拦；即使误发，旧 parser 对不带 lease 的 `previewTabs` / `previewStart`
+  回 `INVALID_LEASE`（`previewInput` 回 `INVALID_REQUEST`），不会开整屏。
+- 会话层顺序：`capabilities` → 检查 `previewTab` → `previewStart` → **核对回执含 `preview` 对象**，否则立即
+  `stop` 该 lease 并抛 `INVALID_RESPONSE`（与代输入的回执门同构）→ 之后才 offer / 开放输入。
+  回执里的 `controlling` 一律按 `false`；预览 lease 上 `control()` 本地即报 `DESKTOP_PREVIEW_ONLY`。
+- `ViewerConnectOptions.preview` 与 `handoff` / `resume` / `takeover` 互斥，同传抛 `INVALID_REQUEST`，不发任何请求。
+- 控制端投影的能力（`previewTabCapabilities`）只保留 `videoSettings`、`trickleIce`、`channelRequests`、
+  `backgroundViewing`、`viewerHidden`、`previewTab`，`canControl` 为 `false`，其余整屏能力不显示。
+- 旧 iOS 安装包 + 新 JS：`previewInput` 经已有 `sendRequest` 通用封装，不新增原生接口。
+
 ## 手机首页会话活动快照
 
 ### 可见历史优先读取
