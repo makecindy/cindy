@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewTabEntry } from "../PreviewTabEntry";
 
 const fixture = vi.hoisted(() => ({
-  tabs: [] as Array<{ sessionId: string; pluginName: string; title: string }>,
+  tabs: [] as Array<{
+    sessionId: string;
+    pluginName: string;
+    title: string;
+    ref?: string;
+  }>,
   focused: true,
   push: vi.fn(),
   alert: vi.fn(),
@@ -109,6 +114,22 @@ describe("preview entry strip", () => {
       },
     });
     expect(fixture.alert).not.toHaveBeenCalled();
+  });
+
+  it("names the tab by its stable ref in the route when the computer gave one", () => {
+    fixture.tabs = [
+      { sessionId: "s1", pluginName: "Baguette", title: "Sim", ref: "tab_1-B" },
+    ];
+    render();
+    act(() => entry()!.click());
+    expect(fixture.push.mock.calls[0][0].params).toEqual({
+      deviceId: "pc",
+      deviceName: "My Mac",
+      previewSession: "s1",
+      previewPlugin: "Baguette",
+      previewTitle: "Sim",
+      previewRef: "tab_1-B",
+    });
   });
 
   it("offers a choice when the task has several previews", () => {

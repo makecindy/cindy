@@ -161,6 +161,7 @@ describe.each([false, true])(
           previewSession: "task-a",
           previewPlugin: "Baguette",
           previewTitle: "Sim",
+          previewRef: "tab_1",
         },
       };
       fixture.state = stack(home, previewView);
@@ -169,6 +170,7 @@ describe.each([false, true])(
         sessionId: "task-a",
         pluginName: "Baguette",
         title: "Sim",
+        ref: "tab_1",
       });
       expect(fixture.props.handoff).toBeUndefined();
       // The whole-desktop viewer of the same computer is replaced, not reused.
@@ -182,6 +184,22 @@ describe.each([false, true])(
       render();
       expect(fixture.props.preview.title).toBe("Other");
       expect(fixture.stopped).toHaveBeenCalledTimes(2);
+      // A rebuilt tab (same words, new ref) is a different viewer too.
+      fixture.state = stack(home, {
+        ...previewView,
+        key: "desktop-r",
+        params: { ...previewView.params, previewTitle: "Other", previewRef: "tab_2" },
+      });
+      render();
+      expect(fixture.props.preview.ref).toBe("tab_2");
+      expect(fixture.stopped).toHaveBeenCalledTimes(3);
+      fixture.state = stack(home, {
+        ...previewView,
+        key: "desktop-q",
+        params: { ...previewView.params, previewTitle: "Other" },
+      });
+      render();
+      expect(fixture.stopped).toHaveBeenCalledTimes(4);
       act(() => fixture.props.onBack());
       render();
       fixture.props.onRestore();
@@ -193,6 +211,7 @@ describe.each([false, true])(
             previewSession: "task-a",
             previewPlugin: "Baguette",
             previewTitle: "Other",
+            previewRef: "tab_1",
           },
         }),
       );

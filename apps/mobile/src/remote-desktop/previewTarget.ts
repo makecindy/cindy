@@ -1,4 +1,4 @@
-import type { PreviewTabSummary } from "@cindy/device-link";
+import { isPreviewTabRef, type PreviewTabSummary } from "@cindy/device-link";
 
 /**
  * Which plugin preview tab a phone wants to watch. It names the task and, when
@@ -9,6 +9,8 @@ export interface PreviewTarget {
   sessionId: string;
   pluginName?: string;
   title?: string;
+  /** The listed tab's stable reference; absent for computers that predate it. */
+  ref?: string;
 }
 
 const text = (value: unknown, max: number): string | undefined =>
@@ -21,28 +23,41 @@ export function parsePreviewTarget(params: {
   previewSession?: unknown;
   previewPlugin?: unknown;
   previewTitle?: unknown;
+  previewRef?: unknown;
 }): PreviewTarget | undefined {
   const sessionId = text(params.previewSession, 128);
   if (!sessionId) return undefined;
   const pluginName = text(params.previewPlugin, 200);
   const title = text(params.previewTitle, 200);
+  const ref = isPreviewTabRef(params.previewRef) ? params.previewRef : undefined;
   return {
     sessionId,
     ...(pluginName ? { pluginName } : {}),
     ...(title ? { title } : {}),
+    ...(ref ? { ref } : {}),
   };
 }
 
 /**
- * The listed tab to start. Titles change while a page loads, so an exact match
- * is preferred but not required: the only tab of the task is taken as it is,
- * and among several the plugin decides. Anything else means the tab is gone.
+ * The listed tab to start. With a `ref` only that tab will do: it is the host's
+ * stable identity of the binding, so a missing one means the tab was closed or
+ * rebuilt, and another tab of the same plugin is never taken in its place.
+ * Without one (a computer that predates it) titles change while a page loads,
+ * so an exact match is preferred but not required: the only tab of the task is
+ * taken as it is, and among several the plugin decides. Anything else means
+ * the tab is gone.
  */
 export function pickPreviewTab(
   tabs: readonly PreviewTabSummary[],
   target: PreviewTarget,
 ): PreviewTabSummary | undefined {
-  const own = tabs.filter((tab) => tab.sessionId === target.sessionId);
+  // A tab with a ref that is not one is malformed, not "a computer without refs".
+  const own = tabs.filter(
+    (tab) =>
+      tab.sessionId === target.sessionId &&
+      (tab.ref === undefined || isPreviewTabRef(tab.ref)),
+  );
+  if (target.ref !== undefined) return own.find((tab) => tab.ref === target.ref);
   const exact = own.find(
     (tab) =>
       tab.pluginName === target.pluginName && tab.title === target.title,

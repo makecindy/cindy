@@ -1,5 +1,6 @@
 import {
   isPreviewGrant,
+  isPreviewTabRef,
   remoteDesktopPreviewTabCapability,
   type PreviewTabsReply,
   type RemoteDesktopCapabilities,
@@ -15,6 +16,8 @@ export interface PreviewTabListing {
   sessionId: string;
   pluginName: string;
   title: string;
+  /** The host's stable reference of the tab; absent on older computers. */
+  ref?: string;
 }
 
 /**
@@ -57,12 +60,14 @@ export async function readPreviewTabs(
       isPreviewGrant(tab?.grant) &&
       tab.sessionId === sessionId &&
       typeof tab.pluginName === "string" &&
-      typeof tab.title === "string"
+      typeof tab.title === "string" &&
+      (tab.ref === undefined || isPreviewTabRef(tab.ref))
     )
       listed.push({
         sessionId,
         pluginName: tab.pluginName,
         title: tab.title,
+        ...(tab.ref !== undefined ? { ref: tab.ref } : {}),
       });
   }
   return listed;
@@ -76,7 +81,9 @@ export function samePreviewListing(
     a.length === b.length &&
     a.every(
       (tab, index) =>
-        tab.pluginName === b[index].pluginName && tab.title === b[index].title,
+        tab.pluginName === b[index].pluginName &&
+        tab.title === b[index].title &&
+        tab.ref === b[index].ref,
     )
   );
 }

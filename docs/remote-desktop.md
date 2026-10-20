@@ -273,7 +273,10 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   (missing, not an object, other version, bad count) means unsupported.
 - **List and start** need no lease: `previewTabs { sessionId? }` replies
   `{ tabs: [{ grant, sessionId, pluginName, title }] }` (title at most 200
-  characters). A grant is 32 random bytes as base64url (43 characters), valid for 60
+  characters). A tab may also carry `ref`, a stable opaque identity of its binding (1 to
+  64 of `A-Za-z0-9_-`, not a credential): it is the same for as long as the binding
+  lives and changes once the tab is rebuilt or its page changes source. Hosts that
+  predate it omit the field. A grant is 32 random bytes as base64url (43 characters), valid for 60
   seconds, one use, bound to the requesting peer. `previewStart { grant }` replies a
   lease with `controlling: false` and `preview: { pluginName, title }`; `display.id` is
   an opaque preview source id and `width` / `height` are the tab's CSS viewport.
@@ -320,7 +323,11 @@ failure, and shows nothing when the computer is old, has remote desktop off, or 
 tab. The grants in a listing are dropped at once.
 
 Opening it pushes `devices/desktop/[deviceId]` with `previewSession` (the task),
-`previewPlugin` and `previewTitle`; a grant never goes into a route, log or store. The
+`previewPlugin`, `previewTitle` and, when the listing has one, `previewRef`; a grant
+never goes into a route, log or store. With a `previewRef` only the tab with that `ref`
+is started, and when it is not listed any more the view ends as `PREVIEW_SOURCE_ENDED`
+instead of taking another tab of the plugin; without one (an older computer) the tab is
+chosen by plugin name and title as before. The
 session fetches `capabilities` and a fresh grant right before `RemoteDesktopViewerSession`
 `connect({ preview })`, with no `resume`, `takeover` or display, so every reconnect starts
 from a new listing and a vanished tab ends as `PREVIEW_SOURCE_ENDED`.

@@ -50,6 +50,7 @@ export function PreviewTabEntry({
         previewSession: tab.sessionId,
         previewPlugin: tab.pluginName,
         previewTitle: tab.title,
+        ...(tab.ref ? { previewRef: tab.ref } : {}),
       },
     });
   const press = () => {

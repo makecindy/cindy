@@ -5565,13 +5565,13 @@ describe("plugin preview tab view", () => {
       }
     });
   };
-  const render = async () => {
+  const render = async (preview: typeof target & { ref?: string } = target) => {
     await act(async () =>
       root.render(
         <RemoteDesktopSession
           deviceId="computer"
           deviceName="My Mac"
-          preview={target}
+          preview={preview}
           focused
           onBack={() => {}}
         />,
@@ -5611,6 +5611,38 @@ describe("plugin preview tab view", () => {
     expect(requests().some((r) => r.op === "start" || r.op === "control")).toBe(
       false,
     );
+  });
+
+  it("starts the tab with the target's ref even when its title and position changed", async () => {
+    const other = "o".repeat(43);
+    previewHost({
+      tabs: [
+        { grant: other, sessionId: "s1", pluginName: "Baguette", title: "Sim", ref: "ref-b" },
+        { grant, sessionId: "s1", pluginName: "Baguette", title: "Renamed", ref: "ref-a" },
+      ],
+    });
+    await render({ ...target, ref: "ref-a" });
+    await connect();
+    expect(requests().at(-1)).toEqual({ op: "previewStart", grant });
+  });
+
+  it("ends instead of taking another tab of the plugin once the target's ref is gone", async () => {
+    previewHost({
+      tabs: [
+        { grant, sessionId: "s1", pluginName: "Baguette", title: "Sim", ref: "ref-b" },
+      ],
+    });
+    await render({ ...target, ref: "ref-a" });
+    await connect();
+    expect(host.textContent).toContain("remoteDesktop.previewEnded");
+    expect(requests().some((r) => r.op === "previewStart")).toBe(false);
+  });
+
+  it("keeps matching by name for a target without a ref on an older computer", async () => {
+    previewHost();
+    await render({ ...target, title: "Page loaded" });
+    await connect();
+    expect(requests().at(-1)).toEqual({ op: "previewStart", grant });
   });
 
   it("sends viewer batches as previewInput with one increasing sequence and acknowledges each", async () => {

@@ -218,6 +218,7 @@ export default function RemoteDesktopScreen() {
     previewSession,
     previewPlugin,
     previewTitle,
+    previewRef,
   } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
@@ -225,13 +226,19 @@ export default function RemoteDesktopScreen() {
     previewSession?: string;
     previewPlugin?: string;
     previewTitle?: string;
+    previewRef?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
   const deviceName = typeof rawName === "string" ? rawName : deviceId;
   const handoff = typeof rawHandoff === "string" && rawHandoff ? rawHandoff : undefined;
   const preview = handoff
     ? undefined
-    : parsePreviewTarget({ previewSession, previewPlugin, previewTitle });
+    : parsePreviewTarget({
+        previewSession,
+        previewPlugin,
+        previewTitle,
+        previewRef,
+      });
   const router = useRouter();
   const focused = useIsFocused();
   return (

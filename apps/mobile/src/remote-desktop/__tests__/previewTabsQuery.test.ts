@@ -35,6 +35,17 @@ describe("reading a task's preview tabs", () => {
     ]);
     expect(invoke).toHaveBeenLastCalledWith({ op: "previewTabs", sessionId: "s1" });
   });
+  it("passes the stable ref on and skips a tab whose ref is malformed", async () => {
+    const invoke = host(caps(), [
+      { ...listed, ref: "tab_1-B" },
+      { ...listed, title: "Bad", ref: "bad ref!" },
+      { ...listed, title: "Long", ref: "x".repeat(65) },
+      { ...listed, title: "Number", ref: 5 },
+    ]);
+    expect(await readPreviewTabs(invoke, "s1", fresh())).toEqual([
+      { sessionId: "s1", pluginName: "Baguette", title: "Sim", ref: "tab_1-B" },
+    ]);
+  });
   it("drops the grant and anything that is not this task's well-formed tab", async () => {
     const invoke = host(caps(), [
       listed,
@@ -87,5 +98,8 @@ describe("polling cadence and listing identity", () => {
     expect(samePreviewListing(a, [{ ...a[0] }])).toBe(true);
     expect(samePreviewListing(a, [{ ...a[0], title: "U" }])).toBe(false);
     expect(samePreviewListing(a, [])).toBe(false);
+    // A rebuilt tab keeps its words but not its ref: that is a different entry.
+    expect(samePreviewListing([{ ...a[0], ref: "r1" }], [{ ...a[0], ref: "r2" }])).toBe(false);
+    expect(samePreviewListing([{ ...a[0], ref: "r1" }], [{ ...a[0], ref: "r1" }])).toBe(true);
   });
 });

@@ -26,9 +26,12 @@ type Session = {
 const sameTarget = (a?: PreviewTarget, b?: PreviewTarget) =>
   a?.sessionId === b?.sessionId &&
   a?.pluginName === b?.pluginName &&
-  a?.title === b?.title;
+  a?.title === b?.title &&
+  a?.ref === b?.ref;
 const previewKey = (target?: PreviewTarget) =>
-  target ? `${target.sessionId}:${target.pluginName ?? ""}:${target.title ?? ""}` : "";
+  target
+    ? `${target.sessionId}:${target.pluginName ?? ""}:${target.title ?? ""}:${target.ref ?? ""}`
+    : "";
 
 /** One connected viewer survives its route, but never its signed-in owner. */
 export function RemoteDesktopHost({ children }: { children: ReactNode }) {
@@ -45,6 +48,7 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
         previewSession?: string;
         previewPlugin?: string;
         previewTitle?: string;
+        previewRef?: string;
       }
     | undefined;
   const account =
@@ -219,6 +223,9 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
                           : {}),
                         ...(current.preview.title
                           ? { previewTitle: current.preview.title }
+                          : {}),
+                        ...(current.preview.ref
+                          ? { previewRef: current.preview.ref }
                           : {}),
                       }
                     : {}),
