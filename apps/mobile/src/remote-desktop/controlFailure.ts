@@ -58,14 +58,28 @@ export function controlFailureAction(cause: unknown): ControlFailureAction {
 
 /**
  * What a failed `previewInput` batch should do. A refused batch is one bad
- * gesture, not a dead view: release it and carry on. Everything else (the tab
- * is gone, capture failed, the lease ended) takes the ordinary failure path.
+ * gesture, not a dead view: release it, drop the batch and carry on. That
+ * includes a batch the parser refused as malformed (`INVALID_REQUEST`, which
+ * carries no `DESKTOP_` style code) and one refused because input is paused,
+ * for instance a batch still in flight when the small window began
+ * (`DESKTOP_VIEW_ONLY`); neither says anything about the lease. Everything
+ * else (the tab is gone, capture failed, the lease ended) takes the ordinary
+ * failure path.
  */
 export function previewInputFailureAction(
   cause: unknown,
 ): "gesture" | "ignore" | "rebuild" {
-  const code = remoteDesktopErrorCode(cause);
-  if (code === "PREVIEW_INPUT_INVALID" || code === "DESKTOP_PREVIEW_ONLY")
+  const code =
+    remoteDesktopErrorCode(cause) ??
+    (cause instanceof Error ? cause.message : String(cause)).match(
+      /\bINVALID_REQUEST\b/,
+    )?.[0];
+  if (
+    code === "PREVIEW_INPUT_INVALID" ||
+    code === "DESKTOP_PREVIEW_ONLY" ||
+    code === "INVALID_REQUEST" ||
+    code === "DESKTOP_VIEW_ONLY"
+  )
     return "gesture";
   if (code && UNKNOWN_OUTCOME_CODES.has(code)) return "ignore";
   return "rebuild";

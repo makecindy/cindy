@@ -45,6 +45,7 @@ import {
   previewInputFailureAction,
   remoteDesktopErrorCode,
 } from "./controlFailure";
+import { splitPreviewInput } from "./previewInputBatches";
 import {
   parsePreviewTarget,
   pickPreviewTab,
@@ -2322,21 +2323,21 @@ export function RemoteDesktopSession({
           sequence: message.sequence,
         };
         if (previewRef.current) {
-          const events: unknown = message.events;
+          const viewerEvents: unknown = message.events;
           const only =
-            Array.isArray(events) &&
-            events.length > 0 &&
-            events.every(
+            Array.isArray(viewerEvents) &&
+            viewerEvents.length > 0 &&
+            viewerEvents.every(
               (event) => (event as { kind?: unknown })?.kind === "release",
             );
           if (
             presentation.current ||
             actualPresentation.current ||
             (!only && inputBusy.current?.lease === current.lease) ||
-            !Array.isArray(events) ||
-            events.length < 1 ||
-            events.length > 64 ||
-            !events.every((event) =>
+            !Array.isArray(viewerEvents) ||
+            viewerEvents.length < 1 ||
+            viewerEvents.length > 64 ||
+            !viewerEvents.every((event) =>
               isPreviewInputEvent(event, previewTouchLimit.current),
             )
           ) {
@@ -2347,18 +2348,29 @@ export function RemoteDesktopSession({
           if (!only) inputBusy.current = batch;
           const ownsPreviewBatch = () =>
             active.current === current && (only || inputBusy.current === batch);
-          void request({
-            op: "previewInput",
-            lease: current.lease,
-            sequence: ++previewSequence.current,
-            events: events as PreviewInputEvent[],
-          })
+          // One viewer batch may be more than the host takes at once (a long
+          // paste): send it as ordered batches, each only after the last landed.
+          void (async () => {
+            for (const events of splitPreviewInput(
+              viewerEvents as PreviewInputEvent[],
+            )) {
+              if (!ownsPreviewBatch()) return;
+              await request({
+                op: "previewInput",
+                lease: current.lease,
+                sequence: ++previewSequence.current,
+                events,
+              });
+            }
+          })()
             .catch((cause) => {
               if (!ownsPreviewBatch()) return;
-              // One refused batch is one bad gesture, not the end of the view.
+              // One refused batch is one bad gesture, not the end of the view:
+              // drop what is left of it and let go of the fingers. A refused
+              // release is not answered with another one.
               switch (previewInputFailureAction(cause)) {
                 case "gesture":
-                  send({ type: "releaseInput" });
+                  if (!only) send({ type: "releaseInput" });
                   break;
                 case "ignore":
                   break;

@@ -2471,6 +2471,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             ? Math.min(10, message.preview.maxTouchPoints)
             : 0;
         previewTouches.clear();
+        // The picture sits in the rect of the lease's first size. If the tab is
+        // resized later, frames (video or JPEG) keep their own aspect inside it
+        // with bars, which is what the host's touch mapping assumes.
+        for (const el of [image, video])
+          el.style.objectFit = previewTouch ? "contain" : "";
         pending = [];
         sending = false;
         seq = 0;

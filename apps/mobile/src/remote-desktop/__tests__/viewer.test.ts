@@ -1803,6 +1803,17 @@ describe("plugin preview tab view", () => {
     expect(events(v).at(-1)).toMatchObject({ kind: "touch", phase: "start" });
   });
 
+  it("keeps video and JPEG frames inside the lease's first-size rect with bars, not stretched", () => {
+    const v = open();
+    expect(v.elements.image.style.objectFit).toBe("contain");
+    expect(v.elements.video.style.objectFit).toBe("contain");
+    // The rect keeps the first size whatever the tab becomes later.
+    expect(v.elements.image.style.width).toBe("400px");
+    v.send({ type: "init", epoch: "plain", width: 1920, height: 1080 });
+    expect(v.elements.image.style.objectFit).toBe("");
+    expect(v.elements.video.style.objectFit).toBe("");
+  });
+
   it("returns to the ordinary gestures when a lease without preview starts", () => {
     const v = open();
     v.send({ type: "init", epoch: "plain", width: 1920, height: 1080 });

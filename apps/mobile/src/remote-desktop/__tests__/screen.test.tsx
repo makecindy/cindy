@@ -14,6 +14,7 @@ import RemoteDesktopScreen, {
   RemoteDesktopSession,
 } from "../RemoteDesktopScreen";
 import { RemoteDesktopDisplaySettings } from "../RemoteDesktopDisplaySettings";
+import { parseRemoteDesktopRequest } from "@cindy/device-link";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -5689,6 +5690,83 @@ describe("plugin preview tab view", () => {
     expect(sent()).toContainEqual({ type: "releaseInput" });
     expect(requests().some((r) => r.op === "stop")).toBe(false);
     expect(host.textContent).not.toContain("remoteDesktop.previewInputInvalid");
+  });
+
+  it("splits a large paste into ordered batches the host's parser accepts and acknowledges once", async () => {
+    previewHost();
+    await render();
+    await connect();
+    const events = ["a", "b", "c", "d", "e"].map((c) => ({
+      kind: "text",
+      text: c.repeat(4096),
+    }));
+    await viewerInput(1, events);
+    const inputs = requests().filter((r) => r.op === "previewInput");
+    expect(inputs.length).toBeGreaterThan(1);
+    expect(inputs.map((r) => r.sequence)).toEqual(
+      inputs.map((_, index) => index + 1),
+    );
+    for (const request of inputs)
+      expect(() => parseRemoteDesktopRequest(request)).not.toThrow();
+    expect(inputs.flatMap((r) => r.events)).toEqual(events);
+    expect(sent().filter((m) => m.type === "ack")).toHaveLength(1);
+    expect(requests().some((r) => r.op === "stop")).toBe(false);
+  });
+
+  it("stops sending the rest of a split paste once a batch is refused", async () => {
+    let seen = 0;
+    previewHost({
+      input: () => {
+        if (++seen === 1) throw new Error("PREVIEW_INPUT_INVALID");
+        return {};
+      },
+    });
+    await render();
+    await connect();
+    await viewerInput(
+      1,
+      ["a", "b", "c", "d", "e"].map((c) => ({ kind: "text", text: c.repeat(4096) })),
+    );
+    expect(requests().filter((r) => r.op === "previewInput")).toHaveLength(1);
+    expect(sent()).toContainEqual({ type: "releaseInput" });
+  });
+
+  it.each([
+    ["INVALID_REQUEST"],
+    ["DESKTOP_VIEW_ONLY"],
+  ])(
+    "only releases the gesture when a batch is refused with %s, without rebuilding the connection",
+    async (code) => {
+      previewHost({
+        input: () => {
+          throw new Error(code);
+        },
+      });
+      await render();
+      await connect();
+      await viewerInput(1);
+      expect(sent()).toContainEqual({ type: "releaseInput" });
+      expect(requests().filter((r) => r.op === "previewInput")).toHaveLength(1);
+      expect(requests().some((r) => r.op === "stop")).toBe(false);
+      expect(requests().filter((r) => r.op === "previewStart")).toHaveLength(1);
+      expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+      expect(host.textContent).not.toContain("remoteDesktop.disconnected");
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(requests().filter((r) => r.op === "previewStart")).toHaveLength(1);
+    },
+  );
+
+  it("does not answer a refused release with another release", async () => {
+    previewHost({
+      input: () => {
+        throw new Error("DESKTOP_VIEW_ONLY");
+      },
+    });
+    await render();
+    await connect();
+    await viewerInput(1, [{ kind: "release" }]);
+    expect(sent()).not.toContainEqual({ type: "releaseInput" });
+    expect(requests().some((r) => r.op === "stop")).toBe(false);
   });
 
   it("ends without reconnecting when the tab is gone", async () => {

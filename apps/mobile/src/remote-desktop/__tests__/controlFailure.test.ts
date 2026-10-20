@@ -54,7 +54,12 @@ describe("preview input failure classification", () => {
       remoteDesktopErrorCode(new Error("[PREVIEW_SOURCE_ENDED] tab closed")),
     ).toBe("PREVIEW_SOURCE_ENDED");
   });
-  it.each(["PREVIEW_INPUT_INVALID", "DESKTOP_PREVIEW_ONLY"])(
+  it.each([
+    "PREVIEW_INPUT_INVALID",
+    "DESKTOP_PREVIEW_ONLY",
+    "INVALID_REQUEST",
+    "DESKTOP_VIEW_ONLY",
+  ])(
     "releases only the gesture for %s",
     (code) => {
       expect(previewInputFailureAction(new Error(code))).toBe("gesture");
@@ -66,11 +71,20 @@ describe("preview input failure classification", () => {
       expect(previewInputFailureAction(new Error(code))).toBe("ignore");
     },
   );
+  it("reads INVALID_REQUEST from the code, a message or a relay-style error", () => {
+    expect(
+      previewInputFailureAction(Object.assign(new Error("x"), { code: "INVALID_REQUEST" })),
+    ).toBe("gesture");
+    expect(previewInputFailureAction(new Error("[INVALID_REQUEST] bad batch"))).toBe(
+      "gesture",
+    );
+    expect(previewInputFailureAction("INVALID_REQUEST")).toBe("gesture");
+  });
   it.each([
     "PREVIEW_SOURCE_ENDED",
     "PREVIEW_CAPTURE_UNAVAILABLE",
     "DESKTOP_LEASE_EXPIRED",
-    "DESKTOP_VIEW_ONLY",
+    "INVALID_LEASE",
     "something else",
   ])("takes the ordinary failure path for %s", (code) => {
     expect(previewInputFailureAction(new Error(code))).toBe("rebuild");
