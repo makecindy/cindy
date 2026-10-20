@@ -6,6 +6,7 @@ import type { ViewerDisplayHandle } from './viewerDisplay';
 import { PreviewGrantTable } from './previewGrants';
 import {
   isPreviewGrant,
+  isPreviewTabRef,
   isPreviewInputEvent,
   isPreviewLeaseOp,
   parseRemoteDesktopRequest,
@@ -926,16 +927,15 @@ export class RemoteDesktopController {
    * neither reveals the tab id nor works as a credential.
    */
   private previewRef(tab: DesktopPreviewTab): string {
-    return createHmac('sha256', this.previewRefKey)
+    const ref = createHmac('sha256', this.previewRefKey)
       .update(`${tab.tabId}\n${tab.generation}`)
       .digest('base64url')
       .slice(0, 22);
+    if (!isPreviewTabRef(ref)) throw new Error('DESKTOP_REQUEST_FAILED');
+    return ref;
   }
   /** Offers the plugin preview tabs, each with a one-time grant bound to this peer. */
-  private async previewTabs(
-    peer: string,
-    sessionId?: string,
-  ): Promise<{ tabs: Array<PreviewTabsReply['tabs'][number] & { ref: string }> }> {
+  private async previewTabs(peer: string, sessionId?: string): Promise<PreviewTabsReply> {
     const preview = this.requirePreview();
     const authenticationSession = this.authenticationSession(peer);
     const tabs = preview.list(sessionId);
