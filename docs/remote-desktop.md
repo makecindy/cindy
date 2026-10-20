@@ -309,6 +309,33 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   `previewGrantInvalid`, `previewEnded`, `previewCaptureUnavailable`,
   `previewInputInvalid` and `previewOnly`.
 
+### Preview tab view on the phone
+
+The entry is `PreviewTabEntry` (`apps/mobile/src/remote-desktop/`), a strip above the
+composer on the task page and mounted in one place in `app/sessions/[sessionId].tsx`.
+It lists tabs with `previewTabs { sessionId }` every 4 s while the page is focused, the
+app is in the foreground and the computer is online, reads `capabilities` once per run
+(page shown, app foregrounded, computer reconnected), backs off 8 s, 16 s, 30 s after a
+failure, and shows nothing when the computer is old, has remote desktop off, or lists no
+tab. The grants in a listing are dropped at once.
+
+Opening it pushes `devices/desktop/[deviceId]` with `previewSession` (the task),
+`previewPlugin` and `previewTitle`; a grant never goes into a route, log or store. The
+session fetches `capabilities` and a fresh grant right before `RemoteDesktopViewerSession`
+`connect({ preview })`, with no `resume`, `takeover` or display, so every reconnect starts
+from a new listing and a vanished tab ends as `PREVIEW_SOURCE_ENDED`.
+
+In the viewer (`viewerRuntime.js`, `init.preview.maxTouchPoints` turns it on) raw fingers
+become `touch` events with the full set of points in picture coordinates: no local pinch
+zoom, pan, hold-to-drag or cursor. A finger that lands outside the picture is dropped, one
+that slides out is held at the edge. Batches never use the `input-v1` data channel: the
+page posts `input` to React Native, which numbers them (one `previewInput` sequence per
+lease), sends them as `previewInput` requests and acknowledges the page. A refused
+batch (`PREVIEW_INPUT_INVALID`) releases that gesture only; the other preview errors end
+the view without reconnecting. The panel keeps rotate and small window; the keyboard is
+the system keyboard (text, Backspace, Enter), with no clipboard, display, audio, view-only
+or window actions. The native iOS receiver is never sent the `preview` field.
+
 ### Incremental ICE and media recovery
 
 New desktops advertise optional `trickleIce`. When both endpoints support it,

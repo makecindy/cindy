@@ -163,5 +163,13 @@
   "hostMuteFailed": "リモートのパソコンのミュート状態を変更できません",
   "handoffEnded": "この代理入力はすでに終了しているため、表示するウィンドウがありません。",
   "handoffUnavailable": "このコンピュータではこのウィンドウだけを表示できません。そのコンピュータで Cindy を更新するか、リモートデスクトップをオンにしてください。",
-  "handoffWindow": "代理入力 · {{app}}"
+  "handoffWindow": "代理入力 · {{app}}",
+  "previewGrantInvalid": "このプレビューは現在開けません。戻ってもう一度お試しください。",
+  "previewEnded": "このプレビューは終了しました。コンピュータでまだ開いている場合は、セッションから開き直せます。",
+  "previewCaptureUnavailable": "コンピュータがこのプレビューの画面を取得できません。",
+  "previewInputInvalid": "コンピュータがこのタッチを受け付けられませんでした。",
+  "previewOnly": "プレビューではタッチと文字入力のみ使えます。",
+  "previewEntry": "コンピュータのプレビューを表示",
+  "previewEntryMany": "コンピュータのプレビューを表示（{{count}}）",
+  "previewEntryChoose": "表示するプレビューを選択"
 }

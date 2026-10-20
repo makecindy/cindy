@@ -163,5 +163,13 @@
   "hostMuteFailed": "无法修改远程电脑的静音状态",
   "handoffEnded": "这次代输入已经结束，没有可显示的窗口。",
   "handoffUnavailable": "这台电脑暂时不能只显示这个窗口。请在那台电脑上更新 Cindy，或开启远程桌面。",
-  "handoffWindow": "代输入 · {{app}}"
+  "handoffWindow": "代输入 · {{app}}",
+  "previewGrantInvalid": "这个预览暂时无法打开，请返回后重试。",
+  "previewEnded": "这个预览已结束。如果电脑上还开着，可以回到任务里重新进入。",
+  "previewCaptureUnavailable": "电脑暂时无法获取这个预览的画面。",
+  "previewInputInvalid": "电脑没能接收这次触摸。",
+  "previewOnly": "预览只支持触摸和输入文字。",
+  "previewEntry": "查看电脑上的预览",
+  "previewEntryMany": "查看电脑上的预览（{{count}}）",
+  "previewEntryChoose": "选择要查看的预览"
 }

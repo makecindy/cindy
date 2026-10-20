@@ -151,6 +151,69 @@ describe.each([false, true])(
         }),
       );
     });
+    it("opens a plugin preview view as its own viewer, keeps its grant out of the route and restores it", () => {
+      const previewView = {
+        key: "desktop-p",
+        name: REMOTE_DESKTOP_ROUTE,
+        params: {
+          deviceId: "computer",
+          deviceName: "Computer",
+          previewSession: "task-a",
+          previewPlugin: "Baguette",
+          previewTitle: "Sim",
+        },
+      };
+      fixture.state = stack(home, previewView);
+      render();
+      expect(fixture.props.preview).toEqual({
+        sessionId: "task-a",
+        pluginName: "Baguette",
+        title: "Sim",
+      });
+      expect(fixture.props.handoff).toBeUndefined();
+      // The whole-desktop viewer of the same computer is replaced, not reused.
+      expect(fixture.stopped).toHaveBeenCalledOnce();
+      // A different tab of the same computer is a different viewer.
+      fixture.state = stack(home, {
+        ...previewView,
+        key: "desktop-q",
+        params: { ...previewView.params, previewTitle: "Other" },
+      });
+      render();
+      expect(fixture.props.preview.title).toBe("Other");
+      expect(fixture.stopped).toHaveBeenCalledTimes(2);
+      act(() => fixture.props.onBack());
+      render();
+      fixture.props.onRestore();
+      expect(fixture.push).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: {
+            deviceId: "computer",
+            deviceName: "Computer",
+            previewSession: "task-a",
+            previewPlugin: "Baguette",
+            previewTitle: "Other",
+          },
+        }),
+      );
+      const { params } = fixture.push.mock.calls.at(-1)![0];
+      expect(Object.keys(params).join()).not.toMatch(/grant/i);
+    });
+    it("lets a window handoff win over preview params", () => {
+      fixture.state = stack(home, {
+        key: "desktop-w",
+        name: REMOTE_DESKTOP_ROUTE,
+        params: {
+          deviceId: "computer",
+          deviceName: "Computer",
+          handoff: "req1",
+          previewSession: "task-a",
+        },
+      });
+      render();
+      expect(fixture.props.handoff).toBe("req1");
+      expect(fixture.props.preview).toBeUndefined();
+    });
     it("retains one mounted viewer across back and fullscreen restoration", () => {
       act(() => fixture.props.onBack());
       render();

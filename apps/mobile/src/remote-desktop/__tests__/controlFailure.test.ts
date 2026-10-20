@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   controlFailureAction,
+  previewInputFailureAction,
   remoteDesktopErrorCode,
 } from "../controlFailure";
 
@@ -44,5 +45,34 @@ describe("remote desktop control failure classification", () => {
   it("rebuilds when there is no usable code at all", () => {
     expect(controlFailureAction(new Error("network down"))).toBe("rebuild");
     expect(controlFailureAction(undefined)).toBe("rebuild");
+  });
+});
+
+describe("preview input failure classification", () => {
+  it("reads preview codes from a message", () => {
+    expect(
+      remoteDesktopErrorCode(new Error("[PREVIEW_SOURCE_ENDED] tab closed")),
+    ).toBe("PREVIEW_SOURCE_ENDED");
+  });
+  it.each(["PREVIEW_INPUT_INVALID", "DESKTOP_PREVIEW_ONLY"])(
+    "releases only the gesture for %s",
+    (code) => {
+      expect(previewInputFailureAction(new Error(code))).toBe("gesture");
+    },
+  );
+  it.each(["INVOKE_TIMEOUT", "DESKTOP_INPUT_BUSY"])(
+    "keeps the view for the unknown outcome %s",
+    (code) => {
+      expect(previewInputFailureAction(new Error(code))).toBe("ignore");
+    },
+  );
+  it.each([
+    "PREVIEW_SOURCE_ENDED",
+    "PREVIEW_CAPTURE_UNAVAILABLE",
+    "DESKTOP_LEASE_EXPIRED",
+    "DESKTOP_VIEW_ONLY",
+    "something else",
+  ])("takes the ordinary failure path for %s", (code) => {
+    expect(previewInputFailureAction(new Error(code))).toBe("rebuild");
   });
 });

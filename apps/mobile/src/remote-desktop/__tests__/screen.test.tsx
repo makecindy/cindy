@@ -5514,3 +5514,233 @@ describe("remote desktop controls", () => {
     }
   });
 });
+
+describe("plugin preview tab view", () => {
+  const grant = "g".repeat(43);
+  const target = { sessionId: "s1", pluginName: "Baguette", title: "Sim" };
+  const touch = {
+    kind: "touch",
+    phase: "start",
+    points: [{ id: 0, x: 0.5, y: 0.5 }],
+  };
+  const previewHost = (
+    over: {
+      previewTab?: unknown;
+      tabs?: unknown[];
+      input?: (request: any) => unknown;
+    } = {},
+  ) => {
+    fixture.invoke.mockImplementation(async (_device, _channel, [request]) => {
+      switch (request.op) {
+        case "capabilities":
+          return {
+            version: 1,
+            enabled: true,
+            canControl: true,
+            platform: "darwin",
+            displays: [display],
+            ...("previewTab" in over
+              ? { previewTab: over.previewTab }
+              : { previewTab: { version: 1, maxTouchPoints: 2 } }),
+          };
+        case "previewTabs":
+          return {
+            tabs: over.tabs ?? [
+              { grant, sessionId: "s1", pluginName: "Baguette", title: "Sim" },
+            ],
+          };
+        case "previewStart":
+          return {
+            lease: "lease",
+            controlling: false,
+            display: { ...display, id: "preview" },
+            preview: { pluginName: "Baguette", title: "Sim" },
+          };
+        case "previewInput":
+          return over.input
+            ? over.input(request)
+            : { sequence: request.sequence };
+        default:
+          return {};
+      }
+    });
+  };
+  const render = async () => {
+    await act(async () =>
+      root.render(
+        <RemoteDesktopSession
+          deviceId="computer"
+          deviceName="My Mac"
+          preview={target}
+          focused
+          onBack={() => {}}
+        />,
+      ),
+    );
+  };
+  const viewerInput = async (sequence: number, events: unknown[] = [touch]) =>
+    act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "input", epoch: "lease", sequence, events }),
+        },
+      });
+    });
+
+  it("starts a preview with a fresh grant and never asks for a display, control or whole screen", async () => {
+    previewHost();
+    await render();
+    await connect();
+    expect(requests().map((r) => r.op)).toEqual([
+      "capabilities",
+      "previewTabs",
+      "capabilities",
+      "previewStart",
+    ]);
+    expect(requests()[1]).toEqual({ op: "previewTabs", sessionId: "s1" });
+    expect(requests()[3]).toEqual({ op: "previewStart", grant });
+    expect(sent()).toContainEqual(
+      expect.objectContaining({
+        type: "init",
+        preview: { maxTouchPoints: 2 },
+        width: 1920,
+      }),
+    );
+    expect(sent()).toContainEqual({ type: "mode", mode: "pan" });
+    expect(sent()).toContainEqual({ type: "control", enabled: true });
+    expect(requests().some((r) => r.op === "start" || r.op === "control")).toBe(
+      false,
+    );
+  });
+
+  it("sends viewer batches as previewInput with one increasing sequence and acknowledges each", async () => {
+    previewHost();
+    await render();
+    await connect();
+    await viewerInput(1);
+    await viewerInput(1, [{ ...touch, phase: "end", points: [] }]);
+    const inputs = requests().filter((r) => r.op === "previewInput");
+    expect(inputs).toEqual([
+      { op: "previewInput", lease: "lease", sequence: 1, events: [touch] },
+      {
+        op: "previewInput",
+        lease: "lease",
+        sequence: 2,
+        events: [{ ...touch, phase: "end", points: [] }],
+      },
+    ]);
+    expect(sent().filter((m) => m.type === "ack")).toHaveLength(2);
+    expect(requests().some((r) => r.op === "input")).toBe(false);
+  });
+
+  it("drops events the host cannot take instead of sending them", async () => {
+    previewHost();
+    await render();
+    await connect();
+    await viewerInput(1, [{ kind: "move", x: 0.5, y: 0.5 }]);
+    await viewerInput(2, [
+      { ...touch, points: [touch.points[0], { id: 1, x: 0, y: 0 }, { id: 2, x: 1, y: 1 }] },
+    ]);
+    expect(requests().some((r) => r.op === "previewInput")).toBe(false);
+    expect(sent().filter((m) => m.type === "ack")).toHaveLength(2);
+  });
+
+  it("keeps the preview when one batch is refused and releases that gesture", async () => {
+    previewHost({
+      input: () => {
+        throw new Error("PREVIEW_INPUT_INVALID");
+      },
+    });
+    await render();
+    await connect();
+    await viewerInput(1);
+    expect(sent()).toContainEqual({ type: "releaseInput" });
+    expect(requests().some((r) => r.op === "stop")).toBe(false);
+    expect(host.textContent).not.toContain("remoteDesktop.previewInputInvalid");
+  });
+
+  it("ends without reconnecting when the tab is gone", async () => {
+    previewHost({
+      input: () => {
+        throw new Error("PREVIEW_SOURCE_ENDED");
+      },
+    });
+    await render();
+    await connect();
+    await viewerInput(1);
+    expect(host.textContent).toContain("remoteDesktop.previewEnded");
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(requests().filter((r) => r.op === "previewStart")).toHaveLength(1);
+  });
+
+  it("says the tab ended when it is no longer listed, and never starts", async () => {
+    previewHost({ tabs: [] });
+    await render();
+    await connect();
+    expect(host.textContent).toContain("remoteDesktop.previewEnded");
+    expect(requests().some((r) => r.op === "previewStart")).toBe(false);
+  });
+
+  it("does not start on a computer without preview support or fall back to the screen", async () => {
+    previewHost({ previewTab: undefined });
+    await render();
+    await connect();
+    expect(host.textContent).toContain("remoteDesktop.upgrade");
+    expect(requests().some((r) => r.op === "previewTabs")).toBe(false);
+    expect(requests().some((r) => r.op === "start")).toBe(false);
+  });
+
+  it("shows only what a preview can use in the operations panel", async () => {
+    previewHost();
+    await render();
+    await connect();
+    act(() => button("operations").click());
+    expect(button("smallWindow")).not.toBeNull();
+    expect(button("rotate")).not.toBeNull();
+    expect(button("sound")).toBeNull();
+    expect(button("viewOnly")).toBeNull();
+    expect(button("displaySettings")).toBeNull();
+    expect(button("touch")).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.showMouseButtons"]'),
+    ).toBeNull();
+  });
+
+  it("lets go of every finger and takes touches again after the viewer overflows", async () => {
+    previewHost();
+    await render();
+    await connect();
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: { data: '{"type":"inputOverflow","epoch":"lease"}' },
+      });
+    });
+    expect(requests().filter((r) => r.op === "previewInput")).toEqual([
+      {
+        op: "previewInput",
+        lease: "lease",
+        sequence: 1,
+        events: [{ kind: "release" }],
+      },
+    ]);
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+  });
+
+  it("keeps the native receiver out of preview input and its init free of preview fields", async () => {
+    fixture.nativeMedia = true;
+    previewHost();
+    await render();
+    await connect();
+    await viewerInput(1);
+    expect(fixture.nativeInput).not.toHaveBeenCalled();
+    expect(requests().some((r) => r.op === "previewInput")).toBe(true);
+    const init = fixture.nativeReceive.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .find((message) => message.type === "init");
+    expect(init).toBeDefined();
+    expect(init).not.toHaveProperty("preview");
+  });
+});
