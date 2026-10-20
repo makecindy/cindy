@@ -636,8 +636,11 @@ describe('RightSidebarShell empty state', () => {
         expect(parseFloat(layer.style.width)).toBeGreaterThan(0);
         expect(parseFloat(layer.style.height)).toBeGreaterThan(0);
         expect(layer.getAttribute('aria-hidden')).toBe('true');
+        // 不可见期间 webview 退出 Tab 序,停止投屏后还原。
+        expect(entry.webview.getAttribute('tabindex')).toBe('-1');
 
         act(() => setPreviewCastingTabs([]));
+        expect(entry.webview.hasAttribute('tabindex')).toBe(false);
         // 停止投屏:去掉保活层,回到各状态原有的隐藏方式(切任务 = hidden;侧栏收起 = 仍由外壳 w-0 裁切)。
         expect(layer.style.position).toBe('');
         expect(layer.hasAttribute('data-preview-casting')).toBe(false);

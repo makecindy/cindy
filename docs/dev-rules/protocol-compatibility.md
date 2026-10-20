@@ -827,12 +827,15 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 
 - **能力** `capabilities.previewTab: { version: 1, maxTouchPoints: 1..10 }`。缺失、非对象、`version !== 1`
   或 `maxTouchPoints` 非法，一律视为不支持（`remoteDesktopPreviewTabCapability` 返回 null）。
-- **请求**：`previewTabs { sessionId? }`（列出可投屏标签，回 `{ tabs: [{ grant, sessionId, pluginName, title }] }`）、
+- **请求**：`previewTabs { sessionId? }`（列出可投屏标签，回 `{ tabs: [{ grant, sessionId, pluginName, title, ref? }] }`）、
   `previewStart { grant }`（开预览 lease）、`previewInput { lease, sequence, events }`（触摸 / 按键 / 文字）。
   `previewTabs`、`previewStart` 与 `capabilities`、`start` 一样不带 lease；`previewStart` 带
   `displayId` / `takeover` / `resume` / `control` / `lockOnExit` / `handoff` 任一字段即 `INVALID_REQUEST`，
   预览不可能落到整屏。grant 是 32 字节 base64url（43 字符），parser 只限长度，格式由 `isPreviewGrant` 复核，
   被控端对格式不符的 grant 回 `PREVIEW_GRANT_INVALID`。
+- **标签标识** `PreviewTabSummary.ref?`：被控端给的稳定不透明标识（`/^[A-Za-z0-9_-]{1,64}$/`，`isPreviewTabRef`
+  复核，非凭据），同一绑定存续期间不变，标签重建 / 换源后变。可选字段，旧被控端不带。控制端的路由带 `previewRef`
+  （不含 grant）时只按 `ref` 精确选标签，找不到即视为已结束；没有 `ref`（旧被控端）才按插件名 / 标题匹配。
 - **预览 lease**：`controlling` 恒为 `false`，附 `preview: { pluginName, title }`；`display.id` 是不透明预览来源 id。
   只允许 `stop` / `heartbeat` / `presentation` / `offer` / `ice` / `viewerHidden` / `frame` / `previewInput`
   （`PREVIEW_LEASE_OPS`），其余回 `DESKTOP_PREVIEW_ONLY`。

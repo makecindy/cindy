@@ -273,7 +273,10 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   (missing, not an object, other version, bad count) means unsupported.
 - **List and start** need no lease: `previewTabs { sessionId? }` replies
   `{ tabs: [{ grant, sessionId, pluginName, title }] }` (title at most 200
-  characters). A grant is 32 random bytes as base64url (43 characters), valid for 60
+  characters). A tab may also carry `ref`, a stable opaque identity of its binding (1 to
+  64 of `A-Za-z0-9_-`, not a credential): it is the same for as long as the binding
+  lives and changes once the tab is rebuilt or its page changes source. Hosts that
+  predate it omit the field. A grant is 32 random bytes as base64url (43 characters), valid for 60
   seconds, one use, bound to the requesting peer. `previewStart { grant }` replies a
   lease with `controlling: false` and `preview: { pluginName, title }`; `display.id` is
   an opaque preview source id and `width` / `height` are the tab's CSS viewport.
@@ -343,6 +346,37 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.
   Stopping never locks the screen. While a preview lease is active its tab is passed to
   `setCastingTabs` so it keeps painting while hidden.
+
+### Preview tab view on the phone
+
+The entry is `PreviewTabEntry` (`apps/mobile/src/remote-desktop/`), a strip above the
+composer on the task page and mounted in one place in `app/sessions/[sessionId].tsx`.
+It lists tabs with `previewTabs { sessionId }` every 4 s while the page is focused, the
+app is in the foreground and the computer is online, reads `capabilities` once per run
+(page shown, app foregrounded, computer reconnected), backs off 8 s, 16 s, 30 s after a
+failure, and shows nothing when the computer is old, has remote desktop off, or lists no
+tab. The grants in a listing are dropped at once.
+
+Opening it pushes `devices/desktop/[deviceId]` with `previewSession` (the task),
+`previewPlugin`, `previewTitle` and, when the listing has one, `previewRef`; a grant
+never goes into a route, log or store. With a `previewRef` only the tab with that `ref`
+is started, and when it is not listed any more the view ends as `PREVIEW_SOURCE_ENDED`
+instead of taking another tab of the plugin; without one (an older computer) the tab is
+chosen by plugin name and title as before. The
+session fetches `capabilities` and a fresh grant right before `RemoteDesktopViewerSession`
+`connect({ preview })`, with no `resume`, `takeover` or display, so every reconnect starts
+from a new listing and a vanished tab ends as `PREVIEW_SOURCE_ENDED`.
+
+In the viewer (`viewerRuntime.js`, `init.preview.maxTouchPoints` turns it on) raw fingers
+become `touch` events with the full set of points in picture coordinates: no local pinch
+zoom, pan, hold-to-drag or cursor. A finger that lands outside the picture is dropped, one
+that slides out is held at the edge. Batches never use the `input-v1` data channel: the
+page posts `input` to React Native, which numbers them (one `previewInput` sequence per
+lease), sends them as `previewInput` requests and acknowledges the page. A refused
+batch (`PREVIEW_INPUT_INVALID`) releases that gesture only; the other preview errors end
+the view without reconnecting. The panel keeps rotate and small window; the keyboard is
+the system keyboard (text, Backspace, Enter), with no clipboard, display, audio, view-only
+or window actions. The native iOS receiver is never sent the `preview` field.
 
 ### Incremental ICE and media recovery
 

@@ -11,6 +11,7 @@ import {
 import { NativeRemoteDesktopView } from "./NativeRemoteDesktopView";
 import { RemoteDesktopSession } from "./RemoteDesktopScreen";
 import { logDesktopNavigation } from "./remoteDesktopNavigationDebug";
+import { parsePreviewTarget, type PreviewTarget } from "./previewTarget";
 
 type Session = {
   account: string;
@@ -18,7 +19,19 @@ type Session = {
   deviceName: string;
   /** 代输入 live view of one window; a different request is a different viewer. */
   handoff?: string;
+  /** Live view of one plugin preview tab of a task. */
+  preview?: PreviewTarget;
 };
+
+const sameTarget = (a?: PreviewTarget, b?: PreviewTarget) =>
+  a?.sessionId === b?.sessionId &&
+  a?.pluginName === b?.pluginName &&
+  a?.title === b?.title &&
+  a?.ref === b?.ref;
+const previewKey = (target?: PreviewTarget) =>
+  target
+    ? `${target.sessionId}:${target.pluginName ?? ""}:${target.title ?? ""}:${target.ref ?? ""}`
+    : "";
 
 /** One connected viewer survives its route, but never its signed-in owner. */
 export function RemoteDesktopHost({ children }: { children: ReactNode }) {
@@ -28,7 +41,16 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
   const rootState = useNavigationState((state) => state);
   const route = activeDesktopRoute(rootState);
   const params = route?.params as
-    { deviceId?: string; deviceName?: string; handoff?: string } | undefined;
+    | {
+        deviceId?: string;
+        deviceName?: string;
+        handoff?: string;
+        previewSession?: string;
+        previewPlugin?: string;
+        previewTitle?: string;
+        previewRef?: string;
+      }
+    | undefined;
   const account =
     auth.isAuthenticated && auth.user?.id
       ? `${auth.user.id}:${auth.accountGeneration}`
@@ -42,6 +64,9 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
     inDesktop && typeof params?.handoff === "string" && params.handoff
       ? params.handoff
       : undefined;
+  const routePreview =
+    inDesktop && !routeHandoff ? parsePreviewTarget(params ?? {}) : undefined;
+  const routePreviewKey = previewKey(routePreview);
   const [session, setSession] = useState<Session | null>(null);
   const [visible, setVisible] = useState(true);
   const restorePending = useRef<Session | null>(null);
@@ -54,19 +79,22 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
       setSession((current) =>
         current?.account === account &&
         current.deviceId === routeDevice &&
-        current.handoff === routeHandoff
+        current.handoff === routeHandoff &&
+        sameTarget(current.preview, routePreview)
           ? current
           : {
               account,
               deviceId: routeDevice,
               deviceName: routeName,
               ...(routeHandoff ? { handoff: routeHandoff } : {}),
+              ...(routePreview ? { preview: routePreview } : {}),
             },
       );
       setVisible(true);
     } else
       setSession((current) => (current?.account === account ? current : null));
-  }, [account, routeDevice, routeName, routeHandoff]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- routePreviewKey stands for routePreview
+  }, [account, routeDevice, routeName, routeHandoff, routePreviewKey]);
   const current = session?.account === account ? session : null;
   const owner = useRef(current);
   owner.current = current;
@@ -118,10 +146,11 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
           collapsable={false}
         >
           <RemoteDesktopSession
-            key={`${current.account}:${current.deviceId}:${current.handoff ?? ""}`}
+            key={`${current.account}:${current.deviceId}:${current.handoff ?? ""}:${previewKey(current.preview)}`}
             deviceId={current.deviceId}
             deviceName={current.deviceName}
             handoff={current.handoff}
+            preview={current.preview}
             focused={routeDevice === current.deviceId}
             onBack={() => {
               logDesktopNavigation("back callback", navigation.getRootState(), {
@@ -186,6 +215,20 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
                   deviceId: current.deviceId,
                   deviceName: current.deviceName,
                   ...(current.handoff ? { handoff: current.handoff } : {}),
+                  ...(current.preview
+                    ? {
+                        previewSession: current.preview.sessionId,
+                        ...(current.preview.pluginName
+                          ? { previewPlugin: current.preview.pluginName }
+                          : {}),
+                        ...(current.preview.title
+                          ? { previewTitle: current.preview.title }
+                          : {}),
+                        ...(current.preview.ref
+                          ? { previewRef: current.preview.ref }
+                          : {}),
+                      }
+                    : {}),
                 },
               });
             }}

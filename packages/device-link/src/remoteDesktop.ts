@@ -106,10 +106,16 @@ export const PREVIEW_MAX_TEXT_CHARS = 4096;
 export const PREVIEW_MAX_TITLE_CHARS = 200;
 const PREVIEW_MAX_TOUCH_ID = 2_147_483_647;
 const PREVIEW_GRANT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const PREVIEW_REF_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** 32 random bytes as unpadded base64url. Hosts answer a malformed grant with `PREVIEW_GRANT_INVALID`. */
 export function isPreviewGrant(value: unknown): value is string {
   return typeof value === "string" && PREVIEW_GRANT_PATTERN.test(value);
+}
+
+/** A tab's stable reference: 1..64 characters of `A-Za-z0-9_-`. Not a credential. */
+export function isPreviewTabRef(value: unknown): value is string {
+  return typeof value === "string" && PREVIEW_REF_PATTERN.test(value);
 }
 
 export interface PreviewTabSummary {
@@ -118,6 +124,14 @@ export interface PreviewTabSummary {
   sessionId: string;
   pluginName: string;
   title: string;
+  /**
+   * Stable opaque identity of this tab's binding (1..64 of `A-Za-z0-9_-`, see
+   * {@link isPreviewTabRef}), not a credential. It does not change while the
+   * binding lives, and changes once the tab is rebuilt or its page changes
+   * source. Optional: hosts that predate it omit the field, and the viewer then
+   * falls back to matching by plugin name and title.
+   */
+  ref?: string;
 }
 export type PreviewTabsRequest = { op: "previewTabs"; sessionId?: string };
 export type PreviewTabsReply = { tabs: PreviewTabSummary[] };

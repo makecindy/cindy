@@ -40,7 +40,16 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { connectionDiagnostics } from "./connectionDiagnostics";
 import { fittedDisplayModes } from "./fittedDisplayModes";
-import { controlFailureAction, remoteDesktopErrorCode } from "./controlFailure";
+import {
+  controlFailureAction,
+  previewInputFailureAction,
+  remoteDesktopErrorCode,
+} from "./controlFailure";
+import {
+  parsePreviewTarget,
+  pickPreviewTab,
+  type PreviewTarget,
+} from "./previewTarget";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
@@ -71,6 +80,10 @@ import {
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelReply,
   REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+  isPreviewInputEvent,
+  remoteDesktopPreviewTabCapability,
+  type PreviewInputEvent,
+  type PreviewTabsReply,
 } from "@cindy/device-link";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { BACKGROUND_TRANSITION_TIMEOUT_MS } from "@/device-link/backgroundConnection";
@@ -198,14 +211,34 @@ const LABELS: Record<string, string> = {
 };
 
 export default function RemoteDesktopScreen() {
-  const { deviceId: rawId, deviceName: rawName, handoff: rawHandoff } = useLocalSearchParams<{
+  const {
+    deviceId: rawId,
+    deviceName: rawName,
+    handoff: rawHandoff,
+    previewSession,
+    previewPlugin,
+    previewTitle,
+    previewRef,
+  } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
     handoff?: string;
+    previewSession?: string;
+    previewPlugin?: string;
+    previewTitle?: string;
+    previewRef?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
   const deviceName = typeof rawName === "string" ? rawName : deviceId;
   const handoff = typeof rawHandoff === "string" && rawHandoff ? rawHandoff : undefined;
+  const preview = handoff
+    ? undefined
+    : parsePreviewTarget({
+        previewSession,
+        previewPlugin,
+        previewTitle,
+        previewRef,
+      });
   const router = useRouter();
   const focused = useIsFocused();
   return (
@@ -221,6 +254,7 @@ export default function RemoteDesktopScreen() {
         deviceId={deviceId}
         deviceName={deviceName}
         handoff={handoff}
+        preview={preview}
         focused={focused}
         onBack={() => goBackGuarded(router)}
       />
@@ -232,6 +266,7 @@ export function RemoteDesktopSession({
   deviceId,
   deviceName,
   handoff,
+  preview,
   focused,
   onBack,
   onRestore,
@@ -242,6 +277,8 @@ export function RemoteDesktopSession({
   deviceName: string;
   /** 代输入 live view: only the window this waiting request is about (the host picks it). */
   handoff?: string;
+  /** Live view of one plugin preview tab of a task; touch only, never a display. */
+  preview?: PreviewTarget;
   focused: boolean;
   onBack(): void;
   onRestore?(): void;
@@ -249,6 +286,13 @@ export function RemoteDesktopSession({
   onEnded?(): void;
 }) {
   const auth = useAuth();
+  const previewMode = Boolean(preview);
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
+  // The host's touch limit and the sequence of previewInput batches. The
+  // sequence is numbered here, once, because the host ignores any that repeat or fall back.
+  const previewTouchLimit = useRef(1);
+  const previewSequence = useRef(0);
   const navigation = useRef({ onBack, onRestore, onVisibility, onEnded });
   navigation.current = { onBack, onRestore, onVisibility, onEnded };
   const focusedRef = useRef(focused);
@@ -347,7 +391,8 @@ export function RemoteDesktopSession({
   const [viewOnlySelected, setViewOnlySelected] = useState(false);
   const viewOnlyRef = useRef(false);
   /** Input reaches the computer only with host control and outside view only. */
-  const inputAllowed = (controlling: boolean) => controlling && !viewOnlyRef.current;
+  const inputAllowed = (controlling: boolean) =>
+    (controlling || previewMode) && !viewOnlyRef.current;
   // Last control bit we asked the host for but have not confirmed. Overflow and
   // take-control can time out after the local bit already moved; heartbeats use
   // this to retry a release or restore local control instead of ignoring host-true.
@@ -458,8 +503,11 @@ export function RemoteDesktopSession({
   const [inputMode, setInputMode] = useInputModePreference();
   const inputModeRef = useRef(inputMode);
   inputModeRef.current = inputMode;
-  const canInput = Boolean(lease?.controlling) && !viewOnlySelected;
-  const mode: Mode = canInput ? inputMode : "pan";
+  const canInput =
+    (Boolean(lease?.controlling) || (previewMode && Boolean(lease))) &&
+    !viewOnlySelected;
+  // A preview forwards raw touches: no pointer, touch-cursor or hold-to-drag.
+  const mode: Mode = canInput && !previewMode ? inputMode : "pan";
   const [operations, setOperations] = useState(false);
   const [controlPage, setControlPage] = useState<
     "controls" | "display" | "security"
@@ -525,9 +573,11 @@ export function RemoteDesktopSession({
       NativeRemoteDesktopView &&
       nativeMediaCommands.has(String(command.type))
     ) {
+      // The native receiver does not know `preview`; the viewer page does.
+      const { preview: _preview, ...nativeCommand } = command;
       void nativeViewer.current
         ?.receive({
-          ...command,
+          ...nativeCommand,
           epoch: command.epoch ?? owner?.lease,
           ...(command.type === "init"
             ? {
@@ -641,7 +691,11 @@ export function RemoteDesktopSession({
   );
   const request = useCallback(
     async <T,>(message: RemoteDesktopRequest, preSend?: () => void) => {
-      if (message.op === "start" || message.op === "heartbeat")
+      // A preview never locks the computer, so it has no lock-on-exit to carry.
+      if (
+        (message.op === "start" || message.op === "heartbeat") &&
+        !previewRef.current
+      )
         message = { ...message, lockOnExit: exitLockPolicy.current };
       const relay = () =>
         linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
@@ -1150,13 +1204,42 @@ export function RemoteDesktopSession({
         await linkRef.current.openLink(deviceId);
         if (current !== generation.current) return;
         mark("link-ready");
-        const resuming = displayId ? false : recovery.current.resuming;
+        // A preview is never resumed or taken over and names no display. Its
+        // grant is one-time and lives 60 s, so it is fetched here, after the
+        // link is up, and only held in this scope: never in a route, log or store.
+        let previewGrant: string | undefined;
+        const previewTarget = previewRef.current;
+        if (previewTarget) {
+          const hostCaps = await request<RemoteDesktopCapabilities>({
+            op: "capabilities",
+          });
+          if (current !== generation.current) return;
+          if (hostCaps?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
+          if (!hostCaps.enabled) throw new Error("DESKTOP_DISABLED");
+          const previewCap = remoteDesktopPreviewTabCapability(hostCaps);
+          if (!previewCap) throw new Error("CHANNEL_NOT_ALLOWED");
+          previewTouchLimit.current = previewCap.maxTouchPoints;
+          const listed = await request<PreviewTabsReply>({
+            op: "previewTabs",
+            sessionId: previewTarget.sessionId,
+          });
+          if (current !== generation.current) return;
+          const tab = pickPreviewTab(listed?.tabs ?? [], previewTarget);
+          // The tab was closed, replaced or is no longer the plugin's preview.
+          if (!tab) throw new Error("PREVIEW_SOURCE_ENDED");
+          previewGrant = tab.grant;
+        }
+        const resuming =
+          displayId || previewGrant ? false : recovery.current.resuming;
         const { caps: result, lease: next } =
           await viewerSession.current!.connect({
-            displayId: displayId ?? recovery.current.displayId,
+            displayId: previewGrant
+              ? undefined
+              : (displayId ?? recovery.current.displayId),
             resume: resuming,
-            takeover,
+            takeover: previewGrant ? false : takeover,
             ...(handoff ? { handoff } : {}),
+            ...(previewGrant ? { preview: { grant: previewGrant } } : {}),
             // Hosts with `autoControl` grant control with the lease.
             control: true,
             onStart: () => {
@@ -1168,7 +1251,7 @@ export function RemoteDesktopSession({
               capsRef.current = { deviceId, value: result };
               setHostCaps({ deviceId, value: result });
               // A window view never unlocks the computer: it shows a window on an unlocked desktop.
-              if (!handoff && supportsAutoUnlock(result.platform)) {
+              if (!handoff && !previewTarget && supportsAutoUnlock(result.platform)) {
                 // Linux capture may be unavailable until its locker releases the session.
                 if (result.platform === "linux") {
                   return securityRef.current.maybeUnlock(async () => {
@@ -1235,11 +1318,12 @@ export function RemoteDesktopSession({
         // Switch to the remembered display before the viewer asks for video,
         // so the first frame already has the chosen size.
         if (
-          await applyRememberedDisplay.current(
+          !previewGrant &&
+          (await applyRememberedDisplay.current(
             next,
             result,
             () => current === generation.current && active.current === next,
-          )
+          ))
         ) {
           if (current !== generation.current) return;
           setLease({ ...next });
@@ -1255,16 +1339,25 @@ export function RemoteDesktopSession({
             result.systemAudio &&
             videoSettingsRef.current.audio &&
             !audioUnavailable.current,
+          ...(previewGrant
+            ? { preview: { maxTouchPoints: previewTouchLimit.current } }
+            : {}),
         });
         // Playback/display preparation can yield after React has already sent
         // the controlling mode. Do not overwrite it with connect's old "pan".
         send({
           type: "mode",
-          mode: inputAllowed(next.controlling) ? inputModeRef.current : "pan",
+          mode:
+            !previewGrant && inputAllowed(next.controlling)
+              ? inputModeRef.current
+              : "pan",
         });
         // Entering remote desktop is the user's intent to control. The existing
         // host permission and ownership gates still decide whether it is allowed.
-        if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
+        // A preview has no control to ask for: touches are always allowed.
+        previewSequence.current = 0;
+        if (previewGrant) send({ type: "control", enabled: inputAllowed(true) });
+        else if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
         else if (result.canControl) {
           try {
             const control = await viewerSession.current!.control(true);
@@ -1712,6 +1805,7 @@ export function RemoteDesktopSession({
       leftInset: 0,
       enabled:
         showMouseButtons &&
+        !previewMode &&
         focused &&
         !operations &&
         !keyboard &&
@@ -2199,6 +2293,22 @@ export function RemoteDesktopSession({
         // posts control:false, which clears that release without flushing it.
         // Tell the host to drop control (stopInput still injects a native
         // release) so a held key/button cannot stay down while we view only.
+        if (previewRef.current) {
+          // A preview has no control to drop: let go of every finger on the
+          // tab, then take touches again.
+          void request({
+            op: "previewInput",
+            lease: current.lease,
+            sequence: ++previewSequence.current,
+            events: [{ kind: "release" }],
+          })
+            .catch(() => {})
+            .finally(() => {
+              if (active.current === current)
+                send({ type: "control", enabled: inputAllowed(true) });
+            });
+          break;
+        }
         if (!current.controlling) break;
         releaseControl();
         foregroundRestorePending.current = true;
@@ -2211,6 +2321,58 @@ export function RemoteDesktopSession({
           epoch: current.lease,
           sequence: message.sequence,
         };
+        if (previewRef.current) {
+          const events: unknown = message.events;
+          const only =
+            Array.isArray(events) &&
+            events.length > 0 &&
+            events.every(
+              (event) => (event as { kind?: unknown })?.kind === "release",
+            );
+          if (
+            presentation.current ||
+            actualPresentation.current ||
+            (!only && inputBusy.current?.lease === current.lease) ||
+            !Array.isArray(events) ||
+            events.length < 1 ||
+            events.length > 64 ||
+            !events.every((event) =>
+              isPreviewInputEvent(event, previewTouchLimit.current),
+            )
+          ) {
+            send(ack);
+            return;
+          }
+          const batch = { lease: current.lease };
+          if (!only) inputBusy.current = batch;
+          const ownsPreviewBatch = () =>
+            active.current === current && (only || inputBusy.current === batch);
+          void request({
+            op: "previewInput",
+            lease: current.lease,
+            sequence: ++previewSequence.current,
+            events: events as PreviewInputEvent[],
+          })
+            .catch((cause) => {
+              if (!ownsPreviewBatch()) return;
+              // One refused batch is one bad gesture, not the end of the view.
+              switch (previewInputFailureAction(cause)) {
+                case "gesture":
+                  send({ type: "releaseInput" });
+                  break;
+                case "ignore":
+                  break;
+                default:
+                  fail(cause);
+              }
+            })
+            .finally(() => {
+              if (!ownsPreviewBatch()) return;
+              if (!only) inputBusy.current = null;
+              send(ack);
+            });
+          break;
+        }
         // Entering view only sends one release batch: it must reach the host
         // (which keeps control) even while an older batch is still in flight.
         const releaseOnly =
@@ -3186,6 +3348,7 @@ export function RemoteDesktopSession({
             Platform.OS === "ios" &&
             !tableRegion &&
             showMouseButtons &&
+            !previewMode &&
             focused &&
             !operations &&
             !keyboard &&
@@ -3369,10 +3532,10 @@ export function RemoteDesktopSession({
               <RemoteDesktopPanel
                 railAnchor={systemSideRail ? {
                   right: (sideRailWidth - navigationChrome.target) / 2,
-                  top: (sideRailTop + navigationChrome.target + spacing.lg + windowSize.height - insets.bottom - navigationChrome.target * (handoff ? 2 : caps?.omarchyMenu ? 5 : 4)) / 2,
+                  top: (sideRailTop + navigationChrome.target + spacing.lg + windowSize.height - insets.bottom - navigationChrome.target * (handoff || previewMode ? 2 : caps?.omarchyMenu ? 5 : 4)) / 2,
                 } : undefined}
                 toolbarOnLeft={toolbarOnLeft}
-                toolbarActionCount={handoff ? 2 : caps?.omarchyMenu ? 5 : 4}
+                toolbarActionCount={handoff || previewMode ? 2 : caps?.omarchyMenu ? 5 : 4}
                 visible={operations && focused}
                 landscape={landscape}
                 topInset={edgePadding.paddingTop}
@@ -3385,7 +3548,7 @@ export function RemoteDesktopSession({
                     ? undefined
                     : () => setControlPage("controls")
                 }
-                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
+                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : lease?.preview ? lease.preview.title || lease.preview.pluginName : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
                 onClose={() => setOperations(false)}
                 footer={
                   <RemoteDesktopDisconnect onPress={() => void leave()} />
@@ -3454,7 +3617,8 @@ export function RemoteDesktopSession({
                     onResolution: changeResolution,
                   }}
                   inputMode={inputMode}
-                  displays={handoff ? [] : (caps?.displays ?? [])}
+                  displays={handoff || previewMode ? [] : (caps?.displays ?? [])}
+                  preview={previewMode}
                   displayId={recovery.current.displayId ?? lease?.display.id}
                   onViewOnly={() => void toggleControl()}
                   onInputMode={(value) => {
@@ -3472,7 +3636,7 @@ export function RemoteDesktopSession({
             </View>
           )}
         </View>
-        {tableRegion && frameReady && focused && !keyboard && !operations ? (
+        {tableRegion && !previewMode && frameReady && focused && !keyboard && !operations ? (
           <View testID="remoteDesktop.foldControls" style={{ position: 'absolute', left: foldControls.x,
             top: foldControls.y, width: foldControls.width, height: foldControls.height,
             paddingBottom: toolbarSize.height + (showMouseButtons ? 80 : 0) }}>
@@ -3552,7 +3716,7 @@ export function RemoteDesktopSession({
           >
             <RemoteDesktopToolbar
               landscape={landscape || systemSideRail}
-              windowOnly={Boolean(handoff)}
+              windowOnly={Boolean(handoff) || previewMode}
               onWorkspaceLeft={
                 caps?.workspaceNavigation
                   ? () => workspaceAction("workspaceLeft")
@@ -3681,12 +3845,17 @@ export function RemoteDesktopSession({
           ]}
         >
           <View style={styles.keyboardHeader}>
-            <RemoteDesktopClipboardButton
-              enabled={!connectionPending && canInput}
-              supported={caps?.clipboardText === true}
-              transfer={transferClipboard}
-            />
-            {Platform.OS === "ios" ? (
+            {!previewMode && (
+              <RemoteDesktopClipboardButton
+                enabled={!connectionPending && canInput}
+                supported={caps?.clipboardText === true}
+                transfer={transferClipboard}
+              />
+            )}
+            {previewMode ? (
+              // A preview takes the system keyboard's text only: no computer keys.
+              <View style={{ flex: 1 }} />
+            ) : Platform.OS === "ios" ? (
               <View style={{ flex: 1 }}>
                 <SegmentedControl
                   values={[

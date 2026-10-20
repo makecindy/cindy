@@ -163,5 +163,13 @@
   "hostMuteFailed": "Couldn't change the remote computer's mute setting",
   "handoffEnded": "This input handoff has already finished, so there is no window to show.",
   "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
-  "handoffWindow": "Input handoff · {{app}}"
+  "handoffWindow": "Input handoff · {{app}}",
+  "previewGrantInvalid": "This preview can't be opened right now. Go back and try again.",
+  "previewEnded": "This preview has ended. If it is still open on your computer, open it again from the task.",
+  "previewCaptureUnavailable": "The computer can't capture this preview right now.",
+  "previewInputInvalid": "The computer couldn't take that touch.",
+  "previewOnly": "A preview only supports touch and typing.",
+  "previewEntry": "View Preview on Computer",
+  "previewEntryMany": "View Previews on Computer ({{count}})",
+  "previewEntryChoose": "Choose a preview to view"
 }

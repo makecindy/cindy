@@ -35,3 +35,40 @@ export function castingKeepAliveStyle(
     overflow: 'hidden',
   };
 }
+
+const FOCUSABLE =
+  'webview, iframe, a[href], button, input, select, textarea, [contenteditable], [tabindex]';
+
+/**
+ * Take everything inside a kept-alive (invisible) body out of the Tab order and
+ * give up focus if it currently holds it, so a keyboard user can never land in
+ * a transparent webview. Previous `tabindex` values are restored by the
+ * returned function. Elements added while suspended (a late-attached webview,
+ * a popover) are covered too. Not `inert`: that would blur the guest on its own
+ * terms and is broader than needed.
+ */
+export function suspendFocusInside(root: HTMLElement): () => void {
+  const saved = new Map<Element, string | null>();
+  const apply = () => {
+    for (const el of root.querySelectorAll(FOCUSABLE)) {
+      if (saved.has(el)) continue;
+      saved.set(el, el.getAttribute('tabindex'));
+      el.setAttribute('tabindex', '-1');
+    }
+  };
+  apply();
+  const doc = root.ownerDocument;
+  const active = doc.activeElement;
+  if (active instanceof HTMLElement && active !== doc.body && root.contains(active)) active.blur();
+  const observer =
+    typeof MutationObserver === 'undefined' ? null : new MutationObserver(apply);
+  observer?.observe(root, { childList: true, subtree: true });
+  return () => {
+    observer?.disconnect();
+    for (const [el, previous] of saved) {
+      if (previous === null) el.removeAttribute('tabindex');
+      else el.setAttribute('tabindex', previous);
+    }
+    saved.clear();
+  };
+}

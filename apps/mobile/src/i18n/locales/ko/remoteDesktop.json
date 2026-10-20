@@ -163,5 +163,13 @@
   "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다",
   "handoffEnded": "이 대리 입력은 이미 끝나서 표시할 창이 없습니다.",
   "handoffUnavailable": "이 컴퓨터에서는 이 창만 표시할 수 없습니다. 해당 컴퓨터에서 Cindy를 업데이트하거나 원격 데스크톱을 켜세요.",
-  "handoffWindow": "대리 입력 · {{app}}"
+  "handoffWindow": "대리 입력 · {{app}}",
+  "previewGrantInvalid": "이 미리보기를 지금은 열 수 없습니다. 돌아가서 다시 시도하세요.",
+  "previewEnded": "이 미리보기가 종료되었습니다. 컴퓨터에서 아직 열려 있다면 세션에서 다시 들어올 수 있습니다.",
+  "previewCaptureUnavailable": "컴퓨터에서 이 미리보기 화면을 가져올 수 없습니다.",
+  "previewInputInvalid": "컴퓨터가 이 터치를 받지 못했습니다.",
+  "previewOnly": "미리보기에서는 터치와 문자 입력만 사용할 수 있습니다.",
+  "previewEntry": "컴퓨터의 미리보기 보기",
+  "previewEntryMany": "컴퓨터의 미리보기 보기 ({{count}})",
+  "previewEntryChoose": "볼 미리보기 선택"
 }

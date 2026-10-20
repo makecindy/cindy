@@ -54,6 +54,7 @@ export function RemoteDesktopControls({
   inputMode,
   displays,
   displayId,
+  preview = false,
   onViewOnly,
   onInputMode,
   showMouseButtons,
@@ -75,6 +76,8 @@ export function RemoteDesktopControls({
   inputMode: "touch" | "pointer";
   displays: RemoteDesktopDisplay[];
   displayId?: string;
+  /** A plugin preview tab: only rotate and the small window apply. */
+  preview?: boolean;
   onViewOnly(): void;
   onInputMode(mode: "touch" | "pointer"): void;
   showMouseButtons: boolean;
@@ -156,6 +159,10 @@ export function RemoteDesktopControls({
     },
   ];
 
+  const shownActions = preview
+    ? quickActions.filter(({ key }) => key === "rotate" || key === "smallWindow")
+    : quickActions;
+
   if (securitySettings && security)
     return <RemoteDesktopSecuritySettings {...security} />;
 
@@ -163,7 +170,7 @@ export function RemoteDesktopControls({
     <>
       {!displaySettings && (
         <View style={styles.quickActions}>
-          {quickActions.map(
+          {shownActions.map(
             ({ key, icon: Icon, onPress, disabled, selected }) => (
               <RemoteDesktopActionButton
                 key={key}
@@ -210,7 +217,7 @@ export function RemoteDesktopControls({
         </Text>
       )}
 
-      {!displaySettings && (
+      {!displaySettings && !preview && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
             {t("remoteDesktop.inputMode")}
@@ -311,7 +318,7 @@ export function RemoteDesktopControls({
           </View>
         </View>
       )}
-      {!displaySettings && (
+      {!displaySettings && !preview && (
         <View style={styles.group}>
           <Pressable
             onPress={() => onPage("display")}

@@ -156,6 +156,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     hold = null,
     moved = false;
   const pointers = new Map();
+  // Plugin preview tab view: fingers are sent as they are (no local zoom, pan,
+  // long-press drag or cursor). 0 = off; otherwise the host's touch point limit.
+  let previewTouch = 0,
+    previewNextId = 0;
+  const previewTouches = new Map();
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
     wheelGrip = find("mouse-wheel-grip");
@@ -851,6 +856,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const tail = pending[pending.length - 1];
     if (event.kind === "move" && tail?.kind === "move")
       pending[pending.length - 1] = event;
+    // A touch move carries every finger's position, so the newest replaces it.
+    else if (
+      event.kind === "touch" &&
+      event.phase === "move" &&
+      tail?.kind === "touch" &&
+      tail.phase === "move"
+    )
+      pending[pending.length - 1] = event;
     // Coalesce only adjacent scrolls, preserving button/key ordering. Bound the
     // accumulated distance so a delayed ACK cannot replay a large scroll backlog.
     else if (event.kind === "scroll" && tail?.kind === "scroll") {
@@ -886,10 +899,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (sending) return;
     // Do not route around a congested live data channel: the relay could
     // overtake its already-buffered key/button events and reorder input.
-    if (pc?.connectionState === "connected" && dc?.readyState === "open" && dc.bufferedAmount >= 16384) return;
+    if (!previewTouch && pc?.connectionState === "connected" && dc?.readyState === "open" && dc.bufferedAmount >= 16384) return;
     const events = pending.splice(0, 64),
       sequence = ++seq;
+    // A preview never uses the display input channel: the parent turns every
+    // batch into a previewInput request.
     if (
+      !previewTouch &&
       pc?.connectionState === "connected" &&
       dc &&
       dc.readyState === "open" &&
@@ -940,6 +956,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     updateMouseButtons();
     drag = false;
     pointers.clear();
+    previewTouches.clear();
     start = null;
     last = null;
     multi = null;
@@ -1281,7 +1298,49 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     }
     render();
   }
+  const previewSnapshot = () =>
+    [...previewTouches.values()].map(({ id, x, y }) => ({ id, x, y }));
+  function previewPointerDown(e) {
+    e.preventDefault();
+    if (
+      !control ||
+      previewTouches.has(e.pointerId) ||
+      previewTouches.size >= previewTouch
+    )
+      return;
+    const at = { x: e.clientX, y: e.clientY };
+    // The letterbox is no part of the picture: a finger that lands there is
+    // not a touch (one that slides out later is held at the picture's edge).
+    if (!insideDesktop(at)) return;
+    stage.setPointerCapture(e.pointerId);
+    const p = point(at);
+    previewTouches.set(e.pointerId, { id: previewNextId, x: p.x, y: p.y });
+    previewNextId = (previewNextId + 1) % 2147483647;
+    queue({ kind: "touch", phase: "start", points: previewSnapshot() });
+    flush();
+  }
+  function previewPointerMove(e) {
+    const touch = previewTouches.get(e.pointerId);
+    if (!touch) return;
+    e.preventDefault();
+    const p = point({ x: e.clientX, y: e.clientY });
+    if (p.x === touch.x && p.y === touch.y) return;
+    touch.x = p.x;
+    touch.y = p.y;
+    queue({ kind: "touch", phase: "move", points: previewSnapshot() });
+  }
+  function previewPointerUp(e) {
+    if (!previewTouches.has(e.pointerId)) return;
+    previewPointerMove(e);
+    previewTouches.delete(e.pointerId);
+    queue({ kind: "touch", phase: "end", points: previewSnapshot() });
+    flush();
+  }
   listen(stage, "pointerdown", (e) => {
+    if (previewTouch && !config.desktop) {
+      previewPointerDown(e);
+      return;
+    }
     if (config.desktop) {
       e.preventDefault();
       if (
@@ -1369,6 +1428,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       render();
       return;
     }
+    if (previewTouch) {
+      previewPointerMove(e);
+      return;
+    }
     if (!pointers.has(e.pointerId)) return;
     e.preventDefault();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1416,6 +1479,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         return;
       }
       mouse(e, false);
+      return;
+    }
+    if (previewTouch) {
+      previewPointerUp(e);
       return;
     }
     if (!pointers.has(e.pointerId)) return;
@@ -2396,6 +2463,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         resetCursor();
         control = false;
         release();
+        // A preview tab view: the host's touch limit, only for the mobile viewer.
+        previewTouch =
+          !config.desktop &&
+          Number.isSafeInteger(message.preview?.maxTouchPoints) &&
+          message.preview.maxTouchPoints >= 1
+            ? Math.min(10, message.preview.maxTouchPoints)
+            : 0;
+        previewTouches.clear();
         pending = [];
         sending = false;
         seq = 0;

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isPreviewGrant,
   isPreviewInputEvent,
+  isPreviewTabRef,
   isPreviewLeaseOp,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelRequest,
@@ -70,6 +71,13 @@ describe("preview tab wire parsing", () => {
     expect(isPreviewGrant(grant)).toBe(true);
     for (const g of ["", "short", "A".repeat(44), "A".repeat(42) + "=", 5, null])
       expect(isPreviewGrant(g)).toBe(false);
+  });
+
+  it("checks a tab's stable ref as 1..64 of A-Za-z0-9_-, which is not a credential", () => {
+    for (const ref of ["a", "tab_1-B", "x".repeat(64), grant])
+      expect(isPreviewTabRef(ref)).toBe(true);
+    for (const ref of ["", "x".repeat(65), "a b", "a/b", "é", undefined, 5, null])
+      expect(isPreviewTabRef(ref)).toBe(false);
   });
 
   it("previewTabs / previewStart carry no lease, so an older host rejects them at the lease check", () => {

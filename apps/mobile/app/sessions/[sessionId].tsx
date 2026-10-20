@@ -163,6 +163,7 @@ import { buildMobileSessionRenderWindow } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
+import { PreviewTabEntry } from '@/remote-desktop/PreviewTabEntry';
 import {
   COMPANION_AVATAR_SIZE,
   MessageRenderer,
@@ -10360,6 +10361,12 @@ function SessionScreenContent() {
               </Text>
               <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
             </Pressable>
+          ) : null}
+          {/* 电脑上该任务的插件预览标签：自包含入口，只改这一处即可换位置 */}
+          {!shareSelectionActive && !companionChat && currentSession && !isDeviceAccessRevoked && !isSharedTaskPeer(deviceId) ? (
+            <View style={{ marginHorizontal: composerTouchLayout.composerPaddingHorizontal }}>
+              <PreviewTabEntry deviceId={deviceId} deviceName={deviceName} sessionId={sessionId} />
+            </View>
           ) : null}
           {/*
             手机端终结不了的请求(plugin_setup 等)只贴在输入框上方:能看清电脑端

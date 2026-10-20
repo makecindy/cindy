@@ -42,7 +42,7 @@ export function remoteDesktopErrorCode(cause: unknown): string | undefined {
     typeof cause.code === "string"
       ? cause.code
       : message.match(
-          /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS)_[A-Z_]+\b/,
+          /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS|PREVIEW)_[A-Z_]+\b/,
         )?.[0];
   return code && /^[A-Z_]+$/.test(code) ? code : undefined;
 }
@@ -53,5 +53,20 @@ export function controlFailureAction(cause: unknown): ControlFailureAction {
   if (code === undefined) return "rebuild";
   if (CONTROL_LOSS_CODES.has(code)) return "release";
   if (UNKNOWN_OUTCOME_CODES.has(code)) return "ignore";
+  return "rebuild";
+}
+
+/**
+ * What a failed `previewInput` batch should do. A refused batch is one bad
+ * gesture, not a dead view: release it and carry on. Everything else (the tab
+ * is gone, capture failed, the lease ended) takes the ordinary failure path.
+ */
+export function previewInputFailureAction(
+  cause: unknown,
+): "gesture" | "ignore" | "rebuild" {
+  const code = remoteDesktopErrorCode(cause);
+  if (code === "PREVIEW_INPUT_INVALID" || code === "DESKTOP_PREVIEW_ONLY")
+    return "gesture";
+  if (code && UNKNOWN_OUTCOME_CODES.has(code)) return "ignore";
   return "rebuild";
 }

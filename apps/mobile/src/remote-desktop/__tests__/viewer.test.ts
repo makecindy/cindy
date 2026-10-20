@@ -1659,3 +1659,157 @@ describe("remote desktop three-segment backdrop", () => {
     expect(side + centerW + side).toBeCloseTo(800, 2);
   });
 });
+
+describe("plugin preview tab view", () => {
+  // The picture is 400x225 at y=187.5 of the 400x600 stage.
+  const open = (maxTouchPoints = 2, rtc = false) => {
+    const v = viewer(rtc);
+    v.send({
+      type: "init",
+      epoch: "p",
+      width: 1920,
+      height: 1080,
+      preview: { maxTouchPoints },
+    });
+    v.send({ type: "control", enabled: true });
+    return v;
+  };
+  const batches = (v: ReturnType<typeof viewer>) =>
+    v.messages.filter((m) => m.type === "input");
+  const events = (v: ReturnType<typeof viewer>) =>
+    batches(v).flatMap((m) => m.events ?? []);
+
+  it("sends a single finger as touch start, move and end in picture coordinates", () => {
+    const v = open();
+    v.pointer("pointerdown", 1, 200, 300);
+    expect(events(v)).toEqual([
+      { kind: "touch", phase: "start", points: [{ id: 0, x: 0.5, y: 0.5 }] },
+    ]);
+    v.ack();
+    v.pointer("pointermove", 1, 300, 300);
+    v.flush();
+    expect(events(v).at(-1)).toEqual({
+      kind: "touch",
+      phase: "move",
+      points: [{ id: 0, x: 0.75, y: 0.5 }],
+    });
+    v.ack();
+    v.pointer("pointerup", 1, 300, 300);
+    expect(events(v).at(-1)).toEqual({ kind: "touch", phase: "end", points: [] });
+  });
+
+  it("keeps two fingers as a full snapshot and never zooms or pans locally", () => {
+    const v = open();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.ack();
+    v.pointer("pointerdown", 2, 300, 300);
+    expect(events(v).at(-1)).toEqual({
+      kind: "touch",
+      phase: "start",
+      points: [
+        { id: 0, x: 0.25, y: 0.5 },
+        { id: 1, x: 0.75, y: 0.5 },
+      ],
+    });
+    v.ack();
+    v.pointer("pointermove", 1, 0, 300);
+    v.pointer("pointermove", 2, 400, 300);
+    v.frame();
+    v.frame(40);
+    v.flush();
+    expect(v.elements.image.style.width).toBe("400px");
+    expect(v.elements.image.style.left).toBe("0px");
+    expect(events(v).at(-1)).toEqual({
+      kind: "touch",
+      phase: "move",
+      points: [
+        { id: 0, x: 0, y: 0.5 },
+        { id: 1, x: 1, y: 0.5 },
+      ],
+    });
+    v.ack();
+    v.pointer("pointerup", 1, 0, 300);
+    expect(events(v).at(-1)).toEqual({
+      kind: "touch",
+      phase: "end",
+      points: [{ id: 1, x: 1, y: 0.5 }],
+    });
+    v.ack();
+    v.pointer("pointerup", 2, 400, 300);
+    expect(events(v).at(-1)).toEqual({ kind: "touch", phase: "end", points: [] });
+  });
+
+  it("drops fingers that land in the black bars or beyond the host's touch limit", () => {
+    const v = open(1);
+    v.pointer("pointerdown", 1, 200, 100);
+    v.pointer("pointerdown", 1, 200, 550);
+    v.flush();
+    expect(batches(v)).toHaveLength(0);
+    v.pointer("pointerdown", 2, 200, 300);
+    v.ack();
+    v.pointer("pointerdown", 3, 100, 300);
+    v.flush();
+    expect(events(v)).toHaveLength(1);
+    // Sliding out of the picture holds the finger at its edge.
+    v.pointer("pointermove", 2, 200, 100);
+    v.flush();
+    expect(events(v).at(-1)).toMatchObject({
+      phase: "move",
+      points: [{ id: 0, x: 0.5, y: 0 }],
+    });
+  });
+
+  it("merges queued moves and numbers batches for the parent to acknowledge", () => {
+    const v = open();
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 210, 300);
+    v.pointer("pointermove", 1, 220, 300);
+    v.pointer("pointermove", 1, 230, 300);
+    v.ack();
+    v.flush();
+    expect(batches(v).map((m) => m.events?.length)).toEqual([1, 1]);
+    expect(events(v).at(-1)).toMatchObject({
+      phase: "move",
+      points: [{ x: 0.575 }],
+    });
+  });
+
+  it("releases every finger on cancel and keeps release as a valid event", () => {
+    const v = open();
+    v.pointer("pointerdown", 1, 200, 300);
+    v.ack();
+    v.pointer("pointercancel", 1, 200, 300);
+    expect(events(v).at(-1)).toEqual({ kind: "release" });
+    v.ack();
+    // Nothing is held any more: a stray move or up sends nothing.
+    const count = batches(v).length;
+    v.pointer("pointermove", 1, 250, 300);
+    v.pointer("pointerup", 1, 250, 300);
+    v.flush();
+    expect(batches(v)).toHaveLength(count);
+  });
+
+  it("sends committed text and keys, and uses the parent instead of the data channel", () => {
+    const v = open(2, true);
+    v.playVideo();
+    v.send({ type: "keyboard", enabled: true });
+    v.keyboardInput("input", { isComposing: false });
+    v.elements["keyboard-input"].value = "​hi";
+    v.keyboardInput("input", { isComposing: false });
+    expect(events(v)).toEqual([{ kind: "text", text: "hi" }]);
+    v.ack();
+    v.pointer("pointerdown", 1, 200, 300);
+    expect(v.dataChannel.send).not.toHaveBeenCalled();
+    expect(events(v).at(-1)).toMatchObject({ kind: "touch", phase: "start" });
+  });
+
+  it("returns to the ordinary gestures when a lease without preview starts", () => {
+    const v = open();
+    v.send({ type: "init", epoch: "plain", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointerup", 1, 200, 300);
+    v.flush();
+    expect(events(v).some((e) => e.kind === "touch")).toBe(false);
+  });
+});
