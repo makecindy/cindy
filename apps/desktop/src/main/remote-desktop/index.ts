@@ -42,6 +42,8 @@ import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/s
 import { throwIpcError } from '../utils/ipcValidate';
 import { RemoteDesktopController, type DesktopControllerDeps } from './controller';
 import { getInputHandoffService } from '../input-handoff/service';
+import { getPreviewTabIndex, getRsbBrowserBridge, setCastingTabs } from '../rsb-browser-bridge';
+import { createPreviewHost, type PreviewGuest } from './previewHost';
 import { ClipboardCounter } from './clipboardCounter';
 import { onQuit } from '../lifecycle';
 import {
@@ -165,6 +167,14 @@ const captureWindow = new DesktopCaptureWindow(() =>
   remoteDesktop.stop(undefined, undefined, 'capture-exited'),
 );
 const nativeCapture = new NativeDesktopCapture();
+// Plugin preview tabs: listed from the trusted T2 index, captured with capturePage and driven
+// through the guest's debugger. Never a display, an OS window or OS input.
+const previewHost = createPreviewHost({
+  index: getPreviewTabIndex(),
+  guest: (tabId) => getRsbBrowserBridge().getWebContentsByTabId(tabId) as PreviewGuest | null,
+  // Tabs being watched keep painting while the desktop UI hides them.
+  setCastingTabs: (tabIds) => void setCastingTabs(tabIds),
+});
 const hyprlandCapture = new HyprlandCapture();
 const linuxAudio = new LinuxDesktopAudio();
 const linuxMute = new LinuxDesktopMute();
@@ -382,6 +392,9 @@ async function offer(
   attemptId?: string,
 ): Promise<string> {
   if (pending || preparingOffer) throw new Error('DESKTOP_VIDEO_BUSY');
+  // A preview tab never goes through a screen or portal source.
+  if (remoteDesktop.previewSource(lease.lease))
+    return offerPreview(lease, sdp, settings, attemptId);
   if (portalWayland()) {
     if (lease.display.id !== WAYLAND_DISPLAY_ID) throw new Error('DESKTOP_DISPLAY_MISSING');
     await ensurePortalCapture(lease.lease);
@@ -506,6 +519,58 @@ async function offer(
         continuousNativeCapture: hyprland,
         nativeAudio: hyprland && settings?.audio === true,
         cursorOverlay: nativeOverlay,
+        lease: lease.lease,
+        sdp,
+        settings,
+        background: remoteDesktop.isBackgroundViewing(lease.lease),
+        attemptId,
+        iceServers,
+      },
+      REMOTE_DESKTOP_OFFER_BUDGET.hostMs,
+    );
+    if (typeof result !== 'string') throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+    return result;
+  } catch (error) {
+    if (generation === offerGeneration) stopVideo();
+    throw error;
+  } finally {
+    if (generation === offerGeneration) preparingOffer = false;
+  }
+}
+
+/**
+ * A preview tab lease: the video is `capturePage` frames of the tab, pulled through the same
+ * native frame stream as a screen. No capture source, display, portal or audio is involved,
+ * and nothing here falls back to one.
+ */
+async function offerPreview(
+  lease: RemoteDesktopLease,
+  sdp: string,
+  settings?: RemoteDesktopVideoSettings,
+  attemptId?: string,
+): Promise<string> {
+  if (pending || preparingOffer) throw new Error('DESKTOP_VIDEO_BUSY');
+  if (settings?.audio) throw new Error('DESKTOP_AUDIO_UNAVAILABLE');
+  stopVideo();
+  preparingOffer = true;
+  const generation = offerGeneration;
+  const current = () => generation === offerGeneration && remoteDesktop.hasLease(lease.lease);
+  try {
+    const ready = captureWindow.start();
+    host = captureWindow.contents;
+    const currentHost = host;
+    const [, iceServers] = await Promise.all([ready, loadDesktopIceServers()]);
+    if (!current() || host !== currentHost || !currentHost || currentHost.isDestroyed())
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    nativeSettings = settings;
+    setVideoLease(lease.lease);
+    videoAttempt = attemptId;
+    const result = await requestHost(
+      {
+        id: randomUUID(),
+        op: 'offer',
+        nativeCapture: true,
+        continuousNativeCapture: true,
         lease: lease.lease,
         sdp,
         settings,
@@ -912,6 +977,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   createViewerDisplay,
   ...(process.platform === 'darwin' ? handoffWindowDeps() : {}),
+  preview: previewHost,
   startInput: async (displayId, window) => {
     // A portal-selected window is not the whole compositor coordinate space.
     // Never allow a forged control request to drive that view-only fallback.
@@ -1097,14 +1163,23 @@ export function registerRemoteDesktopIpc(
   });
   ipcMain.handle(DESKTOP_LOCAL.NATIVE_FRAME, async (event, lease: unknown) => {
     captureWindow.assertSender(event);
+    const previewSource = typeof lease === 'string' ? remoteDesktop.previewSource(lease) : null;
     if (
       event.sender !== host ||
       typeof lease !== 'string' ||
       lease !== videoLease ||
-      !nativeDisplay ||
+      (!nativeDisplay && !previewSource) ||
       !remoteDesktop.hasLease(lease)
     )
       throwIpcError('PERMISSION_DENIED', 'Invalid desktop capture lease');
+    if (previewSource) {
+      // A preview lease reads its tab only; the screen capture helpers are never started for it.
+      const generation = offerGeneration;
+      const jpeg = await previewHost.frame(previewSource).catch(() => null);
+      if (generation !== offerGeneration || !remoteDesktop.hasLease(lease as string)) return null;
+      return jpeg;
+    }
+    if (!nativeDisplay) return null;
     // Frames from the previous display geometry must not reach the held stream.
     if (videoPaused) return null;
     const generation = offerGeneration;

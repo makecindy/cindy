@@ -1,12 +1,19 @@
 import { ClipboardTransfer } from './clipboardTransfer';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createLogger } from '../logger';
 import { DesktopHeartbeatHistory } from '../../shared/remoteDesktopDiagnostics';
 import type { ViewerDisplayHandle } from './viewerDisplay';
+import { PreviewGrantTable } from './previewGrants';
 import {
+  isPreviewGrant,
+  isPreviewInputEvent,
+  isPreviewLeaseOp,
   parseRemoteDesktopRequest,
+  PREVIEW_MAX_TITLE_CHARS,
   REMOTE_DESKTOP_LEASE_MS,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
+  type PreviewInputEvent,
+  type PreviewTabsReply,
   type DesktopInput,
   type RemoteDesktopWindow,
   type RemoteDesktopCursorFrame,
@@ -29,6 +36,8 @@ export type DesktopStopReason =
   | 'authorization-lost'
   | 'authentication-changed'
   | 'handoff-ended'
+  | 'preview-ended'
+  | 'preview-unavailable'
   | 'heartbeat-expired'
   | 'peer-offline'
   | 'signaling-lost'
@@ -56,6 +65,55 @@ export interface DesktopHandoffWindow {
   /** Window size in points, so the viewer lays the picture out at its own shape. */
   width: number;
   height: number;
+}
+
+/** A plugin preview tab a phone may be offered; resolved by the host from its trusted index. */
+export interface DesktopPreviewTab {
+  tabId: string;
+  /** The guest this offer is for; a rebuilt guest is a different source. */
+  webContentsId: number;
+  /** The index binding generation of that guest. */
+  generation: number;
+  sessionId: string;
+  ghostId: string;
+  pluginName: string;
+  title: string;
+}
+/** An opened preview tab: its CSS viewport at the moment the lease began. */
+export interface DesktopPreviewSource extends DesktopPreviewTab {
+  width: number;
+  height: number;
+}
+/** Why a preview source stopped being viewable. */
+export type DesktopPreviewEnd = 'ended' | 'capture-unavailable';
+
+/**
+ * Preview tab views. A preview lease never reaches a display, an OS window or OS input:
+ * everything it does goes through these, and a missing or failing one ends the lease.
+ */
+export interface DesktopPreviewDeps {
+  /** Most simultaneous touches the host injects; advertised as `previewTab.maxTouchPoints`. */
+  maxTouchPoints: number;
+  /** Plugin preview tabs, optionally of one task. Only the trusted index feeds this. */
+  list(sessionId?: string): DesktopPreviewTab[];
+  /**
+   * Take the tab for a lease: verifies it is still the same guest, measures its viewport and
+   * keeps it paintable. Null when it is gone; throws `PREVIEW_CAPTURE_UNAVAILABLE` when it
+   * cannot be measured.
+   */
+  open(tab: DesktopPreviewTab): Promise<DesktopPreviewSource | null>;
+  /** The source is still the tab (and guest) it was opened for. */
+  current(source: DesktopPreviewSource): boolean;
+  /** Called once when the source ends or capture gives up; returns the unsubscribe. */
+  watch(source: DesktopPreviewSource, listener: (end: DesktopPreviewEnd) => void): () => void;
+  /** Resolves once the whole batch has been injected into the tab. */
+  input(source: DesktopPreviewSource, events: readonly PreviewInputEvent[]): Promise<void>;
+  /** Cancel every pressed touch and key. Idempotent. */
+  release(source: DesktopPreviewSource): Promise<void>;
+  /** One relay / WebRTC frame (base64 JPEG), or null when none is ready. */
+  frame(source: DesktopPreviewSource): Promise<string | null>;
+  /** The lease is over: stop capturing, release input, give back the tab. Idempotent. */
+  end(source: DesktopPreviewSource): void;
 }
 
 /** What a window lease may do; everything else reaches past the window. */
@@ -109,6 +167,8 @@ export interface DesktopControllerDeps {
   handoffCurrent?(requestId: string): boolean;
   /** A window lease ended; the request's card catches up with the window. */
   handoffEnded?(requestId: string): void;
+  /** Plugin preview tab views; absent where the host cannot serve them. */
+  preview?: DesktopPreviewDeps;
   input(events: DesktopInput[]): void;
   stopInput(): void;
   releaseInput?(): Promise<void>;
@@ -198,6 +258,7 @@ export class RemoteDesktopController {
         lockOnExit?: boolean;
         privacyLockOnExit?: boolean;
         handoff?: DesktopHandoffWindow;
+        previewLease?: { source: DesktopPreviewSource; unwatch: () => void };
       })
     | null = null;
   private starting = false;
@@ -263,13 +324,28 @@ export class RemoteDesktopController {
   private inputRecoveryUsed = false;
   private userStopped = new Map<string, string>();
   private lastEnded: { peer: string; lease: string } | null = null;
-  constructor(private readonly deps: DesktopControllerDeps) {}
+  /** Why the last preview lease ended, so its viewer is told instead of "lease expired". */
+  private previewEnded: { peer: string; lease: string; code: string } | null = null;
+  private readonly previewGrants: PreviewGrantTable<DesktopPreviewTab>;
+  /** Process-lifetime key for `ref`; never leaves this controller. */
+  private readonly previewRefKey = randomBytes(32);
+  constructor(private readonly deps: DesktopControllerDeps) {
+    this.previewGrants = new PreviewGrantTable(
+      (tab) => `${tab.tabId}:${tab.webContentsId}:${tab.generation}`,
+      () => this.now(),
+    );
+  }
   get state(): { peer: string; controlling: boolean } | null {
     this.tick();
     return this.active ? { peer: this.active.peer, controlling: this.active.controlling } : null;
   }
   get displayId(): string | null {
-    return this.active?.display.id ?? null;
+    // A preview source id names no real display: nothing may be drawn on, or matched to, one.
+    return this.active && !this.active.previewLease ? this.active.display.id : null;
+  }
+  /** The preview tab this lease shows, when it is a preview lease. */
+  previewSource(lease: string): DesktopPreviewSource | null {
+    return this.active?.lease === lease ? (this.active.previewLease?.source ?? null) : null;
   }
   /** Expected mirror events must not end the lease while its new geometry is prepared. */
   get changingDisplay(): boolean {
@@ -346,6 +422,9 @@ export class RemoteDesktopController {
     } else if (active.handoff && this.deps.handoffCurrent?.(active.handoff.requestId) === false) {
       // The 代输入 request finished: nothing is left to show.
       void this.stop(undefined, false, 'handoff-ended');
+    } else if (active.previewLease && !this.deps.preview?.current(active.previewLease.source)) {
+      // The tab closed, changed page or was rebuilt: nothing is left to show.
+      this.endPreview(active, 'PREVIEW_SOURCE_ENDED', 'preview-ended');
     } else if (!this.locking && active.expires <= this.now()) {
       void this.stop(undefined, undefined, 'heartbeat-expired');
     }
@@ -441,6 +520,10 @@ export class RemoteDesktopController {
     this.deps.stopInput();
     this.deps.stopVideo();
     if (active?.handoff) this.deps.handoffEnded?.(active.handoff.requestId);
+    if (active?.previewLease) {
+      active.previewLease.unwatch();
+      this.deps.preview?.end(active.previewLease.source);
+    }
     this.viewerDisplay?.dispose();
     // Retain the handle until restoration completes (or can be retried after failure).
     // EOF releases it asynchronously; a new lease must not bind stale geometry.
@@ -731,8 +814,11 @@ export class RemoteDesktopController {
     this.tick();
     if (this.userStopped.get(peer) === lease) throw new Error('DESKTOP_STOPPED');
     const active = this.active;
-    if (!active || active.peer !== peer || active.lease !== lease)
+    if (!active || active.peer !== peer || active.lease !== lease) {
+      const ended = this.previewEnded;
+      if (ended && ended.peer === peer && ended.lease === lease) throw new Error(ended.code);
       throw new Error('DESKTOP_LEASE_EXPIRED');
+    }
     return active;
   }
   /** Only the trusted capture renderer may forward live DataChannel pongs. */
@@ -794,6 +880,11 @@ export class RemoteDesktopController {
           caps.displayModes && this.deps.resolution && this.deps.displayModes,
         ),
         ...(this.deps.handoffWindow ? { handoffWindow: true } : {}),
+        ...(this.deps.preview
+          ? {
+              previewTab: { version: 1 as const, maxTouchPoints: this.deps.preview.maxTouchPoints },
+            }
+          : {}),
       };
     }
     if (!this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
@@ -811,15 +902,143 @@ export class RemoteDesktopController {
         ? this.withControl(peer, this.active, lease)
         : lease;
     }
-    // Preview tab views are parsed (packages/device-link) but not hosted yet; refuse
-    // them outright so they can never reach a display lease or open a display.
-    if (
-      request.op === 'previewTabs' ||
-      request.op === 'previewStart' ||
-      request.op === 'previewInput'
-    )
-      throw new Error('DESKTOP_UNAVAILABLE');
+    if (request.op === 'previewTabs') return this.previewTabs(peer, request.sessionId);
+    if (request.op === 'previewStart') return this.previewStart(peer, request.grant);
     return this.leaseRequest(peer, request);
+  }
+  /** Ends a preview lease for a reason its viewer can read (`PREVIEW_*`), not just "expired". */
+  private endPreview(
+    active: NonNullable<RemoteDesktopController['active']>,
+    code: 'PREVIEW_SOURCE_ENDED' | 'PREVIEW_CAPTURE_UNAVAILABLE',
+    reason: DesktopStopReason,
+  ): void {
+    if (this.active !== active) return;
+    this.previewEnded = { peer: active.peer, lease: active.lease, code };
+    void this.stop(undefined, false, reason);
+  }
+  private requirePreview(): DesktopPreviewDeps {
+    if (!this.deps.preview) throw new Error('DESKTOP_UNAVAILABLE');
+    return this.deps.preview;
+  }
+  /**
+   * Stable opaque label of one tab binding (tab id + guest generation): unchanged for the
+   * binding's life, different once the tab is rebuilt or changes source. A keyed hash, so it
+   * neither reveals the tab id nor works as a credential.
+   */
+  private previewRef(tab: DesktopPreviewTab): string {
+    return createHmac('sha256', this.previewRefKey)
+      .update(`${tab.tabId}\n${tab.generation}`)
+      .digest('base64url')
+      .slice(0, 22);
+  }
+  /** Offers the plugin preview tabs, each with a one-time grant bound to this peer. */
+  private async previewTabs(
+    peer: string,
+    sessionId?: string,
+  ): Promise<{ tabs: Array<PreviewTabsReply['tabs'][number] & { ref: string }> }> {
+    const preview = this.requirePreview();
+    const authenticationSession = this.authenticationSession(peer);
+    const tabs = preview.list(sessionId);
+    if (!this.authenticationCurrent(peer, authenticationSession))
+      throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+    return {
+      tabs: tabs.map((tab) => ({
+        grant: this.previewGrants.issue(peer, tab),
+        ref: this.previewRef(tab),
+        sessionId: tab.sessionId,
+        pluginName: tab.pluginName,
+        title: tab.title.slice(0, PREVIEW_MAX_TITLE_CHARS),
+      })),
+    };
+  }
+  /**
+   * Opens the preview tab a grant names. It never touches a display: no capability read,
+   * no virtual display, no resolution, no input helper. Failing to open is a refusal,
+   * never a fallback to the screen.
+   */
+  private async previewStart(peer: string, grant: string): Promise<RemoteDesktopLease> {
+    const preview = this.requirePreview();
+    const authenticationSession = this.authenticationSession(peer);
+    if (!isPreviewGrant(grant)) throw new Error('PREVIEW_GRANT_INVALID');
+    // A display lease being wound down still owns its restoration: starting over it would cancel that.
+    if (
+      this.locking ||
+      this.starting ||
+      this.displayChanging ||
+      this.displayRestoring ||
+      this.viewerDisplay ||
+      this.originalResolution
+    )
+      throw new Error('DESKTOP_BUSY');
+    // Only the same phone re-entering its own preview replaces it (a lost reply, a reconnect).
+    const replacing = this.active;
+    if (replacing && !(replacing.peer === peer && replacing.previewLease))
+      throw new Error('DESKTOP_BUSY');
+    const tab = this.previewGrants.redeem(peer, grant);
+    if (!tab) throw new Error('PREVIEW_GRANT_INVALID');
+    this.starting = true;
+    this.startingPeer = peer;
+    let source: DesktopPreviewSource | null = null;
+    try {
+      if (replacing && this.active === replacing) this.stop(peer, false, 'resume-replaced');
+      const generation = this.controlGeneration;
+      source = await preview.open(tab);
+      if (!source) throw new Error('PREVIEW_SOURCE_ENDED');
+      if (
+        this.startingPeer !== peer ||
+        generation !== this.controlGeneration ||
+        !this.deps.authorized(peer)
+      )
+        throw new Error('DESKTOP_DISABLED');
+      if (!this.authenticationCurrent(peer, authenticationSession))
+        throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      if (this.active) throw new Error('DESKTOP_BUSY');
+      this.userStopped.delete(peer);
+      this.previewEnded = null;
+      const lease: RemoteDesktopLease = {
+        lease: randomUUID(),
+        // `id` is an opaque source id, never a real display; the size is the tab's CSS viewport.
+        display: {
+          id: `preview:${randomUUID()}`,
+          name: source.title,
+          width: source.width,
+          height: source.height,
+        },
+        controlling: false,
+        preview: { pluginName: source.pluginName, title: source.title },
+      };
+      const opened = source;
+      const active: NonNullable<RemoteDesktopController['active']> = {
+        ...lease,
+        peer,
+        sourceDisplayId: lease.display.id,
+        expires: this.now() + REMOTE_DESKTOP_LEASE_MS,
+        diagnostics: {
+          id: createHash('sha256').update(lease.lease).digest('hex').slice(0, 16),
+          startedAt: this.now(),
+          heartbeats: new DesktopHeartbeatHistory(),
+        },
+        sequence: -1,
+        authenticationSession,
+        previewLease: { source: opened, unwatch: () => {} },
+      };
+      this.active = active;
+      this.deps.changed();
+      source = null; // the lease owns it now
+      // Subscribed once the lease exists: a source that has already ended answers at once.
+      const lost = (end: DesktopPreviewEnd) =>
+        this.endPreview(
+          active,
+          end === 'capture-unavailable' ? 'PREVIEW_CAPTURE_UNAVAILABLE' : 'PREVIEW_SOURCE_ENDED',
+          end === 'capture-unavailable' ? 'preview-unavailable' : 'preview-ended',
+        );
+      active.previewLease!.unwatch = preview.watch(opened, lost);
+      return lease;
+    } finally {
+      if (source) preview.end(source);
+      this.starting = false;
+      this.startingPeer = null;
+    }
   }
   private async start(
     peer: string,
@@ -946,6 +1165,9 @@ export class RemoteDesktopController {
     const active = this.require(peer, request.lease);
     if (active.handoff && !HANDOFF_WINDOW_OPS.has(request.op))
       throw new Error('DESKTOP_HANDOFF_WINDOW_ONLY');
+    // A preview lease shows one plugin tab: nothing that reaches the computer itself.
+    if (active.previewLease && !isPreviewLeaseOp(request.op))
+      throw new Error('DESKTOP_PREVIEW_ONLY');
     if (
       this.displayChanging &&
       !['stop', 'heartbeat', 'frame', 'input', 'viewerHidden'].includes(request.op)
@@ -1126,22 +1348,31 @@ export class RemoteDesktopController {
         }
       }
       case 'stop': {
-        if (request.lockScreen && !this.deps.lockScreen)
+        if (request.lockScreen && !active.previewLease && !this.deps.lockScreen)
           throw new Error('DESKTOP_LOCK_UNAVAILABLE');
         // Plain stop is also used for viewer recovery and display handoff.
         // Explicit exit sends lockScreen; involuntary host stops use the policy.
-        await this.stop(peer, request.lockScreen === true && !active.handoff, 'remote-stop');
+        await this.stop(
+          peer,
+          request.lockScreen === true && !active.handoff && !active.previewLease,
+          'remote-stop',
+        );
         return { ok: true };
       }
       case 'heartbeat':
-        if (request.lockOnExit !== undefined && !active.handoff)
+        if (request.lockOnExit !== undefined && !active.handoff && !active.previewLease)
           active.lockOnExit = request.lockOnExit;
         active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
         active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'relay-accepted' });
         return { controlling: active.controlling };
       case 'presentation': {
         this.setBackgroundViewing(active, request.enabled);
-        if (request.enabled) {
+        if (active.previewLease) {
+          // Picture-in-picture only watches: whatever the fingers still hold is let go.
+          if (request.enabled)
+            await this.deps.preview?.release(active.previewLease.source).catch(() => {});
+          this.deps.changed();
+        } else if (request.enabled) {
           // PiP keeps watching the same lease: the masked, muted desktop stays
           // protected; only input and clipboard sync need control.
           await this.revokeControl(true);
@@ -1212,6 +1443,33 @@ export class RemoteDesktopController {
       case 'input':
         this.input(request.lease, request.sequence, request.events);
         return { ok: true };
+      case 'previewInput': {
+        const preview = active.previewLease;
+        if (!preview || !this.deps.preview) throw new Error('PREVIEW_INPUT_INVALID');
+        if (active.backgroundViewing) throw new Error('DESKTOP_VIEW_ONLY');
+        if (request.sequence <= active.sequence) return { sequence: request.sequence };
+        const max = this.deps.preview.maxTouchPoints;
+        if (!request.events.every((event) => isPreviewInputEvent(event, max)))
+          throw new Error('PREVIEW_INPUT_INVALID');
+        if (!this.deps.preview.current(preview.source)) {
+          this.endPreview(active, 'PREVIEW_SOURCE_ENDED', 'preview-ended');
+          throw new Error('PREVIEW_SOURCE_ENDED');
+        }
+        active.sequence = request.sequence;
+        try {
+          await this.deps.preview.input(preview.source, request.events);
+        } catch (error) {
+          const code = error instanceof Error ? error.message : '';
+          if (code === 'PREVIEW_SOURCE_ENDED' || code === 'PREVIEW_CAPTURE_UNAVAILABLE') {
+            this.endPreview(active, code, 'preview-ended');
+            throw error;
+          }
+          throw new Error('PREVIEW_INPUT_INVALID');
+        }
+        // A lease revoked while the batch ran must not report it as applied.
+        this.require(peer, request.lease);
+        return { sequence: request.sequence };
+      }
       case 'frame': {
         if (this.displayChanging) return { jpeg: null };
         const display = active.display;
@@ -1220,11 +1478,9 @@ export class RemoteDesktopController {
         this.framePending = true;
         this.lastFrame = this.now();
         try {
-          const jpeg = await this.deps.frame(
-            active.display.id,
-            request.cursorOverlay,
-            active.lease,
-          );
+          const jpeg = active.previewLease
+            ? await this.deps.preview!.frame(active.previewLease.source)
+            : await this.deps.frame(active.display.id, request.cursorOverlay, active.lease);
           this.require(peer, request.lease); // revoke during capture must not leak the result
           if (this.displayChanging || active.display !== display) return { jpeg: null };
           const frame = typeof jpeg === 'object' && jpeg !== null ? jpeg : { jpeg };

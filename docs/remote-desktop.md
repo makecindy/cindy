@@ -309,6 +309,41 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   `previewGrantInvalid`, `previewEnded`, `previewCaptureUnavailable`,
   `previewInputInvalid` and `previewOnly`.
 
+#### Desktop host for preview leases
+
+`remote-desktop/controller.ts` keeps a preview lease in the same single active slot as
+screen and 代输入 window leases (`active.previewLease`). Its source is the `PreviewTabIndex`
+(plugin preview tabs only); everything it needs from Electron lives behind
+`DesktopPreviewDeps` (`previewHost.ts`), so a preview lease can never reach `capabilities`,
+a display, a virtual display, the input helper, the clipboard or the lock screen.
+
+- **Grants** (`previewGrants.ts`): in memory, 32 random bytes, 60 s, one use, bound to the
+  peer and to one tab generation. Listing is side-effect free: a polling phone gets the
+  same unused grant back until it has under 20 s left; the table holds at most 64.
+- **Tab ref**: each `previewTabs` item also carries `ref`, a keyed-hash (per-process key)
+  label of tab id + guest generation (22 base64url chars): stable for the binding, new after
+  a rebuild or source change, not the tab id and not a credential. The grant stays the only
+  credential.
+- **Capture** (`previewTabCapture.ts`): `capturePage()` of the guest, long edge ≤ 1280,
+  JPEG ≤ `REMOTE_DESKTOP_MAX_FRAME_BYTES`. One capture in flight; a capture over 2 s is
+  abandoned by generation and its late result dropped (the tab is never touched). No
+  successful frame for 6 s, or three abandoned captures still pending, ends the lease with
+  `PREVIEW_CAPTURE_UNAVAILABLE`. Frames reach WebRTC through the existing native frame
+  stream (`nativeCapture` + `NATIVE_FRAME`), and relay `frame` uses the same source.
+- **Input** (`previewTabInput.ts`): touches through the guest debugger
+  (`Input.dispatchTouchEvent`; a partial release is a `touchMove` with the remaining
+  points, a full release `touchEnd`), keys through `sendInputEvent`, text through
+  `insertText` with focus emulation on. Pressed touches and keys are tracked, so `release`,
+  stop, PiP and a failed batch cancel them idempotently. A debugger the injector did not
+  attach (DevTools, browser automation) is never detached by it. A command that does not
+  answer within 2 s is abandoned (outcome unknown, state released) and lifts background
+  throttling for that guest until the lease ends.
+- **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
+  `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
+  `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.
+  Stopping never locks the screen. While a preview lease is active its tab is passed to
+  `setCastingTabs` so it keeps painting while hidden.
+
 ### Incremental ICE and media recovery
 
 New desktops advertise optional `trickleIce`. When both endpoints support it,
