@@ -109,7 +109,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   const nativePopupSurfaceId =
     findNativePopupSurfaceForTab(tabId)?.surfaceId ?? state.nativePopupSurfaceId;
   const isNativePopup = Boolean(nativePopupSurfaceId);
-  const webviewBrowser = useBrowserWebview(tabId, sessionId, tabVisible, !isNativePopup);
+  const webviewBrowser = useBrowserWebview(
+    tabId,
+    sessionId,
+    tabVisible,
+    !isNativePopup,
+    state.previewRequestId,
+  );
   const nativeBrowser = useNativePopupSurface(
     nativePopupSurfaceId,
     sessionId,

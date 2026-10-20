@@ -81,6 +81,11 @@ export interface OpenUrlInSidebarBrowserOptions {
    * 但 detached 形态下不得把子窗口 show + focus 抢走用户前台。缺省 true。
    */
   userInitiated?: boolean;
+  /**
+   * 插件预览槽签发的凭据(main 的 PreviewTabIndex 用它把这个标签绑定到插件身份)。
+   * 随标签状态保存,标签每次 report 时带回;缺省 = 普通网页标签。
+   */
+  previewRequestId?: string;
 }
 
 /** 在指定 session 的侧边栏浏览器里新开一个页签加载 url,并确保侧边栏可见。 */
@@ -90,11 +95,13 @@ export async function openUrlInSidebarBrowser(
   options: OpenUrlInSidebarBrowserOptions = {},
 ): Promise<void> {
   const userInitiated = options.userInitiated !== false;
+  const previewRequestId = options.previewRequestId;
   const routeResult = await routeSidebarCommand(
     {
       type: 'open-web-browser',
       sessionId,
       url,
+      ...(previewRequestId ? { previewRequestId } : {}),
     },
     { userInitiated },
   );
@@ -115,6 +122,7 @@ export async function openUrlInSidebarBrowser(
     title: '',
     favicon: null,
     isAudible: false,
+    ...(previewRequestId ? { previewRequestId } : {}),
   });
   requestRightSidebarVisibility('open', { sessionId, userInitiated });
 }

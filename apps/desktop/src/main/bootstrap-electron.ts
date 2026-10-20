@@ -322,9 +322,11 @@ import {
 } from './selection-context-menu.js';
 import { installContentSecurityPolicy, parseOrigin } from './security/csp';
 import {
+  getPreviewTabIndex,
   getRsbBrowserBridge,
   registerRsbBrowserBridgeIpc,
   registerTabOpResultHandler,
+  setPreviewTabGhostResolver,
 } from './rsb-browser-bridge';
 import {
   getRsbNativePopupOwnerWebContents,
@@ -1108,6 +1110,7 @@ import {
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
+  findGhostForInstanceId,
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
@@ -1119,6 +1122,8 @@ import {
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
   setGhostNodeRuntimeStartAttemptContextReader,
+  setGhostPreviewRequestIssuer,
+  setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
@@ -2393,9 +2398,19 @@ const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
 remoteDesktopViewerWindows.register();
 
 const rsbBrowserRegistry = getRsbBrowserBridge();
+// 插件预览标签索引:previewSlot 开页时签发 previewRequestId,标签 report 时据此绑定
+// 插件身份;插件停用 / 卸载 / 不再声明 preview 时,装/卸/启停广播的同步观察者让绑定失效。
+setPreviewTabGhostResolver((ghostId) => {
+  const ghost = findGhostForInstanceId(ghostId);
+  return ghost ? { available: ghost.enabled && Boolean(ghost.manifest.preview), name: ghost.manifest.name } : null;
+});
+const previewTabIndex = getPreviewTabIndex();
+setGhostPreviewRequestIssuer((input) => previewTabIndex.issue(input));
+setGhostsChangedObserver(() => previewTabIndex.reconcileGhosts());
 registerRsbNativePopupSurfaceIpc(rsbBrowserRegistry);
 registerRsbBrowserBridgeIpc({
   registry: rsbBrowserRegistry,
+  previewTabs: previewTabIndex,
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
   getNativePopupOwnerWebContents: getRsbNativePopupOwnerWebContents,
   logger: createLogger('rsb-browser-bridge-bootstrap'),

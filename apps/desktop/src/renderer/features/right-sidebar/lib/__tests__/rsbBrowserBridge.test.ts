@@ -144,6 +144,21 @@ describe('rsbBrowserBridge — report / release / snapshot forwarding', () => {
     expect(api.report).toHaveBeenCalledWith({ sessionId: 's1', tabId: 't1', webContentsId: 42 });
   });
 
+  it('reportRsbBrowserTab 只在有凭据时才把 previewRequestId 放进 ipc.report 载荷', async () => {
+    const api = installFakeIpc();
+    const previewRequestId = 'K'.repeat(43);
+    await reportRsbBrowserTab({ sessionId: 's1', tabId: 't1', webContentsId: 42, previewRequestId });
+    expect(api.report).toHaveBeenLastCalledWith({
+      sessionId: 's1',
+      tabId: 't1',
+      webContentsId: 42,
+      previewRequestId,
+    });
+    await reportRsbBrowserTab({ sessionId: 's1', tabId: 't1', webContentsId: 42, previewRequestId: undefined });
+    expect(api.report).toHaveBeenLastCalledWith({ sessionId: 's1', tabId: 't1', webContentsId: 42 });
+    expect(api.report.mock.calls[1][0]).not.toHaveProperty('previewRequestId');
+  });
+
   it('snapshotRsbBrowserTabs calls ipc.snapshot with the liveTabIds', async () => {
     const api = installFakeIpc();
     await snapshotRsbBrowserTabs(['t1', 't2']);

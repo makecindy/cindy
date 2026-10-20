@@ -58,6 +58,25 @@ describe('executeSidebarCommand', () => {
     expect(ensureBotWorkbenchTab).toHaveBeenCalledOnce();
   });
 
+  it('open-web-browser 带 previewRequestId 时透传给 openUrlInSidebarBrowser,不带时调用形状不变', async () => {
+    const previewRequestId = 'Q'.repeat(43);
+    await executeSidebarCommand({
+      type: 'open-web-browser',
+      sessionId: 's1',
+      url: 'https://example.com/',
+      previewRequestId,
+    });
+    expect(openUrlInSidebarBrowser).toHaveBeenLastCalledWith('s1', 'https://example.com/', {
+      previewRequestId,
+    });
+    await executeSidebarCommand({
+      type: 'open-web-browser',
+      sessionId: 's1',
+      url: 'https://example.com/',
+    });
+    expect(openUrlInSidebarBrowser).toHaveBeenLastCalledWith('s1', 'https://example.com/');
+  });
+
   it('dispatches every command kind to the current renderer host implementation', async () => {
     const searchJump = {
       kind: 'conversation-search' as const,

@@ -258,6 +258,57 @@ short-lived TURN configuration as described in
 [connectivity](dev-rules/remote-desktop-connectivity.md); actual relay availability
 depends on the service deployment.
 
+## Preview tab view (2026-10-20)
+
+A preview lease shows one plugin preview tab (a browser tab a plugin opened in the
+right sidebar), never a display or an OS window, and lets the phone touch it. It
+rides the same `device-link:remote-desktop:v1` channel and media peer; the server,
+relay and `input-v1` semantics are unchanged. Everything is optional, so older
+hosts and viewers keep working. Compatibility matrix: [protocol compatibility](dev-rules/protocol-compatibility.md).
+
+Types and parsers live in `packages/device-link/src/remoteDesktop.ts`; the viewer
+gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
+
+- **Capability**: `previewTab: { version: 1, maxTouchPoints: 1..10 }`. Anything else
+  (missing, not an object, other version, bad count) means unsupported.
+- **List and start** need no lease: `previewTabs { sessionId? }` replies
+  `{ tabs: [{ grant, sessionId, pluginName, title }] }` (title at most 200
+  characters). A grant is 32 random bytes as base64url (43 characters), valid for 60
+  seconds, one use, bound to the requesting peer. `previewStart { grant }` replies a
+  lease with `controlling: false` and `preview: { pluginName, title }`; `display.id` is
+  an opaque preview source id and `width` / `height` are the tab's CSS viewport.
+  `displayId`, `takeover`, `resume`, `control`, `lockOnExit` and `handoff` on
+  `previewStart` are `INVALID_REQUEST`. The host never falls back to the screen, an OS
+  window or OS input.
+- **Viewer order**: `capabilities` → require `previewTab` (else `CHANNEL_NOT_ALLOWED`,
+  nothing else is sent) → `previewStart` → require a `preview` object in the reply,
+  otherwise `stop` the lease and throw `INVALID_RESPONSE` → offer and input.
+  `preview` is exclusive with `handoff`, `resume` and `takeover`.
+- **Allowed ops on a preview lease**: `stop`, `heartbeat`, `presentation`, `offer`,
+  `ice`, `viewerHidden`, `frame`, `previewInput` (`PREVIEW_LEASE_OPS`). Anything else,
+  including `control`, `input`, clipboard, `privacyScreen`, `displayModes`,
+  `windowAction` and `resolution`, answers `DESKTOP_PREVIEW_ONLY`.
+- **Input**: `previewInput { lease, sequence, events }`; `sequence` is a positive safe
+  integer that only grows (repeated or older batches are ignored); 1 to 64 events, the
+  whole `events` JSON at most 16 KiB. Events:
+  - `touch { phase: start | move | end | cancel, points }`: `points` is every touch still
+    down after the event, each `{ id: 0..2^31-1, x, y }` with `x`, `y` in 0..1 of the
+    picture, ids unique, at most the advertised `maxTouchPoints` (ceiling 10). `start`
+    and `move` carry at least one point; `end` and `cancel` may be empty. The host scales
+    by the tab's CSS viewport and never multiplies by DPR.
+  - `key { code, down }` with a `DESKTOP_KEY_CODES` code; `text { text }` (1 to 4096
+    characters, committed text only, no IME preedit); `release` lets go of everything.
+  - The reply `{ sequence }` means the batch was actually injected. `previewInput` travels
+    over the `input-v1` request envelope when `channelRequests` is on, otherwise relay.
+- **Errors**: `PREVIEW_GRANT_INVALID` (missing, forged, expired, used, wrong peer; list
+  again), `PREVIEW_SOURCE_ENDED` (tab closed, page changed origin, tab rebuilt, plugin
+  disabled; show ended, no auto reconnect), `PREVIEW_CAPTURE_UNAVAILABLE`,
+  `PREVIEW_INPUT_INVALID` (release the gesture), `DESKTOP_PREVIEW_ONLY`. The existing
+  `DESKTOP_BUSY`, `DESKTOP_VIEW_ONLY`, `DESKTOP_LEASE_EXPIRED` and `DESKTOP_UNAVAILABLE`
+  keep their meaning. `remoteDesktopFailureKey` maps the new codes to
+  `previewGrantInvalid`, `previewEnded`, `previewCaptureUnavailable`,
+  `previewInputInvalid` and `previewOnly`.
+
 ### Incremental ICE and media recovery
 
 New desktops advertise optional `trickleIce`. When both endpoints support it,

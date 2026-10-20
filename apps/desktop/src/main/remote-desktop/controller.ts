@@ -811,6 +811,14 @@ export class RemoteDesktopController {
         ? this.withControl(peer, this.active, lease)
         : lease;
     }
+    // Preview tab views are parsed (packages/device-link) but not hosted yet; refuse
+    // them outright so they can never reach a display lease or open a display.
+    if (
+      request.op === 'previewTabs' ||
+      request.op === 'previewStart' ||
+      request.op === 'previewInput'
+    )
+      throw new Error('DESKTOP_UNAVAILABLE');
     return this.leaseRequest(peer, request);
   }
   private async start(
@@ -932,7 +940,7 @@ export class RemoteDesktopController {
     peer: string,
     request: Exclude<
       ReturnType<typeof parseRemoteDesktopRequest>,
-      { op: 'capabilities' | 'permissions' | 'start' }
+      { op: 'capabilities' | 'permissions' | 'start' | 'previewTabs' | 'previewStart' }
     >,
   ): Promise<unknown> {
     const active = this.require(peer, request.lease);

@@ -108,6 +108,46 @@ describe('TabRegistry — report / lookup / release', () => {
     expect(registry.findByWebContentsId(101)).toBeNull();
   });
 
+  it('onRelease 通知被释放的记录;stale release 与未知 tab 不触发;destroyed 自清走同一通道', () => {
+    const { registry, wcMap } = buildRegistry();
+    wcMap.set(101, fakeWc(101));
+    wcMap.set(102, fakeWc(102));
+    const released: unknown[] = [];
+    const off = registry.onRelease((record) => released.push(record));
+
+    registry.report({ sessionId: 's1', tabId: 't1', webContentsId: 101 });
+    registry.release('unknown');
+    registry.release('t1', 999); // stale:当前记录是 101
+    expect(released).toEqual([]);
+
+    registry.release('t1', 101);
+    expect(released).toEqual([{ sessionId: 's1', tabId: 't1', webContentsId: 101 }]);
+
+    registry.report({ sessionId: 's1', tabId: 't2', webContentsId: 102 });
+    wcMap.get(102)!.fireDestroyed();
+    expect(released).toHaveLength(2);
+
+    off();
+    registry.report({ sessionId: 's1', tabId: 't3', webContentsId: 101 });
+    registry.release('t3');
+    expect(released).toHaveLength(2);
+  });
+
+  it('release 监听器抛错被吞掉,不影响释放本身与其它监听器', () => {
+    const { registry, wcMap, logger } = buildRegistry();
+    wcMap.set(101, fakeWc(101));
+    const second = vi.fn();
+    registry.onRelease(() => {
+      throw new Error('boom');
+    });
+    registry.onRelease(second);
+    registry.report({ sessionId: 's1', tabId: 't1', webContentsId: 101 });
+    registry.release('t1');
+    expect(registry.listAll()).toHaveLength(0);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
   it('release drops the record and detaches the destroyed listener', () => {
     const { registry, wcMap } = buildRegistry();
     const wc = fakeWc(101);

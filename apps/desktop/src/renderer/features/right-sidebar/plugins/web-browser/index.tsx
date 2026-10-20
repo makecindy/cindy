@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 
 import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
+import { PREVIEW_REQUEST_ID_RE } from '../../../../../shared/rsbBrowserBridge';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
 
@@ -47,6 +48,9 @@ export interface WebBrowserState {
   /** Runtime-only id of a Chromium-created popup adopted by main. Hydration
    * intentionally drops it because native surfaces do not survive restart. */
   nativePopupSurfaceId?: string;
+  /** 插件预览槽签发的凭据:标签每次向 main report 时带回,main 据此绑定插件身份。
+   *  重启后 main 的签发表已空,凭据自然失效(report 被忽略,标签只是普通网页标签)。 */
+  previewRequestId?: string;
 }
 
 const DEFAULT_STATE: WebBrowserState = {
@@ -151,7 +155,17 @@ const plugin: TabKindPlugin<WebBrowserState> = {
         : obj.favicon === null
         ? null
         : DEFAULT_STATE.favicon;
-    return { url, title, favicon, isAudible: false };
+    const previewRequestId =
+      typeof obj.previewRequestId === 'string' && PREVIEW_REQUEST_ID_RE.test(obj.previewRequestId)
+        ? obj.previewRequestId
+        : undefined;
+    return {
+      url,
+      title,
+      favicon,
+      isAudible: false,
+      ...(previewRequestId ? { previewRequestId } : {}),
+    };
   },
 };
 
