@@ -30,6 +30,7 @@ import {
   subscribeTabResourceEvent,
 } from '../rsbBrowserBridge';
 import { _resetPopupTabsForTests, markPopupSpawnedTab } from '../popupTabs';
+import { _resetPreviewCastingForTests, isPreviewCastingTab } from '../previewCasting';
 import {
   _resetStore,
   addTab,
@@ -44,6 +45,7 @@ interface FakeIpcApi {
   snapshot: ReturnType<typeof vi.fn>;
   onPin: ReturnType<typeof vi.fn>;
   onUnpin: ReturnType<typeof vi.fn>;
+  onPreviewCasting: ReturnType<typeof vi.fn>;
   onTabOpRequest: ReturnType<typeof vi.fn>;
   tabOpResult: ReturnType<typeof vi.fn>;
   setForeground: ReturnType<typeof vi.fn>;
@@ -53,6 +55,7 @@ interface FakeIpcApi {
   // onResourceEvent.
   pinCb: ((p: { tabId: string }) => void) | null;
   unpinCb: ((p: { tabId: string }) => void) | null;
+  castingCb: ((p: { tabIds: string[] }) => void) | null;
   tabOpCb: ((req: unknown) => void) | null;
   resourceCb: ((event: unknown) => void) | null;
 }
@@ -64,6 +67,7 @@ function installFakeIpc(): FakeIpcApi {
     snapshot: vi.fn(async () => ({ ok: true, dropped: [], kept: 0, pinnedTabIds: [] })),
     onPin: vi.fn(),
     onUnpin: vi.fn(),
+    onPreviewCasting: vi.fn(),
     onTabOpRequest: vi.fn(),
     tabOpResult: vi.fn(async () => ({ ok: true })),
     setForeground: vi.fn(async () => ({ ok: true })),
@@ -71,6 +75,7 @@ function installFakeIpc(): FakeIpcApi {
     onResourceEvent: vi.fn(),
     pinCb: null,
     unpinCb: null,
+    castingCb: null,
     tabOpCb: null,
     resourceCb: null,
   };
@@ -84,6 +89,12 @@ function installFakeIpc(): FakeIpcApi {
     api.unpinCb = cb;
     return () => {
       api.unpinCb = null;
+    };
+  });
+  api.onPreviewCasting.mockImplementation((cb: (p: { tabIds: string[] }) => void) => {
+    api.castingCb = cb;
+    return () => {
+      api.castingCb = null;
     };
   });
   api.onTabOpRequest.mockImplementation((cb: (req: unknown) => void) => {
@@ -109,6 +120,7 @@ function clearIpc(): void {
 }
 
 beforeEach(() => {
+  _resetPreviewCastingForTests();
   _resetRsbBrowserBridgeForTests();
   _resetPopupTabsForTests();
   _resetStore();
@@ -165,6 +177,40 @@ describe('rsbBrowserBridge — report / release / snapshot forwarding', () => {
     await snapshotRsbBrowserTabs(['t-pin']);
 
     expect(browserWebviewPool.isPinnedForAutomation('t-pin')).toBe(true);
+  });
+
+  it('replaces the casting set from each main push and from the snapshot reply', async () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    api.castingCb?.({ tabIds: ['t1', 't2'] });
+    expect(isPreviewCastingTab('t1') && isPreviewCastingTab('t2')).toBe(true);
+    api.castingCb?.({ tabIds: ['t2'] });
+    expect(isPreviewCastingTab('t1')).toBe(false);
+
+    api.snapshot.mockResolvedValueOnce({
+      ok: true,
+      dropped: [],
+      kept: 0,
+      pinnedTabIds: [],
+      castingTabIds: ['t9'],
+    });
+    await snapshotRsbBrowserTabs([]);
+    expect(isPreviewCastingTab('t9')).toBe(true);
+    expect(isPreviewCastingTab('t2')).toBe(false);
+  });
+
+  it('clears the casting set when the bridge is torn down', () => {
+    const api = installFakeIpc();
+    const dispose = initRsbBrowserBridge();
+    api.castingCb?.({ tabIds: ['t1'] });
+    dispose();
+    expect(isPreviewCastingTab('t1')).toBe(false);
+  });
+
+  it('works against a preload without onPreviewCasting (older host build)', () => {
+    const api = installFakeIpc();
+    (api as unknown as { onPreviewCasting?: unknown }).onPreviewCasting = undefined;
+    expect(() => initRsbBrowserBridge()).not.toThrow();
   });
 
   it('releaseRsbBrowserTab calls ipc.release with the tabId', async () => {

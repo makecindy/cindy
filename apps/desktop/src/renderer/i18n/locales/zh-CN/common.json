@@ -8131,6 +8131,7 @@
       "addFailed": "添加标签失败",
       "tabCloseAria": "关闭标签",
       "pinnedAria": "全局页签，切换任务时保留",
+      "castingAria": "正在手机上查看",
       "menu": {
         "addLabel": "添加标签",
         "comingSoon": "即将支持",

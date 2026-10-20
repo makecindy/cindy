@@ -70,6 +70,7 @@ import type { TabKindBodyProps } from '../types';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import { registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
+import { setPreviewCastingTabs, _resetPreviewCastingForTests } from '../lib/previewCasting';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
 import {
@@ -306,6 +307,7 @@ describe('RightSidebarShell empty state', () => {
   });
 
   afterEach(() => {
+    _resetPreviewCastingForTests();
     _resetStore();
     _resetRsbBrowserBridgeForTests();
     _resetPopupRouterForTests();
@@ -562,6 +564,96 @@ describe('RightSidebarShell empty state', () => {
       unregisterTabKind('web-browser');
     }
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果:RightSidebarShell 的 PluginBodyHost + TabPill。投屏中的浏览器标签在
+  //   切任务 / 侧栏收起时不能 display:none(Chromium 不再出帧,手机画面冻结),可观察的是它改成
+  //   保留尺寸、不透明度 0、点击穿透的 fixed 层,webview wrapper 的父节点不变(搬家会重建 guest),
+  //   标签栏出现手机图标;停止投屏后恢复原来的 hidden。
+  // - Bug / 规则依据:插件预览投屏计划 D3 / T3。
+  // - 最小失败输入:一个已物化 guest 的浏览器标签 + 投屏集合 + 切到别的任务。
+  it.each(['task switch', 'sidebar hide'] as const)(
+    'keeps a casting browser tab composited and click-through on %s, and restores hiding after',
+    async (how) => {
+      Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+      registerTabKind({
+        kind: 'web-browser',
+        menu: { kind: 'web-browser', labelKey: 'browser', icon: Globe, order: 1, enabled: true },
+        TabPillTitle: () => createElement('span', null, 'browser'),
+        TabBody: (props: TabKindBodyProps) =>
+          createElement(BrowserTabBody, { ...props, state: props.state as WebBrowserState }),
+        defaultState: () => ({ url: 'https://example.test/', title: '', favicon: null, isAudible: false }),
+      });
+      const entry = browserWebviewPool.acquire('browser-a');
+      Object.assign(entry.webview, {
+        getURL: () => 'https://example.test/',
+        getTitle: () => '',
+        canGoBack: () => false,
+        canGoForward: () => false,
+        getWebContentsId: () => 101,
+        setAudioMuted: () => undefined,
+        executeJavaScript: async () => undefined,
+      });
+      tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+        sessionId === 'task-a'
+          ? {
+              tabs: [{ id: 'browser-a', kind: 'web-browser', state: { url: 'https://example.test/' } }],
+              activeTabId: 'browser-a',
+            }
+          : { tabs: [], activeTabId: null },
+      );
+      const props = { workdir: '/tmp/task-a', remoteHostId: null, isMac: true };
+      const view = render(createElement(RightSidebarShell, { ...props, sessionId: 'task-a' }));
+      try {
+        await waitFor(() => expect(entry.wrapper.parentElement?.id).not.toBe('browser-webview-pool'));
+        const slot = entry.wrapper.parentElement!;
+
+        expect(screen.queryByTestId('tab-casting-indicator')).toBeNull();
+        act(() => setPreviewCastingTabs(['browser-a']));
+        expect(screen.getByTestId('tab-casting-indicator')).toBeTruthy();
+
+        if (how === 'task switch') {
+          view.rerender(
+            createElement(RightSidebarShell, { ...props, workdir: '/tmp/task-b', sessionId: 'task-b' }),
+          );
+        } else {
+          view.rerender(
+            createElement(RightSidebarShell, { ...props, sessionId: 'task-a', shellVisible: false }),
+          );
+        }
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        // 同一个 slot / 同一个 wrapper:没有被搬走或重建。
+        expect(entry.wrapper.parentElement).toBe(slot);
+        const layer = slot.closest('[data-preview-casting]') as HTMLElement;
+        expect(layer).not.toBeNull();
+        expect(layer.classList.contains('hidden')).toBe(false);
+        expect(layer.style.position).toBe('fixed');
+        expect(layer.style.opacity).toBe('0');
+        expect(layer.style.pointerEvents).toBe('none');
+        expect(parseFloat(layer.style.width)).toBeGreaterThan(0);
+        expect(parseFloat(layer.style.height)).toBeGreaterThan(0);
+        expect(layer.getAttribute('aria-hidden')).toBe('true');
+        // 不可见期间 webview 退出 Tab 序,停止投屏后还原。
+        expect(entry.webview.getAttribute('tabindex')).toBe('-1');
+
+        act(() => setPreviewCastingTabs([]));
+        expect(entry.webview.hasAttribute('tabindex')).toBe(false);
+        // 停止投屏:去掉保活层,回到各状态原有的隐藏方式(切任务 = hidden;侧栏收起 = 仍由外壳 w-0 裁切)。
+        expect(layer.style.position).toBe('');
+        expect(layer.hasAttribute('data-preview-casting')).toBe(false);
+        expect(layer.classList.contains('hidden')).toBe(how === 'task switch');
+        expect(entry.wrapper.parentElement).toBe(slot);
+      } finally {
+        act(() => setPreviewCastingTabs([]));
+        view.unmount();
+        browserWebviewPool.releaseAll();
+        unregisterTabKind('web-browser');
+      }
+    },
+  );
 
   it.each(['task switch', 'sidebar hide'] as const)(
     'closes the retained browser More portal on %s without restoring hidden focus',

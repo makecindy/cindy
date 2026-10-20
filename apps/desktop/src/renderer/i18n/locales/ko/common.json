@@ -8131,6 +8131,7 @@
       "addFailed": "탭을 추가하지 못했습니다",
       "tabCloseAria": "탭 닫기",
       "pinnedAria": "전역 탭, 작업을 전환해도 유지됩니다",
+      "castingAria": "휴대폰에서 보는 중",
       "menu": {
         "addLabel": "탭 추가",
         "comingSoon": "지원 예정",
