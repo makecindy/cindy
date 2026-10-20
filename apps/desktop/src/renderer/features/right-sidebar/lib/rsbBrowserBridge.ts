@@ -47,7 +47,12 @@ const GUEST_CLOSE_RETRY_DELAYS_MS = [50, 150, 400] as const;
 
 /** Subset of `window.electronAPI.rsbBrowserBridge` actually used here. */
 interface RsbBrowserBridgeIpcSubset {
-  report(input: { sessionId: string; tabId: string; webContentsId: number }): Promise<unknown>;
+  report(input: {
+    sessionId: string;
+    tabId: string;
+    webContentsId: number;
+    previewRequestId?: string;
+  }): Promise<unknown>;
   release(input: { tabId: string; webContentsId?: number }): Promise<unknown>;
   snapshot(input: { liveTabIds: string[] }): Promise<{
     ok: true;
@@ -372,11 +377,14 @@ export function reportRsbBrowserTab(input: {
   sessionId: string;
   tabId: string;
   webContentsId: number;
+  /** 插件预览标签才有:previewSlot 签发的凭据,main 校验后绑定插件身份。 */
+  previewRequestId?: string;
 }): Promise<void> {
   const api = ipc();
   if (!api) return Promise.resolve();
   lastReportedWebContentsId.set(input.tabId, input.webContentsId);
-  return api.report(input).then(
+  const { previewRequestId, ...base } = input;
+  return api.report(previewRequestId ? { ...base, previewRequestId } : base).then(
     () => undefined,
     () => undefined,
   );
@@ -529,9 +537,12 @@ async function handleTabOpRequest(
           error: `tab ${req.tabId ?? '(session default)'} not found`,
         };
       } else {
-        const url =
-          (tab.state as { url?: string } | null | undefined)?.url ?? 'about:blank';
-        await eagerSpawnAndReport(req.sessionId, tab.id, url);
+        const tabState = tab.state as
+          | { url?: string; previewRequestId?: string }
+          | null
+          | undefined;
+        const url = tabState?.url ?? 'about:blank';
+        await eagerSpawnAndReport(req.sessionId, tab.id, url, tabState?.previewRequestId);
         result = { reqId, ok: true, tabId: tab.id };
       }
     } else {
@@ -596,13 +607,15 @@ export async function eagerSpawnAndReport(
   sessionId: string,
   tabId: string,
   url: string,
+  /** 插件预览标签重建时带回原凭据(main 据此复绑插件身份)。 */
+  previewRequestId?: string,
 ): Promise<void> {
   const entry = browserWebviewPool.acquire(tabId);
   try {
     const webContentsId = entry.webview.getWebContentsId();
     // Fire-and-forget:report 失败不致命 —— agent 下一个动作会得到清晰的
     // "tab not found"。
-    void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+    void reportRsbBrowserTab({ sessionId, tabId, webContentsId, previewRequestId });
     return;
   } catch {
     /* 尚未 attach —— 走下面的首次 spawn 路径 */
@@ -625,7 +638,7 @@ export async function eagerSpawnAndReport(
     const onAttach = () => {
       try {
         const webContentsId = entry.webview.getWebContentsId();
-        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+        void reportRsbBrowserTab({ sessionId, tabId, webContentsId, previewRequestId });
       } catch {
         /* attach 尚未完成到可取 id —— dom-ready 兜底。 */
       }
@@ -636,7 +649,7 @@ export async function eagerSpawnAndReport(
         // Fire-and-forget: report failures are non-fatal — the agent's
         // next call will surface "tab not found" cleanly if it really
         // didn't land.
-        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+        void reportRsbBrowserTab({ sessionId, tabId, webContentsId, previewRequestId });
       } catch {
         // Race: getWebContentsId throws if attach hasn't completed yet.
         // dom-ready firing usually means attach is done, but defend

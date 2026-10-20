@@ -28,6 +28,7 @@ import {
   type RsbWindowTabHandoff,
 } from '../../shared/rightSidebarWindow.js';
 import { parseConversationSearchJump } from '../../shared/conversationSearchJump.js';
+import { PREVIEW_REQUEST_ID_RE } from '../../shared/rsbBrowserBridge.js';
 import { hasActiveRsbNativePopupSurfaces } from '../rsb-browser-bridge/native-popup-surfaces.js';
 import type { RsbWindowController } from './controller.js';
 
@@ -100,6 +101,13 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   if (r.type === 'open-web-browser' || r.type === 'open-mail-preview') {
     if (typeof r.url !== 'string' || r.url.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.url required');
+    }
+    if (
+      r.type === 'open-web-browser' &&
+      typeof r.previewRequestId === 'string' &&
+      PREVIEW_REQUEST_ID_RE.test(r.previewRequestId)
+    ) {
+      return { type: r.type, sessionId: r.sessionId, url: r.url, previewRequestId: r.previewRequestId };
     }
     return { type: r.type, sessionId: r.sessionId, url: r.url };
   }

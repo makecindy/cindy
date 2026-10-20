@@ -13,9 +13,17 @@ import { webContents as electronWebContents } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { TabRegistry } from './registry.js';
+import { PreviewTabIndex, type PreviewTabGhostInfo } from './previewTabs.js';
 
 export { TabRegistry } from './registry.js';
 export type { TabRecord } from './registry.js';
+export { PreviewTabIndex, PREVIEW_REQUEST_TTL_MS } from './previewTabs.js';
+export type {
+  PreviewTabBinding,
+  PreviewTabEnded,
+  PreviewTabEndReason,
+  PreviewTabIndexDeps,
+} from './previewTabs.js';
 export {
   registerRsbBrowserBridgeIpc,
   _resetRsbBrowserBridgeIpcForTests,
@@ -53,7 +61,52 @@ export function getRsbBrowserBridge(): TabRegistry {
   return registry;
 }
 
+let previewTabIndex: PreviewTabIndex | null = null;
+let previewGhostResolver: ((ghostId: string) => PreviewTabGhostInfo | null) | null = null;
+
+/**
+ * bootstrap 注入:按插件实例 id 取当前身份(已启用且仍声明 preview 槽才算可用)。
+ * 保持 rsb-browser-bridge 不反向依赖 cindy-brain;未注入时所有插件视为不可用,
+ * 即索引保持为空(fail closed)。
+ */
+export function setPreviewTabGhostResolver(
+  resolver: ((ghostId: string) => PreviewTabGhostInfo | null) | null,
+): void {
+  previewGhostResolver = resolver;
+}
+
+/**
+ * 插件预览标签索引单例。previewSlot 经 bootstrap 注入的签发器写入,ipc `report`
+ * 绑定,T4 的投屏 Host 读取(list / get / current / onEnded)。
+ */
+export function getPreviewTabIndex(): PreviewTabIndex {
+  if (!previewTabIndex) {
+    const index = new PreviewTabIndex({
+      getGhost: (ghostId) => previewGhostResolver?.(ghostId) ?? null,
+      getGuestUrl: (webContentsId) => {
+        const wc = electronWebContents.fromId(webContentsId);
+        return wc && !wc.isDestroyed() ? wc.getURL() : null;
+      },
+      watchNavigation: (webContentsId, onNavigate) => {
+        const wc = electronWebContents.fromId(webContentsId);
+        if (!wc || wc.isDestroyed()) return () => undefined;
+        const listener = (_event: unknown, url: string) => onNavigate(url);
+        wc.on('did-navigate', listener);
+        return () => {
+          if (!wc.isDestroyed()) wc.removeListener('did-navigate', listener);
+        };
+      },
+      logger,
+    });
+    getRsbBrowserBridge().onRelease((record) => index.onRegistryRelease(record));
+    previewTabIndex = index;
+  }
+  return previewTabIndex;
+}
+
 /** Test-only reset. */
 export function _resetRsbBrowserBridgeForTests(): void {
   registry = null;
+  previewTabIndex = null;
+  previewGhostResolver = null;
 }

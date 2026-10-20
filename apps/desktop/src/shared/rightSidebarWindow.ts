@@ -50,7 +50,7 @@ export type RsbWindowCommand =
     }
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'toggle-review-tab'; sessionId: string }
-  | { type: 'open-web-browser'; sessionId: string; url: string }
+  | { type: 'open-web-browser'; sessionId: string; url: string; previewRequestId?: string }
   | { type: 'open-mail-preview'; sessionId: string; url: string }
   | { type: 'open-mail-card'; sessionId: string; callId: string }
   | {

@@ -149,12 +149,19 @@ export type RsbBrowserBridgeTabOpResult =
  * Payload renderer sends on `report`. `webContentsId` is the integer returned
  * by `<webview>.getWebContentsId()` AFTER the guest has attached (i.e. on
  * `dom-ready` or later). Calling earlier returns an invalid id.
+ *
+ * `previewRequestId`(可选)= 该标签由插件预览槽打开时,previewSlot 签发并随开页
+ * 推送下发的凭据;main 的 PreviewTabIndex 据此校验并绑定插件身份。普通网页标签不带。
  */
 export interface RsbBrowserBridgeReportPayload {
   sessionId: string;
   tabId: string;
   webContentsId: number;
+  previewRequestId?: string;
 }
+
+/** previewSlot 签发的 previewRequestId 形状:32 字节 CSPRNG 的 base64url(43 字符)。 */
+export const PREVIEW_REQUEST_ID_RE = /^[A-Za-z0-9_-]{43}$/;
 
 /**
  * Payload renderer sends on `release`.

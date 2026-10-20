@@ -32,7 +32,6 @@ import {
   RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL,
   RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL,
   RSB_BROWSER_BRIDGE_UNPIN_CHANNEL,
-  type RsbBrowserBridgeReportPayload,
   type RsbBrowserBridgeResourceEvent,
 } from '../../shared/rsbBrowserBridge.js';
 import {
@@ -41,7 +40,8 @@ import {
   requireString,
   throwIpcError,
 } from '../utils/ipcValidate.js';
-import type { TabRegistry } from './registry.js';
+import type { PreviewTabIndex } from './previewTabs.js';
+import type { TabRecord, TabRegistry } from './registry.js';
 import {
   BrowserGuestResourceWatchdog,
   ForegroundTabTracker,
@@ -56,6 +56,11 @@ interface IpcLogger {
 
 export interface RegisterRsbBrowserBridgeOptions {
   registry: TabRegistry;
+  /**
+   * 插件预览标签索引:`report` 携带 previewRequestId 时在这里校验并绑定插件身份,
+   * `snapshot` 对账后清理已不存活标签的 grant。未提供 = 不建立任何预览绑定。
+   */
+  previewTabs?: PreviewTabIndex;
   /**
    * Resolves the host webContents (renderer) so pin/unpin broadcasts know
    * where to send. Phase 2 has exactly one main window; in multi-window
@@ -82,7 +87,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   }
   registered = true;
 
-  const { registry, getHostWebContents, getNativePopupOwnerWebContents, logger } = opts;
+  const { registry, previewTabs, getHostWebContents, getNativePopupOwnerWebContents, logger } = opts;
 
   const resolveOwner = (target: WebContents): WebContents | null => {
     const webviewHost = (
@@ -138,8 +143,11 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
       );
     }
 
-    const record: RsbBrowserBridgeReportPayload = { sessionId, tabId, webContentsId };
+    const record: TabRecord = { sessionId, tabId, webContentsId };
     registry.report(record);
+    // previewRequestId 只是一条待校验的声明:形状 / 签发 / 过期 / session / origin
+    // 全部由 PreviewTabIndex 裁决,失败静默当作普通网页标签。
+    previewTabs?.bind(record, obj.previewRequestId);
     return { ok: true };
   });
 
@@ -183,6 +191,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
       return id;
     });
     const result = registry.reconcile(liveTabIds);
+    previewTabs?.pruneTabs(liveTabIds);
     if (result.dropped.length > 0) {
       logger.info('RSB browser registry reconciled — dropped stale entries', {
         dropped: result.dropped,

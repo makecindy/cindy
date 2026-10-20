@@ -73,6 +73,7 @@ export class TabRegistry {
   private readonly destroyedCleanup = new Map<string, () => void>();
   private readonly pinListeners = new Set<PinChangeListener>();
   private readonly reportListeners = new Set<(record: TabRecord) => void>();
+  private readonly releaseListeners = new Set<(record: TabRecord) => void>();
 
   constructor(private readonly opts: TabRegistryOptions) {}
 
@@ -108,6 +109,16 @@ export class TabRegistry {
   }
 
   /**
+   * 订阅记录被释放的事件(renderer release / reconcile / destroyed / 懒 GC 都经此)。
+   * 被忽略的 stale release 不触发。参数是被释放的那条记录。PreviewTabIndex 用它
+   * 在标签关闭 / 回收 / guest 销毁时结束预览绑定。返回退订函数。
+   */
+  onRelease(listener: (record: TabRecord) => void): () => void {
+    this.releaseListeners.add(listener);
+    return () => this.releaseListeners.delete(listener);
+  }
+
+  /**
    * Renderer-driven release (tab close / pool eviction). Drops the record and
    * cleans the destroyed-listener.
    *
@@ -137,6 +148,13 @@ export class TabRegistry {
     this.pinLeases.delete(tabId);
     if (this.pinned.delete(tabId)) {
       this.firePinChange(tabId, false);
+    }
+    for (const l of this.releaseListeners) {
+      try {
+        l(record);
+      } catch (err) {
+        this.opts.logger.warn('release listener threw (ignored)', err);
+      }
     }
   }
 

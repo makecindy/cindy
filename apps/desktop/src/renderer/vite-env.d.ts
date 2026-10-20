@@ -1588,6 +1588,7 @@ interface ElectronAPI {
         iconDataUrl?: string;
         sessionId: string;
         url: string;
+        previewRequestId?: string;
       }) => void,
     ) => () => void;
     /**
@@ -5332,6 +5333,8 @@ interface ElectronAPI {
       sessionId: string;
       tabId: string;
       webContentsId: number;
+      /** 插件预览标签才有:previewSlot 签发的凭据(main 校验后绑定插件身份)。 */
+      previewRequestId?: string;
     }) => Promise<{ ok: true }>;
     /** 通知 main 端释放 tab 的注册条目(pool 释放时触发)。 */
     release: (input: { tabId: string }) => Promise<{ ok: true }>;

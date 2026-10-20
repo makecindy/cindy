@@ -37,6 +37,12 @@ export interface GhostPreviewOpenPush {
   /** 目标会话(main 已兜底解析:显式指定或台前会话)。 */
   sessionId: string;
   url: string;
+  /**
+   * 本次预览的签发凭据(CSPRNG,30 秒有效,绑定 ghostId / sessionId / URL origin)。
+   * renderer 原样存进标签状态,标签 report 时带回 main,由 PreviewTabIndex 校验并
+   * 绑定插件身份。没有签发器(或 URL 无 origin)时缺省,开页行为不变。
+   */
+  previewRequestId?: string;
 }
 
 export interface PreviewSlotDeps {
@@ -44,6 +50,8 @@ export interface PreviewSlotDeps {
   /** 把开页请求推给宿主窗口;false = 一个窗口都不在(HOST_NOT_READY)。 */
   broadcast(payload: GhostPreviewOpenPush): boolean;
   openMobile?(pageId: string, ghostId: string, url: string): boolean;
+  /** 为一次桌面预览签发 previewRequestId(由 bootstrap 注入 PreviewTabIndex);失败返回 null。 */
+  issuePreviewRequest?(input: { ghostId: string; sessionId: string; url: string }): string | null;
   /** 台前会话快照(请求缺省 sessionId 时的落点;非会话页为 null)。 */
   focusedSessionId(): string | null;
   now?(): number;
@@ -115,12 +123,15 @@ export class GhostPreviewSlot {
       return fail('HOST_NOT_READY', '当前没有活跃会话可承载预览标签');
     }
 
+    const previewRequestId =
+      this.deps.issuePreviewRequest?.({ ghostId, sessionId, url: request.url }) ?? null;
     const delivered = this.deps.broadcast({
       ghostId,
       name: ghost.manifest.name,
       ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
       sessionId,
       url: request.url,
+      ...(previewRequestId ? { previewRequestId } : {}),
     });
     if (!delivered) {
       return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');

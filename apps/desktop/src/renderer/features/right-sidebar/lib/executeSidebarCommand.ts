@@ -39,7 +39,13 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     return;
   }
   if (command.type === 'open-web-browser') {
-    await openUrlInSidebarBrowser(command.sessionId, command.url);
+    if (command.previewRequestId) {
+      await openUrlInSidebarBrowser(command.sessionId, command.url, {
+        previewRequestId: command.previewRequestId,
+      });
+    } else {
+      await openUrlInSidebarBrowser(command.sessionId, command.url);
+    }
     return;
   }
   if (command.type === 'open-file-browser') {

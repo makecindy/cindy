@@ -9,12 +9,14 @@ import {
   BROWSER_NAVIGATION_FUSE_LIMIT,
   useBrowserWebview,
 } from '../useBrowserWebview';
+import { reportRsbBrowserTab } from '../../lib/rsbBrowserBridge';
 
 interface MockWebview {
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
   dispatch: (type: string, event?: Record<string, unknown>) => void;
   getURL: ReturnType<typeof vi.fn>;
+  getWebContentsId: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   setAttribute: ReturnType<typeof vi.fn>;
   canGoBack: ReturnType<typeof vi.fn>;
@@ -112,6 +114,7 @@ function makeMockWebview(initialUrl: string): MockWebview {
       }
     },
     getURL: vi.fn(() => initialUrl),
+    getWebContentsId: vi.fn(() => 77),
     loadURL: vi.fn(),
     setAttribute: vi.fn(),
     canGoBack: vi.fn(() => false),
@@ -126,11 +129,13 @@ function makeMockWebview(initialUrl: string): MockWebview {
 function HookProbe({
   onResult,
   visible,
+  previewRequestId,
 }: {
   onResult: (result: UseBrowserWebviewResult) => void;
   visible?: boolean;
+  previewRequestId?: string;
 }) {
-  const result = useBrowserWebview('tab-a', 'session-a', visible);
+  const result = useBrowserWebview('tab-a', 'session-a', visible, true, previewRequestId);
   onResult(result);
   return null;
 }
@@ -436,6 +441,44 @@ describe('useBrowserWebview', () => {
       });
     });
     expect(result!.favicon).toBeNull();
+  });
+
+  it('did-attach / dom-ready 上报 webContentsId 时带上插件预览凭据;普通标签不带该字段', () => {
+    const previewRequestId = 'R'.repeat(43);
+    vi.mocked(reportRsbBrowserTab).mockClear();
+    render(createElement(HookProbe, {
+      visible: true,
+      previewRequestId,
+      onResult: () => undefined,
+    }));
+    act(() => {
+      mockWebview.dispatch('did-attach');
+      mockWebview.dispatch('dom-ready');
+    });
+    expect(reportRsbBrowserTab).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(reportRsbBrowserTab).mock.calls) {
+      expect(call[0]).toEqual({
+        sessionId: 'session-a',
+        tabId: 'tab-a',
+        webContentsId: 77,
+        previewRequestId,
+      });
+    }
+
+    cleanup();
+    poolMocks.fireRelease('tab-a');
+    mockWebview = makeMockWebview('https://www.taptap.cn/');
+    vi.mocked(reportRsbBrowserTab).mockClear();
+    render(createElement(HookProbe, { visible: true, onResult: () => undefined }));
+    act(() => {
+      mockWebview.dispatch('dom-ready');
+    });
+    expect(reportRsbBrowserTab).toHaveBeenCalledWith({
+      sessionId: 'session-a',
+      tabId: 'tab-a',
+      webContentsId: 77,
+      previewRequestId: undefined,
+    });
   });
 
   it('does not treat a suppressed stale navigation report as a missing favicon', () => {

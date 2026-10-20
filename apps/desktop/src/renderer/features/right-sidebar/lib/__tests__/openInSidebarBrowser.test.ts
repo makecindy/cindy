@@ -116,6 +116,29 @@ describe('openUrlInSidebarBrowser', () => {
     });
   });
 
+  it('previewRequestId:随 detached 路由命令与新标签 initialState 一起下发;缺省时两处都不带该字段', async () => {
+    const previewRequestId = 'P'.repeat(43);
+    await openUrlInSidebarBrowser('s1', 'https://example.com/', {
+      userInitiated: false,
+      previewRequestId,
+    });
+    expect(routeSidebarCommand).toHaveBeenCalledWith(
+      { type: 'open-web-browser', sessionId: 's1', url: 'https://example.com/', previewRequestId },
+      { userInitiated: false },
+    );
+    expect(addTab).toHaveBeenCalledWith('s1', 'web-browser', {
+      url: 'https://example.com/',
+      title: '',
+      favicon: null,
+      isAudible: false,
+      previewRequestId,
+    });
+
+    vi.mocked(addTab).mockClear();
+    await openUrlInSidebarBrowser('s1', 'https://example.com/');
+    expect(vi.mocked(addTab).mock.calls[0][2]).not.toHaveProperty('previewRequestId');
+  });
+
   it('does not request visibility when addTab rejects (caller surfaces the error)', async () => {
     vi.mocked(addTab).mockRejectedValueOnce(new Error('boom'));
     await expect(openUrlInSidebarBrowser('s1', 'https://example.com/')).rejects.toThrow('boom');

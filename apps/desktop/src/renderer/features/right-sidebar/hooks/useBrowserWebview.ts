@@ -116,7 +116,11 @@ export function useBrowserWebview(
   sessionId?: string,
   visible?: boolean,
   enabled = true,
+  /** 插件预览槽签发的凭据;每次 report 带回 main(经 ref 读取,变化不重绑事件)。 */
+  previewRequestId?: string,
 ): UseBrowserWebviewResult {
+  const previewRequestIdRef = useRef(previewRequestId);
+  previewRequestIdRef.current = previewRequestId;
   // pool entry 引用 + 反应式 state。entry 本身在 pool 模块管;hook 只观察。
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
   const [url, setUrl] = useState('');
@@ -289,7 +293,12 @@ export function useBrowserWebview(
       if (!sessionId) return;
       try {
         const webContentsId = entry.webview.getWebContentsId();
-        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+        void reportRsbBrowserTab({
+          sessionId,
+          tabId,
+          webContentsId,
+          previewRequestId: previewRequestIdRef.current,
+        });
       } catch {
         // pre-attach edge case (getWebContentsId throws before attach completes);
         // a subsequent did-navigate will not re-fire dom-ready, so we lose this
@@ -305,7 +314,12 @@ export function useBrowserWebview(
       if (!sessionId) return;
       try {
         const webContentsId = entry.webview.getWebContentsId();
-        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+        void reportRsbBrowserTab({
+          sessionId,
+          tabId,
+          webContentsId,
+          previewRequestId: previewRequestIdRef.current,
+        });
       } catch {
         /* attach in-flight —— dom-ready 兜底。 */
       }

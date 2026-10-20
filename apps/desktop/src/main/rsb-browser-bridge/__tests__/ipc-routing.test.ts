@@ -16,10 +16,14 @@ vi.mock('electron', () => {
 });
 
 import { ipcMain } from 'electron';
+import { webContents as electronWebContents } from 'electron';
 import {
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
+  RSB_BROWSER_BRIDGE_REPORT_CHANNEL,
+  RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL,
 } from '../../../shared/rsbBrowserBridge.js';
+import type { PreviewTabIndex } from '../previewTabs.js';
 import { _resetRsbBrowserBridgeIpcForTests, registerRsbBrowserBridgeIpc } from '../ipc.js';
 import type { TabRegistry } from '../registry.js';
 
@@ -112,5 +116,58 @@ describe('RSB browser bridge ownership routing', () => {
         { tabId: 'tab-a', webContentsId: guest.id },
       ),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('RSB browser bridge · previewRequestId 透传', () => {
+  function registerWithPreview() {
+    const guest = fakeGuest(7);
+    const report = vi.fn();
+    const registry = {
+      ...makeRegistry(guest).registry,
+      report,
+      reconcile: vi.fn(() => ({ dropped: [], kept: 0, pinnedTabIds: [] })),
+    } as unknown as TabRegistry;
+    const previewTabs = { bind: vi.fn(), pruneTabs: vi.fn() };
+    registerRsbBrowserBridgeIpc({
+      registry,
+      previewTabs: previewTabs as unknown as PreviewTabIndex,
+      getHostWebContents: () => null,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    vi.mocked(electronWebContents.fromId).mockReturnValue(guest as never);
+    return { report, previewTabs };
+  }
+
+  it('report 把 previewRequestId 交给索引裁决,registry 记录里不含它', () => {
+    const { report, previewTabs } = registerWithPreview();
+    const id = 'A'.repeat(43);
+    expect(
+      handler(RSB_BROWSER_BRIDGE_REPORT_CHANNEL)(
+        { sender: { id: 7 } },
+        { sessionId: 's1', tabId: 'tab-a', webContentsId: 101, previewRequestId: id },
+      ),
+    ).toEqual({ ok: true });
+    const record = { sessionId: 's1', tabId: 'tab-a', webContentsId: 101 };
+    expect(report).toHaveBeenCalledWith(record);
+    expect(previewTabs.bind).toHaveBeenCalledWith(record, id);
+  });
+
+  it('归属校验先于索引:非宿主 renderer 的 report 被拒,索引不被调用', () => {
+    const { report, previewTabs } = registerWithPreview();
+    expect(() =>
+      handler(RSB_BROWSER_BRIDGE_REPORT_CHANNEL)(
+        { sender: { id: 9 } },
+        { sessionId: 's1', tabId: 'tab-a', webContentsId: 101, previewRequestId: 'A'.repeat(43) },
+      ),
+    ).toThrow(/INVALID_PARAMS/);
+    expect(report).not.toHaveBeenCalled();
+    expect(previewTabs.bind).not.toHaveBeenCalled();
+  });
+
+  it('snapshot 对账后让索引清理不存活标签的 grant', () => {
+    const { previewTabs } = registerWithPreview();
+    handler(RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL)({ sender: { id: 7 } }, { liveTabIds: ['a', 'b'] });
+    expect(previewTabs.pruneTabs).toHaveBeenCalledWith(['a', 'b']);
   });
 });
