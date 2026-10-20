@@ -8131,6 +8131,7 @@
       "addFailed": "タブを追加できませんでした",
       "tabCloseAria": "タブを閉じる",
       "pinnedAria": "グローバルタブ。タスクを切り替えても保持されます",
+      "castingAria": "スマートフォンで表示中",
       "menu": {
         "addLabel": "タブを追加",
         "comingSoon": "近日対応",

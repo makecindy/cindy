@@ -8163,6 +8163,7 @@
       "addFailed": "Failed to add tab",
       "tabCloseAria": "Close tab",
       "pinnedAria": "Global tab, kept across tasks",
+      "castingAria": "Being viewed on your phone",
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",

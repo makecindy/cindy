@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, LayoutGrid, ListTodo, Pin, Plus, Puzzle, X, Maximize2, Minimize2, PanelRightClose, PictureInPicture2, Wrench } from 'lucide-react';
+import { Activity, Bot, FolderTree, Globe, Terminal, GitPullRequestArrow, UsersRound, LayoutGrid, ListTodo, Pin, Plus, Puzzle, X, Maximize2, Minimize2, PanelRightClose, PictureInPicture2, Smartphone, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { AddTabDropdown } from './AddTabDropdown';
+import { usePreviewCastingTab } from './lib/previewCasting';
 import { getTabKind, hydrateTabState } from './registry';
 import { TAB_GROUP_IDS, tabGroupLabelKey, type TabGroupId } from './tabGroups';
 import type { BuiltinTabKindId, TabKindId, TabState } from './types';
@@ -736,6 +737,7 @@ function TabPill({
   // active 变成 true 时(用户点了该 tab 或加新 tab 自动 active 它)滚到本容器视口里。
   // 只调整 tabs 横向滚动容器,避免浏览器把右栏外层 chrome 一起滚动。
   const pillRef = useRef<HTMLDivElement>(null);
+  const casting = usePreviewCastingTab(tab.id);
   useEffect(() => {
     if (!active) return;
     scrollTabIntoContainerView(scrollContainerRef.current, pillRef.current);
@@ -804,6 +806,15 @@ function TabPill({
             fallbackLabel
           )}
         </span>
+        {casting && (
+          <Smartphone
+            size={11}
+            role="img"
+            aria-label={t('rightSidebar.tabs.castingAria')}
+            data-testid="tab-casting-indicator"
+            className="shrink-0 text-[var(--text-tertiary)]"
+          />
+        )}
       </button>
       <Tip text={closeAriaLabel}>
         <button

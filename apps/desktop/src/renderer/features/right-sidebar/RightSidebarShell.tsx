@@ -23,6 +23,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -65,6 +66,8 @@ import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useRetainedBrowserTabHosts } from './hooks/useRetainedBrowserTabHosts';
+import { castingKeepAliveStyle, type KeepAliveSize } from './lib/castingKeepAlive';
+import { usePreviewCastingTab } from './lib/previewCasting';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   isTabPoppedOut,
@@ -1078,10 +1081,48 @@ function PluginBodyHost({
   // body / pill 两边看到的 state 形状一致。
   const hydratedState = useMemo(() => hydrateTabState(plugin, tab.state), [plugin, tab.state]);
 
+  // 投屏中的标签不能 display:none(Chromium 不再出帧,capturePage 会冻住),
+  // 也不能落在 0 宽/被裁的侧栏盒里:不可见时改成保留原尺寸的透明点击穿透层,
+  // 不挪动 DOM 位置(搬父节点会重建 guest)。
+  const casting = usePreviewCastingTab(tab.id);
+  const keepAlive = casting && !(active && shellVisible);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const lastSizeRef = useRef<KeepAliveSize | null>(null);
+  useLayoutEffect(() => {
+    // 只在投屏且正常排版时记录尺寸:保活层沿用它,切换瞬间 guest 视口不变。
+    const el = hostRef.current;
+    if (!casting || keepAlive || !el) return;
+    const record = () => {
+      const { width, height } = el.getBoundingClientRect();
+      if (width > 0 && height > 0) lastSizeRef.current = { width, height };
+    };
+    record();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(record);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [casting, keepAlive]);
+
   return (
     <div
-      className={active ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'}
-      aria-hidden={!active || undefined}
+      ref={hostRef}
+      className={
+        keepAlive
+          ? 'flex flex-col'
+          : active
+            ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+            : 'hidden'
+      }
+      style={
+        keepAlive
+          ? castingKeepAliveStyle(lastSizeRef.current, {
+              width: window.innerWidth,
+              height: window.innerHeight,
+            })
+          : undefined
+      }
+      data-preview-casting={casting ? '' : undefined}
+      aria-hidden={!active || keepAlive || undefined}
     >
       {plugin ? (
         <TabBodyErrorBoundary tabId={tab.id} tabKind={tab.kind} t={t}>

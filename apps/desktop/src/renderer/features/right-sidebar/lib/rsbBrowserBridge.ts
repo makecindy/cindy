@@ -20,6 +20,7 @@
 
 import type {
   RsbBrowserBridgePinPayload,
+  RsbBrowserBridgePreviewCastingPayload,
   RsbBrowserBridgeResourceEvent,
   RsbBrowserBridgeTabOpRequest,
   RsbBrowserBridgeTabOpResult,
@@ -28,6 +29,7 @@ import type {
 import { createLogger } from '@/lib/logger';
 
 import { browserWebviewPool } from './browserWebviewPool';
+import { setPreviewCastingTabs } from './previewCasting';
 import {
   addTab,
   closeTab as storeCloseTab,
@@ -54,9 +56,12 @@ interface RsbBrowserBridgeIpcSubset {
     dropped: string[];
     kept: number;
     pinnedTabIds: string[];
+    castingTabIds?: string[];
   }>;
   onPin(cb: (payload: RsbBrowserBridgePinPayload) => void): () => void;
   onUnpin(cb: (payload: RsbBrowserBridgePinPayload) => void): () => void;
+  /** main → renderer 本 renderer 承载的投屏标签全集(旧 preload 无此方法)。 */
+  onPreviewCasting?(cb: (payload: RsbBrowserBridgePreviewCastingPayload) => void): () => void;
   /** main → renderer "do this tab op" command (Phase 3 backend `open` / `focus` / `close`). */
   onTabOpRequest(cb: (req: RsbBrowserBridgeTabOpRequest) => void): () => void;
   /** renderer → main result of a tab-op-request, keyed by reqId. */
@@ -300,6 +305,10 @@ export function initRsbBrowserBridge(): () => void {
   const unsubUnpin = api.onUnpin((payload) => {
     browserWebviewPool.unpinForAutomation(payload.tabId);
   });
+  // Casting set (full replacement): drives the keep-alive layer in the Shell.
+  const unsubCasting = api.onPreviewCasting?.((payload) => {
+    setPreviewCastingTabs(payload.tabIds);
+  });
 
   // Phase 3 tab-op bridge: main asks renderer to mutate the RSB store on its
   // behalf (open / focus / close). Renderer executes against the live store
@@ -344,6 +353,8 @@ export function initRsbBrowserBridge(): () => void {
     unsubGuestClose();
     unsubPin();
     unsubUnpin();
+    unsubCasting?.();
+    setPreviewCastingTabs([]);
     unsubTabOp();
     unsubResource();
     initialized = false;
@@ -424,6 +435,7 @@ export function snapshotRsbBrowserTabs(liveTabIds: string[]): Promise<void> {
       for (const tabId of res.pinnedTabIds) {
         browserWebviewPool.pinForAutomation(tabId);
       }
+      if (Array.isArray(res.castingTabIds)) setPreviewCastingTabs(res.castingTabIds);
     },
     () => undefined,
   );

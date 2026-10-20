@@ -61,6 +61,13 @@ export const RSB_BROWSER_BRIDGE_PIN_CHANNEL = 'rsb-browser-bridge:pin';
 export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = 'rsb-browser-bridge:unpin';
 
 /**
+ * Channel name for main → renderer "these tabs of yours are being cast to a phone".
+ * Payload is the FULL casting set of the receiving renderer (not a delta), so a
+ * dropped or reordered push can never leave a stale tab behind.
+ */
+export const RSB_BROWSER_BRIDGE_PREVIEW_CASTING_CHANNEL = 'rsb-browser-bridge:preview-casting';
+
+/**
  * Channel name for renderer → main "the user is currently looking at THIS
  * browser tab (or none)". 资源看门狗据此区分前台 / 后台 guest:前台页面只在
  * 内存超硬阈值时才强杀,后台页面可以被更激进地淘汰(对用户等价于 LRU 淘汰)。
@@ -202,6 +209,11 @@ export interface RsbBrowserBridgeSnapshotPayload {
 /** Payload main sends on `pin` / `unpin`. */
 export interface RsbBrowserBridgePinPayload {
   tabId: string;
+}
+
+/** Payload main sends on `preview-casting`: every casting tab hosted by the receiver. */
+export interface RsbBrowserBridgePreviewCastingPayload {
+  tabIds: string[];
 }
 
 /**

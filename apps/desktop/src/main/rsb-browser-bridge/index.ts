@@ -27,6 +27,7 @@ export {
   _resetRendererBridgeForTests,
   type RendererBridgeOptions,
 } from './renderer-bridge.js';
+export { setCastingTabs } from './previewCasting.js';
 export {
   getActiveRsbSessionId,
   setActiveRsbSessionId,

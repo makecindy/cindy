@@ -41,6 +41,11 @@ import {
   requireString,
   throwIpcError,
 } from '../utils/ipcValidate.js';
+import {
+  PreviewCastingController,
+  getActivePreviewCastingController,
+  setActivePreviewCastingController,
+} from './previewCasting.js';
 import type { TabRegistry } from './registry.js';
 import {
   BrowserGuestResourceWatchdog,
@@ -98,6 +103,8 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     }
     return getNativePopupOwnerWebContents?.(target.id) ?? null;
   };
+
+  setActivePreviewCastingController(new PreviewCastingController({ registry, resolveOwner, logger }));
 
   ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'report payload');
@@ -171,7 +178,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     return { ok: true };
   });
 
-  ipcMain.handle(RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL, (_e, payload: unknown) => {
+  ipcMain.handle(RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'snapshot payload');
     if (!Array.isArray(obj.liveTabIds)) {
       throwIpcError('INVALID_PARAMS', 'liveTabIds must be an array');
@@ -196,6 +203,9 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
       // Returned so the renderer can re-mirror the main-side pin authority
       // into its pool after a reload (P1-3 in Phase 2 review).
       pinnedTabIds: result.pinnedTabIds,
+      // Same recovery for the casting set: a reloaded host renderer re-applies
+      // the keep-alive layers for the tabs it still hosts.
+      castingTabIds: getActivePreviewCastingController()?.listHostedBy(event.sender) ?? [],
     };
   });
 
@@ -379,6 +389,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   return () => {
     unsubscribe();
     watchdog.stop();
+    setActivePreviewCastingController(null);
     // Note: ipcMain.removeHandler is intentionally NOT called here. Handlers
     // are process-lifetime (registered once during boot); on app quit the
     // process tears down. Tests use `_resetRsbBrowserBridgeIpcForTests` below.
@@ -393,4 +404,5 @@ export function _resetRsbBrowserBridgeIpcForTests(): void {
   registered = false;
   activeWatchdog?.stop();
   activeWatchdog = null;
+  setActivePreviewCastingController(null);
 }

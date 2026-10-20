@@ -634,6 +634,7 @@ const fanOutRsbBrowserCommand = createIpcFanOut('rsb:browser-command');
 // LRU 据此跳过 pinned tab,避免 automation 操作期间 webContents 被销毁。
 const fanOutRsbBrowserBridgePin = createIpcFanOut('rsb-browser-bridge:pin');
 const fanOutRsbBrowserBridgeUnpin = createIpcFanOut('rsb-browser-bridge:unpin');
+const fanOutRsbBrowserBridgePreviewCasting = createIpcFanOut('rsb-browser-bridge:preview-casting');
 const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:resource-event');
 // 资源用量面板:main 订阅驱动采样推送(面板打开才有流量)。
 const fanOutProcessMonitorSample = createIpcFanOut(PROCESS_MONITOR_SAMPLE_CHANNEL);
@@ -6013,6 +6014,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       fanOutRsbBrowserBridgePin(cb as IpcCallback),
     onUnpin: (cb: (payload: { tabId: string }) => void) =>
       fanOutRsbBrowserBridgeUnpin(cb as IpcCallback),
+    /** main → renderer:本 renderer 承载的投屏标签全集(保活图层据此切换)。 */
+    onPreviewCasting: (cb: (payload: { tabIds: string[] }) => void) =>
+      fanOutRsbBrowserBridgePreviewCasting(cb as IpcCallback),
     /** main → renderer "do this tab op against the RSB store" — Phase 3 backend. */
     onTabOpRequest: (cb: (req: unknown) => void) =>
       fanOutRsbBrowserBridgeTabOpRequest(cb as IpcCallback),
