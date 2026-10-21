@@ -38,7 +38,7 @@ export interface GhostPreviewOpenPush {
   sessionId: string;
   url: string;
   /**
-   * 本次预览的签发凭据(CSPRNG,30 秒有效,绑定 ghostId / sessionId / URL origin)。
+   * 本次预览的签发凭据(CSPRNG,未绑定时 12 小时有效,绑定 ghostId / sessionId / URL origin)。
    * renderer 原样存进标签状态,标签 report 时带回 main,由 PreviewTabIndex 校验并
    * 绑定插件身份。没有签发器(或 URL 无 origin)时缺省,开页行为不变。
    */

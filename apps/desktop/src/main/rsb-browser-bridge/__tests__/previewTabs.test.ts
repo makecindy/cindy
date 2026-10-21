@@ -19,6 +19,7 @@ const URL_OK = `${ORIGIN}/app/index.html`;
 function setup() {
   let clock = 1_000_000;
   let seq = 0;
+  const warn = vi.fn();
   const ghosts = new Map<string, { available: boolean; name: string }>([
     ['ghost-a', { available: true, name: 'Ghost A' }],
     ['ghost-b', { available: true, name: 'Ghost B' }],
@@ -38,6 +39,7 @@ function setup() {
     now: () => clock,
     // 43 字符 base64url,满足 PREVIEW_REQUEST_ID_RE
     randomId: () => `id${String(++seq).padStart(41, '0')}`,
+    logger: { info: vi.fn(), warn },
   };
   const index = new PreviewTabIndex(deps);
   const ended: PreviewTabEnded[] = [];
@@ -45,6 +47,7 @@ function setup() {
   return {
     index,
     ended,
+    warn,
     ghosts,
     guestUrls,
     advance: (ms: number) => {
@@ -121,12 +124,55 @@ describe('PreviewTabIndex · 签发与绑定', () => {
     expect(index.list()).toEqual([]);
   });
 
-  it('id 过期(30 秒)后不可绑定', () => {
-    const { index, advance } = setup();
+  it('标签不可见时晚很多才 report 仍能绑定(5 分钟 / 1 小时 / 接近 TTL 上限)', () => {
+    for (const delayMs of [5 * 60_000, 60 * 60_000, PREVIEW_REQUEST_TTL_MS - 1]) {
+      const { index, advance } = setup();
+      const id = index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+      advance(delayMs);
+      index.bind(rec('tab-1', 11), id);
+      expect(index.get('tab-1')).toMatchObject({ ghostId: 'ghost-a' });
+    }
+  });
+
+  it('超出长 TTL(12 小时)后不可绑定,并记原因码', () => {
+    const { index, advance, warn } = setup();
+    expect(PREVIEW_REQUEST_TTL_MS).toBe(12 * 60 * 60 * 1000);
     const id = index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
     advance(PREVIEW_REQUEST_TTL_MS + 1);
     index.bind(rec('tab-1', 11), id);
     expect(index.list()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith('preview tab bind rejected', {
+      tabId: 'tab-1',
+      sessionId: 's1',
+      reason: 'unknown-or-expired-request',
+    });
+  });
+
+  it('绑定被拒时 warn 只带原因码,不带 previewRequestId 值;普通标签不产生日志', () => {
+    const { index, warn, ghosts, guestUrls } = setup();
+    index.bind(rec('plain', 1)); // 普通网页标签
+    expect(warn).not.toHaveBeenCalled();
+
+    index.bind(rec('t-bad', 2), 'short');
+    const sessionMismatch = index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+    index.bind(rec('t-sess', 3, 's2'), sessionMismatch);
+    const originMismatch = index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+    guestUrls.set(4, 'https://evil.example/');
+    index.bind(rec('t-origin', 4), originMismatch);
+    const pluginGone = index.issue({ ghostId: 'ghost-b', sessionId: 's1', url: URL_OK })!;
+    ghosts.set('ghost-b', { available: false, name: 'Ghost B' });
+    index.bind(rec('t-plugin', 5), pluginGone);
+
+    expect(warn.mock.calls.map((c) => (c[1] as { reason: string }).reason)).toEqual([
+      'invalid-request-id',
+      'session-mismatch',
+      'origin-mismatch',
+      'plugin-unavailable',
+    ]);
+    const logged = JSON.stringify(warn.mock.calls);
+    for (const secret of [sessionMismatch, originMismatch, pluginGone, 'short']) {
+      expect(logged).not.toContain(secret);
+    }
   });
 
   it('跨 session 的 report 不绑定,且 id 作废', () => {
