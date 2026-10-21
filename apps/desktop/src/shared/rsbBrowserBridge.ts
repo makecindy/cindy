@@ -127,6 +127,16 @@ export type RsbBrowserBridgeTabOp =
   | { op: 'close'; sessionId: string; tabId: string }
   | {
       /**
+       * 只读:该标签的 `<webview>` 在承载它的 renderer 视口里的矩形(CSS px)。
+       * 手机投屏的触点注入用它定位 guest——CDP 对 guest 的触点按宿主窗口坐标解释。
+       * 零副作用:不水合会话、不改 activeTab、不发 visibility 请求。
+       */
+      op: 'viewRect';
+      sessionId: string;
+      tabId: string;
+    }
+  | {
+      /**
        * 把一个已存在的 web-browser tab 的 webview 在目标 renderer 重新物化
        * (hydrate bucket → eager spawn → report webContentsId),不改 activeTab、
        * 不发 visibility 请求。detached 侧边栏子窗口重开后,直连动作(navigate /
@@ -147,9 +157,17 @@ export type RsbBrowserBridgeTabOp =
 /** Tab-op request that main pushes to renderer (op + reqId for correlation). */
 export type RsbBrowserBridgeTabOpRequest = { reqId: string } & RsbBrowserBridgeTabOp;
 
+/** `viewRect` answer: the webview element's box in its renderer's viewport, CSS px. */
+export interface RsbBrowserBridgeViewRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 /** Tab-op response renderer pushes back. `ok: false` carries a short error. */
 export type RsbBrowserBridgeTabOpResult =
-  | { reqId: string; ok: true; tabId?: string }
+  | { reqId: string; ok: true; tabId?: string; rect?: RsbBrowserBridgeViewRect }
   | { reqId: string; ok: false; error: string };
 
 /**

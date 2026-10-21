@@ -272,6 +272,56 @@ describe('rsbBrowserBridge — control-path probe', () => {
   });
 });
 
+describe('rsbBrowserBridge — viewRect (read-only webview box for phone touches)', () => {
+  it('answers with the pooled webview box and touches nothing else', async () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    const entry = browserWebviewPool.acquire('tab-rect');
+    vi.spyOn(entry.webview, 'getBoundingClientRect').mockReturnValue({
+      left: 770,
+      top: 86,
+      width: 510,
+      height: 800,
+      right: 1280,
+      bottom: 886,
+      x: 770,
+      y: 86,
+      toJSON: () => ({}),
+    });
+    const before = browserWebviewPool.inspectTabIds();
+
+    api.tabOpCb?.({ reqId: 'rect-1', op: 'viewRect', sessionId: 's1', tabId: 'tab-rect' });
+
+    await vi.waitFor(() => {
+      expect(api.tabOpResult).toHaveBeenCalledWith({
+        reqId: 'rect-1',
+        ok: true,
+        tabId: 'tab-rect',
+        rect: { left: 770, top: 86, width: 510, height: 800 },
+      });
+    });
+    // No hydration, no new webview, no visibility request.
+    expect(browserWebviewPool.inspectTabIds()).toEqual(before);
+    expect(getBucket('s1').tabs).toEqual([]);
+    browserWebviewPool.release('tab-rect');
+  });
+
+  it('says so when the tab has no webview in this window', async () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+
+    api.tabOpCb?.({ reqId: 'rect-2', op: 'viewRect', sessionId: 's1', tabId: 'nope' });
+
+    await vi.waitFor(() => {
+      expect(api.tabOpResult).toHaveBeenCalledWith({
+        reqId: 'rect-2',
+        ok: false,
+        error: 'tab nope not found',
+      });
+    });
+  });
+});
+
 describe('rsbBrowserBridge — initialization & teardown', () => {
   it('binds pool.onRelease → ipc.release', () => {
     const api = installFakeIpc();

@@ -14,6 +14,8 @@ import { webContents as electronWebContents } from 'electron';
 import { createLogger } from '../logger.js';
 import { TabRegistry } from './registry.js';
 import { PreviewTabIndex, type PreviewTabGhostInfo } from './previewTabs.js';
+import { requestTabOrigin, type TabOrigin } from './guestOrigin.js';
+import { getRegisteredTabOpOptions } from './renderer-bridge.js';
 
 export { TabRegistry } from './registry.js';
 export type { TabRecord } from './registry.js';
@@ -36,6 +38,7 @@ export {
   type RendererBridgeOptions,
 } from './renderer-bridge.js';
 export { setCastingTabs } from './previewCasting.js';
+export { requestTabOrigin, type TabOrigin } from './guestOrigin.js';
 export {
   getActiveRsbSessionId,
   setActiveRsbSessionId,
@@ -60,6 +63,20 @@ export function getRsbBrowserBridge(): TabRegistry {
     });
   }
   return registry;
+}
+
+/**
+ * Where a tab's `<webview>` sits in its host window (CDP reads a guest's touch coordinates
+ * there). Null when the host renderer cannot say; callers must then refuse, not guess.
+ */
+export function requestGuestOrigin(tab: {
+  sessionId: string;
+  tabId: string;
+}): Promise<TabOrigin | null> {
+  return requestTabOrigin(tab, {
+    options: getRegisteredTabOpOptions,
+    guest: (tabId) => getRsbBrowserBridge().getWebContentsByTabId(tabId),
+  });
 }
 
 let previewTabIndex: PreviewTabIndex | null = null;

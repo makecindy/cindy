@@ -67,6 +67,7 @@ export interface RendererBridgeOptions {
 }
 
 let registered = false;
+let registeredOptions: RendererBridgeOptions | null = null;
 const pending = new Map<string, PendingRequest>();
 
 /**
@@ -75,6 +76,7 @@ const pending = new Map<string, PendingRequest>();
 export function registerTabOpResultHandler(opts: RendererBridgeOptions): void {
   if (registered) return;
   registered = true;
+  registeredOptions = opts;
 
   ipcMain.handle(RSB_BROWSER_BRIDGE_TAB_OP_RESULT_CHANNEL, (_e, payload: unknown) => {
     if (!payload || typeof payload !== 'object') {
@@ -150,9 +152,18 @@ export async function dispatchTabOp(
   });
 }
 
+/**
+ * The options bootstrap registered (host routing by tab, logger): lets other main-side
+ * features send a read-only tab-op without owning a second copy of the routing.
+ */
+export function getRegisteredTabOpOptions(): RendererBridgeOptions | null {
+  return registeredOptions;
+}
+
 /** Test-only reset of internal state. */
 export function _resetRendererBridgeForTests(): void {
   registered = false;
+  registeredOptions = null;
   for (const entry of pending.values()) {
     clearTimeout(entry.timeout);
     entry.reject(new Error('bridge reset (test)'));

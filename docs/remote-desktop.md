@@ -351,6 +351,20 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   (`detach` event). A command that does not
   answer within 2 s is abandoned (outcome unknown, state released) and lifts background
   throttling for that guest until the lease ends.
+- **Touch origin**: CDP reads a `<webview>` guest's touch coordinates in the *host window's*
+  space (measured: a touch at page (255,357) arrived at (-515,271) for a webview at
+  (770,86)), so the injector sends `origin + page point x guest zoom`. The origin is the
+  webview's box in its host renderer (main window or a popped-out tab window), asked once
+  per gesture over the existing tab-op bridge as the read-only `viewRect` op
+  (`rsb-browser-bridge/guestOrigin.ts`, no new channel, nothing executed in the renderer),
+  times the host's zoom factor from main. If it cannot be established (renderer gone, tab
+  not pooled, nonsense numbers) the gesture is refused with `PREVIEW_INPUT_INVALID` instead
+  of being sent somewhere else. CDP delivers the event to the guest's widget directly, with
+  no hit-test of the host UI: a guest under a `pointer-events: none` keep-alive layer still
+  receives it, and a wrong offset cannot press the host's own controls. Mapped points are
+  clamped into the tab rectangle, so nothing leaves `origin .. origin + viewport x scale`.
+  Keys (`sendInputEvent`), text (`insertText`) and `Page.getLayoutMetrics` carry no window
+  coordinates and are unaffected.
 - **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
   `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.

@@ -469,6 +469,24 @@ async function handleTabOpRequest(
       await api.tabOpResult(result);
       return;
     }
+    if (req.op === 'viewRect') {
+      // 只读:不水合、不物化 webview、不改焦点。只回答「池里这个标签的 <webview> 现在
+      // 在本窗口视口的哪里」;池里没有(未物化 / 已被回收)就如实说不在。
+      const webview = browserWebviewPool.peek(req.tabId)?.webview;
+      if (!webview) {
+        result = { reqId, ok: false, error: `tab ${req.tabId} not found` };
+      } else {
+        const box = webview.getBoundingClientRect();
+        result = {
+          reqId,
+          ok: true,
+          tabId: req.tabId,
+          rect: { left: box.left, top: box.top, width: box.width, height: box.height },
+        };
+      }
+      await api.tabOpResult(result);
+      return;
+    }
     // 先把该 session 的 bucket 水合到位(幂等,已水合时同步返回)。三个 op 都需要:
     //  - focus / close 同步读 getBucket —— 新 renderer(侧边栏子窗口刚 READY)或
     //    会话跟随切换后 bucket 可能还是空的,不水合会把存在的 tab 误报 "not found";

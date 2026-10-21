@@ -2439,8 +2439,15 @@ setRsbPopupHostResolver((capturedHost) =>
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.
+// 按页签路由:被弹出到独立窗口的页签由那扇窗口的 renderer 承载,带 tabId 的 tab-op
+// (focus / close / ensure / viewRect)必须落到它的 store;其余(open / probe)仍走侧栏宿主。
+const rsbTabOpHost: Parameters<typeof setMainWindowAccessorForBackend>[0] = (op) => {
+  const tabId = op && 'tabId' in op && typeof op.tabId === 'string' ? op.tabId : null;
+  const popped = tabId ? sidebarTabWindowsController.getWebContentsForTab(tabId) : null;
+  return popped ?? rsbWindowController.getHostWebContents();
+};
 registerTabOpResultHandler({
-  getHostWebContents: () => rsbWindowController.getHostWebContents(),
+  getHostWebContents: rsbTabOpHost,
   logger: createLogger('rsb-browser-bridge-renderer-bridge'),
 });
 
@@ -2452,13 +2459,7 @@ registerTabOpResultHandler({
 // `mainWindowRef`, assigned later in `createMainWindow`). `ensureHost` lets
 // an automation tab-op pop the sidebar window first when the user prefers
 // detached mode but has the window closed.
-// 按页签路由:被弹出到独立窗口的页签由那扇窗口的 renderer 承载,带 tabId 的
-// tab-op(focus / close / ensure)必须落到它的 store;其余(open / probe)仍走侧栏宿主。
-setMainWindowAccessorForBackend((op) => {
-  const tabId = op && 'tabId' in op && typeof op.tabId === 'string' ? op.tabId : null;
-  const popped = tabId ? sidebarTabWindowsController.getWebContentsForTab(tabId) : null;
-  return popped ?? rsbWindowController.getHostWebContents();
-});
+setMainWindowAccessorForBackend(rsbTabOpHost);
 setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomation({ sessionId }));
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 setBrowserSessionUploadRootResolver(async (sessionId) => {

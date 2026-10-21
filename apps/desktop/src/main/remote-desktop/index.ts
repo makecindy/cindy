@@ -42,7 +42,12 @@ import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/s
 import { throwIpcError } from '../utils/ipcValidate';
 import { RemoteDesktopController, type DesktopControllerDeps } from './controller';
 import { getInputHandoffService } from '../input-handoff/service';
-import { getPreviewTabIndex, getRsbBrowserBridge, setCastingTabs } from '../rsb-browser-bridge';
+import {
+  getPreviewTabIndex,
+  getRsbBrowserBridge,
+  requestGuestOrigin,
+  setCastingTabs,
+} from '../rsb-browser-bridge';
 import { createPreviewHost, type PreviewGuest } from './previewHost';
 import { ClipboardCounter } from './clipboardCounter';
 import { onQuit } from '../lifecycle';
@@ -174,6 +179,8 @@ const previewHost = createPreviewHost({
   guest: (tabId) => getRsbBrowserBridge().getWebContentsByTabId(tabId) as PreviewGuest | null,
   // Tabs being watched keep painting while the desktop UI hides them.
   setCastingTabs: (tabIds) => void setCastingTabs(tabIds),
+  // CDP touches for a <webview> guest are in its host window's space.
+  guestOrigin: (tab) => requestGuestOrigin(tab),
 });
 const hyprlandCapture = new HyprlandCapture();
 const linuxAudio = new LinuxDesktopAudio();
