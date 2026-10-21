@@ -5529,6 +5529,7 @@ describe("plugin preview tab view", () => {
       previewTab?: unknown;
       tabs?: unknown[];
       input?: (request: any) => unknown;
+      start?: (request: any) => unknown;
     } = {},
   ) => {
     fixture.invoke.mockImplementation(async (_device, _channel, [request]) => {
@@ -5551,6 +5552,7 @@ describe("plugin preview tab view", () => {
             ],
           };
         case "previewStart":
+          if (over.start) return over.start(request);
           return {
             lease: "lease",
             controlling: false,
@@ -5644,6 +5646,77 @@ describe("plugin preview tab view", () => {
     await render({ ...target, title: "Page loaded" });
     await connect();
     expect(requests().at(-1)).toEqual({ op: "previewStart", grant });
+  });
+
+  describe("after the computer's own Disconnect", () => {
+    const previewLease = {
+      lease: "lease",
+      controlling: false,
+      display: { ...display, id: "preview" },
+      preview: { pluginName: "Baguette", title: "Sim" },
+    };
+    const starts = () => requests().filter((r) => r.op === "previewStart");
+
+    it("marks an automatic recovery as a resume, stops for good when refused, and lets the user connect again", async () => {
+      let disconnected = true;
+      previewHost({
+        start: (request) => {
+          if (request.resume && disconnected)
+            throw new Error("DESKTOP_STOPPED");
+          return previewLease;
+        },
+      });
+      await render();
+      await connect();
+      // The user opened the view: not a resume.
+      expect(starts()).toEqual([{ op: "previewStart", grant }]);
+      // The viewer drops and recovers by itself.
+      act(() => fixture.crashed!());
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      await connect();
+      expect(starts()).toEqual([
+        { op: "previewStart", grant },
+        { op: "previewStart", grant, resume: true },
+      ]);
+      // The computer's Disconnect is final for automatic recovery.
+      expect(fixture.alert).toHaveBeenCalledWith(
+        "remoteDesktop.disconnected",
+        "remoteDesktop.hostDisconnected",
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(starts()).toHaveLength(2);
+      // The user pressing Connect is their own start again.
+      disconnected = false;
+      await act(async () => button("connect").click());
+      expect(starts()).toHaveLength(3);
+      expect(starts()[2]).toEqual({ op: "previewStart", grant });
+      expect(requests().some((r) => r.op === "start")).toBe(false);
+    });
+
+    it("resumes with the same marker after the link comes back", async () => {
+      previewHost();
+      await render();
+      await connect();
+      fixture.status = "offline";
+      await render();
+      fixture.status = "online";
+      await render();
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(starts().length).toBeGreaterThanOrEqual(2);
+      expect(starts()[0]).toEqual({ op: "previewStart", grant });
+      for (const request of starts().slice(1))
+        expect(request).toEqual({ op: "previewStart", grant, resume: true });
+    });
+
+    it("does not carry a resume over into a view the user opens afresh", async () => {
+      previewHost();
+      await render();
+      await connect();
+      act(() => root.render(<span />));
+      await render();
+      await connect();
+      expect(starts().map((r) => r.resume)).toEqual([undefined, undefined]);
+    });
   });
 
   it("sends viewer batches as previewInput with one increasing sequence and acknowledges each", async () => {

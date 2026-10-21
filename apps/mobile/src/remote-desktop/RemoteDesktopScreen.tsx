@@ -1205,9 +1205,9 @@ export function RemoteDesktopSession({
         await linkRef.current.openLink(deviceId);
         if (current !== generation.current) return;
         mark("link-ready");
-        // A preview is never resumed or taken over and names no display. Its
-        // grant is one-time and lives 60 s, so it is fetched here, after the
-        // link is up, and only held in this scope: never in a route, log or store.
+        // A preview is never taken over and names no display. Its grant is
+        // one-time and lives 60 s, so it is fetched here, after the link is up,
+        // and only held in this scope: never in a route, log or store.
         let previewGrant: string | undefined;
         const previewTarget = previewRef.current;
         if (previewTarget) {
@@ -1230,8 +1230,11 @@ export function RemoteDesktopSession({
           if (!tab) throw new Error("PREVIEW_SOURCE_ENDED");
           previewGrant = tab.grant;
         }
-        const resuming =
-          displayId || previewGrant ? false : recovery.current.resuming;
+        // Recovery by ourselves (reconnect, app back in front) marks the start as
+        // a resume, so a computer that was Disconnected from its own side refuses
+        // it; the user opening the view or pressing Connect never does, and that
+        // start is what lets the view back in.
+        const resuming = displayId ? false : recovery.current.resuming;
         const { caps: result, lease: next } =
           await viewerSession.current!.connect({
             displayId: previewGrant

@@ -397,8 +397,12 @@ is started, and when it is not listed any more the view ends as `PREVIEW_SOURCE_
 instead of taking another tab of the plugin; without one (an older computer) the tab is
 chosen by plugin name and title as before. The
 session fetches `capabilities` and a fresh grant right before `RemoteDesktopViewerSession`
-`connect({ preview })`, with no `resume`, `takeover` or display, so every reconnect starts
-from a new listing and a vanished tab ends as `PREVIEW_SOURCE_ENDED`.
+`connect({ preview })`, with no `takeover` or display, so every reconnect starts from a
+new listing and a vanished tab ends as `PREVIEW_SOURCE_ENDED`. Opening the view and pressing
+Connect send `previewStart` without `resume`; the viewer's own recovery (reconnect, app back
+in front) sends `resume: true`, so a computer that was Disconnected from its own side answers
+`DESKTOP_STOPPED`: the phone shows that the computer ended the connection, stops recovering,
+and only the user's Connect starts the view again.
 
 In the viewer (`viewerRuntime.js`, `init.preview.maxTouchPoints` turns it on) raw fingers
 become `touch` events with the full set of points in picture coordinates: no local pinch
