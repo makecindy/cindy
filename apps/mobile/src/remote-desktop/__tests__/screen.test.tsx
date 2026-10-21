@@ -5719,6 +5719,42 @@ describe("plugin preview tab view", () => {
     });
   });
 
+  describe("keeping the picture clear of the floating controls", () => {
+    const insets = () => sent().filter((m) => m.type === "mouseButtons").at(-1);
+
+    it("fits a preview below the status bar and back button and above the toolbar", async () => {
+      previewHost();
+      await render();
+      await connect();
+      // Safe area top 59 + gap + the 44pt back button + gap.
+      expect(insets()).toMatchObject({ fitToInsets: true });
+      expect(insets().topInset).toBeGreaterThanOrEqual(59 + 44);
+      expect(insets().leftInset).toBe(0);
+      expect(insets().rightInset).toBe(0);
+    });
+
+    it("leaves a plain remote desktop running under its controls", async () => {
+      await connect();
+      expect(insets()).toMatchObject({
+        fitToInsets: false,
+        topInset: 59,
+        leftInset: 0,
+        rightInset: 0,
+      });
+    });
+
+    it("follows the toolbar's measured height", async () => {
+      previewHost();
+      await render();
+      await connect();
+      const layout = fixture.views["remoteDesktop.toolbarPosition"].onLayout;
+      await act(async () =>
+        layout({ nativeEvent: { layout: { width: 390, height: 96 } } }),
+      );
+      expect(insets().bottomInset).toBe(96);
+    });
+  });
+
   it("sends viewer batches as previewInput with one increasing sequence and acknowledges each", async () => {
     previewHost();
     await render();
