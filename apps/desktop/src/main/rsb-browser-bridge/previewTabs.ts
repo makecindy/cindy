@@ -5,7 +5,7 @@
  * 供手机端投屏等能力只面向插件预览标签,而不是任意网页标签。
  *
  * 信任链:
- *   previewSlot 校验通过 → issue() 签发 previewRequestId(CSPRNG,30 秒有效,
+ *   previewSlot 校验通过 → issue() 签发 previewRequestId(CSPRNG,未绑定时 12 小时有效,
  *   绑定 ghostId / sessionId / URL origin)随开页推送下发 → renderer 存进标签状态
  *   → 标签 report(sessionId, tabId, wcId, previewRequestId) → bind() 校验后建立绑定。
  *
@@ -27,9 +27,17 @@ import { randomBytes } from 'node:crypto';
 import { PREVIEW_REQUEST_ID_RE } from '../../shared/rsbBrowserBridge.js';
 import type { TabRecord } from './registry.js';
 
-/** previewRequestId 有效期:从签发到首次绑定。 */
-export const PREVIEW_REQUEST_TTL_MS = 30_000;
-/** 签发表上限(防止插件在 30 秒内刷出无限条目;spam 已被 previewSlot 限速,这里兜底)。 */
+/**
+ * previewRequestId 在「首次绑定」之前的有效期。
+ *
+ * 为什么是小时级而不是秒级:标签不可见时(用户停在别的任务 / 别的页面)渲染进程不会
+ * 物化它的 webview,要等用户切回该任务才 report;手机远程使用的主场景恰恰是人不在
+ * 电脑前。30 秒会让这类预览永远绑不上。长有效期不放大攻击面:id 只能由宿主 renderer
+ * 经 IPC 提交(guest 页面与插件沙箱碰不到),提交时仍要核对 sessionId、guest 当前
+ * origin、插件可用性,且取走即废;未绑定条目靠数量上限淘汰最旧,内存有界。
+ */
+export const PREVIEW_REQUEST_TTL_MS = 12 * 60 * 60 * 1000;
+/** 签发表上限(未绑定条目;spam 已被 previewSlot 限速,这里兜底并淘汰最旧)。 */
 const MAX_PENDING_REQUESTS = 64;
 /** grant 上限(按最近绑定保留)。无活绑定且不存活的标签由 snapshot 的 pruneTabs 清理。 */
 const MAX_GRANTS = 256;
@@ -176,6 +184,9 @@ export class PreviewTabIndex {
       typeof previewRequestId === 'string' && PREVIEW_REQUEST_ID_RE.test(previewRequestId)
         ? previewRequestId
         : undefined;
+    if (previewRequestId !== undefined && !requestId) {
+      this.rejected(record, 'invalid-request-id');
+    }
 
     if (existing && existing.binding.webContentsId === record.webContentsId) {
       // 同一 guest 的重复 report(did-attach + dom-ready):幂等。
@@ -184,12 +195,17 @@ export class PreviewTabIndex {
     if (existing) this.end(record.tabId, 'replaced');
     if (!requestId) return;
 
-    const grant = this.grantFor(record, requestId);
-    if (!grant) return;
+    const claimed = this.grantFor(record, requestId);
+    if ('reason' in claimed) {
+      this.rejected(record, claimed.reason);
+      return;
+    }
+    const grant = claimed.grant;
 
     const ghost = this.deps.getGhost(grant.ghostId);
     if (!ghost?.available) {
       this.grants.delete(record.tabId);
+      this.rejected(record, 'plugin-unavailable');
       return;
     }
     // guest 已提交过页面时核对真实 origin;空白页(attach 早期上报)放行,
@@ -197,6 +213,7 @@ export class PreviewTabIndex {
     const currentUrl = this.deps.getGuestUrl(record.webContentsId);
     if (!isBlankUrl(currentUrl) && originOf(currentUrl as string) !== grant.origin) {
       this.grants.delete(record.tabId);
+      this.rejected(record, 'origin-mismatch');
       return;
     }
 
@@ -301,25 +318,36 @@ export class PreviewTabIndex {
    * 取得这次 report 可用的 grant:复绑走本 tab 已有 grant(id 必须一致);首次绑定
    * 从签发表取走 id(无论成败都作废)并核对 session。
    */
-  private grantFor(record: TabRecord, requestId: string): Grant | null {
+  private grantFor(record: TabRecord, requestId: string): { grant: Grant } | { reason: string } {
     const existing = this.grants.get(record.tabId);
     if (existing) {
       return existing.requestId === requestId && existing.sessionId === record.sessionId
-        ? existing
-        : null;
+        ? { grant: existing }
+        : { reason: 'grant-mismatch' };
     }
     const now = this.now();
     this.purgeExpired(now);
     const request = this.pending.get(requestId);
-    if (!request) return null;
+    if (!request) return { reason: 'unknown-or-expired-request' };
     this.pending.delete(requestId);
-    if (request.sessionId !== record.sessionId) return null;
+    if (request.sessionId !== record.sessionId) return { reason: 'session-mismatch' };
     return {
-      requestId,
-      ghostId: request.ghostId,
-      sessionId: request.sessionId,
-      origin: request.origin,
+      grant: {
+        requestId,
+        ghostId: request.ghostId,
+        sessionId: request.sessionId,
+        origin: request.origin,
+      },
     };
+  }
+
+  /** 绑定被拒:只记标签与原因码,不记 previewRequestId 等凭据值。 */
+  private rejected(record: TabRecord, reason: string): void {
+    this.deps.logger?.warn('preview tab bind rejected', {
+      tabId: record.tabId,
+      sessionId: record.sessionId,
+      reason,
+    });
   }
 
   private rememberGrant(tabId: string, grant: Grant): void {
