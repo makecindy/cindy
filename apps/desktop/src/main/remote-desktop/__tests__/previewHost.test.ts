@@ -129,7 +129,9 @@ describe('preview host', () => {
     expect(source).toMatchObject({ width: 800, height: 500, tabId: 'tab1' });
     expect(h.setCastingTabs).toHaveBeenLastCalledWith(['tab1']);
     expect(h.host.current(source)).toBe(true);
-    expect(await h.host.frame(source)).toBe(Buffer.from('jpeg').toString('base64'));
+    expect(await h.host.frame(source, { purpose: 'relay' })).toBe(
+      Buffer.from('jpeg').toString('base64'),
+    );
     await h.host.input(source, [{ kind: 'text', text: 'hi' }]);
     expect(h.guest.insertText).toHaveBeenCalledWith('hi');
     expect(h.attached.value).toBe(true);
@@ -298,12 +300,55 @@ describe('preview host', () => {
     expect(h.host.current(source)).toBe(false);
   });
 
+  it('gives a stream frame the screen profile budget, and relay frames the small one', async () => {
+    const h = setup();
+    const toJPEG = vi.fn((quality: number) => Buffer.alloc(quality === 80 ? 400_000 : 1000, 1));
+    h.guest.capturePage = vi.fn(async () => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 400, height: 250 }),
+      resize: vi.fn(),
+      toJPEG,
+      toBitmap: () => Buffer.alloc(400 * 250 * 4),
+    })) as unknown as PreviewGuest['capturePage'];
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    // Stream: the profile's quality (auto = 80), its 1.5 MB budget, one encode.
+    const stream = await h.host.frame(source, { purpose: 'stream' });
+    expect(Buffer.from(stream!, 'base64').length).toBe(400_000);
+    expect(toJPEG).toHaveBeenCalledTimes(1);
+    expect(toJPEG).toHaveBeenCalledWith(80);
+    // Relay: over 180 KB means re-encoding at a lower quality.
+    toJPEG.mockClear();
+    const relay = await h.host.frame(source, { purpose: 'relay' });
+    expect(Buffer.from(relay!, 'base64').length).toBeLessThanOrEqual(180_000);
+    expect(toJPEG).toHaveBeenCalled();
+  });
+
+  it('wakes the capture when input arrives and passes the phone view state through', async () => {
+    const h = setup();
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    h.host.setView(source, { hidden: true });
+    const calls = (h.guest.capturePage as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+    // A hidden preview with no picture yet still needs one; afterwards it captures nothing.
+    await h.host.frame(source, { purpose: 'stream' });
+    const afterFirst = (h.guest.capturePage as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .length;
+    expect(afterFirst).toBe(calls + 1);
+    h.host.setView(source, { hidden: false, background: true });
+    await h.host.input(source, [{ kind: 'text', text: 'x' }]);
+    await h.host.frame(source, { purpose: 'stream' });
+    expect(
+      (h.guest.capturePage as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBeGreaterThan(afterFirst);
+  });
+
   it('stops serving frames once the tab no longer matches the index', async () => {
     const h = setup();
     const [tab] = h.host.list();
     const source = (await h.host.open(tab))!;
     h.setBindings([]);
-    expect(await h.host.frame(source)).toBeNull();
+    expect(await h.host.frame(source, { purpose: 'relay' })).toBeNull();
     expect(h.guest.capturePage).not.toHaveBeenCalled();
     await expect(h.host.input(source, [{ kind: 'release' }])).rejects.toThrow(
       'PREVIEW_SOURCE_ENDED',

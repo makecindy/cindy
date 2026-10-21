@@ -41,6 +41,7 @@ function harness(options: { tabs?: DesktopPreviewTab[]; withPreview?: boolean } 
     input: vi.fn(async () => {}),
     release: vi.fn(async () => {}),
     frame: vi.fn(async () => 'tabjpeg'),
+    setView: vi.fn(),
     end: vi.fn((source: DesktopPreviewSource) => {
       alive.delete(source);
     }),
@@ -287,11 +288,52 @@ describe('preview tab leases', () => {
     });
   });
 
+  it('tells the preview when the phone hides the viewer or shows it small, and only then', async () => {
+    const h = harness();
+    h.deps.viewerHidden = vi.fn(async () => {});
+    const { lease } = await h.open();
+    const source = h.controller.previewSource(lease)!;
+    await send(h, { op: 'viewerHidden', lease, hidden: true });
+    expect(h.preview.setView).toHaveBeenLastCalledWith(source, { hidden: true });
+    await send(h, { op: 'viewerHidden', lease, hidden: false });
+    expect(h.preview.setView).toHaveBeenLastCalledWith(source, { hidden: false });
+    await send(h, { op: 'presentation', lease, enabled: true });
+    expect(h.preview.setView).toHaveBeenLastCalledWith(source, { background: true });
+    await send(h, { op: 'presentation', lease, enabled: false });
+    expect(h.preview.setView).toHaveBeenLastCalledWith(source, { background: false });
+    // A failed host call does not pretend the viewer is hidden.
+    h.deps.viewerHidden = vi.fn(async () => {
+      throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+    });
+    h.preview.setView = vi.fn();
+    await expect(send(h, { op: 'viewerHidden', lease, hidden: true })).rejects.toThrow(
+      'DESKTOP_VIDEO_UNAVAILABLE',
+    );
+    expect(h.preview.setView).not.toHaveBeenCalled();
+  });
+
+  it('leaves the screen path alone: a screen lease never touches the preview', async () => {
+    const h = harness();
+    h.deps.viewerHidden = vi.fn(async () => {});
+    const screen = (await send(h, { op: 'start', displayId: '1' })) as RemoteDesktopLease;
+    await send(h, { op: 'viewerHidden', lease: screen.lease, hidden: true });
+    await send(h, { op: 'presentation', lease: screen.lease, enabled: true });
+    await send(h, { op: 'frame', lease: screen.lease });
+    expect(h.deps.viewerHidden).toHaveBeenCalledWith(screen.lease, true);
+    expect(h.preview.setView).not.toHaveBeenCalled();
+    expect(h.preview.frame).not.toHaveBeenCalled();
+    expect(h.deps.frame).toHaveBeenCalled();
+  });
+
   it('serves frames from the tab and offers through the host, never from the screen', async () => {
     const h = harness();
     const { lease } = await h.open();
     expect(await send(h, { op: 'frame', lease })).toEqual({ jpeg: 'tabjpeg' });
     expect(h.deps.frame).not.toHaveBeenCalled();
+    // The relay fallback gets the small, always-fresh kind of frame.
+    expect(h.preview.frame).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab1' }), {
+      purpose: 'relay',
+    });
     await send(h, { op: 'offer', lease, sdp: 'v=0' });
     expect(h.deps.offer).toHaveBeenCalledWith(
       expect.objectContaining({ lease, preview: expect.any(Object) }),

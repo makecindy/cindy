@@ -1,5 +1,5 @@
 import { PREVIEW_MAX_TITLE_CHARS, type PreviewInputEvent } from '@cindy/device-link';
-import { desktopVideoProfile } from '../../shared/remoteDesktopQuality';
+import { desktopVideoFramerate, desktopVideoProfile } from '../../shared/remoteDesktopQuality';
 import type { PreviewTabBinding, PreviewTabEnded } from '../rsb-browser-bridge/previewTabs';
 import type {
   DesktopPreviewDeps,
@@ -218,7 +218,6 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
           isCurrent: () => isCurrent(source),
           onUnavailable: () => notify(session, 'capture-unavailable'),
           now: env.now,
-          jpegQuality: desktopVideoProfile(undefined).jpegQuality,
         }),
       };
       sessions.set(source, session);
@@ -242,15 +241,34 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
     async input(source, events: readonly PreviewInputEvent[]) {
       const session = sessionOf(source);
       if (!isCurrent(source)) throw new Error('PREVIEW_SOURCE_ENDED');
-      await session.injector.inject(events);
+      try {
+        await session.injector.inject(events);
+      } finally {
+        // Whatever the input did to the page is on screen within moments.
+        session.capture.nudge();
+      }
     },
 
     async release(source) {
       await sessions.get(source)?.injector.release();
     },
 
-    async frame(source) {
-      return sessionOf(source).capture.frame();
+    async frame(source, request) {
+      const { capture } = sessionOf(source);
+      if (request.purpose === 'relay') return capture.frame({ purpose: 'relay' });
+      // The same quality and size budget as a screen frame; only the relay path is held to
+      // the small one.
+      const profile = desktopVideoProfile(request.settings);
+      return capture.frame({
+        purpose: 'stream',
+        fps: desktopVideoFramerate(request.settings),
+        quality: profile.jpegQuality,
+        maxBytes: profile.maxFrameBytes,
+      });
+    },
+
+    setView(source, view) {
+      sessions.get(source)?.capture.setView(view);
     },
 
     end(source) {

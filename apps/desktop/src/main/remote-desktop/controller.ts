@@ -85,6 +85,8 @@ export interface DesktopPreviewSource extends DesktopPreviewTab {
   width: number;
   height: number;
 }
+export type DesktopPreviewFrameRequest =
+  { purpose: 'relay' } | { purpose: 'stream'; settings?: RemoteDesktopVideoSettings };
 /** Why a preview source stopped being viewable. */
 export type DesktopPreviewEnd = 'ended' | 'capture-unavailable';
 
@@ -111,8 +113,14 @@ export interface DesktopPreviewDeps {
   input(source: DesktopPreviewSource, events: readonly PreviewInputEvent[]): Promise<void>;
   /** Cancel every pressed touch and key. Idempotent. */
   release(source: DesktopPreviewSource): Promise<void>;
-  /** One relay / WebRTC frame (base64 JPEG), or null when none is ready. */
-  frame(source: DesktopPreviewSource): Promise<string | null>;
+  /**
+   * One frame (base64 JPEG), or null when there is nothing new to send. `stream` feeds the
+   * local WebRTC pipeline (adaptive, unchanged pictures skipped); `relay` is the small,
+   * always-fresh compatibility fallback.
+   */
+  frame(source: DesktopPreviewSource, request: DesktopPreviewFrameRequest): Promise<string | null>;
+  /** What the phone shows: hidden (nothing is captured) or small in picture-in-picture. */
+  setView(source: DesktopPreviewSource, view: { hidden?: boolean; background?: boolean }): void;
   /** The lease is over: stop capturing, release input, give back the tab. Idempotent. */
   end(source: DesktopPreviewSource): void;
 }
@@ -1249,6 +1257,9 @@ export class RemoteDesktopController {
       case 'viewerHidden': {
         if (!this.deps.viewerHidden) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
         await this.deps.viewerHidden(active.lease, request.hidden);
+        // A hidden preview captures nothing (the screen path is untouched).
+        if (active.previewLease)
+          this.deps.preview?.setView(active.previewLease.source, { hidden: request.hidden });
         return { hidden: request.hidden };
       }
       case 'clipboardVersion': {
@@ -1377,6 +1388,7 @@ export class RemoteDesktopController {
         this.setBackgroundViewing(active, request.enabled);
         if (active.previewLease) {
           // Picture-in-picture only watches: whatever the fingers still hold is let go.
+          this.deps.preview?.setView(active.previewLease.source, { background: request.enabled });
           if (request.enabled)
             await this.deps.preview?.release(active.previewLease.source).catch(() => {});
           this.deps.changed();
@@ -1487,7 +1499,7 @@ export class RemoteDesktopController {
         this.lastFrame = this.now();
         try {
           const jpeg = active.previewLease
-            ? await this.deps.preview!.frame(active.previewLease.source)
+            ? await this.deps.preview!.frame(active.previewLease.source, { purpose: 'relay' })
             : await this.deps.frame(active.display.id, request.cursorOverlay, active.lease);
           this.require(peer, request.lease); // revoke during capture must not leak the result
           if (this.displayChanging || active.display !== display) return { jpeg: null };

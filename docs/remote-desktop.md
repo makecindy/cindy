@@ -329,13 +329,29 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   label of tab id + guest generation (22 base64url chars): stable for the binding, new after
   a rebuild or source change, not the tab id and not a credential. The grant stays the only
   credential.
-- **Capture** (`previewTabCapture.ts`): `capturePage()` of the guest, long edge ≤ 1280,
-  JPEG ≤ `REMOTE_DESKTOP_MAX_FRAME_BYTES`. One capture in flight; a capture over 2 s is
-  abandoned by generation and its late result dropped (the tab is never touched). Captures
-  that keep failing or hanging for 6 s from the first failure, or three abandoned captures
-  still pending, end the lease with `PREVIEW_CAPTURE_UNAVAILABLE`; time in which no capture
-  was attempted (a slow offer, a pause before re-offering) never counts. Frames reach WebRTC through the existing native frame
-  stream (`nativeCapture` + `NATIVE_FRAME`), and relay `frame` uses the same source.
+- **Capture** (`previewTabCapture.ts`): `capturePage()` of the guest, long edge ≤ 1280. One
+  capture in flight; a capture over 2 s is abandoned by generation and its late result
+  dropped (the tab is never touched). Captures that keep failing or hanging for 6 s from the
+  first failure, or three abandoned captures still pending, end the lease with
+  `PREVIEW_CAPTURE_UNAVAILABLE`; time in which no capture was attempted (a slow offer, a
+  pause before re-offering) never counts.
+  Frames reach WebRTC through the existing native frame stream (`nativeCapture` +
+  `NATIVE_FRAME`) as `stream` frames: encoded **once** at the screen profile's quality and
+  size budget (`jpegQuality` / `maxFrameBytes`, e.g. 0.8 / 1.5 MB for `auto`), the way screen
+  frames are. Only relay `frame` requests are held to `REMOTE_DESKTOP_MAX_FRAME_BYTES` (180 KB,
+  re-encoding while over) and are always a real capture. Stream pacing is done by the source,
+  not by the viewer's fixed timer, and touches nothing shared with the screen path:
+  - the full rate (viewer's fps, capped at 30) while the picture moves, input just reached the
+    tab, or the lease is new; about 5 fps after 1.5 s without change; at most 10 fps for a
+    background (picture-in-picture) viewer; no capture at all while the viewer is hidden;
+  - an unchanged picture (a fixed grid of device pixels, every 12 px, is compared) skips
+    resize and encode and is re-sent from the cache about once a second so the viewer's 5 s
+    watchdog is fed; a resend is not a new picture and does not move `stats.sequence` /
+    `lastFrameAt` (`skipped` / `resent` count them);
+  - a change smaller than the grid can be missed by the comparison, so a real capture and
+    encode happens at least every 3 s: a missed change shows within about 3 s at worst;
+  - `previewInput` wakes the source at once (the effect of a tap is captured without waiting
+    out a still interval); `viewerHidden` / `presentation` reach it through `setView`.
 - **Input** (`previewTabInput.ts`): touches through the guest debugger
   (`Input.dispatchTouchEvent`; a partial release is a `touchMove` with the remaining
   points, a full release `touchEnd`), keys through `sendInputEvent`, text through

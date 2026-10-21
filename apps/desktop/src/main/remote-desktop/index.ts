@@ -1182,7 +1182,9 @@ export function registerRemoteDesktopIpc(
     if (previewSource) {
       // A preview lease reads its tab only; the screen capture helpers are never started for it.
       const generation = offerGeneration;
-      const jpeg = await previewHost.frame(previewSource).catch(() => null);
+      const jpeg = await previewHost
+        .frame(previewSource, { purpose: 'stream', settings: nativeSettings })
+        .catch(() => null);
       if (generation !== offerGeneration || !remoteDesktop.hasLease(lease as string)) return null;
       return jpeg;
     }
