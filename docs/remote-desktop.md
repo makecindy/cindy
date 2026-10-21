@@ -372,7 +372,8 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   undone by the phone starting a preview again: `previewStart` answers `DESKTOP_STOPPED`
   until the phone starts over with a normal `start`. While a preview lease is active (and
   while it opens) its tab is passed to `setCastingTabs` so it keeps painting while hidden;
-  the tab is measured only after that, once two readings in a row agree.
+  the tab is measured only after that: a guest that is not ready yet (empty size, or throttled
+  and silent) is waited for up to ~3 s, then two readings in a row must agree.
 
 ### Preview tab view on the phone
 

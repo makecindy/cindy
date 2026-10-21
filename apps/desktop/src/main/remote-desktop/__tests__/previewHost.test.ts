@@ -162,6 +162,45 @@ describe('preview host', () => {
     expect(h.setCastingTabs.mock.calls.map(([ids]) => ids)).toEqual([['tab1'], ['tab1']]);
   });
 
+  it('waits, boundedly, for a guest that is not ready to be measured', async () => {
+    // Just materialized: the page has no size yet, then it does.
+    const h = setup([
+      { w: 0, h: 0 },
+      { w: 0, h: 0 },
+      { w: 800, h: 500 },
+      { w: 800, h: 500 },
+    ]);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    expect(source).toMatchObject({ width: 800, height: 500 });
+    expect(h.delay.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    // A guest that never becomes ready is reported after a bounded wait, not hung on.
+    const never = setup([{ w: 0, h: 0 }]);
+    const [stuck] = never.host.list();
+    await expect(never.host.open(stuck)).rejects.toThrow('PREVIEW_CAPTURE_UNAVAILABLE');
+    expect(never.delay.mock.calls.length).toBeLessThanOrEqual(30);
+    expect(never.setCastingTabs).toHaveBeenLastCalledWith([]);
+    await vi.waitFor(() => expect(never.attached.value).toBe(false));
+  });
+
+  it('retries a measurement a throttled hidden tab did not answer', async () => {
+    const h = setup();
+    const original = h.guest.debugger.sendCommand;
+    let first = true;
+    h.guest.debugger.sendCommand = vi.fn(async (method: string, params?: object) => {
+      if (first && method === 'Page.getLayoutMetrics') {
+        first = false;
+        throw new Error('PREVIEW_INPUT_TIMEOUT');
+      }
+      return original(method, params);
+    });
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    expect(source).toMatchObject({ width: 800, height: 500 });
+    expect(h.guest.setBackgroundThrottling).toHaveBeenCalledWith(false);
+  });
+
   it('gives up waiting for a layout that never settles and takes the last size', async () => {
     const h = setup(Array.from({ length: 12 }, (_, i) => ({ w: 400 + i * 20, h: 300 })));
     const [tab] = h.host.list();

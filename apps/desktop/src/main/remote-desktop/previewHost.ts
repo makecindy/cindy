@@ -8,7 +8,12 @@ import type {
   DesktopPreviewTab,
 } from './controller';
 import { TabCaptureSource, type CaptureGuest } from './previewTabCapture';
-import { TabInputInjector, type GuestOrigin, type InputGuest } from './previewTabInput';
+import {
+  TabInputInjector,
+  type GuestOrigin,
+  type InputGuest,
+  type TabViewport,
+} from './previewTabInput';
 
 /** The preview tab guest as the host sees it: a webview's WebContents. */
 export type PreviewGuest = CaptureGuest &
@@ -42,6 +47,8 @@ export interface PreviewHostEnv {
 /** How long a just-uncovered tab gets to lay out before it is measured again. */
 const LAYOUT_SETTLE_MS = 120;
 const LAYOUT_SETTLE_TRIES = 5;
+/** How long a guest that is not ready yet (no size, or throttled) is waited for: ~3 s. */
+const LAYOUT_READY_TRIES = 25;
 
 export const PREVIEW_MAX_TOUCH_POINTS_HOSTED = 5;
 /** Tabs offered in one `previewTabs` reply. */
@@ -72,11 +79,26 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
     env.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   /**
-   * A tab that was hidden reports a collapsed size until its keep-alive layer is laid out.
-   * Measure until two readings in a row agree; a layout that keeps moving gets its last size.
+   * A freshly materialized or just-uncovered tab has no real size yet: it answers with an
+   * empty viewport, or (throttled while hidden) not at all. Wait for it, boundedly, then
+   * measure until two readings in a row agree; a layout that keeps moving gets its last size.
+   * Anything but "not ready" (the tab is gone) ends the attempt at once.
    */
   const measureSettled = async (injector: TabInputInjector) => {
-    let previous = await injector.measure();
+    let previous: TabViewport | null = null;
+    for (let attempt = 0; attempt < LAYOUT_READY_TRIES && !previous; attempt++) {
+      try {
+        previous = await injector.measure();
+      } catch (error) {
+        const notReady =
+          error instanceof Error &&
+          (error.message === 'PREVIEW_CAPTURE_UNAVAILABLE' ||
+            error.message === 'PREVIEW_INPUT_TIMEOUT');
+        if (!notReady) throw error;
+        await pause(LAYOUT_SETTLE_MS);
+      }
+    }
+    if (!previous) throw new Error('PREVIEW_CAPTURE_UNAVAILABLE');
     for (let attempt = 0; attempt < LAYOUT_SETTLE_TRIES; attempt++) {
       await pause(LAYOUT_SETTLE_MS);
       const next = await injector.measure();
