@@ -467,10 +467,16 @@ describe('TabInputInjector guest origin', () => {
     touches(h.commands).map((c) =>
       (c?.touchPoints as Array<{ id: number; x: number; y: number }>).map((p) => [p.x, p.y]),
     );
+  const box = (x: number, y: number, width: number, height: number): GuestOrigin => ({
+    x,
+    y,
+    width,
+    height,
+  });
 
-  it('adds the guest view origin: CDP touches are in the host window coordinate space', async () => {
+  it('adds the webview box origin: CDP touches are in the host window coordinate space', async () => {
     // The <webview> sits at (770, 86) in the host window; the page is 800x500 CSS px.
-    const h = setup({ origin: async () => ({ x: 770, y: 86, scale: 1 }) });
+    const h = setup({ origin: async () => box(770, 86, 800, 500) });
     h.injector.bindLease({ width: 800, height: 500 });
     await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
     expect(sentPoints(h)[0]).toEqual([[770 + 400, 86 + 250]]);
@@ -479,13 +485,54 @@ describe('TabInputInjector guest origin', () => {
     expect(sentPoints(h)[2]).toEqual([[770, 86]]);
   });
 
+  // Measured on a real Desktop (defect A): received = sent - (rect.left, rect.top), rect being
+  // the <webview> element's getBoundingClientRect() in the host's CSS px, with the host app at
+  // 100%, 110% and 90% zoom and with the tab inside the keep-alive layer. The page point is
+  // what the guest saw; the host zoom does not enter the offset.
+  it.each([
+    ['100% zoom', box(661, 86, 619, 714), { w: 619, h: 714 }, [339, 514], [1000, 600]],
+    [
+      'host zoom 110% (dpr 2.2)',
+      box(660.99432373, 85.99431611, 502.64202881, 641.27838135),
+      { w: 502, h: 641 },
+      [339.1, 514.1],
+      [1000, 600],
+    ],
+    [
+      'host zoom 90% (dpr 1.8)',
+      box(716.91845703, 85.99826813, 705.30383301, 802.89068604),
+      { w: 705, h: 803 },
+      [283.3, 513.9],
+      [1000, 600],
+    ],
+    ['keep-alive layer', box(0, 40, 619, 714), { w: 619, h: 714 }, [255, 317], [255, 357]],
+  ])('places a touch where the real host put it: %s', async (_name, rect, viewport, page, sent) => {
+    const h = setup({ viewport, origin: async () => rect });
+    h.injector.bindLease({ width: viewport.w, height: viewport.h });
+    await h.injector.inject([
+      touch('start', [[1, page[0] / viewport.w, page[1] / viewport.h]]),
+      touch('end', []),
+    ]);
+    const [[x, y]] = sentPoints(h)[0];
+    expect(Math.abs(x - sent[0])).toBeLessThan(0.5);
+    expect(Math.abs(y - sent[1])).toBeLessThan(0.5);
+  });
+
+  it('scales page points by how much larger the page is drawn than its CSS viewport', async () => {
+    // Only the guest was zoomed (1.25): 480 page px fill a 600 px wide webview.
+    const h = setup({ viewport: { w: 480, h: 320 }, origin: async () => box(10, 20, 600, 400) });
+    h.injector.bindLease({ width: 480, height: 320 });
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(sentPoints(h)[0]).toEqual([[10 + 240 * 1.25, 20 + 160 * 1.25]]);
+  });
+
   it('reads the origin when a gesture starts, and keeps it for the gesture', async () => {
-    let origin = { x: 100, y: 40, scale: 1 };
+    let origin = box(100, 40, 800, 500);
     const provider = vi.fn(async () => origin);
     const h = setup({ origin: provider });
     h.injector.bindLease({ width: 800, height: 500 });
     await h.injector.inject([touch('start', [[1, 0, 0]])]);
-    origin = { x: 300, y: 40, scale: 1 }; // the side panel is dragged mid-gesture
+    origin = box(300, 40, 800, 500); // the side panel is dragged mid-gesture
     await h.injector.inject([touch('move', [[1, 0, 0]]), touch('end', [])]);
     expect(provider).toHaveBeenCalledOnce();
     await h.injector.inject([touch('start', [[1, 0, 0]]), touch('end', [])]);
@@ -494,7 +541,7 @@ describe('TabInputInjector guest origin', () => {
   });
 
   it('keeps every sent point inside the tab rectangle, whatever the phone sends', async () => {
-    const h = setup({ origin: async () => ({ x: 770, y: 86, scale: 1 }) });
+    const h = setup({ origin: async () => box(770, 86, 800, 500) });
     h.injector.bindLease({ width: 800, height: 500 });
     await h.injector.inject([
       touch('start', [[1, 0.5, 0.5]]),
@@ -512,13 +559,6 @@ describe('TabInputInjector guest origin', () => {
     expect(sentPoints(h)[2]).toEqual([[770 + 800, 86 + 500]]);
   });
 
-  it('scales page points by the guest zoom', async () => {
-    const h = setup({ origin: async () => ({ x: 10, y: 20, scale: 1.25 }) });
-    h.injector.bindLease({ width: 800, height: 500 });
-    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
-    expect(sentPoints(h)[0]).toEqual([[10 + 400 * 1.25, 20 + 250 * 1.25]]);
-  });
-
   it('refuses a gesture it cannot place, instead of sending it somewhere else', async () => {
     let answer: GuestOrigin | null | Error = null;
     const h = setup({
@@ -531,9 +571,11 @@ describe('TabInputInjector guest origin', () => {
     for (const bad of [
       null,
       new Error('no renderer'),
-      { x: Number.NaN, y: 0, scale: 1 },
-      { x: 0, y: 0, scale: 0 },
-      { x: 1e9, y: 0, scale: 1 },
+      box(Number.NaN, 0, 800, 500),
+      box(0, 0, 0, 500),
+      box(0, 0, 800, -1),
+      box(1e9, 0, 800, 500),
+      box(0, 0, 80_000, 500), // page drawn 100x larger than its viewport
     ]) {
       answer = bad;
       await expect(
@@ -542,7 +584,7 @@ describe('TabInputInjector guest origin', () => {
     }
     expect(touches(h.commands)).toEqual([]);
     expect(h.injector.pressed.touches).toBe(0);
-    answer = { x: 5, y: 6, scale: 1 };
+    answer = box(5, 6, 800, 500);
     await h.injector.inject([touch('start', [[1, 0, 0]]), touch('end', [])]);
     expect(sentPoints(h)[0]).toEqual([[5, 6]]);
   });

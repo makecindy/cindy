@@ -36,16 +36,18 @@ const EDGE_TOLERANCE = 0.01;
 const ASPECT_TOLERANCE = 0.005;
 
 /**
- * Where the guest's page starts inside the host window, for `Input.dispatchTouchEvent`.
- * CDP reads a guest's touch coordinates in the embedding window's space, not the page's:
- * a touch at page (x, y) must be sent at `origin + (x, y) * scale`.
+ * Where the guest's `<webview>` sits in its host window, for `Input.dispatchTouchEvent`.
+ * CDP reads a guest's touch coordinates in the embedding renderer's CSS px, not the page's:
+ * a touch at page (x, y) must be sent at `(left, top) + (x, y) * scale`. Measured on a real
+ * Desktop: the offset is exactly the webview's `getBoundingClientRect()`, unchanged by the
+ * host app's zoom (90%, 100%, 110%) and by the tab sitting in the keep-alive layer.
  */
 export interface GuestOrigin {
-  /** The `<webview>` element's top-left in the host window, in DIPs (CSS px x host zoom). */
+  /** The `<webview>` element's box in the host renderer's viewport, CSS px. */
   x: number;
   y: number;
-  /** Page CSS px to host DIPs: the guest's own zoom factor (1 unless the tab is zoomed). */
-  scale: number;
+  width: number;
+  height: number;
 }
 export interface TabInputOptions {
   /**
@@ -55,6 +57,11 @@ export interface TabInputOptions {
    */
   origin?: () => Promise<GuestOrigin | null>;
 }
+/** How much larger the page is drawn than its CSS viewport; 1 unless only the guest is zoomed. */
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 10;
+/** The viewport comes back rounded down to whole px; this close to 1 is exactly 1. */
+const SCALE_SNAP = 0.01;
 const MAX_ORIGIN_COORDINATE = 100_000;
 
 function validOrigin(origin: GuestOrigin | null): origin is GuestOrigin {
@@ -65,9 +72,12 @@ function validOrigin(origin: GuestOrigin | null): origin is GuestOrigin {
     Number.isFinite(origin.y) &&
     Math.abs(origin.x) <= MAX_ORIGIN_COORDINATE &&
     Math.abs(origin.y) <= MAX_ORIGIN_COORDINATE &&
-    Number.isFinite(origin.scale) &&
-    origin.scale >= 0.1 &&
-    origin.scale <= 10
+    Number.isFinite(origin.width) &&
+    Number.isFinite(origin.height) &&
+    origin.width > 0 &&
+    origin.height > 0 &&
+    origin.width <= MAX_ORIGIN_COORDINATE &&
+    origin.height <= MAX_ORIGIN_COORDINATE
   );
 }
 
@@ -229,6 +239,8 @@ export class TabInputInjector {
   private viewport: TabViewport | null = null;
   private leaseSize: TabViewport | null = null;
   private origin: GuestOrigin | null = null;
+  /** Page CSS px to host CSS px for the current gesture. */
+  private scale = { x: 1, y: 1 };
   private leases: DebuggerLease[] = [];
   private detachListener: ((...args: unknown[]) => void) | null = null;
   private focusEmulated = false;
@@ -347,8 +359,16 @@ export class TabInputInjector {
       } catch {
         origin = null;
       }
-      if (!validOrigin(origin)) throw failure();
+      if (!validOrigin(origin) || !this.viewport) throw failure();
+      const snap = (ratio: number) => (Math.abs(ratio - 1) <= SCALE_SNAP ? 1 : ratio);
+      const scale = {
+        x: snap(origin.width / this.viewport.width),
+        y: snap(origin.height / this.viewport.height),
+      };
+      if (scale.x < MIN_SCALE || scale.x > MAX_SCALE || scale.y < MIN_SCALE || scale.y > MAX_SCALE)
+        throw failure();
       this.origin = origin;
+      this.scale = scale;
     }
     if (epoch !== this.epoch) throw failure();
     const viewport = this.viewport!;
@@ -375,8 +395,8 @@ export class TabInputInjector {
       const origin = this.origin;
       points.push({
         id: point.id,
-        x: (origin?.x ?? 0) + Math.min(1, Math.max(0, u)) * viewport.width * (origin?.scale ?? 1),
-        y: (origin?.y ?? 0) + Math.min(1, Math.max(0, v)) * viewport.height * (origin?.scale ?? 1),
+        x: (origin?.x ?? 0) + Math.min(1, Math.max(0, u)) * viewport.width * this.scale.x,
+        y: (origin?.y ?? 0) + Math.min(1, Math.max(0, v)) * viewport.height * this.scale.y,
       });
     }
     const unchanged =

@@ -904,7 +904,8 @@ export class RemoteDesktopController {
         : lease;
     }
     if (request.op === 'previewTabs') return this.previewTabs(peer, request.sessionId);
-    if (request.op === 'previewStart') return this.previewStart(peer, request.grant);
+    if (request.op === 'previewStart')
+      return this.previewStart(peer, request.grant, request.resume === true);
     return this.leaseRequest(peer, request);
   }
   /** Ends a preview lease for a reason its viewer can read (`PREVIEW_*`), not just "expired". */
@@ -956,12 +957,17 @@ export class RemoteDesktopController {
    * no virtual display, no resolution, no input helper. Failing to open is a refusal,
    * never a fallback to the screen.
    */
-  private async previewStart(peer: string, grant: string): Promise<RemoteDesktopLease> {
+  private async previewStart(
+    peer: string,
+    grant: string,
+    resume: boolean,
+  ): Promise<RemoteDesktopLease> {
     const preview = this.requirePreview();
     const authenticationSession = this.authenticationSession(peer);
     if (!isPreviewGrant(grant)) throw new Error('PREVIEW_GRANT_INVALID');
-    // The desktop's own Disconnect holds until the phone starts over by itself, like any lease.
-    if (this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
+    // The desktop's own Disconnect holds against the phone recovering by itself (`resume`);
+    // a start without it is the user opening the view again and lifts the stop, as for `start`.
+    if (resume && this.userStopped.has(peer)) throw new Error('DESKTOP_STOPPED');
     // A display lease being wound down still owns its restoration: starting over it would cancel that.
     if (
       this.locking ||
@@ -995,6 +1001,7 @@ export class RemoteDesktopController {
       if (!this.authenticationCurrent(peer, authenticationSession))
         throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
       if (this.active) throw new Error('DESKTOP_BUSY');
+      if (!resume) this.userStopped.delete(peer);
       this.previewEnded = null;
       const lease: RemoteDesktopLease = {
         lease: randomUUID(),

@@ -280,13 +280,15 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   seconds, one use, bound to the requesting peer. `previewStart { grant }` replies a
   lease with `controlling: false` and `preview: { pluginName, title }`; `display.id` is
   an opaque preview source id and `width` / `height` are the tab's CSS viewport.
-  `displayId`, `takeover`, `resume`, `control`, `lockOnExit` and `handoff` on
-  `previewStart` are `INVALID_REQUEST`. The host never falls back to the screen, an OS
-  window or OS input.
+  `displayId`, `takeover`, `control`, `lockOnExit` and `handoff` on `previewStart` are
+  `INVALID_REQUEST`. `resume: true` (boolean only) marks an automatic recovery: the host
+  answers it with `DESKTOP_STOPPED` after its own Disconnect, while a start without it is the
+  user opening the view again, clears that stop and goes ahead. The host never falls back to
+  the screen, an OS window or OS input.
 - **Viewer order**: `capabilities` → require `previewTab` (else `CHANNEL_NOT_ALLOWED`,
   nothing else is sent) → `previewStart` → require a `preview` object in the reply,
   otherwise `stop` the lease and throw `INVALID_RESPONSE` → offer and input.
-  `preview` is exclusive with `handoff`, `resume` and `takeover`.
+  `preview` is exclusive with `handoff` and `takeover`; `resume` is passed on to `previewStart`.
 - **Allowed ops on a preview lease**: `stop`, `heartbeat`, `presentation`, `offer`,
   `ice`, `viewerHidden`, `frame`, `previewInput` (`PREVIEW_LEASE_OPS`). Anything else,
   including `control`, `input`, clipboard, `privacyScreen`, `displayModes`,
@@ -351,20 +353,23 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   (`detach` event). A command that does not
   answer within 2 s is abandoned (outcome unknown, state released) and lifts background
   throttling for that guest until the lease ends.
-- **Touch origin**: CDP reads a `<webview>` guest's touch coordinates in the *host window's*
-  space (measured: a touch at page (255,357) arrived at (-515,271) for a webview at
-  (770,86)), so the injector sends `origin + page point x guest zoom`. The origin is the
-  webview's box in its host renderer (main window or a popped-out tab window), asked once
-  per gesture over the existing tab-op bridge as the read-only `viewRect` op
-  (`rsb-browser-bridge/guestOrigin.ts`, no new channel, nothing executed in the renderer),
-  times the host's zoom factor from main. If it cannot be established (renderer gone, tab
-  not pooled, nonsense numbers) the gesture is refused with `PREVIEW_INPUT_INVALID` instead
-  of being sent somewhere else. CDP delivers the event to the guest's widget directly, with
-  no hit-test of the host UI: a guest under a `pointer-events: none` keep-alive layer still
-  receives it, and a wrong offset cannot press the host's own controls. Mapped points are
-  clamped into the tab rectangle, so nothing leaves `origin .. origin + viewport x scale`.
-  Keys (`sendInputEvent`), text (`insertText`) and `Page.getLayoutMetrics` carry no window
-  coordinates and are unaffected.
+- **Touch origin**: CDP reads a `<webview>` guest's touch coordinates in the *host renderer's*
+  CSS px, not the page's. Measured on a real Desktop (host app at 90%, 100%, 110% zoom, tab
+  visible, sidebar resized, tab inside the keep-alive layer): `received = sent - (rect.left,
+  rect.top)`, `rect` being the webview's `getBoundingClientRect()`; the host zoom factor does
+  not enter. So the injector sends `(rect.left, rect.top) + page point * scale`, with `scale`
+  the webview rect size over the guest's own CSS viewport (1 within 1%, which covers the
+  viewport being reported in whole px; it differs only when just the guest has a page zoom).
+  The rect is asked once per gesture from the host renderer (main window or a popped-out tab
+  window) over the existing tab-op bridge as the read-only `viewRect` op
+  (`rsb-browser-bridge/guestOrigin.ts`, no new channel, nothing executed in the renderer). If
+  it cannot be established (renderer gone, tab not pooled, nonsense numbers, an absurd scale)
+  the gesture is refused with `PREVIEW_INPUT_INVALID` instead of being sent somewhere else.
+  CDP delivers the event to the guest's widget directly, with no hit-test of the host UI: a
+  guest under a `pointer-events: none` keep-alive layer still receives it, and a wrong offset
+  cannot press the host's own controls. Mapped points are clamped into the tab rectangle, so
+  nothing leaves `rect .. rect + size`. Keys (`sendInputEvent`), text (`insertText`) and
+  `Page.getLayoutMetrics` carry no window coordinates and are unaffected.
 - **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
   `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.

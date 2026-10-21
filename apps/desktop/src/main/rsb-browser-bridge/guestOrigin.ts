@@ -5,7 +5,12 @@
  * window's space, so injecting at a page point needs the guest's origin there. Only the
  * host renderer knows the element's box; it answers a read-only `viewRect` tab-op over the
  * existing request/response bridge (no new channel, nothing executed in the renderer).
- * Zoom factors come from main's own WebContents APIs.
+ *
+ * The space is the host renderer's CSS px, as `getBoundingClientRect()` reports it: measured
+ * on a real Desktop with the host app at 90%, 100% and 110% zoom, the offset between what
+ * CDP was sent and what the page received was exactly the webview's rect, with no host zoom
+ * factor in it. The page-to-host scale is left to the consumer, which can derive it from the
+ * rect size and the guest's own CSS viewport without trusting any zoom API.
  */
 
 import type { WebContents } from 'electron';
@@ -22,16 +27,16 @@ export const VIEW_RECT_TIMEOUT_MS = 1_000;
 const MAX_COORDINATE = 100_000;
 
 export interface TabOrigin {
-  /** Webview top-left in the host window, DIPs (CSS px x host zoom). */
+  /** Webview box in the host renderer's viewport, CSS px (`getBoundingClientRect()`). */
   x: number;
   y: number;
-  /** Guest page CSS px to host DIPs (the guest's zoom factor). */
-  scale: number;
+  width: number;
+  height: number;
 }
 
 export interface TabOriginDeps {
   options(): RendererBridgeOptions | null;
-  guest(tabId: string): Pick<WebContents, 'getZoomFactor' | 'isDestroyed'> | null;
+  guest(tabId: string): Pick<WebContents, 'isDestroyed'> | null;
   dispatch?(
     op: RsbBrowserBridgeTabOp,
     options: RendererBridgeOptions,
@@ -86,9 +91,10 @@ export async function requestTabOrigin(
   if (!result.ok || !validRect(result.rect)) return null;
   // The tab may have been closed or rebuilt while the renderer answered.
   if (guest.isDestroyed() || host.isDestroyed()) return null;
-  const hostZoom = host.getZoomFactor();
-  const guestZoom = guest.getZoomFactor();
-  if (!Number.isFinite(hostZoom) || hostZoom <= 0 || !Number.isFinite(guestZoom) || guestZoom <= 0)
-    return null;
-  return { x: result.rect.left * hostZoom, y: result.rect.top * hostZoom, scale: guestZoom };
+  return {
+    x: result.rect.left,
+    y: result.rect.top,
+    width: result.rect.width,
+    height: result.rect.height,
+  };
 }

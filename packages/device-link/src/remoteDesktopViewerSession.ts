@@ -31,8 +31,10 @@ interface ViewerConnectOptions {
   handoff?: string;
   /**
    * View one plugin preview tab with a grant from `previewTabs`. Needs a host
-   * advertising `previewTab`. Exclusive with `handoff`, `resume` and
-   * `takeover`; `displayId` and `control` do not apply and are never sent.
+   * advertising `previewTab`. Exclusive with `handoff` and `takeover`; `displayId` and
+   * `control` do not apply and are never sent. `resume: true` marks an automatic recovery
+   * (sent on `previewStart`): the host refuses it after its own Disconnect, while a start
+   * without it is the user's own and goes ahead.
    */
   preview?: { grant: string };
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
@@ -89,7 +91,7 @@ export class RemoteDesktopViewerSession {
     };
     if (
       options.preview &&
-      (options.handoff !== undefined || options.resume || options.takeover)
+      (options.handoff !== undefined || options.takeover)
     )
       throw new Error("INVALID_REQUEST");
     check();
@@ -108,7 +110,11 @@ export class RemoteDesktopViewerSession {
       check();
       options.onStart?.();
       const lease = await this.request<PreviewLease>(
-        { op: "previewStart", grant: options.preview.grant },
+        {
+          op: "previewStart",
+          grant: options.preview.grant,
+          ...(options.resume ? { resume: true } : {}),
+        },
         check,
       );
       if (generation !== this.generation || !options.isCurrent()) {

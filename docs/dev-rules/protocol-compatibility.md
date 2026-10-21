@@ -830,8 +830,11 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 - **请求**：`previewTabs { sessionId? }`（列出可投屏标签，回 `{ tabs: [{ grant, sessionId, pluginName, title, ref? }] }`）、
   `previewStart { grant }`（开预览 lease）、`previewInput { lease, sequence, events }`（触摸 / 按键 / 文字）。
   `previewTabs`、`previewStart` 与 `capabilities`、`start` 一样不带 lease；`previewStart` 带
-  `displayId` / `takeover` / `resume` / `control` / `lockOnExit` / `handoff` 任一字段即 `INVALID_REQUEST`，
-  预览不可能落到整屏。grant 是 32 字节 base64url（43 字符），parser 只限长度，格式由 `isPreviewGrant` 复核，
+  `displayId` / `takeover` / `control` / `lockOnExit` / `handoff` 任一字段即 `INVALID_REQUEST`，
+  预览不可能落到整屏。`previewStart` 可带可选布尔 `resume`：`true` = 控制端自动恢复，被控端在电脑端
+  自己点过「断开」后回 `DESKTOP_STOPPED`；不带 = 用户主动进入，清除该停止标记后正常开启（非布尔即
+  `INVALID_REQUEST`）。旧被控端（未支持 `resume` 的开发版）对带 `resume` 的 `previewStart` 回 `INVALID_REQUEST`；
+  该版本未发布，不引入单独的能力位。grant 是 32 字节 base64url（43 字符），parser 只限长度，格式由 `isPreviewGrant` 复核，
   被控端对格式不符的 grant 回 `PREVIEW_GRANT_INVALID`。
 - **标签标识** `PreviewTabSummary.ref?`：被控端给的稳定不透明标识（`/^[A-Za-z0-9_-]{1,64}$/`，`isPreviewTabRef`
   复核，非凭据），同一绑定存续期间不变，标签重建 / 换源后变。可选字段，旧被控端不带。控制端的路由带 `previewRef`
@@ -858,7 +861,7 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 - 会话层顺序：`capabilities` → 检查 `previewTab` → `previewStart` → **核对回执含 `preview` 对象**，否则立即
   `stop` 该 lease 并抛 `INVALID_RESPONSE`（与代输入的回执门同构）→ 之后才 offer / 开放输入。
   回执里的 `controlling` 一律按 `false`；预览 lease 上 `control()` 本地即报 `DESKTOP_PREVIEW_ONLY`。
-- `ViewerConnectOptions.preview` 与 `handoff` / `resume` / `takeover` 互斥，同传抛 `INVALID_REQUEST`，不发任何请求。
+- `ViewerConnectOptions.preview` 与 `handoff` / `takeover` 互斥，同传抛 `INVALID_REQUEST`，不发任何请求；`resume` 允许并原样传给 `previewStart`。
 - 控制端投影的能力（`previewTabCapabilities`）只保留 `videoSettings`、`trickleIce`、`channelRequests`、
   `backgroundViewing`、`viewerHidden`、`previewTab`，`canControl` 为 `false`，其余整屏能力不显示。
 - 旧 iOS 安装包 + 新 JS：`previewInput` 经已有 `sendRequest` 通用封装，不新增原生接口。

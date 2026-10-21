@@ -56,7 +56,6 @@ describe("preview tab wire parsing", () => {
     for (const extra of [
       { displayId: "1" },
       { takeover: true },
-      { resume: false },
       { control: true },
       { lockOnExit: true },
       { handoff: "req" },
@@ -65,6 +64,21 @@ describe("preview tab wire parsing", () => {
       reject({ op: "previewStart", grant, ...extra });
     // Never mistaken for a display start.
     reject({ op: "previewStart", displayId: "1" });
+  });
+
+  it("lets previewStart say it is an automatic resume, and nothing else", () => {
+    expect(
+      parseRemoteDesktopRequest({ op: "previewStart", grant, resume: true }),
+    ).toEqual({ op: "previewStart", grant, resume: true });
+    expect(
+      parseRemoteDesktopRequest({ op: "previewStart", grant, resume: false }),
+    ).toEqual({ op: "previewStart", grant, resume: false });
+    for (const resume of [1, "true", null, {}])
+      reject({ op: "previewStart", grant, resume });
+    // Resume must not smuggle in anything that names or takes a display.
+    reject({ op: "previewStart", grant, resume: true, takeover: true });
+    reject({ op: "previewStart", grant, resume: true, displayId: "1" });
+    reject({ op: "previewStart", grant, resume: true, handoff: "req" });
   });
 
   it("checks the grant shape separately so hosts can answer PREVIEW_GRANT_INVALID", () => {
@@ -369,8 +383,28 @@ describe("preview tab viewer session", () => {
     expect(f.request.mock.calls.length).toBe(before);
   });
 
-  it("rejects preview together with handoff, resume or takeover before any request", async () => {
-    for (const extra of [{ handoff: "req1" }, { resume: true }, { takeover: true }]) {
+  it("sends resume with previewStart only when the viewer asks for an automatic resume", async () => {
+    const plain = fixture(previewCaps);
+    await plain.session.connect({ isCurrent: () => true, preview: { grant } });
+    expect(plain.request.mock.calls.map(([r]) => r)).toContainEqual({
+      op: "previewStart",
+      grant,
+    });
+    const resumed = fixture(previewCaps);
+    await resumed.session.connect({
+      isCurrent: () => true,
+      preview: { grant },
+      resume: true,
+    });
+    expect(resumed.request.mock.calls.map(([r]) => r)).toContainEqual({
+      op: "previewStart",
+      grant,
+      resume: true,
+    });
+  });
+
+  it("rejects preview together with handoff or takeover before any request", async () => {
+    for (const extra of [{ handoff: "req1" }, { takeover: true }]) {
       const f = fixture(previewCaps);
       await expect(
         f.session.connect({ isCurrent: () => true, preview: { grant }, ...extra }),

@@ -241,7 +241,7 @@ describe('preview host', () => {
   });
 
   it('places touches in the host window using the tab origin the renderer reports', async () => {
-    const guestOrigin = vi.fn(async () => ({ x: 770, y: 86, scale: 1 }));
+    const guestOrigin = vi.fn(async () => ({ x: 770, y: 86, width: 800, height: 500 }));
     const h = setup([{ w: 800, h: 500 }], guestOrigin);
     const [tab] = h.host.list();
     const source = (await h.host.open(tab))!;

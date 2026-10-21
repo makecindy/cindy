@@ -10,16 +10,9 @@ function setup(
     ok: true,
     rect: { left: 770, top: 86, width: 510, height: 800 },
   },
-  zoom: { host?: number; guest?: number } = {},
 ) {
-  const host = {
-    isDestroyed: vi.fn(() => false),
-    getZoomFactor: () => zoom.host ?? 1,
-  };
-  const guest = {
-    isDestroyed: vi.fn(() => false),
-    getZoomFactor: () => zoom.guest ?? 1,
-  };
+  const host = { isDestroyed: vi.fn(() => false) };
+  const guest = { isDestroyed: vi.fn(() => false) };
   const getHostWebContents = vi.fn(() => host as never);
   const options: RendererBridgeOptions = { getHostWebContents, logger: { warn: vi.fn() } };
   const dispatch = vi.fn(async () => {
@@ -36,12 +29,13 @@ function setup(
 const tab = { sessionId: 'task1', tabId: 'tab1' };
 
 describe('requestTabOrigin', () => {
-  it('asks the tab host for the webview box and scales it by the zoom factors', async () => {
-    const h = setup(undefined, { host: 1.25, guest: 0.8 });
+  it('asks the tab host for the webview box and returns it as is (host CSS px, no zoom factor)', async () => {
+    const h = setup();
     expect(await requestTabOrigin(tab, h.deps)).toEqual({
-      x: 770 * 1.25,
-      y: 86 * 1.25,
-      scale: 0.8,
+      x: 770,
+      y: 86,
+      width: 510,
+      height: 800,
     });
     expect(h.dispatch).toHaveBeenCalledWith(
       { op: 'viewRect', sessionId: 'task1', tabId: 'tab1' },
@@ -94,10 +88,5 @@ describe('requestTabOrigin', () => {
       return { reqId: 'r', ok: true, rect: { left: 1, top: 1, width: 5, height: 5 } };
     });
     expect(await requestTabOrigin(tab, closing.deps)).toBeNull();
-  });
-
-  it('gives no origin for an unusable zoom factor', async () => {
-    expect(await requestTabOrigin(tab, setup(undefined, { host: 0 }).deps)).toBeNull();
-    expect(await requestTabOrigin(tab, setup(undefined, { guest: Number.NaN }).deps)).toBeNull();
   });
 });

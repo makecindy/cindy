@@ -135,7 +135,16 @@ export interface PreviewTabSummary {
 }
 export type PreviewTabsRequest = { op: "previewTabs"; sessionId?: string };
 export type PreviewTabsReply = { tabs: PreviewTabSummary[] };
-export type PreviewStartRequest = { op: "previewStart"; grant: string };
+export type PreviewStartRequest = {
+  op: "previewStart";
+  grant: string;
+  /**
+   * The viewer is recovering by itself (reconnect, app resume) rather than the user opening
+   * the view. A host that was disconnected from its own side refuses such a start, like a
+   * display `start` with `resume`; without it the start is the user's own and goes ahead.
+   */
+  resume?: boolean;
+};
 
 export interface PreviewTouchPoint {
   id: number;
@@ -242,7 +251,6 @@ export function isPreviewLeaseOp(op: string): boolean {
 const PREVIEW_START_FORBIDDEN = [
   "displayId",
   "takeover",
-  "resume",
   "control",
   "lockOnExit",
   "handoff",
@@ -573,7 +581,13 @@ export function parseRemoteDesktopRequest(
       throw new Error("INVALID_REQUEST");
     if (typeof v.grant !== "string" || !v.grant || v.grant.length > 128)
       throw new Error("INVALID_REQUEST");
-    return { op: v.op, grant: v.grant };
+    if (v.resume !== undefined && typeof v.resume !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      grant: v.grant,
+      ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
+    };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
     throw new Error("INVALID_LEASE");
