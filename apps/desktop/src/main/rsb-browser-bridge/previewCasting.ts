@@ -32,12 +32,19 @@ export interface PreviewCastingControllerOptions {
   registry: TabRegistry;
   /** Renderer that hosts the guest (webview host or native popup owner). */
   resolveOwner: (guest: WebContents) => WebContents | null;
+  /**
+   * Renderer to tell about a casting tab that has no live guest (never created,
+   * destroyed, evicted). That renderer is the only one that can (re)create the
+   * guest — it materializes casting tabs even in the background — so without
+   * this the cast set would never reach it and a rebuilt tab would stay empty.
+   */
+  getFallbackHost: () => WebContents | null;
   logger: CastingLogger;
 }
 
 interface CastingEntry {
   releaseLease: () => void;
-  /** Renderer the tab was last pushed to; null until the tab is registered. */
+  /** Renderer the tab was last pushed to: its guest's host, else the fallback host. */
   owner: WebContents | null;
 }
 
@@ -108,7 +115,7 @@ export class PreviewCastingController {
 
   private ownerOf(tabId: string): WebContents | null {
     const guest = this.opts.registry.getWebContentsByTabId(tabId);
-    return guest ? this.opts.resolveOwner(guest) : null;
+    return (guest && this.opts.resolveOwner(guest)) ?? this.opts.getFallbackHost();
   }
 
   private push(owner: WebContents | null): void {

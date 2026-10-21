@@ -45,6 +45,7 @@ import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
+import { usePreviewCastingTab } from '../../lib/previewCasting';
 import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
@@ -109,10 +110,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   const nativePopupSurfaceId =
     findNativePopupSurfaceForTab(tabId)?.surfaceId ?? state.nativePopupSurfaceId;
   const isNativePopup = Boolean(nativePopupSurfaceId);
+  // 投屏中的标签即使不在前台也必须有 guest:否则 guest 被销毁/重建后,手机重新进入时
+  // 电脑端没有可采集的页面,得用户去点标签才恢复。物化只看这一条,不改变前台/可见语义。
+  const casting = usePreviewCastingTab(tabId);
   const webviewBrowser = useBrowserWebview(
     tabId,
     sessionId,
-    tabVisible,
+    tabVisible || casting,
     !isNativePopup,
     state.previewRequestId,
   );

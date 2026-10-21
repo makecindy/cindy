@@ -572,6 +572,56 @@ describe('RightSidebarShell empty state', () => {
   //   标签栏出现手机图标;停止投屏后恢复原来的 hidden。
   // - Bug / 规则依据:插件预览投屏计划 D3 / T3。
   // - 最小失败输入:一个已物化 guest 的浏览器标签 + 投屏集合 + 切到别的任务。
+  // 测试价值
+  // - 生产入口与可观察结果:RightSidebarShell → BrowserTabBody → useBrowserWebview。浏览器标签不在前台
+  //   时默认不物化 webview(恢复会话不在后台加载);但投屏中的标签必须物化,否则 guest 被销毁/重建后
+  //   手机重新进入时电脑端没有可采集的 guest,要用户去点标签才恢复。
+  // - Bug / 规则依据:插件预览投屏计划 T3 缺陷 B②。
+  // - 最小失败输入:同一任务两个浏览器标签,后台那个无 pool 条目,把它加入投屏集合。
+  it('materializes a background browser tab only while it is being cast', async () => {
+    Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+    registerTabKind({
+      kind: 'web-browser',
+      menu: { kind: 'web-browser', labelKey: 'browser', icon: Globe, order: 1, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'browser'),
+      TabBody: (props: TabKindBodyProps) =>
+        createElement(BrowserTabBody, { ...props, state: props.state as WebBrowserState }),
+      defaultState: () => ({ url: 'https://example.test/', title: '', favicon: null, isAudible: false }),
+    });
+    tabsIpc.list.mockImplementation(async () => ({
+      tabs: [
+        { id: 'browser-fg', kind: 'web-browser', state: { url: 'https://fg.test/' } },
+        { id: 'browser-bg', kind: 'web-browser', state: { url: 'https://bg.test/' } },
+      ],
+      activeTabId: 'browser-fg',
+    }));
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 'task-a',
+        workdir: '/tmp/task-a',
+        remoteHostId: null,
+        isMac: true,
+      }),
+    );
+    try {
+      await waitFor(() => expect(browserWebviewPool.peek('browser-fg')).not.toBeNull());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(browserWebviewPool.peek('browser-bg')).toBeNull();
+
+      act(() => setPreviewCastingTabs(['browser-bg']));
+      await waitFor(() => expect(browserWebviewPool.peek('browser-bg')).not.toBeNull());
+      // 仍是后台标签:保活层,而不是被切到前台。
+      expect(getBucket('task-a').activeTabId).toBe('browser-fg');
+    } finally {
+      act(() => setPreviewCastingTabs([]));
+      view.unmount();
+      browserWebviewPool.releaseAll();
+      unregisterTabKind('web-browser');
+    }
+  });
+
   it.each(['task switch', 'sidebar hide'] as const)(
     'keeps a casting browser tab composited and click-through on %s, and restores hiding after',
     async (how) => {
