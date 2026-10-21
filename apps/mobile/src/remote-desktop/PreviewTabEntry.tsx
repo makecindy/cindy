@@ -119,6 +119,8 @@ const makeStyles = (colors: ThemeColors) =>
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
       backgroundColor: colors.surfaceElevated,
+      // Same gap under the strip as the queue-edit bar above the composer.
+      marginBottom: spacing.xs,
     },
     pressed: { backgroundColor: colors.surfaceChip },
     icon: {

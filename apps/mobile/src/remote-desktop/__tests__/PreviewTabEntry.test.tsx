@@ -25,6 +25,9 @@ vi.mock("react-native", async () => {
         onClick: p.onPress,
         "aria-label": p.accessibilityLabel,
         "data-testid": p.testID,
+        "data-style": JSON.stringify(
+          [typeof p.style === "function" ? p.style({ pressed: false }) : p.style].flat(),
+        ),
       },
       typeof p.children === "function" ? p.children({ pressed: false }) : p.children,
     );
@@ -95,6 +98,13 @@ describe("preview entry strip", () => {
     render();
     expect(entry()).toBeNull();
     expect(host.textContent).toBe("");
+  });
+
+  it("leaves the same gap under the strip as the queue-edit bar above the composer", () => {
+    fixture.tabs = [{ sessionId: "s1", pluginName: "Baguette", title: "Sim" }];
+    render();
+    const styles = JSON.parse(entry()!.getAttribute("data-style")!);
+    expect(styles.some((s: any) => s?.marginBottom === 4)).toBe(true);
   });
 
   it("opens the only preview directly, by task and plugin, never by grant", () => {
