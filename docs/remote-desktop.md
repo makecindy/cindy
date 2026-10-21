@@ -404,6 +404,13 @@ in front) sends `resume: true`, so a computer that was Disconnected from its own
 `DESKTOP_STOPPED`: the phone shows that the computer ended the connection, stops recovering,
 and only the user's Connect starts the view again.
 
+Unlike a remote desktop, which may run under the floating controls, a preview is an app page
+you press, so its picture is fitted (contain) and centered inside the area the controls leave
+free: in portrait below the status bar and the back button and above the toolbar, in landscape
+clear of the back button column and the toolbar rail (`previewViewportInsets`, sent to the viewer
+as `fitToInsets` with the top / bottom / left / right insets). Touches in the inset areas are not
+touches on the page. A plain remote desktop is unchanged.
+
 In the viewer (`viewerRuntime.js`, `init.preview.maxTouchPoints` turns it on) raw fingers
 become `touch` events with the full set of points in picture coordinates: no local pinch
 zoom, pan, hold-to-drag or cursor. A finger that lands outside the picture is dropped, one

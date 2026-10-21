@@ -1814,6 +1814,98 @@ describe("plugin preview tab view", () => {
     expect(v.elements.video.style.objectFit).toBe("");
   });
 
+  describe("keeping the picture clear of the floating controls", () => {
+    // A 390x844 tab on the 400x600 stage; the back button needs the top 100 and the toolbar the bottom 90.
+    const insets = (over: object = {}) => ({
+      type: "mouseButtons",
+      fitToInsets: true,
+      topInset: 100,
+      bottomInset: 90,
+      leftInset: 0,
+      rightInset: 0,
+      enabled: false,
+      ...over,
+    });
+    const rect = (v: ReturnType<typeof viewer>) => ({
+      left: parseFloat(v.elements.image.style.left),
+      top: parseFloat(v.elements.image.style.top),
+      width: parseFloat(v.elements.image.style.width),
+      height: parseFloat(v.elements.image.style.height),
+    });
+    const tab = (v: ReturnType<typeof viewer>) =>
+      v.send({
+        type: "init",
+        epoch: "p",
+        width: 390,
+        height: 844,
+        preview: { maxTouchPoints: 2 },
+      });
+
+    it("fits and centers the picture inside the usable area, never under the controls", () => {
+      const v = viewer();
+      tab(v);
+      v.send({ type: "control", enabled: true });
+      // Without insets the page runs the full height, under the controls.
+      expect(rect(v).top).toBe(0);
+      expect(rect(v).height).toBe(600);
+      v.send(insets());
+      const r = rect(v);
+      expect(r.top).toBeGreaterThanOrEqual(100);
+      expect(r.top + r.height).toBeLessThanOrEqual(600 - 90);
+      // contain: the whole usable height is used and the width follows the aspect
+      expect(r.height).toBeCloseTo(410);
+      expect(r.width / r.height).toBeCloseTo(390 / 844);
+      expect(r.left).toBeCloseTo((400 - r.width) / 2);
+    });
+
+    it("maps touches onto the new rectangle and drops the ones in the inset areas", () => {
+      const v = viewer();
+      tab(v);
+      v.send({ type: "control", enabled: true });
+      v.send(insets());
+      const r = rect(v);
+      const events = () =>
+        v.messages.filter((m) => m.type === "input").flatMap((m) => m.events ?? []);
+      // Under the back button / status bar and over the toolbar: no touch at all.
+      v.pointer("pointerdown", 1, 200, 50);
+      v.pointer("pointerdown", 2, 200, 560);
+      v.flush();
+      expect(events()).toEqual([]);
+      // The top-left corner of the picture is (0, 0), its center is (0.5, 0.5).
+      v.pointer("pointerdown", 3, r.left + 1, r.top + 1);
+      expect((events().at(-1) as any).points[0].x).toBeCloseTo(1 / r.width, 3);
+      expect((events().at(-1) as any).points[0].y).toBeCloseTo(1 / r.height, 3);
+      v.ack();
+      v.pointer("pointerup", 3, r.left + 1, r.top + 1);
+      v.ack();
+      v.pointer("pointerdown", 4, r.left + r.width / 2, r.top + r.height / 2);
+      expect((events().at(-1) as any).points[0]).toMatchObject({ x: 0.5, y: 0.5 });
+    });
+
+    it("keeps a side rail and the back button column clear in landscape", () => {
+      const v = viewer();
+      v.elements.stage.clientWidth = 800;
+      v.elements.stage.clientHeight = 400;
+      tab(v);
+      v.send({ type: "viewport", fillHeight: true });
+      v.send(insets({ topInset: 0, bottomInset: 0, leftInset: 70, rightInset: 90 }));
+      const r = rect(v);
+      expect(r.left).toBeGreaterThanOrEqual(70);
+      expect(r.left + r.width).toBeLessThanOrEqual(800 - 90);
+      expect(r.height).toBeCloseTo(400);
+      // centered in what is left between the two columns
+      expect(r.left - 70).toBeCloseTo(800 - 90 - (r.left + r.width));
+    });
+
+    it("leaves a plain remote desktop where it is (insets only guide it)", () => {
+      const v = viewer();
+      v.send({ type: "init", epoch: "d", width: 390, height: 844 });
+      v.send(insets({ fitToInsets: false }));
+      expect(rect(v).top).toBe(0);
+      expect(rect(v).height).toBe(600);
+    });
+  });
+
   it("returns to the ordinary gestures when a lease without preview starts", () => {
     const v = open();
     v.send({ type: "init", epoch: "plain", width: 1920, height: 1080 });

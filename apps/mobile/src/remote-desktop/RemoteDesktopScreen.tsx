@@ -46,6 +46,7 @@ import {
   remoteDesktopErrorCode,
 } from "./controlFailure";
 import { splitPreviewInput } from "./previewInputBatches";
+import { previewViewportInsets } from "./previewInsets";
 import {
   parsePreviewTarget,
   pickPreviewTab,
@@ -1785,19 +1786,47 @@ export function RemoteDesktopSession({
   useEffect(() => {
     send({ type: "mode", mode });
   }, [mode, send]);
+  // Left edge of the back button; the preview fit keeps its column clear.
+  // iOS landscape: Island/notch sits mid-edge, so the top-left corner stays
+  // clear even when insets.left is large. Skip that inset unless the top edge
+  // is also unsafe — a physical cutout occupying the corner, not a centered
+  // island. Android left insets are an unsafe strip (cutout/curve), not an island.
+  const backLeft = landscape
+    ? (Platform.OS === "ios" && !geometry.reservedRegionsSupported && insets.top === 0 ? 0 : insets.left) +
+      spacing.lg +
+      (Platform.OS === "ios" ? spacing.xs : 0)
+    : edgePadding.paddingLeft + spacing.lg;
   useEffect(() => {
-    send({
-      type: "mouseButtons",
-      native: Platform.OS === "ios",
-      fitToInsets: fullScreenFoldBackground,
-      topInset: fullScreenFoldBackground ? foldLayout!.media.y : tableRegion ? 0 : edgePadding.paddingTop,
-      bottomInset: fullScreenFoldBackground
-        ? Math.max(0, geometry.height - foldLayout!.media.y - foldLayout!.media.height) : tableRegion ? 0 :
+    const bottomInset = fullScreenFoldBackground
+      ? Math.max(0, geometry.height - foldLayout!.media.y - foldLayout!.media.height) : tableRegion ? 0 :
         keyboard && landscapeKeyboardOverlay
           ? keyboardPanelHeight + keyboardBottom
           : !keyboard && !landscape
             ? toolbarSize.height
-            : 0,
+            : 0;
+    // A preview is an app page you press: unlike a remote desktop, which may run
+    // under the floating controls, it is fitted into the area they leave free.
+    const fitPreview = previewMode && !fullScreenFoldBackground && !tableRegion;
+    const preview = fitPreview
+      ? previewViewportInsets({
+          landscape,
+          systemSideRail,
+          toolbarOnLeft,
+          paddingTop: edgePadding.paddingTop,
+          bottom: bottomInset,
+          safeBottom: insets.bottom,
+          backHeight: backControlHeight,
+          backLeft,
+          toolbar: toolbarSize,
+          sideRailWidth,
+        })
+      : null;
+    send({
+      type: "mouseButtons",
+      native: Platform.OS === "ios",
+      fitToInsets: fullScreenFoldBackground || fitPreview,
+      topInset: preview ? preview.top : fullScreenFoldBackground ? foldLayout!.media.y : tableRegion ? 0 : edgePadding.paddingTop,
+      bottomInset: preview ? preview.bottom : bottomInset,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
       portraitKeyboardTopInset:
         keyboard && !landscape && !tableRegion
@@ -1805,8 +1834,8 @@ export function RemoteDesktopSession({
           : 0,
       // Side controls float over the desktop; fit against the full canvas width
       // in either landscape direction, including while the keyboard is open.
-      rightInset: 0,
-      leftInset: 0,
+      rightInset: preview ? preview.right : 0,
+      leftInset: preview ? preview.left : 0,
       enabled:
         showMouseButtons &&
         !previewMode &&
@@ -1827,6 +1856,12 @@ export function RemoteDesktopSession({
     showMouseButtons,
     edgePadding.paddingTop,
     backControlHeight,
+    backLeft,
+    previewMode,
+    systemSideRail,
+    toolbarOnLeft,
+    sideRailWidth,
+    insets.bottom,
     toolbarSize,
     keyboardPanelHeight,
     landscapeKeyboardOverlay,
@@ -3812,16 +3847,7 @@ export function RemoteDesktopSession({
             top: landscape
               ? insets.top + spacing.lg
               : edgePadding.paddingTop + spacing.xs,
-            // iOS landscape: Island/notch sits mid-edge, so the top-left
-            // corner stays clear even when insets.left is large. Skip that
-            // inset unless the top edge is also unsafe — a physical cutout
-            // occupying the corner, not a centered island. Android left
-            // insets are an unsafe strip (cutout/curve), not an island.
-            left: landscape
-              ? (Platform.OS === "ios" && !geometry.reservedRegionsSupported && insets.top === 0 ? 0 : insets.left) +
-                spacing.lg +
-                (Platform.OS === "ios" ? spacing.xs : 0)
-              : edgePadding.paddingLeft + spacing.lg,
+            left: backLeft,
           },
           systemSideRail && {
             top: sideRailTop,
