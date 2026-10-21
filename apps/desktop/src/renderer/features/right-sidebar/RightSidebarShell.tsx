@@ -71,7 +71,7 @@ import {
   suspendFocusInside,
   type KeepAliveSize,
 } from './lib/castingKeepAlive';
-import { usePendingPreviewTab } from './lib/pendingPreviewTabs';
+import { usePendingPreviewTab } from './lib/pluginPreviewTabs';
 import { usePreviewCastingTab } from './lib/previewCasting';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {

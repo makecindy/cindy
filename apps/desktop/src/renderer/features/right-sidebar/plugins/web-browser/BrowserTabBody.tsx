@@ -45,7 +45,7 @@ import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
-import { usePendingPreviewTab } from '../../lib/pendingPreviewTabs';
+import { usePendingPreviewTab } from '../../lib/pluginPreviewTabs';
 import { usePreviewCastingTab } from '../../lib/previewCasting';
 import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';

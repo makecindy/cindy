@@ -59,8 +59,7 @@ import {
   setActiveTab,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
-import { usePendingPreviewActive } from '@/features/right-sidebar/lib/pendingPreviewTabs';
-import { usePreviewCastingActive } from '@/features/right-sidebar/lib/previewCasting';
+import { usePreviewKeepAliveActive } from '@/features/right-sidebar/lib/previewKeepAlive';
 import {
   findGlobalTab,
   rememberPluginWindowPlacement,
@@ -301,10 +300,10 @@ export function MainLayout() {
   );
   // 右侧边栏(第三块布局,与左栏对称)：折叠态 + 宽度各自持久化。
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(getInitialRightCollapsed);
-  // 有标签正被手机查看、或有刚打开的插件预览标签等待绑定时,右栏必须保持挂载(即使
-  // 当前路由不在聊天、或停在设置页接管态):卸载会销毁其 webview guest,手机画面中断、
-  // 或预览标签始终不物化而绑不上插件。两者都没有时行为不变。
-  const previewKeepAliveActive = usePreviewCastingActive() || usePendingPreviewActive();
+  // 有标签正被手机查看、或本进程里有存活的插件预览标签时,右栏必须保持挂载(即使当前
+  // 路由不在聊天、或停在设置页接管态):卸载会销毁其 webview guest,手机画面中断、
+  // 预览绑定被 main 丢弃。两者都没有时行为不变。
+  const previewKeepAliveActive = usePreviewKeepAliveActive();
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。

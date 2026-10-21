@@ -16,7 +16,7 @@
 
 import { addTab, ensureHydrated } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
-import { markPendingPreviewTab } from './pendingPreviewTabs';
+import { markPluginPreviewTab } from './pluginPreviewTabs';
 import { routeSidebarCommand } from './detachedSidebarRouting';
 import { isBrowserOpenablePath } from '../../../../shared/browserOpenableExts';
 
@@ -127,6 +127,6 @@ export async function openUrlInSidebarBrowser(
   });
   // 插件预览标签:人不一定在看它(别的标签/任务/设置页),但 main 要等它 report 才能绑定
   // 插件身份。登记为「待绑定」,Shell 会在隐藏保活层里立即物化一次 webview。
-  if (previewRequestId) markPendingPreviewTab(tab.id);
+  if (previewRequestId) markPluginPreviewTab(tab.id);
   requestRightSidebarVisibility('open', { sessionId, userInitiated });
 }

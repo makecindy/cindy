@@ -29,7 +29,7 @@ import type {
 import { createLogger } from '@/lib/logger';
 
 import { browserWebviewPool } from './browserWebviewPool';
-import { clearPendingPreviewTab } from './pendingPreviewTabs';
+import { clearPendingPreviewTab } from './pluginPreviewTabs';
 import { setPreviewCastingTabs } from './previewCasting';
 import {
   addTab,

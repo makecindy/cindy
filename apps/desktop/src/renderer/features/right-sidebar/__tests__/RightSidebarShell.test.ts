@@ -72,10 +72,11 @@ import { registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { setPreviewCastingTabs, _resetPreviewCastingForTests } from '../lib/previewCasting';
 import {
-  markPendingPreviewTab,
+  markPluginPreviewTab,
   clearPendingPreviewTab,
-  _resetPendingPreviewTabsForTests,
-} from '../lib/pendingPreviewTabs';
+  getPluginPreviewTabIds,
+  _resetPluginPreviewTabsForTests,
+} from '../lib/pluginPreviewTabs';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
 import {
@@ -312,7 +313,7 @@ describe('RightSidebarShell empty state', () => {
   });
 
   afterEach(() => {
-    _resetPendingPreviewTabsForTests();
+    _resetPluginPreviewTabsForTests();
     _resetPreviewCastingForTests();
     _resetStore();
     _resetRsbBrowserBridgeForTests();
@@ -637,7 +638,7 @@ describe('RightSidebarShell empty state', () => {
   //   否则 main 无法把它绑定到插件身份,手机入口不出现。可观察:后台标签 / 未显示任务的标签
   //   在被登记为「待绑定」后创建 pool 条目;普通后台网页标签行为不变;不切前台、不改 activeTab。
   // - Bug / 规则依据:插件预览投屏计划 T3 缺陷 C(电脑停在别处时 Agent 开预览,标签不物化)。
-  // - 最小失败输入:同一任务的后台浏览器标签 / 另一任务桶里的浏览器标签 + markPendingPreviewTab。
+  // - 最小失败输入:同一任务的后台浏览器标签 / 另一任务桶里的浏览器标签 + markPluginPreviewTab。
   describe('pending plugin-preview tabs', () => {
     const registerBrowserKind = () =>
       registerTabKind({
@@ -677,7 +678,7 @@ describe('RightSidebarShell empty state', () => {
         });
         expect(browserWebviewPool.peek('browser-bg')).toBeNull();
 
-        act(() => markPendingPreviewTab('browser-bg'));
+        act(() => markPluginPreviewTab('browser-bg'));
         await waitFor(() => expect(browserWebviewPool.peek('browser-bg')).not.toBeNull());
         await waitFor(() =>
           expect(browserWebviewPool.peek('browser-bg')!.webview.getAttribute('src')).toBe('https://bg.test/'),
@@ -693,6 +694,46 @@ describe('RightSidebarShell empty state', () => {
         expect(host!.classList.contains('hidden')).toBe(false);
         expect(host!.style.position).toBe('fixed');
         expect(host!.style.opacity).toBe('0');
+      } finally {
+        view.unmount();
+        browserWebviewPool.releaseAll();
+        unregisterTabKind('web-browser');
+      }
+    });
+
+    it('after its first report a plugin-preview tab hides like any background tab, and closing it forgets it', async () => {
+      Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+      registerBrowserKind();
+      tabsIpc.list.mockImplementation(async () => ({
+        tabs: [
+          { id: 'browser-fg', kind: 'web-browser', state: { url: 'https://fg.test/' } },
+          { id: 'browser-bg', kind: 'web-browser', state: { url: 'https://bg.test/' } },
+        ],
+        activeTabId: 'browser-fg',
+      }));
+      const view = mountShell();
+      try {
+        await waitFor(() => expect(browserWebviewPool.peek('browser-fg')).not.toBeNull());
+        act(() => markPluginPreviewTab('browser-bg'));
+        await waitFor(() => expect(browserWebviewPool.peek('browser-bg')).not.toBeNull());
+
+        // 首次 report 之后:不再强制保活层,回到普通后台标签的 display:none,guest 仍在。
+        act(() => clearPendingPreviewTab('browser-bg'));
+        await act(async () => {
+          await Promise.resolve();
+        });
+        const wrapper = browserWebviewPool.peek('browser-bg')!.wrapper;
+        const host = wrapper.closest('[aria-hidden="true"]') as HTMLElement;
+        expect(host.classList.contains('hidden')).toBe(true);
+        expect(host.style.opacity).toBe('');
+        expect(getPluginPreviewTabIds().has('browser-bg')).toBe(true);
+        expect(browserWebviewPool.peek('browser-bg')).not.toBeNull();
+
+        // 标签关闭:不再被追踪。
+        await act(async () => {
+          await closeTab('task-a', 'browser-bg');
+        });
+        expect(getPluginPreviewTabIds().has('browser-bg')).toBe(false);
       } finally {
         view.unmount();
         browserWebviewPool.releaseAll();
@@ -720,7 +761,7 @@ describe('RightSidebarShell empty state', () => {
         });
         expect(browserWebviewPool.peek('browser-other')).toBeNull();
 
-        act(() => markPendingPreviewTab('browser-other'));
+        act(() => markPluginPreviewTab('browser-other'));
         await waitFor(() => expect(browserWebviewPool.peek('browser-other')).not.toBeNull());
         await waitFor(() =>
           expect(browserWebviewPool.peek('browser-other')!.webview.getAttribute('src')).toBe('https://other.test/'),

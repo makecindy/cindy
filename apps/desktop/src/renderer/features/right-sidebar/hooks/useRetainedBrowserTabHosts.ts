@@ -2,9 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import {
-  getPendingPreviewTabIds,
-  subscribePendingPreviewTabs,
-} from '../lib/pendingPreviewTabs';
+  getPluginPreviewTabIds,
+  subscribePluginPreviewTabs,
+} from '../lib/pluginPreviewTabs';
 import { isTabHostedHere } from '../lib/tabHosting';
 import { findSessionIdByTabId, getBucket, subscribe } from '../store';
 import type { TabState } from '../types';
@@ -26,9 +26,10 @@ export interface TabBodyHostDescriptor {
  * a guest. Close, eviction and host handoff remove the corresponding hidden
  * body. Other plugins and unmaterialized browser tabs are not kept across tasks.
  *
- * One exception: a plugin-preview tab that is still pending (opened for a
- * preview, not yet reported) gets a hidden body even when its task is not in
- * the foreground, so its guest can load and main can bind it to the plugin.
+ * One exception: a plugin-preview tab opened by this renderer keeps a (hidden)
+ * body for its whole life, even when its task is not in the foreground, so its
+ * guest can load, main can bind it to the plugin and the binding survives task
+ * switches. It ends when the tab is closed.
  */
 export function useRetainedBrowserTabHosts(
   current: readonly TabBodyHostDescriptor[],
@@ -41,9 +42,9 @@ export function useRetainedBrowserTabHosts(
     const unsubscribeStore = subscribe(onChange);
     const unsubscribeRelease = browserWebviewPool.onRelease(onChange);
     const unsubscribeCreated = browserWebviewPool.onEntryCreated(onChange);
-    const unsubscribePending = subscribePendingPreviewTabs(onChange);
+    const unsubscribePluginPreview = subscribePluginPreviewTabs(onChange);
     return () => {
-      unsubscribePending();
+      unsubscribePluginPreview();
       unsubscribeStore();
       unsubscribeRelease();
       unsubscribeCreated();
@@ -61,7 +62,7 @@ export function useRetainedBrowserTabHosts(
     }
     // 页签已不由本 renderer 承载(弹出到别的窗口 / 从多页签窗口合并回去):不再保留它的后台 body。
     if (!host.sessionId || !isTabHostedHere(host.tab.id)) continue;
-    if (!browserWebviewPool.peek(host.tab.id) && !getPendingPreviewTabIds().has(host.tab.id))
+    if (!browserWebviewPool.peek(host.tab.id) && !getPluginPreviewTabIds().has(host.tab.id))
       continue;
     // Background navigation/close updates belong to the original task. Never
     // reuse the foreground task's context or revive a tab missing from its bucket.
@@ -69,11 +70,11 @@ export function useRetainedBrowserTabHosts(
     const tab = bucket.hydrated && bucket.tabs.find((candidate) => candidate.id === host.tab.id);
     if (tab && tab.kind === 'web-browser') hosts.push({ ...host, tab });
   }
-  // Pending plugin-preview tabs of tasks that are not on screen. They join the
-  // retained segment (before the foreground hosts), which is where they stay once
-  // their guest exists, so materializing never reorders them.
+  // Plugin-preview tabs of tasks that are not on screen. They join the retained
+  // segment (before the foreground hosts), which is where they stay once their
+  // guest exists, so materializing never reorders them.
   const kept = new Set(hosts.map((host) => host.tab.id));
-  for (const tabId of getPendingPreviewTabIds()) {
+  for (const tabId of getPluginPreviewTabIds()) {
     if (kept.has(tabId) || remaining.has(tabId) || !isTabHostedHere(tabId)) continue;
     const sessionId = findSessionIdByTabId(tabId);
     const tab = sessionId ? getBucket(sessionId).tabs.find((t) => t.id === tabId) : undefined;

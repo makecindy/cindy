@@ -32,10 +32,10 @@ import {
 import { _resetPopupTabsForTests, markPopupSpawnedTab } from '../popupTabs';
 import { _resetPreviewCastingForTests, isPreviewCastingTab } from '../previewCasting';
 import {
-  _resetPendingPreviewTabsForTests,
+  _resetPluginPreviewTabsForTests,
   getPendingPreviewTabIds,
-  markPendingPreviewTab,
-} from '../pendingPreviewTabs';
+  markPluginPreviewTab,
+} from '../pluginPreviewTabs';
 import {
   _resetStore,
   addTab,
@@ -125,7 +125,7 @@ function clearIpc(): void {
 }
 
 beforeEach(() => {
-  _resetPendingPreviewTabsForTests();
+  _resetPluginPreviewTabsForTests();
   _resetPreviewCastingForTests();
   _resetRsbBrowserBridgeForTests();
   _resetPopupTabsForTests();
@@ -167,9 +167,9 @@ describe('rsbBrowserBridge — report / release / snapshot forwarding', () => {
 
   it('a preview report ends the pending state of that tab, even when the report fails', async () => {
     const api = installFakeIpc();
-    markPendingPreviewTab('t1');
-    markPendingPreviewTab('t2');
-    markPendingPreviewTab('plain');
+    markPluginPreviewTab('t1');
+    markPluginPreviewTab('t2');
+    markPluginPreviewTab('plain');
     await reportRsbBrowserTab({
       sessionId: 's1',
       tabId: 't1',

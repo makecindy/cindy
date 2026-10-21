@@ -69,6 +69,13 @@ class BrowserWebviewPoolImpl {
    * pool growing unbounded.
    */
   private pinned = new Set<string>();
+  /**
+   * Tabs the renderer itself wants to keep alive (plugin-preview tabs: the phone
+   * may attach any time, and a rebuilt guest would drop the main-side binding).
+   * Same eviction tier as `pinned`, but owned by the renderer — main's pin /
+   * unpin pushes (automation, casting) must not be able to clear it.
+   */
+  private protectedFromEviction = new Set<string>();
 
   /**
    * pool 的"停车区" off-screen 容器 —— 没挂到任何 tab body slot 的 wrapper
@@ -198,6 +205,15 @@ class BrowserWebviewPoolImpl {
     return this.pinned.has(tabId);
   }
 
+  /** LRU 淘汰跳过该 tab(渲染进程自持,与 main 镜像的 pin 互不影响)。幂等。 */
+  protectFromEviction(tabId: string): void {
+    this.protectedFromEviction.add(tabId);
+  }
+
+  unprotectFromEviction(tabId: string): void {
+    this.protectedFromEviction.delete(tabId);
+  }
+
   /**
    * 订阅 pin 状态变化(automation 期间防 LRU 用)。仅供调试 / 上报通道使用,
    * 业务逻辑请通过 pin 状态判断分支。
@@ -295,7 +311,7 @@ class BrowserWebviewPoolImpl {
     let oldestAny: PoolEntry | null = null;
     for (const e of this.entries.values()) {
       if (!oldestAny || e.lastAccess < oldestAny.lastAccess) oldestAny = e;
-      if (this.pinned.has(e.tabId)) continue;
+      if (this.pinned.has(e.tabId) || this.protectedFromEviction.has(e.tabId)) continue;
       if (!oldestUnpinned || e.lastAccess < oldestUnpinned.lastAccess) oldestUnpinned = e;
     }
     const victim = oldestUnpinned ?? oldestAny;

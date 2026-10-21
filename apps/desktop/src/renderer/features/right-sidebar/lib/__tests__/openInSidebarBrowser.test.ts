@@ -24,9 +24,9 @@ import { addTab, ensureHydrated } from '../../store';
 import { requestRightSidebarVisibility } from '../sidebarCommands';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
 import {
-  _resetPendingPreviewTabsForTests,
+  _resetPluginPreviewTabsForTests,
   getPendingPreviewTabIds,
-} from '../pendingPreviewTabs';
+} from '../pluginPreviewTabs';
 import {
   openUrlInSidebarBrowser,
   pathToFileUrl,
@@ -84,7 +84,7 @@ describe('fileUrlToAbsPath / isLocalHtmlFileUrl', () => {
 describe('openUrlInSidebarBrowser', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    _resetPendingPreviewTabsForTests();
+    _resetPluginPreviewTabsForTests();
     vi.mocked(routeSidebarCommand).mockResolvedValue('attached');
   });
 
