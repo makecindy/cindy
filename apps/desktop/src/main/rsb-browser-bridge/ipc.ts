@@ -109,7 +109,14 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     return getNativePopupOwnerWebContents?.(target.id) ?? null;
   };
 
-  setActivePreviewCastingController(new PreviewCastingController({ registry, resolveOwner, logger }));
+  setActivePreviewCastingController(
+    new PreviewCastingController({
+      registry,
+      resolveOwner,
+      getFallbackHost: getHostWebContents,
+      logger,
+    }),
+  );
 
   ipcMain.handle(RSB_BROWSER_BRIDGE_REPORT_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'report payload');

@@ -146,6 +146,65 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     expect(ids).toEqual(['p-chat']);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果:LayoutRoot 的设置页接管态。投屏标签的 webview 住在右栏里,接管态把右栏
+  //   从 React 树摘掉会销毁 guest;MainLayout 在有投屏标签时经 retainPanelKinds 要求保留 right-tabs。
+  //   可观察:同一个 DOM 节点在进出接管态时不被重建、不画分割线、其它非 chat 面板仍歇业,
+  //   停止投屏(prop 清空)后回到「只渲染 chat-main」。
+  // - Bug / 规则依据:插件预览投屏计划 T3 缺陷 B①(设置页接管销毁投屏 guest)。
+  // - 最小失败输入:默认布局 + suppressNonChatPanels + retainPanelKinds=['right-tabs']。
+  it('接管态 + retainPanelKinds:right-tabs 原地保留挂载,其余面板仍歇业,清空后恢复', () => {
+    const tree = (props: { suppress: boolean; retain?: readonly string[] }) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <div data-testid="row">
+          <LayoutRoot suppressNonChatPanels={props.suppress} retainPanelKinds={props.retain} />
+        </div>
+      </BuiltinPanelBridgeProvider>
+    );
+    registerPanelKind({
+      kind: 'ghost:extra',
+      Component: () => <div data-testid="p-extra" />,
+      collapseMemory: 'global',
+    });
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          { fraction: 0.5, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+          { fraction: 0.2, node: { type: 'pane', id: 'extra', panelKind: 'ghost:extra' } },
+          { fraction: 0.3, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+        ],
+      },
+    };
+    const rendered = render(tree({ suppress: false }));
+    const rightBefore = screen.getByTestId('p-right');
+    expect(screen.getByTestId('p-extra')).toBeTruthy();
+
+    // 默认(prop 为空)的接管态行为不变:只剩 chat-main。
+    rendered.rerender(tree({ suppress: true }));
+    expect(screen.queryByTestId('p-right')).toBeNull();
+    rendered.rerender(tree({ suppress: false }));
+    const rightAfterDefault = screen.getByTestId('p-right');
+    expect(rightAfterDefault).not.toBe(rightBefore); // 默认接管态确实会重建(这正是投屏要避免的)
+
+    // 投屏时:同一个 DOM 节点穿过接管态,不画分割线,会话列表等仍歇业。
+    rendered.rerender(tree({ suppress: true, retain: ['right-tabs'] }));
+    expect(screen.getByTestId('p-right')).toBe(rightAfterDefault);
+    expect(screen.queryByTestId('p-extra')).toBeNull();
+    expect(screen.getByTestId('p-chat')).toBeTruthy();
+    expect(screen.queryAllByTestId('layout-divider')).toHaveLength(0);
+
+    rendered.rerender(tree({ suppress: false, retain: ['right-tabs'] }));
+    expect(screen.getByTestId('p-right')).toBe(rightAfterDefault);
+
+    // 停止投屏:回到默认行为。
+    rendered.rerender(tree({ suppress: true }));
+    expect(screen.queryByTestId('p-right')).toBeNull();
+  });
+
   it('live resize 停稳后只在 120px clamp 命中时自愈份额账本', async () => {
     vi.useFakeTimers();
     currentLayout = {

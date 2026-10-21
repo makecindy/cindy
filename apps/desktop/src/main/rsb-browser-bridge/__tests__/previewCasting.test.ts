@@ -29,7 +29,7 @@ function makeWc(id: number, host?: FakeWc): FakeWc {
   };
 }
 
-function setup() {
+function setup(fallback: 'none' | 'hostA' = 'none') {
   const wcs = new Map<number, FakeWc>();
   const hostA = makeWc(1);
   const hostB = makeWc(2);
@@ -41,6 +41,7 @@ function setup() {
   const controller = new PreviewCastingController({
     registry,
     resolveOwner: (guest) => ((guest as unknown as FakeWc).host as unknown as WebContents) ?? null,
+    getFallbackHost: () => (fallback === 'hostA' ? (hostA as unknown as WebContents) : null),
     logger,
   });
   const addGuest = (tabId: string, guestId: number, host: FakeWc) => {
@@ -131,6 +132,26 @@ describe('PreviewCastingController', () => {
 
     addGuest('late', 301, hostA);
     expect(lastPush(hostA)?.[1]).toEqual({ tabIds: ['late'] });
+  });
+
+  it('tells the fallback host about a casting tab that has no live guest, so it can rebuild one', () => {
+    const { registry, controller, hostA, hostB, addGuest } = setup('hostA');
+    controller.setCastingTabs(['gone']);
+    expect(lastPush(hostA)?.[1]).toEqual({ tabIds: ['gone'] });
+    expect(registry.isPinned('gone')).toBe(true);
+
+    // the rebuilt guest registers under another host: ownership follows it
+    addGuest('gone', 401, hostB);
+    expect(lastPush(hostB)?.[1]).toEqual({ tabIds: ['gone'] });
+    expect(lastPush(hostA)?.[1]).toEqual({ tabIds: [] });
+  });
+
+  it('keeps targeting the last host after the guest is destroyed (it must rebuild it)', () => {
+    const { registry, controller, hostA, addGuest } = setup('none');
+    addGuest('t1', 101, hostA);
+    controller.setCastingTabs(['t1']);
+    registry.release('t1');
+    expect(controller.listHostedBy(hostA as unknown as WebContents)).toEqual(['t1']);
   });
 
   it('lists the casting tabs hosted by one renderer (snapshot recovery)', () => {
