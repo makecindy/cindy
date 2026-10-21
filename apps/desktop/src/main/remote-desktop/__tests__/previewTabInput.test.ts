@@ -2,13 +2,20 @@ import type { PreviewInputEvent } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { acquireDebuggerLease, releaseDebuggerLease } from '../../rsb-browser-bridge/debuggerLease';
 import {
+  type GuestOrigin,
   PREVIEW_INPUT_TIMEOUT_MS,
   TabInputInjector,
   type GuestDebugger,
   type InputGuest,
 } from '../previewTabInput';
 
-function setup(options: { attached?: boolean; viewport?: { w: number; h: number } } = {}) {
+function setup(
+  options: {
+    attached?: boolean;
+    viewport?: { w: number; h: number };
+    origin?: () => Promise<GuestOrigin | null>;
+  } = {},
+) {
   const state = { attached: options.attached ?? false };
   const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
   const handlers = new Map<string, (params?: Record<string, unknown>) => Promise<unknown>>();
@@ -52,7 +59,7 @@ function setup(options: { attached?: boolean; viewport?: { w: number; h: number 
   };
   const emit = (event: string) => listeners.get(event)?.forEach((listener) => listener());
   return {
-    injector: new TabInputInjector(guest),
+    injector: new TabInputInjector(guest, options.origin ? { origin: options.origin } : {}),
     guest,
     transport,
     commands,
@@ -452,5 +459,98 @@ describe('TabInputInjector debugger lease', () => {
     await h.injector.dispose();
     expect(h.state.attached).toBe(false);
     expect(h.listeners.get('detach')?.size ?? 0).toBe(0);
+  });
+});
+
+describe('TabInputInjector guest origin', () => {
+  const sentPoints = (h: ReturnType<typeof setup>) =>
+    touches(h.commands).map((c) =>
+      (c?.touchPoints as Array<{ id: number; x: number; y: number }>).map((p) => [p.x, p.y]),
+    );
+
+  it('adds the guest view origin: CDP touches are in the host window coordinate space', async () => {
+    // The <webview> sits at (770, 86) in the host window; the page is 800x500 CSS px.
+    const h = setup({ origin: async () => ({ x: 770, y: 86, scale: 1 }) });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(sentPoints(h)[0]).toEqual([[770 + 400, 86 + 250]]);
+    // The phone's normalized 0,0 is the tab's own top-left, whatever the window layout.
+    await h.injector.inject([touch('start', [[1, 0, 0]]), touch('end', [])]);
+    expect(sentPoints(h)[2]).toEqual([[770, 86]]);
+  });
+
+  it('reads the origin when a gesture starts, and keeps it for the gesture', async () => {
+    let origin = { x: 100, y: 40, scale: 1 };
+    const provider = vi.fn(async () => origin);
+    const h = setup({ origin: provider });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0, 0]])]);
+    origin = { x: 300, y: 40, scale: 1 }; // the side panel is dragged mid-gesture
+    await h.injector.inject([touch('move', [[1, 0, 0]]), touch('end', [])]);
+    expect(provider).toHaveBeenCalledOnce();
+    await h.injector.inject([touch('start', [[1, 0, 0]]), touch('end', [])]);
+    expect(provider).toHaveBeenCalledTimes(2);
+    expect(sentPoints(h)).toEqual([[[100, 40]], [[100, 40]], [], [[300, 40]], []]);
+  });
+
+  it('keeps every sent point inside the tab rectangle, whatever the phone sends', async () => {
+    const h = setup({ origin: async () => ({ x: 770, y: 86, scale: 1 }) });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([
+      touch('start', [[1, 0.5, 0.5]]),
+      touch('move', [[1, 0, 0]]),
+      touch('move', [[1, 1, 1]]),
+      touch('move', [[1, 0.5, 1]]),
+      touch('end', []),
+    ]);
+    for (const [x, y] of sentPoints(h).flat()) {
+      expect(x).toBeGreaterThanOrEqual(770);
+      expect(x).toBeLessThanOrEqual(770 + 800);
+      expect(y).toBeGreaterThanOrEqual(86);
+      expect(y).toBeLessThanOrEqual(86 + 500);
+    }
+    expect(sentPoints(h)[2]).toEqual([[770 + 800, 86 + 500]]);
+  });
+
+  it('scales page points by the guest zoom', async () => {
+    const h = setup({ origin: async () => ({ x: 10, y: 20, scale: 1.25 }) });
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(sentPoints(h)[0]).toEqual([[10 + 400 * 1.25, 20 + 250 * 1.25]]);
+  });
+
+  it('refuses a gesture it cannot place, instead of sending it somewhere else', async () => {
+    let answer: GuestOrigin | null | Error = null;
+    const h = setup({
+      origin: async () => {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    });
+    h.injector.bindLease({ width: 800, height: 500 });
+    for (const bad of [
+      null,
+      new Error('no renderer'),
+      { x: Number.NaN, y: 0, scale: 1 },
+      { x: 0, y: 0, scale: 0 },
+      { x: 1e9, y: 0, scale: 1 },
+    ]) {
+      answer = bad;
+      await expect(
+        h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]),
+      ).rejects.toThrow('PREVIEW_INPUT_INVALID');
+    }
+    expect(touches(h.commands)).toEqual([]);
+    expect(h.injector.pressed.touches).toBe(0);
+    answer = { x: 5, y: 6, scale: 1 };
+    await h.injector.inject([touch('start', [[1, 0, 0]]), touch('end', [])]);
+    expect(sentPoints(h)[0]).toEqual([[5, 6]]);
+  });
+
+  it('does not need an origin when none is configured (a host window that is the page)', async () => {
+    const h = setup();
+    h.injector.bindLease({ width: 800, height: 500 });
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(sentPoints(h)[0]).toEqual([[400, 250]]);
   });
 });

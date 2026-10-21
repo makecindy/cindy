@@ -8,7 +8,7 @@ import type {
   DesktopPreviewTab,
 } from './controller';
 import { TabCaptureSource, type CaptureGuest } from './previewTabCapture';
-import { TabInputInjector, type InputGuest } from './previewTabInput';
+import { TabInputInjector, type GuestOrigin, type InputGuest } from './previewTabInput';
 
 /** The preview tab guest as the host sees it: a webview's WebContents. */
 export type PreviewGuest = CaptureGuest &
@@ -30,6 +30,11 @@ export interface PreviewHostEnv {
   /** Most simultaneous touches injected; advertised in the capability. */
   maxTouchPoints?: number;
   now?(): number;
+  /**
+   * Where the tab's `<webview>` sits in its host window (CDP touches use the window's
+   * coordinate space). Absent where the guest is its own window.
+   */
+  guestOrigin?(tab: { tabId: string; sessionId: string }): Promise<GuestOrigin | null>;
   /** Pause between layout measurements; tests inject an immediate one. */
   delay?(ms: number): Promise<void>;
 }
@@ -147,7 +152,12 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         guest.id !== tab.webContentsId
       )
         return null;
-      const injector = new TabInputInjector(guest);
+      const injector = new TabInputInjector(
+        guest,
+        env.guestOrigin
+          ? { origin: () => env.guestOrigin!({ tabId: tab.tabId, sessionId: tab.sessionId }) }
+          : {},
+      );
       // Keep the tab painting first, then measure it: a background tab has no real size.
       opening.add(tab.tabId);
       env.setCastingTabs?.(castingTabs());

@@ -35,6 +35,42 @@ const EDGE_TOLERANCE = 0.01;
 /** Aspect ratios this close are the same shape; no bars are assumed. */
 const ASPECT_TOLERANCE = 0.005;
 
+/**
+ * Where the guest's page starts inside the host window, for `Input.dispatchTouchEvent`.
+ * CDP reads a guest's touch coordinates in the embedding window's space, not the page's:
+ * a touch at page (x, y) must be sent at `origin + (x, y) * scale`.
+ */
+export interface GuestOrigin {
+  /** The `<webview>` element's top-left in the host window, in DIPs (CSS px x host zoom). */
+  x: number;
+  y: number;
+  /** Page CSS px to host DIPs: the guest's own zoom factor (1 unless the tab is zoomed). */
+  scale: number;
+}
+export interface TabInputOptions {
+  /**
+   * Looks the origin up; asked once per gesture. Absent for a guest whose page is the window.
+   * A null, a failure or an implausible answer refuses the gesture: a touch sent without
+   * knowing where it lands would hit something else.
+   */
+  origin?: () => Promise<GuestOrigin | null>;
+}
+const MAX_ORIGIN_COORDINATE = 100_000;
+
+function validOrigin(origin: GuestOrigin | null): origin is GuestOrigin {
+  return (
+    origin !== null &&
+    typeof origin === 'object' &&
+    Number.isFinite(origin.x) &&
+    Number.isFinite(origin.y) &&
+    Math.abs(origin.x) <= MAX_ORIGIN_COORDINATE &&
+    Math.abs(origin.y) <= MAX_ORIGIN_COORDINATE &&
+    Number.isFinite(origin.scale) &&
+    origin.scale >= 0.1 &&
+    origin.scale <= 10
+  );
+}
+
 export interface TabViewport {
   /** CSS pixels. */
   width: number;
@@ -170,6 +206,13 @@ interface CssPoint {
  * `insertText`. Never reaches the OS input stack. Every pressed touch and key is
  * accounted for so `release` / `dispose` can cancel them idempotently.
  *
+ * CDP reads a guest's touch coordinates in the host window's space (see `GuestOrigin`), so
+ * the origin is added here. This is positioning only: CDP delivers the event to the guest's
+ * widget directly, without hit-testing the host UI (a guest under a `pointer-events: none`
+ * keep-alive layer still receives it, and a wrong offset cannot land on the host's own
+ * controls). Mapped points are always clamped into the tab's rectangle, so no coordinate
+ * leaves `origin .. origin + viewport * scale`.
+ *
  * Touch points arrive normalized to the rectangle the phone laid out for the lease
  * (`bindLease`); they are mapped back into the tab's picture and scaled by its CSS viewport.
  *
@@ -185,6 +228,7 @@ export class TabInputInjector {
   private keys: DesktopKeyCode[] = [];
   private viewport: TabViewport | null = null;
   private leaseSize: TabViewport | null = null;
+  private origin: GuestOrigin | null = null;
   private leases: DebuggerLease[] = [];
   private detachListener: ((...args: unknown[]) => void) | null = null;
   private focusEmulated = false;
@@ -194,7 +238,10 @@ export class TabInputInjector {
   private epoch = 0;
   private disposed = false;
 
-  constructor(private readonly guest: InputGuest) {}
+  constructor(
+    private readonly guest: InputGuest,
+    private readonly options: TabInputOptions = {},
+  ) {}
 
   /** The size the phone was told for this lease; touch coordinates are relative to it. */
   bindLease(size: TabViewport): void {
@@ -291,8 +338,18 @@ export class TabInputInjector {
       return;
     }
     // Geometry may change between gestures (the side panel is resized); within one it holds.
-    if ((this.touches.size === 0 && this.ignored.size === 0) || !this.viewport)
-      await this.measure();
+    const gestureStart = this.touches.size === 0 && this.ignored.size === 0;
+    if (gestureStart || !this.viewport) await this.measure();
+    if (gestureStart && this.options.origin) {
+      let origin: GuestOrigin | null = null;
+      try {
+        origin = await this.options.origin();
+      } catch {
+        origin = null;
+      }
+      if (!validOrigin(origin)) throw failure();
+      this.origin = origin;
+    }
     if (epoch !== this.epoch) throw failure();
     const viewport = this.viewport!;
     const picture = pictureInLeaseRect(this.leaseSize, viewport);
@@ -315,10 +372,11 @@ export class TabInputInjector {
         this.ignored.add(point.id);
         continue;
       }
+      const origin = this.origin;
       points.push({
         id: point.id,
-        x: Math.min(1, Math.max(0, u)) * viewport.width,
-        y: Math.min(1, Math.max(0, v)) * viewport.height,
+        x: (origin?.x ?? 0) + Math.min(1, Math.max(0, u)) * viewport.width * (origin?.scale ?? 1),
+        y: (origin?.y ?? 0) + Math.min(1, Math.max(0, v)) * viewport.height * (origin?.scale ?? 1),
       });
     }
     const unchanged =

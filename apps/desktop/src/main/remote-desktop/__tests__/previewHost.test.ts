@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PreviewTabBinding, PreviewTabEnded } from '../../rsb-browser-bridge/previewTabs';
-import { createPreviewHost, type PreviewGuest } from '../previewHost';
+import { createPreviewHost, type PreviewGuest, type PreviewHostEnv } from '../previewHost';
 
 function binding(extra: Partial<PreviewTabBinding> = {}): PreviewTabBinding {
   return {
@@ -16,7 +16,10 @@ function binding(extra: Partial<PreviewTabBinding> = {}): PreviewTabBinding {
   };
 }
 
-function setup(metrics: Array<{ w: number; h: number }> = [{ w: 800, h: 500 }]) {
+function setup(
+  metrics: Array<{ w: number; h: number }> = [{ w: 800, h: 500 }],
+  guestOrigin?: PreviewHostEnv['guestOrigin'],
+) {
   let bindings = [binding()];
   const order: string[] = [];
   let measured = 0;
@@ -78,6 +81,7 @@ function setup(metrics: Array<{ w: number; h: number }> = [{ w: 800, h: 500 }]) 
     guest: (tabId) => guests.get(tabId) ?? null,
     setCastingTabs,
     delay,
+    guestOrigin,
   });
   return {
     host,
@@ -195,6 +199,27 @@ describe('preview host', () => {
     ]);
     const start = h.order.find((entry) => entry.includes('touchStart'))!;
     expect(JSON.parse(start).touchPoints[0]).toMatchObject({ id: 1, x: 400, y: 400 });
+  });
+
+  it('places touches in the host window using the tab origin the renderer reports', async () => {
+    const guestOrigin = vi.fn(async () => ({ x: 770, y: 86, scale: 1 }));
+    const h = setup([{ w: 800, h: 500 }], guestOrigin);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    await h.host.input(source, [
+      { kind: 'touch', phase: 'start', points: [{ id: 1, x: 0.5, y: 0.5 }] },
+      { kind: 'touch', phase: 'end', points: [] },
+    ]);
+    expect(guestOrigin).toHaveBeenCalledWith({ tabId: 'tab1', sessionId: 'task1' });
+    const start = h.order.find((entry) => entry.includes('touchStart'))!;
+    expect(JSON.parse(start).touchPoints[0]).toMatchObject({ x: 1170, y: 336 });
+    // A renderer that cannot answer refuses the gesture rather than guessing.
+    guestOrigin.mockResolvedValueOnce(null as never);
+    await expect(
+      h.host.input(source, [
+        { kind: 'touch', phase: 'start', points: [{ id: 1, x: 0.5, y: 0.5 }] },
+      ]),
+    ).rejects.toThrow('PREVIEW_INPUT_INVALID');
   });
 
   it('refuses to open a tab whose guest was rebuilt or whose binding moved on', async () => {
