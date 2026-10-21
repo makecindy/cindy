@@ -32,6 +32,11 @@ import {
 import { _resetPopupTabsForTests, markPopupSpawnedTab } from '../popupTabs';
 import { _resetPreviewCastingForTests, isPreviewCastingTab } from '../previewCasting';
 import {
+  _resetPendingPreviewTabsForTests,
+  getPendingPreviewTabIds,
+  markPendingPreviewTab,
+} from '../pendingPreviewTabs';
+import {
   _resetStore,
   addTab,
   ensureHydrated,
@@ -120,6 +125,7 @@ function clearIpc(): void {
 }
 
 beforeEach(() => {
+  _resetPendingPreviewTabsForTests();
   _resetPreviewCastingForTests();
   _resetRsbBrowserBridgeForTests();
   _resetPopupTabsForTests();
@@ -157,6 +163,29 @@ describe('rsbBrowserBridge — report / release / snapshot forwarding', () => {
     await reportRsbBrowserTab({ sessionId: 's1', tabId: 't1', webContentsId: 42, previewRequestId: undefined });
     expect(api.report).toHaveBeenLastCalledWith({ sessionId: 's1', tabId: 't1', webContentsId: 42 });
     expect(api.report.mock.calls[1][0]).not.toHaveProperty('previewRequestId');
+  });
+
+  it('a preview report ends the pending state of that tab, even when the report fails', async () => {
+    const api = installFakeIpc();
+    markPendingPreviewTab('t1');
+    markPendingPreviewTab('t2');
+    markPendingPreviewTab('plain');
+    await reportRsbBrowserTab({
+      sessionId: 's1',
+      tabId: 't1',
+      webContentsId: 1,
+      previewRequestId: 'P'.repeat(43),
+    });
+    api.report.mockRejectedValueOnce(new Error('boom'));
+    await reportRsbBrowserTab({
+      sessionId: 's1',
+      tabId: 't2',
+      webContentsId: 2,
+      previewRequestId: 'Q'.repeat(43),
+    });
+    // 没带凭据的 report 不影响别的标签的待绑定状态。
+    await reportRsbBrowserTab({ sessionId: 's1', tabId: 'other', webContentsId: 3 });
+    expect([...getPendingPreviewTabIds()]).toEqual(['plain']);
   });
 
   it('snapshotRsbBrowserTabs calls ipc.snapshot with the liveTabIds', async () => {

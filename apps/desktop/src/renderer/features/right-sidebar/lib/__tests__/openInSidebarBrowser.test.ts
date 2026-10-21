@@ -24,6 +24,10 @@ import { addTab, ensureHydrated } from '../../store';
 import { requestRightSidebarVisibility } from '../sidebarCommands';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
 import {
+  _resetPendingPreviewTabsForTests,
+  getPendingPreviewTabIds,
+} from '../pendingPreviewTabs';
+import {
   openUrlInSidebarBrowser,
   pathToFileUrl,
   fileUrlToAbsPath,
@@ -80,6 +84,7 @@ describe('fileUrlToAbsPath / isLocalHtmlFileUrl', () => {
 describe('openUrlInSidebarBrowser', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetPendingPreviewTabsForTests();
     vi.mocked(routeSidebarCommand).mockResolvedValue('attached');
   });
 
@@ -114,6 +119,25 @@ describe('openUrlInSidebarBrowser', () => {
       sessionId: 's1',
       userInitiated: false,
     });
+  });
+
+  it('插件预览标签登记为「待绑定」(进程内),普通网页标签不登记', async () => {
+    await openUrlInSidebarBrowser('s1', 'https://example.com/');
+    expect(getPendingPreviewTabIds().size).toBe(0);
+
+    await openUrlInSidebarBrowser('s1', 'https://example.com/', {
+      userInitiated: false,
+      previewRequestId: 'P'.repeat(43),
+    });
+    expect([...getPendingPreviewTabIds()]).toEqual(['t_1']);
+  });
+
+  it('detached 路由(routed)时不在本窗口登记:标签由对方窗口创建', async () => {
+    vi.mocked(routeSidebarCommand).mockResolvedValue('routed');
+    await openUrlInSidebarBrowser('s1', 'https://example.com/', {
+      previewRequestId: 'P'.repeat(43),
+    });
+    expect(getPendingPreviewTabIds().size).toBe(0);
   });
 
   it('previewRequestId:随 detached 路由命令与新标签 initialState 一起下发;缺省时两处都不带该字段', async () => {

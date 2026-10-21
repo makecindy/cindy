@@ -71,6 +71,11 @@ import { browserWebviewPool } from '../lib/browserWebviewPool';
 import { registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { setPreviewCastingTabs, _resetPreviewCastingForTests } from '../lib/previewCasting';
+import {
+  markPendingPreviewTab,
+  clearPendingPreviewTab,
+  _resetPendingPreviewTabsForTests,
+} from '../lib/pendingPreviewTabs';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
 import {
@@ -79,7 +84,7 @@ import {
   type SidebarVisibilityRequest,
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
-import { _resetStore, closeTab, getBucket, setActiveTab } from '../store';
+import { _resetStore, closeTab, ensureHydrated, getBucket, setActiveTab } from '../store';
 import {
   __resetSidebarTabWindowsStateForTest,
   __setSidebarTabWindowsStateForTest,
@@ -307,6 +312,7 @@ describe('RightSidebarShell empty state', () => {
   });
 
   afterEach(() => {
+    _resetPendingPreviewTabsForTests();
     _resetPreviewCastingForTests();
     _resetStore();
     _resetRsbBrowserBridgeForTests();
@@ -612,6 +618,10 @@ describe('RightSidebarShell empty state', () => {
 
       act(() => setPreviewCastingTabs(['browser-bg']));
       await waitFor(() => expect(browserWebviewPool.peek('browser-bg')).not.toBeNull());
+      // 不只创建 guest,还要真的加载页面,否则永远没有 dom-ready / report。
+      await waitFor(() =>
+        expect(browserWebviewPool.peek('browser-bg')!.webview.getAttribute('src')).toBe('https://bg.test/'),
+      );
       // 仍是后台标签:保活层,而不是被切到前台。
       expect(getBucket('task-a').activeTabId).toBe('browser-fg');
     } finally {
@@ -620,6 +630,117 @@ describe('RightSidebarShell empty state', () => {
       browserWebviewPool.releaseAll();
       unregisterTabKind('web-browser');
     }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:插件预览标签(待绑定)在人不在该标签前也要立刻物化 webview 并 report,
+  //   否则 main 无法把它绑定到插件身份,手机入口不出现。可观察:后台标签 / 未显示任务的标签
+  //   在被登记为「待绑定」后创建 pool 条目;普通后台网页标签行为不变;不切前台、不改 activeTab。
+  // - Bug / 规则依据:插件预览投屏计划 T3 缺陷 C(电脑停在别处时 Agent 开预览,标签不物化)。
+  // - 最小失败输入:同一任务的后台浏览器标签 / 另一任务桶里的浏览器标签 + markPendingPreviewTab。
+  describe('pending plugin-preview tabs', () => {
+    const registerBrowserKind = () =>
+      registerTabKind({
+        kind: 'web-browser',
+        menu: { kind: 'web-browser', labelKey: 'browser', icon: Globe, order: 1, enabled: true },
+        TabPillTitle: () => createElement('span', null, 'browser'),
+        TabBody: (props: TabKindBodyProps) =>
+          createElement(BrowserTabBody, { ...props, state: props.state as WebBrowserState }),
+        defaultState: () => ({ url: 'https://example.test/', title: '', favicon: null, isAudible: false }),
+      });
+    const mountShell = (sessionId = 'task-a') =>
+      render(
+        createElement(RightSidebarShell, {
+          sessionId,
+          workdir: '/tmp/' + sessionId,
+          remoteHostId: null,
+          isMac: true,
+        }),
+      );
+
+    it('materializes a background tab of the current task, without taking the foreground', async () => {
+      Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+      registerBrowserKind();
+      tabsIpc.list.mockImplementation(async () => ({
+        tabs: [
+          { id: 'browser-fg', kind: 'web-browser', state: { url: 'https://fg.test/' } },
+          { id: 'browser-bg', kind: 'web-browser', state: { url: 'https://bg.test/' } },
+          { id: 'browser-plain', kind: 'web-browser', state: { url: 'https://plain.test/' } },
+        ],
+        activeTabId: 'browser-fg',
+      }));
+      const view = mountShell();
+      try {
+        await waitFor(() => expect(browserWebviewPool.peek('browser-fg')).not.toBeNull());
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(browserWebviewPool.peek('browser-bg')).toBeNull();
+
+        act(() => markPendingPreviewTab('browser-bg'));
+        await waitFor(() => expect(browserWebviewPool.peek('browser-bg')).not.toBeNull());
+        await waitFor(() =>
+          expect(browserWebviewPool.peek('browser-bg')!.webview.getAttribute('src')).toBe('https://bg.test/'),
+        );
+        // 普通后台网页标签不受影响;前台不变。
+        expect(browserWebviewPool.peek('browser-plain')).toBeNull();
+        expect(getBucket('task-a').activeTabId).toBe('browser-fg');
+        // 物化在不可见的保活层里,而不是 display:none。
+        const host = browserWebviewPool
+          .peek('browser-bg')!
+          .wrapper.closest('[data-preview-pending]') as HTMLElement | null;
+        expect(host).not.toBeNull();
+        expect(host!.classList.contains('hidden')).toBe(false);
+        expect(host!.style.position).toBe('fixed');
+        expect(host!.style.opacity).toBe('0');
+      } finally {
+        view.unmount();
+        browserWebviewPool.releaseAll();
+        unregisterTabKind('web-browser');
+      }
+    });
+
+    it('materializes a tab that belongs to a task that is not on screen', async () => {
+      Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+      registerBrowserKind();
+      tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+        sessionId === 'task-b'
+          ? {
+              tabs: [{ id: 'browser-other', kind: 'web-browser', state: { url: 'https://other.test/' } }],
+              activeTabId: 'browser-other',
+            }
+          : { tabs: [], activeTabId: null },
+      );
+      await ensureHydrated('task-b');
+      expect(getBucket('task-b').tabs).toHaveLength(1);
+      const view = mountShell('task-a');
+      try {
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(browserWebviewPool.peek('browser-other')).toBeNull();
+
+        act(() => markPendingPreviewTab('browser-other'));
+        await waitFor(() => expect(browserWebviewPool.peek('browser-other')).not.toBeNull());
+        await waitFor(() =>
+          expect(browserWebviewPool.peek('browser-other')!.webview.getAttribute('src')).toBe('https://other.test/'),
+        );
+        // 前台任务不被改动。
+        expect(getBucket('task-b').activeTabId).toBe('browser-other');
+
+        // 已登记过的另一个任务标签,清除登记后不再强制保活,但 guest 与 DOM 位置保留。
+        const slot = browserWebviewPool.peek('browser-other')!.wrapper.parentElement;
+        act(() => clearPendingPreviewTab('browser-other'));
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(browserWebviewPool.peek('browser-other')!.wrapper.parentElement).toBe(slot);
+      } finally {
+        view.unmount();
+        browserWebviewPool.releaseAll();
+        unregisterTabKind('web-browser');
+      }
+    });
   });
 
   it.each(['task switch', 'sidebar hide'] as const)(

@@ -29,6 +29,7 @@ import type {
 import { createLogger } from '@/lib/logger';
 
 import { browserWebviewPool } from './browserWebviewPool';
+import { clearPendingPreviewTab } from './pendingPreviewTabs';
 import { setPreviewCastingTabs } from './previewCasting';
 import {
   addTab,
@@ -395,9 +396,13 @@ export function reportRsbBrowserTab(input: {
   if (!api) return Promise.resolve();
   lastReportedWebContentsId.set(input.tabId, input.webContentsId);
   const { previewRequestId, ...base } = input;
+  // 首次 report 发出(无论成败)即不再「待绑定」:main 已拿到凭据,或凭据已作废重试也无益。
+  const settle = () => {
+    if (previewRequestId) clearPendingPreviewTab(input.tabId);
+  };
   return api.report(previewRequestId ? { ...base, previewRequestId } : base).then(
-    () => undefined,
-    () => undefined,
+    () => settle(),
+    () => settle(),
   );
 }
 

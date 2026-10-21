@@ -71,6 +71,7 @@ import {
   suspendFocusInside,
   type KeepAliveSize,
 } from './lib/castingKeepAlive';
+import { usePendingPreviewTab } from './lib/pendingPreviewTabs';
 import { usePreviewCastingTab } from './lib/previewCasting';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -1089,13 +1090,15 @@ function PluginBodyHost({
   // 也不能落在 0 宽/被裁的侧栏盒里:不可见时改成保留原尺寸的透明点击穿透层,
   // 不挪动 DOM 位置(搬父节点会重建 guest)。
   const casting = usePreviewCastingTab(tab.id);
-  const keepAlive = casting && !(active && shellVisible);
+  // 待绑定的插件预览标签同样要在不可见时保持可合成,否则 guest 不会加载、无法 report。
+  const pendingPreview = usePendingPreviewTab(tab.id);
+  const keepAlive = (casting || pendingPreview) && !(active && shellVisible);
   const hostRef = useRef<HTMLDivElement>(null);
   const lastSizeRef = useRef<KeepAliveSize | null>(null);
   useLayoutEffect(() => {
     // 只在投屏且正常排版时记录尺寸:保活层沿用它,切换瞬间 guest 视口不变。
     const el = hostRef.current;
-    if (!casting || keepAlive || !el) return;
+    if (!(casting || pendingPreview) || keepAlive || !el) return;
     const record = () => {
       const { width, height } = el.getBoundingClientRect();
       if (width > 0 && height > 0) lastSizeRef.current = { width, height };
@@ -1105,7 +1108,7 @@ function PluginBodyHost({
     const observer = new ResizeObserver(record);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [casting, keepAlive]);
+  }, [casting, pendingPreview, keepAlive]);
 
   useLayoutEffect(() => {
     // 保活层不可见:退出 Tab 序并让出焦点,键盘用户不会落进透明 webview。
@@ -1133,6 +1136,7 @@ function PluginBodyHost({
           : undefined
       }
       data-preview-casting={casting ? '' : undefined}
+      data-preview-pending={pendingPreview ? '' : undefined}
       aria-hidden={!active || keepAlive || undefined}
     >
       {plugin ? (

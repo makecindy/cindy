@@ -45,6 +45,7 @@ import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
+import { usePendingPreviewTab } from '../../lib/pendingPreviewTabs';
 import { usePreviewCastingTab } from '../../lib/previewCasting';
 import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
@@ -113,10 +114,14 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 投屏中的标签即使不在前台也必须有 guest:否则 guest 被销毁/重建后,手机重新进入时
   // 电脑端没有可采集的页面,得用户去点标签才恢复。物化只看这一条,不改变前台/可见语义。
   const casting = usePreviewCastingTab(tabId);
+  // 插件预览标签在首次 report 前同理:main 要等 guest report 才能绑定插件身份。
+  const pendingPreview = usePendingPreviewTab(tabId);
+  // 物化(创建 guest 并首次导航)的条件:真正可见,或必须有 guest 的预览标签。
+  const materialize = tabVisible || casting || pendingPreview;
   const webviewBrowser = useBrowserWebview(
     tabId,
     sessionId,
-    tabVisible || casting,
+    materialize,
     !isNativePopup,
     state.previewRequestId,
   );
@@ -242,7 +247,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 是空的,必须重新用持久化 URL 驱动一次加载(review P1:淘汰后空壳)。
   useEffect(() => {
     const wrapper = browser.wrapper;
-    if (isNativePopup || !tabVisible || !wrapper || lastNavigatedWrapperRef.current === wrapper)
+    if (isNativePopup || !materialize || !wrapper || lastNavigatedWrapperRef.current === wrapper)
       return;
     lastNavigatedWrapperRef.current = wrapper;
     const nextUrl = stateUrlRef.current || 'about:blank';
@@ -251,7 +256,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     // about:blank 默认状态下也要 navigate,确保 webview 真的处于 about:blank,
     // 不会停留在 pool 创建时未 setAttribute('src') 的"未初始化"状态。
     navigateRef.current(nextUrl);
-  }, [tabId, browser.wrapper, isNativePopup, tabVisible]);
+  }, [tabId, browser.wrapper, isNativePopup, materialize]);
 
   useEffect(() => {
     if (!isNativePopup || !nativeBrowser.closed) return;

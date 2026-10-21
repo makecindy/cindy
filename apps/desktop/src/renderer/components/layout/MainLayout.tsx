@@ -59,6 +59,7 @@ import {
   setActiveTab,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
+import { usePendingPreviewActive } from '@/features/right-sidebar/lib/pendingPreviewTabs';
 import { usePreviewCastingActive } from '@/features/right-sidebar/lib/previewCasting';
 import {
   findGlobalTab,
@@ -300,9 +301,10 @@ export function MainLayout() {
   );
   // 右侧边栏(第三块布局,与左栏对称)：折叠态 + 宽度各自持久化。
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(getInitialRightCollapsed);
-  // 有标签正被手机查看时,设置页接管态也要保住右栏挂载:卸载会销毁其 webview guest,
-  // 手机画面随之中断。没有投屏时接管态行为不变。
-  const previewCastingActive = usePreviewCastingActive();
+  // 有标签正被手机查看、或有刚打开的插件预览标签等待绑定时,右栏必须保持挂载(即使
+  // 当前路由不在聊天、或停在设置页接管态):卸载会销毁其 webview guest,手机画面中断、
+  // 或预览标签始终不物化而绑不上插件。两者都没有时行为不变。
+  const previewKeepAliveActive = usePreviewCastingActive() || usePendingPreviewActive();
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。
@@ -314,12 +316,14 @@ export function MainLayout() {
   // 据此决定是否渲染右栏面板：离开聊天视图 → 面板卸载，不会卡在展开态且无入口关闭。
   const [rightSidebarAvailable, setRightSidebarAvailable] = useState(false);
   // 经过不声明右栏的路由时保持挂载并强制折叠，避免销毁内置浏览器 guest（#6485）。
-  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
+  const { mounted: retainedMounted, forceCollapsed: rightSidebarForceCollapsed } =
     useRetainedRightSidebarMount({
       available: rightSidebarAvailable,
       loaded: rsbWindow.loaded,
       detached: rsbDetached,
     });
+  const rightSidebarMounted =
+    retainedMounted || (previewKeepAliveActive && rsbWindow.loaded && !rsbDetached);
   // 当前 cc-agent session id —— 由 CCAgentSessionView 的路由主实例(ownsRoute=true)经 outlet context
   // 推上来,Shell 据此从 module-level store 拉对应桶的 tab 列表持久化数据。null = 不在聊天会话内。
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
@@ -1829,7 +1833,7 @@ export function MainLayout() {
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
               suppressNonChatPanels={isSettingsRoute}
-              retainPanelKinds={previewCastingActive ? RETAIN_RIGHT_TABS_KINDS : undefined}
+              retainPanelKinds={previewKeepAliveActive ? RETAIN_RIGHT_TABS_KINDS : undefined}
             />
           </TabGroupHostProvider>
         </BuiltinPanelBridgeProvider>
