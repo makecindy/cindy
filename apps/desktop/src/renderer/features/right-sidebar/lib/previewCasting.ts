@@ -42,6 +42,15 @@ export function usePreviewCastingTab(tabId: string): boolean {
   );
 }
 
+/** True while this renderer hosts at least one casting tab. */
+export function usePreviewCastingActive(): boolean {
+  return useSyncExternalStore(
+    subscribe,
+    () => casting.size > 0,
+    () => false,
+  );
+}
+
 /** Test-only reset. */
 export function _resetPreviewCastingForTests(): void {
   casting = new Set();

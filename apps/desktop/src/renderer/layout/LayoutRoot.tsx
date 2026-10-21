@@ -847,9 +847,19 @@ interface LayoutRootProps {
    * 统一开关(2026-07-08 Lizi 实测:设置页右缘冒出意识面板)。
    */
   suppressNonChatPanels?: boolean;
+  /**
+   * 接管态下仍要保留挂载的根级 pane 的 panelKind(默认空 = 接管态行为不变)。
+   * 用于面板里有卸载就会丢的活资源时(投屏标签的 webview:摘出 React 树会销毁
+   * Electron guest)。保留的面板由调用方自行收起成不占位,引擎不画它的分割线。
+   * 只在接管态生效;布局树数据与不变量不动。
+   */
+  retainPanelKinds?: readonly string[];
 }
 
-export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = {}): ReactNode {
+export function LayoutRoot({
+  suppressNonChatPanels = false,
+  retainPanelKinds,
+}: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
   // 已装意识的面板首帧前同步注册:与内置面板同帧就位;未装意识的存档残留
@@ -946,7 +956,11 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     // root split 扁平化(见文件头注释):children(含交互式分割线)直接作为父 row
     // 容器的 flex 子项。接管态只留 chat-main(见 LayoutRootProps)。
     const ledger = activeSplitLedger(content.children);
-    const visible = ledger.entries.filter((e) => !suppressNonChatPanels || containsChat(e.node));
+    const retains = (node: LayoutNode) =>
+      node.type === 'pane' && retainPanelKinds?.includes(node.panelKind) === true;
+    const visible = ledger.entries.filter(
+      (e) => !suppressNonChatPanels || containsChat(e.node) || retains(e.node),
+    );
     // 撑满态:目标 pane 独占一行(自身经 PanelMaximizeContext 切成 flex-1),
     // 兄弟收成 0 宽裁切 —— 保持挂载不动 display:webview 卸载丢 webContents,
     // display:none 对 webview 也不友好;分割线整组不画。树账本(fraction/顺序)
@@ -1002,7 +1016,8 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     }
     const items: ReactNode[] = [];
     visible.forEach((entry, i) => {
-      if (i > 0) {
+      // 接管态下没有可拖的缝:保留的面板自己收起,不与聊天区之间画分割线。
+      if (i > 0 && !suppressNonChatPanels) {
         const prev = visible[i - 1];
         if (content.direction === 'row') {
           items.push(

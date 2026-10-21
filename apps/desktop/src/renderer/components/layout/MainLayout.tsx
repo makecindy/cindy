@@ -59,6 +59,7 @@ import {
   setActiveTab,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
+import { usePreviewCastingActive } from '@/features/right-sidebar/lib/previewCasting';
 import {
   findGlobalTab,
   rememberPluginWindowPlacement,
@@ -140,6 +141,8 @@ import {
 } from '@/lib/agentIslandVisibleSessionRoute';
 
 const SIDEBAR_RAIL_KEY = 'sidebar-rail';
+/** 投屏期间设置页接管态仍保留挂载的面板(稳定引用,避免 LayoutRoot 无谓重渲染)。 */
+const RETAIN_RIGHT_TABS_KINDS: readonly string[] = ['right-tabs'];
 
 /**
  * RSB 交互领地:aside 本体(data-panel-drag-root="right-tabs")+ portal 到 body 的
@@ -297,6 +300,9 @@ export function MainLayout() {
   );
   // 右侧边栏(第三块布局,与左栏对称)：折叠态 + 宽度各自持久化。
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(getInitialRightCollapsed);
+  // 有标签正被手机查看时,设置页接管态也要保住右栏挂载:卸载会销毁其 webview guest,
+  // 手机画面随之中断。没有投屏时接管态行为不变。
+  const previewCastingActive = usePreviewCastingActive();
   // 「侧边栏在新窗口中显示」偏好 + 子窗口开闭(main 权威,广播镜像)。
   // 副窗(会话多开窗)不参与 detach:内嵌行为保持不变,只有主窗联动子窗口
   // (main 侧 SET_CONTEXT 也只信主窗 sender,双保险)。
@@ -1821,7 +1827,10 @@ export function MainLayout() {
           {/* 面板稳态宽度由 LayoutRoot 输出 CSS 百分比/clamp，BrowserWindow live resize
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
-            <LayoutRoot suppressNonChatPanels={isSettingsRoute} />
+            <LayoutRoot
+              suppressNonChatPanels={isSettingsRoute}
+              retainPanelKinds={previewCastingActive ? RETAIN_RIGHT_TABS_KINDS : undefined}
+            />
           </TabGroupHostProvider>
         </BuiltinPanelBridgeProvider>
         {/* 拖面板换位(B3 转正;M3 起 mac 同步开闸——mac 顶栏全部保留窗口拖拽,

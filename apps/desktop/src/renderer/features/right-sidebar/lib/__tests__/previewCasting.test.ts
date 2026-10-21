@@ -8,6 +8,7 @@ import {
   _resetPreviewCastingForTests,
   isPreviewCastingTab,
   setPreviewCastingTabs,
+  usePreviewCastingActive,
   usePreviewCastingTab,
 } from '../previewCasting';
 
@@ -25,6 +26,15 @@ describe('previewCasting store', () => {
     act(() => setPreviewCastingTabs(['t2']));
     expect(result.current).toBe(false);
     expect(isPreviewCastingTab('t1')).toBe(false);
+  });
+
+  it('reports whether any casting tab is hosted', () => {
+    const { result } = renderHook(() => usePreviewCastingActive());
+    expect(result.current).toBe(false);
+    act(() => setPreviewCastingTabs(['t1']));
+    expect(result.current).toBe(true);
+    act(() => setPreviewCastingTabs([]));
+    expect(result.current).toBe(false);
   });
 
   it('does not notify subscribers for an identical set', () => {
