@@ -65,6 +65,8 @@ export interface CompanionCloudHost {
   installationId?: () => string;
   /** Owner-scoped persisted shadow set (demotion survives restarts, an offline server and a disabled feature). */
   shadows?: { read: () => string[]; write: (ids: string[]) => void };
+  /** Keep a confirmed retired cloud copy as local history, releasing its name. */
+  retireLocalCopy?: (botId: string, current: () => boolean) => Promise<void>;
 }
 
 export interface CompanionCloudBot { botId: string; actorId: string; name: string }
@@ -84,7 +86,7 @@ export interface CompanionCloudRuntime {
   /** One full upload + mirror pass (tests and explicit refresh). */
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
-  reconcile: (localProfiles: Array<{ id: string; status: string }>) => void;
+  reconcile: (localProfiles: Array<{ id: string; status: string }>) => Promise<void>;
   takeOver: (botId: string) => Promise<CompanionCloudActionResult>;
   transfer: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transferTargets: () => Promise<CompanionTransferTarget[]>;
@@ -581,7 +583,7 @@ export function startCompanionCloud(input: {
     isDirectRoom: roomId => state.botForRoom(roomId) !== null,
     syncNow: async () => { await uploads.run(); await mirrors.run(); },
 
-    reconcile(localProfiles) {
+    async reconcile(localProfiles) {
       const self = input.selfDeviceId;
       if (!self || !live()) return;
       for (const actor of input.actors?.() ?? []) {
@@ -595,6 +597,13 @@ export function startCompanionCloud(input: {
           if (local && local.status !== 'deleting' && !entry?.demoted) {
             state.update(botId, actor.id, next => { next.demoted = true; });
             input.log?.info?.('Companion was deleted on its main computer; local copy demoted', { actorId: actor.id });
+          }
+          // Also handle already-demoted copies from older clients. A live remote home alone
+          // is never evidence of deletion. Failed writes are retried on the next reconcile.
+          if (local && local.status !== 'deleting' && local.status !== 'archived' && input.host.retireLocalCopy) {
+            try { await input.host.retireLocalCopy(botId, live); }
+            catch (error) { input.log?.warn('Retired companion copy will retry', { code: errorCode(error) }); }
+            if (!live()) return;
           }
           continue;
         }

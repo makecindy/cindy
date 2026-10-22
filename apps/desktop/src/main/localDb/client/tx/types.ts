@@ -54,6 +54,7 @@ export type DbTxName =
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
+  | 'bots.retireCloudCopy'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
   | 'bots.persistSessionPermission'
@@ -1432,6 +1433,7 @@ export type DbTxArgsByName = {
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.retireCloudCopy': { botId: string; at: number };
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
   'bots.persistSessionPermission': { sessionId: string; mode: string };
@@ -1531,6 +1533,7 @@ export type DbTxResultByName = {
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
+  'bots.retireCloudCopy': { changed: boolean };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
   'bots.persistSessionPermission': { updated: boolean };

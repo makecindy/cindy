@@ -778,7 +778,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     await registerCompanionHomes({ api, selfDeviceId: self, actors, log: deps.log,
       botIds: profiles.filter(p => p.status === 'active').map(p => p.id), isDemoted: botId => runtime.state.isDemoted(botId) });
     if (!current()) return;
-    runtime.reconcile(profiles.map(p => ({ id: p.id, status: p.status })));
+    await runtime.reconcile(profiles.map(p => ({ id: p.id, status: p.status })));
     publishHomes();
   }
   function publishHomes() {

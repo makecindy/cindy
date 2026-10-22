@@ -21,7 +21,8 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
-  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean }) {
+  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean;
+  retireLocalCopy?: CompanionCloudHost['retireLocalCopy'] }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -42,6 +43,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: async () => [], latestRows: async () => [],
     deliverToCanonical: async () => ({ ok: true }),
     materializer: local.host, listDevices: async () => options.devices ?? [],
+    retireLocalCopy: options.retireLocalCopy,
     ...(options.installationId ? { installationId: () => options.installationId! } : {}),
     ...(options.probe ? { probeCompanionCloud: options.probe } : {}),
     ...(options.turnActive ? { isBotBusy: async () => options.turnActive!() } : {}),
@@ -410,6 +412,29 @@ describe('transcript', () => {
 });
 
 describe('retire', () => {
+  // #6578: old demoted copies still held names. Unlike a live remote home, disabled is definitive.
+  // Unit: reconcile is the production entry; the worker transaction separately proves retained data.
+  it('retires an already-hidden deleted copy, retries failed persistence, and keeps live remote copies', async () => {
+    const local = { id: 'bot_mia', status: 'active' };
+    let fail = true;
+    const t = setup({ home: 'laptop', retireLocalCopy: async (_botId, current) => {
+      expect(current()).toBe(true);
+      if (fail) throw new Error('WRITE_FAILED');
+      local.status = 'archived';
+    } });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+    await t.runtime.reconcile([local]);
+    expect(local.status).toBe('active');
+    t.actors[0]!.disabled = true;
+    await t.runtime.reconcile([local]);
+    expect(local.status).toBe('active');
+    fail = false;
+    await t.runtime.reconcile([local]);
+    expect(local.status).toBe('archived');
+    expect(t.runtime.isShadowed('bot_mia')).toBe(true);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
   it('disables the cloud companion when it is deleted on its main computer', async () => {
     const t = setup({ home: 'desk' });
     await t.runtime.retire('bot_mia');
