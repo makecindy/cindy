@@ -62,6 +62,17 @@ const MIN_SCALE = 0.1;
 const MAX_SCALE = 10;
 /** The viewport comes back rounded down to whole px; this close to 1 is exactly 1. */
 const SCALE_SNAP = 0.01;
+/**
+ * The only way a casting tab is presented as a touch device: `(pointer: coarse)`,
+ * `(hover: none)`, `(any-pointer: coarse)`, `(any-hover: none)` and `maxTouchPoints` follow, so
+ * a page's own `@media` rules can lay itself out for a phone. Verified on Electron 42 /
+ * Chromium 148: `setEmulatedMedia` pointer/hover features are accepted but ignored,
+ * `setDeviceMetricsOverride` changes the viewport, `setEmitTouchEventsForMouse` turns the
+ * desktop mouse into touch, `enableDeviceEmulation` changes neither pointer nor hover. Mouse
+ * and wheel through `sendInputEvent` stay mouse events, and the emulation survives reloads and
+ * cross-site navigations but lives and dies with the CDP session.
+ */
+const TOUCH_EMULATION = 'Emulation.setTouchEmulationEnabled';
 const MAX_ORIGIN_COORDINATE = 100_000;
 
 function validOrigin(origin: GuestOrigin | null): origin is GuestOrigin {
@@ -244,6 +255,10 @@ export class TabInputInjector {
   private leases: DebuggerLease[] = [];
   private detachListener: ((...args: unknown[]) => void) | null = null;
   private focusEmulated = false;
+  /** Wanted: the page presented as a touch device with this many touch points. */
+  private touchPoints: number | null = null;
+  /** Applied in the CDP session now in use (a replaced session starts without it). */
+  private touchEmulated = false;
   private throttlingLifted = false;
   private queue: Promise<unknown> = Promise.resolve();
   /** Bumped when pending work must not run any more (timeout, release, dispose). */
@@ -258,6 +273,15 @@ export class TabInputInjector {
   /** The size the phone was told for this lease; touch coordinates are relative to it. */
   bindLease(size: TabViewport): void {
     this.leaseSize = { width: size.width, height: size.height };
+  }
+
+  /**
+   * Present the page as a touch device for as long as this injector lives. Nothing is sent
+   * here: the emulation goes out before the next command (so before the first measurement),
+   * and again after any session replacement. `dispose` takes it back.
+   */
+  presentAsTouch(maxTouchPoints: number): void {
+    this.touchPoints = maxTouchPoints;
   }
 
   /** The tab's current CSS viewport. */
@@ -295,6 +319,7 @@ export class TabInputInjector {
     this.epoch++;
     try {
       await this.releaseState();
+      await this.releaseTouchPresentation();
     } finally {
       this.restore();
     }
@@ -483,7 +508,9 @@ export class TabInputInjector {
     if (this.leases.length === 0 || !transport.isAttached()) {
       if (this.leases.length === 0) this.watchDetach(transport);
       this.leases.push(acquireDebuggerLease(transport));
-      this.focusEmulated = false; // a session we did not just prove starts without it
+      // A session we did not just prove starts without either emulation.
+      this.focusEmulated = false;
+      this.touchEmulated = false;
     }
     return transport;
   }
@@ -493,6 +520,7 @@ export class TabInputInjector {
     if (!transport.on) return;
     this.detachListener = () => {
       this.focusEmulated = false;
+      this.touchEmulated = false;
     };
     transport.on('detach', this.detachListener);
   }
@@ -500,6 +528,18 @@ export class TabInputInjector {
   private async send(method: string, params?: object): Promise<unknown> {
     const transport = this.ensureAttached();
     try {
+      if (this.touchPoints !== null && !this.touchEmulated && method !== TOUCH_EMULATION) {
+        // Before anything else the page is told it is a touch device, so what it lays out and
+        // reports afterwards is the phone's layout.
+        await withTimeout(
+          transport.sendCommand(TOUCH_EMULATION, {
+            enabled: true,
+            maxTouchPoints: this.touchPoints,
+          }),
+          PREVIEW_INPUT_TIMEOUT_MS,
+        );
+        this.touchEmulated = true;
+      }
       return await withTimeout(
         params === undefined
           ? transport.sendCommand(method)
@@ -514,6 +554,29 @@ export class TabInputInjector {
       }
       throw error;
     }
+  }
+
+  /**
+   * Give the page back as a mouse device. Done before any lease is released: when the browser
+   * automation still holds the debugger nothing else would undo it, and it would leak into
+   * the Agent's own use of the page. A session that has already ended took it with it.
+   */
+  private async releaseTouchPresentation(): Promise<void> {
+    const wanted = this.touchPoints;
+    this.touchPoints = null;
+    if (wanted === null || this.guest.isDestroyed()) return;
+    const transport = this.guest.debugger;
+    if (!transport.isAttached()) return;
+    try {
+      // Also after a timed-out apply: that command may still have gone through.
+      await withTimeout(
+        transport.sendCommand(TOUCH_EMULATION, { enabled: false }),
+        RELEASE_TIMEOUT_MS,
+      );
+    } catch {
+      // Nothing more can be done for a page that does not answer; detaching clears it.
+    }
+    this.touchEmulated = false;
   }
 
   private async releaseState(): Promise<void> {

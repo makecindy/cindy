@@ -369,6 +369,20 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   (`detach` event). A command that does not
   answer within 2 s is abandoned (outcome unknown, state released) and lifts background
   throttling for that guest until the lease ends.
+- **Touch presentation**: while a tab is cast it is presented as a touch device, so its own
+  `@media (pointer: coarse)` / `(hover: none)` rules lay it out for a phone (Baguette collapses
+  its settings area that way). Only `Emulation.setTouchEmulationEnabled({ enabled: true,
+  maxTouchPoints })` does this on Electron 42 / Chromium 148 (`maxTouchPoints` is the
+  advertised one, 5): `setEmulatedMedia` pointer/hover features are accepted but ignored,
+  `setDeviceMetricsOverride` changes the viewport and `setEmitTouchEventsForMouse` turns the
+  desktop mouse into touch. The embedding page and the viewport are unaffected, and
+  `sendInputEvent` mouse and wheel stay mouse events, so the person at the computer can still
+  use the mouse. Side effect: the tab itself is a coarse, hover-less layout for them too while
+  it is cast, so hover-only menus degrade. It is sent before the first measurement (so the size
+  the phone is told is the reflowed one) and again, before the next command, whenever the CDP
+  session was replaced (it lives and dies with the session); every end of the lease sends
+  `enabled: false` **before** the debugger lease is released, so it never leaks into the
+  browser automation's later use of the page. Screen leases never involve it.
 - **Touch origin**: CDP reads a `<webview>` guest's touch coordinates in the *host renderer's*
   CSS px, not the page's. Measured on a real Desktop (host app at 90%, 100%, 110% zoom, tab
   visible, sidebar resized, tab inside the keep-alive layer): `received = sent - (rect.left,

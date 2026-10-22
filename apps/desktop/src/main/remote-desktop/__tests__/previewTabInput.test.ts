@@ -596,3 +596,135 @@ describe('TabInputInjector guest origin', () => {
     expect(sentPoints(h)[0]).toEqual([[400, 250]]);
   });
 });
+
+describe('TabInputInjector touch presentation', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const touchCommands = (h: ReturnType<typeof setup>) =>
+    h.commands
+      .filter((c) => c.method === 'Emulation.setTouchEmulationEnabled')
+      .map((c) => c.params);
+  const methods = (h: ReturnType<typeof setup>) => h.commands.map((c) => c.method);
+
+  it('presents the page as a touch device before its first command, once', async () => {
+    const h = setup();
+    h.injector.presentAsTouch(5);
+    // Nothing is sent until the injector first talks to the page.
+    expect(h.commands).toEqual([]);
+    await h.injector.measure();
+    expect(methods(h).slice(0, 2)).toEqual([
+      'Emulation.setTouchEmulationEnabled',
+      'Page.getLayoutMetrics',
+    ]);
+    expect(touchCommands(h)).toEqual([{ enabled: true, maxTouchPoints: 5 }]);
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    await h.injector.inject([{ kind: 'text', text: 'x' }]);
+    expect(touchCommands(h)).toHaveLength(1);
+  });
+
+  it('leaves a page alone that was never asked to look like a touch device', async () => {
+    const h = setup();
+    await h.injector.measure();
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    await h.injector.dispose();
+    expect(touchCommands(h)).toEqual([]);
+  });
+
+  it('only uses setTouchEmulationEnabled: no media, metrics or mouse-to-touch emulation', async () => {
+    const h = setup();
+    h.injector.presentAsTouch(5);
+    await h.injector.measure();
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    await h.injector.dispose();
+    const used = new Set(methods(h));
+    for (const forbidden of [
+      'Emulation.setEmulatedMedia',
+      'Emulation.setDeviceMetricsOverride',
+      'Emulation.setEmitTouchEventsForMouse',
+    ])
+      expect(used.has(forbidden)).toBe(false);
+  });
+
+  it('applies it again after the session was replaced underneath, before the next command', async () => {
+    const h = setup();
+    h.injector.presentAsTouch(5);
+    await h.injector.measure();
+    // Somebody else detaches and attaches: the new session starts as a mouse device.
+    h.state.attached = false;
+    h.emit('detach');
+    h.state.attached = true;
+    const before = h.commands.length;
+    await h.injector.inject([{ kind: 'text', text: 'again' }]);
+    const after = h.commands.slice(before).map((c) => c.method);
+    expect(after[0]).toBe('Emulation.setTouchEmulationEnabled');
+    expect(touchCommands(h)).toHaveLength(2);
+    // The same when the debugger is simply gone and the injector has to attach again.
+    h.state.attached = false;
+    const again = h.commands.length;
+    await h.injector.inject([touch('start', [[1, 0.5, 0.5]]), touch('end', [])]);
+    expect(h.commands.slice(again).map((c) => c.method)[0]).toBe(
+      'Emulation.setTouchEmulationEnabled',
+    );
+    expect(touchCommands(h)).toHaveLength(3);
+  });
+
+  it('gives the page back before releasing the debugger, even when someone else still holds it', async () => {
+    const h = setup();
+    h.injector.presentAsTouch(5);
+    await h.injector.measure();
+    const automation = acquireDebuggerLease(h.transport); // the browser automation joins
+    await h.injector.dispose();
+    expect(touchCommands(h).at(-1)).toEqual({ enabled: false });
+    // Still attached (the automation holds it) and no longer a touch device.
+    expect(h.state.attached).toBe(true);
+    expect(h.transport.detach).not.toHaveBeenCalled();
+    expect(releaseDebuggerLease(h.transport, automation)).toBe(true);
+    // Order: the disable went out before the lease was given back.
+    expect(methods(h).lastIndexOf('Emulation.setTouchEmulationEnabled')).toBe(
+      methods(h).length - 1,
+    );
+  });
+
+  it('gives it back first when it is the last lease too, and does nothing for a session that is gone', async () => {
+    const h = setup();
+    h.injector.presentAsTouch(5);
+    await h.injector.measure();
+    const detach = h.transport.detach as ReturnType<typeof vi.fn>;
+    detach.mockImplementation(() => {
+      expect(touchCommands(h).at(-1)).toEqual({ enabled: false });
+      h.state.attached = false;
+    });
+    await h.injector.dispose();
+    expect(detach).toHaveBeenCalledOnce();
+
+    const gone = setup();
+    gone.injector.presentAsTouch(5);
+    await gone.injector.measure();
+    gone.state.attached = false; // the session ended by itself: nothing to undo, nothing to attach for
+    const attaches = (gone.transport.attach as ReturnType<typeof vi.fn>).mock.calls.length;
+    await gone.injector.dispose();
+    expect(touchCommands(gone)).toHaveLength(1);
+    expect((gone.transport.attach as ReturnType<typeof vi.fn>).mock.calls.length).toBe(attaches);
+  });
+
+  it('does not strand the emulation when the first command times out; it is retried', async () => {
+    const h = setup();
+    h.injector.presentAsTouch(5);
+    let hang = true;
+    h.handlers.set('Emulation.setTouchEmulationEnabled', async (params) => {
+      if (hang && params?.enabled === true) return new Promise(() => {});
+      return {};
+    });
+    const pending = h.injector.measure();
+    const assertion = expect(pending).rejects.toThrow('PREVIEW_INPUT_TIMEOUT');
+    await vi.advanceTimersByTimeAsync(PREVIEW_INPUT_TIMEOUT_MS);
+    await assertion;
+    hang = false;
+    await h.injector.measure();
+    expect(touchCommands(h).filter((p) => p?.enabled === true)).toHaveLength(2);
+    // The timed-out apply may still have gone through in the page: it is undone at the end.
+    await h.injector.dispose();
+    expect(touchCommands(h).at(-1)).toEqual({ enabled: false });
+  });
+});

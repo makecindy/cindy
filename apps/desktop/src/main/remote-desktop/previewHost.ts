@@ -183,6 +183,10 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       // Keep the tab painting first, then measure it: a background tab has no real size.
       opening.add(tab.tabId);
       env.setCastingTabs?.(castingTabs());
+      // Looks like a touch device while cast: a page's own `@media (pointer: coarse)` layout
+      // applies. Sent before the first measurement, so the size the phone is told is the
+      // reflowed one; `dispose` (every end of the lease) takes it back.
+      injector.presentAsTouch(env.maxTouchPoints ?? PREVIEW_MAX_TOUCH_POINTS_HOSTED);
       const abandon = () => {
         opening.delete(tab.tabId);
         env.setCastingTabs?.(castingTabs());

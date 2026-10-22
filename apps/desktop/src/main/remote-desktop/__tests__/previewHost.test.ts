@@ -22,6 +22,7 @@ function setup(
 ) {
   let bindings = [binding()];
   const order: string[] = [];
+  const touchEmulation: object[] = [];
   let measured = 0;
   const listeners = new Set<(event: PreviewTabEnded) => void>();
   const attached = { value: false };
@@ -42,6 +43,7 @@ function setup(
       },
       detach: () => {
         attached.value = false;
+        order.push('detach');
       },
       sendCommand: vi.fn(async (method: string, params?: object) => {
         order.push(method);
@@ -50,6 +52,7 @@ function setup(
           return { cssVisualViewport: { clientWidth: size.w, clientHeight: size.h } };
         }
         if (method === 'Input.dispatchTouchEvent') order.push(JSON.stringify(params));
+        if (method === 'Emulation.setTouchEmulationEnabled') touchEmulation.push(params ?? {});
         return {};
       }),
     },
@@ -91,6 +94,7 @@ function setup(
     setCastingTabs,
     delay,
     order,
+    touchEmulation,
     attached,
     end: (reason: PreviewTabEnded['reason'] = 'released') => {
       const [first] = bindings;
@@ -261,6 +265,49 @@ describe('preview host', () => {
         { kind: 'touch', phase: 'start', points: [{ id: 1, x: 0.5, y: 0.5 }] },
       ]),
     ).rejects.toThrow('PREVIEW_INPUT_INVALID');
+  });
+
+  it('keeps the tab painting, then presents it as a touch device, then measures', async () => {
+    const h = setup();
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    const casting = h.order.indexOf('casting:tab1');
+    const touchOn = h.order.indexOf('Emulation.setTouchEmulationEnabled');
+    const measure = h.order.indexOf('Page.getLayoutMetrics');
+    expect(casting).toBeGreaterThanOrEqual(0);
+    expect(touchOn).toBeGreaterThan(casting);
+    expect(measure).toBeGreaterThan(touchOn);
+    expect(h.touchEmulation).toEqual([{ enabled: true, maxTouchPoints: 5 }]);
+    // The phone is told the size the page has after the touch layout settled.
+    expect(source).toMatchObject({ width: 800, height: 500 });
+  });
+
+  it('turns the touch emulation off whenever the lease ends, before the debugger goes', async () => {
+    const h = setup();
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    h.host.end(source);
+    await vi.waitFor(() => expect(h.attached.value).toBe(false));
+    expect(h.touchEmulation.at(-1)).toEqual({ enabled: false });
+    expect(h.order.lastIndexOf('Emulation.setTouchEmulationEnabled')).toBeLessThan(
+      h.order.indexOf('detach'),
+    );
+
+    // The tab ending by itself (index event) goes through the same end.
+    const ended = setup();
+    const [other] = ended.host.list();
+    const sourceB = (await ended.host.open(other))!;
+    ended.end('released');
+    ended.host.end(sourceB);
+    await vi.waitFor(() => expect(ended.attached.value).toBe(false));
+    expect(ended.touchEmulation.at(-1)).toEqual({ enabled: false });
+
+    // A tab that never became ready is given back too.
+    const never = setup([{ w: 0, h: 0 }]);
+    const [stuck] = never.host.list();
+    await expect(never.host.open(stuck)).rejects.toThrow('PREVIEW_CAPTURE_UNAVAILABLE');
+    await vi.waitFor(() => expect(never.attached.value).toBe(false));
+    expect(never.touchEmulation.at(-1)).toEqual({ enabled: false });
   });
 
   it('refuses to open a tab whose guest was rebuilt or whose binding moved on', async () => {

@@ -320,6 +320,8 @@ describe('preview tab leases', () => {
     await send(h, { op: 'presentation', lease: screen.lease, enabled: true });
     await send(h, { op: 'frame', lease: screen.lease });
     expect(h.deps.viewerHidden).toHaveBeenCalledWith(screen.lease, true);
+    // Nothing of the preview (tab, capture, touch presentation) is involved in a screen lease.
+    expect(h.preview.open).not.toHaveBeenCalled();
     expect(h.preview.setView).not.toHaveBeenCalled();
     expect(h.preview.frame).not.toHaveBeenCalled();
     expect(h.deps.frame).toHaveBeenCalled();
