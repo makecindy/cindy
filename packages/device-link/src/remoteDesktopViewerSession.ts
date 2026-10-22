@@ -1,6 +1,7 @@
 import {
   remoteDesktopPreviewTabCapability,
   type PreviewLease,
+  type PreviewViewport,
   type RemoteDesktopCapabilities,
   type RemoteDesktopDisplayMode,
   type RemoteDesktopLease,
@@ -36,7 +37,7 @@ interface ViewerConnectOptions {
    * (sent on `previewStart`): the host refuses it after its own Disconnect, while a start
    * without it is the user's own and goes ahead.
    */
-  preview?: { grant: string };
+  preview?: { grant: string; viewport?: PreviewViewport };
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
@@ -114,6 +115,11 @@ export class RemoteDesktopViewerSession {
           op: "previewStart",
           grant: options.preview.grant,
           ...(options.resume ? { resume: true } : {}),
+          // Only a host that advertises it understands the picture size.
+          ...(options.preview.viewport &&
+          remoteDesktopPreviewTabCapability(caps)?.viewport
+            ? { viewport: options.preview.viewport }
+            : {}),
         },
         check,
       );

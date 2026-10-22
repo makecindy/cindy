@@ -144,7 +144,39 @@ export type PreviewStartRequest = {
    * display `start` with `resume`; without it the start is the user's own and goes ahead.
    */
   resume?: boolean;
+  /**
+   * The phone's picture area in CSS px (iOS pt), without the soft keyboard. Only sent to a
+   * host advertising `previewTab.viewport`; see {@link isPreviewViewport}.
+   */
+  viewport?: PreviewViewport;
 };
+
+/** Size of the phone's picture area, CSS px. */
+export interface PreviewViewport {
+  width: number;
+  height: number;
+}
+export const PREVIEW_VIEWPORT_MIN = 240;
+export const PREVIEW_VIEWPORT_MAX_WIDTH = 2048;
+export const PREVIEW_VIEWPORT_MAX_HEIGHT = 4096;
+/** Integers inside the bounds; anything else is `INVALID_REQUEST` on the host. */
+export function isPreviewViewport(value: unknown): value is PreviewViewport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(v.width) &&
+    (v.width as number) >= PREVIEW_VIEWPORT_MIN &&
+    (v.width as number) <= PREVIEW_VIEWPORT_MAX_WIDTH &&
+    Number.isSafeInteger(v.height) &&
+    (v.height as number) >= PREVIEW_VIEWPORT_MIN &&
+    (v.height as number) <= PREVIEW_VIEWPORT_MAX_HEIGHT
+  );
+}
+/** The picture area changed (rotation, split view); debounced 300 ms, never for the keyboard. */
+export type PreviewViewportRequest = {
+  op: "previewViewport";
+  lease: string;
+} & PreviewViewport;
 
 export interface PreviewTouchPoint {
   id: number;
@@ -242,6 +274,7 @@ export const PREVIEW_LEASE_OPS: ReadonlySet<string> = new Set([
   "viewerHidden",
   "frame",
   "previewInput",
+  "previewViewport",
 ]);
 export function isPreviewLeaseOp(op: string): boolean {
   return PREVIEW_LEASE_OPS.has(op);
@@ -270,7 +303,11 @@ export function remoteDesktopPreviewTabCapability(
     (v.maxTouchPoints as number) > PREVIEW_MAX_TOUCH_POINTS
   )
     return null;
-  return { version: 1, maxTouchPoints: v.maxTouchPoints as number };
+  return {
+    version: 1,
+    maxTouchPoints: v.maxTouchPoints as number,
+    ...(v.viewport === true ? { viewport: true } : {}),
+  };
 }
 
 /** Viewer intent; the host owns the concrete encoder and capture parameters. */
@@ -393,6 +430,8 @@ export interface RemoteDesktopPreviewTabCapability {
   version: 1;
   /** Most simultaneous touch points the host injects, 1..{@link PREVIEW_MAX_TOUCH_POINTS}. */
   maxTouchPoints: number;
+  /** The host lays the tab out at the phone's picture size ({@link PreviewViewport}). */
+  viewport?: true;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -466,6 +505,7 @@ export type RemoteDesktopRequest =
   | PreviewTabsRequest
   | PreviewStartRequest
   | PreviewInputRequest
+  | PreviewViewportRequest
   | { op: "permissions"; action: "check" | "guide" }
   | {
       op: "start";
@@ -583,10 +623,20 @@ export function parseRemoteDesktopRequest(
       throw new Error("INVALID_REQUEST");
     if (v.resume !== undefined && typeof v.resume !== "boolean")
       throw new Error("INVALID_REQUEST");
+    if (v.viewport !== undefined && !isPreviewViewport(v.viewport))
+      throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       grant: v.grant,
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
+      ...(v.viewport !== undefined
+        ? {
+            viewport: {
+              width: v.viewport.width,
+              height: v.viewport.height,
+            },
+          }
+        : {}),
     };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
@@ -792,6 +842,9 @@ export function parseRemoteDesktopRequest(
       events: v.events as PreviewInputEvent[],
     };
   }
+  if (v.op === "previewViewport" && isPreviewViewport(v)) {
+    return { op: v.op, lease, width: v.width, height: v.height };
+  }
   throw new Error("INVALID_REQUEST");
 }
 
@@ -811,6 +864,7 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "clipboardSync",
   "clipboardVersion",
   "previewInput",
+  "previewViewport",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */

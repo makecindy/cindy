@@ -171,5 +171,6 @@
   "previewOnly": "預覽只支援觸控和輸入文字。",
   "previewEntry": "查看電腦上的預覽",
   "previewEntryMany": "查看電腦上的預覽（{{count}}）",
-  "previewEntryChoose": "選擇要查看的預覽"
+  "previewEntryChoose": "選擇要查看的預覽",
+  "connectionStatus": "連線狀態"
 }

@@ -55,6 +55,7 @@ export function RemoteDesktopControls({
   displays,
   displayId,
   preview = false,
+  connectionInfo,
   onViewOnly,
   onInputMode,
   showMouseButtons,
@@ -78,6 +79,11 @@ export function RemoteDesktopControls({
   displayId?: string;
   /** A plugin preview tab: only rotate and the small window apply. */
   preview?: boolean;
+  /**
+   * "Direct to computer · rate · latency", shown here when the immersive
+   * preview has no room for it on the picture.
+   */
+  connectionInfo?: string;
   onViewOnly(): void;
   onInputMode(mode: "touch" | "pointer"): void;
   showMouseButtons: boolean;
@@ -216,6 +222,15 @@ export function RemoteDesktopControls({
           {t("remoteDesktop.backgroundRunningHint")}
         </Text>
       )}
+
+      {!displaySettings && connectionInfo ? (
+        <View style={styles.section} testID="remoteDesktop.connectionInfo">
+          <Text style={styles.sectionTitle}>
+            {t("remoteDesktop.connectionStatus")}
+          </Text>
+          <Text style={styles.rowTitle}>{connectionInfo.replace("\n", " · ")}</Text>
+        </View>
+      ) : null}
 
       {!displaySettings && !preview && (
         <View style={styles.section}>

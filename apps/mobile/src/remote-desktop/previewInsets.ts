@@ -28,6 +28,11 @@ export function previewViewportInsets(input: {
   backLeft: number;
   toolbar: { width: number; height: number };
   sideRailWidth: number;
+  /**
+   * Portrait with a camera cutout (see previewImmersive.ts): the controls sit
+   * beside the cutout, so the picture starts right below the top safe area.
+   */
+  immersive?: boolean;
 }): PreviewViewportInsets {
   const gap = spacing.sm;
   if (input.systemSideRail)
@@ -36,6 +41,13 @@ export function previewViewportInsets(input: {
       bottom: input.bottom,
       left: 0,
       right: input.sideRailWidth,
+    };
+  if (!input.landscape && input.immersive)
+    return {
+      top: input.paddingTop,
+      bottom: input.bottom,
+      left: 0,
+      right: 0,
     };
   if (!input.landscape)
     return {

@@ -5722,15 +5722,32 @@ describe("plugin preview tab view", () => {
   describe("keeping the picture clear of the floating controls", () => {
     const insets = () => sent().filter((m) => m.type === "mouseButtons").at(-1);
 
-    it("fits a preview below the status bar and back button and above the toolbar", async () => {
-      previewHost();
-      await render();
-      await connect();
-      // Safe area top 59 + gap + the 44pt back button + gap.
-      expect(insets()).toMatchObject({ fitToInsets: true });
-      expect(insets().topInset).toBeGreaterThanOrEqual(59 + 44);
-      expect(insets().leftInset).toBe(0);
-      expect(insets().rightInset).toBe(0);
+    describe("a phone without a camera cutout", () => {
+      beforeEach(() => {
+        fixture.safe = { top: 20, bottom: 0, left: 0, right: 0 };
+      });
+
+      it("fits a preview below the status bar and back button and above the toolbar", async () => {
+        previewHost();
+        await render();
+        await connect();
+        // Safe area top 20 + gap + the 44pt back button + gap.
+        expect(insets()).toMatchObject({ fitToInsets: true });
+        expect(insets().topInset).toBeGreaterThanOrEqual(20 + 44);
+        expect(insets().leftInset).toBe(0);
+        expect(insets().rightInset).toBe(0);
+      });
+
+      it("follows the toolbar's measured height", async () => {
+        previewHost();
+        await render();
+        await connect();
+        const layout = fixture.views["remoteDesktop.toolbarPosition"].onLayout;
+        await act(async () =>
+          layout({ nativeEvent: { layout: { width: 390, height: 96 } } }),
+        );
+        expect(insets().bottomInset).toBe(96);
+      });
     });
 
     it("leaves a plain remote desktop running under its controls", async () => {
@@ -5742,16 +5759,184 @@ describe("plugin preview tab view", () => {
         rightInset: 0,
       });
     });
+  });
 
-    it("follows the toolbar's measured height", async () => {
+  describe("immersive preview", () => {
+    const insets = () => sent().filter((m) => m.type === "mouseButtons").at(-1);
+    const style = (testID: string) =>
+      Object.assign(
+        {},
+        ...[fixture.views[testID].style].flat(Infinity).filter(Boolean),
+      );
+    const networkTexts = () =>
+      sent()
+        .filter((m) => m.type === "networkStatus" && m.text)
+        .map((m) => m.text);
+    const open = async () => {
       previewHost();
       await render();
       await connect();
-      const layout = fixture.views["remoteDesktop.toolbarPosition"].onLayout;
-      await act(async () =>
-        layout({ nativeEvent: { layout: { width: 390, height: 96 } } }),
+    };
+
+    it("draws from the top safe area to the bottom one, edge to edge", async () => {
+      await open();
+      expect(insets()).toMatchObject({
+        fitToInsets: true,
+        topInset: 59,
+        bottomInset: 34,
+        leftInset: 0,
+        rightInset: 0,
+      });
+    });
+
+    it("puts back left of the cutout and keyboard and settings right of it, centered in the safe area", async () => {
+      await open();
+      // (59 - 44) / 2: a 44pt target centered in the top safe area.
+      expect(style("remoteDesktop.backPosition")).toMatchObject({
+        top: 7.5,
+        left: 16,
+      });
+      expect(style("remoteDesktop.toolbarPosition")).toMatchObject({
+        top: 7.5,
+        right: 16,
+        left: undefined,
+        bottom: undefined,
+      });
+      expect(button("keyboard")).not.toBeNull();
+      expect(button("operations")).not.toBeNull();
+    });
+
+    it("keeps the top controls while the keyboard is open, and the picture below the safe area", async () => {
+      await open();
+      act(() => button("keyboard").click());
+      expect(fixture.views["remoteDesktop.toolbarPosition"]).toBeDefined();
+      expect(button("keyboard")).not.toBeNull();
+      expect(insets()).toMatchObject({ topInset: 59, bottomInset: 0 });
+    });
+
+    it("moves the connection line into the settings panel", async () => {
+      await open();
+      act(() =>
+        fixture.message!({
+          nativeEvent: { data: '{"type":"streaming","epoch":"lease"}' },
+        }),
       );
-      expect(insets().bottomInset).toBe(96);
+      act(() =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: "network",
+              epoch: "lease",
+              transport: "direct",
+              bytesPerSecond: 125000,
+              latencyMs: 42,
+            }),
+          },
+        }),
+      );
+      expect(networkTexts()).toEqual([]);
+      act(() => button("operations").click());
+      const info = host.querySelector(
+        '[data-testid="remoteDesktop.connectionInfo"]',
+      )!;
+      expect(info.textContent).toContain("remoteDesktop.directConnection");
+      expect(info.textContent).toContain("125 KB/s");
+      expect(info.textContent).toContain("42 ms");
+    });
+
+    it.each([
+      ["no camera cutout", () => (fixture.safe = { top: 20, bottom: 0, left: 0, right: 0 })],
+      ["a notch with no room beside it", () => {
+        fixture.safe = { top: 47, bottom: 34, left: 0, right: 0 };
+        fixture.size = { width: 375, height: 812 };
+      }],
+      ["landscape", () => {
+        fixture.safe = { top: 0, bottom: 21, left: 62, right: 62 };
+        fixture.size = { width: 844, height: 390 };
+      }],
+      ["Android", () => (fixture.platform = "android")],
+    ])("keeps the floating controls with %s", async (_name, arrange) => {
+      const platform = fixture.platform;
+      try {
+        arrange();
+        await open();
+        expect(host.querySelector('[data-testid="remoteDesktop.connectionInfo"]')).toBeNull();
+        // Not the immersive placement: back is not centered in the safe area.
+        expect(style("remoteDesktop.backPosition").top).not.toBe(
+          (fixture.safe.top - 44) / 2,
+        );
+      } finally {
+        fixture.platform = platform;
+      }
+    });
+
+    it("keeps a whole remote desktop as it is", async () => {
+      await connect();
+      expect(insets()).toMatchObject({ fitToInsets: false, topInset: 59 });
+      expect(host.querySelector('[data-testid="remoteDesktop.connectionInfo"]')).toBeNull();
+    });
+  });
+
+  describe("telling the computer the picture area", () => {
+    const viewports = () =>
+      requests().filter((r) => r.op === "previewViewport");
+    const withViewport = { version: 1, maxTouchPoints: 2, viewport: true };
+    const open = async (previewTab: unknown = withViewport) => {
+      previewHost({ previewTab });
+      await render();
+      await connect();
+    };
+    const resize = async (width: number, height: number) => {
+      fixture.size = { width, height };
+      await render();
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+    };
+
+    it("sends the area with previewStart: below the top safe area, above the bottom one", async () => {
+      await open();
+      const start = requests().find((r) => r.op === "previewStart");
+      // 844 - 59 - 34, edge to edge.
+      expect(start.viewport).toEqual({ width: 390, height: 751 });
+    });
+
+    it("sends nothing to a computer that did not advertise viewport", async () => {
+      await open({ version: 1, maxTouchPoints: 2 });
+      expect(requests().find((r) => r.op === "previewStart")).not.toHaveProperty(
+        "viewport",
+      );
+      await resize(402, 874);
+      expect(viewports()).toEqual([]);
+    });
+
+    it("reports a rotation once, after it settles", async () => {
+      await open();
+      fixture.size = { width: 874, height: 402 };
+      await render();
+      fixture.size = { width: 844, height: 390 };
+      await render();
+      expect(viewports()).toEqual([]);
+      await act(async () => vi.advanceTimersByTimeAsync(299));
+      expect(viewports()).toEqual([]);
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(viewports()).toHaveLength(1);
+      expect(viewports()[0]).toMatchObject({ op: "previewViewport", lease: "lease" });
+      expect(viewports()[0].width).toBeGreaterThan(viewports()[0].height);
+    });
+
+    it("does not repeat an area the computer already has", async () => {
+      await open();
+      await resize(390, 844);
+      expect(viewports()).toEqual([]);
+    });
+
+    it("ignores the keyboard opening and closing, even when the window shrinks for it", async () => {
+      await open();
+      act(() => button("keyboard").click());
+      await resize(390, 500);
+      expect(viewports()).toEqual([]);
+      act(() => button("keyboard").click());
+      await resize(390, 844);
+      expect(viewports()).toEqual([]);
     });
   });
 

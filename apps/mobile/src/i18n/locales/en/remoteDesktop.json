@@ -171,5 +171,6 @@
   "previewOnly": "A preview only supports touch and typing.",
   "previewEntry": "View Preview on Computer",
   "previewEntryMany": "View Previews on Computer ({{count}})",
-  "previewEntryChoose": "Choose a preview to view"
+  "previewEntryChoose": "Choose a preview to view",
+  "connectionStatus": "Connection"
 }

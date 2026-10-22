@@ -25,6 +25,20 @@ describe("where a preview picture may be drawn", () => {
     expect([insets.left, insets.right]).toEqual([0, 0]);
   });
 
+  it("immersive portrait: right below the top safe area, no row for the back button", () => {
+    const insets = previewViewportInsets({
+      ...base,
+      immersive: true,
+      bottom: 34,
+    });
+    expect(insets).toEqual({ top: 59, bottom: 34, left: 0, right: 0 });
+    // Landscape and the iPad side rail ignore it.
+    expect(
+      previewViewportInsets({ ...base, immersive: true, landscape: true, paddingTop: 0 })
+        .left,
+    ).toBe(24 + 44 + spacing.sm);
+  });
+
   it("portrait with the keyboard: the screen's own bottom inset is kept", () => {
     expect(previewViewportInsets({ ...base, bottom: 0 }).bottom).toBe(0);
   });
