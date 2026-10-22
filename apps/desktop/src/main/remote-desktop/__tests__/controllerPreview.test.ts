@@ -19,7 +19,9 @@ const tab: DesktopPreviewTab = {
   title: 'Simulator',
 };
 
-function harness(options: { tabs?: DesktopPreviewTab[]; withPreview?: boolean } = {}) {
+function harness(
+  options: { tabs?: DesktopPreviewTab[]; withPreview?: boolean; withViewport?: boolean } = {},
+) {
   let tabs = options.tabs ?? [tab];
   const watchers = new Map<DesktopPreviewSource, (end: DesktopPreviewEnd) => void>();
   const alive = new Set<DesktopPreviewSource>();
@@ -45,6 +47,7 @@ function harness(options: { tabs?: DesktopPreviewTab[]; withPreview?: boolean } 
     end: vi.fn((source: DesktopPreviewSource) => {
       alive.delete(source);
     }),
+    ...(options.withViewport ? { setViewport: vi.fn(async () => {}) } : {}),
   };
   const deps: DesktopControllerDeps = {
     authorized: () => true,
@@ -528,5 +531,112 @@ describe('preview tab leases', () => {
     };
     await expect(send(h, { op: 'previewStart', grant })).rejects.toThrow('DESKTOP_BUSY');
     expect(h.preview.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('preview tab phone viewport', () => {
+  const viewport = { width: 402, height: 786 };
+
+  it('advertises previewTab.viewport only when the host can lay a tab out', async () => {
+    const caps = async (h: ReturnType<typeof harness>) =>
+      ((await send(h, { op: 'capabilities' })) as { previewTab?: object }).previewTab;
+    expect(await caps(harness({ withViewport: true }))).toEqual({
+      version: 1,
+      maxTouchPoints: 5,
+      viewport: true,
+    });
+    expect(await caps(harness())).toEqual({ version: 1, maxTouchPoints: 5 });
+  });
+
+  it('opens the tab in the phone shape and reports the size it ended up with', async () => {
+    const h = harness({ withViewport: true });
+    const reply = (await send(h, {
+      op: 'previewStart',
+      grant: await h.grantFor(),
+      viewport,
+    })) as RemoteDesktopLease;
+    expect(h.preview.open).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab1' }), viewport);
+    // The lease carries the measured CSS viewport, as without a viewport.
+    expect(reply.display).toMatchObject({ width: 800, height: 500 });
+  });
+
+  it('ignores the viewport on a host that cannot lay a tab out, and without one asks for none', async () => {
+    const old = harness();
+    await send(old, { op: 'previewStart', grant: await old.grantFor(), viewport });
+    expect(old.preview.open).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab1' }));
+    const h = harness({ withViewport: true });
+    await h.open();
+    expect(h.preview.open).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab1' }));
+    expect(h.preview.setViewport).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed viewport before touching the tab', async () => {
+    const h = harness({ withViewport: true });
+    const grant = await h.grantFor();
+    for (const bad of [{ width: 100, height: 786 }, { width: 402.5, height: 786 }, 'phone'])
+      await expect(send(h, { op: 'previewStart', grant, viewport: bad })).rejects.toThrow(
+        'INVALID_REQUEST',
+      );
+    expect(h.preview.open).not.toHaveBeenCalled();
+  });
+
+  it('applies previewViewport to the source of this lease and answers {}', async () => {
+    const h = harness({ withViewport: true });
+    const { lease } = await h.open();
+    expect(await send(h, { op: 'previewViewport', lease, width: 786, height: 402 })).toEqual({});
+    expect(h.preview.setViewport).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: 'tab1' }),
+      { width: 786, height: 402 },
+    );
+    expect(h.controller.state).not.toBeNull();
+  });
+
+  it('refuses previewViewport on a screen lease and on a host without support', async () => {
+    const h = harness({ withViewport: true });
+    const screen = (await send(h, { op: 'start', displayId: '1' })) as RemoteDesktopLease;
+    await expect(
+      send(h, { op: 'previewViewport', lease: screen.lease, width: 402, height: 786 }),
+    ).rejects.toThrow('INVALID_REQUEST');
+    expect(h.preview.setViewport).not.toHaveBeenCalled();
+    const old = harness();
+    const { lease } = await old.open();
+    await expect(send(old, { op: 'previewViewport', lease, width: 402, height: 786 })).rejects.toThrow(
+      'INVALID_REQUEST',
+    );
+    await expect(send(old, { op: 'previewViewport', lease: 'nope', width: 402, height: 786 })).rejects.toThrow(
+      'DESKTOP_LEASE_EXPIRED',
+    );
+  });
+
+  it('ends the lease when the tab is gone while it is laid out', async () => {
+    const h = harness({ withViewport: true });
+    const { lease } = await h.open();
+    h.preview.setViewport = vi.fn(async () => {
+      throw new Error('PREVIEW_SOURCE_ENDED');
+    });
+    await expect(send(h, { op: 'previewViewport', lease, width: 402, height: 786 })).rejects.toThrow(
+      'PREVIEW_SOURCE_ENDED',
+    );
+    expect(h.controller.state).toBeNull();
+    expect(h.preview.end).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the lease when laying out fails for any other reason', async () => {
+    const h = harness({ withViewport: true });
+    const { lease } = await h.open();
+    h.preview.setViewport = vi.fn(async () => {
+      throw new Error('internal detail');
+    });
+    await expect(send(h, { op: 'previewViewport', lease, width: 402, height: 786 })).rejects.toThrow(
+      'DESKTOP_REQUEST_FAILED',
+    );
+    expect(h.controller.state).not.toBeNull();
+  });
+
+  it('gives the tab back (end) when the lease stops, as for any other end', async () => {
+    const h = harness({ withViewport: true });
+    const { lease } = await h.open();
+    await send(h, { op: 'stop', lease });
+    expect(h.preview.end).toHaveBeenCalledOnce();
   });
 });

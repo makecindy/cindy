@@ -37,7 +37,7 @@ export {
   _resetRendererBridgeForTests,
   type RendererBridgeOptions,
 } from './renderer-bridge.js';
-export { setCastingTabs } from './previewCasting.js';
+export { setCastingTabs, setCastingViewports } from './previewCasting.js';
 export { requestTabOrigin, type TabOrigin } from './guestOrigin.js';
 export {
   getActiveRsbSessionId,

@@ -9,7 +9,14 @@
 
 import { useSyncExternalStore } from 'react';
 
+/** The phone's picture shape (CSS px) a casting tab is laid out in. */
+export interface PreviewCastingViewport {
+  width: number;
+  height: number;
+}
+
 let casting: ReadonlySet<string> = new Set();
+let viewports: ReadonlyMap<string, PreviewCastingViewport> = new Map();
 const listeners = new Set<() => void>();
 
 function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
@@ -18,10 +25,34 @@ function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return true;
 }
 
-export function setPreviewCastingTabs(tabIds: readonly string[]): void {
+function sameViewports(
+  a: ReadonlyMap<string, PreviewCastingViewport>,
+  b: ReadonlyMap<string, PreviewCastingViewport>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, v] of a) {
+    const other = b.get(id);
+    if (!other || other.width !== v.width || other.height !== v.height) return false;
+  }
+  return true;
+}
+
+/**
+ * Replace the casting set and the phone shapes together (both are full replacements; a tab
+ * without a shape keeps its own layout). Shapes of tabs outside the set are dropped.
+ */
+export function setPreviewCastingTabs(
+  tabIds: readonly string[],
+  shapes?: Readonly<Record<string, PreviewCastingViewport>>,
+): void {
   const next = new Set(tabIds);
-  if (sameSet(casting, next)) return;
+  const nextViewports = new Map<string, PreviewCastingViewport>();
+  for (const [id, v] of Object.entries(shapes ?? {}))
+    if (next.has(id) && v && v.width > 0 && v.height > 0)
+      nextViewports.set(id, { width: v.width, height: v.height });
+  if (sameSet(casting, next) && sameViewports(viewports, nextViewports)) return;
   casting = next;
+  viewports = nextViewports;
   for (const l of [...listeners]) l();
 }
 
@@ -42,6 +73,16 @@ export function usePreviewCastingTab(tabId: string): boolean {
   );
 }
 
+/** The phone shape this casting tab is laid out in, or null when it keeps its own layout. */
+export function usePreviewCastingViewport(tabId: string): PreviewCastingViewport | null {
+  return useSyncExternalStore(
+    subscribe,
+    // The stored object is replaced only by a new set, so the snapshot is stable between them.
+    () => viewports.get(tabId) ?? null,
+    () => null,
+  );
+}
+
 /** True while this renderer hosts at least one casting tab. */
 export function usePreviewCastingActive(): boolean {
   return useSyncExternalStore(
@@ -54,5 +95,6 @@ export function usePreviewCastingActive(): boolean {
 /** Test-only reset. */
 export function _resetPreviewCastingForTests(): void {
   casting = new Set();
+  viewports = new Map();
   listeners.clear();
 }

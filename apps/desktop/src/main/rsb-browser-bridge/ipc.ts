@@ -222,6 +222,8 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
       // Same recovery for the casting set: a reloaded host renderer re-applies
       // the keep-alive layers for the tabs it still hosts.
       castingTabIds: getActivePreviewCastingController()?.listHostedBy(event.sender) ?? [],
+      castingViewports:
+        getActivePreviewCastingController()?.listViewportsHostedBy(event.sender) ?? {},
     };
   });
 

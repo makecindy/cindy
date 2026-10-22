@@ -48,8 +48,15 @@ interface CastingEntry {
   owner: WebContents | null;
 }
 
+export interface CastingViewport {
+  width: number;
+  height: number;
+}
+
 export class PreviewCastingController {
   private readonly casting = new Map<string, CastingEntry>();
+  /** Phone picture shape per cast tab; only tabs that are casting keep one. */
+  private viewports = new Map<string, CastingViewport>();
   private offReport: (() => void) | null = null;
 
   constructor(private readonly opts: PreviewCastingControllerOptions) {}
@@ -85,6 +92,7 @@ export class PreviewCastingController {
       if (next.has(tabId)) continue;
       entry.releaseLease();
       this.casting.delete(tabId);
+      this.viewports.delete(tabId);
       if (entry.owner) affected.add(entry.owner);
     }
     for (const tabId of next) {
@@ -97,8 +105,44 @@ export class PreviewCastingController {
     for (const owner of affected) this.push(owner);
   }
 
+  /**
+   * Replace the phone picture shapes (full set). A tab that stops being listed gets its own
+   * layout back. Shapes of tabs that are not casting are ignored.
+   */
+  setCastingViewports(viewports: Readonly<Record<string, CastingViewport>>): void {
+    const next = new Map<string, CastingViewport>();
+    for (const [tabId, viewport] of Object.entries(viewports)) {
+      if (
+        this.casting.has(tabId) &&
+        Number.isFinite(viewport?.width) &&
+        Number.isFinite(viewport?.height) &&
+        viewport.width > 0 &&
+        viewport.height > 0
+      )
+        next.set(tabId, { width: viewport.width, height: viewport.height });
+    }
+    const affected = new Set<WebContents>();
+    for (const tabId of new Set([...this.viewports.keys(), ...next.keys()])) {
+      const before = this.viewports.get(tabId);
+      const after = next.get(tabId);
+      if (before?.width === after?.width && before?.height === after?.height) continue;
+      const owner = this.casting.get(tabId)?.owner;
+      if (owner) affected.add(owner);
+    }
+    this.viewports = next;
+    for (const owner of affected) this.push(owner);
+  }
+
   list(): string[] {
     return [...this.casting.keys()];
+  }
+
+  /** Phone picture shapes of the casting tabs hosted by `owner`. */
+  listViewportsHostedBy(owner: WebContents): Record<string, CastingViewport> {
+    const hosted: Record<string, CastingViewport> = {};
+    for (const [tabId, viewport] of this.viewports)
+      if (this.casting.get(tabId)?.owner === owner) hosted[tabId] = { ...viewport };
+    return hosted;
   }
 
   /** Casting tabs hosted by `owner` — lets a reloaded renderer recover its set on snapshot. */
@@ -111,6 +155,7 @@ export class PreviewCastingController {
     this.offReport = null;
     for (const entry of this.casting.values()) entry.releaseLease();
     this.casting.clear();
+    this.viewports.clear();
   }
 
   private ownerOf(tabId: string): WebContents | null {
@@ -120,7 +165,12 @@ export class PreviewCastingController {
 
   private push(owner: WebContents | null): void {
     if (!owner || owner.isDestroyed()) return;
-    const payload: RsbBrowserBridgePreviewCastingPayload = { tabIds: this.listHostedBy(owner) };
+    const viewports = this.listViewportsHostedBy(owner);
+    const payload: RsbBrowserBridgePreviewCastingPayload = {
+      tabIds: this.listHostedBy(owner),
+      // Absent when no tab here has a shape: payloads stay what they were without it.
+      ...(Object.keys(viewports).length > 0 ? { viewports } : {}),
+    };
     try {
       owner.send(RSB_BROWSER_BRIDGE_PREVIEW_CASTING_CHANNEL, payload);
     } catch (err) {
@@ -150,5 +200,16 @@ export function getActivePreviewCastingController(): PreviewCastingController | 
 export function setCastingTabs(tabIds: readonly string[]): boolean {
   if (!active) return false;
   active.setCastingTabs(tabIds);
+  return true;
+}
+
+/**
+ * Public API for the Host: lay exactly these cast tabs out in the given phone picture shapes
+ * (CSS px); tabs not listed keep their own layout. Returns false when the browser bridge is
+ * not registered yet.
+ */
+export function setCastingViewports(viewports: Readonly<Record<string, CastingViewport>>): boolean {
+  if (!active) return false;
+  active.setCastingViewports(viewports);
   return true;
 }

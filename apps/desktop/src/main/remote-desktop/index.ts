@@ -47,6 +47,7 @@ import {
   getRsbBrowserBridge,
   requestGuestOrigin,
   setCastingTabs,
+  setCastingViewports,
 } from '../rsb-browser-bridge';
 import { createPreviewHost, type PreviewGuest } from './previewHost';
 import { ClipboardCounter } from './clipboardCounter';
@@ -179,6 +180,8 @@ const previewHost = createPreviewHost({
   guest: (tabId) => getRsbBrowserBridge().getWebContentsByTabId(tabId) as PreviewGuest | null,
   // Tabs being watched keep painting while the desktop UI hides them.
   setCastingTabs: (tabIds) => void setCastingTabs(tabIds),
+  // While cast, the tab is laid out in the phone's picture shape (and given back afterwards).
+  setCastingViewports: (viewports) => void setCastingViewports(viewports),
   // CDP touches for a <webview> guest are in its host window's space.
   guestOrigin: (tab) => requestGuestOrigin(tab),
 });

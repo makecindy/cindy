@@ -19,6 +19,7 @@ function binding(extra: Partial<PreviewTabBinding> = {}): PreviewTabBinding {
 function setup(
   metrics: Array<{ w: number; h: number }> = [{ w: 800, h: 500 }],
   guestOrigin?: PreviewHostEnv['guestOrigin'],
+  withViewports = false,
 ) {
   let bindings = [binding()];
   const order: string[] = [];
@@ -64,6 +65,9 @@ function setup(
   const setCastingTabs = vi.fn((tabIds: string[]) => {
     order.push(`casting:${tabIds.join(',')}`);
   });
+  const setCastingViewports = vi.fn((viewports: Record<string, { width: number; height: number }>) => {
+    order.push(`viewports:${JSON.stringify(viewports)}`);
+  });
   const delay = vi.fn(async () => {});
   const index = {
     list: vi.fn((sessionId?: string) =>
@@ -83,10 +87,12 @@ function setup(
     index,
     guest: (tabId) => guests.get(tabId) ?? null,
     setCastingTabs,
+    ...(withViewports ? { setCastingViewports } : {}),
     delay,
     guestOrigin,
   });
   return {
+    setCastingViewports,
     host,
     guest,
     guests,
@@ -410,5 +416,106 @@ describe('preview host', () => {
     const late = vi.fn();
     h.host.watch(source, late);
     expect(late).toHaveBeenCalledWith('ended');
+  });
+});
+
+describe('preview host phone viewport', () => {
+  const phone = { width: 402, height: 786 };
+  // The renderer lays the tab out a moment after being asked: the first readings are stale.
+  const relayout = [
+    { w: 800, h: 500 },
+    { w: 800, h: 500 },
+    { w: 402, h: 786 },
+    { w: 402, h: 786 },
+  ];
+
+  it('asks for the phone shape before measuring, waits for it, and gives the layout back on end', async () => {
+    const h = setup(relayout, undefined, true);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab, phone))!;
+    expect(source).toMatchObject({ width: 402, height: 786 });
+    const asked = h.order.indexOf(`viewports:${JSON.stringify({ tab1: phone })}`);
+    expect(asked).toBeGreaterThanOrEqual(0);
+    expect(asked).toBeGreaterThan(h.order.indexOf('casting:tab1'));
+    expect(asked).toBeLessThan(h.order.indexOf('Page.getLayoutMetrics'));
+    expect(h.setCastingViewports).toHaveBeenLastCalledWith({ tab1: phone });
+    h.host.end(source);
+    expect(h.setCastingViewports).toHaveBeenLastCalledWith({});
+    expect(h.setCastingTabs).toHaveBeenLastCalledWith([]);
+  });
+
+  it('keeps the tab as it is when no shape is asked for', async () => {
+    const h = setup(undefined, undefined, true);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    expect(source).toMatchObject({ width: 800, height: 500 });
+    expect(h.setCastingViewports).toHaveBeenCalledWith({});
+    expect(h.setCastingViewports).not.toHaveBeenCalledWith({ tab1: expect.anything() });
+    expect(h.host.setViewport).toBeTypeOf('function');
+  });
+
+  it('does not offer the shape (nor setViewport) where the renderer cannot lay a tab out', async () => {
+    const h = setup(undefined, undefined, false);
+    expect(h.host.setViewport).toBeUndefined();
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab, phone))!;
+    expect(source).toMatchObject({ width: 800, height: 500 });
+    expect(h.setCastingViewports).not.toHaveBeenCalled();
+  });
+
+  it('gives up waiting for a tab that never takes the shape, after a bounded wait', async () => {
+    const h = setup([{ w: 800, h: 500 }], undefined, true);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab, phone))!;
+    expect(source).toMatchObject({ width: 800, height: 500 });
+    expect(h.delay.mock.calls.length).toBeLessThanOrEqual(30);
+  });
+
+  it('a tab already in the shape is not waited for', async () => {
+    const h = setup([{ w: 402, h: 786 }], undefined, true);
+    const [tab] = h.host.list();
+    await h.host.open(tab, phone);
+    // Settling only: two readings, no extra waits for the shape.
+    expect(h.delay).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies a new shape to the open tab and keeps the lease size it was told', async () => {
+    const landscape = { width: 786, height: 402 };
+    const h = setup(
+      [
+        { w: 402, h: 786 },
+        { w: 402, h: 786 },
+        { w: 402, h: 786 },
+        { w: 786, h: 402 },
+        { w: 786, h: 402 },
+      ],
+      undefined,
+      true,
+    );
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab, phone))!;
+    await h.host.setViewport!(source, landscape);
+    expect(h.setCastingViewports).toHaveBeenLastCalledWith({ tab1: landscape });
+    // The source the controller holds is the lease's: its size is what the phone was told.
+    expect(source).toMatchObject({ width: 402, height: 786 });
+    h.host.end(source);
+    expect(h.setCastingViewports).toHaveBeenLastCalledWith({});
+  });
+
+  it('refuses a new shape for a source that has ended', async () => {
+    const h = setup(relayout, undefined, true);
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab, phone))!;
+    h.end();
+    await expect(h.host.setViewport!(source, { width: 500, height: 700 })).rejects.toThrow(
+      'PREVIEW_SOURCE_ENDED',
+    );
+  });
+
+  it('gives the layout back when opening fails', async () => {
+    const h = setup([{ w: 0, h: 0 }], undefined, true);
+    const [tab] = h.host.list();
+    await expect(h.host.open(tab, phone)).rejects.toThrow('PREVIEW_CAPTURE_UNAVAILABLE');
+    expect(h.setCastingViewports).toHaveBeenLastCalledWith({});
   });
 });

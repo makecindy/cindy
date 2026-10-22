@@ -483,7 +483,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload('rsb-browser-bridge:pin', cb),
     onUnpin: (cb: (payload: { tabId: string }) => void): (() => void) =>
       onPayload('rsb-browser-bridge:unpin', cb),
-    onPreviewCasting: (cb: (payload: { tabIds: string[] }) => void): (() => void) =>
+    onPreviewCasting: (
+      cb: (payload: {
+        tabIds: string[];
+        viewports?: Record<string, { width: number; height: number }>;
+      }) => void,
+    ): (() => void) =>
       onPayload('rsb-browser-bridge:preview-casting', cb),
     onTabOpRequest: (cb: (request: unknown) => void): (() => void) =>
       onPayload('rsb-browser-bridge:tab-op-request', cb),

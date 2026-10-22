@@ -1,4 +1,8 @@
-import { PREVIEW_MAX_TITLE_CHARS, type PreviewInputEvent } from '@cindy/device-link';
+import {
+  PREVIEW_MAX_TITLE_CHARS,
+  type PreviewInputEvent,
+  type PreviewViewport,
+} from '@cindy/device-link';
 import { desktopVideoFramerate, desktopVideoProfile } from '../../shared/remoteDesktopQuality';
 import type { PreviewTabBinding, PreviewTabEnded } from '../rsb-browser-bridge/previewTabs';
 import type {
@@ -32,6 +36,12 @@ export interface PreviewHostEnv {
   guest(tabId: string): PreviewGuest | null;
   /** T3: keep these tabs painting while hidden. Absent until the right-sidebar keep-alive lands. */
   setCastingTabs?(tabIds: string[]): void;
+  /**
+   * Lay these cast tabs out in the phone's picture shape (full set each call; a tab that is
+   * missing gets its own layout back). Absent where the renderer cannot do it: the host then
+   * does not advertise `previewTab.viewport`.
+   */
+  setCastingViewports?(viewports: Record<string, PreviewViewport>): void;
   /** Most simultaneous touches injected; advertised in the capability. */
   maxTouchPoints?: number;
   now?(): number;
@@ -49,6 +59,10 @@ const LAYOUT_SETTLE_MS = 120;
 const LAYOUT_SETTLE_TRIES = 5;
 /** How long a guest that is not ready yet (no size, or throttled) is waited for: ~3 s. */
 const LAYOUT_READY_TRIES = 25;
+/** Extra measurements granted to a tab that is being laid out in the phone's shape: ~1.2 s. */
+const VIEWPORT_APPLY_TRIES = 10;
+/** A tab this close to the phone's aspect ratio is laid out in its shape (rounding to whole px). */
+const VIEWPORT_ASPECT_TOLERANCE = 0.02;
 
 export const PREVIEW_MAX_TOUCH_POINTS_HOSTED = 5;
 /** Tabs offered in one `previewTabs` reply. */
@@ -56,6 +70,7 @@ const MAX_LISTED_TABS = 32;
 
 interface Session {
   source: DesktopPreviewSource;
+  viewport: PreviewViewport | null;
   capture: TabCaptureSource;
   injector: TabInputInjector;
   listeners: Set<(end: DesktopPreviewEnd) => void>;
@@ -71,10 +86,22 @@ interface Session {
 export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
   const sessions = new Map<DesktopPreviewSource, Session>();
   /** Tabs being opened: already asked to keep painting, not yet a lease. */
-  const opening = new Set<string>();
+  const opening = new Map<string, PreviewViewport | null>();
   const castingTabs = () => [
-    ...new Set([...[...sessions.keys()].map((source) => source.tabId), ...opening]),
+    ...new Set([...[...sessions.keys()].map((source) => source.tabId), ...opening.keys()]),
   ];
+  /** The phone shape each cast tab is laid out in; a tab without one keeps its own layout. */
+  const castingViewports = () => {
+    const viewports: Record<string, PreviewViewport> = {};
+    for (const [tabId, viewport] of opening) if (viewport) viewports[tabId] = viewport;
+    for (const session of sessions.values())
+      if (session.viewport) viewports[session.source.tabId] = session.viewport;
+    return viewports;
+  };
+  const syncCasting = () => {
+    env.setCastingTabs?.(castingTabs());
+    env.setCastingViewports?.(castingViewports());
+  };
   const pause =
     env.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
@@ -84,7 +111,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
    * measure until two readings in a row agree; a layout that keeps moving gets its last size.
    * Anything but "not ready" (the tab is gone) ends the attempt at once.
    */
-  const measureSettled = async (injector: TabInputInjector) => {
+  const measureSettled = async (injector: TabInputInjector, shape: PreviewViewport | null = null) => {
     let previous: TabViewport | null = null;
     for (let attempt = 0; attempt < LAYOUT_READY_TRIES && !previous; attempt++) {
       try {
@@ -106,6 +133,17 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         Math.abs(next.width - previous.width) < 1 && Math.abs(next.height - previous.height) < 1;
       previous = next;
       if (settled) break;
+    }
+    // The renderer lays the tab out in the phone's shape a moment after being asked; wait for
+    // it, boundedly. A renderer that cannot (or a window too small) leaves the tab as it is.
+    if (shape) {
+      const wanted = shape.width / shape.height;
+      const shaped = (size: TabViewport) =>
+        Math.abs(size.width / size.height - wanted) / wanted <= VIEWPORT_ASPECT_TOLERANCE;
+      for (let attempt = 0; attempt < VIEWPORT_APPLY_TRIES && !shaped(previous); attempt++) {
+        await pause(LAYOUT_SETTLE_MS);
+        previous = await injector.measure();
+      }
     }
     return previous;
   };
@@ -163,7 +201,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       return tabs;
     },
 
-    async open(tab) {
+    async open(tab, viewport) {
       const binding = env.index.current(tab.tabId, tab.webContentsId);
       const guest = env.guest(tab.tabId);
       if (
@@ -181,20 +219,21 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
           : {},
       );
       // Keep the tab painting first, then measure it: a background tab has no real size.
-      opening.add(tab.tabId);
-      env.setCastingTabs?.(castingTabs());
+      const shape = env.setCastingViewports && viewport ? viewport : null;
+      opening.set(tab.tabId, shape);
+      syncCasting();
       // Looks like a touch device while cast: a page's own `@media (pointer: coarse)` layout
       // applies. Sent before the first measurement, so the size the phone is told is the
       // reflowed one; `dispose` (every end of the lease) takes it back.
       injector.presentAsTouch(env.maxTouchPoints ?? PREVIEW_MAX_TOUCH_POINTS_HOSTED);
       const abandon = () => {
         opening.delete(tab.tabId);
-        env.setCastingTabs?.(castingTabs());
+        syncCasting();
         void injector.dispose();
       };
-      let viewport;
+      let measured;
       try {
-        viewport = await measureSettled(injector);
+        measured = await measureSettled(injector, shape);
       } catch (error) {
         abandon();
         throw error;
@@ -207,13 +246,14 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       }
       const source: DesktopPreviewSource = {
         ...tab,
-        width: Math.max(1, Math.round(viewport.width)),
-        height: Math.max(1, Math.round(viewport.height)),
+        width: Math.max(1, Math.round(measured.width)),
+        height: Math.max(1, Math.round(measured.height)),
       };
       // Touches arrive relative to the size the phone is told here.
       injector.bindLease({ width: source.width, height: source.height });
       const session: Session = {
         source,
+        viewport: shape,
         injector,
         listeners: new Set(),
         ended: false,
@@ -226,7 +266,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       };
       sessions.set(source, session);
       opening.delete(tab.tabId);
-      env.setCastingTabs?.(castingTabs());
+      syncCasting();
       return source;
     },
 
@@ -283,7 +323,26 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       session.listeners.clear();
       session.capture.stop();
       void session.injector.dispose();
-      env.setCastingTabs?.(castingTabs());
+      // The tab's own layout comes back with it leaving the cast set.
+      syncCasting();
     },
+
+    ...(env.setCastingViewports
+      ? {
+          async setViewport(source: DesktopPreviewSource, viewport: PreviewViewport) {
+            const session = sessionOf(source);
+            if (!isCurrent(source)) throw new Error('PREVIEW_SOURCE_ENDED');
+            session.viewport = viewport;
+            syncCasting();
+            // Measured again so the next gesture and frame start from the new layout; a tab
+            // that is momentarily not ready keeps the new shape and is measured by the gesture.
+            try {
+              await measureSettled(session.injector, viewport);
+            } catch (error) {
+              if (error instanceof Error && error.message === 'PREVIEW_SOURCE_ENDED') throw error;
+            }
+          },
+        }
+      : {}),
   };
 }

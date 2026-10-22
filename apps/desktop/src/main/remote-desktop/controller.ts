@@ -14,6 +14,7 @@ import {
   REMOTE_DESKTOP_LEASE_MS,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
   type PreviewInputEvent,
+  type PreviewViewport,
   type PreviewTabsReply,
   type DesktopInput,
   type RemoteDesktopWindow,
@@ -102,9 +103,16 @@ export interface DesktopPreviewDeps {
   /**
    * Take the tab for a lease: verifies it is still the same guest, measures its viewport and
    * keeps it paintable. Null when it is gone; throws `PREVIEW_CAPTURE_UNAVAILABLE` when it
-   * cannot be measured.
+   * cannot be measured. With `viewport` the tab is laid out in the phone's picture shape for
+   * as long as it is open (only when `setViewport` exists).
    */
-  open(tab: DesktopPreviewTab): Promise<DesktopPreviewSource | null>;
+  open(tab: DesktopPreviewTab, viewport?: PreviewViewport): Promise<DesktopPreviewSource | null>;
+  /**
+   * The phone's picture area changed: lay the tab out in the new shape. Present only where the
+   * host can do that; its absence keeps `previewTab.viewport` unadvertised. The tab's own
+   * layout comes back with `end`.
+   */
+  setViewport?(source: DesktopPreviewSource, viewport: PreviewViewport): Promise<void>;
   /** The source is still the tab (and guest) it was opened for. */
   current(source: DesktopPreviewSource): boolean;
   /** Called once when the source ends or capture gives up; returns the unsubscribe. */
@@ -891,7 +899,11 @@ export class RemoteDesktopController {
         ...(this.deps.handoffWindow ? { handoffWindow: true } : {}),
         ...(this.deps.preview
           ? {
-              previewTab: { version: 1 as const, maxTouchPoints: this.deps.preview.maxTouchPoints },
+              previewTab: {
+                version: 1 as const,
+                maxTouchPoints: this.deps.preview.maxTouchPoints,
+                ...(this.deps.preview.setViewport ? { viewport: true as const } : {}),
+              },
             }
           : {}),
       };
@@ -913,7 +925,7 @@ export class RemoteDesktopController {
     }
     if (request.op === 'previewTabs') return this.previewTabs(peer, request.sessionId);
     if (request.op === 'previewStart')
-      return this.previewStart(peer, request.grant, request.resume === true);
+      return this.previewStart(peer, request.grant, request.resume === true, request.viewport);
     return this.leaseRequest(peer, request);
   }
   /** Ends a preview lease for a reason its viewer can read (`PREVIEW_*`), not just "expired". */
@@ -969,6 +981,7 @@ export class RemoteDesktopController {
     peer: string,
     grant: string,
     resume: boolean,
+    viewport?: PreviewViewport,
   ): Promise<RemoteDesktopLease> {
     const preview = this.requirePreview();
     const authenticationSession = this.authenticationSession(peer);
@@ -998,7 +1011,8 @@ export class RemoteDesktopController {
     try {
       if (replacing && this.active === replacing) this.stop(peer, false, 'resume-replaced');
       const generation = this.controlGeneration;
-      source = await preview.open(tab);
+      source =
+        viewport && preview.setViewport ? await preview.open(tab, viewport) : await preview.open(tab);
       if (!source) throw new Error('PREVIEW_SOURCE_ENDED');
       if (
         this.startingPeer !== peer ||
@@ -1489,6 +1503,31 @@ export class RemoteDesktopController {
         // A lease revoked while the batch ran must not report it as applied.
         this.require(peer, request.lease);
         return { sequence: request.sequence };
+      }
+      case 'previewViewport': {
+        const preview = active.previewLease;
+        // Only a preview lease on a host that can lay a tab out has anything to resize.
+        if (!preview || !this.deps.preview?.setViewport) throw new Error('INVALID_REQUEST');
+        if (!this.deps.preview.current(preview.source)) {
+          this.endPreview(active, 'PREVIEW_SOURCE_ENDED', 'preview-ended');
+          throw new Error('PREVIEW_SOURCE_ENDED');
+        }
+        try {
+          await this.deps.preview.setViewport(preview.source, {
+            width: request.width,
+            height: request.height,
+          });
+        } catch (error) {
+          const code = error instanceof Error ? error.message : '';
+          if (code === 'PREVIEW_SOURCE_ENDED' || code === 'PREVIEW_CAPTURE_UNAVAILABLE') {
+            this.endPreview(active, code, 'preview-ended');
+            throw error;
+          }
+          throw new Error('DESKTOP_REQUEST_FAILED');
+        }
+        // A lease revoked while the tab was laid out must not report it as applied.
+        this.require(peer, request.lease);
+        return {};
       }
       case 'frame': {
         if (this.displayChanging) return { jpeg: null };

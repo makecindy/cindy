@@ -105,6 +105,10 @@ export const PREVIEW_MAX_INPUT_BYTES = 16_384;
 export const PREVIEW_MAX_TEXT_CHARS = 4096;
 export const PREVIEW_MAX_TITLE_CHARS = 200;
 const PREVIEW_MAX_TOUCH_ID = 2_147_483_647;
+/** Bounds of the phone picture area the host lays a preview tab out for, in CSS px (iOS pt). */
+export const PREVIEW_VIEWPORT_MIN = 240;
+export const PREVIEW_VIEWPORT_MAX_WIDTH = 2048;
+export const PREVIEW_VIEWPORT_MAX_HEIGHT = 4096;
 const PREVIEW_GRANT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PREVIEW_REF_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -135,6 +139,27 @@ export interface PreviewTabSummary {
 }
 export type PreviewTabsRequest = { op: "previewTabs"; sessionId?: string };
 export type PreviewTabsReply = { tabs: PreviewTabSummary[] };
+/**
+ * The area of the phone that shows the picture, in CSS px (iOS pt), without the soft
+ * keyboard. Whole numbers: width 240..2048, height 240..4096.
+ */
+export interface PreviewViewport {
+  width: number;
+  height: number;
+}
+/** Hosts answer a `viewport` / `previewViewport` outside the bounds with `INVALID_REQUEST`. */
+export function isPreviewViewport(value: unknown): value is PreviewViewport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    Number.isInteger(v.width) &&
+    (v.width as number) >= PREVIEW_VIEWPORT_MIN &&
+    (v.width as number) <= PREVIEW_VIEWPORT_MAX_WIDTH &&
+    Number.isInteger(v.height) &&
+    (v.height as number) >= PREVIEW_VIEWPORT_MIN &&
+    (v.height as number) <= PREVIEW_VIEWPORT_MAX_HEIGHT
+  );
+}
 export type PreviewStartRequest = {
   op: "previewStart";
   grant: string;
@@ -144,7 +169,17 @@ export type PreviewStartRequest = {
    * display `start` with `resume`; without it the start is the user's own and goes ahead.
    */
   resume?: boolean;
+  /**
+   * Lay the tab out in the phone's picture shape while it is cast. Only sent to hosts
+   * advertising `previewTab.viewport`; older hosts drop the unknown field.
+   */
+  viewport?: PreviewViewport;
 };
+/** Phone picture area changed (rotation, split view); not sent for the soft keyboard. Reply `{}`. */
+export type PreviewViewportRequest = {
+  op: "previewViewport";
+  lease: string;
+} & PreviewViewport;
 
 export interface PreviewTouchPoint {
   id: number;
@@ -242,6 +277,7 @@ export const PREVIEW_LEASE_OPS: ReadonlySet<string> = new Set([
   "viewerHidden",
   "frame",
   "previewInput",
+  "previewViewport",
 ]);
 export function isPreviewLeaseOp(op: string): boolean {
   return PREVIEW_LEASE_OPS.has(op);
@@ -270,7 +306,11 @@ export function remoteDesktopPreviewTabCapability(
     (v.maxTouchPoints as number) > PREVIEW_MAX_TOUCH_POINTS
   )
     return null;
-  return { version: 1, maxTouchPoints: v.maxTouchPoints as number };
+  return {
+    version: 1,
+    maxTouchPoints: v.maxTouchPoints as number,
+    ...(v.viewport === true ? { viewport: true as const } : {}),
+  };
 }
 
 /** Viewer intent; the host owns the concrete encoder and capture parameters. */
@@ -393,6 +433,11 @@ export interface RemoteDesktopPreviewTabCapability {
   version: 1;
   /** Most simultaneous touch points the host injects, 1..{@link PREVIEW_MAX_TOUCH_POINTS}. */
   maxTouchPoints: number;
+  /**
+   * Accepts `previewStart.viewport` and `previewViewport`: while cast, the tab is laid out in
+   * the phone's picture shape. Absent = the tab keeps the desktop layout.
+   */
+  viewport?: true;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -466,6 +511,7 @@ export type RemoteDesktopRequest =
   | PreviewTabsRequest
   | PreviewStartRequest
   | PreviewInputRequest
+  | PreviewViewportRequest
   | { op: "permissions"; action: "check" | "guide" }
   | {
       op: "start";
@@ -583,10 +629,15 @@ export function parseRemoteDesktopRequest(
       throw new Error("INVALID_REQUEST");
     if (v.resume !== undefined && typeof v.resume !== "boolean")
       throw new Error("INVALID_REQUEST");
+    if (v.viewport !== undefined && !isPreviewViewport(v.viewport))
+      throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       grant: v.grant,
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
+      ...(v.viewport !== undefined
+        ? { viewport: { width: v.viewport.width, height: v.viewport.height } }
+        : {}),
     };
   }
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
@@ -775,6 +826,10 @@ export function parseRemoteDesktopRequest(
       events: v.events,
     };
   }
+  if (v.op === "previewViewport") {
+    if (!isPreviewViewport(v)) throw new Error("INVALID_REQUEST");
+    return { op: v.op, lease, width: v.width, height: v.height };
+  }
   if (
     v.op === "previewInput" &&
     Number.isSafeInteger(v.sequence) &&
@@ -811,6 +866,7 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "clipboardSync",
   "clipboardVersion",
   "previewInput",
+  "previewViewport",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */

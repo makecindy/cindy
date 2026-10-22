@@ -81,6 +81,60 @@ describe("preview tab wire parsing", () => {
     reject({ op: "previewStart", grant, resume: true, handoff: "req" });
   });
 
+  it("takes an optional previewStart.viewport in whole numbers within bounds", () => {
+    const parsed = (viewport: unknown) =>
+      parseRemoteDesktopRequest({ op: "previewStart", grant, viewport });
+    expect(parsed({ width: 402, height: 786, extra: 1 })).toEqual({
+      op: "previewStart",
+      grant,
+      viewport: { width: 402, height: 786 },
+    });
+    expect(parsed({ width: 240, height: 240 })).toMatchObject({
+      viewport: { width: 240, height: 240 },
+    });
+    expect(parsed({ width: 2048, height: 4096 })).toMatchObject({
+      viewport: { width: 2048, height: 4096 },
+    });
+    for (const viewport of [
+      null,
+      "402x786",
+      [],
+      {},
+      { width: 402 },
+      { width: 239, height: 786 },
+      { width: 402, height: 239 },
+      { width: 2049, height: 786 },
+      { width: 402, height: 4097 },
+      { width: 402.5, height: 786 },
+      { width: "402", height: 786 },
+      { width: Number.NaN, height: 786 },
+    ])
+      reject({ op: "previewStart", grant, viewport });
+  });
+
+  it("parses previewViewport on a lease with the same bounds, and over the media channel", () => {
+    expect(
+      parseRemoteDesktopRequest({ op: "previewViewport", lease: "l", width: 402, height: 786 }),
+    ).toEqual({ op: "previewViewport", lease: "l", width: 402, height: 786 });
+    reject({ op: "previewViewport", width: 402, height: 786 }, "INVALID_LEASE");
+    for (const size of [
+      { width: 100, height: 786 },
+      { width: 402, height: 5000 },
+      { width: 402.5, height: 786 },
+      { width: 402 },
+      {},
+    ])
+      reject({ op: "previewViewport", lease: "l", ...size });
+    const request = parseRemoteDesktopRequest({
+      op: "previewViewport",
+      lease: "l",
+      width: 402,
+      height: 786,
+    });
+    expect(isRemoteDesktopChannelRequest(request)).toBe(true);
+    expect(isPreviewLeaseOp("previewViewport")).toBe(true);
+  });
+
   it("checks the grant shape separately so hosts can answer PREVIEW_GRANT_INVALID", () => {
     expect(isPreviewGrant(grant)).toBe(true);
     for (const g of ["", "short", "A".repeat(44), "A".repeat(42) + "=", 5, null])
@@ -206,6 +260,7 @@ describe("preview tab wire parsing", () => {
         "offer",
         "presentation",
         "previewInput",
+        "previewViewport",
         "stop",
         "viewerHidden",
       ].sort(),
@@ -251,6 +306,16 @@ describe("preview tab wire parsing", () => {
         previewTab: { version: 1, maxTouchPoints: 10 },
       }),
     ).toEqual({ version: 1, maxTouchPoints: 10 });
+  });
+
+  it("reads previewTab.viewport only when it is exactly true", () => {
+    const cap = (viewport: unknown) =>
+      remoteDesktopPreviewTabCapability({
+        previewTab: { version: 1, maxTouchPoints: 2, viewport },
+      } as never);
+    expect(cap(true)).toEqual({ version: 1, maxTouchPoints: 2, viewport: true });
+    for (const value of [false, "true", 1, null, {}, undefined])
+      expect(cap(value)).toEqual({ version: 1, maxTouchPoints: 2 });
   });
 
   it("maps the new error codes", () => {
@@ -401,6 +466,78 @@ describe("preview tab viewer session", () => {
       grant,
       resume: true,
     });
+  });
+
+  it("sends the phone viewport with previewStart only to a host advertising viewport", async () => {
+    const viewport = { width: 402, height: 786 };
+    const supported = fixture({
+      ...previewCaps,
+      previewTab: { version: 1, maxTouchPoints: 2, viewport: true },
+    });
+    await supported.session.connect({ isCurrent: () => true, preview: { grant, viewport } });
+    expect(supported.request.mock.calls[1][0]).toEqual({
+      op: "previewStart",
+      grant,
+      viewport,
+    });
+    // An older host never sees the field; a malformed size is never sent at all.
+    const older = fixture(previewCaps);
+    await older.session.connect({ isCurrent: () => true, preview: { grant, viewport } });
+    expect(older.request.mock.calls[1][0]).toEqual({ op: "previewStart", grant });
+    for (const bad of [{ width: 100, height: 786 }, { width: 402.5, height: 786 }]) {
+      const f = fixture({
+        ...previewCaps,
+        previewTab: { version: 1, maxTouchPoints: 2, viewport: true },
+      });
+      await f.session.connect({ isCurrent: () => true, preview: { grant, viewport: bad } });
+      expect(f.request.mock.calls[1][0]).toEqual({ op: "previewStart", grant });
+    }
+  });
+
+  it("sends previewViewport only on a preview lease of a viewport host, once per change", async () => {
+    const f = fixture({
+      ...previewCaps,
+      previewTab: { version: 1, maxTouchPoints: 2, viewport: true },
+    });
+    await expect(f.session.previewViewport({ width: 402, height: 786 })).resolves.toBe(false);
+    await f.session.connect({
+      isCurrent: () => true,
+      preview: { grant, viewport: { width: 402, height: 786 } },
+    });
+    // Same as what the host already has, and malformed sizes, send nothing.
+    await expect(f.session.previewViewport({ width: 402, height: 786 })).resolves.toBe(false);
+    await expect(f.session.previewViewport({ width: 10, height: 786 })).resolves.toBe(false);
+    expect(ops(f)).toEqual(["capabilities", "previewStart"]);
+    await expect(f.session.previewViewport({ width: 786, height: 402 })).resolves.toBe(true);
+    expect(f.request.mock.calls.at(-1)?.[0]).toEqual({
+      op: "previewViewport",
+      lease: "pl",
+      width: 786,
+      height: 402,
+    });
+    await expect(f.session.previewViewport({ width: 786, height: 402 })).resolves.toBe(false);
+    await f.session.stop();
+    await expect(f.session.previewViewport({ width: 402, height: 786 })).resolves.toBe(false);
+  });
+
+  it("never sends previewViewport to an older host or on a display lease", async () => {
+    const older = fixture(previewCaps);
+    await older.session.connect({ isCurrent: () => true, preview: { grant } });
+    await expect(older.session.previewViewport({ width: 402, height: 786 })).resolves.toBe(false);
+    expect(ops(older)).toEqual(["capabilities", "previewStart"]);
+    const display = fixture(previewCaps);
+    display.request.mockImplementation(async (r: RemoteDesktopRequest) =>
+      r.op === "capabilities"
+        ? { ...previewCaps, previewTab: { version: 1, maxTouchPoints: 2, viewport: true } }
+        : r.op === "start"
+          ? { lease: "l", display: { id: "screen" }, controlling: false }
+          : {},
+    );
+    await display.session.connect({ isCurrent: () => true });
+    await expect(display.session.previewViewport({ width: 402, height: 786 })).resolves.toBe(
+      false,
+    );
+    expect(ops(display)).toEqual(["capabilities", "start"]);
   });
 
   it("rejects preview together with handoff or takeover before any request", async () => {

@@ -5348,6 +5348,7 @@ interface ElectronAPI {
       kept: number;
       pinnedTabIds: string[];
       castingTabIds: string[];
+      castingViewports?: Record<string, { width: number; height: number }>;
     }>;
     /** 工具栏截图按钮:main 端 capturePage 后写入系统剪贴板。失败抛 IPC error。 */
     captureScreenshot: (input: { tabId: string }) => Promise<{ ok: true }>;
@@ -5358,7 +5359,12 @@ interface ElectronAPI {
     /** main → renderer:取消 automation pin。 */
     onUnpin: (cb: (payload: { tabId: string }) => void) => () => void;
     /** main → renderer:本 renderer 承载的投屏标签全集(全量替换,非增量)。 */
-    onPreviewCasting: (cb: (payload: { tabIds: string[] }) => void) => () => void;
+    onPreviewCasting: (
+      cb: (payload: {
+        tabIds: string[];
+        viewports?: Record<string, { width: number; height: number }>;
+      }) => void,
+    ) => () => void;
     /**
      * main → renderer:Phase 3 backend 让 renderer 代调 store 的 tab-op
      * 请求(probe / open / focus / close)。payload 是带 reqId 的 union;renderer 处理
