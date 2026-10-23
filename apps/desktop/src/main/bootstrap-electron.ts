@@ -88,6 +88,7 @@ import {
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
+import { ghostInstallApprovalToken } from '../shared/ghost.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { textFilePreviewResult, TEXT_PREVIEW_LIMIT_MB } from './text-file-preview';
@@ -2402,7 +2403,14 @@ const rsbBrowserRegistry = getRsbBrowserBridge();
 // 插件身份;插件停用 / 卸载 / 不再声明 preview 时,装/卸/启停广播的同步观察者让绑定失效。
 setPreviewTabGhostResolver((ghostId) => {
   const ghost = findGhostForInstanceId(ghostId);
-  return ghost ? { available: ghost.enabled && Boolean(ghost.manifest.preview), name: ghost.manifest.name } : null;
+  return ghost
+    ? {
+        available: ghost.enabled && Boolean(ghost.manifest.preview),
+        name: ghost.manifest.name,
+        // 版本 + 安装批准快照:更新 / 重装后变化,旧版本打开的预览标签据此从索引移除。
+        revision: `${ghost.manifest.version}|${ghostInstallApprovalToken(ghost.approval)}`,
+      }
+    : null;
 });
 const previewTabIndex = getPreviewTabIndex();
 setGhostPreviewRequestIssuer((input) => previewTabIndex.issue(input));

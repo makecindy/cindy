@@ -16,7 +16,7 @@
  *   LRU 回收后重建)的重新 report 能原样复绑;grant 在换源 / 插件不可用 / 标签
  *   不再存活时作废,作废后同一个 id 无法复活。
  * - 失效:registry release(含 webContents destroyed)、webContentsId 变更(guest 重建)、
- *   插件停用 / 卸载 / 不再声明 preview。失效即触发 onEnded。
+ *   插件停用 / 卸载 / 不再声明 preview、插件更新(安装代次变了)。失效即触发 onEnded。
  * - 暂停:同一 webContents 顶层导航离开绑定 origin(典型是预览要求登录、跳到账号站点
  *   再回来)不作废,而是暂停:触发一次 onEnded('origin-changed')(投屏据此结束,不会采集
  *   跨站页面),list / get / current 一律当作不存在,grant 无从签发或使用。同一 webContents
@@ -77,7 +77,12 @@ export type PreviewTabEndReason =
   /** 暂停超过 PREVIEW_PAUSE_LIMIT_MS 仍没回到绑定 origin(只记日志,不触发 onEnded)。 */
   | 'pause-expired'
   /** 插件停用 / 卸载 / 不再声明 preview。 */
-  | 'plugin-unavailable';
+  | 'plugin-unavailable'
+  /**
+   * 插件更新 / 重装(安装代次变了)。旧标签里是旧版本的页面,更新会重启插件自己的
+   * 服务,页面背后的服务已停;选它进不去,所以直接从索引移除,新版本开的预览是新标签。
+   */
+  | 'plugin-updated';
 
 export interface PreviewTabEnded {
   readonly binding: PreviewTabBinding;
@@ -90,6 +95,11 @@ export interface PreviewTabGhostInfo {
   /** 已启用且仍声明 preview 槽。 */
   available: boolean;
   name: string;
+  /**
+   * 安装代次(版本 + 安装批准快照):插件更新 / 重装后变化。缺省 = 不跟踪(绑定不会
+   * 因更新失效)。签发时记下,之后与当前值不同即视为插件已更新。
+   */
+  revision?: string;
 }
 
 export interface PreviewTabIndexDeps {
@@ -110,6 +120,7 @@ export interface PreviewTabIndexDeps {
 
 interface PendingRequest {
   ghostId: string;
+  ghostRevision?: string;
   sessionId: string;
   origin: string;
   expiresAt: number;
@@ -118,6 +129,7 @@ interface PendingRequest {
 interface Grant {
   requestId: string;
   ghostId: string;
+  ghostRevision?: string;
   sessionId: string;
   origin: string;
 }
@@ -177,8 +189,10 @@ export class PreviewTabIndex {
       this.pending.delete(oldest);
     }
     const id = (this.deps.randomId ?? defaultRandomId)();
+    const ghostRevision = this.deps.getGhost(input.ghostId)?.revision;
     this.pending.set(id, {
       ghostId: input.ghostId,
+      ...(ghostRevision !== undefined ? { ghostRevision } : {}),
       sessionId: input.sessionId,
       origin,
       expiresAt: now + PREVIEW_REQUEST_TTL_MS,
@@ -222,6 +236,11 @@ export class PreviewTabIndex {
       this.rejected(record, 'plugin-unavailable');
       return;
     }
+    if (this.isStale(grant, ghost)) {
+      this.grants.delete(record.tabId);
+      this.rejected(record, 'plugin-updated');
+      return;
+    }
     // guest 已提交过页面时核对真实 origin;空白页(attach 早期上报)放行,
     // 随后的导航提交由 watchNavigation 兜住。
     const currentUrl = this.deps.getGuestUrl(record.webContentsId);
@@ -260,9 +279,15 @@ export class PreviewTabIndex {
   reconcileGhosts(): void {
     this.expirePaused();
     for (const [tabId, grant] of [...this.grants]) {
-      if (!this.deps.getGhost(grant.ghostId)?.available) {
+      const ghost = this.deps.getGhost(grant.ghostId);
+      const reason: PreviewTabEndReason | null = !ghost?.available
+        ? 'plugin-unavailable'
+        : this.isStale(grant, ghost)
+          ? 'plugin-updated'
+          : null;
+      if (reason) {
         this.grants.delete(tabId);
-        if (this.live.has(tabId)) this.end(tabId, 'plugin-unavailable');
+        if (this.live.has(tabId)) this.end(tabId, reason);
       }
     }
     for (const [tabId, entry] of [...this.live]) {
@@ -367,6 +392,15 @@ export class PreviewTabIndex {
     });
   }
 
+  /** 签发时记了安装代次、而插件当前代次不同 = 插件更新过。 */
+  private isStale(grant: Grant, ghost: PreviewTabGhostInfo): boolean {
+    return (
+      grant.ghostRevision !== undefined &&
+      ghost.revision !== undefined &&
+      grant.ghostRevision !== ghost.revision
+    );
+  }
+
   /** 作废暂停超过上限的条目(惰性检查:无定时器,每次查询 / 对账 / 导航时核对)。 */
   private expirePaused(): void {
     const now = this.now();
@@ -405,6 +439,7 @@ export class PreviewTabIndex {
       grant: {
         requestId,
         ghostId: request.ghostId,
+        ...(request.ghostRevision !== undefined ? { ghostRevision: request.ghostRevision } : {}),
         sessionId: request.sessionId,
         origin: request.origin,
       },

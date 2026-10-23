@@ -22,7 +22,7 @@ function setup() {
   let clock = 1_000_000;
   let seq = 0;
   const warn = vi.fn();
-  const ghosts = new Map<string, { available: boolean; name: string }>([
+  const ghosts = new Map<string, { available: boolean; name: string; revision?: string }>([
     ['ghost-a', { available: true, name: 'Ghost A' }],
     ['ghost-b', { available: true, name: 'Ghost B' }],
   ]);
@@ -331,6 +331,39 @@ describe('PreviewTabIndex · 失效', () => {
     c.navigate(11, URL_OK);
     expect(c.index.get('tab-1')).toBeNull();
     expect(c.ended).toHaveLength(1);
+  });
+
+  it('插件更新(安装代次变了)→ 旧标签从索引移除并通知,同一个 id 无法复活', () => {
+    const ctx = setup();
+    ctx.ghosts.set('ghost-a', { available: true, name: 'Ghost A', revision: '0.1.25|r1' });
+    const id = ctx.index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+    ctx.index.bind(rec('tab-1', 11), id);
+    expect(ctx.index.list()).toHaveLength(1);
+    ctx.ghosts.set('ghost-a', { available: true, name: 'Ghost A', revision: '0.1.26|r2' });
+    ctx.index.reconcileGhosts();
+    expect(ctx.index.list()).toEqual([]);
+    expect(ctx.ended).toMatchObject([{ reason: 'plugin-updated', binding: { tabId: 'tab-1' } }]);
+    expect(ctx.watcherCount(11)).toBe(0);
+    ctx.index.bind(rec('tab-1', 11), id);
+    expect(ctx.index.get('tab-1')).toBeNull();
+    // 新版本开的预览(新签发)是新标签,正常绑定
+    const fresh = ctx.index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+    ctx.index.bind(rec('tab-2', 12), fresh);
+    expect(ctx.index.get('tab-2')).not.toBeNull();
+  });
+
+  it('插件在签发之后、绑定之前更新 → 绑定被拒;不跟踪代次的插件不受影响', () => {
+    const ctx = setup();
+    ctx.ghosts.set('ghost-a', { available: true, name: 'Ghost A', revision: 'v1' });
+    const id = ctx.index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+    ctx.ghosts.set('ghost-a', { available: true, name: 'Ghost A', revision: 'v2' });
+    ctx.index.bind(rec('tab-1', 11), id);
+    expect(ctx.index.get('tab-1')).toBeNull();
+    // ghost-b 没有 revision:更新与否都不失效
+    const idB = ctx.index.issue({ ghostId: 'ghost-b', sessionId: 's1', url: URL_OK })!;
+    ctx.index.bind(rec('tab-2', 12), idB);
+    ctx.index.reconcileGhosts();
+    expect(ctx.index.get('tab-2')).not.toBeNull();
   });
 
   it('暂停期间插件停用后又启用,回到原 origin 也不恢复(恢复前核对插件)', () => {

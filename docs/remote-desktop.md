@@ -459,6 +459,12 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   to exactly the bound origin resumes it under a new generation (new `ref`; the ended cast is
   not revived, the phone lists again). Not back within 30 minutes, or the tab is released,
   rebuilt, or the plugin disabled: invalidated for good (silently, `onEnded` already fired).
+- **Plugin updates**: the index records the plugin's install revision (version + install
+  approval snapshot) when the preview is issued. After an update or reinstall the plugin's own
+  service is restarted, so a tab opened by the old version points at a stopped service and
+  could never be entered; it is removed from the index (`onEnded('plugin-updated')`) instead of
+  being listed as a duplicate of the new version's tab. Removal was chosen over keeping it
+  castable because nothing can tell that the old page still works.
 - **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
   `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.
