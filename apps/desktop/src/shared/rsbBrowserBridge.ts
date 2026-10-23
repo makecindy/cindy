@@ -163,6 +163,11 @@ export interface RsbBrowserBridgeViewRect {
   top: number;
   width: number;
   height: number;
+  /**
+   * 该 `<webview>` 的计算样式 `pointer-events` 为 `none`(含继承自保活层):宿主无法对它做命中测试,
+   * 触点到不了其中的跨进程 iframe,注入端要改为直送 iframe 的调试会话。缺省按 false(旧 renderer)。
+   */
+  pointerBlocked?: boolean;
 }
 
 /** Tab-op response renderer pushes back. `ok: false` carries a short error. */

@@ -488,7 +488,14 @@ async function handleTabOpRequest(
           reqId,
           ok: true,
           tabId: req.tabId,
-          rect: { left: box.left, top: box.top, width: box.width, height: box.height },
+          rect: {
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            height: box.height,
+            // 保活层用 pointer-events:none 让出点击,但这会让宿主对其中的跨进程 iframe 失去命中测试。
+            pointerBlocked: getComputedStyle(webview).pointerEvents === 'none',
+          },
         };
       }
       await api.tabOpResult(result);

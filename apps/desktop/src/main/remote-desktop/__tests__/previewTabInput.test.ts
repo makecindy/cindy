@@ -17,7 +17,11 @@ function setup(
   } = {},
 ) {
   const state = { attached: options.attached ?? false };
-  const commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  const commands: Array<{
+    method: string;
+    params?: Record<string, unknown>;
+    sessionId?: string;
+  }> = [];
   const handlers = new Map<string, (params?: Record<string, unknown>) => Promise<unknown>>();
   const viewport = options.viewport ?? { w: 800, h: 500 };
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -38,8 +42,8 @@ function setup(
     detach: vi.fn(() => {
       state.attached = false;
     }),
-    sendCommand: vi.fn(async (method: string, params?: object) => {
-      commands.push({ method, params: params as Record<string, unknown> | undefined });
+    sendCommand: vi.fn(async (method: string, params?: object, sessionId?: string) => {
+      commands.push({ method, params: params as Record<string, unknown> | undefined, sessionId });
       const handler = handlers.get(method);
       if (handler) return handler(params as Record<string, unknown> | undefined);
       if (method === 'Page.getLayoutMetrics')
@@ -726,5 +730,253 @@ describe('TabInputInjector touch presentation', () => {
     // The timed-out apply may still have gone through in the page: it is undone at the end.
     await h.injector.dispose();
     expect(touchCommands(h).at(-1)).toEqual({ enabled: false });
+  });
+});
+
+describe('TabInputInjector touches into cross-process frames', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  type Harness = ReturnType<typeof setup>;
+  // A 300x300 iframe at (50, 100) in an 800x500 tab, turned 90 degrees (CSS transform): its
+  // content box is a rotated quad in tab px, and its own viewport is 300x300.
+  const rotated = { content: [350, 100, 350, 400, 50, 400, 50, 100], width: 300, height: 300 };
+  const flat = { content: [50, 100, 350, 100, 350, 400, 50, 400], width: 300, height: 300 };
+  const blocked: GuestOrigin = { x: 770, y: 86, width: 800, height: 500, hitBlocked: true };
+  const clear: GuestOrigin = { x: 0, y: 0, width: 800, height: 500 };
+  // Hit-testable, but not at the host's (0, 0): the browser looks for the frame under the finger
+  // with the host-space numbers as if they were the tab's own.
+  const offset: GuestOrigin = { x: 770, y: 86, width: 800, height: 500 };
+  const commandsOf = (h: Harness, method: string) => h.commands.filter((c) => c.method === method);
+  const touchesOf = (h: Harness) =>
+    h.commands
+      .filter((c) => c.method === 'Input.dispatchTouchEvent')
+      .map((c) => ({
+        session: c.sessionId,
+        type: c.params?.type,
+        at: (c.params?.touchPoints as Array<{ x: number; y: number }>).map((p) => [p.x, p.y]),
+      }));
+  const detaches = (h: Harness) =>
+    commandsOf(h, 'Target.detachFromTarget').map((c) => c.params?.sessionId);
+
+  /** The tab holds one cross-process iframe; `frames` are the targets that exist. */
+  function withFrame(
+    origin: GuestOrigin,
+    box: { content: number[]; width: number; height: number } = rotated,
+    frames: string[] = ['F1'],
+  ) {
+    const h = setup({ origin: async () => origin });
+    h.injector.bindLease({ width: 800, height: 500 });
+    h.handlers.set('DOM.getNodeForLocation', async () => ({ backendNodeId: 7 }));
+    h.handlers.set('DOM.describeNode', async () => ({ node: { frameId: 'F1' } }));
+    h.handlers.set('DOM.getBoxModel', async () => ({ model: box }));
+    h.handlers.set('Target.getTargets', async () => ({
+      targetInfos: frames.map((targetId) => ({ targetId, type: 'iframe' })),
+    }));
+    h.handlers.set('Target.attachToTarget', async (params) => ({
+      sessionId: `session-${params?.targetId}`,
+    }));
+    return h;
+  }
+
+  it('leaves a webview at the host origin alone: no frame lookup, plain coordinates', async () => {
+    const h = withFrame(clear);
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(commandsOf(h, 'DOM.getNodeForLocation')).toEqual([]);
+    expect(commandsOf(h, 'Target.attachToTarget')).toEqual([]);
+    expect(touchesOf(h)[0]).toEqual({ session: undefined, type: 'touchStart', at: [[300, 200]] });
+  });
+
+  it('reaches a frame under a webview the host cannot hit-test, even at the host origin', async () => {
+    const h = withFrame({ ...clear, hitBlocked: true });
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h)[0]).toEqual({ session: 'session-F1', type: 'touchStart', at: [[100, 50]] });
+  });
+
+  it('reaches a frame under a webview that sits away from the host origin too', async () => {
+    const h = withFrame(offset);
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h)[0]).toEqual({ session: 'session-F1', type: 'touchStart', at: [[100, 50]] });
+    // Over the tab's own page the host coordinates are still used.
+    h.handlers.set('DOM.describeNode', async () => ({ node: { nodeName: 'DIV' } }));
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h)[2]).toEqual({ session: undefined, type: 'touchStart', at: [[1070, 286]] });
+  });
+
+  it("sends the gesture to the frame under the finger, in that frame's own coordinates", async () => {
+    const h = withFrame(blocked);
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    // Page point (300, 200) is local (100, 50) in the turned frame; no host offset is added.
+    expect(commandsOf(h, 'DOM.getNodeForLocation')[0].params).toMatchObject({
+      x: 300,
+      y: 200,
+      ignorePointerEventsNone: true,
+    });
+    expect(commandsOf(h, 'Target.attachToTarget')[0].params).toEqual({
+      targetId: 'F1',
+      flatten: true,
+    });
+    expect(touchesOf(h)).toEqual([
+      { session: 'session-F1', type: 'touchStart', at: [[100, 50]] },
+      { session: 'session-F1', type: 'touchEnd', at: [] },
+    ]);
+    // The session is for this gesture only.
+    expect(detaches(h)).toEqual(['session-F1']);
+    expect(h.injector.pressed.touches).toBe(0);
+  });
+
+  it('keeps every finger of the gesture in the frame the first one landed in', async () => {
+    const h = withFrame(blocked, flat);
+    await h.injector.inject([
+      touch('start', [[1, 0.125, 0.4]]), // page (100, 200) -> local (50, 100)
+      touch('start', [
+        [1, 0.125, 0.4],
+        [2, 0.25, 0.5], // page (200, 250) -> local (150, 150)
+      ]),
+      touch('move', [
+        [1, 0.125, 0.4],
+        [2, 0.375, 0.5], // page (300, 250) -> local (250, 150)
+      ]),
+      touch('end', []),
+    ]);
+    expect(touchesOf(h)).toEqual([
+      { session: 'session-F1', type: 'touchStart', at: [[50, 100]] },
+      {
+        session: 'session-F1',
+        type: 'touchStart',
+        at: [
+          [50, 100],
+          [150, 150],
+        ],
+      },
+      {
+        session: 'session-F1',
+        type: 'touchMove',
+        at: [
+          [50, 100],
+          [250, 150],
+        ],
+      },
+      { session: 'session-F1', type: 'touchEnd', at: [] },
+    ]);
+    // One lookup for the gesture, not one per event.
+    expect(commandsOf(h, 'Target.attachToTarget')).toHaveLength(1);
+  });
+
+  it('stays on the tab when the element under the finger hosts no cross-process frame', async () => {
+    const h = withFrame(blocked);
+    h.handlers.set('DOM.describeNode', async () => ({ node: { nodeName: 'DIV' } }));
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(commandsOf(h, 'Target.attachToTarget')).toEqual([]);
+    expect(touchesOf(h)[0]).toEqual({ session: undefined, type: 'touchStart', at: [[1070, 286]] });
+    // A same-process iframe has no target of its own either.
+    const same = withFrame(blocked, rotated, []);
+    await same.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(commandsOf(same, 'Target.attachToTarget')).toEqual([]);
+    expect(touchesOf(same)[0].session).toBeUndefined();
+  });
+
+  it('follows frames nested in frames, and gives every session back', async () => {
+    const h = withFrame(blocked, flat, ['F1', 'F2']);
+    let depth = 0;
+    h.handlers.set('DOM.describeNode', async () => ({
+      node: { frameId: ['F1', 'F2'][depth++] },
+    }));
+    // The inner frame sits at (20, 30), 200x200, inside the outer one.
+    h.handlers.set('DOM.getBoxModel', async () => ({
+      model:
+        depth === 1
+          ? flat
+          : { content: [20, 30, 220, 30, 220, 230, 20, 230], width: 200, height: 200 },
+    }));
+    await h.injector.inject([touch('start', [[1, 0.25, 0.5]]), touch('end', [])]); // page (200, 250)
+    // (200, 250) -> (150, 150) in F1 -> (130, 120) in F2
+    expect(commandsOf(h, 'DOM.getNodeForLocation').map((c) => c.sessionId)).toEqual([
+      undefined,
+      'session-F1',
+      'session-F2', // the innermost frame is asked too, and hosts no further frame
+    ]);
+    expect(touchesOf(h)[0]).toEqual({
+      session: 'session-F2',
+      type: 'touchStart',
+      at: [[130, 120]],
+    });
+    expect(detaches(h)).toEqual(['session-F2', 'session-F1']);
+  });
+
+  it('looks the frame up again for every gesture: it may load late, navigate or go away', async () => {
+    const h = withFrame(blocked, rotated, []);
+    // Not there yet.
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h)[0].session).toBeUndefined();
+    // Loaded: a target now exists.
+    h.handlers.set('Target.getTargets', async () => ({
+      targetInfos: [{ targetId: 'F1', type: 'iframe' }],
+    }));
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h).map((t) => t.session)).toEqual([
+      undefined,
+      undefined,
+      'session-F1',
+      'session-F1',
+    ]);
+    // Navigated to another site: a different target answers.
+    h.handlers.set('DOM.describeNode', async () => ({ node: { frameId: 'F2' } }));
+    h.handlers.set('Target.getTargets', async () => ({
+      targetInfos: [{ targetId: 'F2', type: 'iframe' }],
+    }));
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h).at(-1)?.session).toBe('session-F2');
+    // Destroyed mid-gesture: the dispatch is refused, the gesture is dropped, the next one works.
+    h.handlers.set('Input.dispatchTouchEvent', async () => {
+      throw new Error('Session with given id not found');
+    });
+    await expect(h.injector.inject([touch('start', [[1, 0.375, 0.4]])])).rejects.toThrow(
+      'PREVIEW_INPUT_INVALID',
+    );
+    expect(h.injector.pressed.touches).toBe(0);
+    expect(detaches(h).at(-1)).toBe('session-F2');
+    h.handlers.delete('Input.dispatchTouchEvent');
+    h.handlers.set('DOM.describeNode', async () => ({ node: { nodeName: 'DIV' } }));
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(touchesOf(h).at(-1)?.session).toBeUndefined();
+  });
+
+  it('falls back to the tab when the lookup fails', async () => {
+    const h = withFrame(blocked);
+    h.handlers.set('DOM.getBoxModel', async () => {
+      throw new Error('Could not compute box model.');
+    });
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    expect(commandsOf(h, 'Target.attachToTarget')).toEqual([]);
+    expect(touchesOf(h)[0]).toEqual({ session: undefined, type: 'touchStart', at: [[1070, 286]] });
+  });
+
+  it('cancels in the frame and gives the session back on cancel, release and dispose', async () => {
+    const h = withFrame(blocked);
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('cancel', [])]);
+    expect(touchesOf(h).at(-1)).toEqual({ session: 'session-F1', type: 'touchCancel', at: [] });
+    expect(detaches(h)).toEqual(['session-F1']);
+
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+    await h.injector.release();
+    expect(touchesOf(h).at(-1)).toEqual({ session: 'session-F1', type: 'touchCancel', at: [] });
+    expect(detaches(h)).toEqual(['session-F1', 'session-F1']);
+
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+    await h.injector.dispose();
+    expect(touchesOf(h).at(-1)).toEqual({ session: 'session-F1', type: 'touchCancel', at: [] });
+    expect(detaches(h)).toHaveLength(3);
+    // Every attach has its detach, and the debugger itself went back.
+    expect(commandsOf(h, 'Target.attachToTarget')).toHaveLength(3);
+    expect(h.transport.detach).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not detach sessions that died with a replaced debugger session', async () => {
+    const h = withFrame(blocked);
+    await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+    h.emit('detach');
+    await h.injector.release();
+    expect(detaches(h)).toEqual([]);
   });
 });

@@ -51,6 +51,21 @@ describe('requestTabOrigin', () => {
     });
   });
 
+  it('passes on that the renderer cannot hit-test the webview (keep-alive layer)', async () => {
+    const h = setup({
+      reqId: 'r',
+      ok: true,
+      rect: { left: 0, top: 0, width: 510, height: 800, pointerBlocked: true },
+    });
+    expect(await requestTabOrigin(tab, h.deps)).toEqual({
+      x: 0,
+      y: 0,
+      width: 510,
+      height: 800,
+      hitBlocked: true,
+    });
+  });
+
   it.each([
     [
       'the renderer says the tab is not there',
