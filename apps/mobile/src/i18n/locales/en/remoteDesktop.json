@@ -167,6 +167,7 @@
   "previewGrantInvalid": "This preview can't be opened right now. Go back and try again.",
   "previewEnded": "This preview has ended. If it is still open on your computer, open it again from the task.",
   "previewCaptureUnavailable": "The computer can't capture this preview right now.",
+  "previewScreenLocked": "The computer's screen is locked. This preview will resume automatically once it is unlocked.",
   "previewInputInvalid": "The computer couldn't take that touch.",
   "previewOnly": "A preview only supports touch and typing.",
   "previewEntry": "View Preview on Computer",

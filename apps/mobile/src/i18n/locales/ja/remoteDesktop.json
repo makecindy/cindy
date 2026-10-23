@@ -167,6 +167,7 @@
   "previewGrantInvalid": "このプレビューは現在開けません。戻ってもう一度お試しください。",
   "previewEnded": "このプレビューは終了しました。コンピュータでまだ開いている場合は、セッションから開き直せます。",
   "previewCaptureUnavailable": "コンピュータがこのプレビューの画面を取得できません。",
+  "previewScreenLocked": "パソコンの画面がロックされています。ロックを解除すると、プレビューが自動的に再開されます。",
   "previewInputInvalid": "コンピュータがこのタッチを受け付けられませんでした。",
   "previewOnly": "プレビューではタッチと文字入力のみ使えます。",
   "previewEntry": "コンピュータのプレビューを表示",

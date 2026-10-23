@@ -40,6 +40,7 @@ export type DesktopStopReason =
   | 'handoff-ended'
   | 'preview-ended'
   | 'preview-unavailable'
+  | 'preview-screen-locked'
   | 'heartbeat-expired'
   | 'peer-offline'
   | 'signaling-lost'
@@ -89,7 +90,7 @@ export interface DesktopPreviewSource extends DesktopPreviewTab {
 export type DesktopPreviewFrameRequest =
   { purpose: 'relay' } | { purpose: 'stream'; settings?: RemoteDesktopVideoSettings };
 /** Why a preview source stopped being viewable. */
-export type DesktopPreviewEnd = 'ended' | 'capture-unavailable';
+export type DesktopPreviewEnd = 'ended' | 'capture-unavailable' | 'screen-locked';
 
 /**
  * Preview tab views. A preview lease never reaches a display, an OS window or OS input:
@@ -931,7 +932,7 @@ export class RemoteDesktopController {
   /** Ends a preview lease for a reason its viewer can read (`PREVIEW_*`), not just "expired". */
   private endPreview(
     active: NonNullable<RemoteDesktopController['active']>,
-    code: 'PREVIEW_SOURCE_ENDED' | 'PREVIEW_CAPTURE_UNAVAILABLE',
+    code: 'PREVIEW_SOURCE_ENDED' | 'PREVIEW_CAPTURE_UNAVAILABLE' | 'HOST_SCREEN_LOCKED',
     reason: DesktopStopReason,
   ): void {
     if (this.active !== active) return;
@@ -1057,11 +1058,11 @@ export class RemoteDesktopController {
       source = null; // the lease owns it now
       // Subscribed once the lease exists: a source that has already ended answers at once.
       const lost = (end: DesktopPreviewEnd) =>
-        this.endPreview(
-          active,
-          end === 'capture-unavailable' ? 'PREVIEW_CAPTURE_UNAVAILABLE' : 'PREVIEW_SOURCE_ENDED',
-          end === 'capture-unavailable' ? 'preview-unavailable' : 'preview-ended',
-        );
+        end === 'screen-locked'
+          ? this.endPreview(active, 'HOST_SCREEN_LOCKED', 'preview-screen-locked')
+          : end === 'capture-unavailable'
+            ? this.endPreview(active, 'PREVIEW_CAPTURE_UNAVAILABLE', 'preview-unavailable')
+            : this.endPreview(active, 'PREVIEW_SOURCE_ENDED', 'preview-ended');
       active.previewLease!.unwatch = preview.watch(opened, lost);
       return lease;
     } finally {

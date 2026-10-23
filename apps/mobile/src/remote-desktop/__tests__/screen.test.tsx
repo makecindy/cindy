@@ -5719,6 +5719,80 @@ describe("plugin preview tab view", () => {
     });
   });
 
+  describe("while the computer's screen is locked", () => {
+    const previewLease = {
+      lease: "lease",
+      controlling: false,
+      display: { ...display, id: "preview" },
+      preview: { pluginName: "Baguette", title: "Sim" },
+    };
+    const starts = () => requests().filter((r) => r.op === "previewStart");
+
+    it("says so, keeps resuming without a deadline, and shows the picture again after unlock", async () => {
+      let locked = false;
+      previewHost({
+        start: () => {
+          if (locked) throw new Error("HOST_SCREEN_LOCKED");
+          return previewLease;
+        },
+      });
+      await render();
+      await connect();
+      expect(starts()).toEqual([{ op: "previewStart", grant }]);
+      // The computer locks: the next start is refused with the lock reason.
+      locked = true;
+      act(() => fixture.crashed!());
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      await connect();
+      expect(host.textContent).toContain("remoteDesktop.previewScreenLocked");
+      expect(host.textContent).not.toContain("remoteDesktop.previewCaptureUnavailable");
+      expect(host.textContent).not.toContain("remoteDesktop.connect");
+      // It keeps asking at a steady pace as resumes, long past the usual connection deadline.
+      const before = starts().length;
+      for (let i = 0; i < 40; i++) {
+        await act(async () => vi.advanceTimersByTimeAsync(3100));
+        await connect();
+      }
+      expect(starts().length).toBeGreaterThanOrEqual(before + 30);
+      for (const request of starts().slice(1))
+        expect(request).toEqual({ op: "previewStart", grant, resume: true });
+      expect(host.textContent).toContain("remoteDesktop.previewScreenLocked");
+      expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
+      expect(host.textContent).not.toContain("remoteDesktop.connectionTakingLong");
+      // Unlocked: the next resume gets the picture back and the notice goes away.
+      locked = false;
+      await act(async () => vi.advanceTimersByTimeAsync(3100));
+      await connect();
+      expect(host.textContent).not.toContain("remoteDesktop.previewScreenLocked");
+    });
+
+    it("stops waiting when the computer's own Disconnect refuses the resume", async () => {
+      let state: "locked" | "disconnected" = "locked";
+      previewHost({
+        start: (request) => {
+          if (!request.resume) return previewLease;
+          throw new Error(state === "locked" ? "HOST_SCREEN_LOCKED" : "DESKTOP_STOPPED");
+        },
+      });
+      await render();
+      await connect();
+      act(() => fixture.crashed!());
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      await connect();
+      expect(host.textContent).toContain("remoteDesktop.previewScreenLocked");
+      state = "disconnected";
+      await act(async () => vi.advanceTimersByTimeAsync(3100));
+      await connect();
+      expect(fixture.alert).toHaveBeenCalledWith(
+        "remoteDesktop.disconnected",
+        "remoteDesktop.hostDisconnected",
+      );
+      const count = starts().length;
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(starts()).toHaveLength(count);
+    });
+  });
+
   describe("keeping the picture clear of the floating controls", () => {
     const insets = () => sent().filter((m) => m.type === "mouseButtons").at(-1);
 

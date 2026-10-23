@@ -11,7 +11,9 @@ import type {
   DesktopPreviewSource,
   DesktopPreviewTab,
 } from './controller';
+import { holdBackgroundThrottlingOff, type ThrottledContents } from './previewThrottling';
 import { TabCaptureSource, type CaptureGuest } from './previewTabCapture';
+import { readScreenLockState, type ScreenLockState } from './screenLock';
 import {
   TabInputInjector,
   type GuestOrigin,
@@ -21,9 +23,14 @@ import {
 
 /** The preview tab guest as the host sees it: a webview's WebContents. */
 export type PreviewGuest = CaptureGuest &
-  InputGuest & {
+  InputGuest &
+  ThrottledContents & {
     id: number;
     getTitle(): string;
+    /** Asks the compositor for a new frame; a guest the system stopped painting may resume. */
+    invalidate?(): void;
+    /** The window's contents that embeds this `<webview>`. */
+    hostWebContents?: (ThrottledContents & { invalidate?(): void }) | null;
   };
 
 export interface PreviewHostEnv {
@@ -61,6 +68,14 @@ export interface PreviewHostEnv {
   ): Promise<boolean>;
   /** Pause between layout measurements; tests inject an immediate one. */
   delay?(ms: number): Promise<void>;
+  /** Whether the screen is locked; read when capture gives up and before a start that follows. */
+  readScreenLock?(): Promise<ScreenLockState>;
+  /**
+   * While a tab is cast, keep it and its host window painting when the system would stop them
+   * (background throttling off, `invalidate()` when a capture stalls). On by default; the
+   * switch exists because the behavior under a real lock could not be proven without locking.
+   */
+  keepRendering?: boolean;
 }
 
 /** How long a just-uncovered tab gets to lay out before it is measured again. */
@@ -84,6 +99,8 @@ interface Session {
   injector: TabInputInjector;
   listeners: Set<(end: DesktopPreviewEnd) => void>;
   ended: boolean;
+  /** Gives back the tab's and its window's background-throttling setting. */
+  releaseRendering: () => void;
 }
 
 /**
@@ -113,6 +130,37 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
   };
   const pause =
     env.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const readLock = env.readScreenLock ?? (() => readScreenLockState());
+  const keepRendering = env.keepRendering !== false;
+  /**
+   * A cast ended because the screen was locked. Until the screen is seen unlocked a start is
+   * refused at once with the same reason, rather than laying the tab out and timing out again.
+   */
+  let endedByLock = false;
+  const holdRendering = (guest: PreviewGuest): (() => void) => {
+    if (!keepRendering) return () => undefined;
+    const releases = [guest, guest.hostWebContents]
+      .filter((contents): contents is ThrottledContents => Boolean(contents))
+      .map((contents) => {
+        try {
+          return holdBackgroundThrottlingOff(contents);
+        } catch {
+          return () => undefined;
+        }
+      });
+    return () => releases.forEach((release) => release());
+  };
+  /** A capture stalled: ask the guest and its window for a new frame. */
+  const nudgeRendering = (guest: PreviewGuest | null) => {
+    if (!keepRendering || !guest || guest.isDestroyed()) return;
+    for (const contents of [guest, guest.hostWebContents]) {
+      try {
+        if (contents && !contents.isDestroyed()) contents.invalidate?.();
+      } catch {
+        // A contents that cannot be invalidated is no worse off.
+      }
+    }
+  };
 
   /**
    * A freshly materialized or just-uncovered tab has no real size yet: it answers with an
@@ -185,6 +233,19 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         notify(session, 'ended');
   });
 
+  /** Capture gave up: a locked screen is the reason the phone is told, anything else is a plain failure. */
+  const endUnavailable = async (session: Session) => {
+    let state: ScreenLockState = 'unknown';
+    try {
+      state = await readLock();
+    } catch {
+      // Unreadable is not locked.
+    }
+    if (session.ended) return;
+    if (state === 'locked') endedByLock = true;
+    notify(session, state === 'locked' ? 'screen-locked' : 'capture-unavailable');
+  };
+
   const sessionOf = (source: DesktopPreviewSource): Session => {
     const session = sessions.get(source);
     if (!session) throw new Error('PREVIEW_SOURCE_ENDED');
@@ -224,6 +285,10 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         guest.id !== tab.webContentsId
       )
         return null;
+      if (endedByLock) {
+        if ((await readLock()) === 'locked') throw new Error('HOST_SCREEN_LOCKED');
+        endedByLock = false; // unlocked (or unreadable): try the picture again
+      }
       const injector = new TabInputInjector(
         guest,
         env.guestOrigin
@@ -242,11 +307,13 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       const shape = env.setCastingViewports && viewport ? viewport : null;
       opening.set(tab.tabId, shape);
       syncCasting();
+      const releaseRendering = holdRendering(guest);
       // Looks like a touch device while cast: a page's own `@media (pointer: coarse)` layout
       // applies. Sent before the first measurement, so the size the phone is told is the
       // reflowed one; `dispose` (every end of the lease) takes it back.
       injector.presentAsTouch(env.maxTouchPoints ?? PREVIEW_MAX_TOUCH_POINTS_HOSTED);
       const abandon = () => {
+        releaseRendering();
         opening.delete(tab.tabId);
         syncCasting();
         void injector.dispose();
@@ -277,10 +344,12 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         injector,
         listeners: new Set(),
         ended: false,
+        releaseRendering,
         capture: new TabCaptureSource({
           guest: () => env.guest(source.tabId),
           isCurrent: () => isCurrent(source),
-          onUnavailable: () => notify(session, 'capture-unavailable'),
+          onStall: () => nudgeRendering(env.guest(source.tabId)),
+          onUnavailable: () => void endUnavailable(session),
           now: env.now,
         }),
       };
@@ -342,6 +411,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       session.ended = true;
       session.listeners.clear();
       session.capture.stop();
+      session.releaseRendering();
       void session.injector.dispose();
       // The tab's own layout comes back with it leaving the cast set.
       syncCasting();

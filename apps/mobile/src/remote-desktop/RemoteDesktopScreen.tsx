@@ -176,6 +176,8 @@ type ChannelOutcome =
   | { kind: "result"; value: unknown }
   | { kind: "relay" }
   | { kind: "error"; code: string };
+/** While the computer is locked, how often a resume asks whether it is unlocked yet. */
+const SCREEN_LOCKED_RETRY_MS = 3000;
 const MODIFIERS = ["ControlLeft", "ShiftLeft", "AltLeft", "MetaLeft"];
 const KEY_PAGES = [
   [
@@ -486,6 +488,9 @@ export function RemoteDesktopSession({
   const [status, setStatus] = useState("connecting");
   const [appState, setAppState] = useState(AppState.currentState);
   const [error, setError] = useState<string | null>(null);
+  // The computer is locked and cannot produce the preview picture. Not an error: the
+  // recovery loop keeps resuming and the picture returns once the computer is unlocked.
+  const [screenLocked, setScreenLocked] = useState(false);
   const takeoverPromptOpen = useRef(false);
   const takeoverAction = useRef<() => void>(() => {});
   useEffect(() => {
@@ -518,7 +523,9 @@ export function RemoteDesktopSession({
   const connectionLabel = t(
     showExitLockStatus
       ? "remoteDesktop.lockingOnExit"
-      : recovery.current.at || status === "reconnecting"
+      : screenLocked
+        ? "remoteDesktop.previewScreenLocked"
+        : recovery.current.at || status === "reconnecting"
         ? "remoteDesktop.reconnecting"
         : "remoteDesktop.connecting",
   );
@@ -1021,8 +1028,12 @@ export function RemoteDesktopSession({
       const blocked = /DESKTOP_STOPPED/.test(code ?? message)
         ? "hostDisconnected"
         : remoteDesktopFailureKey(code ?? message);
-      stop(!blocked);
-      setError(blocked);
+      // A locked computer is waited out: recovery stays on at a steady pace and the
+      // notice replaces the spinner label, instead of an error that stops everything.
+      const waitOut = blocked === "previewScreenLocked";
+      stop(!blocked || waitOut);
+      setScreenLocked(waitOut);
+      setError(waitOut ? null : blocked);
       if (
         blocked === "connectionBusy" &&
         capsRef.current?.deviceId === deviceId &&
@@ -1053,7 +1064,11 @@ export function RemoteDesktopSession({
         );
       }
       if (blocked === "hostDisconnected") setOperations(false);
-      if (blocked) recovery.current.enabled = false;
+      if (waitOut) {
+        recovery.current.at = Date.now() + SCREEN_LOCKED_RETRY_MS;
+        recovery.current.delay = 1000;
+        setStatus("reconnecting");
+      } else if (blocked) recovery.current.enabled = false;
       else {
         recovery.current.at = Date.now() + recovery.current.delay;
         recovery.current.delay = Math.min(15_000, recovery.current.delay * 2);
@@ -1346,6 +1361,7 @@ export function RemoteDesktopSession({
           frameMs: null,
           frameAt: 0,
         };
+        setScreenLocked(false);
         setLease({ ...next });
         setStatus("compatibility");
         audioUnavailable.current = false;
@@ -1457,7 +1473,9 @@ export function RemoteDesktopSession({
   const portalAuthorization =
     caps?.displays.some((display) => display.id === "wayland-portal") === true;
   useEffect(() => {
-    if (!focused || appState !== "active" || !showConnectionStatus) return;
+    // A locked computer is waited for as long as it takes: no deadline.
+    if (!focused || appState !== "active" || !showConnectionStatus || screenLocked)
+      return;
     // One deadline spans link setup, automatic retries and first presentation.
     // Background/navigation pauses it; a manual retry starts a fresh budget.
     const timer = setTimeout(
@@ -1473,7 +1491,14 @@ export function RemoteDesktopSession({
         (portalAuthorization ? 120_000 : 0),
     );
     return () => clearTimeout(timer);
-  }, [focused, appState, showConnectionStatus, fail, portalAuthorization]);
+  }, [
+    focused,
+    appState,
+    showConnectionStatus,
+    screenLocked,
+    fail,
+    portalAuthorization,
+  ]);
   useEffect(() => {
     // Authentication preparation is already running; only the native prompt
     // waits for a frame from this lease. stop() releases cancelled waiters.
@@ -1556,6 +1581,7 @@ export function RemoteDesktopSession({
     recovery.current.delay = 1000;
     recovery.current.resuming = false;
     setError(null);
+    setScreenLocked(false);
     setStatus("reconnecting");
     if (!ready.current) webview.current?.reload();
     else
@@ -3587,7 +3613,10 @@ export function RemoteDesktopSession({
                   </Text>
                 )
               )}
-              {!frameReady && showConnectionStatus && connectionTakingLong && (
+              {!frameReady &&
+                showConnectionStatus &&
+                connectionTakingLong &&
+                !screenLocked && (
                 <Text style={styles.waitingLabel}>
                   {t("remoteDesktop.connectionTakingLong")}
                 </Text>

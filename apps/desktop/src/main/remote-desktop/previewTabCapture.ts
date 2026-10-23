@@ -57,6 +57,8 @@ export interface TabCaptureOptions {
   isCurrent(): boolean;
   /** Capture keeps failing or hanging beyond the budget; called once, then the source is stopped. */
   onUnavailable(): void;
+  /** One `capturePage` outlived its timeout (the picture may have stopped being produced). */
+  onStall?(): void;
   now?(): number;
   /** Waiting between pulls; tests drive the clock with it. */
   sleep?(ms: number): Promise<void>;
@@ -301,6 +303,11 @@ export class TabCaptureSource {
       if (generation !== this.generation || this.stopped) return null; // late or stopped
       if (image === null) {
         this.generation++; // abandon: whatever this call returns later is dropped
+        try {
+          this.options.onStall?.();
+        } catch {
+          // A stall hook must not change what a timeout means.
+        }
         return this.failed();
       }
       if (!this.options.isCurrent()) return this.failed();

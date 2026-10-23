@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PreviewTabBinding, PreviewTabEnded } from '../../rsb-browser-bridge/previewTabs';
+import { PREVIEW_CAPTURE_TIMEOUT_MS } from '../previewTabCapture';
 import { createPreviewHost, type PreviewGuest, type PreviewHostEnv } from '../previewHost';
 
 function binding(extra: Partial<PreviewTabBinding> = {}): PreviewTabBinding {
@@ -20,6 +21,7 @@ function setup(
   metrics: Array<{ w: number; h: number }> = [{ w: 800, h: 500 }],
   guestOrigin?: PreviewHostEnv['guestOrigin'],
   withViewports = false,
+  extra: Partial<PreviewHostEnv> = {},
 ) {
   let bindings = [binding()];
   const order: string[] = [];
@@ -27,8 +29,15 @@ function setup(
   let measured = 0;
   const listeners = new Set<(event: PreviewTabEnded) => void>();
   const attached = { value: false };
+  const hostWindow = {
+    isDestroyed: () => false,
+    setBackgroundThrottling: vi.fn(),
+    invalidate: vi.fn(),
+  };
   const guest: PreviewGuest = {
     id: 11,
+    hostWebContents: hostWindow,
+    invalidate: vi.fn(),
     getTitle: () => 'Simulator',
     isDestroyed: () => false,
     capturePage: vi.fn(async () => ({
@@ -90,8 +99,10 @@ function setup(
     ...(withViewports ? { setCastingViewports } : {}),
     delay,
     guestOrigin,
+    ...extra,
   });
   return {
+    hostWindow,
     setCastingViewports,
     host,
     guest,
@@ -517,5 +528,100 @@ describe('preview host phone viewport', () => {
     const [tab] = h.host.list();
     await expect(h.host.open(tab, phone)).rejects.toThrow('PREVIEW_CAPTURE_UNAVAILABLE');
     expect(h.setCastingViewports).toHaveBeenLastCalledWith({});
+  });
+});
+
+describe('preview host on a locked screen', () => {
+  afterEach(() => vi.useRealTimers());
+
+  /** A capture that never answers, until the host gives up on it (3 abandoned calls). */
+  async function wedge(h: ReturnType<typeof setup>, source: Awaited<ReturnType<typeof h.host.open>>) {
+    h.guest.capturePage = vi.fn(() => new Promise<never>(() => {})) as PreviewGuest['capturePage'];
+    for (let i = 0; i < 3; i++) {
+      const frame = h.host.frame(source!, { purpose: 'relay' });
+      await vi.advanceTimersByTimeAsync(PREVIEW_CAPTURE_TIMEOUT_MS);
+      expect(await frame).toBeNull();
+    }
+    expect(await h.host.frame(source!, { purpose: 'relay' })).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it('tells a capture that gave up on a locked screen apart from a plain failure', async () => {
+    vi.useFakeTimers();
+    const locked = setup(undefined, undefined, false, { readScreenLock: async () => 'locked' });
+    const source = (await locked.host.open(locked.host.list()[0]))!;
+    const ends: string[] = [];
+    locked.host.watch(source, (end) => ends.push(end));
+    await wedge(locked, source);
+    expect(ends).toEqual(['screen-locked']);
+
+    // The same hang with the screen unlocked, or unreadable, keeps its old meaning.
+    for (const state of ['unlocked', 'unknown'] as const) {
+      const other = setup(undefined, undefined, false, { readScreenLock: async () => state });
+      const opened = (await other.host.open(other.host.list()[0]))!;
+      const seen: string[] = [];
+      other.host.watch(opened, (end) => seen.push(end));
+      await wedge(other, opened);
+      expect(seen).toEqual(['capture-unavailable']);
+    }
+  });
+
+  it('refuses a start while the screen is still locked, and starts once it is unlocked', async () => {
+    vi.useFakeTimers();
+    let state: 'locked' | 'unlocked' = 'locked';
+    const h = setup(undefined, undefined, false, { readScreenLock: async () => state });
+    const [tab] = h.host.list();
+    const source = (await h.host.open(tab))!;
+    await wedge(h, source);
+    h.host.end(source);
+    h.setCastingTabs.mockClear();
+
+    await expect(h.host.open(tab)).rejects.toThrow('HOST_SCREEN_LOCKED');
+    // Refused before the tab is touched: no layout, no casting, no throttling change.
+    expect(h.setCastingTabs).not.toHaveBeenCalled();
+    state = 'unlocked';
+    expect(await h.host.open(tab)).toMatchObject({ tabId: 'tab1' });
+    // The lock is forgotten once seen unlocked, even if the screen locks again later.
+    h.host.end((await h.host.open(tab))!);
+    state = 'locked';
+    expect(await h.host.open(tab)).toMatchObject({ tabId: 'tab1' });
+  });
+
+  it('keeps the tab and its window painting while cast and gives their setting back after', async () => {
+    const h = setup();
+    const source = (await h.host.open(h.host.list()[0]))!;
+    expect(h.guest.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+    expect(h.hostWindow.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+    h.host.end(source);
+    expect(h.guest.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+    expect(h.hostWindow.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+    h.host.end(source); // idempotent
+    expect(h.hostWindow.setBackgroundThrottling).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives the throttling back when a tab fails to open, and leaves it alone when switched off', async () => {
+    const failing = setup([{ w: 0, h: 0 }]);
+    failing.guest.debugger.sendCommand = vi.fn(async () => {
+      throw new Error('PREVIEW_INPUT_TIMEOUT');
+    });
+    await expect(failing.host.open(failing.host.list()[0])).rejects.toThrow();
+    expect(failing.hostWindow.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+
+    const off = setup(undefined, undefined, false, { keepRendering: false });
+    await off.host.open(off.host.list()[0]);
+    expect(off.hostWindow.setBackgroundThrottling).not.toHaveBeenCalled();
+    expect(off.guest.invalidate).not.toHaveBeenCalled();
+  });
+
+  it('asks the tab and its window for a new frame when a capture stalls', async () => {
+    vi.useFakeTimers();
+    const h = setup();
+    const source = (await h.host.open(h.host.list()[0]))!;
+    h.guest.capturePage = vi.fn(() => new Promise<never>(() => {})) as PreviewGuest['capturePage'];
+    const frame = h.host.frame(source, { purpose: 'relay' });
+    await vi.advanceTimersByTimeAsync(PREVIEW_CAPTURE_TIMEOUT_MS);
+    await frame;
+    expect(h.guest.invalidate).toHaveBeenCalledOnce();
+    expect(h.hostWindow.invalidate).toHaveBeenCalledOnce();
   });
 });
