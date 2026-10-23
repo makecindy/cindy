@@ -101,3 +101,40 @@ export async function requestTabOrigin(
     ...(result.rect.pointerBlocked === true ? { hitBlocked: true } : {}),
   };
 }
+
+/**
+ * Whether the host window would hand a touch at this point (host viewport CSS px) to the tab's
+ * `<webview>`: the element on top there is the webview, not an overlay, menu or dialog of the
+ * host app. False whenever that cannot be established (no bridge, old renderer, failure), so a
+ * caller that needs it to be true fails closed.
+ */
+export async function requestTabPointTopmost(
+  tab: { sessionId: string; tabId: string },
+  point: { x: number; y: number },
+  deps: TabOriginDeps,
+): Promise<boolean> {
+  const options = deps.options();
+  if (!options || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+  const op: RsbBrowserBridgeTabOp = {
+    op: 'viewRect',
+    sessionId: tab.sessionId,
+    tabId: tab.tabId,
+    at: { x: point.x, y: point.y },
+  };
+  const host = options.getHostWebContents(op);
+  if (!host || host.isDestroyed()) return false;
+  const guest = deps.guest(tab.tabId);
+  if (!guest || guest.isDestroyed()) return false;
+  try {
+    const result = await (deps.dispatch ?? dispatchTabOp)(
+      op,
+      { ...options, timeoutMs: VIEW_RECT_TIMEOUT_MS },
+      undefined,
+      { ensureHost: false },
+    );
+    if (guest.isDestroyed() || host.isDestroyed()) return false;
+    return result.ok && result.rect?.topmostAt === true;
+  } catch {
+    return false;
+  }
+}

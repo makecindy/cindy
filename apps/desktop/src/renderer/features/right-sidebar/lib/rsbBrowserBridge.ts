@@ -179,12 +179,10 @@ export function forceKillBrowserTab(tabId: string): Promise<void> {
   } catch {
     // attach 尚未完成时 getWebContentsId 抛 —— 不带兜底 id,交给 main 判 NOT_FOUND。
   }
-  return api
-    .forceKill(webContentsId === undefined ? { tabId } : { tabId, webContentsId })
-    .then(
-      () => undefined,
-      () => undefined,
-    );
+  return api.forceKill(webContentsId === undefined ? { tabId } : { tabId, webContentsId }).then(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 /**
@@ -417,9 +415,7 @@ export function releaseRsbBrowserTab(tabId: string): Promise<void> {
   if (!api) return Promise.resolve();
   const reported = lastReportedWebContentsId.get(tabId);
   lastReportedWebContentsId.delete(tabId);
-  return api
-    .release(reported === undefined ? { tabId } : { tabId, webContentsId: reported })
-    .then(
+  return api.release(reported === undefined ? { tabId } : { tabId, webContentsId: reported }).then(
     () => undefined,
     () => undefined,
   );
@@ -454,6 +450,12 @@ export function snapshotRsbBrowserTabs(liveTabIds: string[]): Promise<void> {
     },
     () => undefined,
   );
+}
+
+/** 宿主视口里这一点最上层的元素就是该 `<webview>`(没有被浮层、菜单、弹窗盖住)。 */
+function isTopmostAt(webview: Element, x: number, y: number): boolean {
+  const hit = document.elementFromPoint(x, y);
+  return hit !== null && (hit === webview || webview.contains(hit));
 }
 
 /**
@@ -495,6 +497,9 @@ async function handleTabOpRequest(
             height: box.height,
             // 保活层用 pointer-events:none 让出点击,但这会让宿主对其中的跨进程 iframe 失去命中测试。
             pointerBlocked: getComputedStyle(webview).pointerEvents === 'none',
+            ...(req.at && Number.isFinite(req.at.x) && Number.isFinite(req.at.y)
+              ? { topmostAt: isTopmostAt(webview, req.at.x, req.at.y) }
+              : {}),
           },
         };
       }
@@ -582,9 +587,7 @@ async function handleTabOpRequest(
         };
       } else {
         const tabState = tab.state as
-          | { url?: string; previewRequestId?: string }
-          | null
-          | undefined;
+          { url?: string; previewRequestId?: string } | null | undefined;
         const url = tabState?.url ?? 'about:blank';
         await eagerSpawnAndReport(req.sessionId, tab.id, url, tabState?.previewRequestId);
         result = { reqId, ok: true, tabId: tab.id };

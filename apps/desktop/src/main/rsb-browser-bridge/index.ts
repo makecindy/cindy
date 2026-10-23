@@ -14,7 +14,7 @@ import { webContents as electronWebContents } from 'electron';
 import { createLogger } from '../logger.js';
 import { TabRegistry } from './registry.js';
 import { PreviewTabIndex, type PreviewTabGhostInfo } from './previewTabs.js';
-import { requestTabOrigin, type TabOrigin } from './guestOrigin.js';
+import { requestTabOrigin, requestTabPointTopmost, type TabOrigin } from './guestOrigin.js';
 import { getRegisteredTabOpOptions } from './renderer-bridge.js';
 
 export { TabRegistry } from './registry.js';
@@ -38,7 +38,7 @@ export {
   type RendererBridgeOptions,
 } from './renderer-bridge.js';
 export { setCastingTabs, setCastingViewports } from './previewCasting.js';
-export { requestTabOrigin, type TabOrigin } from './guestOrigin.js';
+export { requestTabOrigin, requestTabPointTopmost, type TabOrigin } from './guestOrigin.js';
 export {
   getActiveRsbSessionId,
   setActiveRsbSessionId,
@@ -74,6 +74,20 @@ export function requestGuestOrigin(tab: {
   tabId: string;
 }): Promise<TabOrigin | null> {
   return requestTabOrigin(tab, {
+    options: getRegisteredTabOpOptions,
+    guest: (tabId) => getRsbBrowserBridge().getWebContentsByTabId(tabId),
+  });
+}
+
+/**
+ * Whether the host window would give a touch at this host-viewport point to the tab's
+ * `<webview>` (nothing of the host app is drawn over it there). False when unknown.
+ */
+export function requestGuestPointFree(
+  tab: { sessionId: string; tabId: string },
+  point: { x: number; y: number },
+): Promise<boolean> {
+  return requestTabPointTopmost(tab, point, {
     options: getRegisteredTabOpOptions,
     guest: (tabId) => getRsbBrowserBridge().getWebContentsByTabId(tabId),
   });

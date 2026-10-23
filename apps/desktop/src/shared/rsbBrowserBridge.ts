@@ -134,6 +134,11 @@ export type RsbBrowserBridgeTabOp =
       op: 'viewRect';
       sessionId: string;
       tabId: string;
+      /**
+       * 可选:宿主视口坐标(CSS px)的一个点。给了就同时回答该点最上层的元素是不是这个
+       * `<webview>`(`rect.topmostAt`),供 Host 判断「宿主命中测试会把这一点交给预览」。
+       */
+      at?: { x: number; y: number };
     }
   | {
       /**
@@ -168,6 +173,11 @@ export interface RsbBrowserBridgeViewRect {
    * 触点到不了其中的跨进程 iframe,注入端要改为直送 iframe 的调试会话。缺省按 false(旧 renderer)。
    */
   pointerBlocked?: boolean;
+  /**
+   * 请求带了 `at` 时才有:`document.elementFromPoint(at)` 返回的正是该 `<webview>`(或其内部),
+   * 即宿主没有被浮层、菜单、弹窗盖住这一点。缺省(旧 renderer、未带 `at`)按 false。
+   */
+  topmostAt?: boolean;
 }
 
 /** Tab-op response renderer pushes back. `ok: false` carries a short error. */

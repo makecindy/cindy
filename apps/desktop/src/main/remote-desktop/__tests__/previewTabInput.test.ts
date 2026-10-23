@@ -14,6 +14,7 @@ function setup(
     attached?: boolean;
     viewport?: { w: number; h: number };
     origin?: () => Promise<GuestOrigin | null>;
+    pointFree?: (point: { x: number; y: number }) => Promise<boolean>;
   } = {},
 ) {
   const state = { attached: options.attached ?? false };
@@ -63,7 +64,15 @@ function setup(
   };
   const emit = (event: string) => listeners.get(event)?.forEach((listener) => listener());
   return {
-    injector: new TabInputInjector(guest, options.origin ? { origin: options.origin } : {}),
+    injector: new TabInputInjector(
+      guest,
+      options.origin
+        ? {
+            origin: options.origin,
+            ...(options.pointFree ? { pointFree: options.pointFree } : {}),
+          }
+        : {},
+    ),
     guest,
     transport,
     commands,
@@ -762,7 +771,10 @@ describe('TabInputInjector touches into cross-process frames', () => {
     touch('move', [[1, 0.4, 0.4]]),
     touch('end', []),
   ];
-  const tapAtPoint = (): PreviewInputEvent[] => [touch('start', [[1, 0.375, 0.4]]), touch('end', [])];
+  const tapAtPoint = (): PreviewInputEvent[] => [
+    touch('start', [[1, 0.375, 0.4]]),
+    touch('end', []),
+  ];
   const mouseOf = (h: Harness) =>
     commandsOf(h, 'Input.dispatchMouseEvent').map((c) => ({
       session: c.sessionId,
@@ -777,8 +789,9 @@ describe('TabInputInjector touches into cross-process frames', () => {
     origin: GuestOrigin,
     box: { content: number[]; width: number; height: number } = rotated,
     frames: string[] = ['F1'],
+    pointFree: (point: { x: number; y: number }) => Promise<boolean> = async () => true,
   ) {
-    const h = setup({ origin: async () => origin });
+    const h = setup({ origin: async () => origin, pointFree });
     h.injector.bindLease({ width: 800, height: 500 });
     h.handlers.set('DOM.getNodeForLocation', async () => ({ backendNodeId: 7 }));
     h.handlers.set('DOM.describeNode', async () => ({ node: { frameId: 'F1' } }));
@@ -998,9 +1011,9 @@ describe('TabInputInjector touches into cross-process frames', () => {
       expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
       await h.injector.inject([touch('end', [])]);
       // Page (300, 200) in the host: origin + point. One tap, no touch sequence beside it.
-      expect(commandsOf(h, 'Input.synthesizeTapGesture').map((c) => [c.sessionId, c.params])).toEqual([
-        [undefined, { x: 1070, y: 286, gestureSourceType: 'touch' }],
-      ]);
+      expect(
+        commandsOf(h, 'Input.synthesizeTapGesture').map((c) => [c.sessionId, c.params]),
+      ).toEqual([[undefined, { x: 1070, y: 286, gestureSourceType: 'touch' }]]);
       expect(touchesOf(h)).toEqual([]);
       expect(mouseOf(h)).toEqual([]);
       expect(detaches(h)).toEqual(['session-F1']);
@@ -1084,6 +1097,98 @@ describe('TabInputInjector touches into cross-process frames', () => {
       expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
       expect(detaches(h)).toHaveLength(3);
       expect(h.injector.pressed.touches).toBe(0);
+    });
+
+    it('does not hand the tap to the host when the host app is drawn over that point', async () => {
+      const asked: Array<{ x: number; y: number }> = [];
+      const covered = async (point: { x: number; y: number }) => {
+        asked.push(point);
+        return false;
+      };
+      const h = withFrame(offset, rotated, ['F1'], covered);
+      await h.injector.inject(tapAtPoint());
+      // The host was asked about the point the tap would land on, in its own space.
+      expect(asked).toEqual([{ x: 1070, y: 286 }]);
+      // A tap through the host's hit test could land on its menu or dialog: the frame's own
+      // session gets a click instead, which cannot reach any host control.
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(mouseOf(h).map((m) => m.session)).toEqual(['session-F1', 'session-F1', 'session-F1']);
+      expect(detaches(h)).toEqual(['session-F1']);
+    });
+
+    it('treats an unknown, failed or slow answer as covered, and does not ask without need', async () => {
+      const failing = withFrame(offset, rotated, ['F1'], async () => {
+        throw new Error('bridge gone');
+      });
+      await failing.injector.inject(tapAtPoint());
+      expect(commandsOf(failing, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(mouseOf(failing)).toHaveLength(3);
+
+      const never = withFrame(offset, rotated, ['F1'], () => new Promise<boolean>(() => {}));
+      const done = never.injector.inject(tapAtPoint());
+      const settled = expect(done).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(PREVIEW_INPUT_TIMEOUT_MS);
+      await settled;
+      expect(commandsOf(never, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(mouseOf(never)).toHaveLength(3);
+
+      // No way to ask (an injector built without one): same, and a blocked webview never asks.
+      const none = setup({ origin: async () => offset });
+      none.injector.bindLease({ width: 800, height: 500 });
+      none.handlers.set('DOM.getNodeForLocation', async () => ({ backendNodeId: 7 }));
+      none.handlers.set('DOM.describeNode', async () => ({ node: { frameId: 'F1' } }));
+      none.handlers.set('DOM.getBoxModel', async () => ({ model: rotated }));
+      none.handlers.set('Target.getTargets', async () => ({
+        targetInfos: [{ targetId: 'F1', type: 'iframe' }],
+      }));
+      none.handlers.set('Target.attachToTarget', async () => ({ sessionId: 'session-F1' }));
+      await none.injector.inject(tapAtPoint());
+      expect(commandsOf(none, 'Input.synthesizeTapGesture')).toEqual([]);
+      const asked = vi.fn(async () => true);
+      const blockedHost = withFrame(blocked, rotated, ['F1'], asked);
+      await blockedHost.injector.inject(tapAtPoint());
+      expect(asked).not.toHaveBeenCalled();
+    });
+
+    it('sends the start of a press that is still down after 300 ms, and goes on as a touch', async () => {
+      const h = withFrame(offset);
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(touchesOf(h)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      // The frame hears the press while it lasts, at the finger, in its own coordinates.
+      expect(touchesOf(h)).toEqual([
+        { session: 'session-F1', type: 'touchStart', at: [[100, 50]] },
+      ]);
+      expect(h.injector.pressed.touches).toBe(1);
+      await h.injector.inject([touch('end', [])]);
+      // It lifts as a touch, not as a tap gesture.
+      expect(touchesOf(h).map((t) => t.type)).toEqual(['touchStart', 'touchEnd']);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(detaches(h)).toEqual(['session-F1']);
+      expect(h.injector.pressed.touches).toBe(0);
+    });
+
+    it('keeps a tap that lifts in time a tap, and cancels the wait when the press moves or is released', async () => {
+      const h = withFrame(offset);
+      await h.injector.inject(tapAtPoint());
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toHaveLength(1);
+      expect(touchesOf(h)).toEqual([]);
+
+      // Moved away: sent at once, and the timer does not send it again.
+      await h.injector.inject(swipe().slice(0, 2));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(touchesOf(h).map((t) => t.type)).toEqual(['touchStart', 'touchMove']);
+      await h.injector.release();
+      expect(touchesOf(h).map((t) => t.type)).toEqual(['touchStart', 'touchMove', 'touchCancel']);
+
+      // Released before the wait is over: nothing is ever sent for it.
+      const before = touchesOf(h).length;
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      await h.injector.release();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(touchesOf(h)).toHaveLength(before);
     });
 
     it('drops the tap and gives the session back when it cannot be delivered', async () => {
