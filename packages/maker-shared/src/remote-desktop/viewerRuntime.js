@@ -1317,7 +1317,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     previewTouches.set(e.pointerId, { id: previewNextId, x: p.x, y: p.y });
     previewNextId = (previewNextId + 1) % 2147483647;
     queue({ kind: "touch", phase: "start", points: previewSnapshot() });
-    flush();
+    // The first finger waits for the next input tick (33 ms) before it is sent: a second
+    // finger of the same gesture then travels in the same batch. Sent alone at once, the
+    // first finger's batch is in flight and the second finger waits for its ACK (a round
+    // trip through the computer, 50-170 ms measured), so the preview page saw a lone finger
+    // for that long, long enough to treat it as a tap before the pinch began. A further
+    // finger goes straight out, as does every other event.
+    if (previewTouches.size > 1) flush();
   }
   function previewPointerMove(e) {
     const touch = previewTouches.get(e.pointerId);
