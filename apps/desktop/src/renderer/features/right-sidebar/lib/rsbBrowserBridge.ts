@@ -63,6 +63,7 @@ interface RsbBrowserBridgeIpcSubset {
     kept: number;
     pinnedTabIds: string[];
     castingTabIds?: string[];
+    castingViewports?: RsbBrowserBridgePreviewCastingPayload['viewports'];
   }>;
   onPin(cb: (payload: RsbBrowserBridgePinPayload) => void): () => void;
   onUnpin(cb: (payload: RsbBrowserBridgePinPayload) => void): () => void;
@@ -313,7 +314,7 @@ export function initRsbBrowserBridge(): () => void {
   });
   // Casting set (full replacement): drives the keep-alive layer in the Shell.
   const unsubCasting = api.onPreviewCasting?.((payload) => {
-    setPreviewCastingTabs(payload.tabIds);
+    setPreviewCastingTabs(payload.tabIds, payload.viewports);
   });
 
   // Phase 3 tab-op bridge: main asks renderer to mutate the RSB store on its
@@ -448,7 +449,8 @@ export function snapshotRsbBrowserTabs(liveTabIds: string[]): Promise<void> {
       for (const tabId of res.pinnedTabIds) {
         browserWebviewPool.pinForAutomation(tabId);
       }
-      if (Array.isArray(res.castingTabIds)) setPreviewCastingTabs(res.castingTabIds);
+      if (Array.isArray(res.castingTabIds))
+        setPreviewCastingTabs(res.castingTabIds, res.castingViewports);
     },
     () => undefined,
   );

@@ -9,6 +9,7 @@ import {
   isPreviewCastingTab,
   setPreviewCastingTabs,
   usePreviewCastingActive,
+  usePreviewCastingViewport,
   usePreviewCastingTab,
 } from '../previewCasting';
 
@@ -132,5 +133,39 @@ describe('suspendFocusInside', () => {
     expect(late.getAttribute('tabindex')).toBe('-1');
     restore();
     expect(late.hasAttribute('tabindex')).toBe(false);
+  });
+});
+
+describe('previewCasting phone viewports', () => {
+  const phone = { width: 402, height: 786 };
+
+  it('replaces the shapes with the set and re-renders only on a change', () => {
+    const renders = vi.fn();
+    const { result } = renderHook(() => {
+      renders();
+      return usePreviewCastingViewport('t1');
+    });
+    expect(result.current).toBeNull();
+
+    act(() => setPreviewCastingTabs(['t1'], { t1: phone }));
+    expect(result.current).toEqual(phone);
+    const afterFirst = renders.mock.calls.length;
+    act(() => setPreviewCastingTabs(['t1'], { t1: { ...phone } }));
+    expect(renders.mock.calls.length).toBe(afterFirst);
+
+    act(() => setPreviewCastingTabs(['t1'], { t1: { width: 786, height: 402 } }));
+    expect(result.current).toEqual({ width: 786, height: 402 });
+
+    // No shape in the next push = the tab keeps its own layout again.
+    act(() => setPreviewCastingTabs(['t1']));
+    expect(result.current).toBeNull();
+  });
+
+  it('drops the shape of a tab that leaves the set, and ignores nonsense', () => {
+    const { result } = renderHook(() => usePreviewCastingViewport('t1'));
+    act(() => setPreviewCastingTabs(['t2'], { t1: phone }));
+    expect(result.current).toBeNull();
+    act(() => setPreviewCastingTabs(['t1'], { t1: { width: 0, height: 5 } }));
+    expect(result.current).toBeNull();
   });
 });

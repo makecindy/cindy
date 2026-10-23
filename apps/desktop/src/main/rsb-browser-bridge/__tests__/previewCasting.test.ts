@@ -172,6 +172,74 @@ describe('PreviewCastingController', () => {
   });
 });
 
+describe('PreviewCastingController phone viewports', () => {
+  const phone = { width: 402, height: 786 };
+
+  it('pushes a shape only to the host of that tab, with the full set, and nothing when unchanged', () => {
+    const { controller, hostA, hostB, addGuest } = setup();
+    addGuest('t1', 101, hostA);
+    addGuest('t3', 103, hostB);
+    controller.setCastingTabs(['t1', 't3']);
+    hostA.send.mockClear();
+    hostB.send.mockClear();
+
+    controller.setCastingViewports({ t1: phone });
+
+    expect(lastPush(hostA)).toEqual([
+      RSB_BROWSER_BRIDGE_PREVIEW_CASTING_CHANNEL,
+      { tabIds: ['t1'], viewports: { t1: phone } },
+    ]);
+    expect(hostB.send).not.toHaveBeenCalled();
+    controller.setCastingViewports({ t1: { ...phone } });
+    expect(hostA.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the layout back by dropping the shape, and with it leaving the set', () => {
+    const { controller, hostA, addGuest } = setup();
+    addGuest('t1', 101, hostA);
+    controller.setCastingTabs(['t1']);
+    controller.setCastingViewports({ t1: phone });
+
+    controller.setCastingViewports({});
+    // No shape left: the payload is what it was before shapes existed.
+    expect(lastPush(hostA)?.[1]).toEqual({ tabIds: ['t1'] });
+
+    controller.setCastingViewports({ t1: phone });
+    controller.setCastingTabs([]);
+    expect(lastPush(hostA)?.[1]).toEqual({ tabIds: [] });
+    // A tab that comes back casting does not inherit the old shape.
+    controller.setCastingTabs(['t1']);
+    expect(lastPush(hostA)?.[1]).toEqual({ tabIds: ['t1'] });
+  });
+
+  it('ignores shapes of tabs that are not casting and shapes that make no sense', () => {
+    const { controller, hostA, addGuest } = setup();
+    addGuest('t1', 101, hostA);
+    addGuest('t2', 102, hostA);
+    controller.setCastingTabs(['t1']);
+    hostA.send.mockClear();
+    controller.setCastingViewports({
+      t2: phone,
+      t1: { width: 0, height: 786 },
+    });
+    expect(hostA.send).not.toHaveBeenCalled();
+    expect(controller.listViewportsHostedBy(hostA as unknown as WebContents)).toEqual({});
+  });
+
+  it('lets a reloaded renderer recover the shapes it hosts', () => {
+    const { controller, hostA, hostB, addGuest } = setup();
+    addGuest('t1', 101, hostA);
+    addGuest('t3', 103, hostB);
+    controller.setCastingTabs(['t1', 't3']);
+    controller.setCastingViewports({ t1: phone, t3: { width: 500, height: 700 } });
+    expect(controller.listViewportsHostedBy(hostA as unknown as WebContents)).toEqual({
+      t1: phone,
+    });
+    controller.dispose();
+    expect(controller.listViewportsHostedBy(hostA as unknown as WebContents)).toEqual({});
+  });
+});
+
 describe('setCastingTabs (module API)', () => {
   it('returns false without a registered controller and applies once one is active', () => {
     setActivePreviewCastingController(null);

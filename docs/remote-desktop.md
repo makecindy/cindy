@@ -293,6 +293,25 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   `ice`, `viewerHidden`, `frame`, `previewInput` (`PREVIEW_LEASE_OPS`). Anything else,
   including `control`, `input`, clipboard, `privacyScreen`, `displayModes`,
   `windowAction` and `resolution`, answers `DESKTOP_PREVIEW_ONLY`.
+- **Phone-shaped layout** (`previewTab.viewport`): while cast, the tab on the computer is
+  laid out in the shape of the phone's picture area, so the captured picture has the phone's
+  shape with no bars. Capability `previewTab: { version: 1, maxTouchPoints, viewport: true }`;
+  only exactly `true` counts, anything else reads as absent. A viewer sends the two things
+  below **only** to a host that advertised it; without it nothing changes.
+  - `previewStart { grant, viewport: { width, height } }`: the area of the phone that shows
+    the picture, in CSS px (iOS pt), **without the soft keyboard**; whole numbers, `width`
+    240..2048, `height` 240..4096, anything else `INVALID_REQUEST`. Older hosts drop the unknown
+    field when parsing (their `previewStart` ignores it).
+  - `previewViewport { lease, width, height }` (same bounds, a preview-lease op and a
+    `REMOTE_DESKTOP_CHANNEL_OPS` op): rotation, split view or any other change of the area;
+    debounce about 300 ms on the phone; the soft keyboard opening or closing is **not**
+    sent. Reply `{}`. On a screen lease or a host without the capability it is
+    `INVALID_REQUEST`. `RemoteDesktopViewerSession.previewViewport(size)` sends it only on a
+    preview lease of a host that advertised `viewport`, skips an unchanged size and resolves
+    `false` when nothing was sent.
+  - The lease's `display.width/height` stay the tab's measured CSS viewport at the start of
+    the lease (the shape the phone was told); a later `previewViewport` changes the frames'
+    shape, not that size, and the existing contain-fit mapping of touches covers the difference.
 - **Input**: `previewInput { lease, sequence, events }`; `sequence` is a positive safe
   integer that only grows (repeated or older batches are ignored); 1 to 64 events, the
   whole `events` JSON at most 16 KiB. Events:
@@ -400,6 +419,39 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   cannot press the host's own controls. Mapped points are clamped into the tab rectangle, so
   nothing leaves `rect .. rect + size`. Keys (`sendInputEvent`), text (`insertText`) and
   `Page.getLayoutMetrics` carry no window coordinates and are unaffected.
+- **Phone-shaped layout** (`previewTab.viewport`): the host does it by giving the tab's
+  `<webview>` element the phone's shape in the renderer, not by emulating a device in the
+  guest. Measured in a hidden Electron (Chromium 148) with `Emulation.setDeviceMetricsOverride`
+  (402x786) the page does take the viewport, but `capturePage` still returns the whole
+  `<webview>` element (the page sits top-left, blank space on the right, clipped at the
+  bottom when the element is shorter) and the touch scale would have to be reworked; resizing
+  the element gives a viewport of exactly that size and a capture of exactly that shape in
+  both the visible and the keep-alive (opacity 0) state, and touch mapping stays the existing
+  rect / CSS viewport formula with scale 1. So: `previewHost` passes the shape per tab to
+  `setCastingViewports` (main `PreviewCastingController`, full replacement like the casting
+  set, pushed in the `preview-casting` payload as `viewports` and recovered by `snapshot` as
+  `castingViewports`), the renderer's `previewCasting` store holds it, and `BrowserTabBody`
+  calls `applyPhoneViewportLayout` (`lib/previewViewportLayout.ts`): inside whatever box the
+  pool wrapper has, the `<webview>` gets the phone's size when it fits and otherwise the
+  phone's shape scaled down to fit (never larger than the phone's size), centred, following
+  the wrapper with a `ResizeObserver`. Only the inline `style` of the wrapper and the webview
+  is touched and the exact original attribute values are put back; the element is never moved
+  in the DOM. The tab stays in whatever box it has (the panel, or the keep-alive layer, which
+  is clamped to the window), so a window shorter than the phone gets the same shape smaller
+  rather than a clipped picture. `open` asks for the shape right after the tab is marked
+  casting and before the first measurement, then waits (up to ~1.2 s more) until the measured
+  viewport has the phone's aspect ratio within 2%; a renderer that cannot (no host, tiny
+  window) leaves the tab as it is and the lease starts anyway. The shape is released with
+  the casting entry on every end of the lease (stop, disconnect, tab ended, source change,
+  a failed open), because it lives and dies with the casting set. The browser automation's
+  own `resize` (`Emulation.setDeviceMetricsOverride` through the same debugger) is not
+  touched by this: the host takes no CDP viewport emulation, so there is no conflict on the
+  debugger, but an active automation override still decides the page's CSS viewport and
+  therefore the picture while the Agent holds it. Measured in a hidden Electron, a CDP touch
+  gets the sent coordinates unshifted by the window origin (as without this feature), so the
+  `viewRect` origin rule above could only be checked there with an origin of zero: the
+  touch landed exactly at (0.5, 0.25) of the 347x680 picture in both the visible and
+  keep-alive states.
 - **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
   `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.

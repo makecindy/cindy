@@ -1,4 +1,5 @@
 import {
+  isPreviewViewport,
   remoteDesktopPreviewTabCapability,
   type PreviewLease,
   type PreviewViewport,
@@ -36,6 +37,10 @@ interface ViewerConnectOptions {
    * `control` do not apply and are never sent. `resume: true` marks an automatic recovery
    * (sent on `previewStart`): the host refuses it after its own Disconnect, while a start
    * without it is the user's own and goes ahead.
+   *
+   * `viewport` is the phone's picture area (see {@link PreviewViewport}); it is sent only to a
+   * host advertising `previewTab.viewport`, which then lays the tab out in that shape. Keep it
+   * current with {@link RemoteDesktopViewerSession.previewViewport}.
    */
   preview?: { grant: string; viewport?: PreviewViewport };
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
@@ -52,6 +57,10 @@ export class RemoteDesktopViewerSession {
   private controlGeneration = 0;
   private releaseUnconfirmed = false;
   private lifecycle: Promise<void> | null = null;
+  /** The preview viewport the host has last been given; null when none or unsupported. */
+  private previewViewportSent: PreviewViewport | null = null;
+  /** The connected preview host accepts `previewViewport`. */
+  private previewViewportSupported = false;
   constructor(private readonly request: DesktopViewerRequest) {}
 
   get lease(): RemoteDesktopLease | null {
@@ -104,8 +113,18 @@ export class RemoteDesktopViewerSession {
     if (caps?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
     if (!caps.enabled) throw new Error("DESKTOP_DISABLED");
     if (options.preview) {
-      if (!remoteDesktopPreviewTabCapability(caps))
-        throw new Error("CHANNEL_NOT_ALLOWED");
+      const previewCaps = remoteDesktopPreviewTabCapability(caps);
+      if (!previewCaps) throw new Error("CHANNEL_NOT_ALLOWED");
+      // Never sent to a host that did not advertise it, and never malformed.
+      const viewport =
+        previewCaps.viewport && isPreviewViewport(options.preview.viewport)
+          ? {
+              width: options.preview.viewport.width,
+              height: options.preview.viewport.height,
+            }
+          : null;
+      this.previewViewportSupported = previewCaps.viewport === true;
+      this.previewViewportSent = null;
       caps = previewTabCapabilities(caps);
       await options.onCapabilities?.(caps);
       check();
@@ -115,11 +134,7 @@ export class RemoteDesktopViewerSession {
           op: "previewStart",
           grant: options.preview.grant,
           ...(options.resume ? { resume: true } : {}),
-          // Only a host that advertises it understands the picture size.
-          ...(options.preview.viewport &&
-          remoteDesktopPreviewTabCapability(caps)?.viewport
-            ? { viewport: options.preview.viewport }
-            : {}),
+          ...(viewport ? { viewport } : {}),
         },
         check,
       );
@@ -135,6 +150,7 @@ export class RemoteDesktopViewerSession {
       }
       // A preview never carries input authority, whatever the host says.
       (lease as RemoteDesktopLease).controlling = false;
+      this.previewViewportSent = viewport;
       this.active = lease;
       return { caps, lease };
     }
@@ -207,6 +223,30 @@ export class RemoteDesktopViewerSession {
     } finally {
       if (this.controlPending === operation) this.controlPending = null;
     }
+  }
+
+  /**
+   * Tell the host the phone's picture area changed (rotation, split view). Not for the soft
+   * keyboard. Sent only on a preview lease whose host advertised `previewTab.viewport`; resolves
+   * `false` when nothing was sent (no such lease, unsupported host, invalid or unchanged size).
+   * Debouncing is the caller's: this sends at once.
+   */
+  async previewViewport(viewport: PreviewViewport): Promise<boolean> {
+    const lease = this.active;
+    if (!lease?.preview || !this.previewViewportSupported) return false;
+    if (!isPreviewViewport(viewport)) return false;
+    const sent = this.previewViewportSent;
+    if (sent && sent.width === viewport.width && sent.height === viewport.height)
+      return false;
+    await this.request({
+      op: "previewViewport",
+      lease: lease.lease,
+      width: viewport.width,
+      height: viewport.height,
+    });
+    if (this.active !== lease) return false;
+    this.previewViewportSent = { width: viewport.width, height: viewport.height };
+    return true;
   }
 
   async heartbeat(): Promise<{ controlling: boolean }> {
@@ -335,6 +375,8 @@ export class RemoteDesktopViewerSession {
     this.generation++;
     const lease = this.active;
     this.active = null;
+    this.previewViewportSent = null;
+    this.previewViewportSupported = false;
     this.controlPending = null;
     this.controlGeneration++;
     this.releaseUnconfirmed = false;

@@ -236,9 +236,14 @@ export interface RsbBrowserBridgePinPayload {
   tabId: string;
 }
 
-/** Payload main sends on `preview-casting`: every casting tab hosted by the receiver. */
+/**
+ * Payload main sends on `preview-casting`: every casting tab hosted by the receiver, and the
+ * phone picture shape (CSS px) each of them is laid out in. `viewports` is a full replacement
+ * like `tabIds`; a missing key (or tab) means the tab keeps its own layout.
+ */
 export interface RsbBrowserBridgePreviewCastingPayload {
   tabIds: string[];
+  viewports?: Record<string, { width: number; height: number }>;
 }
 
 /**

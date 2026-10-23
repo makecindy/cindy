@@ -6016,7 +6016,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onUnpin: (cb: (payload: { tabId: string }) => void) =>
       fanOutRsbBrowserBridgeUnpin(cb as IpcCallback),
     /** main → renderer:本 renderer 承载的投屏标签全集(保活图层据此切换)。 */
-    onPreviewCasting: (cb: (payload: { tabIds: string[] }) => void) =>
+    onPreviewCasting: (
+      cb: (payload: {
+        tabIds: string[];
+        viewports?: Record<string, { width: number; height: number }>;
+      }) => void,
+    ) =>
       fanOutRsbBrowserBridgePreviewCasting(cb as IpcCallback),
     /** main → renderer "do this tab op against the RSB store" — Phase 3 backend. */
     onTabOpRequest: (cb: (req: unknown) => void) =>

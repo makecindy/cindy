@@ -866,6 +866,31 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
   `backgroundViewing`、`viewerHidden`、`previewTab`，`canControl` 为 `false`，其余整屏能力不显示。
 - 旧 iOS 安装包 + 新 JS：`previewInput` 经已有 `sendRequest` 通用封装，不新增原生接口。
 
+### 预览标签按手机比例排版（2026-10-22，`previewTab.viewport`）
+
+投屏期间电脑上的预览页按手机画面比例排版，截下来的画面与手机同形。全部可选字段，不改协议版本、relay、服务端或原生接口。
+
+- **能力** `previewTab.viewport?: true`：只有恰为 `true` 才算支持（`remoteDesktopPreviewTabCapability` 才带出）。
+  其他值（`false` / 字符串 / 对象）一律当作没有；旧控制端读不到该字段，行为不变。
+- **`previewStart.viewport?: { width, height }`**：手机上显示画面的区域，CSS px（iOS pt），**不含软键盘**；整数，
+  `width` 240–2048、`height` 240–4096，越界 / 非整数 / 非对象即 `INVALID_REQUEST`。
+- **`previewViewport { lease, width, height }`**：预览 lease 的新 op，校验同上，加入 `PREVIEW_LEASE_OPS` 与
+  `REMOTE_DESKTOP_CHANNEL_OPS`（数据通道 `request` 封装，relay 回退不变），回复 `{}`。在整屏 lease 或不支持的被控端上
+  回 `INVALID_REQUEST`。手机旋转 / 分屏时发送，防抖 300 ms，软键盘弹起 / 收起不发。
+- 会话层：`connect({ preview: { grant, viewport? } })` 只在被控端宣告 `viewport` 且尺寸合法时才把 `viewport`
+  放进 `previewStart`；`previewViewport(size)` 只在宣告了 `viewport` 的预览 lease 上发送，尺寸与上次相同不重发，
+  不满足条件返回 `false`、不发任何请求。
+
+| 控制端 / 被控端 | 旧被控端（无 `viewport`） | 新被控端 |
+| --- | --- | --- |
+| 旧控制端 | 不变 | 不发 `viewport` / `previewViewport`；电脑上的标签保持原排版 |
+| 新控制端 | 能力门拦住，不发新字段；即使误发，旧 `previewStart` parser 丢弃未知字段，旧 parser 对 `previewViewport` 回 `INVALID_REQUEST` | 宣告后才发；没收到 `viewport` 时不改变布局 |
+
+- 被控端语义：结束 / 断线 / 换源 / 标签关闭 / 打开失败都按原样恢复排版（shape 随投屏集合进出）；触摸换算仍以标签实际
+  CSS 视口为准（现有 rect / 视口公式，缩放比为 1）。lease 的 `display.width/height` 仍是开始时测得的视口，
+  `previewViewport` 之后帧的形状变化由既有 contain-fit 映射兜住。
+- 存量兼容：不新增必选字段、不改既有字段含义；旧 iOS 安装包 + 新 JS 走既有 `sendRequest` 封装，不新增原生接口。
+
 ## 手机首页会话活动快照
 
 ### 可见历史优先读取

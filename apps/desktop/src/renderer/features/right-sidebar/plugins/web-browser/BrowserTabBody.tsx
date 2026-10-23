@@ -46,7 +46,8 @@ import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
 import { usePendingPreviewTab } from '../../lib/pluginPreviewTabs';
-import { usePreviewCastingTab } from '../../lib/previewCasting';
+import { usePreviewCastingTab, usePreviewCastingViewport } from '../../lib/previewCasting';
+import { applyPhoneViewportLayout } from '../../lib/previewViewportLayout';
 import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
@@ -114,6 +115,9 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   // 投屏中的标签即使不在前台也必须有 guest:否则 guest 被销毁/重建后,手机重新进入时
   // 电脑端没有可采集的页面,得用户去点标签才恢复。物化只看这一条,不改变前台/可见语义。
   const casting = usePreviewCastingTab(tabId);
+  // 手机画面的比例:投屏期间让 <webview> 按它排版(电脑上可见与保活层两种状态一致),
+  // 断开 / 换源 / 标签结束时 cleanup 按原样还原 style。
+  const castingViewport = usePreviewCastingViewport(tabId);
   // 插件预览标签在首次 report 前同理:main 要等 guest report 才能绑定插件身份。
   const pendingPreview = usePendingPreviewTab(tabId);
   // 物化(创建 guest 并首次导航)的条件:真正可见,或必须有 guest 的预览标签。
@@ -179,6 +183,26 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
       }
     };
   }, [browser.wrapper, tabId]);
+
+  const castingViewportWidth = castingViewport?.width;
+  const castingViewportHeight = castingViewport?.height;
+  useLayoutEffect(() => {
+    // 必须排在上面 slot.appendChild(wrapper) 的 layout effect 之后:wrapper 进了 slot 才有尺寸。
+    const wrapper = browser.wrapper;
+    const webview = browser.webview;
+    if (
+      isNativePopup ||
+      !wrapper ||
+      !webview ||
+      castingViewportWidth === undefined ||
+      castingViewportHeight === undefined
+    )
+      return;
+    return applyPhoneViewportLayout(wrapper, webview, {
+      width: castingViewportWidth,
+      height: castingViewportHeight,
+    });
+  }, [browser.wrapper, browser.webview, isNativePopup, castingViewportWidth, castingViewportHeight]);
 
   // hook 事件 → patchState。注意 onPatchState 引用稳定,这里只在 url / title /
   // favicon 真实改变(由 webview 推上来)时才写回,不会无限循环。
