@@ -1,5 +1,7 @@
 import type { PreviewInputEvent } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const logs = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
+vi.mock('../../logger', () => ({ createLogger: () => logs }));
 import { acquireDebuggerLease, releaseDebuggerLease } from '../../rsb-browser-bridge/debuggerLease';
 import {
   type GuestOrigin,
@@ -1242,15 +1244,79 @@ describe('TabInputInjector touches into cross-process frames', () => {
       expect(touchesOf(h)).toHaveLength(before);
     });
 
-    it('drops the tap and gives the session back when it cannot be delivered', async () => {
+    it('clicks in the frame instead when the tap gesture fails or never completes', async () => {
+      logs.debug.mockClear();
+      logs.warn.mockClear();
+      const failing = withFrame(offset);
+      failing.handlers.set('Input.synthesizeTapGesture', async () => {
+        throw new Error('nope');
+      });
+      await failing.injector.inject(tapAtPoint());
+      // The tap is not lost: the frame's own session gets a click at the finger.
+      expect(mouseOf(failing).map((m) => [m.session, m.type, ...m.at])).toEqual([
+        ['session-F1', 'mouseMoved', 100, 50],
+        ['session-F1', 'mousePressed', 100, 50],
+        ['session-F1', 'mouseReleased', 100, 50],
+      ]);
+      expect(detaches(failing)).toEqual(['session-F1']);
+
+      // A gesture on a tab that is not painted never completes: 800 ms, then the click.
+      const hanging = withFrame(offset);
+      hanging.handlers.set('Input.synthesizeTapGesture', () => new Promise(() => {}));
+      const done = hanging.injector.inject(tapAtPoint());
+      const settled = expect(done).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(799);
+      expect(mouseOf(hanging)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await settled;
+      expect(mouseOf(hanging)).toHaveLength(3);
+
+      // One line says which way each tap went and why: paths, reasons and times only.
+      expect(logs.warn.mock.calls).toEqual([
+        ['Frame tap gesture failed, clicking in the frame', { why: 'gesture-error', ms: 0 }],
+        ['Frame tap gesture failed, clicking in the frame', { why: 'gesture-timeout', ms: 800 }],
+      ]);
+      expect(logs.debug.mock.calls).toEqual([
+        ['Frame tap delivered', { path: 'mouse', why: 'gesture-error', ms: 0 }],
+        ['Frame tap delivered', { path: 'mouse', why: 'gesture-timeout', ms: 800 }],
+      ]);
+    });
+
+    it('logs which way a tap went: gesture, covered, blocked, unverified', async () => {
+      const kinds = async (h: Harness) => {
+        logs.debug.mockClear();
+        await h.injector.inject(tapAtPoint());
+        return logs.debug.mock.calls.map(([, f]) => f);
+      };
+      expect(await kinds(withFrame(offset))).toEqual([{ path: 'gesture', ms: 0 }]);
+      expect(await kinds(withFrame(offset, rotated, ['F1'], async () => false))).toEqual([
+        { path: 'mouse', why: 'covered', ms: 0 },
+      ]);
+      expect(await kinds(withFrame(blocked))).toEqual([{ path: 'mouse', why: 'blocked', ms: 0 }]);
+      const throwing = withFrame(offset, rotated, ['F1'], async () => {
+        throw new Error('bridge gone');
+      });
+      expect(await kinds(throwing)).toEqual([{ path: 'mouse', why: 'unverified', ms: 0 }]);
+    });
+
+    it('drops the tap and gives the session back only when neither way can deliver it', async () => {
+      logs.warn.mockClear();
       const h = withFrame(offset);
       h.handlers.set('Input.synthesizeTapGesture', async () => {
         throw new Error('nope');
+      });
+      h.handlers.set('Input.dispatchMouseEvent', async () => {
+        throw new Error('no session');
       });
       await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
       await expect(h.injector.inject([touch('end', [])])).rejects.toThrow('PREVIEW_INPUT_INVALID');
       expect(detaches(h)).toEqual(['session-F1']);
       expect(h.injector.pressed.touches).toBe(0);
+      expect(logs.warn).toHaveBeenLastCalledWith('Frame tap click failed', {
+        why: 'gesture-error',
+        code: 'error',
+        ms: 0,
+      });
     });
   });
 
