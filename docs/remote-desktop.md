@@ -472,6 +472,13 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   plugin-opened tab of the same session already shows (same origin + path + query, fragment
   ignored) replaces that tab instead of adding another, so one page has one tab, one guest and
   one phone list entry. The replaced tab ends like any closed tab (`PREVIEW_SOURCE_ENDED`).
+  A plugin restarting its local viewer service usually changes the port, and the old page
+  (loaded earlier, so never a `chrome-error://` page) can no longer be entered. So for
+  loopback hosts (`127.0.0.1` / `localhost` / `[::1]`) the port is ignored as well — but only
+  when the old tab was opened by the **same plugin instance** (`ghostId`, filled by the host in
+  the open push and kept in memory next to the tab; it grants nothing) and path, query and
+  protocol are equal. Other plugins' tabs, ordinary web tabs and non-loopback hosts keep the
+  strict origin + path + query rule.
 - **Plugin updates**: the index records the plugin's install revision (version + install
   approval snapshot) when the preview is issued. After an update or reinstall the plugin's own
   service is restarted, so a tab opened by the old version points at a stopped service and

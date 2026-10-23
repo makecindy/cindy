@@ -8,6 +8,7 @@ import {
   _resetPluginPreviewTabsForTests,
   clearPendingPreviewTab,
   getPendingPreviewTabIds,
+  getPluginPreviewGhostId,
   getPluginPreviewTabIds,
   markPluginPreviewTab,
   unmarkPluginPreviewTab,
@@ -44,6 +45,15 @@ describe('pluginPreviewTabs', () => {
 
     act(() => unmarkPluginPreviewTab('t1'));
     expect(any.result.current).toBe(false);
+  });
+
+  it('remembers which plugin opened the tab until it is closed', () => {
+    markPluginPreviewTab('t1', 'ghost-a');
+    markPluginPreviewTab('t2');
+    expect(getPluginPreviewGhostId('t1')).toBe('ghost-a');
+    expect(getPluginPreviewGhostId('t2')).toBeUndefined();
+    unmarkPluginPreviewTab('t1');
+    expect(getPluginPreviewGhostId('t1')).toBeUndefined();
   });
 
   it('expires on its own so a guest that never loads cannot pin the layer forever', () => {

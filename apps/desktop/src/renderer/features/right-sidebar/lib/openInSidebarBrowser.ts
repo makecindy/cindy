@@ -16,7 +16,11 @@
 
 import { addTab, closeTab, ensureHydrated, getBucket } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
-import { getPluginPreviewTabIds, markPluginPreviewTab } from './pluginPreviewTabs';
+import {
+  getPluginPreviewGhostId,
+  getPluginPreviewTabIds,
+  markPluginPreviewTab,
+} from './pluginPreviewTabs';
 import { routeSidebarCommand } from './detachedSidebarRouting';
 import { isBrowserOpenablePath } from '../../../../shared/browserOpenableExts';
 
@@ -76,19 +80,53 @@ export function isLocalHtmlFileUrl(url: string): boolean {
   return abs !== null && isBrowserOpenablePath(abs);
 }
 
-/**
- * 预览页的「同一页」判据:origin + path + query,忽略 hash(插件常把每次启动的
- * 一次性令牌放在 hash 里)。非 http(s) / 解析失败 = null(不参与去重)。
- */
-function previewPageKey(url: unknown): string | null {
+/** 回环主机:本机插件自己起的预览服务(端口每次重启都可能变)。 */
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+}
+
+function parseHttpUrl(url: unknown): URL | null {
   if (typeof url !== 'string') return null;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * 旧预览标签是否被「这次新开的预览」取代。
+ *
+ * - 同一页:origin + path + query 完全相同(忽略 hash,插件常把每次启动的一次性令牌放
+ *   在 hash 里)——任何插件、任何主机都适用。
+ * - 同一插件的本机预览服务重启:新旧两个 URL 的主机都是回环地址、协议相同、path 与
+ *   query 相同,仅端口不同;并且旧标签必须是**同一个插件实例**(ghostId,主机在推送里
+ *   填的)在本 renderer 开的。插件重启服务后旧端口已无人监听,旧标签永远打不开,
+ *   但它加载过的旧文档不会变成错误页,所以不能靠加载失败来识别。
+ *
+ * 非回环地址不放宽端口:远程主机上不同端口是不同的服务。
+ */
+function supersedes(
+  next: URL,
+  nextGhostId: string | undefined,
+  oldTabId: string,
+  oldUrl: unknown,
+): boolean {
+  const old = parseHttpUrl(oldUrl);
+  if (!old) return false;
+  if (old.origin === next.origin && old.pathname === next.pathname && old.search === next.search) {
+    return true;
+  }
+  return (
+    nextGhostId !== undefined &&
+    getPluginPreviewGhostId(oldTabId) === nextGhostId &&
+    isLoopbackHost(old.hostname) &&
+    isLoopbackHost(next.hostname) &&
+    old.protocol === next.protocol &&
+    old.pathname === next.pathname &&
+    old.search === next.search
+  );
 }
 
 export interface OpenUrlInSidebarBrowserOptions {
@@ -102,6 +140,11 @@ export interface OpenUrlInSidebarBrowserOptions {
    * 随标签状态保存,标签每次 report 时带回;缺省 = 普通网页标签。
    */
   previewRequestId?: string;
+  /**
+   * 开这个预览的插件实例 id(主机在推送里填)。只用于「同一插件在同一任务里新开预览时,
+   * 取代它自己此前开的回环预览标签」,不参与任何授权判断。
+   */
+  previewGhostId?: string;
 }
 
 /** 在指定 session 的侧边栏浏览器里新开一个页签加载 url,并确保侧边栏可见。 */
@@ -112,12 +155,14 @@ export async function openUrlInSidebarBrowser(
 ): Promise<void> {
   const userInitiated = options.userInitiated !== false;
   const previewRequestId = options.previewRequestId;
+  const previewGhostId = previewRequestId ? options.previewGhostId : undefined;
   const routeResult = await routeSidebarCommand(
     {
       type: 'open-web-browser',
       sessionId,
       url,
       ...(previewRequestId ? { previewRequestId } : {}),
+      ...(previewGhostId ? { previewGhostId } : {}),
     },
     { userInitiated },
   );
@@ -131,19 +176,19 @@ export async function openUrlInSidebarBrowser(
   // 此时 Shell 的异步 list 拉取尚未回包,直接 addTab 会与后到的 list 结果
   // 互相覆盖。先 ensureHydrated(已 hydrate 时是同步 no-op)消除该竞态。
   await ensureHydrated(sessionId);
-  // 插件对同一页再次发起预览(close_viewer / open_viewer、重复调用):旧标签被新标签
-  // 取代,而不是再叠一个同页标签。只收「本 renderer 里由插件预览槽开的」标签(已登记
-  // 的 tracked 集合,普通网页标签与用户导航走的标签不在其中),且页面完全相同才算同一页
-  // ——一个预览页始终只有一个标签、一个 guest、一个手机列表项。
+  // 插件对同一预览再次发起(close_viewer / open_viewer、重复调用、服务换端口):旧标签被新
+  // 标签取代,而不是再叠一个。只关「本 renderer 里由插件预览槽开的」标签(已登记的 tracked
+  // 集合;普通网页标签、用户自己导航走的标签不在其中),判据见 supersedes。
+  // 一个预览始终只有一个标签、一个 guest、一个手机列表项。
   if (previewRequestId) {
-    const key = previewPageKey(url);
-    if (key) {
+    const next = parseHttpUrl(url);
+    if (next) {
       const tracked = getPluginPreviewTabIds();
       const superseded = getBucket(sessionId).tabs.filter(
         (tab) =>
           tab.kind === 'web-browser' &&
           tracked.has(tab.id) &&
-          previewPageKey((tab.state as { url?: unknown } | null)?.url) === key,
+          supersedes(next, previewGhostId, tab.id, (tab.state as { url?: unknown } | null)?.url),
       );
       for (const tab of superseded) await closeTab(sessionId, tab.id);
     }
@@ -159,6 +204,6 @@ export async function openUrlInSidebarBrowser(
   });
   // 插件预览标签:人不一定在看它(别的标签/任务/设置页),但 main 要等它 report 才能绑定
   // 插件身份。登记为「待绑定」,Shell 会在隐藏保活层里立即物化一次 webview。
-  if (previewRequestId) markPluginPreviewTab(tab.id);
+  if (previewRequestId) markPluginPreviewTab(tab.id, previewGhostId);
   requestRightSidebarVisibility('open', { sessionId, userInitiated });
 }

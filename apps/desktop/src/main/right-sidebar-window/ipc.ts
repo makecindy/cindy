@@ -107,7 +107,17 @@ function parseCommand(raw: unknown): RsbWindowCommand {
       typeof r.previewRequestId === 'string' &&
       PREVIEW_REQUEST_ID_RE.test(r.previewRequestId)
     ) {
-      return { type: r.type, sessionId: r.sessionId, url: r.url, previewRequestId: r.previewRequestId };
+      return {
+        type: r.type,
+        sessionId: r.sessionId,
+        url: r.url,
+        previewRequestId: r.previewRequestId,
+        ...(typeof r.previewGhostId === 'string' &&
+        r.previewGhostId.length > 0 &&
+        r.previewGhostId.length <= 256
+          ? { previewGhostId: r.previewGhostId }
+          : {}),
+      };
     }
     return { type: r.type, sessionId: r.sessionId, url: r.url };
   }

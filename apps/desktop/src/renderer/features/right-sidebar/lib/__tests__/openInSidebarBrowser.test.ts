@@ -28,6 +28,7 @@ import { routeSidebarCommand } from '../detachedSidebarRouting';
 import {
   _resetPluginPreviewTabsForTests,
   getPendingPreviewTabIds,
+  getPluginPreviewGhostId,
   markPluginPreviewTab,
 } from '../pluginPreviewTabs';
 import {
@@ -217,6 +218,98 @@ describe('openUrlInSidebarBrowser', () => {
 
       expect(closeTab).not.toHaveBeenCalled();
       expect(addTab).toHaveBeenCalledTimes(1);
+    });
+
+    describe('同一插件的本机预览服务换端口', () => {
+      const GHOST = 'baguette-simulator';
+      const at = (port: number, extra = '') =>
+        `http://127.0.0.1:${port}/control?udid=U&lang=en${extra}`;
+      const openAs = (url: string, ghost: string | undefined = GHOST) =>
+        openUrlInSidebarBrowser('s1', url, {
+          userInitiated: false,
+          previewRequestId: 'P'.repeat(43),
+          ...(ghost ? { previewGhostId: ghost } : {}),
+        });
+      const bucketOf = (...tabs: ReturnType<typeof previewTab>[]) =>
+        vi.mocked(getBucket).mockReturnValue({ tabs, activeTabId: null } as never);
+
+      it('回环地址 + 同 path/query、仅端口不同 + 同一插件实例开的旧标签 → 被取代(含 localhost / 忽略 hash)', async () => {
+        markPluginPreviewTab('dead-58232', GHOST);
+        markPluginPreviewTab('dead-59832', GHOST);
+        markPluginPreviewTab('dead-localhost', GHOST);
+        bucketOf(
+          previewTab('dead-58232', at(58232, '#cindyClipboard=58232.a')),
+          previewTab('dead-59832', at(59832)),
+          previewTab('dead-localhost', 'http://localhost:61000/control?udid=U&lang=en'),
+        );
+
+        await openAs(at(60296, '#cindyClipboard=60296.b'));
+
+        expect(vi.mocked(closeTab).mock.calls.map((c) => c[1])).toEqual([
+          'dead-58232',
+          'dead-59832',
+          'dead-localhost',
+        ]);
+        expect(addTab).toHaveBeenCalledTimes(1);
+        // 新标签带上插件身份登记,下一次重开还能认出它
+        expect(getPluginPreviewGhostId('t_1')).toBe(GHOST);
+      });
+
+      it('别的插件实例开的、没有身份记录的、path 或 query 不同的回环标签都不取代', async () => {
+        markPluginPreviewTab('other-ghost', 'another-plugin');
+        markPluginPreviewTab('no-ghost'); // 没有身份记录(只能按完全同页取代)
+        markPluginPreviewTab('other-path', GHOST);
+        markPluginPreviewTab('other-udid', GHOST);
+        bucketOf(
+          previewTab('other-ghost', at(58232)),
+          previewTab('no-ghost', at(58233)),
+          previewTab('other-path', 'http://127.0.0.1:58234/other?udid=U&lang=en'),
+          previewTab('other-udid', 'http://127.0.0.1:58235/control?udid=V&lang=en'),
+        );
+
+        await openAs(at(60296));
+
+        expect(closeTab).not.toHaveBeenCalled();
+      });
+
+      it('非回环地址维持 origin + path + query:换端口不算同一页,即使同一插件', async () => {
+        markPluginPreviewTab('remote-old', GHOST);
+        markPluginPreviewTab('remote-same', GHOST);
+        bucketOf(
+          previewTab('remote-old', 'https://preview.example.dev:8443/app?x=1'),
+          previewTab('remote-same', 'https://preview.example.dev:9443/app?x=1#tok'),
+        );
+
+        await openAs('https://preview.example.dev:9443/app?x=1#tok2');
+
+        expect(vi.mocked(closeTab).mock.calls.map((c) => c[1])).toEqual(['remote-same']);
+      });
+
+      it('回环旧标签与非回环新预览(或反过来)互不取代', async () => {
+        markPluginPreviewTab('loop-old', GHOST);
+        bucketOf(previewTab('loop-old', at(58232)));
+
+        await openAs('https://preview.example.dev/control?udid=U&lang=en');
+
+        expect(closeTab).not.toHaveBeenCalled();
+      });
+
+      it('身份随 detached 路由命令下发;没有 previewRequestId 时不带身份', async () => {
+        await openAs(at(60296));
+        expect(routeSidebarCommand).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'open-web-browser',
+            previewRequestId: 'P'.repeat(43),
+            previewGhostId: GHOST,
+          }),
+          { userInitiated: false },
+        );
+        vi.mocked(routeSidebarCommand).mockClear();
+        await openUrlInSidebarBrowser('s1', at(60296), { previewGhostId: GHOST });
+        expect(vi.mocked(routeSidebarCommand).mock.calls[0][0]).not.toHaveProperty(
+          'previewGhostId',
+        );
+      });
     });
 
     it('非预览打开(无 previewRequestId)从不关闭任何标签', async () => {
