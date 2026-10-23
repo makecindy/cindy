@@ -338,6 +338,36 @@ describe('right-sidebar-window IPC', () => {
       allowOpen: true,
     });
 
+    // previewGhostId 只跟着合法的 previewRequestId 透传;单独出现或超长都被丢弃。
+    for (const command of [
+      { previewRequestId, previewGhostId: 'baguette-simulator' },
+      { previewGhostId: 'baguette-simulator' },
+      { previewRequestId, previewGhostId: 'x'.repeat(257) },
+    ]) {
+      await handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-web-browser',
+            sessionId: 'lead-1',
+            url: 'https://example.com/',
+            ...command,
+          },
+          allowOpen: true,
+        },
+      );
+    }
+    const routed = (n: number) => controller.routeCommand.mock.calls[n - 1][0].command;
+    expect(routed(5)).toEqual({
+      type: 'open-web-browser',
+      sessionId: 'lead-1',
+      url: 'https://example.com/',
+      previewRequestId,
+      previewGhostId: 'baguette-simulator',
+    });
+    expect(routed(6)).not.toHaveProperty('previewGhostId');
+    expect(routed(7)).not.toHaveProperty('previewGhostId');
+
     await expect(
       handler(
         { sender: mainWebContents },

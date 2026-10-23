@@ -9725,6 +9725,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         sessionId?: string;
         url?: string;
         previewRequestId?: string;
+        ghostId?: string;
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
@@ -9734,6 +9735,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       void openUrlInSidebarBrowser(p.sessionId, p.url, {
         userInitiated: false,
         ...(typeof p.previewRequestId === 'string' ? { previewRequestId: p.previewRequestId } : {}),
+        ...(typeof p.ghostId === 'string' && p.ghostId ? { previewGhostId: p.ghostId } : {}),
       }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });

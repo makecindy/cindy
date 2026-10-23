@@ -42,6 +42,7 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     if (command.previewRequestId) {
       await openUrlInSidebarBrowser(command.sessionId, command.url, {
         previewRequestId: command.previewRequestId,
+        ...(command.previewGhostId ? { previewGhostId: command.previewGhostId } : {}),
       });
     } else {
       await openUrlInSidebarBrowser(command.sessionId, command.url);

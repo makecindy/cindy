@@ -29,6 +29,8 @@ export const PENDING_PREVIEW_TAB_TTL_MS = 60_000;
 
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const tracked = new Set<string>();
+/** tabId → 开它的插件实例 id(主机在推送里填的;仅进程内,用于同一插件的预览互相取代)。 */
+const ghostByTab = new Map<string, string>();
 let pendingSnapshot: ReadonlySet<string> = new Set();
 let trackedSnapshot: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
@@ -40,7 +42,7 @@ function publish(): void {
 }
 
 /** The renderer just created a plugin-preview tab: pending + tracked + eviction-protected. */
-export function markPluginPreviewTab(tabId: string): void {
+export function markPluginPreviewTab(tabId: string, ghostId?: string): void {
   const previous = pending.get(tabId);
   if (previous !== undefined) clearTimeout(previous);
   pending.set(
@@ -48,6 +50,7 @@ export function markPluginPreviewTab(tabId: string): void {
     setTimeout(() => clearPendingPreviewTab(tabId), PENDING_PREVIEW_TAB_TTL_MS),
   );
   tracked.add(tabId);
+  if (ghostId) ghostByTab.set(tabId, ghostId);
   browserWebviewPool.protectFromEviction(tabId);
   publish();
 }
@@ -67,8 +70,14 @@ export function unmarkPluginPreviewTab(tabId: string): void {
   if (timer !== undefined) clearTimeout(timer);
   const wasPending = pending.delete(tabId);
   const wasTracked = tracked.delete(tabId);
+  ghostByTab.delete(tabId);
   browserWebviewPool.unprotectFromEviction(tabId);
   if (wasPending || wasTracked) publish();
+}
+
+/** 开这个预览标签的插件实例 id;不是本 renderer 里插件预览槽开的标签返回 undefined。 */
+export function getPluginPreviewGhostId(tabId: string): string | undefined {
+  return ghostByTab.get(tabId);
 }
 
 export function getPendingPreviewTabIds(): ReadonlySet<string> {
@@ -107,6 +116,7 @@ export function _resetPluginPreviewTabsForTests(): void {
   for (const tabId of tracked) browserWebviewPool.unprotectFromEviction(tabId);
   pending.clear();
   tracked.clear();
+  ghostByTab.clear();
   pendingSnapshot = new Set();
   trackedSnapshot = new Set();
   listeners.clear();

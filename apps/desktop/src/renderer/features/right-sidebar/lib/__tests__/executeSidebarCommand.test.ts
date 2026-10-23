@@ -75,6 +75,18 @@ describe('executeSidebarCommand', () => {
       url: 'https://example.com/',
     });
     expect(openUrlInSidebarBrowser).toHaveBeenLastCalledWith('s1', 'https://example.com/');
+    // 插件身份随预览一起透传(抽离的侧栏窗口里同样能做「同一插件的预览互相取代」)
+    await executeSidebarCommand({
+      type: 'open-web-browser',
+      sessionId: 's1',
+      url: 'https://example.com/',
+      previewRequestId,
+      previewGhostId: 'baguette-simulator',
+    });
+    expect(openUrlInSidebarBrowser).toHaveBeenLastCalledWith('s1', 'https://example.com/', {
+      previewRequestId,
+      previewGhostId: 'baguette-simulator',
+    });
   });
 
   it('dispatches every command kind to the current renderer host implementation', async () => {
