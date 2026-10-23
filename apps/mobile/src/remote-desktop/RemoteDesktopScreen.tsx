@@ -8,7 +8,9 @@ import {
   useEffect,
   useRef,
   useState,
+  type ComponentProps,
   type ComponentRef,
+  type ComponentType,
 } from "react";
 import {
   AppState,
@@ -143,6 +145,11 @@ import { usePictureInPicturePreference } from "./usePictureInPicturePreference";
 import { PermissionGuide } from "./PermissionGuide";
 import { navigationChrome } from "@/theme/tokens";
 import { RemoteDesktopBackButton } from "./RemoteDesktopBackButton";
+import {
+  RemoteDesktopImmersiveBack,
+  RemoteDesktopImmersivePanelButton,
+  RemoteDesktopImmersiveToolbar,
+} from "./RemoteDesktopImmersiveControls";
 import { RemoteDesktopWindows } from "./RemoteDesktopWindows";
 import {
   desktopNetworkStatusText,
@@ -3398,6 +3405,15 @@ export function RemoteDesktopSession({
     setModifiers([]);
     setKeyPage(page);
   };
+  // Plain views, not SwiftUI, so the status bar can hide; see previewImmersive.ts.
+  const Toolbar: ComponentType<ComponentProps<typeof RemoteDesktopToolbar>> =
+    immersivePreview ? RemoteDesktopImmersiveToolbar : RemoteDesktopToolbar;
+  const PanelButton = immersivePreview
+    ? RemoteDesktopImmersivePanelButton
+    : RemoteDesktopPanelButton;
+  const BackButton = immersivePreview
+    ? RemoteDesktopImmersiveBack
+    : RemoteDesktopBackButton;
   return (
     <KeyboardAvoidingView
       testID="remoteDesktop.layout"
@@ -3639,7 +3655,10 @@ export function RemoteDesktopSession({
                 onClose={() => setWindowsOpen(false)}
               />
             )}
-          {(operations || Platform.OS === "ios") && (
+          {/* The iOS settings sheet is a SwiftUI Host that stays mounted; in the immersive
+              preview it is mounted only while open, since a mounted Host keeps the
+              status bar on screen (see previewImmersive.ts). */}
+          {(operations || (Platform.OS === "ios" && !immersivePreview)) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -3858,7 +3877,7 @@ export function RemoteDesktopSession({
               },
             ]}
           >
-            <RemoteDesktopToolbar
+            <Toolbar
               landscape={landscape || systemSideRail}
               windowOnly={Boolean(handoff) || previewMode}
               onWorkspaceLeft={
@@ -3952,7 +3971,7 @@ export function RemoteDesktopSession({
           },
         ]}
       >
-        <RemoteDesktopBackButton
+        <BackButton
           label={t("remoteDesktop.back")}
           onPress={back}
         />
@@ -4041,7 +4060,7 @@ export function RemoteDesktopSession({
                 ))}
               </View>
             )}
-            <RemoteDesktopPanelButton
+            <PanelButton
               label={t("remoteDesktop.close")}
               onPress={() => {
                 setKeyboard(false);
