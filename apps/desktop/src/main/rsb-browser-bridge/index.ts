@@ -79,6 +79,18 @@ export function requestGuestOrigin(tab: {
   });
 }
 
+/**
+ * 主文档是不是 Chromium 错误页(连接被拒 / DNS 失败)。`getURL()` 在错误页上仍是被请求的
+ * 地址,只有主框架已提交的 URL 是 `chrome-error://chromewebdata/`。
+ */
+function isErrorDocument(wc: Electron.WebContents): boolean {
+  try {
+    return wc.mainFrame.url.startsWith('chrome-error:');
+  } catch {
+    return false;
+  }
+}
+
 let previewTabIndex: PreviewTabIndex | null = null;
 let previewGhostResolver: ((ghostId: string) => PreviewTabGhostInfo | null) | null = null;
 
@@ -104,6 +116,33 @@ export function getPreviewTabIndex(): PreviewTabIndex {
       getGuestUrl: (webContentsId) => {
         const wc = electronWebContents.fromId(webContentsId);
         return wc && !wc.isDestroyed() ? wc.getURL() : null;
+      },
+      isGuestDocumentFailed: (webContentsId) => {
+        const wc = electronWebContents.fromId(webContentsId);
+        return !!wc && !wc.isDestroyed() && isErrorDocument(wc);
+      },
+      watchLoadHealth: (webContentsId, onHealth) => {
+        const wc = electronWebContents.fromId(webContentsId);
+        if (!wc || wc.isDestroyed()) return () => undefined;
+        // errorCode -3 (ERR_ABORTED) = 导航被新导航 / 下载取代,不是页面坏了。
+        const onFail = (
+          _event: unknown,
+          errorCode: number,
+          _description: string,
+          _url: string,
+          isMainFrame: boolean,
+        ) => {
+          if (isMainFrame && errorCode !== -3) onHealth(true);
+        };
+        // 错误页提交后同样会触发 did-finish-load,所以按真实提交的文档判断,不是按事件本身。
+        const onFinish = () => onHealth(isErrorDocument(wc));
+        wc.on('did-fail-load', onFail);
+        wc.on('did-finish-load', onFinish);
+        return () => {
+          if (wc.isDestroyed()) return;
+          wc.removeListener('did-fail-load', onFail);
+          wc.removeListener('did-finish-load', onFinish);
+        };
       },
       watchNavigation: (webContentsId, onNavigate) => {
         const wc = electronWebContents.fromId(webContentsId);

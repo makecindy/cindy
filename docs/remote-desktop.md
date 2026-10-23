@@ -459,6 +459,19 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   to exactly the bound origin resumes it under a new generation (new `ref`; the ended cast is
   not revived, the phone lists again). Not back within 30 minutes, or the tab is released,
   rebuilt, or the plugin disabled: invalidated for good (silently, `onEnded` already fired).
+- **Dead pages (load failure)**: when the guest's main document fails to load (connection
+  refused, DNS failure — the committed document is Chromium's `chrome-error://` page), the
+  binding is paused the same way: `onEnded('load-failed')` fires once, the tab is invisible to
+  `list` / `get` / `current`, and the phone no longer lists it. This is what a plugin restarting
+  its own viewer service on a new port leaves behind. A successful main-document load back at the
+  bound origin (service returns, user reloads) resumes it under a new generation; 30 minutes
+  without recovery invalidates it. A page that loaded fine and whose backend later dies is not
+  detectable and stays listed. Both pause causes can overlap; the binding resumes only when all
+  are cleared. Only plugin-preview tabs are in the index, so ordinary web tabs are unaffected.
+- **Re-opening the same preview**: a plugin preview request for a page that an existing
+  plugin-opened tab of the same session already shows (same origin + path + query, fragment
+  ignored) replaces that tab instead of adding another, so one page has one tab, one guest and
+  one phone list entry. The replaced tab ends like any closed tab (`PREVIEW_SOURCE_ENDED`).
 - **Plugin updates**: the index records the plugin's install revision (version + install
   approval snapshot) when the preview is issued. After an update or reinstall the plugin's own
   service is restarted, so a tab opened by the old version points at a stopped service and
