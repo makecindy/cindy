@@ -1,4 +1,5 @@
 import type { DesktopKeyCode, PreviewInputEvent } from '@cindy/device-link';
+import { createLogger } from '../logger';
 import {
   acquireDebuggerLease,
   releaseDebuggerLease,
@@ -26,8 +27,17 @@ export interface InputGuest {
   setBackgroundThrottling(allowed: boolean): void;
 }
 
+const log = createLogger('remote-desktop:preview-input');
+
 /** One injected command that has not answered by now is abandoned; its result is unknown. */
 export const PREVIEW_INPUT_TIMEOUT_MS = 2_000;
+/**
+ * Each step of delivering a tap (the host's check of what is on top, the tap gesture) gets this
+ * long, so that a step that never answers (a tab that is not being painted never completes a
+ * synthetic gesture) still leaves time to fall back to a click in the frame and the tap is
+ * not lost. A tap gesture takes ~110 ms when it works.
+ */
+const TAP_STEP_TIMEOUT_MS = 800;
 /** Release after a failure must not hang the lease teardown. */
 const RELEASE_TIMEOUT_MS = 1_000;
 /** A point this far outside the picture still counts as on it (rounding of the shared size). */
@@ -693,17 +703,27 @@ export class TabInputInjector {
       .catch(() => undefined);
   }
 
-  private async pointIsFree(host: { x: number; y: number }): Promise<boolean> {
-    if (!this.options.pointFree) return false;
+  /** What the host says about the point: the webview is on top, something else is, or unknown. */
+  private async pointStatus(host: {
+    x: number;
+    y: number;
+  }): Promise<'free' | 'covered' | 'unverified'> {
+    if (!this.options.pointFree) return 'unverified';
     try {
-      return (await withTimeout(this.options.pointFree(host), PREVIEW_INPUT_TIMEOUT_MS)) === true;
+      const free = await withTimeout(this.options.pointFree(host), TAP_STEP_TIMEOUT_MS);
+      return free === true ? 'free' : 'covered';
     } catch {
-      return false;
+      return 'unverified';
     }
   }
 
-  /** A whole tap on the routed frame at this page point (see `FrameRoute`). */
+  /**
+   * A whole tap on the routed frame at this page point (see `FrameRoute`). A tap that cannot be
+   * delivered one way is delivered the other: it is never dropped for a gesture that failed.
+   * One debug line says which way it went, how long it took and why, with no page content.
+   */
   private async tap(point: CssPoint): Promise<void> {
+    const started = Date.now();
     // The host's own space, as for any touch sent to the tab (see `GuestOrigin`).
     const host = {
       x: (this.origin?.x ?? 0) + point.x * this.scale.x,
@@ -711,29 +731,61 @@ export class TabInputInjector {
     };
     // The tap gesture goes through the host window's hit test, so it may only be used where the
     // webview itself is on top: a menu or dialog of the host app over it would take the tap.
-    if (this.origin?.hitBlocked !== true && (await this.pointIsFree(host))) {
-      await this.send('Input.synthesizeTapGesture', {
-        x: host.x,
-        y: host.y,
-        gestureSourceType: 'touch',
-      });
-      return;
+    let why: string = 'blocked';
+    if (this.origin?.hitBlocked !== true) {
+      const status = await this.pointStatus(host);
+      why = status;
+      if (status === 'free') {
+        try {
+          await this.send(
+            'Input.synthesizeTapGesture',
+            { x: host.x, y: host.y, gestureSourceType: 'touch' },
+            undefined,
+            TAP_STEP_TIMEOUT_MS,
+          );
+          log.debug('Frame tap delivered', { path: 'gesture', ms: Date.now() - started });
+          return;
+        } catch (error) {
+          // A gesture that never completes is usually a tab that is not painting; one that
+          // errors may have delivered nothing at all. A click in the frame is the way out.
+          why =
+            error instanceof Error && error.message === 'PREVIEW_INPUT_TIMEOUT'
+              ? 'gesture-timeout'
+              : 'gesture-error';
+          log.warn('Frame tap gesture failed, clicking in the frame', {
+            why,
+            ms: Date.now() - started,
+          });
+        }
+      }
     }
     const [local] = this.wirePoints([point]);
     const sessionId = this.route?.sessionId;
     const at = { x: local.x, y: local.y };
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at }, sessionId);
-    await this.send(
-      'Input.dispatchMouseEvent',
-      { type: 'mousePressed', ...at, button: 'left', clickCount: 1 },
-      sessionId,
-    );
-    await this.send(
-      'Input.dispatchMouseEvent',
-      { type: 'mouseReleased', ...at, button: 'left', clickCount: 1 },
-      sessionId,
-    );
+    try {
+      await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at }, sessionId);
+      await this.send(
+        'Input.dispatchMouseEvent',
+        { type: 'mousePressed', ...at, button: 'left', clickCount: 1 },
+        sessionId,
+      );
+      await this.send(
+        'Input.dispatchMouseEvent',
+        { type: 'mouseReleased', ...at, button: 'left', clickCount: 1 },
+        sessionId,
+      );
+    } catch (error) {
+      log.warn('Frame tap click failed', {
+        why,
+        code:
+          error instanceof Error && error.message === 'PREVIEW_INPUT_TIMEOUT' ? 'timeout' : 'error',
+        ms: Date.now() - started,
+      });
+      throw error;
+    }
+    log.debug('Frame tap delivered', { path: 'mouse', why, ms: Date.now() - started });
   }
+
   /**
    * The frame a gesture starting at this page point has to be delivered to, or null when the
    * point is in the tab's own (or a same-process) frame: the element under the point, whether
@@ -902,7 +954,12 @@ export class TabInputInjector {
     transport.on('detach', this.detachListener);
   }
 
-  private async send(method: string, params?: object, sessionId?: string): Promise<unknown> {
+  private async send(
+    method: string,
+    params?: object,
+    sessionId?: string,
+    timeoutMs = PREVIEW_INPUT_TIMEOUT_MS,
+  ): Promise<unknown> {
     const transport = this.ensureAttached();
     try {
       if (this.touchPoints !== null && !this.touchEmulated && method !== TOUCH_EMULATION) {
@@ -923,7 +980,7 @@ export class TabInputInjector {
           : params === undefined
             ? transport.sendCommand(method)
             : transport.sendCommand(method, params),
-        PREVIEW_INPUT_TIMEOUT_MS,
+        timeoutMs,
       );
     } catch (error) {
       if (error instanceof Error && error.message === 'PREVIEW_INPUT_TIMEOUT') {
