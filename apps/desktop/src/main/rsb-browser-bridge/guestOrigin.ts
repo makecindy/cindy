@@ -32,6 +32,8 @@ export interface TabOrigin {
   y: number;
   width: number;
   height: number;
+  /** The webview cannot be hit-tested in its host (`pointer-events: none` on it or above it). */
+  hitBlocked?: boolean;
 }
 
 export interface TabOriginDeps {
@@ -96,5 +98,6 @@ export async function requestTabOrigin(
     y: result.rect.top,
     width: result.rect.width,
     height: result.rect.height,
+    ...(result.rect.pointerBlocked === true ? { hitBlocked: true } : {}),
   };
 }

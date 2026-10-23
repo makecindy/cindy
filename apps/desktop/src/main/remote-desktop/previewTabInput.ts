@@ -10,7 +10,7 @@ export interface GuestDebugger {
   isAttached(): boolean;
   attach(protocolVersion?: string): void;
   detach(): void;
-  sendCommand(method: string, params?: object): Promise<unknown>;
+  sendCommand(method: string, params?: object, sessionId?: string): Promise<unknown>;
   on?(event: 'detach', listener: (...args: unknown[]) => void): unknown;
   removeListener?(event: 'detach', listener: (...args: unknown[]) => void): unknown;
 }
@@ -48,6 +48,12 @@ export interface GuestOrigin {
   y: number;
   width: number;
   height: number;
+  /**
+   * The webview cannot be hit-tested in its host (`pointer-events: none`, which the casting
+   * keep-alive layer uses to stay click-through): the browser then never looks for a
+   * cross-process frame under a touch (see `FrameRoute`).
+   */
+  hitBlocked?: boolean;
 }
 export interface TabInputOptions {
   /**
@@ -221,6 +227,60 @@ interface CssPoint {
   y: number;
 }
 
+/** One cross-process frame on the way down: its element's box, as seen from the frame above. */
+interface FrameHop {
+  /** Top-left corner and the two edge vectors of the element's content box (CSS px). */
+  origin: [number, number];
+  across: [number, number];
+  down: [number, number];
+  /** The content box's own (untransformed) size, which is the frame's viewport. */
+  width: number;
+  height: number;
+}
+/**
+ * Where a gesture is delivered when the browser would not get it into a cross-process frame
+ * (an iframe of another site, with a process of its own). Measured on Electron 42 / Chromium
+ * 148, a touch is placed in the host window's space (see `GuestOrigin`) for the tab's main
+ * frame, but the frame under it is looked up as if the same numbers were the tab's own, so with
+ * a webview that is not at the host's (0, 0) the touch lands on the parent page, which then
+ * answers with a click on the iframe element and the frame never hears of it; with a webview
+ * the host cannot hit-test it is never looked up at all. A gesture that starts on such a frame
+ * is therefore sent to the frame's own debugger session instead, in the frame's coordinates
+ * (found from the page: the element under the finger and its box, transforms included): the
+ * frame then gets exact touch and pointer events, multi-touch included. The browser's compat
+ * click for a tap is placed from those same numbers by the tab, so it only reaches the frame
+ * when they fall inside the frame's box in the tab. Sessions are attached for one gesture and
+ * detached after it.
+ */
+interface FrameRoute {
+  sessionId: string;
+  sessions: string[];
+  hops: FrameHop[];
+}
+/** Frames nested this deep are not followed any further. */
+const MAX_FRAME_DEPTH = 4;
+/** An element box whose edges are this close to parallel has no inverse. */
+const DEGENERATE_BOX = 1e-6;
+
+/** The point in the frame an element hosts, from a point in the frame the element sits in. */
+function intoFrame(hop: FrameHop, x: number, y: number): [number, number] | null {
+  const det = hop.across[0] * hop.down[1] - hop.across[1] * hop.down[0];
+  if (!Number.isFinite(det) || Math.abs(det) < DEGENERATE_BOX) return null;
+  const dx = x - hop.origin[0];
+  const dy = y - hop.origin[1];
+  const along = (dx * hop.down[1] - dy * hop.down[0]) / det;
+  const below = (hop.across[0] * dy - hop.across[1] * dx) / det;
+  return [along * hop.width, below * hop.height];
+}
+function throughHops(hops: readonly FrameHop[], x: number, y: number): [number, number] | null {
+  let point: [number, number] | null = [x, y];
+  for (const hop of hops) {
+    point = point && intoFrame(hop, point[0], point[1]);
+    if (!point) return null;
+  }
+  return point;
+}
+
 /**
  * Injects phone input into one preview tab: touch through the guest's debugger
  * (`Input.dispatchTouchEvent`), keys through `sendInputEvent`, committed text through
@@ -250,6 +310,9 @@ export class TabInputInjector {
   private viewport: TabViewport | null = null;
   private leaseSize: TabViewport | null = null;
   private origin: GuestOrigin | null = null;
+  /** Frames of other sites cannot be reached by a plain touch (see `FrameRoute`). */
+  private frameRouting = false;
+  private route: FrameRoute | null = null;
   /** Page CSS px to host CSS px for the current gesture. */
   private scale = { x: 1, y: 1 };
   private leases: DebuggerLease[] = [];
@@ -371,7 +434,15 @@ export class TabInputInjector {
       this.ignored.clear();
       if (this.touches.size === 0) return;
       this.touches.clear();
-      await this.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+      try {
+        await this.send(
+          'Input.dispatchTouchEvent',
+          { type: 'touchCancel', touchPoints: [] },
+          this.route?.sessionId,
+        );
+      } finally {
+        await this.endRoute();
+      }
       return;
     }
     // Geometry may change between gestures (the side panel is resized); within one it holds.
@@ -394,6 +465,8 @@ export class TabInputInjector {
         throw failure();
       this.origin = origin;
       this.scale = scale;
+      this.frameRouting =
+        origin.hitBlocked === true || Math.abs(origin.x) > 0.5 || Math.abs(origin.y) > 0.5;
     }
     if (epoch !== this.epoch) throw failure();
     const viewport = this.viewport!;
@@ -417,11 +490,10 @@ export class TabInputInjector {
         this.ignored.add(point.id);
         continue;
       }
-      const origin = this.origin;
       points.push({
         id: point.id,
-        x: (origin?.x ?? 0) + Math.min(1, Math.max(0, u)) * viewport.width * this.scale.x,
-        y: (origin?.y ?? 0) + Math.min(1, Math.max(0, v)) * viewport.height * this.scale.y,
+        x: Math.min(1, Math.max(0, u)) * viewport.width,
+        y: Math.min(1, Math.max(0, v)) * viewport.height,
       });
     }
     const unchanged =
@@ -441,17 +513,135 @@ export class TabInputInjector {
       type = 'touchMove';
     }
     try {
-      await this.send('Input.dispatchTouchEvent', {
-        type,
-        touchPoints: points.map((point) => ({ ...point, radiusX: 3, radiusY: 3, force: 1 })),
-      });
+      if (type === 'touchStart' && this.touches.size === 0 && this.frameRouting && !this.route) {
+        this.route = await this.routeTo(points[0]);
+        if (epoch !== this.epoch) throw failure();
+      }
+      const route = this.route;
+      const wire: CssPoint[] = [];
+      for (const point of points) {
+        // Into a routed frame the point is in that frame's own CSS px; otherwise in the host's.
+        const local = route ? throughHops(route.hops, point.x, point.y) : null;
+        if (route && !local) throw failure();
+        wire.push(
+          local
+            ? { id: point.id, x: local[0], y: local[1] }
+            : {
+                id: point.id,
+                x: (this.origin?.x ?? 0) + point.x * this.scale.x,
+                y: (this.origin?.y ?? 0) + point.y * this.scale.y,
+              },
+        );
+      }
+      await this.send(
+        'Input.dispatchTouchEvent',
+        {
+          type,
+          touchPoints: wire.map((point) => ({ ...point, radiusX: 3, radiusY: 3, force: 1 })),
+        },
+        route?.sessionId,
+      );
+      if (type === 'touchEnd') await this.endRoute();
     } catch (error) {
       // A sequence the page never saw begin cannot be continued; start over.
       this.touches.clear();
       this.ignored.clear();
+      await this.endRoute();
       throw error;
     }
     this.touches = new Map(points.map((point) => [point.id, point] as const));
+  }
+
+  /**
+   * The frame a gesture starting at this page point has to be delivered to, or null when the
+   * point is in the tab's own (or a same-process) frame: the element under the point, whether
+   * it hosts a frame with its own target, and where its box lies (transforms included),
+   * repeated for frames inside that frame. Any failure leaves the gesture on the tab itself,
+   * which is what it did before.
+   */
+  private async routeTo(point: CssPoint): Promise<FrameRoute | null> {
+    const sessions: string[] = [];
+    const hops: FrameHop[] = [];
+    let owner: string | undefined;
+    let x = point.x;
+    let y = point.y;
+    let frames: Set<string> | null = null;
+    const hopsFrames = new Set<string>();
+    try {
+      for (let depth = 0; depth < MAX_FRAME_DEPTH; depth++) {
+        const hit = (await this.send(
+          'DOM.getNodeForLocation',
+          { x: Math.round(x), y: Math.round(y), ignorePointerEventsNone: true },
+          owner,
+        )) as { backendNodeId?: number };
+        if (typeof hit?.backendNodeId !== 'number') break;
+        const described = (await this.send(
+          'DOM.describeNode',
+          { backendNodeId: hit.backendNodeId },
+          owner,
+        )) as { node?: { frameId?: string } };
+        const frameId = described?.node?.frameId;
+        if (!frameId) break;
+        if (!frames) {
+          const targets = (await this.send('Target.getTargets')) as {
+            targetInfos?: Array<{ targetId?: string; type?: string }>;
+          };
+          frames = new Set(
+            (targets?.targetInfos ?? []).flatMap((t) =>
+              t.type === 'iframe' && typeof t.targetId === 'string' ? [t.targetId] : [],
+            ),
+          );
+        }
+        if (!frames.has(frameId) || hopsFrames.has(frameId)) break;
+        hopsFrames.add(frameId);
+        const model = (
+          (await this.send('DOM.getBoxModel', { backendNodeId: hit.backendNodeId }, owner)) as {
+            model?: { content?: number[]; width?: number; height?: number };
+          }
+        )?.model;
+        const quad = model?.content;
+        if (!quad || quad.length < 8 || !quad.every(Number.isFinite)) break;
+        const hop: FrameHop = {
+          origin: [quad[0], quad[1]],
+          across: [quad[2] - quad[0], quad[3] - quad[1]],
+          down: [quad[6] - quad[0], quad[7] - quad[1]],
+          width: Number(model?.width),
+          height: Number(model?.height),
+        };
+        const inside = hop.width > 0 && hop.height > 0 ? intoFrame(hop, x, y) : null;
+        if (!inside) break;
+        const attached = (await this.send('Target.attachToTarget', {
+          targetId: frameId,
+          flatten: true,
+        })) as { sessionId?: string };
+        if (typeof attached?.sessionId !== 'string') break;
+        sessions.push(attached.sessionId);
+        hops.push(hop);
+        owner = attached.sessionId;
+        [x, y] = inside;
+      }
+    } catch {
+      // A frame that does not answer is as good as none: the tab itself gets the gesture.
+    }
+    if (!owner) return null;
+    return { sessionId: owner, sessions, hops };
+  }
+
+  /** The gesture is over: give the frame sessions back. */
+  private async endRoute(): Promise<void> {
+    const route = this.route;
+    this.route = null;
+    if (!route || this.guest.isDestroyed() || !this.guest.debugger.isAttached()) return;
+    for (const sessionId of [...route.sessions].reverse()) {
+      try {
+        await withTimeout(
+          this.guest.debugger.sendCommand('Target.detachFromTarget', { sessionId }),
+          RELEASE_TIMEOUT_MS,
+        );
+      } catch {
+        // The frame is gone or the tab does not answer; its session went with it.
+      }
+    }
   }
 
   private async key(code: DesktopKeyCode, down: boolean): Promise<void> {
@@ -521,11 +711,13 @@ export class TabInputInjector {
     this.detachListener = () => {
       this.focusEmulated = false;
       this.touchEmulated = false;
+      // The frame sessions went with the debugger session.
+      this.route = null;
     };
     transport.on('detach', this.detachListener);
   }
 
-  private async send(method: string, params?: object): Promise<unknown> {
+  private async send(method: string, params?: object, sessionId?: string): Promise<unknown> {
     const transport = this.ensureAttached();
     try {
       if (this.touchPoints !== null && !this.touchEmulated && method !== TOUCH_EMULATION) {
@@ -541,9 +733,11 @@ export class TabInputInjector {
         this.touchEmulated = true;
       }
       return await withTimeout(
-        params === undefined
-          ? transport.sendCommand(method)
-          : transport.sendCommand(method, params),
+        sessionId !== undefined
+          ? transport.sendCommand(method, params, sessionId)
+          : params === undefined
+            ? transport.sendCommand(method)
+            : transport.sendCommand(method, params),
         PREVIEW_INPUT_TIMEOUT_MS,
       );
     } catch (error) {
@@ -585,22 +779,26 @@ export class TabInputInjector {
     this.touches.clear();
     this.ignored.clear();
     this.keys = [];
-    if (this.guest.isDestroyed()) return;
+    if (this.guest.isDestroyed()) {
+      this.route = null;
+      return;
+    }
     if (hadTouches) {
       try {
         // Without a started touch the page rejects a cancel; the held set makes that impossible.
         const transport = this.ensureAttached();
+        const touchCancel = { type: 'touchCancel', touchPoints: [] };
         await withTimeout(
-          transport.sendCommand('Input.dispatchTouchEvent', {
-            type: 'touchCancel',
-            touchPoints: [],
-          }),
+          this.route
+            ? transport.sendCommand('Input.dispatchTouchEvent', touchCancel, this.route.sessionId)
+            : transport.sendCommand('Input.dispatchTouchEvent', touchCancel),
           RELEASE_TIMEOUT_MS,
         );
       } catch {
         // Nothing more can be done for a tab that does not answer.
       }
     }
+    await this.endRoute();
     // Modifiers go last (the reverse press order already puts them there for a normal chord).
     for (const code of keys) {
       const stroke = strokeFor(code);

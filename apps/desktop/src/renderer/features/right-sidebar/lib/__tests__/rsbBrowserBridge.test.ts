@@ -317,6 +317,10 @@ describe('rsbBrowserBridge — viewRect (read-only webview box for phone touches
       y: 86,
       toJSON: () => ({}),
     });
+    // The pool parks a webview nobody shows in a click-through box; this one is on display.
+    const shown = document.createElement('div');
+    shown.append(entry.webview);
+    document.body.append(shown);
     const before = browserWebviewPool.inspectTabIds();
 
     api.tabOpCb?.({ reqId: 'rect-1', op: 'viewRect', sessionId: 's1', tabId: 'tab-rect' });
@@ -326,13 +330,38 @@ describe('rsbBrowserBridge — viewRect (read-only webview box for phone touches
         reqId: 'rect-1',
         ok: true,
         tabId: 'tab-rect',
-        rect: { left: 770, top: 86, width: 510, height: 800 },
+        rect: { left: 770, top: 86, width: 510, height: 800, pointerBlocked: false },
       });
     });
     // No hydration, no new webview, no visibility request.
     expect(browserWebviewPool.inspectTabIds()).toEqual(before);
     expect(getBucket('s1').tabs).toEqual([]);
+    shown.remove();
     browserWebviewPool.release('tab-rect');
+  });
+
+  it('reports a webview that the host cannot hit-test (keep-alive layer is click-through)', async () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    const entry = browserWebviewPool.acquire('tab-blocked');
+    const layer = document.createElement('div');
+    layer.style.pointerEvents = 'none';
+    layer.append(entry.webview);
+    document.body.append(layer);
+
+    api.tabOpCb?.({ reqId: 'rect-3', op: 'viewRect', sessionId: 's1', tabId: 'tab-blocked' });
+
+    await vi.waitFor(() => {
+      expect(api.tabOpResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reqId: 'rect-3',
+          ok: true,
+          rect: expect.objectContaining({ pointerBlocked: true }),
+        }),
+      );
+    });
+    layer.remove();
+    browserWebviewPool.release('tab-blocked');
   });
 
   it('says so when the tab has no webview in this window', async () => {
