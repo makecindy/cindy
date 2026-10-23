@@ -48,6 +48,14 @@ import {
 import { splitPreviewInput } from "./previewInputBatches";
 import { previewViewportInsets } from "./previewInsets";
 import {
+  immersiveControlsTop,
+  previewImmersiveEnabled,
+} from "./previewImmersive";
+import {
+  createPreviewViewportReporter,
+  previewPictureArea,
+} from "./previewViewport";
+import {
   parsePreviewTarget,
   pickPreviewTab,
   type PreviewTarget,
@@ -136,7 +144,10 @@ import { PermissionGuide } from "./PermissionGuide";
 import { navigationChrome } from "@/theme/tokens";
 import { RemoteDesktopBackButton } from "./RemoteDesktopBackButton";
 import { RemoteDesktopWindows } from "./RemoteDesktopWindows";
-import { RemoteDesktopNetworkStatus } from "./RemoteDesktopNetworkStatus";
+import {
+  desktopNetworkStatusText,
+  RemoteDesktopNetworkStatus,
+} from "./RemoteDesktopNetworkStatus";
 import type { DesktopNetworkStats } from "./networkStats";
 import {
   findRememberedMode,
@@ -295,6 +306,9 @@ export function RemoteDesktopSession({
   // sequence is numbered here, once, because the host ignores any that repeat or fall back.
   const previewTouchLimit = useRef(1);
   const previewSequence = useRef(0);
+  // The picture area with the keyboard closed, in CSS px; what the computer lays
+  // the tab out at (previewTab.viewport). Written during render, read at connect.
+  const previewAreaRef = useRef<ReturnType<typeof previewPictureArea>>(null);
   const navigation = useRef({ onBack, onRestore, onVisibility, onEnded });
   navigation.current = { onBack, onRestore, onVisibility, onEnded };
   const focusedRef = useRef(focused);
@@ -722,6 +736,20 @@ export function RemoteDesktopSession({
     },
     [deviceId, sendOverChannel],
   );
+  const requestRef = useRef(request);
+  requestRef.current = request;
+  const viewportReporter = useRef<ReturnType<typeof createPreviewViewportReporter> | null>(null);
+  if (!viewportReporter.current)
+    viewportReporter.current = createPreviewViewportReporter((area) => {
+      const lease = active.current;
+      if (!previewRef.current || !lease?.preview) return;
+      return requestRef.current({
+        op: "previewViewport",
+        lease: lease.lease,
+        width: area.width,
+        height: area.height,
+      });
+    });
   const viewerSession = useMemo(
     () => ({ current: new RemoteDesktopViewerSession(request) }),
     [request],
@@ -1210,6 +1238,7 @@ export function RemoteDesktopSession({
         // one-time and lives 60 s, so it is fetched here, after the link is up,
         // and only held in this scope: never in a route, log or store.
         let previewGrant: string | undefined;
+        let previewViewportSupported = false;
         const previewTarget = previewRef.current;
         if (previewTarget) {
           const hostCaps = await request<RemoteDesktopCapabilities>({
@@ -1221,6 +1250,7 @@ export function RemoteDesktopSession({
           const previewCap = remoteDesktopPreviewTabCapability(hostCaps);
           if (!previewCap) throw new Error("CHANNEL_NOT_ALLOWED");
           previewTouchLimit.current = previewCap.maxTouchPoints;
+          previewViewportSupported = previewCap.viewport === true;
           const listed = await request<PreviewTabsReply>({
             op: "previewTabs",
             sessionId: previewTarget.sessionId,
@@ -1244,7 +1274,16 @@ export function RemoteDesktopSession({
             resume: resuming,
             takeover: previewGrant ? false : takeover,
             ...(handoff ? { handoff } : {}),
-            ...(previewGrant ? { preview: { grant: previewGrant } } : {}),
+            ...(previewGrant
+              ? {
+                  preview: {
+                    grant: previewGrant,
+                    ...(previewViewportSupported && previewAreaRef.current
+                      ? { viewport: previewAreaRef.current }
+                      : {}),
+                  },
+                }
+              : {}),
             // Hosts with `autoControl` grant control with the lease.
             control: true,
             onStart: () => {
@@ -1361,6 +1400,11 @@ export function RemoteDesktopSession({
         // host permission and ownership gates still decide whether it is allowed.
         // A preview has no control to ask for: touches are always allowed.
         previewSequence.current = 0;
+        if (previewGrant)
+          viewportReporter.current!.start(
+            previewViewportSupported ? previewAreaRef.current : null,
+            previewViewportSupported,
+          );
         if (previewGrant) send({ type: "control", enabled: inputAllowed(true) });
         else if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
         else if (result.canControl) {
@@ -1796,31 +1840,61 @@ export function RemoteDesktopSession({
       spacing.lg +
       (Platform.OS === "ios" ? spacing.xs : 0)
     : edgePadding.paddingLeft + spacing.lg;
+  // A preview is an app page you press: unlike a remote desktop, which may run
+  // under the floating controls, it is fitted into the area they leave free.
+  const fitPreview = previewMode && !fullScreenFoldBackground && !tableRegion;
+  // Portrait on a phone with a camera cutout: back beside the cutout on the
+  // left, keyboard and settings on the right, no bottom toolbar.
+  const immersivePreview =
+    fitPreview &&
+    previewImmersiveEnabled({
+      preview: previewMode,
+      ios: Platform.OS === "ios",
+      landscape,
+      split: false,
+      safeTop: insets.top,
+      windowWidth: windowSize.width,
+    });
+  const previewFit = (bottom: number) =>
+    previewViewportInsets({
+      landscape,
+      systemSideRail,
+      toolbarOnLeft,
+      paddingTop: edgePadding.paddingTop,
+      bottom,
+      safeBottom: insets.bottom,
+      backHeight: backControlHeight,
+      backLeft,
+      toolbar: toolbarSize,
+      sideRailWidth,
+      immersive: immersivePreview,
+    });
+  // What sits below the picture while the keyboard is closed.
+  const closedBottomInset =
+    landscape ? 0 : immersivePreview ? insets.bottom : toolbarSize.height;
+  const keyboardUp = keyboard || nativeKeyboard;
+  const pictureArea = fitPreview
+    ? previewPictureArea({
+        windowWidth: windowSize.width,
+        windowHeight: windowSize.height,
+        insets: previewFit(closedBottomInset),
+      })
+    : null;
+  // The keyboard changes the window on some systems; the report ignores it.
+  if (!keyboardUp) previewAreaRef.current = pictureArea;
+  useEffect(() => {
+    if (!keyboardUp) viewportReporter.current!.update(pictureArea);
+  }, [pictureArea?.width, pictureArea?.height, keyboardUp]);
+  useEffect(() => () => viewportReporter.current!.stop(), []);
   useEffect(() => {
     const bottomInset = fullScreenFoldBackground
       ? Math.max(0, geometry.height - foldLayout!.media.y - foldLayout!.media.height) : tableRegion ? 0 :
         keyboard && landscapeKeyboardOverlay
           ? keyboardPanelHeight + keyboardBottom
           : !keyboard && !landscape
-            ? toolbarSize.height
+            ? closedBottomInset
             : 0;
-    // A preview is an app page you press: unlike a remote desktop, which may run
-    // under the floating controls, it is fitted into the area they leave free.
-    const fitPreview = previewMode && !fullScreenFoldBackground && !tableRegion;
-    const preview = fitPreview
-      ? previewViewportInsets({
-          landscape,
-          systemSideRail,
-          toolbarOnLeft,
-          paddingTop: edgePadding.paddingTop,
-          bottom: bottomInset,
-          safeBottom: insets.bottom,
-          backHeight: backControlHeight,
-          backLeft,
-          toolbar: toolbarSize,
-          sideRailWidth,
-        })
-      : null;
+    const preview = fitPreview ? previewFit(bottomInset) : null;
     send({
       type: "mouseButtons",
       native: Platform.OS === "ios",
@@ -1830,7 +1904,9 @@ export function RemoteDesktopSession({
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
       portraitKeyboardTopInset:
         keyboard && !landscape && !tableRegion
-          ? edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
+          ? immersivePreview
+            ? edgePadding.paddingTop
+            : edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
           : 0,
       // Side controls float over the desktop; fit against the full canvas width
       // in either landscape direction, including while the keyboard is open.
@@ -1858,6 +1934,7 @@ export function RemoteDesktopSession({
     backControlHeight,
     backLeft,
     previewMode,
+    immersivePreview,
     systemSideRail,
     toolbarOnLeft,
     sideRailWidth,
@@ -3539,7 +3616,7 @@ export function RemoteDesktopSession({
                 {t("remoteDesktop.viewOnly")}
               </Text>
             )}
-          {lease && !showConnectionStatus && !operations && !landscape && (
+          {lease && !showConnectionStatus && !operations && !landscape && !immersivePreview && (
             <RemoteDesktopNetworkStatus
               send={send}
               stats={network}
@@ -3669,6 +3746,11 @@ export function RemoteDesktopSession({
                   inputMode={inputMode}
                   displays={handoff || previewMode ? [] : (caps?.displays ?? [])}
                   preview={previewMode}
+                  connectionInfo={
+                    immersivePreview && lease
+                      ? desktopNetworkStatusText(t, network, status === "live")
+                      : undefined
+                  }
                   displayId={recovery.current.displayId ?? lease?.display.id}
                   onViewOnly={() => void toggleControl()}
                   onInputMode={(value) => {
@@ -3696,7 +3778,7 @@ export function RemoteDesktopSession({
                 right: t("remoteDesktop.rightClick"), wheel: t("remoteDesktop.mouseWheel") }} /> : null}
           </View>
         ) : null}
-        {!keyboard && (
+        {(!keyboard || immersivePreview) && (
           <Animated.View
             key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
             testID="remoteDesktop.toolbarPosition"
@@ -3749,6 +3831,18 @@ export function RemoteDesktopSession({
               },
               tableRegion && { left: foldControls.x, right: undefined, width: foldControls.width,
                 bottom: geometry.height - foldControls.y - foldControls.height, paddingBottom: spacing.sm },
+              immersivePreview && {
+                // Keyboard and settings, right of the camera cutout.
+                left: undefined,
+                right: Math.max(spacing.lg, edgePadding.paddingRight),
+                top: immersiveControlsTop(insets.top),
+                bottom: undefined,
+                alignItems: "center",
+                justifyContent: "center",
+                paddingLeft: 0,
+                paddingRight: 0,
+                paddingBottom: 0,
+              },
               systemSideRail && {
                 left: toolbarOnLeft ? 0 : undefined,
                 right: toolbarOnLeft ? undefined : 0,
@@ -3846,7 +3940,9 @@ export function RemoteDesktopSession({
           {
             top: landscape
               ? insets.top + spacing.lg
-              : edgePadding.paddingTop + spacing.xs,
+              : immersivePreview
+                ? immersiveControlsTop(insets.top)
+                : edgePadding.paddingTop + spacing.xs,
             left: backLeft,
           },
           systemSideRail && {

@@ -3,6 +3,26 @@ import { useTranslation } from "react-i18next";
 import { spacing, typeScale, useTheme } from "@/theme";
 import { formatReceiveRate, type DesktopNetworkStats } from "./networkStats";
 
+/** "Direct to computer" plus the receive rate and latency, on two lines. */
+export function desktopNetworkStatusText(
+  t: (key: string) => string,
+  stats: DesktopNetworkStats | null,
+  video: boolean,
+): string {
+  const transport = stats?.transport ?? (video ? "video" : "screenshots");
+  const label =
+    !stats && !video
+      ? "connecting"
+      : {
+          video: "live",
+          direct: "directConnection",
+          relay: "videoRelay",
+          screenshots: "screenshotRelay",
+        }[transport];
+  const latency = stats?.latencyMs;
+  return `${t(`remoteDesktop.${label}`)}\n${formatReceiveRate(stats?.bytesPerSecond ?? null)}${latency != null ? ` · ${Math.round(latency)} ms` : ""}`;
+}
+
 // Render inside the viewer, between its backdrop and interactive desktop.
 export function RemoteDesktopNetworkStatus({
   stats,
@@ -17,18 +37,7 @@ export function RemoteDesktopNetworkStatus({
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const transport = stats?.transport ?? (video ? "video" : "screenshots");
-  const label =
-    !stats && !video
-      ? "connecting"
-      : {
-          video: "live",
-          direct: "directConnection",
-          relay: "videoRelay",
-          screenshots: "screenshotRelay",
-        }[transport];
-  const latency = stats?.latencyMs;
-  const text = `${t(`remoteDesktop.${label}`)}\n${formatReceiveRate(stats?.bytesPerSecond ?? null)}${latency != null ? ` · ${Math.round(latency)} ms` : ""}`;
+  const text = desktopNetworkStatusText(t, stats, video);
   useEffect(() => {
     send({
       type: "networkStatus",

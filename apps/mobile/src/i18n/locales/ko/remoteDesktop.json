@@ -171,5 +171,6 @@
   "previewOnly": "미리보기에서는 터치와 문자 입력만 사용할 수 있습니다.",
   "previewEntry": "컴퓨터의 미리보기 보기",
   "previewEntryMany": "컴퓨터의 미리보기 보기 ({{count}})",
-  "previewEntryChoose": "볼 미리보기 선택"
+  "previewEntryChoose": "볼 미리보기 선택",
+  "connectionStatus": "연결 상태"
 }

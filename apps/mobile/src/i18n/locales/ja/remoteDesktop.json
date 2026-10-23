@@ -171,5 +171,6 @@
   "previewOnly": "プレビューではタッチと文字入力のみ使えます。",
   "previewEntry": "コンピュータのプレビューを表示",
   "previewEntryMany": "コンピュータのプレビューを表示（{{count}}）",
-  "previewEntryChoose": "表示するプレビューを選択"
+  "previewEntryChoose": "表示するプレビューを選択",
+  "connectionStatus": "接続状況"
 }
