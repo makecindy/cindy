@@ -288,9 +288,16 @@ const TAP_SLOP = 10;
  * the browser shows a press at about 150 ms; a finger still down at 300 ms is a press-and-hold,
  * not a tap, so its start is sent then and the gesture continues as a touch (the frame hears
  * the press while it lasts). Long enough that a slow tap is not split, short enough that a
- * hold is not delayed past the point where pages react to it. A touch sent this way lifts as a
- * touch: the browser still places its own compat click for a stationary lift away from the
- * finger (measured: any stationary hold up to 1.5 s), which only a cancel would avoid.
+ * hold is not delayed past the point where pages react to it.
+ *
+ * A press sent this way that is then lifted without having moved ends in `touchCancel`, not
+ * `touchEnd`. Measured on Electron 42: after any stationary hold (100 ms to 1.5 s) a lift
+ * makes the browser place a compat click of its own away from the finger (see `FrameRoute`),
+ * which can land on another control, and a 11 px nudge before the lift does not prevent it;
+ * a cancel does. A phone's long press makes no click either, and engines treat `touchcancel`
+ * like `touchend`, so the trade is a cancel event instead of an up for a hold, against a
+ * click on the wrong element. A press that moved, a second finger, a same-origin page and a
+ * tap that lifted in time are not affected.
  */
 const TAP_HOLD_MS = 300;
 /** Frames nested this deep are not followed any further. */
@@ -351,6 +358,8 @@ export class TabInputInjector {
   private route: FrameRoute | null = null;
   private pendingTap: PendingTap | null = null;
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A press whose start went out because it was held past `TAP_HOLD_MS`; `moved` once it travels. */
+  private timedHold: { point: CssPoint; moved: boolean } | null = null;
   /** Page CSS px to host CSS px for the current gesture. */
   private scale = { x: 1, y: 1 };
   private leases: DebuggerLease[] = [];
@@ -588,7 +597,27 @@ export class TabInputInjector {
         this.dropPending();
         await this.dispatchTouch('touchStart', [pending.point]);
       }
-      await this.dispatchTouch(type, points);
+      const hold = this.timedHold;
+      if (hold && type !== 'touchEnd') {
+        const finger = points[0];
+        if (
+          type === 'touchStart' ||
+          points.length !== 1 ||
+          finger.id !== hold.point.id ||
+          Math.hypot(finger.x - hold.point.x, finger.y - hold.point.y) > TAP_SLOP
+        )
+          hold.moved = true;
+      }
+      if (type === 'touchEnd' && hold && !hold.moved && this.route) {
+        // Lifts as a cancel, so the browser has no stationary lift to place a click for.
+        await this.send(
+          'Input.dispatchTouchEvent',
+          { type: 'touchCancel', touchPoints: [] },
+          this.route.sessionId,
+        );
+      } else {
+        await this.dispatchTouch(type, points);
+      }
       if (type === 'touchEnd') await this.endRoute();
     } catch (error) {
       // A sequence the page never saw begin cannot be continued; start over.
@@ -654,6 +683,7 @@ export class TabInputInjector {
         this.pendingTap = null;
         try {
           await this.dispatchTouch('touchStart', [pending.point]);
+          this.timedHold = { point: pending.point, moved: false };
         } catch {
           // A start the page never saw cannot be continued; the next event starts over.
           this.epoch++;
@@ -783,6 +813,7 @@ export class TabInputInjector {
   private async endRoute(): Promise<void> {
     const route = this.route;
     this.route = null;
+    this.timedHold = null;
     if (!route || this.guest.isDestroyed() || !this.guest.debugger.isAttached()) return;
     for (const sessionId of [...route.sessions].reverse()) {
       try {
@@ -865,6 +896,7 @@ export class TabInputInjector {
       this.touchEmulated = false;
       // The frame sessions went with the debugger session.
       this.route = null;
+      this.timedHold = null;
       this.dropPending();
     };
     transport.on('detach', this.detachListener);
@@ -936,6 +968,7 @@ export class TabInputInjector {
     this.keys = [];
     if (this.guest.isDestroyed()) {
       this.route = null;
+      this.timedHold = null;
       return;
     }
     if (hadTouches) {

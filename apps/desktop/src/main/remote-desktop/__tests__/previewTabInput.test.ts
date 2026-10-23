@@ -1162,11 +1162,62 @@ describe('TabInputInjector touches into cross-process frames', () => {
       ]);
       expect(h.injector.pressed.touches).toBe(1);
       await h.injector.inject([touch('end', [])]);
-      // It lifts as a touch, not as a tap gesture.
-      expect(touchesOf(h).map((t) => t.type)).toEqual(['touchStart', 'touchEnd']);
+      // It does not become a tap gesture, and a hold that never moved lifts as a cancel: the
+      // browser would place a click of its own for a stationary lift, away from the finger.
+      expect(touchesOf(h)).toEqual([
+        { session: 'session-F1', type: 'touchStart', at: [[100, 50]] },
+        { session: 'session-F1', type: 'touchCancel', at: [] },
+      ]);
       expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
       expect(detaches(h)).toEqual(['session-F1']);
       expect(h.injector.pressed.touches).toBe(0);
+    });
+
+    it('lifts a hold as a touchEnd once it has moved, got a second finger, or when it is a fresh press', async () => {
+      const held = async (events: PreviewInputEvent[]) => {
+        const h = withFrame(offset, flat);
+        await h.injector.inject([touch('start', [[1, 0.125, 0.4]])]);
+        await vi.advanceTimersByTimeAsync(300);
+        await h.injector.inject(events);
+        return touchesOf(h).map((t) => t.type);
+      };
+      // Jitter inside the slop is still a stationary hold.
+      expect(await held([touch('move', [[1, 0.13, 0.4]]), touch('end', [])])).toEqual([
+        'touchStart',
+        'touchMove',
+        'touchCancel',
+      ]);
+      // Travelled: a drag, which makes no click, ends as it always did.
+      expect(await held([touch('move', [[1, 0.2, 0.4]]), touch('end', [])])).toEqual([
+        'touchStart',
+        'touchMove',
+        'touchEnd',
+      ]);
+      // A second finger makes it a multi-touch gesture.
+      expect(
+        await held([
+          touch('start', [
+            [1, 0.125, 0.4],
+            [2, 0.25, 0.5],
+          ]),
+          touch('end', []),
+        ]),
+      ).toEqual(['touchStart', 'touchStart', 'touchEnd']);
+      // A press that is not a timed hold (it moved before 300 ms) is not touched.
+      const h = withFrame(offset, flat);
+      await h.injector.inject([
+        touch('start', [[1, 0.125, 0.4]]),
+        touch('move', [[1, 0.2, 0.4]]),
+        touch('end', []),
+      ]);
+      expect(touchesOf(h).map((t) => t.type)).toEqual(['touchStart', 'touchMove', 'touchEnd']);
+      // And the next press starts clean: a hold, then a quick tap, is a tap.
+      const again = withFrame(offset);
+      await again.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      await vi.advanceTimersByTimeAsync(300);
+      await again.injector.inject([touch('end', [])]);
+      await again.injector.inject(tapAtPoint());
+      expect(commandsOf(again, 'Input.synthesizeTapGesture')).toHaveLength(1);
     });
 
     it('keeps a tap that lifts in time a tap, and cancels the wait when the press moves or is released', async () => {
