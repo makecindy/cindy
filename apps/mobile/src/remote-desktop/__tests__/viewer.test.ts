@@ -1682,6 +1682,9 @@ describe("plugin preview tab view", () => {
   it("sends a single finger as touch start, move and end in picture coordinates", () => {
     const v = open();
     v.pointer("pointerdown", 1, 200, 300);
+    // The first finger waits for the next input tick (see the next test).
+    expect(events(v)).toEqual([]);
+    v.flush();
     expect(events(v)).toEqual([
       { kind: "touch", phase: "start", points: [{ id: 0, x: 0.5, y: 0.5 }] },
     ]);
@@ -1696,6 +1699,38 @@ describe("plugin preview tab view", () => {
     v.ack();
     v.pointer("pointerup", 1, 300, 300);
     expect(events(v).at(-1)).toEqual({ kind: "touch", phase: "end", points: [] });
+  });
+
+  it("sends two fingers that land together in one batch, not the first alone", () => {
+    const v = open();
+    v.pointer("pointerdown", 1, 100, 300);
+    // Sent alone, the first finger's batch would be in flight and the second finger would
+    // wait for its ACK (a round trip through the computer) before the page saw it.
+    expect(batches(v)).toHaveLength(0);
+    v.pointer("pointerdown", 2, 300, 300);
+    expect(batches(v)).toHaveLength(1);
+    expect(batches(v)[0].events).toEqual([
+      { kind: "touch", phase: "start", points: [{ id: 0, x: 0.25, y: 0.5 }] },
+      {
+        kind: "touch",
+        phase: "start",
+        points: [
+          { id: 0, x: 0.25, y: 0.5 },
+          { id: 1, x: 0.75, y: 0.5 },
+        ],
+      },
+    ]);
+  });
+
+  it("does not delay a tap: a lift before the tick sends the start and the end together", () => {
+    const v = open();
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointerup", 1, 200, 300);
+    expect(batches(v)).toHaveLength(1);
+    expect(batches(v)[0].events).toEqual([
+      { kind: "touch", phase: "start", points: [{ id: 0, x: 0.5, y: 0.5 }] },
+      { kind: "touch", phase: "end", points: [] },
+    ]);
   });
 
   it("keeps two fingers as a full snapshot and never zooms or pans locally", () => {
@@ -1750,6 +1785,7 @@ describe("plugin preview tab view", () => {
     v.pointer("pointerdown", 3, 100, 300);
     v.flush();
     expect(events(v)).toHaveLength(1);
+    v.ack();
     // Sliding out of the picture holds the finger at its edge.
     v.pointer("pointermove", 2, 200, 100);
     v.flush();
@@ -1767,11 +1803,16 @@ describe("plugin preview tab view", () => {
     v.pointer("pointermove", 1, 230, 300);
     v.ack();
     v.flush();
-    expect(batches(v).map((m) => m.events?.length)).toEqual([1, 1]);
+    // The held start and the merged move go out together.
+    expect(batches(v).map((m) => m.events?.length)).toEqual([2]);
     expect(events(v).at(-1)).toMatchObject({
       phase: "move",
       points: [{ x: 0.575 }],
     });
+    v.ack();
+    v.pointer("pointermove", 1, 240, 300);
+    v.flush();
+    expect(batches(v).map((m) => m.events?.length)).toEqual([2, 1]);
   });
 
   it("releases every finger on cancel and keeps release as a valid event", () => {
@@ -1799,6 +1840,7 @@ describe("plugin preview tab view", () => {
     expect(events(v)).toEqual([{ kind: "text", text: "hi" }]);
     v.ack();
     v.pointer("pointerdown", 1, 200, 300);
+    v.flush();
     expect(v.dataChannel.send).not.toHaveBeenCalled();
     expect(events(v).at(-1)).toMatchObject({ kind: "touch", phase: "start" });
   });
@@ -1873,12 +1915,14 @@ describe("plugin preview tab view", () => {
       expect(events()).toEqual([]);
       // The top-left corner of the picture is (0, 0), its center is (0.5, 0.5).
       v.pointer("pointerdown", 3, r.left + 1, r.top + 1);
+      v.flush();
       expect((events().at(-1) as any).points[0].x).toBeCloseTo(1 / r.width, 3);
       expect((events().at(-1) as any).points[0].y).toBeCloseTo(1 / r.height, 3);
       v.ack();
       v.pointer("pointerup", 3, r.left + 1, r.top + 1);
       v.ack();
       v.pointer("pointerdown", 4, r.left + r.width / 2, r.top + r.height / 2);
+      v.flush();
       expect((events().at(-1) as any).points[0]).toMatchObject({ x: 0.5, y: 0.5 });
     });
 
