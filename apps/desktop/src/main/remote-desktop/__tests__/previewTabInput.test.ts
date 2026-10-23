@@ -756,6 +756,19 @@ describe('TabInputInjector touches into cross-process frames', () => {
         type: c.params?.type,
         at: (c.params?.touchPoints as Array<{ x: number; y: number }>).map((p) => [p.x, p.y]),
       }));
+  // A finger that travels 20 px: a touch gesture, not a tap.
+  const swipe = (): PreviewInputEvent[] => [
+    touch('start', [[1, 0.375, 0.4]]),
+    touch('move', [[1, 0.4, 0.4]]),
+    touch('end', []),
+  ];
+  const tapAtPoint = (): PreviewInputEvent[] => [touch('start', [[1, 0.375, 0.4]]), touch('end', [])];
+  const mouseOf = (h: Harness) =>
+    commandsOf(h, 'Input.dispatchMouseEvent').map((c) => ({
+      session: c.sessionId,
+      type: c.params?.type,
+      at: [c.params?.x, c.params?.y],
+    }));
   const detaches = (h: Harness) =>
     commandsOf(h, 'Target.detachFromTarget').map((c) => c.params?.sessionId);
 
@@ -789,23 +802,23 @@ describe('TabInputInjector touches into cross-process frames', () => {
 
   it('reaches a frame under a webview the host cannot hit-test, even at the host origin', async () => {
     const h = withFrame({ ...clear, hitBlocked: true });
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    await h.injector.inject(swipe());
     expect(touchesOf(h)[0]).toEqual({ session: 'session-F1', type: 'touchStart', at: [[100, 50]] });
   });
 
   it('reaches a frame under a webview that sits away from the host origin too', async () => {
     const h = withFrame(offset);
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    await h.injector.inject(swipe());
     expect(touchesOf(h)[0]).toEqual({ session: 'session-F1', type: 'touchStart', at: [[100, 50]] });
     // Over the tab's own page the host coordinates are still used.
     h.handlers.set('DOM.describeNode', async () => ({ node: { nodeName: 'DIV' } }));
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
-    expect(touchesOf(h)[2]).toEqual({ session: undefined, type: 'touchStart', at: [[1070, 286]] });
+    await h.injector.inject(tapAtPoint());
+    expect(touchesOf(h)[3]).toEqual({ session: undefined, type: 'touchStart', at: [[1070, 286]] });
   });
 
   it("sends the gesture to the frame under the finger, in that frame's own coordinates", async () => {
     const h = withFrame(blocked);
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    await h.injector.inject(swipe());
     // Page point (300, 200) is local (100, 50) in the turned frame; no host offset is added.
     expect(commandsOf(h, 'DOM.getNodeForLocation')[0].params).toMatchObject({
       x: 300,
@@ -818,6 +831,7 @@ describe('TabInputInjector touches into cross-process frames', () => {
     });
     expect(touchesOf(h)).toEqual([
       { session: 'session-F1', type: 'touchStart', at: [[100, 50]] },
+      { session: 'session-F1', type: 'touchMove', at: [[100, 30]] },
       { session: 'session-F1', type: 'touchEnd', at: [] },
     ]);
     // The session is for this gesture only.
@@ -896,27 +910,31 @@ describe('TabInputInjector touches into cross-process frames', () => {
       'session-F1',
       'session-F2', // the innermost frame is asked too, and hosts no further frame
     ]);
-    expect(touchesOf(h)[0]).toEqual({
-      session: 'session-F2',
-      type: 'touchStart',
-      at: [[130, 120]],
-    });
+    // A tap on a webview the host cannot hit-test: a mouse click in the innermost frame.
+    expect(touchesOf(h)).toEqual([]);
+    expect(mouseOf(h)).toEqual([
+      { session: 'session-F2', type: 'mouseMoved', at: [130, 120] },
+      { session: 'session-F2', type: 'mousePressed', at: [130, 120] },
+      { session: 'session-F2', type: 'mouseReleased', at: [130, 120] },
+    ]);
     expect(detaches(h)).toEqual(['session-F2', 'session-F1']);
   });
 
   it('looks the frame up again for every gesture: it may load late, navigate or go away', async () => {
     const h = withFrame(blocked, rotated, []);
     // Not there yet.
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
-    expect(touchesOf(h)[0].session).toBeUndefined();
+    await h.injector.inject(swipe());
+    expect(touchesOf(h).map((t) => t.session)).toEqual([undefined, undefined, undefined]);
     // Loaded: a target now exists.
     h.handlers.set('Target.getTargets', async () => ({
       targetInfos: [{ targetId: 'F1', type: 'iframe' }],
     }));
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    await h.injector.inject(swipe());
     expect(touchesOf(h).map((t) => t.session)).toEqual([
       undefined,
       undefined,
+      undefined,
+      'session-F1',
       'session-F1',
       'session-F1',
     ]);
@@ -925,20 +943,18 @@ describe('TabInputInjector touches into cross-process frames', () => {
     h.handlers.set('Target.getTargets', async () => ({
       targetInfos: [{ targetId: 'F2', type: 'iframe' }],
     }));
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    await h.injector.inject(swipe());
     expect(touchesOf(h).at(-1)?.session).toBe('session-F2');
     // Destroyed mid-gesture: the dispatch is refused, the gesture is dropped, the next one works.
     h.handlers.set('Input.dispatchTouchEvent', async () => {
       throw new Error('Session with given id not found');
     });
-    await expect(h.injector.inject([touch('start', [[1, 0.375, 0.4]])])).rejects.toThrow(
-      'PREVIEW_INPUT_INVALID',
-    );
+    await expect(h.injector.inject(swipe().slice(0, 2))).rejects.toThrow('PREVIEW_INPUT_INVALID');
     expect(h.injector.pressed.touches).toBe(0);
     expect(detaches(h).at(-1)).toBe('session-F2');
     h.handlers.delete('Input.dispatchTouchEvent');
     h.handlers.set('DOM.describeNode', async () => ({ node: { nodeName: 'DIV' } }));
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('end', [])]);
+    await h.injector.inject(tapAtPoint());
     expect(touchesOf(h).at(-1)?.session).toBeUndefined();
   });
 
@@ -954,22 +970,132 @@ describe('TabInputInjector touches into cross-process frames', () => {
 
   it('cancels in the frame and gives the session back on cancel, release and dispose', async () => {
     const h = withFrame(blocked);
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('cancel', [])]);
+    const down = () => swipe().slice(0, 2);
+    await h.injector.inject([...down(), touch('cancel', [])]);
     expect(touchesOf(h).at(-1)).toEqual({ session: 'session-F1', type: 'touchCancel', at: [] });
     expect(detaches(h)).toEqual(['session-F1']);
 
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+    await h.injector.inject(down());
     await h.injector.release();
     expect(touchesOf(h).at(-1)).toEqual({ session: 'session-F1', type: 'touchCancel', at: [] });
     expect(detaches(h)).toEqual(['session-F1', 'session-F1']);
 
-    await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+    await h.injector.inject(down());
     await h.injector.dispose();
     expect(touchesOf(h).at(-1)).toEqual({ session: 'session-F1', type: 'touchCancel', at: [] });
     expect(detaches(h)).toHaveLength(3);
     // Every attach has its detach, and the debugger itself went back.
     expect(commandsOf(h, 'Target.attachToTarget')).toHaveLength(3);
     expect(h.transport.detach).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a tap on a frame', () => {
+    it('is held, then sent whole as a tap gesture at the host point on a webview the host can hit-test', async () => {
+      const h = withFrame(offset);
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      // Nothing is sent while the finger might still move: no start, no stray click source.
+      expect(touchesOf(h)).toEqual([]);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
+      await h.injector.inject([touch('end', [])]);
+      // Page (300, 200) in the host: origin + point. One tap, no touch sequence beside it.
+      expect(commandsOf(h, 'Input.synthesizeTapGesture').map((c) => [c.sessionId, c.params])).toEqual([
+        [undefined, { x: 1070, y: 286, gestureSourceType: 'touch' }],
+      ]);
+      expect(touchesOf(h)).toEqual([]);
+      expect(mouseOf(h)).toEqual([]);
+      expect(detaches(h)).toEqual(['session-F1']);
+      expect(h.injector.pressed.touches).toBe(0);
+    });
+
+    it('is a click in the frame, at the finger, on a webview the host cannot hit-test', async () => {
+      const h = withFrame(blocked);
+      await h.injector.inject(tapAtPoint());
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(touchesOf(h)).toEqual([]);
+      expect(mouseOf(h)).toEqual([
+        { session: 'session-F1', type: 'mouseMoved', at: [100, 50] },
+        { session: 'session-F1', type: 'mousePressed', at: [100, 50] },
+        { session: 'session-F1', type: 'mouseReleased', at: [100, 50] },
+      ]);
+      expect(commandsOf(h, 'Input.dispatchMouseEvent')[1].params).toMatchObject({
+        button: 'left',
+        clickCount: 1,
+      });
+      expect(detaches(h)).toEqual(['session-F1']);
+    });
+
+    it('stays a tap through the jitter of a finger, and becomes a touch once it really moves', async () => {
+      const h = withFrame(offset);
+      await h.injector.inject([
+        touch('start', [[1, 0.375, 0.4]]),
+        touch('move', [[1, 0.38, 0.404]]), // 4 px
+        touch('end', []),
+      ]);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toHaveLength(1);
+      expect(touchesOf(h)).toEqual([]);
+
+      await h.injector.inject([
+        touch('start', [[1, 0.375, 0.4]]),
+        touch('move', [[1, 0.4, 0.4]]), // 20 px
+        touch('end', []),
+      ]);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toHaveLength(1);
+      // The frame hears of the finger where it landed, then of the move.
+      expect(touchesOf(h)).toEqual([
+        { session: 'session-F1', type: 'touchStart', at: [[100, 50]] },
+        { session: 'session-F1', type: 'touchMove', at: [[100, 30]] },
+        { session: 'session-F1', type: 'touchEnd', at: [] },
+      ]);
+    });
+
+    it('becomes a two-finger touch when a second finger lands, with the first where it was', async () => {
+      const h = withFrame(offset, flat);
+      await h.injector.inject([
+        touch('start', [[1, 0.125, 0.4]]), // page (100, 200) -> local (50, 100)
+        touch('start', [
+          [1, 0.125, 0.4],
+          [2, 0.25, 0.5], // page (200, 250) -> local (150, 150)
+        ]),
+        touch('end', []),
+      ]);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(touchesOf(h)).toEqual([
+        { session: 'session-F1', type: 'touchStart', at: [[50, 100]] },
+        {
+          session: 'session-F1',
+          type: 'touchStart',
+          at: [
+            [50, 100],
+            [150, 150],
+          ],
+        },
+        { session: 'session-F1', type: 'touchEnd', at: [] },
+      ]);
+    });
+
+    it('sends nothing when it is cancelled, released or the lease ends before the finger lifts', async () => {
+      const h = withFrame(offset);
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]]), touch('cancel', [])]);
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      await h.injector.release();
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      await h.injector.dispose();
+      expect(touchesOf(h)).toEqual([]);
+      expect(commandsOf(h, 'Input.synthesizeTapGesture')).toEqual([]);
+      expect(detaches(h)).toHaveLength(3);
+      expect(h.injector.pressed.touches).toBe(0);
+    });
+
+    it('drops the tap and gives the session back when it cannot be delivered', async () => {
+      const h = withFrame(offset);
+      h.handlers.set('Input.synthesizeTapGesture', async () => {
+        throw new Error('nope');
+      });
+      await h.injector.inject([touch('start', [[1, 0.375, 0.4]])]);
+      await expect(h.injector.inject([touch('end', [])])).rejects.toThrow('PREVIEW_INPUT_INVALID');
+      expect(detaches(h)).toEqual(['session-F1']);
+      expect(h.injector.pressed.touches).toBe(0);
+    });
   });
 
   it('does not detach sessions that died with a replaced debugger session', async () => {
