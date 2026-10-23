@@ -16,7 +16,12 @@
  *   LRU 回收后重建)的重新 report 能原样复绑;grant 在换源 / 插件不可用 / 标签
  *   不再存活时作废,作废后同一个 id 无法复活。
  * - 失效:registry release(含 webContents destroyed)、webContentsId 变更(guest 重建)、
- *   顶层导航到不同 origin、插件停用 / 卸载 / 不再声明 preview。失效即触发 onEnded。
+ *   插件停用 / 卸载 / 不再声明 preview。失效即触发 onEnded。
+ * - 暂停:同一 webContents 顶层导航离开绑定 origin(典型是预览要求登录、跳到账号站点
+ *   再回来)不作废,而是暂停:触发一次 onEnded('origin-changed')(投屏据此结束,不会采集
+ *   跨站页面),list / get / current 一律当作不存在,grant 无从签发或使用。同一 webContents
+ *   之后导航回**完全相同的绑定 origin** 即恢复;超过 PREVIEW_PAUSE_LIMIT_MS 没回来则作废。
+ *   暂停期间所有其他失效条件照旧生效(静默:onEnded 已经发过)。
  * - 普通网页标签(无 previewRequestId)永远不进索引。
  *
  * 纯逻辑 + 依赖注入(便于单测):Electron 与插件清单的访问由调用方注入。
@@ -37,6 +42,11 @@ import type { TabRecord } from './registry.js';
  * origin、插件可用性,且取走即废;未绑定条目靠数量上限淘汰最旧,内存有界。
  */
 export const PREVIEW_REQUEST_TTL_MS = 12 * 60 * 60 * 1000;
+/**
+ * 暂停(顶层导航离开绑定 origin)的最长时长。登录 / OAuth 往返通常是分钟级;超过这个
+ * 时间没回到绑定 origin 就作废,避免跨站页面后的标签长期悬挂在索引里。
+ */
+export const PREVIEW_PAUSE_LIMIT_MS = 30 * 60 * 1000;
 /** 签发表上限(未绑定条目;spam 已被 previewSlot 限速,这里兜底并淘汰最旧)。 */
 const MAX_PENDING_REQUESTS = 64;
 /** grant 上限(按最近绑定保留)。无活绑定且不存活的标签由 snapshot 的 pruneTabs 清理。 */
@@ -50,9 +60,9 @@ export interface PreviewTabBinding {
   readonly ghostId: string;
   /** 插件展示名(主机按已装清单投影,不信自报)。 */
   readonly pluginName: string;
-  /** 签发时的 URL origin;标签顶层导航到其他 origin 即失效。 */
+  /** 签发时的 URL origin;标签顶层导航到其他 origin 即暂停,回到该 origin 恢复。 */
   readonly origin: string;
-  /** 每次(重)绑定自增,供消费方区分同一 tab 的不同 guest 代际。 */
+  /** 每次(重)绑定与每次暂停后恢复自增,供消费方区分同一 tab 的不同代际。 */
   readonly generation: number;
   readonly boundAt: number;
 }
@@ -62,8 +72,10 @@ export type PreviewTabEndReason =
   | 'released'
   /** 同一标签换了 guest(弹出独立窗口等),旧绑定结束。 */
   | 'replaced'
-  /** 顶层导航到不同 origin。 */
+  /** 顶层导航离开绑定 origin:绑定暂停(回到原 origin 可恢复),投屏据此结束。 */
   | 'origin-changed'
+  /** 暂停超过 PREVIEW_PAUSE_LIMIT_MS 仍没回到绑定 origin(只记日志,不触发 onEnded)。 */
+  | 'pause-expired'
   /** 插件停用 / 卸载 / 不再声明 preview。 */
   | 'plugin-unavailable';
 
@@ -113,6 +125,8 @@ interface Grant {
 interface LiveBinding {
   binding: PreviewTabBinding;
   stopWatching: () => void;
+  /** 暂停开始时刻;null = 活动。暂停中的条目对所有查询不可见。 */
+  pausedAt: number | null;
 }
 
 function defaultRandomId(): string {
@@ -227,12 +241,11 @@ export class PreviewTabIndex {
       generation: ++this.generationSeq,
       boundAt: this.now(),
     };
-    const stopWatching = this.deps.watchNavigation(record.webContentsId, (url) => {
-      if (originOf(url) === binding.origin) return;
-      this.grants.delete(binding.tabId);
-      if (this.live.get(binding.tabId)?.binding === binding) this.end(binding.tabId, 'origin-changed');
-    });
-    this.live.set(record.tabId, { binding, stopWatching });
+    const entry: LiveBinding = { binding, stopWatching: () => undefined, pausedAt: null };
+    entry.stopWatching = this.deps.watchNavigation(record.webContentsId, (url) =>
+      this.onNavigated(entry, url),
+    );
+    this.live.set(record.tabId, entry);
     this.rememberGrant(record.tabId, grant);
   }
 
@@ -245,6 +258,7 @@ export class PreviewTabIndex {
 
   /** 插件清单变化(安装 / 卸载 / 启停 / 换版)后调用:不可用插件的绑定与 grant 作废。 */
   reconcileGhosts(): void {
+    this.expirePaused();
     for (const [tabId, grant] of [...this.grants]) {
       if (!this.deps.getGhost(grant.ghostId)?.available) {
         this.grants.delete(tabId);
@@ -265,6 +279,7 @@ export class PreviewTabIndex {
    * 的标签不在其中,活绑定的收口只走 registry release / 导航 / 插件状态。
    */
   pruneTabs(liveTabIds: readonly string[]): void {
+    this.expirePaused();
     const alive = new Set(liveTabIds);
     for (const tabId of [...this.grants.keys()]) {
       if (alive.has(tabId) || this.live.has(tabId)) continue;
@@ -278,6 +293,7 @@ export class PreviewTabIndex {
   list(sessionId?: string): PreviewTabBinding[] {
     this.reconcileGhosts();
     return [...this.live.values()]
+      .filter((entry) => entry.pausedAt === null)
       .map((entry) => entry.binding)
       .filter((binding) => sessionId === undefined || binding.sessionId === sessionId)
       .sort((a, b) => a.boundAt - b.boundAt || a.generation - b.generation);
@@ -285,7 +301,8 @@ export class PreviewTabIndex {
 
   get(tabId: string): PreviewTabBinding | null {
     this.reconcileGhosts();
-    return this.live.get(tabId)?.binding ?? null;
+    const entry = this.live.get(tabId);
+    return entry && entry.pausedAt === null ? entry.binding : null;
   }
 
   /**
@@ -306,6 +323,59 @@ export class PreviewTabIndex {
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
+  }
+
+  /**
+   * guest 顶层导航提交。离开绑定 origin → 暂停(grant 与导航监听保留);暂停中回到
+   * 完全相同的绑定 origin → 恢复。
+   *
+   * 恢复时换一个新 generation(因此 ref 也变):暂停前基于旧 generation 的投屏会话、
+   * 一次性 grant 都不会借「回到原 origin」复活,手机重新列表后看到的是一个新来源;
+   * 跨站页面期间发生过什么,旧来源并不知情。
+   */
+  private onNavigated(entry: LiveBinding, url: string): void {
+    const { tabId } = entry.binding;
+    if (this.live.get(tabId) !== entry) return;
+    const sameOrigin = originOf(url) === entry.binding.origin;
+    if (entry.pausedAt === null) {
+      if (sameOrigin) return;
+      entry.pausedAt = this.now();
+      this.deps.logger?.info('preview tab binding paused', {
+        tabId,
+        ghostId: entry.binding.ghostId,
+      });
+      this.notifyEnded(entry.binding, 'origin-changed');
+      return;
+    }
+    if (this.now() - entry.pausedAt >= PREVIEW_PAUSE_LIMIT_MS) {
+      this.grants.delete(tabId);
+      this.end(tabId, 'pause-expired');
+      return;
+    }
+    if (!sameOrigin) return;
+    // 恢复前再核对一次插件仍可用(暂停期间的清单变化不一定经过 reconcile)。
+    if (!this.deps.getGhost(entry.binding.ghostId)?.available) {
+      this.grants.delete(tabId);
+      this.end(tabId, 'plugin-unavailable');
+      return;
+    }
+    entry.binding = { ...entry.binding, generation: ++this.generationSeq };
+    entry.pausedAt = null;
+    this.deps.logger?.info('preview tab binding resumed', {
+      tabId,
+      ghostId: entry.binding.ghostId,
+    });
+  }
+
+  /** 作废暂停超过上限的条目(惰性检查:无定时器,每次查询 / 对账 / 导航时核对)。 */
+  private expirePaused(): void {
+    const now = this.now();
+    for (const [tabId, entry] of [...this.live]) {
+      if (entry.pausedAt !== null && now - entry.pausedAt >= PREVIEW_PAUSE_LIMIT_MS) {
+        this.grants.delete(tabId);
+        this.end(tabId, 'pause-expired');
+      }
+    }
   }
 
   private purgeExpired(now: number): void {
@@ -375,9 +445,14 @@ export class PreviewTabIndex {
       ghostId: entry.binding.ghostId,
       reason,
     });
+    // 暂停时已经发过 onEnded;暂停中的后续作废静默,不重复通知。
+    if (entry.pausedAt === null) this.notifyEnded(entry.binding, reason);
+  }
+
+  private notifyEnded(binding: PreviewTabBinding, reason: PreviewTabEndReason): void {
     for (const listener of [...this.endedListeners]) {
       try {
-        listener({ binding: entry.binding, reason });
+        listener({ binding, reason });
       } catch (err) {
         this.deps.logger?.warn('preview tab ended listener threw (ignored)', err);
       }

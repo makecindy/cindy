@@ -1,13 +1,15 @@
 // PreviewTabIndex 契约:
 //  - 签发 / 过期 / 伪造 / 跨 session / 用后作废 / origin 不符
 //  - 普通网页标签(无 previewRequestId)不进索引
-//  - 失效:registry release(destroyed)、guest 重建、换 origin、插件停用 / 卸载
+//  - 失效:registry release(destroyed)、guest 重建、插件停用 / 卸载
+//  - 暂停:导航离开 origin 暂停、回到同 origin 恢复、超时作废
 //  - grant 复绑:同 tab 同 id 在 guest 重建 / 回收后重新 report 可复绑,换源后不可
 
 import { describe, expect, it, vi } from 'vitest';
 
 import { PREVIEW_REQUEST_ID_RE } from '../../../shared/rsbBrowserBridge';
 import {
+  PREVIEW_PAUSE_LIMIT_MS,
   PREVIEW_REQUEST_TTL_MS,
   PreviewTabIndex,
   type PreviewTabEnded,
@@ -252,15 +254,90 @@ describe('PreviewTabIndex · 失效', () => {
     expect(ended).toEqual([]);
   });
 
-  it('顶层导航到不同 origin → 结束,且同一个 id 无法复活', () => {
-    const { index, ended, navigate, id } = bound();
-    navigate(11, `${ORIGIN}/other-page`); // 同 origin:保持
+  it('顶层导航离开 origin → 暂停(通知一次、查询不可见),同 origin 导航保持', () => {
+    const { index, ended, navigate } = bound();
+    navigate(11, `${ORIGIN}/other-page`);
     expect(index.get('tab-1')).not.toBeNull();
-    navigate(11, 'https://elsewhere.example/');
+    expect(ended).toEqual([]);
+    navigate(11, 'https://login.example/');
+    expect(ended).toMatchObject([{ reason: 'origin-changed', binding: { tabId: 'tab-1' } }]);
     expect(index.get('tab-1')).toBeNull();
-    expect(ended).toMatchObject([{ reason: 'origin-changed' }]);
-    // 页面又回到原 origin 并重新 report:grant 已作废,不复绑
+    expect(index.current('tab-1', 11)).toBeNull();
+    expect(index.list()).toEqual([]);
+    navigate(11, 'https://login2.example/'); // 暂停中继续跳:不重复通知
+    expect(ended).toHaveLength(1);
+  });
+
+  it('暂停后回到同一 origin → 恢复(新 generation),经第三个 origin 也一样', () => {
+    const { index, ended, navigate } = bound();
+    const before = index.get('tab-1')!;
+    navigate(11, 'https://login.example/');
+    navigate(11, 'https://sso.example/');
+    navigate(11, `${ORIGIN}/app/after-login`);
+    const after = index.get('tab-1')!;
+    expect(after).toMatchObject({ tabId: 'tab-1', webContentsId: 11, boundAt: before.boundAt });
+    expect(after.generation).toBeGreaterThan(before.generation);
+    expect(index.current('tab-1', 11)).toBe(after);
+    expect(index.list()).toEqual([after]);
+    expect(ended).toHaveLength(1);
+    // 恢复后再次离开仍可暂停
+    navigate(11, 'https://login.example/');
+    expect(index.get('tab-1')).toBeNull();
+    expect(ended).toHaveLength(2);
+  });
+
+  it('暂停超过上限 → 作废:回到原 origin 也不恢复,同一个 id 无法复活', () => {
+    const { index, ended, navigate, advance, id, watcherCount } = bound();
+    navigate(11, 'https://login.example/');
+    advance(PREVIEW_PAUSE_LIMIT_MS);
+    navigate(11, URL_OK);
+    expect(index.get('tab-1')).toBeNull();
+    expect(watcherCount(11)).toBe(0);
+    expect(ended).toHaveLength(1); // 只有暂停时那一次
     index.bind(rec('tab-1', 11), id);
+    expect(index.get('tab-1')).toBeNull();
+  });
+
+  it('暂停超过上限且没有再导航:查询时惰性作废并退订', () => {
+    const { index, navigate, advance, watcherCount } = bound();
+    navigate(11, 'https://login.example/');
+    advance(PREVIEW_PAUSE_LIMIT_MS - 1);
+    expect(watcherCount(11)).toBe(1);
+    advance(1);
+    expect(index.list()).toEqual([]);
+    expect(watcherCount(11)).toBe(0);
+  });
+
+  it('暂停期间 release / guest 重建 / 插件停用仍作废,且不重复通知', () => {
+    const a = bound();
+    a.navigate(11, 'https://login.example/');
+    a.index.onRegistryRelease(rec('tab-1', 11));
+    a.navigate(11, URL_OK);
+    expect(a.index.get('tab-1')).toBeNull();
+    expect(a.ended).toHaveLength(1);
+
+    const b = bound();
+    b.navigate(11, 'https://login.example/');
+    b.index.bind(rec('tab-1', 22));
+    b.navigate(11, URL_OK);
+    expect(b.index.get('tab-1')).toBeNull();
+    expect(b.ended).toHaveLength(1);
+
+    const c = bound();
+    c.navigate(11, 'https://login.example/');
+    c.ghosts.set('ghost-a', { available: false, name: 'Ghost A' });
+    expect(c.index.list()).toEqual([]);
+    c.ghosts.set('ghost-a', { available: true, name: 'Ghost A' });
+    c.navigate(11, URL_OK);
+    expect(c.index.get('tab-1')).toBeNull();
+    expect(c.ended).toHaveLength(1);
+  });
+
+  it('暂停期间插件停用后又启用,回到原 origin 也不恢复(恢复前核对插件)', () => {
+    const { index, navigate, ghosts } = bound();
+    navigate(11, 'https://login.example/');
+    ghosts.set('ghost-a', { available: false, name: 'Ghost A' });
+    navigate(11, URL_OK);
     expect(index.get('tab-1')).toBeNull();
   });
 
