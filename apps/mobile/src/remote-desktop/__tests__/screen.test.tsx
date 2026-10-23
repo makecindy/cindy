@@ -5814,6 +5814,22 @@ describe("plugin preview tab view", () => {
       expect(insets()).toMatchObject({ topInset: 59, bottomInset: 0 });
     });
 
+    it("back leaves the preview; keyboard and settings open their panels and show they are on", async () => {
+      await open();
+      expect(button("keyboard").getAttribute("aria-selected")).toBe("false");
+      act(() => button("keyboard").click());
+      expect(fixture.views["remoteDesktop.keyboardPanel"]).toBeDefined();
+      expect(button("keyboard").getAttribute("aria-selected")).toBe("true");
+      act(() => button("operations").click());
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.operationsPanel"]'),
+      ).not.toBeNull();
+      expect(button("operations").getAttribute("aria-selected")).toBe("true");
+      expect(button("keyboard").getAttribute("aria-selected")).toBe("false");
+      await act(async () => button("back").click());
+      expect(requests().at(-1)).toMatchObject({ op: "stop" });
+    });
+
     it("moves the connection line into the settings panel", async () => {
       await open();
       act(() =>
