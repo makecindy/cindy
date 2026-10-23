@@ -525,6 +525,8 @@ export function remoteDesktopFailureKey(code: string): string | null {
   if (/PREVIEW_GRANT_INVALID/.test(code)) return "previewGrantInvalid";
   if (/PREVIEW_SOURCE_ENDED/.test(code)) return "previewEnded";
   if (/PREVIEW_CAPTURE_UNAVAILABLE/.test(code)) return "previewCaptureUnavailable";
+  // Waited out, not a stop: the mobile viewer keeps its automatic resume going.
+  if (/HOST_SCREEN_LOCKED/.test(code)) return "previewScreenLocked";
   if (/PREVIEW_INPUT_INVALID/.test(code)) return "previewInputInvalid";
   if (/DESKTOP_PREVIEW_ONLY/.test(code)) return "previewOnly";
   if (/CHANNEL_NOT_ALLOWED/.test(code)) return "upgrade";

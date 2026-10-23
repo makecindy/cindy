@@ -56,7 +56,9 @@ describe('主 BrowserWindow 后台节流', () => {
   it('active turn 期间通过 webContents 运行态切换后台节流', () => {
     expect(source).toContain('function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void');
     expect(source).toContain('const nextAllowed = !hasRunningTurn;');
-    expect(source).toMatch(/setBackgroundThrottling\(\s*mainWindowBackgroundThrottlingAllowed,?\s*\)/);
+    expect(source).toMatch(
+      /applyBackgroundThrottling\(\s*win\.webContents,\s*mainWindowBackgroundThrottlingAllowed,?\s*\)/,
+    );
     expect(source).not.toContain('isRemoteDesktopVideoActive');
     expect(source).toContain('registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {');
     expect(source).toContain('onAnySessionTurnKeepaliveChange: (isRunning) => {');

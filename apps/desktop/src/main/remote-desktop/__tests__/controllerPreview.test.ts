@@ -482,6 +482,25 @@ describe('preview tab leases', () => {
     ).rejects.toThrow('PREVIEW_SOURCE_ENDED');
   });
 
+  it('ends with HOST_SCREEN_LOCKED on a locked screen, and an automatic resume works again after unlock', async () => {
+    const h = harness();
+    const { lease } = await h.open();
+    h.watchers.get(h.controller.previewSource(lease)!)!('screen-locked');
+    expect(h.controller.state).toBeNull();
+    await expect(send(h, { op: 'heartbeat', lease })).rejects.toThrow('HOST_SCREEN_LOCKED');
+    // The lock is no Disconnect: the phone's automatic resume is an ordinary start.
+    const grant = await h.grantFor();
+    expect(await send(h, { op: 'previewStart', grant, resume: true })).toMatchObject({
+      controlling: false,
+    });
+    // A Disconnect on the computer still wins over the automatic resume.
+    h.controller.stopByUser();
+    const after = await h.grantFor();
+    await expect(send(h, { op: 'previewStart', grant: after, resume: true })).rejects.toThrow(
+      'DESKTOP_STOPPED',
+    );
+  });
+
   it('handles a source that has already ended by the time the lease subscribes', async () => {
     const h = harness();
     h.preview.watch = vi.fn((_source, listener) => {

@@ -595,6 +595,7 @@ import {
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
 import { registerRemoteDesktopIpc } from './remote-desktop';
+import { applyBackgroundThrottling } from './remote-desktop/previewThrottling';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
@@ -3642,7 +3643,8 @@ if (process.platform === 'darwin') {
 function applyMainWindowBackgroundThrottling(): void {
   const win = mainWindowRef;
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.setBackgroundThrottling(mainWindowBackgroundThrottlingAllowed);
+  // Through the shared helper: a phone watching a preview may be holding throttling off.
+  applyBackgroundThrottling(win.webContents, mainWindowBackgroundThrottlingAllowed);
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {

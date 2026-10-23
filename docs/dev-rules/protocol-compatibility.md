@@ -845,7 +845,7 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 - **数据通道**：`previewInput` 加入 `REMOTE_DESKTOP_CHANNEL_OPS`（走既有 `{type:"request"}` 封装与 relay 回退）；
   `previewTabs` / `previewStart` 仍只走 relay。
 - **错误码**：`PREVIEW_GRANT_INVALID`、`PREVIEW_SOURCE_ENDED`、`PREVIEW_CAPTURE_UNAVAILABLE`、
-  `PREVIEW_INPUT_INVALID`、`DESKTOP_PREVIEW_ONLY`，`remoteDesktopFailureKey` 分别映射到 `previewGrantInvalid` /
+  `PREVIEW_INPUT_INVALID`、`DESKTOP_PREVIEW_ONLY`（`HOST_SCREEN_LOCKED` 见下文专节），`remoteDesktopFailureKey` 分别映射到 `previewGrantInvalid` /
   `previewEnded` / `previewCaptureUnavailable` / `previewInputInvalid` / `previewOnly`。
   `PREVIEW_INPUT_INVALID` 是单次手势错误（控制端释放手势，不结束预览），只应在输入路径上处理。
 
@@ -865,6 +865,29 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 - 控制端投影的能力（`previewTabCapabilities`）只保留 `videoSettings`、`trickleIce`、`channelRequests`、
   `backgroundViewing`、`viewerHidden`、`previewTab`，`canControl` 为 `false`，其余整屏能力不显示。
 - 旧 iOS 安装包 + 新 JS：`previewInput` 经已有 `sendRequest` 通用封装，不新增原生接口。
+
+### 预览遇锁屏：`HOST_SCREEN_LOCKED`（2026-10-23）
+
+Mac 锁屏后，已显示的宿主窗口被系统置为 hidden，预览 guest 的 `capturePage()` 挂起，原先 6 秒后只会以
+`PREVIEW_CAPTURE_UNAVAILABLE` 结束。现在主机能判断锁屏时，采集放弃的结束原因改为独立的错误码；不新增能力位、
+不改请求 / 回复字段、不改协议版本、relay、服务端或原生接口。
+
+- **错误码** `HOST_SCREEN_LOCKED`：预览 lease 因电脑锁屏而无法出画面。只出现在 `previewStart`（锁屏结束后、
+  解锁前再次开始时被立即拒绝）和已结束 lease 的后续请求（`heartbeat` / `frame` / `previewInput` 等，替代
+  `PREVIEW_CAPTURE_UNAVAILABLE`）上。`remoteDesktopFailureKey` 映射为 `previewScreenLocked`。主机只在读到
+  `locked` 时才用它；`unlocked` / `unknown`（含非 macOS）仍回 `PREVIEW_CAPTURE_UNAVAILABLE`。
+- **语义**：与 `PREVIEW_SOURCE_ENDED` 相反，是「可等待」的结束：控制端不当错误终止，而是提示后沿用既有 resume 语义
+  （`previewStart` 带 `resume: true`）每 3 秒自动重试，被控端解锁后即开启。**电脑端自己点「断开」优先**：其
+  `resume` 仍回 `DESKTOP_STOPPED`，控制端据此停止自动恢复。
+- 新旧端矩阵：
+
+| 控制端 / 被控端 | 旧被控端 | 新被控端 |
+| --- | --- | --- |
+| 旧控制端 | 不变（超时即 `PREVIEW_CAPTURE_UNAVAILABLE`） | 收到未知码 `HOST_SCREEN_LOCKED`，当作未知错误处理：`remoteDesktopFailureKey` 无匹配返回 `null`，走普通自动重连（指数退避，受连接超时限制），不卡死也不误报「已结束」 |
+| 新控制端 | 只会收到 `PREVIEW_CAPTURE_UNAVAILABLE`，行为同今 | 提示「电脑已锁屏，解锁后自动恢复」，每 3 秒 resume，不设连接期限 |
+
+- 同批的主机侧行为（不进协议）：投屏期间对 guest 与宿主窗口关闭后台节流并在采集卡住时 `invalidate()`，结束时按
+  原设置精确恢复；主窗自己的节流策略改经 `previewThrottling.applyBackgroundThrottling`，持有期内只记录、释放时应用。
 
 ### 预览标签按手机比例排版（2026-10-22，`previewTab.viewport`）
 

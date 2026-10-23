@@ -167,6 +167,7 @@
   "previewGrantInvalid": "这个预览暂时无法打开，请返回后重试。",
   "previewEnded": "这个预览已结束。如果电脑上还开着，可以回到任务里重新进入。",
   "previewCaptureUnavailable": "电脑暂时无法获取这个预览的画面。",
+  "previewScreenLocked": "电脑已锁屏，解锁后将自动恢复预览。",
   "previewInputInvalid": "电脑没能接收这次触摸。",
   "previewOnly": "预览只支持触摸和输入文字。",
   "previewEntry": "查看电脑上的预览",

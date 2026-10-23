@@ -327,10 +327,12 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
 - **Errors**: `PREVIEW_GRANT_INVALID` (missing, forged, expired, used, wrong peer; list
   again), `PREVIEW_SOURCE_ENDED` (tab closed, page left its origin, tab rebuilt, plugin
   disabled; show ended, no auto reconnect), `PREVIEW_CAPTURE_UNAVAILABLE`,
+  `HOST_SCREEN_LOCKED` (the computer's screen is locked; the phone keeps resuming, see
+  "Preview while the computer's screen is locked"),
   `PREVIEW_INPUT_INVALID` (release the gesture), `DESKTOP_PREVIEW_ONLY`. The existing
   `DESKTOP_BUSY`, `DESKTOP_VIEW_ONLY`, `DESKTOP_LEASE_EXPIRED` and `DESKTOP_UNAVAILABLE`
   keep their meaning. `remoteDesktopFailureKey` maps the new codes to
-  `previewGrantInvalid`, `previewEnded`, `previewCaptureUnavailable`,
+  `previewGrantInvalid`, `previewEnded`, `previewCaptureUnavailable`, `previewScreenLocked`,
   `previewInputInvalid` and `previewOnly`.
 
 #### Desktop host for preview leases
@@ -494,6 +496,45 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   while it opens) its tab is passed to `setCastingTabs` so it keeps painting while hidden;
   the tab is measured only after that: a guest that is not ready yet (empty size, or throttled
   and silent) is waited for up to ~3 s, then two readings in a row must agree.
+
+#### Preview while the computer's screen is locked
+
+People view a preview from the phone precisely when they are away from the computer, and the
+Mac then locks itself. A window that was already shown when the lock came is put to `hidden`
+by the system (its page stops getting animation frames) and the guest `<webview>` inside it
+produces no frames either, so `capturePage()` **hangs** rather than throwing (measured on a
+real locked Mac: `/tmp/preview-lock-spike/REPORT.md`; a window created after the lock is not
+affected, which is why the tab needs the state transition to reproduce).
+
+- **Keep painting (`keepRendering`, on by default)**: while a tab is cast, background
+  throttling is switched off for the guest **and** its host window (`hostWebContents`), and a
+  stalled capture (one that timed out) calls `invalidate()` on both. The setting is held through
+  `previewThrottling.ts`: a refcounted hold that gives back the owner's setting exactly when
+  the last hold ends. The main window's own policy (off while a turn runs) is applied through
+  the same helper (`applyBackgroundThrottling`), so it neither undoes a hold nor is lost by one.
+  The injector's reactive "lift throttling" uses the same hold. Whether this keeps the picture
+  alive under a real lock could only be argued, not proven, without locking the user's
+  computer; it costs nothing when the screen is not locked and is switched off with
+  `keepRendering: false` in `createPreviewHost`. Verify by opening the preview, locking the
+  Mac, and watching the phone (see the delivery notes for the checklist).
+- **Fallback, reason for the end**: when capture gives up (the usual 6 s / 3 abandoned captures
+  rule), the host reads the screen lock state (`screenLock.ts`). If it is `locked` the lease ends
+  with the separate code `HOST_SCREEN_LOCKED` (stop reason `preview-screen-locked`) instead of
+  `PREVIEW_CAPTURE_UNAVAILABLE`; `unlocked` / `unknown` keep the old code. The lock state is the
+  console session flag `CGSSessionScreenIsLocked` read from the IORegistry with
+  `/usr/sbin/ioreg -n Root -d1 -a` (the same data as `CGSessionCopyCurrentDictionary`; no native
+  module). It is the only reliable source: `powerMonitor.getSystemIdleState` reports `idle` on a
+  locked screen and the `lock-screen` / `unlock-screen` events were not observed to fire. Other
+  platforms read `unknown`, so nothing changes there.
+- **Until unlocked**: after a lock end, `previewStart` is refused at once with `HOST_SCREEN_LOCKED`
+  (before the tab is laid out or touched) for as long as the lock reads `locked`; the first start
+  that sees it unlocked forgets the lock and opens normally.
+- **Phone**: `HOST_SCREEN_LOCKED` maps to `previewScreenLocked` and is *waited out*, not an error:
+  the picture area shows "The computer is locked. This preview will resume automatically once it
+  is unlocked." (all five languages), recovery stays on at a steady 3 s pace as `resume: true`
+  starts, and the connection deadline does not run meanwhile. The first start that the computer
+  accepts shows the picture again. The computer's own Disconnect still wins: its `resume` is
+  answered `DESKTOP_STOPPED` and the phone stops for good. Pressing Connect also starts over.
 
 ### Preview tab view on the phone
 

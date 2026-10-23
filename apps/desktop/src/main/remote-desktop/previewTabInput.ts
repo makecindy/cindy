@@ -5,6 +5,7 @@ import {
   releaseDebuggerLease,
   type DebuggerLease,
 } from '../rsb-browser-bridge/debuggerLease';
+import { holdBackgroundThrottlingOff } from './previewThrottling';
 
 /** The slice of Electron's Debugger the injector uses. */
 export interface GuestDebugger {
@@ -379,7 +380,8 @@ export class TabInputInjector {
   private touchPoints: number | null = null;
   /** Applied in the CDP session now in use (a replaced session starts without it). */
   private touchEmulated = false;
-  private throttlingLifted = false;
+  /** Gives the tab's background throttling back; set while this injector keeps it off. */
+  private releaseThrottling: (() => void) | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   /** Bumped when pending work must not run any more (timeout, release, dispose). */
   private epoch = 0;
@@ -985,8 +987,7 @@ export class TabInputInjector {
     } catch (error) {
       if (error instanceof Error && error.message === 'PREVIEW_INPUT_TIMEOUT') {
         // Most likely a throttled hidden tab: stop waiting on it next time.
-        this.guest.setBackgroundThrottling(false);
-        this.throttlingLifted = true;
+        this.releaseThrottling ??= holdBackgroundThrottlingOff(this.guest);
       }
       throw error;
     }
@@ -1085,9 +1086,7 @@ export class TabInputInjector {
         }
       }
     }
-    if (this.throttlingLifted) {
-      this.throttlingLifted = false;
-      this.guest.setBackgroundThrottling(true);
-    }
+    this.releaseThrottling?.();
+    this.releaseThrottling = null;
   }
 }

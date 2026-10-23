@@ -324,6 +324,7 @@ describe("preview tab wire parsing", () => {
     expect(remoteDesktopFailureKey("PREVIEW_CAPTURE_UNAVAILABLE")).toBe(
       "previewCaptureUnavailable",
     );
+    expect(remoteDesktopFailureKey("HOST_SCREEN_LOCKED")).toBe("previewScreenLocked");
     expect(remoteDesktopFailureKey("PREVIEW_INPUT_INVALID")).toBe("previewInputInvalid");
     expect(remoteDesktopFailureKey("DESKTOP_PREVIEW_ONLY")).toBe("previewOnly");
     expect(remoteDesktopFailureKey("DESKTOP_BUSY")).toBe("connectionBusy");

@@ -115,6 +115,31 @@ describe('TabCaptureSource', () => {
     expect(source.stats.sequence).toBe(1);
   });
 
+  it('tells onStall about a timed-out capture (not a thrown one), and survives a throwing hook', async () => {
+    const onStall = vi.fn(() => {
+      throw new Error('hook');
+    });
+    const make = (capturePage: () => Promise<TabImage>) =>
+      new TabCaptureSource({
+        guest: () => ({ isDestroyed: () => false, capturePage }),
+        isCurrent: () => true,
+        onUnavailable: vi.fn(),
+        onStall,
+        now: () => clock,
+      });
+    const hung = make(() => new Promise<TabImage>(() => {}));
+    const first = hung.frame();
+    clock = PREVIEW_CAPTURE_TIMEOUT_MS;
+    await vi.advanceTimersByTimeAsync(PREVIEW_CAPTURE_TIMEOUT_MS);
+    expect(await first).toBeNull();
+    expect(onStall).toHaveBeenCalledOnce();
+    const thrown = make(async () => {
+      throw new Error('boom');
+    });
+    expect(await thrown.frame()).toBeNull();
+    expect(onStall).toHaveBeenCalledOnce();
+  });
+
   it('reports the tab unavailable after failing for too long, once, and then stops', async () => {
     const capturePage = vi.fn(async () => {
       throw new Error('boom');

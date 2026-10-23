@@ -42,7 +42,7 @@ export function remoteDesktopErrorCode(cause: unknown): string | undefined {
     typeof cause.code === "string"
       ? cause.code
       : message.match(
-          /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS|PREVIEW)_[A-Z_]+\b/,
+          /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS|PREVIEW|HOST)_[A-Z_]+\b/,
         )?.[0];
   return code && /^[A-Z_]+$/.test(code) ? code : undefined;
 }
