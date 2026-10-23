@@ -153,15 +153,29 @@ describe('rsbBrowserBridge — report / release / snapshot forwarding', () => {
   it('reportRsbBrowserTab 只在有凭据时才把 previewRequestId 放进 ipc.report 载荷', async () => {
     const api = installFakeIpc();
     const previewRequestId = 'K'.repeat(43);
-    await reportRsbBrowserTab({ sessionId: 's1', tabId: 't1', webContentsId: 42, previewRequestId });
+    await reportRsbBrowserTab({
+      sessionId: 's1',
+      tabId: 't1',
+      webContentsId: 42,
+      previewRequestId,
+    });
     expect(api.report).toHaveBeenLastCalledWith({
       sessionId: 's1',
       tabId: 't1',
       webContentsId: 42,
       previewRequestId,
     });
-    await reportRsbBrowserTab({ sessionId: 's1', tabId: 't1', webContentsId: 42, previewRequestId: undefined });
-    expect(api.report).toHaveBeenLastCalledWith({ sessionId: 's1', tabId: 't1', webContentsId: 42 });
+    await reportRsbBrowserTab({
+      sessionId: 's1',
+      tabId: 't1',
+      webContentsId: 42,
+      previewRequestId: undefined,
+    });
+    expect(api.report).toHaveBeenLastCalledWith({
+      sessionId: 's1',
+      tabId: 't1',
+      webContentsId: 42,
+    });
     expect(api.report.mock.calls[1][0]).not.toHaveProperty('previewRequestId');
   });
 
@@ -364,6 +378,46 @@ describe('rsbBrowserBridge — viewRect (read-only webview box for phone touches
     browserWebviewPool.release('tab-blocked');
   });
 
+  it('says whether the webview is what the host shows at a point, only when asked', async () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    const entry = browserWebviewPool.acquire('tab-top');
+    const shown = document.createElement('div');
+    shown.append(entry.webview);
+    document.body.append(shown);
+    const overlay = document.createElement('div'); // a menu or dialog of the host app
+    const hits = new Map<string, Element>([
+      ['300,200', entry.webview],
+      ['10,10', overlay],
+    ]);
+    const original = document.elementFromPoint;
+    document.elementFromPoint = (x: number, y: number) => hits.get(`${x},${y}`) ?? null;
+    try {
+      const ask = async (reqId: string, at?: { x: number; y: number }) => {
+        api.tabOpCb?.({
+          reqId,
+          op: 'viewRect',
+          sessionId: 's1',
+          tabId: 'tab-top',
+          ...(at ? { at } : {}),
+        });
+        await vi.waitFor(() =>
+          expect(api.tabOpResult).toHaveBeenCalledWith(expect.objectContaining({ reqId })),
+        );
+        const call = api.tabOpResult.mock.calls.find(([r]) => r.reqId === reqId)!;
+        return (call[0] as { rect: { topmostAt?: boolean } }).rect.topmostAt;
+      };
+      expect(await ask('top-1', { x: 300, y: 200 })).toBe(true);
+      expect(await ask('top-2', { x: 10, y: 10 })).toBe(false);
+      expect(await ask('top-3', { x: 999, y: 999 })).toBe(false); // nothing there at all
+      expect(await ask('top-4')).toBeUndefined();
+    } finally {
+      document.elementFromPoint = original;
+      shown.remove();
+      browserWebviewPool.release('tab-top');
+    }
+  });
+
   it('says so when the tab has no webview in this window', async () => {
     const api = installFakeIpc();
     initRsbBrowserBridge();
@@ -424,9 +478,9 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
       setActive: vi.fn(async () => ({ ok: true })),
       reorder: vi.fn(async () => ({ ok: true })),
     };
-    (
-      window as unknown as { electronAPI: { localDb?: unknown } }
-    ).electronAPI.localDb = { rightSidebarTabs: tabsIpc };
+    (window as unknown as { electronAPI: { localDb?: unknown } }).electronAPI.localDb = {
+      rightSidebarTabs: tabsIpc,
+    };
     initRsbBrowserBridge();
 
     await ensureHydrated('sess-retry');
@@ -595,43 +649,41 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     // synthetic dom-ready. jsdom's <webview> is a generic HTMLElement, not a
     // real Electron guest, so we override the entry's webview methods.
     const realAcquire = browserWebviewPool.acquire.bind(browserWebviewPool);
-    const acquireSpy = vi.spyOn(browserWebviewPool, 'acquire').mockImplementation(
-      (tabId) => {
-        const real = realAcquire(tabId);
-        // Override the webview to behave like a real Electron <webview>:
-        //   - setAttribute('src') is fine on a vanilla HTMLElement, no extra
-        //     work needed.
-        //   - addEventListener('dom-ready') needs to fire synthetically.
-        //   - getWebContentsId must return a stable number.
-        const synthetic = real.webview as unknown as {
-          addEventListener: (event: string, cb: () => void) => void;
-          removeEventListener: (event: string, cb: () => void) => void;
-          setAttribute: (k: string, v: string) => void;
-          getWebContentsId: () => number;
-          _domReadyListeners: Array<() => void>;
-        };
-        synthetic._domReadyListeners = [];
-        synthetic.addEventListener = (event, cb) => {
-          if (event === 'dom-ready') synthetic._domReadyListeners.push(cb);
-        };
-        synthetic.removeEventListener = (event, cb) => {
-          if (event === 'dom-ready') {
-            const idx = synthetic._domReadyListeners.indexOf(cb);
-            if (idx >= 0) synthetic._domReadyListeners.splice(idx, 1);
-          }
-        };
-        synthetic.setAttribute = vi.fn(() => {
-          // Simulate async dom-ready firing on the next microtask. The real
-          // Electron <webview> fires it once the guest WebContents has
-          // attached + initial navigation begins.
-          queueMicrotask(() => {
-            for (const l of synthetic._domReadyListeners.slice()) l();
-          });
+    const acquireSpy = vi.spyOn(browserWebviewPool, 'acquire').mockImplementation((tabId) => {
+      const real = realAcquire(tabId);
+      // Override the webview to behave like a real Electron <webview>:
+      //   - setAttribute('src') is fine on a vanilla HTMLElement, no extra
+      //     work needed.
+      //   - addEventListener('dom-ready') needs to fire synthetically.
+      //   - getWebContentsId must return a stable number.
+      const synthetic = real.webview as unknown as {
+        addEventListener: (event: string, cb: () => void) => void;
+        removeEventListener: (event: string, cb: () => void) => void;
+        setAttribute: (k: string, v: string) => void;
+        getWebContentsId: () => number;
+        _domReadyListeners: Array<() => void>;
+      };
+      synthetic._domReadyListeners = [];
+      synthetic.addEventListener = (event, cb) => {
+        if (event === 'dom-ready') synthetic._domReadyListeners.push(cb);
+      };
+      synthetic.removeEventListener = (event, cb) => {
+        if (event === 'dom-ready') {
+          const idx = synthetic._domReadyListeners.indexOf(cb);
+          if (idx >= 0) synthetic._domReadyListeners.splice(idx, 1);
+        }
+      };
+      synthetic.setAttribute = vi.fn(() => {
+        // Simulate async dom-ready firing on the next microtask. The real
+        // Electron <webview> fires it once the guest WebContents has
+        // attached + initial navigation begins.
+        queueMicrotask(() => {
+          for (const l of synthetic._domReadyListeners.slice()) l();
         });
-        synthetic.getWebContentsId = () => 4242;
-        return real;
-      },
-    );
+      });
+      synthetic.getWebContentsId = () => 4242;
+      return real;
+    });
 
     api.tabOpCb?.({ reqId: 'r-open-1', op: 'open', sessionId: 's-A', url: 'https://example.test' });
 

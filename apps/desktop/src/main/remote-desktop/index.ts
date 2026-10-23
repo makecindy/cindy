@@ -46,6 +46,7 @@ import {
   getPreviewTabIndex,
   getRsbBrowserBridge,
   requestGuestOrigin,
+  requestGuestPointFree,
   setCastingTabs,
   setCastingViewports,
 } from '../rsb-browser-bridge';
@@ -184,6 +185,8 @@ const previewHost = createPreviewHost({
   setCastingViewports: (viewports) => void setCastingViewports(viewports),
   // CDP touches for a <webview> guest are in its host window's space.
   guestOrigin: (tab) => requestGuestOrigin(tab),
+  // A tap is let through the host's hit test only where nothing of the host app is on top.
+  guestPointFree: (tab, point) => requestGuestPointFree(tab, point),
 });
 const hyprlandCapture = new HyprlandCapture();
 const linuxAudio = new LinuxDesktopAudio();

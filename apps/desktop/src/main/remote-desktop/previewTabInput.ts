@@ -62,6 +62,13 @@ export interface TabInputOptions {
    * knowing where it lands would hit something else.
    */
   origin?: () => Promise<GuestOrigin | null>;
+  /**
+   * Whether the host window gives a touch at this point (host CSS px) to this webview, with
+   * none of the host app's own overlays, menus or dialogs drawn over it there. Asked before a
+   * tap is handed to the host's hit test (`Input.synthesizeTapGesture`); absent, false, or a
+   * failure sends the tap to the frame's own session instead, which cannot reach host controls.
+   */
+  pointFree?: (point: { x: number; y: number }) => Promise<boolean>;
 }
 /** How much larger the page is drawn than its CSS viewport; 1 unless only the guest is zoomed. */
 const MIN_SCALE = 0.1;
@@ -247,16 +254,52 @@ interface FrameHop {
  * the host cannot hit-test it is never looked up at all. A gesture that starts on such a frame
  * is therefore sent to the frame's own debugger session instead, in the frame's coordinates
  * (found from the page: the element under the finger and its box, transforms included): the
- * frame then gets exact touch and pointer events, multi-touch included. The browser's compat
- * click for a tap is placed from those same numbers by the tab, so it only reaches the frame
- * when they fall inside the frame's box in the tab. Sessions are attached for one gesture and
- * detached after it.
+ * frame then gets exact touch and pointer events, multi-touch included. Sessions are attached
+ * for one gesture and detached after it.
+ *
+ * The browser's compat click for a touch sent that way is placed by the tab from the same
+ * numbers read as host coordinates, so it lands `origin + frame offset` away from the finger
+ * (inside the frame or on the parent page, whatever is there) and never where the finger was.
+ * A tap (one finger, no movement beyond `TAP_SLOP`) is therefore not sent as a touch: its
+ * start is held until the finger lifts and the tap is delivered whole instead. A webview the
+ * host can hit-test, with nothing of the host app drawn over that point (`pointFree`), takes
+ * `Input.synthesizeTapGesture` at the host point: the frame gets
+ * pointerdown / touchstart / pointerup / touchend / mousemove / mousedown / mouseup / click in
+ * a phone's order, once each, at the finger. Measured on Electron 42 / Chromium 148 for flat,
+ * turned and nested frames. A webview it cannot hit-test (`hitBlocked`) delivers nothing at
+ * all that way, and one with host UI over the point would hand the tap to that UI, so those
+ * taps go to the frame's session as a mouse click: a correctly placed
+ * click, but with pointer / mouse events only (no touch events). A gesture that moves or gets
+ * a second finger sends the held start first and continues as a touch.
  */
 interface FrameRoute {
   sessionId: string;
   sessions: string[];
   hops: FrameHop[];
 }
+/** A touch that started in a routed frame and has not been sent: it may still turn out a tap. */
+interface PendingTap {
+  point: CssPoint;
+}
+/** A finger that stays this close (page CSS px) to where it landed is still a tap. */
+const TAP_SLOP = 10;
+/**
+ * A held tap start waits at most this long for the finger to lift. Taps lift in 80-200 ms and
+ * the browser shows a press at about 150 ms; a finger still down at 300 ms is a press-and-hold,
+ * not a tap, so its start is sent then and the gesture continues as a touch (the frame hears
+ * the press while it lasts). Long enough that a slow tap is not split, short enough that a
+ * hold is not delayed past the point where pages react to it.
+ *
+ * A press sent this way that is then lifted without having moved ends in `touchCancel`, not
+ * `touchEnd`. Measured on Electron 42: after any stationary hold (100 ms to 1.5 s) a lift
+ * makes the browser place a compat click of its own away from the finger (see `FrameRoute`),
+ * which can land on another control, and a 11 px nudge before the lift does not prevent it;
+ * a cancel does. A phone's long press makes no click either, and engines treat `touchcancel`
+ * like `touchend`, so the trade is a cancel event instead of an up for a hold, against a
+ * click on the wrong element. A press that moved, a second finger, a same-origin page and a
+ * tap that lifted in time are not affected.
+ */
+const TAP_HOLD_MS = 300;
 /** Frames nested this deep are not followed any further. */
 const MAX_FRAME_DEPTH = 4;
 /** An element box whose edges are this close to parallel has no inverse. */
@@ -313,6 +356,10 @@ export class TabInputInjector {
   /** Frames of other sites cannot be reached by a plain touch (see `FrameRoute`). */
   private frameRouting = false;
   private route: FrameRoute | null = null;
+  private pendingTap: PendingTap | null = null;
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A press whose start went out because it was held past `TAP_HOLD_MS`; `moved` once it travels. */
+  private timedHold: { point: CssPoint; moved: boolean } | null = null;
   /** Page CSS px to host CSS px for the current gesture. */
   private scale = { x: 1, y: 1 };
   private leases: DebuggerLease[] = [];
@@ -434,6 +481,12 @@ export class TabInputInjector {
       this.ignored.clear();
       if (this.touches.size === 0) return;
       this.touches.clear();
+      if (this.pendingTap) {
+        // Nothing was sent for it, so there is nothing to cancel.
+        this.dropPending();
+        await this.endRoute();
+        return;
+      }
       try {
         await this.send(
           'Input.dispatchTouchEvent',
@@ -516,42 +569,171 @@ export class TabInputInjector {
       if (type === 'touchStart' && this.touches.size === 0 && this.frameRouting && !this.route) {
         this.route = await this.routeTo(points[0]);
         if (epoch !== this.epoch) throw failure();
+        if (this.route && points.length === 1) {
+          this.pendingTap = { point: points[0] };
+          this.touches = new Map([[points[0].id, points[0]]]);
+          this.holdTimer = setTimeout(() => this.holdElapsed(), TAP_HOLD_MS);
+          return;
+        }
       }
-      const route = this.route;
-      const wire: CssPoint[] = [];
-      for (const point of points) {
-        // Into a routed frame the point is in that frame's own CSS px; otherwise in the host's.
-        const local = route ? throughHops(route.hops, point.x, point.y) : null;
-        if (route && !local) throw failure();
-        wire.push(
-          local
-            ? { id: point.id, x: local[0], y: local[1] }
-            : {
-                id: point.id,
-                x: (this.origin?.x ?? 0) + point.x * this.scale.x,
-                y: (this.origin?.y ?? 0) + point.y * this.scale.y,
-              },
+      const pending = this.pendingTap;
+      if (pending) {
+        if (type === 'touchEnd') {
+          await this.tap(pending.point);
+          this.dropPending();
+          this.touches.clear();
+          await this.endRoute();
+          return;
+        }
+        const finger = points[0];
+        if (
+          type === 'touchMove' &&
+          points.length === 1 &&
+          finger.id === pending.point.id &&
+          Math.hypot(finger.x - pending.point.x, finger.y - pending.point.y) <= TAP_SLOP
+        )
+          return;
+        // Not a tap after all: the frame hears of the finger now, where it first landed.
+        this.dropPending();
+        await this.dispatchTouch('touchStart', [pending.point]);
+      }
+      const hold = this.timedHold;
+      if (hold && type !== 'touchEnd') {
+        const finger = points[0];
+        if (
+          type === 'touchStart' ||
+          points.length !== 1 ||
+          finger.id !== hold.point.id ||
+          Math.hypot(finger.x - hold.point.x, finger.y - hold.point.y) > TAP_SLOP
+        )
+          hold.moved = true;
+      }
+      if (type === 'touchEnd' && hold && !hold.moved && this.route) {
+        // Lifts as a cancel, so the browser has no stationary lift to place a click for.
+        await this.send(
+          'Input.dispatchTouchEvent',
+          { type: 'touchCancel', touchPoints: [] },
+          this.route.sessionId,
         );
+      } else {
+        await this.dispatchTouch(type, points);
       }
-      await this.send(
-        'Input.dispatchTouchEvent',
-        {
-          type,
-          touchPoints: wire.map((point) => ({ ...point, radiusX: 3, radiusY: 3, force: 1 })),
-        },
-        route?.sessionId,
-      );
       if (type === 'touchEnd') await this.endRoute();
     } catch (error) {
       // A sequence the page never saw begin cannot be continued; start over.
       this.touches.clear();
       this.ignored.clear();
+      this.dropPending();
       await this.endRoute();
       throw error;
     }
     this.touches = new Map(points.map((point) => [point.id, point] as const));
   }
 
+  /** Where a page point is for the current gesture: in the routed frame, else in the host. */
+  private wirePoints(points: readonly CssPoint[]): CssPoint[] {
+    const route = this.route;
+    return points.map((point) => {
+      // Into a routed frame the point is in that frame's own CSS px; otherwise in the host's.
+      const local = route ? throughHops(route.hops, point.x, point.y) : null;
+      if (route && !local) throw failure();
+      return local
+        ? { id: point.id, x: local[0], y: local[1] }
+        : {
+            id: point.id,
+            x: (this.origin?.x ?? 0) + point.x * this.scale.x,
+            y: (this.origin?.y ?? 0) + point.y * this.scale.y,
+          };
+    });
+  }
+
+  private async dispatchTouch(
+    type: 'touchStart' | 'touchMove' | 'touchEnd',
+    points: readonly CssPoint[],
+  ): Promise<void> {
+    const wire = this.wirePoints(points);
+    await this.send(
+      'Input.dispatchTouchEvent',
+      {
+        type,
+        touchPoints: wire.map((point) => ({ ...point, radiusX: 3, radiusY: 3, force: 1 })),
+      },
+      this.route?.sessionId,
+    );
+  }
+
+  private dropPending(): void {
+    this.pendingTap = null;
+    if (this.holdTimer !== null) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+  }
+
+  /** The finger is still down after `TAP_HOLD_MS`: it is a hold, so its start goes out now. */
+  private holdElapsed(): void {
+    this.holdTimer = null;
+    const pending = this.pendingTap;
+    if (!pending) return;
+    const epoch = this.epoch;
+    // In line with the batches, so it cannot overtake or interleave with an event being applied.
+    this.queue = this.queue
+      .then(async () => {
+        if (epoch !== this.epoch || this.pendingTap !== pending || this.disposed) return;
+        this.pendingTap = null;
+        try {
+          await this.dispatchTouch('touchStart', [pending.point]);
+          this.timedHold = { point: pending.point, moved: false };
+        } catch {
+          // A start the page never saw cannot be continued; the next event starts over.
+          this.epoch++;
+          await this.releaseState();
+        }
+      })
+      .catch(() => undefined);
+  }
+
+  private async pointIsFree(host: { x: number; y: number }): Promise<boolean> {
+    if (!this.options.pointFree) return false;
+    try {
+      return (await withTimeout(this.options.pointFree(host), PREVIEW_INPUT_TIMEOUT_MS)) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** A whole tap on the routed frame at this page point (see `FrameRoute`). */
+  private async tap(point: CssPoint): Promise<void> {
+    // The host's own space, as for any touch sent to the tab (see `GuestOrigin`).
+    const host = {
+      x: (this.origin?.x ?? 0) + point.x * this.scale.x,
+      y: (this.origin?.y ?? 0) + point.y * this.scale.y,
+    };
+    // The tap gesture goes through the host window's hit test, so it may only be used where the
+    // webview itself is on top: a menu or dialog of the host app over it would take the tap.
+    if (this.origin?.hitBlocked !== true && (await this.pointIsFree(host))) {
+      await this.send('Input.synthesizeTapGesture', {
+        x: host.x,
+        y: host.y,
+        gestureSourceType: 'touch',
+      });
+      return;
+    }
+    const [local] = this.wirePoints([point]);
+    const sessionId = this.route?.sessionId;
+    const at = { x: local.x, y: local.y };
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at }, sessionId);
+    await this.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mousePressed', ...at, button: 'left', clickCount: 1 },
+      sessionId,
+    );
+    await this.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', ...at, button: 'left', clickCount: 1 },
+      sessionId,
+    );
+  }
   /**
    * The frame a gesture starting at this page point has to be delivered to, or null when the
    * point is in the tab's own (or a same-process) frame: the element under the point, whether
@@ -631,6 +813,7 @@ export class TabInputInjector {
   private async endRoute(): Promise<void> {
     const route = this.route;
     this.route = null;
+    this.timedHold = null;
     if (!route || this.guest.isDestroyed() || !this.guest.debugger.isAttached()) return;
     for (const sessionId of [...route.sessions].reverse()) {
       try {
@@ -713,6 +896,8 @@ export class TabInputInjector {
       this.touchEmulated = false;
       // The frame sessions went with the debugger session.
       this.route = null;
+      this.timedHold = null;
+      this.dropPending();
     };
     transport.on('detach', this.detachListener);
   }
@@ -774,13 +959,16 @@ export class TabInputInjector {
   }
 
   private async releaseState(): Promise<void> {
-    const hadTouches = this.touches.size > 0;
+    // A held tap start was never sent, so there is nothing of it to cancel.
+    const hadTouches = this.touches.size > 0 && !this.pendingTap;
+    this.dropPending();
     const keys = [...this.keys].reverse();
     this.touches.clear();
     this.ignored.clear();
     this.keys = [];
     if (this.guest.isDestroyed()) {
       this.route = null;
+      this.timedHold = null;
       return;
     }
     if (hadTouches) {

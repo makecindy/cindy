@@ -50,6 +50,15 @@ export interface PreviewHostEnv {
    * coordinate space). Absent where the guest is its own window.
    */
   guestOrigin?(tab: { tabId: string; sessionId: string }): Promise<GuestOrigin | null>;
+  /**
+   * Whether the host window would hand a touch at this host-viewport point to the tab's
+   * `<webview>` (none of the host app's own overlays, menus or dialogs on top there). Absent
+   * or false makes a tap into a cross-process frame use the frame's own session instead.
+   */
+  guestPointFree?(
+    tab: { tabId: string; sessionId: string },
+    point: { x: number; y: number },
+  ): Promise<boolean>;
   /** Pause between layout measurements; tests inject an immediate one. */
   delay?(ms: number): Promise<void>;
 }
@@ -111,7 +120,10 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
    * measure until two readings in a row agree; a layout that keeps moving gets its last size.
    * Anything but "not ready" (the tab is gone) ends the attempt at once.
    */
-  const measureSettled = async (injector: TabInputInjector, shape: PreviewViewport | null = null) => {
+  const measureSettled = async (
+    injector: TabInputInjector,
+    shape: PreviewViewport | null = null,
+  ) => {
     let previous: TabViewport | null = null;
     for (let attempt = 0; attempt < LAYOUT_READY_TRIES && !previous; attempt++) {
       try {
@@ -215,7 +227,15 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       const injector = new TabInputInjector(
         guest,
         env.guestOrigin
-          ? { origin: () => env.guestOrigin!({ tabId: tab.tabId, sessionId: tab.sessionId }) }
+          ? {
+              origin: () => env.guestOrigin!({ tabId: tab.tabId, sessionId: tab.sessionId }),
+              ...(env.guestPointFree
+                ? {
+                    pointFree: (point: { x: number; y: number }) =>
+                      env.guestPointFree!({ tabId: tab.tabId, sessionId: tab.sessionId }, point),
+                  }
+                : {}),
+            }
           : {},
       );
       // Keep the tab painting first, then measure it: a background tab has no real size.

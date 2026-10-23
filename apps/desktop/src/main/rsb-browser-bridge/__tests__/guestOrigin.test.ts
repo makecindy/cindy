@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RsbBrowserBridgeTabOpResult } from '../../../shared/rsbBrowserBridge';
-import { requestTabOrigin, VIEW_RECT_TIMEOUT_MS, type TabOriginDeps } from '../guestOrigin';
+import {
+  requestTabOrigin,
+  requestTabPointTopmost,
+  VIEW_RECT_TIMEOUT_MS,
+  type TabOriginDeps,
+} from '../guestOrigin';
 import type { RendererBridgeOptions } from '../renderer-bridge';
 
 function setup(
@@ -103,5 +108,59 @@ describe('requestTabOrigin', () => {
       return { reqId: 'r', ok: true, rect: { left: 1, top: 1, width: 5, height: 5 } };
     });
     expect(await requestTabOrigin(tab, closing.deps)).toBeNull();
+  });
+});
+
+describe('requestTabPointTopmost', () => {
+  const point = { x: 1070, y: 286 };
+  const answer = (topmostAt?: boolean): RsbBrowserBridgeTabOpResult => ({
+    reqId: 'r',
+    ok: true,
+    rect: {
+      left: 770,
+      top: 86,
+      width: 510,
+      height: 800,
+      ...(topmostAt === undefined ? {} : { topmostAt }),
+    },
+  });
+
+  it('asks the tab host about that point and passes the answer on', async () => {
+    const h = setup(answer(true));
+    expect(await requestTabPointTopmost(tab, point, h.deps)).toBe(true);
+    expect(h.dispatch).toHaveBeenCalledWith(
+      { op: 'viewRect', sessionId: 'task1', tabId: 'tab1', at: point },
+      expect.objectContaining({ timeoutMs: VIEW_RECT_TIMEOUT_MS }),
+      undefined,
+      { ensureHost: false },
+    );
+    expect(await requestTabPointTopmost(tab, point, setup(answer(false)).deps)).toBe(false);
+  });
+
+  it.each([
+    ['an old renderer does not say', answer()],
+    [
+      'the renderer says the tab is not there',
+      { reqId: 'r', ok: false, error: 'tab tab1 not found' },
+    ],
+    ['it answers without a box', { reqId: 'r', ok: true }],
+    ['the round trip fails', new Error('tab-op timed out')],
+  ] as Array<[string, RsbBrowserBridgeTabOpResult | Error]>)(
+    'is false when %s',
+    async (_name, a) => {
+      expect(await requestTabPointTopmost(tab, point, setup(a).deps)).toBe(false);
+    },
+  );
+
+  it('is false without a bridge, a live host or guest, or a finite point, and asks nothing then', async () => {
+    const h = setup(answer(true));
+    expect(await requestTabPointTopmost(tab, point, { ...h.deps, options: () => null })).toBe(
+      false,
+    );
+    expect(await requestTabPointTopmost(tab, { x: Number.NaN, y: 1 }, h.deps)).toBe(false);
+    expect(await requestTabPointTopmost(tab, point, { ...h.deps, guest: () => null })).toBe(false);
+    h.host.isDestroyed.mockReturnValue(true);
+    expect(await requestTabPointTopmost(tab, point, h.deps)).toBe(false);
+    expect(h.dispatch).not.toHaveBeenCalled();
   });
 });
