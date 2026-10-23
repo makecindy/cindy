@@ -325,7 +325,7 @@ gate is `RemoteDesktopViewerSession.connect({ preview: { grant } })`.
   - The reply `{ sequence }` means the batch was actually injected. `previewInput` travels
     over the `input-v1` request envelope when `channelRequests` is on, otherwise relay.
 - **Errors**: `PREVIEW_GRANT_INVALID` (missing, forged, expired, used, wrong peer; list
-  again), `PREVIEW_SOURCE_ENDED` (tab closed, page changed origin, tab rebuilt, plugin
+  again), `PREVIEW_SOURCE_ENDED` (tab closed, page left its origin, tab rebuilt, plugin
   disabled; show ended, no auto reconnect), `PREVIEW_CAPTURE_UNAVAILABLE`,
   `PREVIEW_INPUT_INVALID` (release the gesture), `DESKTOP_PREVIEW_ONLY`. The existing
   `DESKTOP_BUSY`, `DESKTOP_VIEW_ONLY`, `DESKTOP_LEASE_EXPIRED` and `DESKTOP_UNAVAILABLE`
@@ -452,6 +452,19 @@ a display, a virtual display, the input helper, the clipboard or the lock screen
   `viewRect` origin rule above could only be checked there with an origin of zero: the
   touch landed exactly at (0.5, 0.25) of the 347x680 picture in both the visible and
   keep-alive states.
+- **Cross-origin round trips (sign-in)**: when the same guest navigates away from the bound
+  origin, the index *pauses* the binding instead of dropping it: `onEnded('origin-changed')`
+  fires once (a live cast ends and never captures the other site), and the tab is invisible to
+  `list` / `get` / `current`, so no grant can be issued or used. Navigating the same guest back
+  to exactly the bound origin resumes it under a new generation (new `ref`; the ended cast is
+  not revived, the phone lists again). Not back within 30 minutes, or the tab is released,
+  rebuilt, or the plugin disabled: invalidated for good (silently, `onEnded` already fired).
+- **Plugin updates**: the index records the plugin's install revision (version + install
+  approval snapshot) when the preview is issued. After an update or reinstall the plugin's own
+  service is restarted, so a tab opened by the old version points at a stopped service and
+  could never be entered; it is removed from the index (`onEnded('plugin-updated')`) instead of
+  being listed as a duplicate of the new version's tab. Removal was chosen over keeping it
+  castable because nothing can tell that the old page still works.
 - **Ending**: tab closed, rebuilt, navigated to another origin or plugin disabled (index
   `onEnded`, also polled by `tick`) stops the lease; the viewer's next request gets
   `PREVIEW_SOURCE_ENDED` (or `PREVIEW_CAPTURE_UNAVAILABLE`) instead of `DESKTOP_LEASE_EXPIRED`.
