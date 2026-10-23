@@ -14,9 +14,9 @@
  * 是 guest 能直接加载的唯一本地形式。
  */
 
-import { addTab, ensureHydrated } from '../store';
+import { addTab, closeTab, ensureHydrated, getBucket } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
-import { markPluginPreviewTab } from './pluginPreviewTabs';
+import { getPluginPreviewTabIds, markPluginPreviewTab } from './pluginPreviewTabs';
 import { routeSidebarCommand } from './detachedSidebarRouting';
 import { isBrowserOpenablePath } from '../../../../shared/browserOpenableExts';
 
@@ -76,6 +76,21 @@ export function isLocalHtmlFileUrl(url: string): boolean {
   return abs !== null && isBrowserOpenablePath(abs);
 }
 
+/**
+ * 预览页的「同一页」判据:origin + path + query,忽略 hash(插件常把每次启动的
+ * 一次性令牌放在 hash 里)。非 http(s) / 解析失败 = null(不参与去重)。
+ */
+function previewPageKey(url: unknown): string | null {
+  if (typeof url !== 'string') return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
 export interface OpenUrlInSidebarBrowserOptions {
   /**
    * false = 不是用户当次手势(插件 preview 槽开页):标签照常开、内容照常加载,
@@ -116,6 +131,23 @@ export async function openUrlInSidebarBrowser(
   // 此时 Shell 的异步 list 拉取尚未回包,直接 addTab 会与后到的 list 结果
   // 互相覆盖。先 ensureHydrated(已 hydrate 时是同步 no-op)消除该竞态。
   await ensureHydrated(sessionId);
+  // 插件对同一页再次发起预览(close_viewer / open_viewer、重复调用):旧标签被新标签
+  // 取代,而不是再叠一个同页标签。只收「本 renderer 里由插件预览槽开的」标签(已登记
+  // 的 tracked 集合,普通网页标签与用户导航走的标签不在其中),且页面完全相同才算同一页
+  // ——一个预览页始终只有一个标签、一个 guest、一个手机列表项。
+  if (previewRequestId) {
+    const key = previewPageKey(url);
+    if (key) {
+      const tracked = getPluginPreviewTabIds();
+      const superseded = getBucket(sessionId).tabs.filter(
+        (tab) =>
+          tab.kind === 'web-browser' &&
+          tracked.has(tab.id) &&
+          previewPageKey((tab.state as { url?: unknown } | null)?.url) === key,
+      );
+      for (const tab of superseded) await closeTab(sessionId, tab.id);
+    }
+  }
   // initialState 形状与 RightSidebarShell popup 路径 / rsbBrowserBridge open
   // 路径保持一致,plugin hydrate 不会看到意外字段。
   const tab = await addTab(sessionId, 'web-browser', {

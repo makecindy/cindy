@@ -29,6 +29,9 @@ function setup() {
   /** wcId → 当前 URL('' = 尚未提交首个导航)。 */
   const guestUrls = new Map<number, string>();
   const navListeners = new Map<number, Set<(url: string) => void>>();
+  /** wcId → 主文档是否错误页;healthListeners 对应 did-fail-load / did-finish-load。 */
+  const failedDocs = new Set<number>();
+  const healthListeners = new Map<number, Set<(failed: boolean) => void>>();
   const deps = {
     getGhost: (id: string) => ghosts.get(id) ?? null,
     getGuestUrl: (wcId: number) => guestUrls.get(wcId) ?? null,
@@ -36,6 +39,13 @@ function setup() {
       const set = navListeners.get(wcId) ?? new Set();
       set.add(cb);
       navListeners.set(wcId, set);
+      return () => set.delete(cb);
+    },
+    isGuestDocumentFailed: (wcId: number) => failedDocs.has(wcId),
+    watchLoadHealth: (wcId: number, cb: (failed: boolean) => void) => {
+      const set = healthListeners.get(wcId) ?? new Set();
+      set.add(cb);
+      healthListeners.set(wcId, set);
       return () => set.delete(cb);
     },
     now: () => clock,
@@ -60,6 +70,14 @@ function setup() {
       for (const cb of [...(navListeners.get(wcId) ?? [])]) cb(url);
     },
     watcherCount: (wcId: number) => navListeners.get(wcId)?.size ?? 0,
+    healthWatcherCount: (wcId: number) => healthListeners.get(wcId)?.size ?? 0,
+    /** 主文档加载结果:failed=true 是错误页(连接被拒),false 是正常文档加载完成。 */
+    loadResult: (wcId: number, failed: boolean) => {
+      if (failed) failedDocs.add(wcId);
+      else failedDocs.delete(wcId);
+      for (const cb of [...(healthListeners.get(wcId) ?? [])]) cb(failed);
+    },
+    markDocumentFailed: (wcId: number) => failedDocs.add(wcId),
   };
 }
 
@@ -284,6 +302,75 @@ describe('PreviewTabIndex · 失效', () => {
     navigate(11, 'https://login.example/');
     expect(index.get('tab-1')).toBeNull();
     expect(ended).toHaveLength(2);
+  });
+
+  it('主文档加载失败(服务重启后旧端口拒绝连接)→ 暂停:通知一次、列表不可见;成功加载后恢复为新 generation', () => {
+    const { index, ended, loadResult } = bound();
+    const before = index.get('tab-1')!;
+    loadResult(11, true);
+    expect(ended).toMatchObject([{ reason: 'load-failed', binding: { tabId: 'tab-1' } }]);
+    expect(index.get('tab-1')).toBeNull();
+    expect(index.current('tab-1', 11)).toBeNull();
+    expect(index.list('s1')).toEqual([]);
+    loadResult(11, true); // 重复失败不重复通知
+    expect(ended).toHaveLength(1);
+
+    loadResult(11, false); // 服务回来,刷新成功
+    const after = index.get('tab-1')!;
+    expect(after.generation).toBeGreaterThan(before.generation);
+    expect(index.list('s1')).toEqual([after]);
+    expect(ended).toHaveLength(1);
+  });
+
+  it('错误页提交后也会触发完成事件:仍按文档是否为错误页判断,不会误恢复', () => {
+    const { index, loadResult } = bound();
+    loadResult(11, true);
+    // did-finish-load 在错误页上同样触发,真实实现上报 failed=true
+    loadResult(11, true);
+    expect(index.get('tab-1')).toBeNull();
+  });
+
+  it('加载失败与离开 origin 叠加:两个原因都解除才恢复', () => {
+    const { index, ended, navigate, loadResult } = bound();
+    navigate(11, 'https://login.example/');
+    loadResult(11, true);
+    expect(ended).toHaveLength(1); // 已暂停,不再重复通知
+    navigate(11, URL_OK);
+    expect(index.get('tab-1')).toBeNull(); // 还在失败态
+    loadResult(11, false);
+    expect(index.get('tab-1')).not.toBeNull();
+  });
+
+  it('绑定时 guest 已经是错误页(guest 重建、服务已停):以暂停态入索引,不通知,成功加载后出现', () => {
+    const ctx = setup();
+    const id = ctx.index.issue({ ghostId: 'ghost-a', sessionId: 's1', url: URL_OK })!;
+    ctx.markDocumentFailed(11);
+    ctx.index.bind(rec('tab-1', 11), id);
+    expect(ctx.index.list()).toEqual([]);
+    expect(ctx.ended).toEqual([]);
+    ctx.loadResult(11, false);
+    expect(ctx.index.list('s1')).toHaveLength(1);
+  });
+
+  it('加载失败暂停超过上限 → 作废并退订;之后成功加载也不复活', () => {
+    const { index, ended, loadResult, advance, healthWatcherCount } = bound();
+    loadResult(11, true);
+    advance(PREVIEW_PAUSE_LIMIT_MS);
+    loadResult(11, false);
+    expect(index.get('tab-1')).toBeNull();
+    expect(healthWatcherCount(11)).toBe(0);
+    expect(ended).toHaveLength(1);
+  });
+
+  it('同一个标签任何时候只有一个绑定:同 tab 换 guest 后列表仍是一项,旧 guest 的迟到加载事件被忽略', () => {
+    const { index, ended, loadResult, id, healthWatcherCount } = bound();
+    index.bind(rec('tab-1', 22), id); // 同 tab 同 id,换了 guest
+    expect(index.list('s1')).toHaveLength(1);
+    expect(index.list('s1')[0]).toMatchObject({ tabId: 'tab-1', webContentsId: 22 });
+    expect(ended).toMatchObject([{ reason: 'replaced' }]);
+    expect(healthWatcherCount(11)).toBe(0);
+    loadResult(11, true); // 旧 guest 的事件不影响新绑定
+    expect(index.list('s1')).toHaveLength(1);
   });
 
   it('暂停超过上限 → 作废:回到原 origin 也不恢复,同一个 id 无法复活', () => {

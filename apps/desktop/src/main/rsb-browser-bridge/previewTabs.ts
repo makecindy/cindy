@@ -22,6 +22,11 @@
  *   跨站页面),list / get / current 一律当作不存在,grant 无从签发或使用。同一 webContents
  *   之后导航回**完全相同的绑定 origin** 即恢复;超过 PREVIEW_PAUSE_LIMIT_MS 没回来则作废。
  *   暂停期间所有其他失效条件照旧生效(静默:onEnded 已经发过)。
+ * - 暂停(加载失败):同一 webContents 的主文档加载失败(连接被拒 / DNS 失败等,Chromium
+ *   错误页)同样当作暂停——插件重启查看器服务、端口换了之后,旧标签只剩一张打不开的
+ *   错误页,手机列表不该再出现它。语义与上一条一致:触发一次 onEnded('load-failed')、
+ *   查询一律不可见;主文档之后成功加载(服务回来、用户刷新)且仍在绑定 origin 即恢复,
+ *   暂停超过 PREVIEW_PAUSE_LIMIT_MS 作废。两种暂停原因可叠加,全部解除才恢复。
  * - 普通网页标签(无 previewRequestId)永远不进索引。
  *
  * 纯逻辑 + 依赖注入(便于单测):Electron 与插件清单的访问由调用方注入。
@@ -74,7 +79,12 @@ export type PreviewTabEndReason =
   | 'replaced'
   /** 顶层导航离开绑定 origin:绑定暂停(回到原 origin 可恢复),投屏据此结束。 */
   | 'origin-changed'
-  /** 暂停超过 PREVIEW_PAUSE_LIMIT_MS 仍没回到绑定 origin(只记日志,不触发 onEnded)。 */
+  /**
+   * 主文档加载失败(Chromium 错误页):绑定暂停,成功加载后恢复。典型是插件重启了
+   * 自己的查看器服务,旧端口已无人监听。
+   */
+  | 'load-failed'
+  /** 暂停超过 PREVIEW_PAUSE_LIMIT_MS 仍没解除(只记日志,不触发 onEnded)。 */
   | 'pause-expired'
   /** 插件停用 / 卸载 / 不再声明 preview。 */
   | 'plugin-unavailable'
@@ -109,6 +119,13 @@ export interface PreviewTabIndexDeps {
   getGuestUrl(webContentsId: number): string | null;
   /** 订阅 guest 的顶层导航提交(did-navigate),返回退订函数。 */
   watchNavigation(webContentsId: number, onNavigate: (url: string) => void): () => void;
+  /** guest 主文档当前是不是 Chromium 错误页(连接被拒 / DNS 失败等)。缺省 = 不跟踪。 */
+  isGuestDocumentFailed?(webContentsId: number): boolean;
+  /**
+   * 订阅 guest 主文档的加载结果:failed=true = 主框架加载失败;failed=false = 一次加载
+   * 完成且提交的不是错误页。返回退订函数。缺省 = 不跟踪。
+   */
+  watchLoadHealth?(webContentsId: number, onHealth: (failed: boolean) => void): () => void;
   now?(): number;
   /** 签发 id 的随机源,默认 32 字节 CSPRNG base64url(43 字符)。 */
   randomId?(): string;
@@ -139,6 +156,10 @@ interface LiveBinding {
   stopWatching: () => void;
   /** 暂停开始时刻;null = 活动。暂停中的条目对所有查询不可见。 */
   pausedAt: number | null;
+  /** 顶层 URL 仍在绑定 origin 内。 */
+  originOk: boolean;
+  /** 主文档当前是加载失败的错误页。 */
+  loadFailed: boolean;
 }
 
 function defaultRandomId(): string {
@@ -260,10 +281,27 @@ export class PreviewTabIndex {
       generation: ++this.generationSeq,
       boundAt: this.now(),
     };
-    const entry: LiveBinding = { binding, stopWatching: () => undefined, pausedAt: null };
-    entry.stopWatching = this.deps.watchNavigation(record.webContentsId, (url) =>
+    const loadFailed = this.deps.isGuestDocumentFailed?.(record.webContentsId) ?? false;
+    const entry: LiveBinding = {
+      binding,
+      stopWatching: () => undefined,
+      // 绑定时主文档已经是错误页(guest 重建后服务已停):直接以暂停态入索引,不通知
+      // ——它从未对外可见过。
+      pausedAt: loadFailed ? this.now() : null,
+      originOk: true,
+      loadFailed,
+    };
+    const stopNavigation = this.deps.watchNavigation(record.webContentsId, (url) =>
       this.onNavigated(entry, url),
     );
+    const stopLoadHealth =
+      this.deps.watchLoadHealth?.(record.webContentsId, (failed) =>
+        this.onLoadHealth(entry, failed),
+      ) ?? (() => undefined);
+    entry.stopWatching = () => {
+      stopNavigation();
+      stopLoadHealth();
+    };
     this.live.set(record.tabId, entry);
     this.rememberGrant(record.tabId, grant);
   }
@@ -352,32 +390,48 @@ export class PreviewTabIndex {
 
   /**
    * guest 顶层导航提交。离开绑定 origin → 暂停(grant 与导航监听保留);暂停中回到
-   * 完全相同的绑定 origin → 恢复。
-   *
-   * 恢复时换一个新 generation(因此 ref 也变):暂停前基于旧 generation 的投屏会话、
-   * 一次性 grant 都不会借「回到原 origin」复活,手机重新列表后看到的是一个新来源;
-   * 跨站页面期间发生过什么,旧来源并不知情。
+   * 完全相同的绑定 origin → 恢复(若没有其他暂停原因)。
    */
   private onNavigated(entry: LiveBinding, url: string): void {
+    if (this.live.get(entry.binding.tabId) !== entry) return;
+    entry.originOk = originOf(url) === entry.binding.origin;
+    this.settle(entry);
+  }
+
+  /** guest 主文档加载结果:失败 → 暂停;成功提交且回到绑定 origin → 恢复。 */
+  private onLoadHealth(entry: LiveBinding, failed: boolean): void {
+    if (this.live.get(entry.binding.tabId) !== entry) return;
+    entry.loadFailed = failed;
+    this.settle(entry);
+  }
+
+  /**
+   * 按 originOk / loadFailed 对齐暂停态。
+   *
+   * 恢复时换一个新 generation(因此 ref 也变):暂停前基于旧 generation 的投屏会话、
+   * 一次性 grant 都不会借「回到原 origin / 服务重启」复活,手机重新列表后看到的是一个
+   * 新来源;暂停期间发生过什么,旧来源并不知情。
+   */
+  private settle(entry: LiveBinding): void {
     const { tabId } = entry.binding;
-    if (this.live.get(tabId) !== entry) return;
-    const sameOrigin = originOf(url) === entry.binding.origin;
-    if (entry.pausedAt === null) {
-      if (sameOrigin) return;
-      entry.pausedAt = this.now();
-      this.deps.logger?.info('preview tab binding paused', {
-        tabId,
-        ghostId: entry.binding.ghostId,
-      });
-      this.notifyEnded(entry.binding, 'origin-changed');
-      return;
-    }
-    if (this.now() - entry.pausedAt >= PREVIEW_PAUSE_LIMIT_MS) {
+    if (entry.pausedAt !== null && this.now() - entry.pausedAt >= PREVIEW_PAUSE_LIMIT_MS) {
       this.grants.delete(tabId);
       this.end(tabId, 'pause-expired');
       return;
     }
-    if (!sameOrigin) return;
+    const shouldPause = !entry.originOk || entry.loadFailed;
+    if (shouldPause) {
+      if (entry.pausedAt !== null) return;
+      entry.pausedAt = this.now();
+      this.deps.logger?.info('preview tab binding paused', {
+        tabId,
+        ghostId: entry.binding.ghostId,
+        reason: entry.originOk ? 'load-failed' : 'origin-changed',
+      });
+      this.notifyEnded(entry.binding, entry.originOk ? 'load-failed' : 'origin-changed');
+      return;
+    }
+    if (entry.pausedAt === null) return;
     // 恢复前再核对一次插件仍可用(暂停期间的清单变化不一定经过 reconcile)。
     if (!this.deps.getGhost(entry.binding.ghostId)?.available) {
       this.grants.delete(tabId);

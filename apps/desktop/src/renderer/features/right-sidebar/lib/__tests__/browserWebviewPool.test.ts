@@ -43,6 +43,18 @@ describe('browserWebviewPool', () => {
     expect(a2.webview).toBe(a1.webview);
   });
 
+  it('切路由:wrapper 被卸载后重新挂载同一 tabId,仍是同一个 entry,文档里该标签只有一个 webview', () => {
+    const first = browserWebviewPool.acquire('route-tab');
+    // 路由切走:slot 卸载,wrapper 停回停车区(或暂时脱离文档)
+    first.wrapper.remove();
+    document.body.appendChild(first.wrapper);
+    // 路由切回:再次 acquire 命中既有 entry,不创建第二个 wrapper / webview
+    const again = browserWebviewPool.acquire('route-tab');
+    expect(again).toBe(first);
+    expect(document.querySelectorAll('[data-pool-tab-id="route-tab"]')).toHaveLength(1);
+    expect(browserWebviewPool.inspectTabIds().filter((id) => id === 'route-tab')).toHaveLength(1);
+  });
+
   it('notifies only when a new entry is created', () => {
     const onEntryCreated = vi.fn();
     const unsub = browserWebviewPool.onEntryCreated(onEntryCreated);

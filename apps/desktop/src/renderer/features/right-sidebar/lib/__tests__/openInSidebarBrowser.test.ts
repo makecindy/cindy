@@ -12,6 +12,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../store', () => ({
   addTab: vi.fn(async () => ({ id: 't_1', kind: 'web-browser', state: null })),
   ensureHydrated: vi.fn(async () => undefined),
+  closeTab: vi.fn(async () => undefined),
+  getBucket: vi.fn(() => ({ tabs: [], activeTabId: null })),
 }));
 vi.mock('../sidebarCommands', () => ({
   requestRightSidebarVisibility: vi.fn(),
@@ -20,12 +22,13 @@ vi.mock('../detachedSidebarRouting', () => ({
   routeSidebarCommand: vi.fn(async () => 'attached'),
 }));
 
-import { addTab, ensureHydrated } from '../../store';
+import { addTab, closeTab, ensureHydrated, getBucket } from '../../store';
 import { requestRightSidebarVisibility } from '../sidebarCommands';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
 import {
   _resetPluginPreviewTabsForTests,
   getPendingPreviewTabIds,
+  markPluginPreviewTab,
 } from '../pluginPreviewTabs';
 import {
   openUrlInSidebarBrowser,
@@ -161,6 +164,72 @@ describe('openUrlInSidebarBrowser', () => {
     vi.mocked(addTab).mockClear();
     await openUrlInSidebarBrowser('s1', 'https://example.com/');
     expect(vi.mocked(addTab).mock.calls[0][2]).not.toHaveProperty('previewRequestId');
+  });
+
+  describe('同一预览页再次打开', () => {
+    const PAGE = 'http://127.0.0.1:60296/control?udid=U&lang=en';
+    const previewTab = (id: string, url: string, kind = 'web-browser') => ({
+      id,
+      kind,
+      state: { url },
+    });
+    const open = (url: string) =>
+      openUrlInSidebarBrowser('s1', url, {
+        userInitiated: false,
+        previewRequestId: 'P'.repeat(43),
+      });
+
+    it('已登记的同页预览标签被新标签取代(hash 令牌不同也算同一页),一个页面只留一个标签', async () => {
+      markPluginPreviewTab('old-1');
+      markPluginPreviewTab('old-2');
+      vi.mocked(getBucket).mockReturnValue({
+        tabs: [
+          previewTab('old-1', `${PAGE}#cindyClipboard=60296.aaa`),
+          previewTab('old-2', `${PAGE}#cindyClipboard=60296.bbb`),
+        ],
+        activeTabId: 'old-1',
+      } as never);
+
+      await open(`${PAGE}#cindyClipboard=60296.ccc`);
+
+      expect(vi.mocked(closeTab).mock.calls.map((c) => c[1])).toEqual(['old-1', 'old-2']);
+      expect(vi.mocked(closeTab).mock.invocationCallOrder[1]).toBeLessThan(
+        vi.mocked(addTab).mock.invocationCallOrder[0],
+      );
+      expect(addTab).toHaveBeenCalledTimes(1);
+    });
+
+    it('不同端口 / 不同路径 / 不同 query、未登记的普通网页标签、非浏览器标签都不动', async () => {
+      markPluginPreviewTab('other-port');
+      markPluginPreviewTab('other-query');
+      markPluginPreviewTab('not-browser');
+      vi.mocked(getBucket).mockReturnValue({
+        tabs: [
+          previewTab('other-port', 'http://127.0.0.1:58232/control?udid=U&lang=en'),
+          previewTab('other-query', 'http://127.0.0.1:60296/control?udid=V&lang=en'),
+          previewTab('plain-web', PAGE), // 用户自己开的同址网页:未登记,不碰
+          previewTab('not-browser', PAGE, 'file-browser'),
+        ],
+        activeTabId: null,
+      } as never);
+
+      await open(PAGE);
+
+      expect(closeTab).not.toHaveBeenCalled();
+      expect(addTab).toHaveBeenCalledTimes(1);
+    });
+
+    it('非预览打开(无 previewRequestId)从不关闭任何标签', async () => {
+      markPluginPreviewTab('old-1');
+      vi.mocked(getBucket).mockReturnValue({
+        tabs: [previewTab('old-1', PAGE)],
+        activeTabId: null,
+      } as never);
+
+      await openUrlInSidebarBrowser('s1', PAGE);
+
+      expect(closeTab).not.toHaveBeenCalled();
+    });
   });
 
   it('does not request visibility when addTab rejects (caller surfaces the error)', async () => {
