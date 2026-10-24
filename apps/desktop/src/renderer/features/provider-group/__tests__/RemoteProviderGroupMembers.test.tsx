@@ -79,6 +79,16 @@ afterEach(() => {
 });
 
 describe('RemoteProviderGroupMembers', () => {
+  // Unit regression: the same-account read-only list must retain the owner's
+  // confirmed exhaustion reason without dropping running tasks or requiring expansion.
+  it('shows confirmed quota exhaustion in the collapsed remote row and keeps the running count', async () => {
+    mountWith({ state: 'cooling', usageLimit: { resetAtMs: null } });
+    await screen.findByText('providerGroup.member.status.quotaExhausted');
+    expect(screen.getByText('providerGroup.member.runningCount:{"count":2}')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.status.idle')).toBeNull();
+    expect(screen.getByRole('button', { expanded: false })).toBeTruthy();
+  });
+
   it('reads versions from this computer’s device directory when an older group host omits them', async () => {
     const config: ProviderGroupConfig = { ...CONFIG, members: [
       { ...VM, key: 'local:anthropic', kind: 'local', agentDeviceId: null, label: 'Group host' },

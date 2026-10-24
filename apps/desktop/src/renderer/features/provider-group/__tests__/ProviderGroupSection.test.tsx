@@ -288,6 +288,26 @@ describe('ProviderGroupSection', () => {
     expect(within(rows[0]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
   });
 
+  // Unit regression: the collapsed row must explain a confirmed exhausted quota
+  // and its reset while retaining ongoing work; quota details used to be the only explanation.
+  it('shows quota exhaustion and its reset in the collapsed row alongside running tasks', async () => {
+    realLocale = createInstance();
+    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const view = viewOf(stored);
+    view.members[1] = {
+      ...view.members[1], running: 2,
+      usageLimit: { resetAtMs: Date.now() + (6 * 24 + 1) * 3_600_000 },
+    };
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'list' ? { anthropic: stored } : view);
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = await screen.findAllByTestId('provider-group-member');
+    expect(await within(rows[1]).findByText('配额已用完 · 6天 1小时后重置')).toBeTruthy();
+    expect(within(rows[1]).getByText('2 个任务运行中')).toBeTruthy();
+    expect(within(rows[1]).queryByText('空闲')).toBeNull();
+    expect(screen.queryByTestId('member-quota')).toBeNull();
+  });
+
   it('changes the group strategy and turns automatic switching off', async () => {
     stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
@@ -586,5 +606,13 @@ describe('memberStatusText', () => {
     // 周上限：10 月 15 日才恢复，不能只写 16:00。
     expect(memberStatusText(t, cooling(new Date(2026, 9, 15, 16, 0).getTime()), 'en-US', now))
       .toBe('providerGroup.member.status.coolingUntil:{"time":"Oct 15 16:00"}');
+  });
+
+  it('does not invent a quota reset and keeps an elapsed observation pending', () => {
+    const now = Date.UTC(2026, 9, 22);
+    expect(memberStatusText(t, { ...cooling(now + 60_000), usageLimit: { resetAtMs: null } }, 'en', now))
+      .toBe('providerGroup.member.status.quotaExhausted');
+    expect(memberStatusText(t, { ...cooling(now + 60_000), usageLimit: { resetAtMs: now - 1 } }, 'en', now))
+      .toBe('providerGroup.member.status.quotaExhausted · quotaCard.resetPending');
   });
 });
