@@ -46,7 +46,7 @@ backend and PipeWire installed and working. Omarchy normally configures these;
 this installer deliberately does not rewrite Hyprland, PAM or portal settings.
 See the [Electron safeStorage documentation](https://www.electronjs.org/docs/latest/api/safe-storage)
 for the backend model. KDE and GNOME retain Electron's existing selection;
-Hyprland selects `gnome-libsecret` before app readiness; other desktops retain
+Hyprland and labwc (including `labwc:wlroots`) select `gnome-libsecret` before app readiness; other desktops retain
 Electron's selection. Desktop identity uses the first non-empty value from
 `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, and `DESKTOP_SESSION`.
 An explicit `--password-store` always wins and survives an in-app update restart.
