@@ -2862,6 +2862,7 @@ export function ChatInput({
         const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
+          compositionActive: view.composing,
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -3577,9 +3578,14 @@ export function ChatInput({
         }
       }
 
+      const composer = editorRef.current;
+      const compositionActive = Boolean(
+        composer && !composer.isDestroyed && composer.view.composing,
+      );
       const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
         turnRunning: showStopButtonRef.current,
         platform,
+        compositionActive,
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (

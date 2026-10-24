@@ -11,6 +11,7 @@ import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
+import { _resetComposerSendShortcutPreferenceForTests } from '@/hooks/useComposerSendShortcutPreference';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
   __testing as promptRecommendations,
@@ -234,6 +235,56 @@ it.each(['two queued messages', 'typed draft'] as const)('preserves composer dis
   } else {
     expect(onSend).not.toHaveBeenCalled();
   }
+});
+
+it('steers a focused draft with Cmd+Enter during output when IME marks the key composing', async () => {
+  h.platform = 'darwin';
+  h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
+  _resetComposerSendShortcutPreferenceForTests();
+  const onQueueSteer = vi.fn().mockResolvedValue(true);
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(
+    <ChatInput
+      {...queueShortcutProps}
+      isStreaming
+      onQueueSteer={onQueueSteer}
+      onSend={onSend}
+    />,
+  );
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Steer this</p>'); });
+  const editor = h.editor!.view.dom;
+  editor.focus();
+  await act(async () => {
+    fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', metaKey: true, isComposing: true });
+  });
+
+  expect(onQueueSteer).not.toHaveBeenCalled();
+  expect(onSend).toHaveBeenCalledTimes(1);
+  expect(onSend.mock.calls[0][0]).toBe('Steer this');
+  expect(onSend.mock.calls[0][6]).toMatchObject({ deliveryMode: 'steer' });
+});
+
+it('queues a focused draft with Cmd+Enter during output in modifier-enter mode', async () => {
+  h.platform = 'darwin';
+  h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
+  localStorage.setItem('chat.sendShortcutPreference', 'modifier-enter');
+  _resetComposerSendShortcutPreferenceForTests();
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(<ChatInput {...queueShortcutProps} pendingQueue={[]} isStreaming onSend={onSend} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Queue this</p>'); });
+  const editor = h.editor!.view.dom;
+  editor.focus();
+  await act(async () => {
+    fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', metaKey: true, isComposing: true });
+  });
+
+  expect(onSend).toHaveBeenCalledTimes(1);
+  expect(onSend.mock.calls[0][0]).toBe('Queue this');
+  expect(onSend.mock.calls[0][6]).toMatchObject({ deliveryMode: 'queue' });
+  localStorage.removeItem('chat.sendShortcutPreference');
+  _resetComposerSendShortcutPreferenceForTests();
 });
 
 it.each(queueShortcuts)('sends the visible recommendation ahead of a queued message on $platform', async shortcut => {

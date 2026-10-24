@@ -16,9 +16,14 @@ import { getDefaultVoiceInputSettings } from '../../../shared/voiceInputData';
 const KEY = 'chat.sendShortcutPreference';
 
 function enterEvent(
-  overrides: Partial<Pick<KeyboardEvent, 'shiftKey' | 'altKey' | 'metaKey' | 'ctrlKey' | 'repeat' | 'isComposing'>> = {},
+  overrides: Partial<
+    Pick<KeyboardEvent, 'shiftKey' | 'altKey' | 'metaKey' | 'ctrlKey' | 'repeat' | 'isComposing'>
+  > & { keyCode?: number } = {},
 ): KeyboardEvent {
-  return new KeyboardEvent('keydown', { key: 'Enter', ...overrides });
+  const { keyCode, ...init } = overrides;
+  const event = new KeyboardEvent('keydown', { key: 'Enter', ...init });
+  if (keyCode !== undefined) Object.defineProperty(event, 'keyCode', { value: keyCode });
+  return event;
 }
 
 describe('useComposerSendShortcutPreference', () => {
@@ -135,6 +140,7 @@ describe('useComposerSendShortcutPreference', () => {
       turnRunning: boolean;
       event: KeyboardEvent;
       expected: 'queue' | 'steer' | 'native' | 'ignore' | null;
+      compositionActive?: boolean;
     }> = [
       {
         name: 'sends with plain Enter in Enter mode',
@@ -233,6 +239,41 @@ describe('useComposerSendShortcutPreference', () => {
         expected: 'native',
       },
       {
+        name: 'keeps a composing Cmd+Enter native when the caller does not report session state',
+        preference: 'enter',
+        platform: 'darwin',
+        turnRunning: true,
+        event: enterEvent({ metaKey: true, isComposing: true }),
+        expected: 'native',
+      },
+      {
+        name: 'still steers when Cmd+Enter is flagged composing but the session is closed',
+        preference: 'enter',
+        platform: 'darwin',
+        turnRunning: true,
+        event: enterEvent({ metaKey: true, isComposing: true }),
+        expected: 'steer',
+        compositionActive: false,
+      },
+      {
+        name: 'keeps Cmd+Enter native while a composition session is actually open',
+        preference: 'enter',
+        platform: 'darwin',
+        turnRunning: true,
+        event: enterEvent({ metaKey: true, isComposing: true }),
+        expected: 'native',
+        compositionActive: true,
+      },
+      {
+        name: 'queues a closed-session Cmd+Enter in modifier-enter mode',
+        preference: 'modifier-enter',
+        platform: 'darwin',
+        turnRunning: true,
+        event: enterEvent({ metaKey: true, isComposing: true, keyCode: 229 }),
+        expected: 'queue',
+        compositionActive: false,
+      },
+      {
         name: 'ignores Shift+Enter so list and hard-break handling can run',
         preference: 'enter',
         platform: 'darwin',
@@ -258,10 +299,14 @@ describe('useComposerSendShortcutPreference', () => {
       },
     ];
 
-    it.each(cases)('$name', ({ preference, platform, turnRunning, event, expected }) => {
-      expect(resolveComposerEnterIntent(event, preference, { turnRunning, platform })).toBe(
-        expected,
-      );
+    it.each(cases)('$name', ({ preference, platform, turnRunning, event, expected, compositionActive }) => {
+      expect(
+        resolveComposerEnterIntent(event, preference, {
+          turnRunning,
+          platform,
+          ...(compositionActive === undefined ? {} : { compositionActive }),
+        }),
+      ).toBe(expected);
     });
   });
 });
