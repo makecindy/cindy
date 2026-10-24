@@ -126,7 +126,7 @@ describe('desktop 会话标题投影出口', () => {
     // lanes never notify (docs/product-rules/bot-group-chat.md §3).
     expect(sidebarUpper).toContain('if (botTitle === BOT_GROUP_LANE_SESSION) return;');
     expect(sidebarUpper).toContain(
-      'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);',
+      'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind, options);',
     );
     expect(sidebarUpper).toContain("unnamedLabelRef.current = t('ccAgent.common.unnamedSession');");
   });

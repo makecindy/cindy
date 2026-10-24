@@ -663,6 +663,8 @@ describe('Cindy durable PI Subagent runner', () => {
       }, undefined, 'the runner to receive the hanging child startup output');
       fixture.child.kill('SIGTERM');
       await waitForClose(fixture.child, fixture.stderr);
+      await waitFor(async () => readFile(fixture.stdinEndedFile, 'utf8').catch(() => null),
+        undefined, 'the orphan to observe stdin closing and remain alive');
       const receipt = JSON.parse(await readFile(path.join(fixture.runDir, 'result.json'), 'utf8'));
       expect(receipt.state).toBe('stopped');
       expect(receipt.tasks[0].status).toBe('stopped');
