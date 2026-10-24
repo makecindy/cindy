@@ -67,6 +67,7 @@ import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryP
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
+import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
 import { serverApiFetch } from '../serverApiClient';
 import {
@@ -2110,6 +2111,7 @@ const mobileNotifyDeduper = new MobileNotifyDeduper();
  * 会话终态时给本账号已注册推送 token 的手机发系统推送(fire-and-forget)。
  * 静默跳过的场景(返回 false):
  *  - relay 未连接 / server 未声明 notify capability(老 relay,黑洞防护)
+ *  - 该任务开了「消息免打扰」(含代输入等不走会话终态路径的调用方)
  *  - 有控制端正订阅该会话的实时流(session:<id> topic)——人已经在手机上看着这
  *    个会话,系统推送只会重复打扰
  *  - 同 session + kind 5s 短窗去重
@@ -2134,6 +2136,9 @@ export function sendMobileSessionNotify(payload: {
   generation?: number;
 }): boolean {
   if (!client) return false;
+  // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
+  // notification:show-session-event,这里是所有发起方的唯一出口。
+  if (isSessionNotificationsMutedSync(payload.sessionId)) return false;
   if (payload.generation !== undefined && payload.generation !== mobileNotifyGeneration) {
     log.debug(
       `mobile notify dropped: link generation changed (account/ownership boundary), session=${payload.sessionId.slice(0, 8)}`,

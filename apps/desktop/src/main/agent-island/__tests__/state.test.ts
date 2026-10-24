@@ -32,6 +32,7 @@ import {
   setAgentIslandHovered,
   setAgentIslandLayoutDragActive,
   setAgentIslandPointerZones,
+  setAgentIslandSessionDisplaySuppressed,
   setAgentIslandVisibleSession,
 } from '../state.js';
 
@@ -116,6 +117,81 @@ function askUserQuestionRequest(requestId: string): InteractionRequest {
 }
 
 describe('Agent Island display state', () => {
+  it('「消息免打扰」只把任务从岛面拿掉，侧栏活动快照照旧保留', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-task', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, meta, toolUseEvent('tool-1'), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions.map((s) => s.sessionId)).toEqual([
+      'muted-task',
+    ]);
+
+    expect(setAgentIslandSessionDisplaySuppressed(state, 'muted-task', true)).toBe(true);
+    // 岛面（含菜单栏/提示音）不再有它。
+    expect(buildAgentIslandDisplayState(state, 1_300).sessions).toEqual([]);
+    // 但状态机照常记账：侧栏卡片的实时活动与等待交互态从这份快照来。
+    expect(state.sessions.has('muted-task')).toBe(true);
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'muted-task', phase: 'running' }),
+    ]);
+
+    // 取消静音后回到岛面，状态没有丢。
+    expect(setAgentIslandSessionDisplaySuppressed(state, 'muted-task', false)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 1_400).sessions.map((s) => s.sessionId)).toEqual([
+      'muted-task',
+    ]);
+  });
+
+  it('a muted task stays off the island even after its entry is recreated', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-task', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    setAgentIslandSessionDisplaySuppressed(state, 'muted-task', true);
+    // 岛面 TTL / 进程收尾把条目删掉后，新事件重建条目也不得把静音任务放回来。
+    state.sessions.delete('muted-task');
+
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working again'), 2_000);
+
+    expect(buildAgentIslandDisplayState(state, 2_100).sessions).toEqual([]);
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'muted-task', phase: 'running' }),
+    ]);
+  });
+
+  it('静音任务的完成卡不回到岛面，也不占 active transient / 揭示队列', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-done', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    setAgentIslandSessionDisplaySuppressed(state, 'muted-done', true);
+
+    applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
+
+    const display = buildAgentIslandDisplayState(state, 2_100);
+    expect(display.sessions).toEqual([]);
+    expect(display.currentSessionId).toBeNull();
+    expect(state.activeTransientSessionId).toBeNull();
+    expect(state.transientRevealQueue).toEqual([]);
+    // 侧栏活动照旧看得到它已经完成。
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'muted-done', phase: 'completed' }),
+    ]);
+  });
+
+  it('完成卡已经在岛上时再静音，下一次展示面就不再包含它', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-live', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, meta, doneEvent(), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions.map((s) => s.sessionId)).toEqual([
+      'muted-live',
+    ]);
+
+    setAgentIslandSessionDisplaySuppressed(state, 'muted-live', true);
+
+    expect(buildAgentIslandDisplayState(state, 1_300).sessions).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, 1_300).currentSessionId).toBeNull();
+  });
+
   it('does not complete the island on claimed SDK boundary events', () => {
     const state = createAgentIslandState();
     const meta = { sessionId: 'continuing', title: 'Continuing', agentKind: 'codex' };

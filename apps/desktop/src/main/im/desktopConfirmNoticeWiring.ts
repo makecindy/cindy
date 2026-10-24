@@ -14,6 +14,7 @@ import { eq } from 'drizzle-orm';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
+import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry.js';
 import { bindingStore } from './binding.js';
 import { feishuIm } from './host.js';
 import {
@@ -28,6 +29,9 @@ export function createFeishuDesktopConfirmNotifier(
   buildText?: (what: string) => string,
 ): (sessionId: string, what: string) => void {
   return createDesktopConfirmNotifier({
+    // 「消息免打扰」任务不发 IM 提示(桌面确认卡 / 代输入指引都不发);提示属于
+    // 提醒面,与 notificationService / device-link / scheduler-host 的四道门同口径。
+    isSuppressed: (sessionId) => isSessionNotificationsMutedSync(sessionId),
     async getFeishuOpenId(sessionId) {
       return resolveFeishuNoticeTarget(
         {

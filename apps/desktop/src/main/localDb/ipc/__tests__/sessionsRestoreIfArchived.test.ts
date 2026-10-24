@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  // 导入链会静态引到 WorktreeManager → workdir-probe-host,后者在模块顶层读 app.once。
+  app: { getPath: () => os.tmpdir(), once: vi.fn() },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       h.handlers.set(channel, handler);
@@ -109,6 +111,7 @@ function createDb(): void {
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',

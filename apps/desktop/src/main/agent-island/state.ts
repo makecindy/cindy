@@ -247,6 +247,13 @@ export interface AgentIslandState {
    * (进程重启后靠 localDb 兜底补发收尾包)。
    */
   remoteUnreadTerminals: Map<string, AgentIslandRemoteUnreadTerminal>;
+  /**
+   * 「消息免打扰」任务：只从**展示面**（岛面 / 菜单栏 / 提示音）排除，不删
+   * `state.sessions`、也不影响事件摄取 —— 侧栏卡片的逐步活动、等待交互态与远端
+   * 活动镜像都长在这份状态上，静音不该把任务藏起来。按 sessionId 保存而不是塞进
+   * session 条目：条目会随岛面 TTL 被裁剪后重建，塞进去会丢。
+   */
+  displaySuppressedSessionIds: Set<string>;
 }
 
 export interface AgentIslandRemoteUnreadTerminal {
@@ -307,6 +314,7 @@ export function createAgentIslandState(): AgentIslandState {
     strings: { ...DEFAULT_AGENT_ISLAND_STRINGS },
     toolWording: DEFAULT_TOOL_ROW_WORDING,
     remoteUnreadTerminals: new Map(),
+    displaySuppressedSessionIds: new Set(),
   };
 }
 
@@ -341,6 +349,8 @@ export function resetAgentIslandState(state: AgentIslandState): void {
   state.compactCurrentUntil = fresh.compactCurrentUntil;
   state.strings = fresh.strings;
   state.remoteUnreadTerminals = fresh.remoteUnreadTerminals;
+  // 展示面抑制(静音)跟着账号/数据源一起重置:publish() 会从同步索引重新对齐。
+  state.displaySuppressedSessionIds = fresh.displaySuppressedSessionIds;
   // toolWording 是注入的配置(非会话状态),reset 时保留,避免退回默认中文表。
 }
 
@@ -588,6 +598,8 @@ function restoreSessionScopedReveal(
   session: AgentIslandSessionState,
   now: number,
 ): void {
+  // 静音任务的卡不该重新活过来（展示面才有的概念，活动快照不受影响）。
+  if (state.displaySuppressedSessionIds.has(session.sessionId)) return;
   const sessionId = session.sessionId;
   const wantsActive = session.revealUntil != null
     && session.revealUntil > now
@@ -1859,6 +1871,15 @@ function enqueueTransientReveal(
   now: number,
   dwellMs: number,
 ): void {
+  // 静音任务的完成 / 错误卡不揭示：它不该在岛面上出现，也不该带提示音。
+  // 活动快照与未读账本另路，静音不影响。
+  if (state.displaySuppressedSessionIds.has(session.sessionId)) {
+    session.revealUntil = null;
+    session.deferredReveal = false;
+    session.deferredRevealReason = null;
+    removeQueuedTransientReveal(state, session.sessionId);
+    return;
+  }
   removeQueuedTransientReveal(state, session.sessionId);
   if (state.activeTransientSessionId === session.sessionId) {
     session.revealUntil = now + dwellMs;
@@ -1909,6 +1930,7 @@ function promoteNextTransientReveal(
     if (!nextSessionId) continue;
     const next = state.sessions.get(nextSessionId);
     if (!next || !isSessionVisible(next, now)) continue;
+    if (state.displaySuppressedSessionIds.has(next.sessionId)) continue;
     if (shouldSmartSuppressSession(state, next)) {
       deferSessionReveal(state, next, 'visible-session');
       continue;
@@ -1924,6 +1946,9 @@ function promoteNextTransientReveal(
 function getActiveTransientSession(state: AgentIslandState, now: number): AgentIslandSessionState | null {
   const activeSessionId = state.activeTransientSessionId;
   if (!activeSessionId) return null;
+  // 静音任务即使被排成 active transient 也不上展示面：否则它会绕开
+  // shouldDisplaySession 的过滤被 prepend 回列表（完成/错误卡 + 提示音）。
+  if (state.displaySuppressedSessionIds.has(activeSessionId)) return null;
   const active = state.sessions.get(activeSessionId);
   if (!active?.revealUntil || active.revealUntil <= now) return null;
   return active;
@@ -2709,8 +2734,27 @@ function shouldDisplaySession(
   now: number,
   preserveExpiredTransient = false,
 ): boolean {
+  // 「消息免打扰」只从展示面排除:任务仍在岛面以外的所有面(侧栏实时活动、等待
+  // 交互态、远端活动镜像)照常可见,所以这里是过滤而不是把条目从 state 里删掉。
+  if (state.displaySuppressedSessionIds.has(session.sessionId)) return false;
   return isSessionVisible(session, now, preserveExpiredTransient)
     && !isVisibleInteractionSuppressed(state, session, now);
+}
+
+/**
+ * 标记某个任务的岛面展示是否被抑制(当前只用于「消息免打扰」)。返回是否有变化。
+ * 抑制只影响 displayState 与提示音,不动 state.sessions。
+ */
+export function setAgentIslandSessionDisplaySuppressed(
+  state: AgentIslandState,
+  sessionId: string,
+  suppressed: boolean,
+): boolean {
+  const had = state.displaySuppressedSessionIds.has(sessionId);
+  if (had === suppressed) return false;
+  if (suppressed) state.displaySuppressedSessionIds.add(sessionId);
+  else state.displaySuppressedSessionIds.delete(sessionId);
+  return true;
 }
 
 function isUnreadTerminalLedger(

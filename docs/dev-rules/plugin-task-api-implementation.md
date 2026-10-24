@@ -209,7 +209,7 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
   与 Worker 没有创建回执，`readSession` 不认，不支持 setHidden。
 - **可见性口径**：`local-db:sessions:list`、会话搜索（conversationSearch）、未结束提示两条腿
   （sessionActiveTurn）、hook-control 最近任务排除隐藏任务；用量统计等全量口径不排除。灵动岛/菜单栏
-  运行态与系统通知经 `hiddenSessionRegistry` 同步判定跳过（首次 list 时按账号库预热，加载前按可见处理）；
+  运行态与系统通知经 `sessionFlagRegistry` 同步判定跳过（首次 list 时按账号库预热，加载前按可见处理）；
   renderer 通知兜底按单任务读取的 `hiddenAt` 判定。`subscriptionGateway.isGhostEligibleSessionRow`
   不因隐藏改变，插件仍可订阅自己的任务。
 - **透明性兜底**：插件详情页「后台任务」区块（设置之后、Tools 之前）列出本插件回执拥有、仍在后台且未删除
