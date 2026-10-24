@@ -5108,3 +5108,28 @@ describe('ghost · browserExtension 槽(2026-10-27 浏览器扩展经宿主桥�
     expect(unreviewedGhostPermissionItems(channelOnly.manifest, reviewed.manifest, controlAdded.manifest)).toEqual([]);
   });
 });
+
+describe('liveScreen declaration', () => {
+  const base = {
+    schemaVersion: 3,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+  };
+  const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' };
+  it('is listed in plugin details only together with node, which it needs to run', () => {
+    const withNode = validateGhostManifest({ ...base, node, liveScreen: true });
+    expect(withNode.ok).toBe(true);
+    if (!withNode.ok) return;
+    expect(withNode.manifest.liveScreen).toBe(true);
+    expect(ghostPermissionItems(withNode.manifest)).toContainEqual(
+      expect.objectContaining({ key: 'live-screen', kind: 'live-screen', labelKey: 'liveScreen', detailKey: 'liveScreenDetail' }),
+    );
+    const alone = validateGhostManifest({ ...base, liveScreen: true });
+    expect(alone.ok).toBe(true);
+    if (!alone.ok) return;
+    expect(ghostPermissionItems(alone.manifest).map((item) => item.key)).not.toContain('live-screen');
+  });
+});

@@ -324,6 +324,17 @@ vi.mock("lucide-react-native", () => ({
   Keyboard: () => null,
   SlidersHorizontal: () => null,
   X: () => null,
+  // Live screen device buttons.
+  Camera: () => null,
+  Copy: () => null,
+  House: () => null,
+  Lock: () => null,
+  Mic: () => null,
+  Play: () => null,
+  Power: () => null,
+  Undo2: () => null,
+  Vibrate: () => null,
+  Volume1: () => null,
 }));
 vi.mock("@/platform/chrome/NativeSwitch", () => ({
   NativeSwitch: (p: any) =>

@@ -1,0 +1,196 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  LiveScreenFramer,
+  LiveScreenInputMapper,
+  LiveScreenSession,
+  type LiveScreenSource,
+} from '../liveScreen';
+
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }),
+}));
+
+const frame = (type: number, ...payload: number[]) => {
+  const body = Buffer.from([type, ...payload]);
+  const head = Buffer.alloc(4);
+  head.writeUInt32BE(body.length);
+  return Buffer.concat([head, body]);
+};
+const screen = {
+  plugin: 'sim',
+  id: 'UDID-1',
+  name: 'iPhone',
+  platform: 'ios' as const,
+  cornerRadius: 0,
+  maxTouches: 2,
+  keyboard: true,
+  buttons: [],
+};
+
+describe('live screen framing', () => {
+  it('reassembles messages split anywhere and copies each one', () => {
+    const framer = new LiveScreenFramer();
+    const bytes = Buffer.concat([frame(0x10, 1, 2), frame(0x02, 3)]);
+    const out = [
+      ...framer.push(bytes.subarray(0, 3)),
+      ...framer.push(bytes.subarray(3, 9)),
+      ...framer.push(bytes.subarray(9)),
+    ];
+    expect(out.map((m) => [...m])).toEqual([
+      [0x10, 1, 2],
+      [0x02, 3],
+    ]);
+    expect(out[0].buffer.byteLength).toBe(3);
+  });
+
+  it('rejects empty and oversized messages', () => {
+    expect(() => new LiveScreenFramer().push(Buffer.from([0, 0, 0, 0]))).toThrow(
+      'DESKTOP_SCREEN_FRAME_INVALID',
+    );
+    const huge = Buffer.alloc(4);
+    huge.writeUInt32BE(9 * 1024 * 1024);
+    expect(() => new LiveScreenFramer().push(huge)).toThrow('DESKTOP_SCREEN_FRAME_INVALID');
+  });
+});
+
+describe('live screen input mapping', () => {
+  it('turns keyboard downs into device keys with held modifiers, and refuses desktop pointers', () => {
+    const mapper = new LiveScreenInputMapper();
+    expect(
+      mapper.map([
+        { kind: 'key', code: 'ShiftLeft', down: true },
+        { kind: 'key', code: 'KeyA', down: true },
+        { kind: 'key', code: 'KeyA', down: false },
+        { kind: 'key', code: 'ShiftLeft', down: false },
+        { kind: 'key', code: 'Enter', down: true },
+        { kind: 'text', text: '好' },
+        { kind: 'press', button: 'home' },
+        { kind: 'release' },
+      ]),
+    ).toEqual([
+      { kind: 'key', code: 'KeyA', modifiers: ['shift'] },
+      { kind: 'key', code: 'Enter' },
+      { kind: 'text', text: '好' },
+      { kind: 'press', button: 'home' },
+      { kind: 'release' },
+    ]);
+    expect(() => mapper.map([{ kind: 'scroll', dx: 0, dy: 1 }])).toThrow('INVALID_REQUEST');
+  });
+});
+
+describe('live screen session', () => {
+  let server: http.Server | null = null;
+  afterEach(() => {
+    server?.closeAllConnections();
+    server?.close();
+    server = null;
+  });
+  const serve = async (write: (res: http.ServerResponse) => void) => {
+    server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+      res.flushHeaders();
+      write(res);
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${(server!.address() as AddressInfo).port}/live/token`;
+  };
+  const source = (url: string): LiveScreenSource & { calls: unknown[][] } => {
+    const calls: unknown[][] = [];
+    return {
+      calls,
+      open: vi.fn(async () => ({ url, screen: { ...screen, width: 10, height: 20 } })),
+      input: vi.fn(async (...args: unknown[]) => {
+        calls.push(['input', ...args]);
+      }),
+      control: vi.fn(async (...args: unknown[]) => {
+        calls.push(['control', ...args]);
+      }),
+      close: vi.fn(async (...args: unknown[]) => {
+        calls.push(['close', ...args]);
+      }),
+    };
+  };
+
+  it('delivers messages in order to the pulling page and reports the end of the stream', async () => {
+    let response: http.ServerResponse | null = null;
+    const url = await serve((res) => {
+      response = res;
+      res.write(Buffer.concat([frame(0x10, 7), frame(0x01, 1), frame(0x02, 2)]));
+    });
+    const plugin = source(url);
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    await session.connect();
+    const first = await session.pull(1000);
+    const rest = first!.length < 3 ? await session.pull(1000) : [];
+    expect([...first!, ...rest!].map((m) => m[0])).toEqual([0x10, 0x01, 0x02]);
+    expect(await session.pull(30)).toEqual([]);
+    response!.end();
+    expect(await session.pull(1000)).toBeNull();
+    session.close();
+  });
+
+  it('asks for a keyframe and drops stale deltas when the page lost its decoder', async () => {
+    let response: http.ServerResponse | null = null;
+    const url = await serve((res) => {
+      response = res;
+    });
+    const plugin = source(url);
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    await session.connect();
+    response!.write(frame(0x03, 1));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(await session.pull(10, true)).toEqual([]);
+    expect(plugin.control).toHaveBeenCalledWith('sim', 'UDID-1', { keyframe: true });
+    response!.write(Buffer.concat([frame(0x03, 2), frame(0x02, 3), frame(0x03, 4)]));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((await session.pull(1000))!.map((m) => [...m])).toEqual([
+      [0x02, 3],
+      [0x03, 4],
+    ]);
+    session.close();
+  });
+
+  it('opens a fresh stream for a later offer and lifts held contacts before closing', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    await session.connect();
+    expect(plugin.open).not.toHaveBeenCalled();
+    await session.connect();
+    expect(plugin.open).toHaveBeenCalledOnce();
+    session.input([{ kind: 'touch', touches: [{ id: 0, x: 0.5, y: 0.5, phase: 'began' }] }]);
+    session.close();
+    await vi.waitFor(() => expect(plugin.calls.at(-1)?.[0]).toBe('close'));
+    expect(plugin.calls.filter((call) => call[0] === 'input').map((call) => call[3])).toEqual([
+      [{ kind: 'touch', touches: [{ id: 0, x: 0.5, y: 0.5, phase: 'began' }] }],
+      [{ kind: 'release' }],
+    ]);
+    await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_ENDED');
+  });
+});

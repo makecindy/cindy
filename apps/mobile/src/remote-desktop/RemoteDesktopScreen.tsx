@@ -150,6 +150,12 @@ import {
   RemoteDesktopPanel,
   RemoteDesktopToolbar,
 } from "./RemoteDesktopChrome";
+import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
+import {
+  LIVE_SCREEN_ICONS,
+  LIVE_SCREEN_TOOLBAR_BUTTONS,
+  parseLiveScreenParam,
+} from "./liveScreen";
 
 type Mode = "pointer" | "touch" | "pan";
 /** How a data-channel request ended; "relay" means it was never executed. */
@@ -216,10 +222,12 @@ export default function RemoteDesktopScreen() {
     deviceId: rawId,
     deviceName: rawName,
     handoff: rawHandoff,
+    screen: rawScreen,
   } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
     handoff?: string;
+    screen?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
   const deviceName = deviceDisplayName(
@@ -243,6 +251,7 @@ export default function RemoteDesktopScreen() {
         deviceId={deviceId}
         deviceName={deviceName}
         handoff={handoff}
+        screen={typeof rawScreen === "string" ? rawScreen : undefined}
         focused={focused}
         onBack={() => goBackGuarded(router)}
       />
@@ -254,6 +263,7 @@ export function RemoteDesktopSession({
   deviceId,
   deviceName,
   handoff,
+  screen: screenParam,
   focused,
   onBack,
   onRestore,
@@ -264,6 +274,8 @@ export function RemoteDesktopSession({
   deviceName: string;
   /** 代输入 live view: only the window this waiting request is about (the host picks it). */
   handoff?: string;
+  /** A plugin live screen (`plugin|id`) from the host's list, such as a simulator. */
+  screen?: string;
   focused: boolean;
   onBack(): void;
   onRestore?(): void;
@@ -271,6 +283,9 @@ export function RemoteDesktopSession({
   onEnded?(): void;
 }) {
   const auth = useAuth();
+  const screenTarget = parseLiveScreenParam(screenParam);
+  const screenPlugin = screenTarget?.plugin;
+  const screenId = screenTarget?.id;
   const navigation = useRef({ onBack, onRestore, onVisibility, onEnded });
   navigation.current = { onBack, onRestore, onVisibility, onEnded };
   const focusedRef = useRef(focused);
@@ -1026,7 +1041,7 @@ export function RemoteDesktopSession({
       }
       const lockScreen = Boolean(
         (exiting && exitLock.current) ||
-          (forceLock && capsRef.current?.value.lockOnExit === true),
+        (forceLock && capsRef.current?.value.lockOnExit === true),
       );
       return viewerSession
         .current!.stop(lockScreen, preserveLease)
@@ -1300,6 +1315,9 @@ export function RemoteDesktopSession({
             resume: resuming,
             takeover,
             ...(handoff ? { handoff } : {}),
+            ...(screenPlugin && screenId
+              ? { screen: { plugin: screenPlugin, id: screenId } }
+              : {}),
             // Hosts with `autoControl` grant control with the lease.
             control: true,
             onStart: () => {
@@ -1313,7 +1331,12 @@ export function RemoteDesktopSession({
               // A window view never unlocks the computer: it shows a window on an unlocked desktop.
               // Automatic recovery must never unlock before the host can reject resume.
               // A deliberate new connection may still use the saved password.
-              if (!resuming && !handoff && supportsAutoUnlock(result.platform)) {
+              if (
+                !resuming &&
+                !handoff &&
+                !screenPlugin &&
+                supportsAutoUnlock(result.platform)
+              ) {
                 // Linux capture may be unavailable until its locker releases the session.
                 if (result.platform === "linux") {
                   return securityRef.current.maybeUnlock(async () => {
@@ -1442,6 +1465,8 @@ export function RemoteDesktopSession({
       deviceId,
       fail,
       handoff,
+      screenPlugin,
+      screenId,
       landscape,
       request,
       resolveControlFailure,
@@ -1901,7 +1926,12 @@ export function RemoteDesktopSession({
       rightInset: 0,
       leftInset: 0,
       enabled:
-        showMouseButtons && focused && !operations && !keyboard && canInput,
+        showMouseButtons &&
+        !lease?.screen &&
+        focused &&
+        !operations &&
+        !keyboard &&
+        canInput,
       labels: {
         left: t("remoteDesktop.leftClick"),
         right: t("remoteDesktop.rightClick"),
@@ -3304,6 +3334,16 @@ export function RemoteDesktopSession({
       </Text>
     </Pressable>
   );
+  // Fingers on a live screen are device touches; the desktop viewer modes stay off.
+  const liveScreenTouches = lease?.screen ? lease.screen.maxTouches : null;
+  useEffect(() => {
+    if (!frameReady) return;
+    send(
+      liveScreenTouches === null
+        ? { type: "deviceTouch", enabled: false }
+        : { type: "deviceTouch", enabled: true, maxTouches: liveScreenTouches },
+    );
+  }, [frameReady, liveScreenTouches, send]);
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
     heldKeys.current.clear();
@@ -3318,6 +3358,23 @@ export function RemoteDesktopSession({
     setModifiers([]);
     setKeyPage(page);
   };
+  // A plugin live screen: its own buttons, in the plugin's order of importance.
+  const liveScreen = lease?.screen;
+  const deviceButtons: RemoteDesktopDeviceButton[] = (
+    liveScreen?.buttons ?? []
+  ).map((button) => ({
+    key: `device-${button.id}`,
+    icon: LIVE_SCREEN_ICONS[button.icon] ?? LIVE_SCREEN_ICONS.home,
+    label: button.label,
+    press: () =>
+      send({ type: "events", events: [{ kind: "press", button: button.id }] }),
+  }));
+  const toolbarDeviceButtons = deviceButtons.slice(
+    0,
+    LIVE_SCREEN_TOOLBAR_BUTTONS,
+  );
+  const panelDeviceButtons = deviceButtons.slice(LIVE_SCREEN_TOOLBAR_BUTTONS);
+  const windowView = Boolean(handoff || liveScreen);
   return (
     <KeyboardAvoidingView
       testID="remoteDesktop.layout"
@@ -3439,6 +3496,7 @@ export function RemoteDesktopSession({
             Platform.OS === "ios" &&
             !tableRegion &&
             showMouseButtons &&
+            !liveScreen &&
             focused &&
             !operations &&
             !keyboard &&
@@ -3634,13 +3692,29 @@ export function RemoteDesktopSession({
                             windowSize.height -
                             insets.bottom -
                             navigationChrome.target *
-                              (handoff ? 2 : caps?.omarchyMenu ? 5 : 4)) /
+                              (liveScreen
+                                ? toolbarDeviceButtons.length +
+                                  (liveScreen.keyboard ? 2 : 1)
+                                : handoff
+                                  ? 2
+                                  : caps?.omarchyMenu
+                                    ? 5
+                                    : 4)) /
                           2,
                       }
                     : undefined
                 }
                 toolbarOnLeft={toolbarOnLeft}
-                toolbarActionCount={handoff ? 2 : caps?.omarchyMenu ? 5 : 4}
+                toolbarActionCount={
+                  liveScreen
+                    ? toolbarDeviceButtons.length +
+                      (liveScreen.keyboard ? 2 : 1)
+                    : handoff
+                      ? 2
+                      : caps?.omarchyMenu
+                        ? 5
+                        : 4
+                }
                 visible={operations && focused}
                 landscape={landscape}
                 topInset={edgePadding.paddingTop}
@@ -3653,7 +3727,7 @@ export function RemoteDesktopSession({
                     ? undefined
                     : () => setControlPage("controls")
                 }
-                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
+                caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : liveScreen ? liveScreen.name : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
                 onClose={() => setOperations(false)}
                 footer={
                   <RemoteDesktopDisconnect onPress={() => void leave()} />
@@ -3662,19 +3736,26 @@ export function RemoteDesktopSession({
                 <RemoteDesktopControls
                   page={controlPage}
                   onPage={setControlPage}
-                  security={{
-                    ...security,
-                    ...safety,
-                    hostPlatform: caps?.platform,
-                    lockOnExit,
-                    lockOnExitAvailable:
-                      lockOnExitLoaded && caps?.lockOnExit === true,
-                    onLockOnExit: updateLockOnExit,
-                    idleTimeoutMinutes,
-                    idleTimeoutAvailable:
-                      idleTimeoutLoaded && caps?.idleLock === true,
-                    onIdleTimeout: updateIdleTimeout,
-                  }}
+                  device={
+                    liveScreen ? { buttons: panelDeviceButtons } : undefined
+                  }
+                  security={
+                    liveScreen
+                      ? undefined
+                      : {
+                          ...security,
+                          ...safety,
+                          hostPlatform: caps?.platform,
+                          lockOnExit,
+                          lockOnExitAvailable:
+                            lockOnExitLoaded && caps?.lockOnExit === true,
+                          onLockOnExit: updateLockOnExit,
+                          idleTimeoutMinutes,
+                          idleTimeoutAvailable:
+                            idleTimeoutLoaded && caps?.idleLock === true,
+                          onIdleTimeout: updateIdleTimeout,
+                        }
+                  }
                   connected={Boolean(lease) && !connectionPending}
                   controlling={Boolean(lease?.controlling)}
                   viewOnly={viewOnlySelected}
@@ -3734,7 +3815,7 @@ export function RemoteDesktopSession({
                     onResolution: changeResolution,
                   }}
                   inputMode={inputMode}
-                  displays={handoff ? [] : (caps?.displays ?? [])}
+                  displays={windowView ? [] : (caps?.displays ?? [])}
                   displayId={recovery.current.displayId ?? lease?.display.id}
                   onViewOnly={() => void toggleControl()}
                   onInputMode={(value) => {
@@ -3895,7 +3976,15 @@ export function RemoteDesktopSession({
           >
             <RemoteDesktopToolbar
               landscape={landscape || systemSideRail}
-              windowOnly={Boolean(handoff)}
+              windowOnly={windowView}
+              device={
+                liveScreen
+                  ? {
+                      buttons: toolbarDeviceButtons,
+                      keyboard: liveScreen.keyboard,
+                    }
+                  : undefined
+              }
               onWorkspaceLeft={
                 caps?.workspaceNavigation
                   ? () => workspaceAction("workspaceLeft")

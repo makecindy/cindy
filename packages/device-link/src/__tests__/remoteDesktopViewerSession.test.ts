@@ -308,3 +308,33 @@ it("a 代输入 window view names only the request, hides controls past the wind
   expect(f.request.mock.calls.at(-1)?.[0]).toEqual({ op: "stop", lease: "whole" });
   expect(f.session.lease).toBeNull();
 });
+
+it("a live screen names a listed screen, keeps only what applies to it and refuses the desktop instead", async () => {
+  const f = fixture();
+  const full = { ...caps, liveScreens: true, canControl: false, clipboardText: true, displayModes: true, lockOnExit: true, systemAudio: true, autoControl: true, viewerDisplay: true };
+  const screen = { plugin: "sim", id: "UDID-1" };
+  f.request.mockResolvedValueOnce(full).mockResolvedValueOnce({
+    lease: "lease",
+    display: { id: "live-screen:UDID-1" },
+    controlling: true,
+    screen: { ...screen, name: "iPhone", platform: "ios", cornerRadius: 0.1, maxTouches: 2, keyboard: true, buttons: [] },
+  });
+  const { caps: shown, lease } = await f.session.connect({ isCurrent: () => true, screen, control: true });
+  // Plugin input needs no desktop permission, so control is offered even where the desktop has none.
+  expect(f.request.mock.calls[1][0]).toEqual({ op: "start", displayId: "live-screen", control: true, screen });
+  expect(shown).toMatchObject({ liveScreens: true, canControl: true, autoControl: true, displays: [] });
+  for (const key of ["clipboardText", "displayModes", "lockOnExit", "systemAudio", "viewerDisplay", "permissions"])
+    expect(shown).not.toHaveProperty(key);
+  expect(lease.screen?.id).toBe("UDID-1");
+  await f.session.stop();
+
+  // An older desktop would drop `screen` and open itself: never ask it.
+  f.request.mockResolvedValueOnce(caps);
+  await expect(f.session.connect({ isCurrent: () => true, screen })).rejects.toThrow("CHANNEL_NOT_ALLOWED");
+  expect(f.request.mock.calls.at(-1)?.[0]).toEqual({ op: "capabilities" });
+  // A desktop that answers with anything but that screen is released at once.
+  f.request.mockResolvedValueOnce(full).mockResolvedValueOnce({ lease: "whole", display: { id: "screen" } });
+  await expect(f.session.connect({ isCurrent: () => true, screen })).rejects.toThrow("INVALID_RESPONSE");
+  expect(f.request.mock.calls.at(-1)?.[0]).toEqual({ op: "stop", lease: "whole" });
+  expect(f.session.lease).toBeNull();
+});

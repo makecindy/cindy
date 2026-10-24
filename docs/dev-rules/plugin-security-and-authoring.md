@@ -1101,3 +1101,15 @@ UNSUPPORTED_CAPABILITY，不降级为普通消息或另建任务。旧 Host 无�
 Main 从当前接受的输入、原批准和持久回执读取 scope，交给现有 Auto 审核投影；
 不伪造主人原话，不提升伙伴权限，不新增团队，Core 不包含业务插件流程。
 作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。
+
+### 插件实时屏幕
+
+`liveScreen: true`（且必须同时声明 `node`）是独立自主能力，也是唯一一条 Host 主动调用
+Node 工作进程的方向：用户从手机经远程桌面打开设备画面时，Main 的
+`cindy-brain/liveScreenHost.ts` 只对已装启用、同时声明两者的插件，经
+`GhostNodeRuntimeBroker.handleRequest` 调用固定的 `liveScreen.list/open/input/control/close`，
+沿用 broker 的启用、更新、超时与限流复核；不经 main.js，不出现在 Agent 工具里，也不给插件
+任何手机或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
+`http://127.0.0.1:<端口>`，由 Main 读取，采集页与手机都拿不到地址。旧版插件的权限不变；
+声明该字段的更新属于能力增加，按 3.1 节处理。接口见 `FORGE_GUIDE` §4.22.1，协议与兼容边界见
+[协议兼容](protocol-compatibility.md)的「插件实时屏幕」。
