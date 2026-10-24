@@ -66,6 +66,7 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
   });
   const deps: OrcaInterAgentDispatcherDeps<TestSessionMeta> = {
     createId: vi.fn(() => 'client-1'),
+    onDirectInputDispatched: vi.fn(async () => {}),
     getSessionMeta: vi.fn(async () => meta),
     getSessionRowSnapshot: vi.fn(async () => dbRow),
     getLiveSession: vi.fn(() => liveSession),
@@ -293,6 +294,7 @@ describe('Orca lead/worker dispatcher', () => {
       targetLastUserSendAt: '2026-06-12T01:02:03.000Z',
     });
     expect(h.order).toEqual(['send-called', 'db', 'change-set', 'accepted', 'vendor-released']);
+    expect(h.deps.onDirectInputDispatched).toHaveBeenCalledExactlyOnceWith('target-session');
     expect(commit).toHaveBeenCalledTimes(1);
     expect(h.deps.beginDirectTurnChangeSet).toHaveBeenCalledWith('target-session', 'client-1');
     expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();

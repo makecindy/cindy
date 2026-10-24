@@ -267,6 +267,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     pinnedAt: msToIso(row.pinnedAt),
     hiddenAt: msToIso(row.hiddenAt),
     userSendAt: msToIso(row.userSendAt),
+    lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
     source: normalizeSessionSource(row.source),
     orcaRole: row.orcaRole as OrcaRole | null,

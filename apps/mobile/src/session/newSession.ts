@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
@@ -384,7 +385,7 @@ export function buildRecentWorkspaceOptions(
     const members = membersByPath.get(pathKey) ?? [];
     members.push(session);
     membersByPath.set(pathKey, members);
-    const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+    const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
     const current = byPath.get(pathKey);
     if (!current) {
       byPath.set(pathKey, {

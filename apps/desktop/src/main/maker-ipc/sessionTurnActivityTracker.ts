@@ -2,6 +2,68 @@ import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 export const TURN_IDLE_THROTTLE_RESTORE_GRACE_MS = 1_000;
 
+export class SessionListActivityTracker {
+  private readonly turns = new Map<string, {
+    identity?: string;
+    endedAt?: number;
+    settled: boolean;
+    held: boolean;
+    flush?: ReturnType<typeof setImmediate>;
+  }>();
+
+  constructor(private readonly write: (sessionId: string, atMs: number) => void) {}
+
+  start(sessionId: string, identity?: string): void {
+    if (identity && this.turns.get(sessionId)?.identity === identity) return;
+    this.deleteSession(sessionId);
+    this.turns.set(sessionId, { identity, settled: false, held: false });
+  }
+
+  end(sessionId: string, options: { statusOnly?: boolean; hold?: boolean; identity?: string } = {}): void {
+    if (!this.turns.has(sessionId) ||
+      (options.identity && this.turns.get(sessionId)?.identity !== options.identity)) {
+      this.start(sessionId, options.identity);
+    }
+    const turn = this.turns.get(sessionId)!;
+    if (turn.settled) return;
+    turn.endedAt ??= Date.now();
+    turn.held ||= options.hold === true;
+    if (turn.held) return;
+    if (!options.statusOnly) {
+      this.commit(sessionId);
+    } else if (!turn.flush) {
+      // 同批 status(false) / done 可跨 async iterator 微任务；等当前事件批次结束，
+      // 让 silentStop 有机会接管。不是固定毫秒延时，新轮次或关闭会取消此兜底。
+      turn.flush = setImmediate(() => {
+        turn.flush = undefined;
+        if (this.turns.get(sessionId) === turn && !turn.held) this.commit(sessionId);
+      });
+    }
+  }
+
+  commit(sessionId: string): void {
+    const turn = this.turns.get(sessionId);
+    if (!turn || turn.settled) return;
+    if (turn.flush) clearImmediate(turn.flush);
+    turn.flush = undefined;
+    turn.settled = true;
+    if (turn.endedAt !== undefined) this.write(sessionId, turn.endedAt);
+  }
+
+  captureContinuation(sessionId: string): () => void {
+    const turn = this.turns.get(sessionId);
+    return () => {
+      if (this.turns.get(sessionId) === turn) this.deleteSession(sessionId);
+    };
+  }
+
+  deleteSession(sessionId: string): void {
+    const turn = this.turns.get(sessionId);
+    if (turn?.flush) clearImmediate(turn.flush);
+    this.turns.delete(sessionId);
+  }
+}
+
 /**
  * 维护 desktop 对「逻辑 turn」和「前台恢复 keepalive」的本地视图。
  *
