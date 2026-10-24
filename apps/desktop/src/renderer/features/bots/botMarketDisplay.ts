@@ -40,5 +40,6 @@ export const bundledPluginNames: Record<string, string> = {
   'x-manager': 'X Manager',
   'cindy-art': 'Art',
   'opendesign-trial': 'OpenDesign',
-  'baguette-simulator': 'Baguette',
+  'cindy-simulator': 'Device Simulator',
+  'baguette-simulator': 'Device Simulator',
 };

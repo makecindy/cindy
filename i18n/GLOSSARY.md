@@ -297,7 +297,7 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 ### Device Simulator
 
-官方插件 baguette-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。
+官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。
 
 ### DingTalk
 
@@ -377,7 +377,7 @@ Agent 遇到需要主人填写的界面（选择、文本、密码、验证码�
 
 ### iOS Simulator
 
-Apple Simulator 的用户可见名称，也用于原内置 iOS 模拟器的历史与下线说明。Cindy 已移除内置查看器能力；替代插件 baguette-simulator 使用独立术语 Device Simulator。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。
+Apple Simulator 的用户可见名称，也用于原内置 iOS 模拟器的历史与下线说明。Cindy 已移除内置查看器能力；替代插件 cindy-simulator 使用独立术语 Device Simulator。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。
 
 ### Lark
 
