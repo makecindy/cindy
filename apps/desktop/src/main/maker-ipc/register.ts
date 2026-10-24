@@ -11705,7 +11705,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (pendingHandoff && sendResult.accepted) {
           agentHandoffPending.consume(session.id);
         }
-        if (sendResult.accepted) await touchSessionActivityInDb(session.id);
+        if (sendResult.accepted) void touchSessionActivityInDb(session.id);
         return sendResult;
       } catch (err) {
         if (turnChangeSetStarted) {
@@ -19904,7 +19904,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 插话并入正在运行的 turn,不开启新 turn:排队时登记的「新 turn 接管」回调不再适用,
     // 只释放登记(不运行),否则会给已在跑的 worker 另建一份 running/auto-bridge 身份。
     onSteerAccepted: async (sessionId, item) => {
-      if (!item.autoResume) await touchSessionActivityInDb(sessionId);
+      if (!item.autoResume) void touchSessionActivityInDb(sessionId);
       void settleTaskActionInput(item).catch(() => undefined);
       await settleTodoDispatch(sessionId, item.clientId, true);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
@@ -19948,7 +19948,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
       if (!item.autoResume) {
-        await touchSessionActivityInDb(sessionId, preVendorDispatchAt);
+        void touchSessionActivityInDb(sessionId, preVendorDispatchAt);
       }
       void settleTaskActionInput(item).catch(() => undefined);
       // 供应商组换电脑后的续跑派发出去了：协同 Worker 暂存的那次终态不再回报(续跑那一轮结束时照常回报结果)。
