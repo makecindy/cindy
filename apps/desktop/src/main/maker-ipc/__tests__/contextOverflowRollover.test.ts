@@ -1180,7 +1180,12 @@ describe('createContextOverflowRollover', () => {
       return deps;
     }
 
-    it('learns the per-model compat fix once and replays the failed turn', async () => {
+    it.each([
+      rejection,
+      ...['prompt_cache_key', 'prompt_cache_retention'].map(field => '400: ' + JSON.stringify({
+        code: null, message: `Validation: Unsupported parameter(s): \`${field}\``, param: null, type: 'invalid_request_error',
+      })),
+    ])('learns the per-model compat fix once and replays the failed turn: %s', async (rejection) => {
       const deps = makePiDeps([
         msg('user', '继续修这个 bug', 'u1', 1),
         msg('assistant', '改完了，正在跑测试', 'a1', 2),
