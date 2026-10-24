@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from './sessionActivity.js';
 import {
   compareSessionListStrings,
   groupAutomationListItems,
@@ -687,7 +688,7 @@ function projectTitle(workingDir: string): string {
 }
 
 function lastActivityTime(session: RemoteSessionListSessionLike): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function mobileHomeEmptyState({

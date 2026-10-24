@@ -40,6 +40,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       pinned_at INTEGER,
       hidden_at INTEGER,
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       orca_role TEXT,
       parent_session_id TEXT,

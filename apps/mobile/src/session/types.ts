@@ -97,6 +97,7 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   createdAt: string;
   updatedAt: string;
   deviceLinkDeviceId?: string;

@@ -53,6 +53,18 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  it('preserves an activity push while accepting an in-flight detail read', () => {
+    const session = mk('handoff');
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [session]);
+    const read = remoteProjectsStore.captureSessionRead('host', session.id);
+    const lastActivityAt = '2026-01-02T00:00:00.000Z';
+    remoteProjectsStore.applyPatch('host', session.id, { lastActivityAt });
+    expect(read()).toBe(true);
+    expect(read.mergeActivity(session)).toMatchObject({
+      lastActivityAt,
+      userSendAt: session.userSendAt,
+    });
+  });
   // Unit, #6529: ordinary lists deliberately omit side chats; a list refresh
   // must not erase detail loaded for an opened full-page follow-up.
   it('retains a hidden side chat across ordinary snapshots until an explicit deletion', () => {

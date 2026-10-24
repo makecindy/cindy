@@ -842,7 +842,7 @@ export class GoalController {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
           this.stopSession(sessionId);
-          this.emit(limited);
+          this.emit(limited, current.status);
         }
         return limited;
       }
@@ -982,7 +982,7 @@ export class GoalController {
         await this.resumeGoal(sessionId);
         return reconcileLifecycleChange();
       }
-      this.emit(next);
+      this.emit(next, state.status);
       if (
         next.status === 'active' &&
         state.status === 'budgetLimited' &&
@@ -1128,9 +1128,12 @@ export class GoalController {
     }
     await this.awaitPendingLifecycle(clearBoundary);
     if (this.turns.get(sessionId) !== clearBoundary) return;
+    const previousGoal = await this.deps.storage.get(sessionId);
+    if (this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
     if (this.turns.get(sessionId) !== clearBoundary) return;
     this.deps.emitStatus({ sessionId, goal: null });
+    if (previousGoal) this.deps.onGoalStopped?.(sessionId, this.now());
     this.turns.delete(sessionId);
   }
 
@@ -1187,7 +1190,7 @@ export class GoalController {
       }),
     );
     if (this.turns.get(sessionId) !== pauseBoundary) return;
-    if (updated) this.emit(updated);
+    if (updated) this.emit(updated, state.status);
   }
 
   /**
@@ -1756,9 +1759,12 @@ export class GoalController {
     return session ? session.isTurnRunning() : false;
   }
 
-  private emit(state: GoalState): void {
+  private emit(state: GoalState, previousStatus?: GoalState['status']): void {
     if (this.disposed || this.disposing) return;
     this.deps.emitStatus({ sessionId: state.sessionId, goal: toPayload(state) });
+    if (previousStatus === 'active' && state.status !== 'active') {
+      this.deps.onGoalStopped?.(state.sessionId, state.updatedAt);
+    }
   }
 
   /**
@@ -1993,6 +1999,7 @@ export class GoalController {
           // null emit 属于同一顺序提交；后续新目标必须在它之后再 emit active，
           // 否则旧 completion 的迟到 null 会把新 chip 隐藏。
           this.deps.emitStatus({ sessionId, goal: null });
+          this.deps.onGoalStopped?.(sessionId, this.now());
         })(),
       );
       if (isCurrentTurn()) this.stopSession(sessionId);
@@ -2091,7 +2098,7 @@ export class GoalController {
       },
     );
     if (!isCurrentTurn()) return;
-    if (updated) this.emit(updated);
+    if (updated) this.emit(updated, state.status);
 
     this.resetTurn(sessionId);
 
@@ -2122,7 +2129,7 @@ export class GoalController {
         }),
       );
       if (!isCurrent()) return true;
-      if (blocked) this.emit(blocked);
+      if (blocked) this.emit(blocked, 'active');
     } catch (persistError) {
       this.deps.logger.error('[goal] failed to persist dispatch failure', {
         sessionId,
@@ -2420,7 +2427,7 @@ export class GoalController {
       );
       if (!isCurrentLifecycle()) return;
       this.stopSession(sessionId);
-      if (limited) this.emit(limited);
+      if (limited) this.emit(limited, state.status);
       return;
     }
     const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);

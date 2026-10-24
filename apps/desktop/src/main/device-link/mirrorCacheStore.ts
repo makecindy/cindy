@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * mirrorCacheStore —— 控制端「远程会话镜像」的本地冷缓存(落盘)。
  * ---------------------------------------------------------------------------
@@ -249,6 +250,7 @@ const SESSION_FIELD_WHITELIST = [
   'pinnedAt',
   'preview',
   'userSendAt',
+  'lastActivityAt',
   'createdAt',
   'updatedAt',
 ] as const;
@@ -309,7 +311,7 @@ export function normalizeDeviceSessions(
 function lastActivityTime(session: Record<string, unknown> | undefined): number {
   if (!session) return 0;
   return (
-    parseTime(session.userSendAt) || parseTime(session.updatedAt) || parseTime(session.createdAt)
+    parseTime(getSessionListActivityAt({ lastActivityAt: session.lastActivityAt, userSendAt: session.userSendAt, updatedAt: session.updatedAt })) || parseTime(session.createdAt)
   );
 }
 

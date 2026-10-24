@@ -60,6 +60,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly noteSessionListActivity: (sessionId: string) => void;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
@@ -543,6 +544,14 @@ export function finishSessionTerminalEvent(
     }
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
+      if (
+        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal' &&
+        !autoResumeSuppressesPersist && !recoveryOwnsUnsuccessfulBoundary &&
+        !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
+        !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
+      ) {
+        deps.noteSessionListActivity(session.id);
+      }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
       // 钉住,review P1-1)。

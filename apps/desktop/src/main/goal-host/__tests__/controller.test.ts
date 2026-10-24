@@ -412,6 +412,7 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
   const persistedLimits: GoalLimits[] = [];
   const notices: Array<{ sessionId: string; kind: string }> = [];
   const userMessages: Array<{ sessionId: string; content: string; updated?: boolean }> = [];
+  const stopped = vi.fn();
   // 可变:测试按需设置"账号是否受限 + resetAt"。
   let accountLimit: AccountLimitInfo | null = null;
   // 可变:模拟"会话已关闭 / 此刻 hydrate 不出来"(ensureSession 返回 undefined)。
@@ -423,6 +424,7 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     isSessionInTurn: () => false,
     stopActiveGoalTurn: () => {},
     emitStatus: (u) => updates.push(u),
+    onGoalStopped: stopped,
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
     persistGoalSettingsOverride: (l) => persistedLimits.push(l),
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -450,6 +452,7 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     persistedLimits,
     notices,
     userMessages,
+    stopped,
     setAccountLimit: (v: AccountLimitInfo | null) => {
       accountLimit = v;
     },
@@ -488,6 +491,17 @@ describe('GoalController', () => {
   beforeEach(() => {
     resetUiContinuationListenersForTest();
     h = makeController();
+  });
+
+  it('reports one handoff when a goal is cleared, not on its intermediate turns', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+    await tick();
+    expect(h.stopped).not.toHaveBeenCalled();
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
   });
 
   // ── setGoal / updateGoal ──
@@ -2388,6 +2402,7 @@ describe('GoalController', () => {
     expect(h.completions[0].summary.reason).toBe('green');
     expect(h.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
     expect(h.session.sends).toHaveLength(1); // no continuation
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('pauseGoal pauses an active goal, preserves counters, and stops continuation', async () => {
@@ -2403,6 +2418,7 @@ describe('GoalController', () => {
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"x"}\n```' });
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
