@@ -36,6 +36,7 @@ describe('bot im connection store', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(h.root, { recursive: true, force: true });
   });
 
@@ -147,5 +148,206 @@ describe('bot im connection store', () => {
     await addBotImConnectionRecord({ botId: 'bot-a', channel: 'telegram' }, { id: () => 'ffffffffffff' });
     h.owner = 'owner-b';
     expect(listBotImConnections()).toEqual([]);
+  });
+
+  // PR #6899 review: accumulated archive markers must not consume the shared
+  // connection settings budget. Exercise the real file writer, not a mock.
+  it.each(['count', 'bytes'] as const)('reserves connection settings space when archive %s capacity is reached', async (limit) => {
+    const first = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const second = await addBotImConnectionRecord({ botId: 'bot-b', channel: 'telegram' }, { id: () => 'bbbbbbbbbbbb' });
+    const document = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    const count = limit === 'count' ? 512 : 330;
+    for (const [index, id] of [first.id, second.id].entries()) {
+      document.connections[id].archivedTaskRows = Object.fromEntries(Array.from({ length: count / 2 }, (_, i) => [
+        `s-${index}-${i}${limit === 'bytes' ? '-'.repeat(185) : ''}`, 1,
+      ]));
+    }
+    fs.writeFileSync(file(), JSON.stringify(document, null, 2));
+    const before = fs.readFileSync(file(), 'utf8');
+    await expect(archiveBotImTaskRow(first, 'new-session')).rejects.toThrow(/ARCHIVE_CAPACITY_REACHED/);
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before);
+    await addBotImConnectionRecord({ botId: 'bot-c', channel: 'telegram' }, { id: () => 'cccccccccccc' });
+    await setBotImConnectionGroupActivation(second.id, '-1001', 'always');
+    expect(readBotImConnection(second.id)?.groupActivation).toEqual({ '-1001': 'always' });
+    expect(listBotImConnections()).toHaveLength(3);
+    const obsolete = Object.fromEntries(Object.keys(document.connections[first.id].archivedTaskRows)
+      .slice(0, limit === 'count' ? 1 : count / 2).map((id) => [id, 1]));
+    await archiveBotImTaskRow(second, 'new-session', [{ connection: first, cutoffs: obsolete }]);
+    const archives = readBotImConnection(first.id)?.archivedTaskRows;
+    for (const id of Object.keys(obsolete)) expect(archives?.[id]).toBeUndefined();
+    expect(readBotImConnection(second.id)?.archivedTaskRows).toEqual({
+      ...document.connections[second.id].archivedTaskRows, 'new-session': expect.any(Number),
+    });
+  });
+
+  it('serializes concurrent archives at the owner-wide limit', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const document = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    document.connections[record.id].archivedTaskRows = Object.fromEntries(Array.from({ length: 511 }, (_, i) => [`existing-${i}`, 1]));
+    fs.writeFileSync(file(), JSON.stringify(document));
+    const results = await Promise.allSettled([archiveBotImTaskRow(record, 'new-a'), archiveBotImTaskRow(record, 'new-b')]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(Object.keys(readBotImConnection(record.id)?.archivedTaskRows ?? {})).toHaveLength(512);
+  });
+
+  it('reclaims only observed obsolete cutoffs and preserves a concurrent rearchive', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const document = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    document.connections[record.id].archivedTaskRows = { obsolete: 1, rearchived: 2, dormant: 1 };
+    fs.writeFileSync(file(), JSON.stringify(document));
+    // The runtime observed cutoff=1 before another writer rearchived this row.
+    await archiveBotImTaskRow(record, 'new-session', [{ connection: record, cutoffs: { obsolete: 1, rearchived: 1 } }]);
+    expect(readBotImConnection(record.id)?.archivedTaskRows).toEqual({
+      rearchived: 2, dormant: 1, 'new-session': expect.any(Number),
+    });
+  });
+
+  it('preserves another connection whose binding changed during reclamation lookup', async () => {
+    const first = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const second = await addBotImConnectionRecord({ botId: 'bot-b', channel: 'telegram' }, { id: () => 'bbbbbbbbbbbb' });
+    await archiveBotImTaskRow(first, 'old-session');
+    const observed = readBotImConnection(first.id)!;
+    await updateBotImConnectionRecord(first.id, { botContextId: 'new-binding' });
+    await archiveBotImTaskRow(second, 'new-session', [{ connection: observed, cutoffs: observed.archivedTaskRows! }]);
+    expect(readBotImConnection(first.id)?.archivedTaskRows).toEqual(observed.archivedTaskRows);
+    expect(readBotImConnection(second.id)?.archivedTaskRows?.['new-session']).toEqual(expect.any(Number));
+  });
+
+  // Codex review: timestamp-only CAS cannot distinguish two archives in one ms.
+  // Real file entry points must retain a newer marker and atomically pair its anchor;
+  // previous tests only varied timestamps. Unit tier uses an isolated temporary file.
+  it('preserves a same-millisecond rearchive while reclaiming an older observation', async () => {
+    const at = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(at);
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    await archiveBotImTaskRow(record, 'rearchived', [], { messageId: 'message', generation: '111111111111' });
+    const observed = readBotImConnection(record.id)!;
+    await archiveBotImTaskRow(observed, 'rearchived', [], { messageId: 'message', generation: '222222222222' });
+    await archiveBotImTaskRow(readBotImConnection(record.id)!, 'new-session', [
+      { connection: observed, cutoffs: observed.archivedTaskRows! },
+    ], { messageId: null, generation: '333333333333' });
+    expect(readBotImConnection(record.id)?.archivedTaskRows).toEqual({ rearchived: at, 'new-session': at });
+    expect(readBotImConnection(record.id)?.archivedTaskActivity).toEqual({
+      rearchived: { messageId: 'message', generation: '222222222222' },
+      'new-session': { messageId: null, generation: '333333333333' },
+    });
+  });
+
+  it.each(['cutoff', 'generation', 'messageId'] as const)('does not overwrite a newer target with a stale %s observation', async (changed) => {
+    const at = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(at);
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const activity = { messageId: 'first', generation: '111111111111' };
+    await archiveBotImTaskRow(record, 'target', [], activity);
+    const observed = readBotImConnection(record.id)!;
+    if (changed === 'cutoff') now.mockReturnValue(at + 1);
+    const winningActivity = {
+      messageId: changed === 'messageId' ? 'second' : activity.messageId,
+      generation: changed === 'generation' ? '222222222222' : activity.generation,
+    };
+    const winner = await archiveBotImTaskRow(observed, 'target', [], winningActivity);
+    expect(winner?.archivedTaskActivity?.target).toEqual(winningActivity);
+    const before = fs.readFileSync(file(), 'utf8');
+    now.mockReturnValue(at + 2);
+    const late = await archiveBotImTaskRow(observed, 'target', [], { messageId: 'stale', generation: '333333333333' });
+    expect(late).toEqual(winner);
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before);
+  });
+
+  it('normalizes only valid activity anchors with a corresponding numeric cutoff', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const document = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    const activity = { messageId: 'message', generation: '111111111111' };
+    const anchors = {
+      valid: activity, empty: { ...activity, messageId: '' }, spaces: { ...activity, messageId: ' ' },
+      long: { ...activity, messageId: 'x'.repeat(257) }, wrongType: { ...activity, messageId: 1 },
+      badGeneration: { ...activity, generation: 'not-a-nonce' }, missing: { messageId: 'message' },
+      nullMessage: { ...activity, messageId: null }, orphan: activity, badCutoff: activity,
+    };
+    document.connections[record.id].archivedTaskRows = { ...Object.fromEntries(Object.keys(anchors)
+      .filter((id) => id !== 'orphan').map((id) => [id, 100])), badCutoff: 'invalid' };
+    document.connections[record.id].archivedTaskActivity = anchors;
+    fs.writeFileSync(file(), JSON.stringify(document));
+    expect(readBotImConnection(record.id)?.archivedTaskActivity).toEqual({
+      valid: activity, nullMessage: { ...activity, messageId: null },
+    });
+    await setBotImConnectionGroupActivation(record.id, '-1001', 'always');
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8')).connections[record.id].archivedTaskActivity)
+      .toEqual(readBotImConnection(record.id)?.archivedTaskActivity);
+  });
+
+  it('cleans activity anchors with matching cutoffs and clears them for legacy archive writes', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const activity = { messageId: null, generation: '111111111111' };
+    await archiveBotImTaskRow(record, 'obsolete', [], activity);
+    await archiveBotImTaskRow(readBotImConnection(record.id)!, 'dormant', [], activity);
+    const observed = readBotImConnection(record.id)!;
+    await archiveBotImTaskRow(observed, 'new-session', [
+      { connection: observed, cutoffs: { obsolete: observed.archivedTaskRows!.obsolete } },
+    ], activity);
+    const cleaned = readBotImConnection(record.id)!;
+    expect(Object.keys(cleaned.archivedTaskRows!).sort()).toEqual(['dormant', 'new-session']);
+    expect(Object.keys(cleaned.archivedTaskActivity!).sort()).toEqual(['dormant', 'new-session']);
+    await archiveBotImTaskRow(cleaned, 'dormant');
+    expect(readBotImConnection(record.id)?.archivedTaskRows?.dormant).toEqual(expect.any(Number));
+    expect(readBotImConnection(record.id)?.archivedTaskActivity).toEqual({ 'new-session': activity });
+  });
+
+  it('includes activity anchors in the byte budget and rolls back both maps on rejection', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const document = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    const ids = Array.from({ length: 200 }, (_, i) => `existing-${i}`);
+    const activity = { messageId: 'x'.repeat(256), generation: '111111111111' };
+    document.connections[record.id].archivedTaskRows = Object.fromEntries(ids.map((id) => [id, 1]));
+    document.connections[record.id].archivedTaskActivity = Object.fromEntries(ids.map((id) => [id, activity]));
+    fs.writeFileSync(file(), JSON.stringify(document, null, 2));
+    const observed = readBotImConnection(record.id)!;
+    const before = fs.readFileSync(file(), 'utf8');
+    expect(Buffer.byteLength(before)).toBeGreaterThan(64 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(observed.archivedTaskRows))).toBeLessThan(64 * 1024);
+    await expect(archiveBotImTaskRow(observed, 'new-session', [], activity)).rejects.toThrow('ARCHIVE_CAPACITY_REACHED');
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before);
+    await archiveBotImTaskRow(observed, 'new-session', [
+      { connection: observed, cutoffs: Object.fromEntries(ids.slice(0, 80).map((id) => [id, 1])) },
+    ], activity);
+    const cleaned = readBotImConnection(record.id)!;
+    expect(Object.keys(cleaned.archivedTaskRows!)).toHaveLength(121);
+    expect(Object.keys(cleaned.archivedTaskActivity!)).toHaveLength(121);
+    expect(cleaned.archivedTaskActivity?.[ids[0]]).toBeUndefined();
+    expect(cleaned.archivedTaskActivity?.['new-session']).toEqual(activity);
+  });
+
+  it('keeps valid prototype-named task ids as ordinary archive entries', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const activity = { messageId: null, generation: '111111111111' };
+    await archiveBotImTaskRow(record, '__proto__', [], activity);
+    await archiveBotImTaskRow(record, 'constructor', [], activity);
+    const archived = readBotImConnection(record.id)?.archivedTaskRows;
+    expect(Object.hasOwn(archived ?? {}, '__proto__')).toBe(true);
+    expect(archived?.['__proto__']).toEqual(expect.any(Number));
+    expect(archived?.constructor).toEqual(expect.any(Number));
+    expect(readBotImConnection(record.id)?.archivedTaskActivity?.['__proto__']).toEqual(activity);
+    expect(readBotImConnection(record.id)?.archivedTaskActivity?.constructor).toEqual(activity);
+  });
+
+  it('does not treat inherited activity fields as anchors for legacy prototype-named rows', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' }, { id: () => 'aaaaaaaaaaaa' });
+    const document = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    const activity = { messageId: 'message', generation: '111111111111' };
+    document.connections[record.id].archivedTaskRows = Object.fromEntries([
+      ['constructor', 1], ['__proto__', 1], ['other', 1],
+    ]);
+    document.connections[record.id].archivedTaskActivity = { other: activity };
+    fs.writeFileSync(file(), JSON.stringify(document));
+    const observed = readBotImConnection(record.id)!;
+    await archiveBotImTaskRow(observed, 'new-session', [{ connection: observed, cutoffs: { constructor: 1 } }], activity);
+    const cleaned = readBotImConnection(record.id)!;
+    expect(Object.hasOwn(cleaned.archivedTaskRows!, 'constructor')).toBe(false);
+    expect(Object.hasOwn(cleaned.archivedTaskRows!, '__proto__')).toBe(true);
+    expect(Object.hasOwn(cleaned.archivedTaskActivity!, '__proto__')).toBe(false);
+    await archiveBotImTaskRow(observed, '__proto__', [], activity);
+    expect(readBotImConnection(record.id)?.archivedTaskActivity?.['__proto__']).toEqual(activity);
+    expect(readBotImConnection(record.id)?.archivedTaskActivity?.other).toEqual(activity);
   });
 });

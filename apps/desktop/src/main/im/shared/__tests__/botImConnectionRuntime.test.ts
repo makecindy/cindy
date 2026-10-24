@@ -97,6 +97,8 @@ import {
   __testing,
 } from '../botImConnectionRuntime';
 import { addBotImConnectionRecord, listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
+import * as connectionStore from '../botImConnectionStore';
+import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
 import {
@@ -297,6 +299,62 @@ describe('bot im connection runtime', () => {
     expect(h.archiveCalls).toEqual([]);
   });
 
+  // PR #6959: the real IPC handler must encode storage failures without leaking
+  // filesystem paths, while retaining domain/owner errors. Existing coverage
+  // only rejects synchronous invalid inputs. Unit: inject failure at archive
+  // persistence after real connection/link ownership checks, without Electron.
+  it.each([
+    { failure: new Error('ARCHIVE_CAPACITY_REACHED'), code: 'PRECONDITION_FAILED', message: 'ARCHIVE_CAPACITY_REACHED' },
+    { failure: new Error('OWNER_CHANGED'), code: 'PRECONDITION_FAILED', message: 'OWNER_CHANGED' },
+    { failure: new Error("EACCES: permission denied, open '/private/owners/secret/bot-im-connections.json'"), code: 'INTERNAL', message: 'LANE_ARCHIVE_FAILED' },
+    { failure: new Error('EPERM: operation not permitted, rename C:\\Users\\private-owner\\bot-im-connections.json'), code: 'INTERNAL', message: 'LANE_ARCHIVE_FAILED' },
+  ])('normalizes archive persistence failure to $code ($message)', async ({ failure, code, message }) => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'telegram' });
+    await connectionStore.updateBotImConnectionRecord(record.id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => [{ sessionId: 'session-1', role: 'canonical', routeKey: null }],
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    const archive = vi.spyOn(connectionStore, 'archiveBotImTaskRow').mockRejectedValueOnce(failure);
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: record.id, sessionId: 'session-1' })).rejects.toMatchObject({
+      code, message: `[${code}] ${message}`,
+    });
+    expect(archive).toHaveBeenCalledOnce();
+    expect(listBotImConnections()[0]?.archivedTaskRows).toBeUndefined();
+  });
+
+  it('preserves the archive IPC not-found error', async () => {
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: 'a1b2c3d4e5f6', sessionId: 'session-1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND', message: '[NOT_FOUND] CONNECTION_NOT_FOUND',
+    });
+  });
+
+  it('preserves the archive IPC owner-change rejection before persistence', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'telegram' });
+    await connectionStore.updateBotImConnectionRecord(record.id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => {
+        h.ownerKey = 'owner-b';
+        return [{ sessionId: 'session-1', role: 'canonical', routeKey: null }];
+      },
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    const archive = vi.spyOn(connectionStore, 'archiveBotImTaskRow');
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:archive-lane')!;
+    await expect(handler({}, { id: record.id, sessionId: 'session-1' })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] OWNER_CHANGED',
+    });
+    expect(archive).not.toHaveBeenCalled();
+    expect(listBotImConnections()[0]?.archivedTaskRows).toBeUndefined();
+  });
+
   beforeEach(() => {
     h.root = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-im-runtime-'));
     h.secrets.clear();
@@ -406,6 +464,8 @@ describe('bot im connection runtime', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    laneTesting.setStore(null);
     await stopBotImConnections();
     fs.rmSync(h.root, { recursive: true, force: true });
   });

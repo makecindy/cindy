@@ -19,6 +19,7 @@ import {
   type BotImChannel,
   type BotImConnectionRecord,
   type BotImFeishuService,
+  type BotImTaskArchiveActivity,
 } from '../../../shared/botImConnection.js';
 
 const log = desktopMakerLogger.child('bot-im-connection-store');
@@ -61,6 +62,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
+  const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   return {
     botId: r.botId,
     channel: r.channel,
@@ -69,6 +71,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     botContextId,
     ...(groupActivation ? { groupActivation } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
+    ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
 }
 
@@ -79,6 +82,35 @@ function normalizeArchivedTaskRows(raw: unknown): Record<string, number> | undef
     /^[A-Za-z0-9_.:-]{1,200}$/.test(id) && typeof at === 'number' && Number.isFinite(at) && at >= 0,
   )) as Record<string, number>;
   return Object.keys(rows).length ? rows : undefined;
+}
+
+function normalizeArchivedTaskActivity(
+  raw: unknown,
+  cutoffs: Record<string, number> | undefined,
+): Record<string, BotImTaskArchiveActivity> | undefined {
+  if (!cutoffs || !raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const entries: [string, BotImTaskArchiveActivity][] = [];
+  for (const [id, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(cutoffs, id) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const activity = value as Record<string, unknown>;
+    if (typeof activity.generation !== 'string' || !ID_PATTERN.test(activity.generation)) continue;
+    if (activity.messageId !== null && (typeof activity.messageId !== 'string'
+      || !activity.messageId.trim() || activity.messageId.length > 256)) continue;
+    entries.push([id, { messageId: activity.messageId as string | null, generation: activity.generation }]);
+  }
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function archivedCutoff(record: Pick<BotImConnectionRecord, 'archivedTaskRows'>, id: string): number | undefined {
+  return record.archivedTaskRows && Object.hasOwn(record.archivedTaskRows, id) ? record.archivedTaskRows[id] : undefined;
+}
+
+function archivedActivity(record: Pick<BotImConnectionRecord, 'archivedTaskActivity'>, id: string): BotImTaskArchiveActivity | undefined {
+  return record.archivedTaskActivity && Object.hasOwn(record.archivedTaskActivity, id) ? record.archivedTaskActivity[id] : undefined;
+}
+
+function sameArchiveActivity(left: BotImTaskArchiveActivity | undefined, right: BotImTaskArchiveActivity | undefined): boolean {
+  return left?.messageId === right?.messageId && left?.generation === right?.generation;
 }
 
 /** 只认 chatId → 'always'; 'mention' 是缺省, 不落盘。未知值整条丢弃。 */
@@ -176,10 +208,34 @@ export async function updateBotImConnectionRecord(
   return next;
 }
 
+// Reserve most of the 256 KiB connection file for bindings/group preferences.
+// This is an owner-wide budget, so adding connections cannot multiply it.
+const MAX_ARCHIVED_TASK_ROWS = 512;
+const MAX_ARCHIVED_TASK_BYTES = 64 * 1024;
+
+function assertArchiveCapacity(connections: BotImConnectionDocument['connections']): void {
+  const count = Object.values(connections).reduce((sum, record) => sum + Object.keys(record.archivedTaskRows ?? {}).length, 0);
+  const withoutArchives = Object.fromEntries(Object.entries(connections).map(([id, record]) => [id, {
+    ...record, archivedTaskRows: undefined, archivedTaskActivity: undefined,
+  }]));
+  const archiveBytes = Buffer.byteLength(JSON.stringify({ connections }, null, 2), 'utf8')
+    - Buffer.byteLength(JSON.stringify({ connections: withoutArchives }, null, 2), 'utf8');
+  if (count > MAX_ARCHIVED_TASK_ROWS || archiveBytes > MAX_ARCHIVED_TASK_BYTES) {
+    throw new Error('ARCHIVE_CAPACITY_REACHED');
+  }
+}
+
+export interface BotImTaskArchiveCleanup {
+  connection: BotImConnectionRecord;
+  cutoffs: Readonly<Record<string, number>>;
+}
+
 /** Archive a row in one connection, without touching its session or route link. */
 export async function archiveBotImTaskRow(
   expected: BotImConnectionRecord,
   sessionId: string,
+  reclaimable: readonly BotImTaskArchiveCleanup[] = [],
+  activity?: BotImTaskArchiveActivity,
 ): Promise<BotImConnectionRecord | null> {
   const owner = activeOwnerScopeKey();
   let next: BotImConnectionRecord | null = null;
@@ -187,12 +243,45 @@ export async function archiveBotImTaskRow(
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
     const existing = current.value.connections[expected.id];
     if (!existing || existing.botId !== expected.botId || existing.channel !== expected.channel || existing.botContextId !== expected.botContextId) return current.value;
+    if (activity && (archivedCutoff(existing, sessionId) !== archivedCutoff(expected, sessionId)
+      || !sameArchiveActivity(archivedActivity(existing, sessionId), archivedActivity(expected, sessionId)))) {
+      // A newer archive already won while this request was reading activity.
+      next = { id: expected.id, ...existing };
+      return current.value;
+    }
+    const connections = { ...current.value.connections };
+    for (const { connection, cutoffs } of reclaimable) {
+      const source = connections[connection.id];
+      if (!source || source.botId !== connection.botId || source.channel !== connection.channel || source.botContextId !== connection.botContextId) continue;
+      const archivedTaskRows = { ...source.archivedTaskRows };
+      const archivedTaskActivity = { ...source.archivedTaskActivity };
+      for (const [id, observedCutoff] of Object.entries(cutoffs)) {
+        // A newer archive made while activity was being read must survive.
+        if (archivedCutoff(source, id) === observedCutoff
+          && sameArchiveActivity(archivedActivity(source, id), archivedActivity(connection, id))) {
+          delete archivedTaskRows[id];
+          delete archivedTaskActivity[id];
+        }
+      }
+      connections[connection.id] = {
+        ...source, archivedTaskRows,
+        archivedTaskActivity: Object.keys(archivedTaskActivity).length ? archivedTaskActivity : undefined,
+      };
+    }
+    const target = connections[expected.id];
+    const archivedTaskActivity = activity
+      ? { ...target.archivedTaskActivity, [sessionId]: activity }
+      : { ...target.archivedTaskActivity };
+    if (!activity) delete archivedTaskActivity[sessionId];
     const merged = {
-      ...existing,
-      archivedTaskRows: { ...existing.archivedTaskRows, [sessionId]: Date.now() },
+      ...target,
+      archivedTaskRows: { ...target.archivedTaskRows, [sessionId]: Date.now() },
+      archivedTaskActivity: Object.keys(archivedTaskActivity).length ? archivedTaskActivity : undefined,
     };
+    connections[expected.id] = merged;
+    assertArchiveCapacity(connections);
     next = { id: expected.id, ...merged };
-    return { connections: { ...current.value.connections, [expected.id]: merged } };
+    return { connections };
   }, { preserveDefaults: true });
   if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
   return next;
