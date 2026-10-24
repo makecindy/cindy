@@ -60,6 +60,11 @@ function normalize(raw: unknown): Snapshot {
           avatarColor: typeof member.avatarColor === 'string' ? member.avatarColor.slice(0, 64) : '' }];
       }) : undefined;
       return [{ key: `chat:${item.ref.id}`, host: { deviceId: '', deviceName: '' }, item, groupMembers,
+        ...(row.chatUnread && Number.isInteger(row.chatUnread.count) && row.chatUnread.count >= 0
+          && typeof row.chatUnread.mentioned === 'boolean' && Number.isInteger(row.chatUnread.threadCount)
+          && row.chatUnread.threadCount >= 0 && row.chatUnread.threadCount <= row.chatUnread.count
+          && typeof row.chatUnread.threadMentioned === 'boolean'
+          ? { chatUnread: { count: Math.min(row.chatUnread.count, 999), mentioned: row.chatUnread.mentioned, threadCount: Math.min(row.chatUnread.threadCount, 999), threadMentioned: row.chatUnread.threadMentioned } } : {}),
         ...(validSequence(row.lastReplySequence) ? { lastReplySequence: row.lastReplySequence } : {}) }];
     });
     (out.chatRosters ??= {})[realm] = { items, ids: [...new Set(roster.ids.filter(id => typeof id === 'string' && id.length <= 160))].slice(-2000) };

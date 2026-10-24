@@ -167,7 +167,7 @@ import {
   type MobileSessionEventKind,
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
-import { getSessionNotificationBody } from '../sessionNotificationCopy';
+import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
   handleContactsDeviceLinkStatusChanged,
@@ -2158,6 +2158,7 @@ export function sendMobileSessionNotify(payload: {
       selfDeviceId,
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
+      imageFallback: getNotificationImageLabel(),
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
       ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
     }),

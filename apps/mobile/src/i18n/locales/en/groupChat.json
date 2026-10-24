@@ -60,6 +60,8 @@
     "send": "Send"
   },
   "timeline": {
+    "newMessages_one": "{{count}} new message",
+    "newMessages_other": "{{count}} new messages",
     "emptyTitle": "No messages in this group yet",
     "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
     "roundEnded": "Teammates are done",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "Quoting {{name}}: {{summary}}",
     "deleted": "Original message was deleted",
-    "attachments": "{{name}} and others ({{total}} files)"
+    "attachments": "{{name}} and others ({{total}} files)",
+    "unavailable": "This message is no longer available."
   },
   "notice": {
     "memberJoined": "{{name}} joined the group",

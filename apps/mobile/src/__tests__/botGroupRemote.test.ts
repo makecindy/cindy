@@ -310,5 +310,9 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['new'] }).clientId).toBe('c2');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['other', 'picked'] }).clientId).toBe('c3');
     expect(nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: true, botIds: ['picked', 'other'] }).clientId).toBe('c4');
+    const quoted = nextBotGroupSendAttempt(first, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original');
+    expect(quoted.clientId).toBe('c5');
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'original')).toBe(quoted);
+    expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'another').clientId).toBe('c6');
   });
 });

@@ -1918,7 +1918,20 @@
       "wecomGroupToggleFailed": "企业微信群通知开关更新失败",
       "wecomGroupClear": "移除",
       "wecomGroupCleared": "Webhook 已移除",
-      "wecomGroupClearFailed": "Webhook 移除失败"
+      "wecomGroupClearFailed": "Webhook 移除失败",
+      "chat": {
+        "image": "图片",
+        "audio": "语音",
+        "video": "视频",
+        "file": "文件",
+        "message": "新消息",
+        "teammate": "伙伴",
+        "sender": "未知发送者",
+        "mention": "提到了你",
+        "reply": "回复了你",
+        "threadReply": "话题新回复",
+        "thread": "话题"
+      }
     },
     "windowBehavior": {
       "menubar": {

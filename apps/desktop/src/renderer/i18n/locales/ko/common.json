@@ -1918,7 +1918,20 @@
       "wecomGroupToggleFailed": "WeCom 그룹 알림 설정을 업데이트하지 못했습니다",
       "wecomGroupClear": "삭제",
       "wecomGroupCleared": "Webhook을 삭제했습니다",
-      "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
+      "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다",
+      "chat": {
+        "image": "이미지",
+        "audio": "음성 메시지",
+        "video": "동영상",
+        "file": "파일",
+        "message": "새 메시지",
+        "teammate": "파트너",
+        "sender": "알 수 없는 발신자",
+        "mention": "나를 멘션함",
+        "reply": "내게 답장함",
+        "threadReply": "스레드 답장",
+        "thread": "스레드"
+      }
     },
     "windowBehavior": {
       "menubar": {

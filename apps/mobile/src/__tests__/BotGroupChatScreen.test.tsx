@@ -31,6 +31,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
+vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
 vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel, style }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
@@ -433,6 +434,33 @@ describe('group timeline', () => {
     await render(newer);
     await act(async () => h.scroll.onContentSizeChange(400, 3000));
     expect(h.markRead).not.toHaveBeenCalled();
+    // The reader stays in history, sees the arrival, and can explicitly return to it.
+    const jump = byId('botGroup.newMessages') as HTMLButtonElement;
+    expect(jump.textContent).toContain('count=1');
+    h.scrollToEnd.mockClear();
+    await act(async () => jump.click());
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => scroll(2500, 3000));
+    expect(byId('botGroup.newMessages')).toBeNull();
+  });
+
+  it('notices arrivals after a notification opens history without acknowledging the tail', async () => {
+    const data = group();
+    h.chat = { ...h.chat, state: { kind: 'ready', group: data } };
+    const props = { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1', messageId: data.messages[0].id };
+    await act(async () => root.render(el(BotGroupChatScreen, props)));
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+    });
+    h.scrollToEnd.mockClear();
+    h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
+    await act(async () => root.render(el(BotGroupChatScreen, props)));
+    await act(async () => h.scroll.onContentSizeChange(400, 2500));
+    expect(byId('botGroup.newMessages')?.textContent).toContain('count=1');
+    expect(h.markRead).not.toHaveBeenCalled();
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
   });
 
   it('acknowledges a short conversation only after both native dimensions are measured', async () => {
@@ -623,6 +651,27 @@ describe('group composer', () => {
       h.row.onSelectionChange({ nativeEvent: { selection: { start: text.length, end: text.length } } });
     });
   }
+
+  // Both Chat Server entry paths must carry the selected original through the real composer.
+  it.each([true, false])('sends a quote and retains it after failure (direct server %s)', async server => {
+    h.chat.server = server;
+    const originalId = '11111111-1111-4111-8111-111111111111';
+    await render(group({ serverBacked: true, openPlan: null, messages: [
+      message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
+    ] }));
+    await click(`botGroup.reply.${originalId}`);
+    await type('引用回复');
+    h.chat.act.mockRejectedValueOnce(new Error('QUOTE_UNAVAILABLE'));
+    await click('botGroup.composer.send');
+    expect(h.row.value).toBe('引用回复');
+    expect(byId('botGroup.cancelReply')).not.toBeNull();
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '引用回复', quote: { messageId: originalId }, clientId: 'uuid-1',
+    }));
+    expect(byId('botGroup.cancelReply')).toBeNull();
+    expect(h.row.value).toBe('');
+  });
 
   it.each([true, false])('locks an existing draft when dissolved without being archived (direct server %s)', async server => {
     h.chat.server = server;
@@ -1336,8 +1385,8 @@ describe('direct server group presentation', () => {
 });
 
 
-it('acknowledges other humans only once their messages reach the measured visible tail', async () => {
-  h.chat.server = true;
+it.each([true, false])('acknowledges other humans at the measured visible tail (direct: %s)', async server => {
+  h.chat.server = server;
   h.chat.markRead = vi.fn(async () => {});
   await render(group({ messages: [message('incoming-human', 12, { authorKind: 'user', isSelf: false, content: 'hello' }),
     message('mine', 13, { authorKind: 'user', isSelf: true, content: 'reply' })], plans: [], openPlan: null }));
@@ -1348,7 +1397,8 @@ it('acknowledges other humans only once their messages reach the measured visibl
     h.scroll.onContentSizeChange(400, 400);
   });
   expect(h.chat.markRead).toHaveBeenLastCalledWith(['incoming-human']);
-  expect(h.markRead).not.toHaveBeenCalled();
+  if (server) expect(h.markRead).not.toHaveBeenCalled();
+  else expect(h.markRead).toHaveBeenCalled();
 });
 
 // #6550: screen + real mobile Markdown parser, with RN host primitives simulated in jsdom.

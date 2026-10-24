@@ -114,3 +114,17 @@ it('treats a computer known to be offline as unavailable for actions', async () 
   await render();
   expect(result.online).toBe(false);
 });
+
+it('forwards only the measured message to a read-capable host without a re-read loop', async () => {
+  const row = (id: string, sequence: number) => ({ id, sequence, kind: 'message', authorKind: 'user', isSelf: false, authorBotId: 'mimi',
+    authorName: '咪咪', content: id, mentions: { all: false, botIds: [] }, noticeCode: null, planId: null, files: [], attachments: [], createdAt: sequence });
+  const data = { ...groupData('官网'), serverBacked: true, supportsReadReceipts: true, messages: [row('seen', 1), row('newer-unseen', 2)] };
+  h.link.invoke.mockImplementation(async (_deviceId: string, channel: string) => channel === 'maker:remote-resources:get'
+    ? { ...resource('官网'), blocks: [{ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '', data }] } : { effects: [] });
+  await render();
+  expect(result.state).toMatchObject({ kind: 'ready', group: { messages: [expect.objectContaining({ isSelf: false }), expect.objectContaining({ isSelf: false })] } });
+  await act(async () => { await result.markRead!(['seen']); });
+  const request = h.link.invoke.mock.calls.find(call => call[1] === 'maker:remote-resources:invoke')!;
+  expect(request[2][0]).toMatchObject({ actionId: 'read', input: { messageId: 'seen' } });
+  expect(reads()).toHaveLength(1);
+});

@@ -164,6 +164,7 @@ const NO_ATTACHMENTS: BotGroupComposerAttachments = {
 export function BotGroupComposer({
   groupId,
   mode = 'group',
+  conversationKind,
   draftKey,
   members,
   running,
@@ -183,6 +184,7 @@ export function BotGroupComposer({
   footerStart,
 }: {
   groupId: string;
+  conversationKind?: 'direct';
   /** `thread`: a 话题's reply box (no 「+」 menu, attachments or quotes). */
   mode?: 'group' | 'thread';
   /** Where the unsent text is kept (the group's attachment scope, or the 话题's own key). */
@@ -406,6 +408,7 @@ export function BotGroupComposer({
     const sentQuote = quoteRef.current;
     const fields = {
       groupId,
+      ...(conversationKind ? { conversationKind } : {}),
       text: trimmed,
       mentions,
       ...(division ? { division: true } : {}),
@@ -667,7 +670,7 @@ export function BotGroupComposer({
                       {t('extraDirs.addFiles')}
                     </span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem
+                  {conversationKind !== 'direct' && <DropdownMenuItem
                     disabled={divisionBlocked}
                     className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}
                     onSelect={() => {
@@ -688,7 +691,7 @@ export function BotGroupComposer({
                         )}
                       </span>
                     </span>
-                  </DropdownMenuItem>
+                  </DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
               </>)}

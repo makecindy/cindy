@@ -3652,6 +3652,33 @@ describe('Chat Server result delivery and refresh', () => {
       expect(vi.mocked(socket.send).mock.calls.filter(([raw]) => String(raw).includes(groupId))).toEqual([]);
     });
 
+    // Notification landing explicitly opts into direct read/send. Previously the real
+    // getGroup entry rejected it. Existing cases below still protect group-only operations.
+    it('opens, reads and answers a direct notification without invoking group planning', async () => {
+      const messageId = '50000000-0000-4000-8000-000000000009';
+      deps.decidePlan = vi.fn(async () => null);
+      const read = await service.getGroup(directId, { conversationKind: 'direct' });
+      expect(read).toMatchObject({ ok: true, group: { conversationKind: 'direct', canInvite: false, supportsGroupLeave: false } });
+      expect(await service.sendMessage({ groupId: directId, conversationKind: 'direct', text: 'Received',
+        clientId: 'direct-notice-reply', mentions: { all: false, botIds: [] } })).toMatchObject({ ok: true });
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]).toMatchObject([`/conversations/${directId}/messages`, 'POST', {
+        content: [{ type: 'text', text: 'Received' }], deferExecution: false,
+      }]);
+      expect(deps.decidePlan).not.toHaveBeenCalled();
+      expect(await service.getGroup(channelId, { conversationKind: 'direct' })).toMatchObject({ ok: false });
+      expect(await service.sendMessage({ groupId: directId, conversationKind: 'direct', text: 'No plan', division: true,
+        clientId: 'direct-notice-no-plan', mentions: { all: false, botIds: [] } })).toMatchObject({ ok: false });
+      expect(writes()).toHaveLength(1);
+      const previous = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${directId}/snapshot`
+        ? { body: { room: roomOf(directId), cursor: '2', members: [], reads: [{ thread_key: 'main', read_seq: '0' }],
+          messages: [{ id: messageId, seq: '2', threadRootId: null }] } }
+        : previous(route, method, body));
+      expect(await service.chatServer!.manage({ groupId: directId, action: { type: 'read', messageId, conversationKind: 'direct' } })).toMatchObject({ ok: true });
+      expect(writes().at(-1)).toMatchObject([`/conversations/${directId}/read`, 'POST', { readSeq: '2' }]);
+    });
+
     it('rejects a first send to a direct room before reading plans or members', async () => {
       expect(await service.sendMessage({ groupId: directId, text: 'hi', clientId: 'cold-direct-send', mentions: { all: true, botIds: [] } }))
         .toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });

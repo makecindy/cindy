@@ -1918,7 +1918,20 @@
       "wecomGroupToggleFailed": "WeCom グループ通知の設定を更新できませんでした",
       "wecomGroupClear": "削除",
       "wecomGroupCleared": "Webhook を削除しました",
-      "wecomGroupClearFailed": "Webhook を削除できませんでした"
+      "wecomGroupClearFailed": "Webhook を削除できませんでした",
+      "chat": {
+        "image": "画像",
+        "audio": "音声メッセージ",
+        "video": "動画",
+        "file": "ファイル",
+        "message": "新しいメッセージ",
+        "teammate": "パートナー",
+        "sender": "不明な送信者",
+        "mention": "あなたにメンション",
+        "reply": "あなたに返信",
+        "threadReply": "スレッドへの返信",
+        "thread": "スレッド"
+      }
     },
     "windowBehavior": {
       "menubar": {

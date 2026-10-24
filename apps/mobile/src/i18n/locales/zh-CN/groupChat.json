@@ -60,6 +60,8 @@
     "send": "发送"
   },
   "timeline": {
+    "newMessages_one": "{{count}} 条新消息",
+    "newMessages_other": "{{count}} 条新消息",
     "emptyTitle": "群里还没有消息",
     "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
     "roundEnded": "伙伴们说完了",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
     "deleted": "原消息已删除",
-    "attachments": "{{name}} 等 {{total}} 个附件"
+    "attachments": "{{name}} 等 {{total}} 个附件",
+    "unavailable": "无法找到这条消息。"
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",

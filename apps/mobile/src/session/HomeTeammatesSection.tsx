@@ -233,8 +233,10 @@ function StripCell({ entry, online, connected, quiet, onPress }: {
   const { row } = entry;
   const display = row.item.display;
   const title = resolveRemoteText(display.title, i18n.language);
-  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt,
+  const mainUnread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt,
     entry.kind === 'group' ? row.lastReplySequence : undefined);
+  const unread = entry.kind === 'group' && row.chatUnread
+    ? (mainUnread ? row.chatUnread.count : row.chatUnread.threadCount) > 0 : mainUnread;
   const working = online && !!display.generation;
   const group = entry.kind === 'group';
   const dimmed = group ? !online : connected === false && !quiet;

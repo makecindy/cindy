@@ -1947,7 +1947,20 @@
       "wecomGroupToggleFailed": "Could not update WeCom group notifications",
       "wecomGroupClear": "Remove",
       "wecomGroupCleared": "Webhook removed",
-      "wecomGroupClearFailed": "Could not remove the Webhook"
+      "wecomGroupClearFailed": "Could not remove the Webhook",
+      "chat": {
+        "image": "Image",
+        "audio": "Voice message",
+        "video": "Video",
+        "file": "File",
+        "message": "New message",
+        "teammate": "Teammate",
+        "sender": "Unknown sender",
+        "mention": "Mentioned you",
+        "reply": "Replied to you",
+        "threadReply": "Thread reply",
+        "thread": "Thread"
+      }
     },
     "windowBehavior": {
       "menubar": {

@@ -699,6 +699,7 @@ export function MainLayout() {
     (
       payload:
         | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
@@ -709,6 +710,13 @@ export function MainLayout() {
         | { type: 'provider-share-join'; link: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' },
     ) => {
+      if (payload.type === 'chat-message') {
+        const search = new URLSearchParams({ messageId: payload.messageId });
+        if (payload.threadRootId) search.set('threadRootId', payload.threadRootId);
+        if (payload.conversationKind === 'direct') search.set('conversationKind', 'direct');
+        navigate(`/bots/groups/${encodeURIComponent(payload.groupId)}?${search}`);
+        return;
+      }
       if (payload.type === 'chat-invite') {
         requestChatInvite(payload.token);
         return;

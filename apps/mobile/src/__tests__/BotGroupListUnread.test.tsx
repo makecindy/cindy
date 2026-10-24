@@ -7,7 +7,7 @@ vi.mock('react-native', async () => { const { createElement } = await import('re
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' } }) }));
 vi.mock('@/session/BotGroupAvatars', () => ({ BotGroupDuoAvatar: () => null, useBotGroupIdentities: () => () => ({}) }));
-vi.mock('@/session/messageMarkdown', () => ({ parseMobileMarkdownInlines: () => [] }));
+vi.mock('@/session/messageMarkdown', () => ({ parseMobileMarkdownInlines: () => [], mobileMarkdownPreviewText: (value: string) => value }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => 'now' }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}) }));
 vi.mock('@/session/CompanionListRow', async () => { const { createElement } = await import('react'); return {

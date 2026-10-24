@@ -3997,6 +3997,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     callback: (
       payload:
         | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
@@ -4024,6 +4025,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         connect?: unknown;
         messageClientId?: unknown;
         islandEntryId?: unknown;
+        groupId?: unknown;
+        messageId?: unknown;
+        threadRootId?: unknown;
       };
       if (p.type === 'session' && typeof p.id === 'string' && p.id.length > 0) {
         callback({
@@ -4037,6 +4041,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
             ? { islandEntryId: p.islandEntryId }
             : {}),
         });
+      } else if (p.type === 'chat-message' && typeof p.groupId === 'string' && typeof p.messageId === 'string'
+        && [p.groupId, p.messageId, ...(p.threadRootId === undefined ? [] : [p.threadRootId])].every(value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value))) {
+        callback({ type: 'chat-message', groupId: p.groupId, messageId: p.messageId,
+          ...(typeof p.threadRootId === 'string' ? { threadRootId: p.threadRootId } : {}) });
       } else if (p.type === 'settings' && (p.tab === 'voice-input' || p.tab === 'providers')) {
         // connect 只对 providers 页有意义;主进程已做 id 白名单,这里按纵深防御
         // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行。
@@ -4095,6 +4103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 详见 main/deepLink.ts 的 pending buffer 段。
   takePendingDeepLink: (): Promise<
     | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string }
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }

@@ -334,7 +334,7 @@ SDK 规则随依赖一起进入应用的最终 R8 配置，不在应用侧重复
 
 `plugins/with-communication-notifications.js` 为当前 bundle identity 生成
 `CindyNotificationService` 扩展，启用 Communication Notifications，并向 EAS 登记扩展签名。
-扩展仅消费伙伴回复的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
+扩展消费伙伴回复与群消息的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
 系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
@@ -451,3 +451,21 @@ JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。�
 定向测试为对应的 `androidInstallController.test.ts` 与 `androidInstaller.test.ts`，构建配置
 边界由 `src/__tests__/nativeAppConfig.test.ts` 验证。原生验证还应检查授权/拒绝返回、系统
 安装取消、签名不匹配拒绝与同签名覆盖安装；不能把 JS 单测当作这些原生路径的实测。
+
+### 群消息通知与 Android 后台连接
+
+`CINDY_ANDROID_GOOGLE_SERVICES_FILE` 可指向仓库外的 `google-services.json`；未配置仍可构建，
+通知设置会说明 Google 推送不可用。服务端 Chat Server 和 device-link 分别配置同一 Firebase 项目的
+`FCM_PROJECT_ID` 与 ADC（例如仓库外 `GOOGLE_APPLICATION_CREDENTIALS`）。不要把密钥提交到仓库。
+
+`cindy-chat-notifications` 是 Android Expo 本地模块，复用 Expo 的 token、通知点击和冷启动响应；
+FCM data 消息与显式开启的前台服务都通过同一通知入口，按账号／消息去重。预览关闭时本机再次去除内容与
+发送者头像。群通知使用 MessagingStyle；伙伴回复有发送者时也使用 Person。普通任务仍沿用原通知。
+
+后台连接声明 `specialUse` 前台服务，持续显示运行通知和停止按钮；没有开机启动、隐藏重启或凭证落盘。
+发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
+服务及有效项目配置，不能承诺所有设备强杀后送达。
+
+本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；按冷更门由指定把关人明确
+批准。上线顺序为服务端兼容接口／通道配置、各端原生包，再验证 token 注册、前后台、拒绝权限、预览关闭、
+停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。

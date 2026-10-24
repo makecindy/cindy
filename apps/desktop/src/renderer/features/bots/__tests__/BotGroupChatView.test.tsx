@@ -2937,11 +2937,13 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     const scroll = view.container.querySelector('.overflow-y-auto.px-5') as HTMLElement;
     Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
     scroll.scrollTop = 0; fireEvent.scroll(scroll);
-    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', ...incoming, content: 'New reply', createdAt: 1200 })] }) });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', sequence: 3, ...incoming, content: 'New reply', createdAt: 1200 })] }) });
     act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
     await screen.findByText('New reply');
     act(() => window.dispatchEvent(new Event('focus')));
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(scroll.scrollTop).toBe(0);
+    expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' })).toBeTruthy();
     scroll.scrollTop = 900; fireEvent.scroll(scroll);
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }

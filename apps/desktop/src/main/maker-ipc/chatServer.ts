@@ -30,6 +30,9 @@ import { prepareBotGroupTaskPost, type BotGroupTaskPostSnapshot } from './botGro
 import { registerGroupToolAuthority, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
+import { notificationPreview } from '../notificationPreview.js';
+import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
+import { createChatMessageNotifications } from './chatMessageNotifications.js';
 import WebSocket from 'ws';
 import { z } from 'zod';
 import { and, asc, eq, gt } from 'drizzle-orm';
@@ -73,7 +76,7 @@ interface Room {
   created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
 }
 /** `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it. */
-interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean }> }
+interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean }> }
 interface Execution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string;
   requester_id?: string;
@@ -493,6 +496,41 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Local writes always notify: HTTP can finish before the server handles subscribe,
   // even on an open socket. Nearby realtime echoes join the same bounded window.
   const pendingChanges = new Map<string, ReturnType<typeof setTimeout>>();
+  const chatNotifications = deps.onChatMessageNotification ? createChatMessageNotifications<Message>({
+    current, selfId: () => selfId,
+    message: (groupId, messageId) => api<Message>(`/conversations/${groupId}/messages/${messageId}`),
+    snapshot: async groupId => {
+      const snapshot = await api<Snapshot>(`/conversations/${groupId}/snapshot`);
+      if (personalList.hidden(groupId)) throw new Error('CHAT_HIDDEN');
+      return snapshot;
+    },
+    present: async (groupId, message) => {
+      const snapshot = await recentSnapshot(groupId);
+      const member = snapshot.members.find(member => member.id === message.authorId);
+      const view = messageView(message, snapshot.members);
+      const words = (key: string) => t(`settings.notifications.chat.${key}`);
+      const name = notificationPreview(view.authorName) || words('sender');
+      const senderName = message.author.kind === 'bot' ? `${name} (${words('teammate')})` : name;
+      const attachments = await Promise.all(bodyBlocks(message).filter(block => block.type === 'media').map(async block => {
+        if (block.caption?.trim()) return notificationPreview(block.caption);
+        const file = block.mediaId ? await api<{ name: string; type: string }>(`/conversations/${groupId}/media/${block.mediaId}`).catch(() => null) : null;
+        const kind = file?.type.startsWith('image/') ? 'image' : file?.type.startsWith('audio/') ? 'audio' : file?.type.startsWith('video/') ? 'video' : 'file';
+        return kind === 'file' && file?.name ? `${words(kind)}: ${notificationPreview(file.name)}` : words(kind);
+      }));
+      const readContext = async (messageId: string) => snapshot.messages.find(item => item.id === messageId)
+        ?? await api<Message>(`/conversations/${groupId}/messages/${messageId}`).catch(() => undefined);
+      const root = message.threadRootId ? await readContext(message.threadRootId) : undefined;
+      const quote = view.quote ? await readContext(view.quote.messageId) : undefined;
+      const reason = message.mentions?.includes(selfId) ? words('mention')
+        : quote && !quote.deleted && quote.authorId === selfId ? words('reply') : message.threadRootId ? words('threadReply') : '';
+      const preview = notificationPreview([botGroupMessageSummaryText(view), ...attachments].filter(Boolean).join(' '), 240, words('image')) || words('message');
+      return { senderName, avatar: member?.avatar ?? localBot(message.authorId)?.avatar ?? '',
+        conversationKind: snapshot.room.kind === 'direct' ? 'direct' as const : 'group' as const,
+        ...(message.threadRootId ? { threadName: root && !root.deleted ? notificationPreview(displayText(root), 48) || words('thread') : words('thread') } : {}),
+        preview: [reason,preview].filter(Boolean).join(': ') };
+    },
+    notify: deps.onChatMessageNotification,
+  }) : undefined;
   const changed = (roomId: string) => {
     if (!current()) return;
     invalidate(roomId);
@@ -903,6 +941,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if ((event.changes ?? []).some((change: { type?: string; data?: { dissolvedAt?: unknown } }) => change.type === 'conversation.updated' && change.data?.dissolvedAt)) retirePlanning(roomId);
             if (rooms.has(roomId)) advanceRoom(roomId, event.cursor);
             for (const change of event.changes ?? []) {
+              if (change.type === 'message.created' && typeof change.entityId === 'string' && id.safeParse(change.entityId).success)
+                chatNotifications?.enqueue(roomId, change.entityId);
               if (change.type === 'message.updated' || change.type === 'message.deleted') threads.invalidate(roomId, change.entityId);
               if (change.type === 'reaction.changed' && typeof change.entityId === 'string') bumpMessageReactions(roomId, change.entityId);
             }
@@ -1018,6 +1058,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     subscribe(roomId, value.cursor);
     return value;
   }
+  /** Notification landing opts into a direct room; ordinary group callers remain strict. */
+  async function directSnapshot(roomId: string) {
+    const value = await readSnapshot(roomId);
+    if (value.room.kind !== 'direct') throw new Error('NOT_A_GROUP');
+    subscribe(roomId, value.cursor);
+    return value;
+  }
   /** Every groupId entry resolves through here: a room that is not a group answers as missing before any other read or write. */
   async function groupRoom(groupId: string) {
     const room = await resolveGroup(groupId);
@@ -1039,7 +1086,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const joined = !m.deleted && m.threadRootId === null ? m.content.find(b => b.type === 'card' &&
         b.namespace === 'cindy.membership' && b.schemaRevision === 1 && b.data?.type === 'member.joined' &&
         id.safeParse(b.data.actorId).success && typeof b.data.displayName === 'string' && b.data.displayName.trim()) : undefined;
-      return { id: m.id, sequence: Number(m.seq), kind: 'notice', authorKind: 'system', isSelf: false,
+      return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', authorKind: 'system', isSelf: false,
         authorBotId: null, authorName: joined ? String(joined.data!.displayName) : '', content: displayText(m),
         threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
         noticeCode: joined ? 'member-joined' : null, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
@@ -1047,7 +1094,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const notice = m.origin === 'integration' && !m.deleted ? m.content.find(b => b.namespace === 'cindy.group-notice' && b.schemaRevision === 1) : undefined;
     const noticeCode = notice?.data?.noticeCode;
     if (noticeCode === 'member-failed' || noticeCode === 'member-timeout' || noticeCode === 'plan-failed') return {
-      id: m.id, sequence: Number(m.seq), kind: 'notice', authorKind: 'system', isSelf: false,
+      id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', authorKind: 'system', isSelf: false,
       authorBotId: localBot(m.authorId)?.id ?? null, authorName: members.find(member => member.id === m.authorId)?.name ?? '',
       content: displayText(m), threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
       noticeCode, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt),
@@ -1056,17 +1103,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(m);
-    if (runtimeFailureCode) return { id: m.id, sequence: Number(m.seq), kind: 'notice', authorKind: 'system', isSelf: false,
+    if (runtimeFailureCode) return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', authorKind: 'system', isSelf: false,
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: typeof legacy?.authorName === 'string' ? legacy.authorName : '',
       content: '', threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
       noticeCode: runtimeFailureCode === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed', runtimeFailureCode,
       planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
     const quote = m.deleted || planCard ? null : readBotGroupQuote(m.content);
     const task = m.deleted || planCard ? null : taskCardOf(m);
-    return { id: m.id, sequence: Number(m.seq), deleted: m.deleted, kind: planCard ? 'plan' : 'message', authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
+    return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: planCard ? 'plan' : 'message', authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}),
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member) : m.author.name, content: displayText(m),
-      mentions: { all: false, botIds: [] }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
+      mentions: { all: false, botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
   }
   /**
    * When the newest (up to 99) messages from someone else arrived, oldest first: Bots and other
@@ -1275,7 +1322,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function detail(roomId: string, options?: unknown, summaryOnly = false): Promise<BotGroupDetail> {
     id.parse(roomId);
-    const o = z.object({ beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
+    const o = z.object({ conversationKind: z.literal('direct').optional(), beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
       sourceMessageIds: z.array(id).optional(),
       shownShares: z.array(z.object({ id, messageId: id, threadRootId: id, sharerId: z.string().min(1).max(200).optional() })).optional() }).parse(options ?? {});
     const query = new URLSearchParams({ limit: String(o.limit ?? 100) });
@@ -1285,18 +1332,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // reported (a left room stays 「not found」), whichever request fails first in time.
     // A followed room reports every later change, so its snapshot may run alongside. A new
     // room first takes the snapshot cursor it will follow from, before the rest is read.
-    const snapshotRead = groupSnapshot(roomId);
+    const direct = o.conversationKind === 'direct';
+    const snapshotRead = direct ? directSnapshot(roomId) : groupSnapshot(roomId);
     if (!rooms.has(roomId)) await snapshotRead;
     const messagesRead = summaryOnly ? null : api<Message[]>(`/conversations/${roomId}/messages?${query}`);
-    const executionsRead = api<Execution[]>(`/conversations/${roomId}/executions`);
+    const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>(`/conversations/${roomId}/executions`);
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
     const page = (await messagesRead) ?? s.messages;
     const executions = await executionsRead;
     const ids = page.flatMap(m => m.content.flatMap(b => b.namespace === 'cindy.plan' && typeof b.data?.planId === 'string' ? [id.parse(b.data.planId)] : []));
-    const plansRead = api<ServerPlan[]>(`/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
+    const plansRead = direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
     plansRead.catch(() => undefined);
-    const executionFailures = summaryOnly ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
+    const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
     const plans = serverPlans.map(plan => planView(plan, s.members, workspace));
@@ -1316,17 +1364,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning' });
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members);
-    const shares = summaryOnly ? undefined : await decorateThreads(roomId, messages, page, s.messages, s.members, true, o.shownShares);
+    const shares = summaryOnly || direct ? undefined : await decorateThreads(roomId, messages, page, s.messages, s.members, true, o.shownShares);
     const threadShareUpdates = shares?.updates;
-    const reads = summaryOnly ? null : threadReads(s);
+    const reads = threadReads(s);
+    const unread = reads ? s.messages.filter(m => !m.deleted && m.origin !== 'system' && m.origin !== 'import' && m.authorId !== selfId
+      && (!m.threadRootId || m.mentions?.includes(selfId) || s.reads?.some(read => read.thread_key === m.threadRootId && read.following))
+      && BigInt(m.seq) > (reads.get(m.threadRootId ?? 'main') ?? 0n)) : null;
     if (reads) for (const view of messages) if (!view.threadRootId && (view.replyCount ?? 0) > 0) view.threadUnread = threadUnread(view.id, s.messages, reads);
-    const threadList = reads ? threadSummaries(roomId, s, page, reads) : undefined;
+    const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads) : undefined;
     messages.sort((a, b) => a.sequence - b.sequence);
     const last = s.messages[0];
     const lastView = last ? messageView(last, s.members) : null;
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
-    return { serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: true, supportsDissolve, supportsListRemoval, supportsMemberAvatar, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: singleSpeaker && !!managementActor(s), ...(singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: !direct && singleSpeaker && !!managementActor(s), ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(memberName).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       members: s.members.filter(m => m.state === 'joined').map(m => {
         const p = localBot(m.id);
         return { botId: p?.id ?? m.id, actorId: m.id, actorKind: m.kind, isSelf: m.id === selfId,
@@ -1337,15 +1388,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(m.ownerActorId === selfId && m.kind === 'bot' ? { homeDeviceId: actors.find(a => a.id === m.id)?.homeDeviceId ?? null } : {}),
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
-      }), organizerBotId: ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id), projectDir: workspace?.projectDir ?? null,
+      }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id), projectDir: workspace?.projectDir ?? null,
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
         isSelf: lastView.isSelf, authorKind: lastView.authorKind, authorName: lastView.authorName, noticeCode: lastView.noticeCode,
-        preview: lastIsShare ? '' : (botGroupMessageSummaryText(lastView) || mediaNames(last)).slice(0, 80), createdAt: lastView.createdAt, ...(lastIsShare ? { threadShare: true } : {}),
+        preview: lastIsShare ? '' : notificationPreview(botGroupMessageSummaryText(lastView) || mediaNames(last), 80), createdAt: lastView.createdAt, ...(lastIsShare ? { threadShare: true } : {}),
       } : null, speakingBotIds: speakers.map(s => s.botId), planningBotId: planning.get(roomId)?.botId ?? null, openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length, currentBotName: open.steps[open.currentStep ?? 0]?.botName ?? null, currentStepStatus: open.steps[open.currentStep ?? 0]?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
       lastReplyAt: s.messages.reduce((latest, m) => !m.deleted && m.origin !== 'system' && m.authorId !== selfId
         ? Math.max(latest, Date.parse(m.createdAt)) : latest, 0),
       incomingMessageTimes: incomingMessageTimes(s.messages, s.members),
+      ...(unread ? { serverUnread: { count: Math.min(99, unread.length), mentioned: unread.some(m => m.mentions?.includes(selfId)) } } : {}),
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       messages, executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
@@ -2319,9 +2371,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       changed(''); return {};
     }),
     manage: input => result(async () => {
-      const target = await resolveGroup(id.parse(input.groupId));
+      const requested = id.parse(input.groupId);
       const actorAction = z.object({ actorId: id });
       const action = z.discriminatedUnion('type', [
+        z.object({ type: z.literal('read'), messageId: id, conversationKind: z.literal('direct').optional() }).strict(),
         z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), expectedRevision: z.number().int().positive() }).strict(),
         actorAction.extend({ type: z.literal('avatar'), avatar: z.discriminatedUnion('type', [
           z.object({ type: z.literal('keep') }).strict(), z.object({ type: z.literal('reset') }).strict(),
@@ -2335,6 +2388,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         z.object({ type: z.literal('dissolve'), expectedRevision: z.number().int().positive() }).strict(),
         z.object({ type: z.literal('archive'), archived: z.boolean(), expectedRevision: z.number().int().positive() }).strict(),
       ]).parse(input.action);
+      const target = action.type === 'read' && action.conversationKind === 'direct'
+        ? (await directSnapshot(requested)).room.id : await resolveGroup(requested);
+      if (action.type === 'read') {
+        const snapshot = await recentSnapshot(target);
+        if (!snapshot.reads) return {};
+        const message = snapshot.messages.find(m => m.id === action.messageId)
+          ?? await api<Message>(`/conversations/${target}/messages/${action.messageId}`);
+        if (message.threadRootId) throw new Error('MAIN_MESSAGE_REQUIRED');
+        const read = snapshot.reads.find(entry => entry.thread_key === 'main')?.read_seq ?? '0';
+        if (BigInt(message.seq) > BigInt(read)) {
+          await api(`/conversations/${target}/read`, 'POST', { operationId: `read-main:${message.seq}`, readSeq: message.seq });
+          changed(target);
+        }
+        return {};
+      }
       if (action.type === 'avatar') {
         if (!supportsMemberAvatar) throw new Error('CHAT_UNAVAILABLE');
         const snapshot = await groupSnapshot(target);
@@ -2548,10 +2616,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   const sendMessage: BotGroupChatService['sendMessage'] = (input, origin) => safe(async () => {
     const started = Date.now();
-    const i = z.object({ groupId: id, text: z.string().max(8000), clientId: z.string().min(8).max(160),
+    const i = z.object({ conversationKind: z.literal('direct').optional(), groupId: id, text: z.string().max(8000), clientId: z.string().min(8).max(160),
       mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(), attachments: z.array(z.unknown()).optional(),
       quote: z.object({ messageId: id }).strict().optional() }).parse(input);
     i.groupId = await resolveGroup(i.groupId);
+    const direct = i.conversationKind === 'direct';
+    if (direct && i.division) throw new Error('INVALID_INPUT');
     if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
     // A single-speaker server cannot release a held request (no cancel-planning): a newer message
     // replacing a 分工 still being arranged would leave it to be queued two minutes later. Wait for its card.
@@ -2561,14 +2631,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The reads a send needs share one round trip (none for a snapshot the live subscription
     // vouches for). Each is awaited in the former order, so the first failure reported is the
     // one the serial version reported.
-    const snapshotRead = recentSnapshot(i.groupId, true);
+    const snapshotRead = direct ? directSnapshot(i.groupId) : recentSnapshot(i.groupId, true);
     // An unopened room must be confirmed as a group before reading its other resources.
     if (!rooms.has(i.groupId)) await snapshotRead;
     const quoteKey = i.quote ? JSON.stringify([i.groupId, i.clientId, i.quote.messageId, i.text, i.mentions, i.division]) : '';
     const knownQuote = i.quote ? postedQuotes.get(quoteKey) : undefined;
     const snapshotMembers = snapshotRead.then(value => value.members);
     const quoteRead = i.quote && !knownQuote ? quoteSnapshot(i.groupId, i.quote.messageId, snapshotMembers) : undefined;
-    const plansRead = api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
+    const plansRead = direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
     const membersRead = namesNobody(i.mentions) && !i.quote ? undefined : api<Member[]>(`/conversations/${i.groupId}/members`);
     for (const read of [snapshotMembers, quoteRead, plansRead, membersRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
@@ -2586,16 +2656,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const settleQueue = singleSpeaker && i.division && openPlan?.kind === 'talk' && openPlan.status === 'waiting' && mayAdd ? openPlan : undefined;
     if (i.division && openPlan && !proposed && !settleQueue) throw new Error('PLAN_OPEN');
     // Reply mode decides whether an unaddressed message wakes anyone (single-speaker servers apply it too).
-    const canTrigger = i.division || s.room.response_mode !== 'mentioned' || !namesNobody(i.mentions);
+    const canTrigger = !direct && (i.division || s.room.response_mode !== 'mentioned' || !namesNobody(i.mentions));
     // Words for a card under way reach its current step only when they would wake anyone (§4.0,
     // §7.4); a queue waiting for 继续 gives way to a new request instead.
     const commentPlan = canTrigger && openPlan && openPlan.status !== 'proposed' && !(singleSpeaker && openPlan.kind === 'talk' && openPlan.status === 'waiting') && !i.mentions.botIds.length && !i.mentions.all && mayAdd ? openPlan : undefined;
     // Single-speaker servers queue turns themselves; only a 分工, or words about your proposed card,
     // wait for the arrangement. A 分工 that writes out its steps needs no helper model.
-    const shouldPlan = singleSpeaker
+    const shouldPlan = !direct && (singleSpeaker
       ? i.division || (canTrigger && proposed && namesNobody(i.mentions) && !!deps.decidePlan)
       : canTrigger && !!deps.decidePlan && (i.division || (!i.mentions.botIds.length && (!proposed || !i.mentions.all)))
-        && (!openPlan || proposed);
+        && (!openPlan || proposed));
     const prepared = i.attachments?.length ? await deps.prepareAttachments?.({ groupId: i.groupId, attachments: i.attachments, controllerDeviceId: origin?.controllerDeviceId }) : undefined;
     if (i.attachments?.length && (!prepared || !prepared.ok)) {
       const error = new Error(prepared && !prepared.ok ? prepared.errorCode === 'INVALID_PARAMS' ? 'INVALID_ATTACHMENT' : prepared.errorCode : 'INVALID_ATTACHMENT');
@@ -2615,7 +2685,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       posting = true;
       result = await api<{ id: string }>(`/conversations/${i.groupId}/${commentPlan ? `plans/${commentPlan.id}/messages` : 'messages'}`, 'POST', {
         operationId: i.clientId, content: [ ...(quote ? [buildBotGroupQuoteCard(quote)] : []), ...(i.text ? [{ type: 'text', text: i.text }] : []),
-          ...uploaded ], mentions, deferExecution: shouldPlan, ...(groupDiscussionParity ? { mentionsAll: i.mentions.all, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
+          ...uploaded ], mentions, deferExecution: shouldPlan, ...(!direct && groupDiscussionParity ? { mentionsAll: i.mentions.all, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       });
     } catch (error) {
       if (prepared?.ok) await prepared.discard();
@@ -2630,6 +2700,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The message exists: the send is answered now and its receipt answers any retry, so the
     // quote snapshot is no longer needed. Arrangement bookkeeping continues after the answer.
     postedQuotes.delete(quoteKey);
+    if (direct) { changed(i.groupId); return { ok: true as const, messageId: result.id }; }
     const roomId = i.groupId;
     const messageId = result.id;
     void (async () => {
@@ -2699,7 +2770,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!current()) return Promise.resolve(chatGroupFailure(new Error('OWNER_CHANGED')));
       // clientId identifies one immutable send; annotation burn-in can regenerate
       // attachment names/URLs while the controller is retrying its lost receipt.
-      const identity = z.object({ groupId: id, clientId: z.string().min(1).max(200), text: z.string(),
+      const identity = z.object({ conversationKind: z.literal('direct').optional(), groupId: id, clientId: z.string().min(1).max(200), text: z.string(),
         mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(),
         quote: z.object({ messageId: z.string() }).optional() }).safeParse(input);
       if (!identity.success) return sendMessage(input, origin);
@@ -2897,6 +2968,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     continuePlan: input => safe(() => actPlan(input, 'continue')), retryPlan: input => safe(() => actPlan(input, 'retry')),
     editPlanStep: input => safe(() => actPlan(input, 'reassign')),
     dispose: () => {
+      chatNotifications?.dispose();
       disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); clearTimeout(claimTrigger); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);

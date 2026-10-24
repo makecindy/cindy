@@ -60,6 +60,8 @@
     "send": "보내기"
   },
   "timeline": {
+    "newMessages_one": "새 메시지 {{count}}개",
+    "newMessages_other": "새 메시지 {{count}}개",
     "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
     "emptyDescription": "한마디 하면 동료들이 이어서 대화합니다. @로 동료를 지정하면 그 동료만 답합니다.",
     "roundEnded": "동료들이 말을 마쳤습니다",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "{{name}} 인용: {{summary}}",
     "deleted": "원본 메시지가 삭제되었습니다",
-    "attachments": "{{name}} 등 {{total}}개"
+    "attachments": "{{name}} 등 {{total}}개",
+    "unavailable": "이 메시지를 찾을 수 없습니다."
   },
   "notice": {
     "memberJoined": "{{name}} 님이 그룹에 참여했습니다",

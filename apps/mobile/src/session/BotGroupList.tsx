@@ -30,7 +30,10 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
   const { user } = useAuth();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const display = row.item.display;
-  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt, row.lastReplySequence);
+  const mainUnread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt, row.lastReplySequence);
+  const unreadCount = row.chatUnread ? mainUnread ? row.chatUnread.count : row.chatUnread.threadCount : undefined;
+  const unread = unreadCount !== undefined ? unreadCount > 0 : mainUnread;
+  const mentioned = row.chatUnread && (mainUnread ? row.chatUnread.mentioned : row.chatUnread.threadMentioned);
   const title = resolveRemoteText(display.title, i18n.language);
   const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
     .map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
@@ -53,6 +56,8 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
     preview={offline ? `${offline} · ${summary}` : summary}
     previewTone={offline ? 'tertiary' : 'secondary'}
     unread={unread}
+    unreadCount={unreadCount}
+    mentioned={mentioned}
     unreadLabel={t('devices.companions.unread')}
     disabled={!online}
     last={last}

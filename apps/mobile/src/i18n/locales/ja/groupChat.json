@@ -60,6 +60,8 @@
     "send": "送信"
   },
   "timeline": {
+    "newMessages_one": "新着メッセージ {{count}} 件",
+    "newMessages_other": "新着メッセージ {{count}} 件",
     "emptyTitle": "このグループにはまだメッセージがありません",
     "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
     "roundEnded": "仲間たちの発言が終わりました",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
     "deleted": "元のメッセージは削除されました",
-    "attachments": "{{name}} など {{total}} 件"
+    "attachments": "{{name}} など {{total}} 件",
+    "unavailable": "このメッセージは見つかりません。"
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",

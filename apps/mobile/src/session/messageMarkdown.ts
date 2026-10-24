@@ -1,3 +1,4 @@
+import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import {
   BARE_HTTP_URL_RE_SOURCE,
@@ -11,7 +12,8 @@ import {
   toWorkdirRel,
 } from '@/session/chatPathCandidate';
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
-import { i18n } from '@/i18n';
+// App bootstrap initializes this instance; parsing summaries must not initialize React bindings.
+import i18n from 'i18next';
 
 // 加粗 / 斜体 / 删除线里的内容会继续按行内语法解析(`**https://…**` 的链接照样可点,
 // 与桌面 remark 同口径),结果拍平进同一层 inline 列表:里面的纯文本就是该强调类型本身,
@@ -66,6 +68,16 @@ export type MobileMarkdownBlock =
   // (仿 mermaid 块的形态),失败/离线降级显示源码。
   | { type: 'math'; key: string; srcLine?: number; text: string }
   | { type: 'code'; key: string; srcLine?: number; language?: string; text: string };
+
+/** Plain summaries share the message parser, keeping labels and omitting link destinations. */
+export function mobileMarkdownPreviewText(markdown: string): string {
+  const inlineText = (inlines: MobileMarkdownInline[]) => inlines.map(inline => inline.type === 'image' ? inline.alt : inline.text).join('');
+  return parseMobileMarkdown(richAnswerText(markdown)).map(block => {
+    if ('inlines' in block) return inlineText(block.inlines);
+    if (block.type === 'table') return [...block.header, ...block.rows.flatMap(row => row.cells)].map(inlineText).join(' ');
+    return block.text;
+  }).join(' ').replace(/\s+/gu, ' ').trim();
+}
 
 export interface ParseMobileMarkdownOptions {
   /**

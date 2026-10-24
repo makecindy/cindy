@@ -60,6 +60,8 @@
     "send": "傳送"
   },
   "timeline": {
+    "newMessages_one": "{{count}} 則新訊息",
+    "newMessages_other": "{{count}} 則新訊息",
     "emptyTitle": "群聊裡還沒有訊息",
     "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
     "roundEnded": "夥伴們說完了",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
     "deleted": "原訊息已刪除",
-    "attachments": "{{name}} 等 {{total}} 個附件"
+    "attachments": "{{name}} 等 {{total}} 個附件",
+    "unavailable": "無法找到這則訊息。"
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",

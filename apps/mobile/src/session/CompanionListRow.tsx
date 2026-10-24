@@ -23,7 +23,7 @@ export type CompanionRowTrailing = { kind: 'time'; text: string } | { kind: 'wor
 
 export function CompanionListRow({
   avatar, title, device, trailing, preview, previewTone = 'secondary', previewPrefix, previewPrefixTestID,
-  unread = false, unreadLabel, disabled = false, last = false, accessibilityLabel, onPress, testID,
+  unread = false, unreadCount, mentioned = false, unreadLabel, disabled = false, last = false, accessibilityLabel, onPress, testID,
 }: {
   /** Content of the 44pt avatar box (the caller draws presence dot and ring inside it). */
   avatar: ReactNode;
@@ -38,6 +38,8 @@ export function CompanionListRow({
   previewPrefix?: string;
   previewPrefixTestID?: string;
   unread?: boolean;
+  unreadCount?: number;
+  mentioned?: boolean;
   unreadLabel?: string;
   disabled?: boolean;
   last?: boolean;
@@ -67,7 +69,11 @@ export function CompanionListRow({
             {preview}
           </Text>
           : <View style={styles.previewSlot}>{preview}</View>}
-        {unread ? <View style={styles.unread} accessibilityLabel={unreadLabel} testID="companion.row.unread" /> : null}
+        {unread ? unreadCount !== undefined
+          ? <Text style={styles.unreadCount} accessibilityLabel={unreadLabel} testID="companion.row.unread">
+            {`${mentioned ? '@ ' : ''}${unreadCount > 99 ? '99+' : unreadCount}`}
+          </Text>
+          : <View style={styles.unread} accessibilityLabel={unreadLabel} testID="companion.row.unread" /> : null}
       </View>
     </View>
   </Pressable>;
@@ -101,6 +107,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   previewQuiet: { color: colors.textTertiary },
   previewSlot: { flex: 1, minWidth: 0, flexDirection: 'row' },
   prefix: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.medium },
+  unreadCount: { color: colors.botUnread, fontSize: typeScale.footnote, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, fontVariant: ['tabular-nums'] },
   unread: { width: COMPANION_ROW_DOT_SIZE, height: COMPANION_ROW_DOT_SIZE, borderRadius: radius.pill, backgroundColor: colors.botUnread },
   presence: { position: 'absolute', right: 0, bottom: 0, padding: 2, borderRadius: radius.pill, backgroundColor: colors.surface },
 });
