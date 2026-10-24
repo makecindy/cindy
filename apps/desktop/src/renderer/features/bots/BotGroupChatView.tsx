@@ -1,3 +1,4 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
 import { useThreadPanelResize } from './useThreadPanelResize';
 import { cn } from '@/lib/utils';
@@ -1104,6 +1105,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       <div
         ref={scrollRef}
         data-testid="bot-group-timeline"
+        onCopy={copyChatSelection}
         onScroll={(event) => {
           const element = event.currentTarget;
           stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;

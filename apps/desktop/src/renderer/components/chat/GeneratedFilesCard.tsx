@@ -354,6 +354,7 @@ function GeneratedFileChip({
   return (
     <>
       <button
+        data-chat-copy-content
         type="button"
         title={file.path}
         disabled={pending}

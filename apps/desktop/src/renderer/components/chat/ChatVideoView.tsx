@@ -104,6 +104,7 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
           NOT 挂 controls — 用户一点就走 lightbox 大图播放。 */}
       <div
         ref={previewTriggerRef}
+        data-chat-video-preview
         // self-start 与 ChatImageView tool-output 同理:防止 MessageStream 的
         // flex-col 包裹层把容器拉宽到超过 <video> 实际宽度(点击区/边框错位)。
         className={cn(
