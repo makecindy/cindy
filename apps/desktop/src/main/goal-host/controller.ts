@@ -349,6 +349,7 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
 // ── 每轮事件累计状态 ─────────────────────────────────────────────────────────
 
 interface TurnAccumulator {
+  userDispatchPending: boolean;
   /** 创建目标之前已在运行的轮次；只保存在本生命周期内，不计入目标裁决。 */
   precedingTurn: { session: SessionLike; generation: number } | null;
   text: string;
@@ -374,6 +375,7 @@ function freshTurn(
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
   return {
+    userDispatchPending: false,
     precedingTurn: null,
     text: '',
     sawToolUse: false,
@@ -630,6 +632,7 @@ export class GoalController {
         previousBoundary?.pendingPersistence ?? null,
         previousBoundary?.pendingCompletion ?? null,
       );
+      editBoundary.userDispatchPending = true;
       this.turns.set(sessionId, editBoundary);
       let editObjectivePersisted = false;
       let updatedState: GoalState | null = null;
@@ -705,6 +708,7 @@ export class GoalController {
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    createBoundary.userDispatchPending = true;
     createBoundary.precedingTurn = previousBoundary?.precedingTurn ?? null;
     this.turns.set(sessionId, createBoundary);
     let createdState: GoalState | null = null;
@@ -1341,6 +1345,7 @@ export class GoalController {
       lookupBoundary.pendingPersistence,
       lookupBoundary.pendingCompletion,
     );
+    resumedBoundary.userDispatchPending = !opts?.auto;
     this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
@@ -2544,11 +2549,18 @@ export class GoalController {
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };
+      const userDispatchAt = this.now();
+      const noteUserDispatched = () => {
+        if (!dispatchBoundary?.userDispatchPending) return;
+        dispatchBoundary.userDispatchPending = false;
+        this.deps.onGoalUserDispatched?.(sessionId, userDispatchAt);
+      };
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {
           origin: { kind: 'goal', goalSessionId: sessionId },
           planMode: false,
+          onAccepted: noteUserDispatched,
           // Session.send 只在 vendor dispatch 前的最后一个同步边界调用它。不能等
           // send Promise 返回后才登记：派发调用尚未返回时用户点清除，clearGoal 必须
           // 已经知道这个 turn 属于目标模式，才能立即走 Stop 边界。
@@ -2565,6 +2577,7 @@ export class GoalController {
           signal: dispatchAbortController.signal,
         },
       );
+      if (result.accepted) noteUserDispatched();
       if (pendingHandoff && result.accepted) {
         agentHandoffPending.consume(sessionId);
       }

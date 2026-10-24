@@ -1067,15 +1067,18 @@ describe('local-db:sessions:update handler wiring', () => {
     );
   });
 
-  it('persists handoffs monotonically without changing the last human send or metadata clock', async () => {
-    const before = h.sqlite!.prepare('SELECT user_send_at, updated_at FROM sessions WHERE id = ?').get('codex-local');
+  it('advances the bounded-list clock monotonically on handoffs without changing the last human send', async () => {
+    const before = h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local');
     await touchSessionActivityInDb('codex-local', 1_786_500_050_000);
     await touchSessionActivityInDb('codex-local', 1_786_500_040_000);
-    expect(h.sqlite!.prepare('SELECT user_send_at, updated_at FROM sessions WHERE id = ?').get('codex-local')).toEqual(before);
-    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
-      .toEqual({ last_activity_at: 1_786_500_050_000 });
+    expect(h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local')).toEqual(before);
+    expect(h.sqlite!.prepare('SELECT last_activity_at, updated_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000, updated_at: 1_786_500_050_000 });
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
-      sessionId: 'codex-local', patch: { lastActivityAt: new Date(1_786_500_050_000).toISOString() },
+      sessionId: 'codex-local', patch: {
+        lastActivityAt: new Date(1_786_500_050_000).toISOString(),
+        updatedAt: new Date(1_786_500_050_000).toISOString(),
+      },
     }));
     await invokeUpdate('codex-local', { title: 'Renamed', status: 'archived' });
     markSessionTurnEnded('codex-local');

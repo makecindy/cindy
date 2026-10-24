@@ -9,7 +9,7 @@ import { setMainLocale } from '../../i18n.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
-import { SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
+import { SessionListActivityTracker, SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
 import { ProductTurnWallClockTracker, ProductTurnUsageTargetTracker } from '../turnWallClock.js';
 import { ClaudeOutputLagTimingGuard } from '../../usage/modelUsageDelta.js';
 import { createWorkerTurnStartSequencer } from '../workerTurnStartSequencer.js';
@@ -264,6 +264,7 @@ function harness() {
     turnStallMs: 0,
   });
   const activity = new SessionTurnActivityTracker();
+  const listActivity = new SessionListActivityTracker(effects.fn('list-activity'));
   const deps = {
     onPluginTaskTerminal: vi.fn(),
     onSuccessfulProductTurn: vi.fn(async () => {}),
@@ -302,6 +303,7 @@ function harness() {
     pendingFailedTurnAssistantPersistId: new Map<string, string>(),
     silentStopAutoResumeGuard: { noteTurnStarted: vi.fn() },
     sessionTurnActivityTracker: activity,
+    sessionListActivityTracker: listActivity,
     productTurnWallClockTracker: new ProductTurnWallClockTracker(),
     productTurnUsageTargetTracker: new ProductTurnUsageTargetTracker(),
     advanceSessionTurnBoundaryGeneration: vi.fn(() => 1),
@@ -378,6 +380,7 @@ function harness() {
     emit,
     dispose: async () => {
       activity.deleteSession('task');
+      listActivity.deleteSession('task');
       await session.close();
     },
   };
@@ -426,6 +429,75 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it.each([false, true])('records a paired terminal once at the first signal (done first: %s)', async doneFirst => {
+    const current = harness();
+    try {
+      current.emit(event('status', { isRunning: true }));
+      vi.setSystemTime(10_000);
+      current.emit(doneFirst ? event('done') : event('status', { isRunning: false }));
+      await microtasks();
+      vi.setSystemTime(10_100);
+      current.emit(doneFirst ? event('status', { isRunning: false }) : event('done'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 10_000);
+    } finally { await current.dispose(); }
+  });
+
+  it.each([false, true])('settles silent-stop activity only after the continuation decision (resume: %s)', async continued => {
+    const current = harness();
+    current.deps.handleSilentStopTurnEnd.mockImplementation(async () => {
+      if (continued) current.deps.sessionListActivityTracker.captureContinuation('task')();
+      else current.deps.sessionListActivityTracker.commit('task');
+    });
+    try {
+      current.emit(event('status', { isRunning: true }));
+      vi.setSystemTime(20_000);
+      current.emit(event('status', { isRunning: false }));
+      await microtasks();
+      vi.setSystemTime(20_100);
+      current.emit(event('done', { silentStop: true }, { source: 'claude-code' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_500);
+      if (continued) {
+        expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+        current.emit(event('status', { isRunning: true }));
+        current.emit(event('done'));
+        expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 21_600);
+      } else {
+        expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 20_000);
+      }
+    } finally { await current.dispose(); }
+  });
+
+  it('distinguishes a new generation that terminates without a running status', async () => {
+    const current = harness();
+    try {
+      current.emit(event('done', {}, { sessionTurnGeneration: 1 }));
+      current.emit(event('done', {}, { sessionTurnGeneration: 1 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(1);
+      current.emit(event('error', {}, { sessionTurnGeneration: 2 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(2);
+    } finally { await current.dispose(); }
+  });
+
+  it('commits a status-only stop once and cancels its fallback when the runtime closes', async () => {
+    const current = harness();
+    try {
+      current.emit(event('status', { isRunning: true }));
+      vi.setSystemTime(30_000);
+      current.emit(event('status', { isRunning: false }));
+      await vi.advanceTimersByTimeAsync(0);
+      current.emit(event('status', { isRunning: false }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 30_000);
+      current.emit(event('status', { isRunning: true }));
+      current.emit(event('status', { isRunning: false }));
+      await current.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(1);
+    } finally { await current.dispose(); }
+  });
+
   it('ignores idle status without a turn and an interrupted turn reserved for automatic continuation', async () => {
     const current = harness();
     try {
@@ -446,7 +518,8 @@ describe('production Session event pipeline', () => {
       expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
       current.emit(event(terminal, terminal === 'status' ? { isRunning: false } : {}));
       await microtasks();
-      expect(current.deps.noteSessionListActivity).toHaveBeenCalledWith('task');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledWith('task', expect.any(Number));
       current.deps.noteSessionListActivity.mockClear();
       current.emit(event('status', { isRunning: true }, { turnOrigin: { kind: 'goal' } }));
       current.emit(event(terminal, terminal === 'status' ? { isRunning: false } : {}, { turnOrigin: { kind: 'goal' } }));

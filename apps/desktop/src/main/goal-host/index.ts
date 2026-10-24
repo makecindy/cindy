@@ -78,6 +78,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     emitStatus: deps.broadcastStatus,
     onGoalStopped: (sessionId, atMs) => { void touchSessionActivityInDb(sessionId, atMs); },
+    onGoalUserDispatched: (sessionId, atMs) => { void touchSessionActivityInDb(sessionId, atMs); },
     // 护栏默认从 goal-settings-store 读(系统默认 + 用户 override,规则 20);新建 goal
     // 时直接采用最新默认值。
     getDefaults: () => readGoalSettings(),

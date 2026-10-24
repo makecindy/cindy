@@ -40,7 +40,7 @@ import {
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
-import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import { isTerminalTurnErrorEvent, type SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
 import { ProductTurnUsageTargetTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
@@ -60,7 +60,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
-  readonly noteSessionListActivity: (sessionId: string) => void;
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
@@ -545,12 +545,16 @@ export function finishSessionTerminalEvent(
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
       if (
-        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal' &&
-        !autoResumeSuppressesPersist && !recoveryOwnsUnsuccessfulBoundary &&
-        !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
-        !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
+        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
       ) {
-        deps.noteSessionListActivity(session.id);
+        deps.sessionListActivityTracker.end(session.id, {
+          identity: event.sessionTurnGeneration === undefined ? undefined
+            : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+          hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
+            deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+            deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
+            (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
+        });
       }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
