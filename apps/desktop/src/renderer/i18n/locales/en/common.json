@@ -1348,6 +1348,8 @@
       "moreTasks_other": "{{n}} more tasks",
       "running": "Running",
       "openApp": "Open Cindy",
+      "remoteControlTitle": "Remote control active",
+      "remoteControlBody": "Other devices are accessing Cindy on this computer.",
       "gateTitle": "Sign in to see what's left",
       "gateBody": "Sign in to Cindy, or choose Skip Sign-In, and this panel shows your subscription quota and today's usage.",
       "settings": "Manage",

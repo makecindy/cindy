@@ -72,4 +72,5 @@ export interface AgentIslandRuntimeHost<Window extends AgentIslandWindow, Event>
   createLocalizedToolRowWording(): ToolRowWording;
   throwIpcError(code: 'INVALID_PARAMS' | 'PERMISSION_DENIED' | 'PRECONDITION_FAILED', message: string): never;
   assertTrustedAppRendererEvent(event: Event): void;
+  getActiveAppSession(): { dataOwnerId: string | null; generation: number };
 }

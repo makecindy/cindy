@@ -189,6 +189,12 @@ export interface MenubarView {
   strings: MenubarStrings;
   /** Text after the menu bar icon for each mode; the active one is `settings.statusText`. */
   statusTextByMode: Record<MenubarStatusTextMode, string | null>;
+  /** Same attention count as Agent Island, shown before the optional usage text. */
+  attentionCount?: number;
+  /** Same active-controller predicate as the in-app connection indicator. */
+  remotelyControlled?: boolean;
+  /** Live display names from the same controller set as the in-app indicator. */
+  remoteControllerNames?: string[];
   updatedAtMs: number | null;
   headlinePrimary: string;
   headlineSecondary: string | null;
@@ -220,6 +226,7 @@ export type MenubarHelperMessage =
   | { type: 'open-session'; sessionId: string }
   | { type: 'detail-action'; sourceId: string }
   | { type: 'open-provider-settings' }
+  | { type: 'open-remote-control-settings' }
   | { type: 'settings'; patch: MenubarSettingsPatch };
 
 /** Settings → Window behavior toggle; only the local app renderer may call these. */

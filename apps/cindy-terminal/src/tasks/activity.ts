@@ -46,6 +46,7 @@ export async function createTerminalSessionActivity(host: Pick<RuntimeHost,
     resolveSafe: host.resolveMedia, resourcesDirectory: runtimeResourcesDirectory });
   const runtime = createAgentIslandRuntime<AgentIslandWindow, TaskInvocationContext>({
     ...host, ...identity, ipcMain,
+    getActiveAppSession: () => ({ dataOwnerId: host.current() ? owner.userId : null, generation: owner.clientEpoch }),
     throwIpcError: (code, message) => { throw Object.assign(new Error(message), { code }); },
     getSessionRowSnapshot: async id => { const row = await host.conversations.snapshot.getSessionRowSnapshot(id); if (!host.current()) throw new Error('TASK_OWNER_CHANGED'); return row; },
     setAgentIslandCompanionChangeSink: sink => { companionSink = sink; },

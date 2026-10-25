@@ -1321,6 +1321,8 @@
       "moreTasks_other": "작업 {{n}}개 더",
       "running": "진행 중",
       "openApp": "Cindy 열기",
+      "remoteControlTitle": "원격 제어 중",
+      "remoteControlBody": "다른 기기에서 이 컴퓨터의 Cindy에 접근하고 있어요.",
       "gateTitle": "로그인하면 남은 양을 볼 수 있어요",
       "gateBody": "Cindy에 로그인하거나 로그인 건너뛰기를 선택하면 여기에 구독 남은 양과 오늘 사용량이 표시돼요.",
       "settings": "관리",

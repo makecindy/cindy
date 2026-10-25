@@ -1321,6 +1321,8 @@
       "moreTasks_other": "ほか {{n}} 件のタスク",
       "running": "実行中",
       "openApp": "Cindy を開く",
+      "remoteControlTitle": "リモート操作中",
+      "remoteControlBody": "ほかのデバイスがこのコンピュータの Cindy にアクセスしています。",
       "gateTitle": "ログインすると残りを確認できます",
       "gateBody": "Cindy にログインするか、ログインをスキップすると、ここにサブスクリプションの残りと今日の使用量が表示されます。",
       "settings": "管理",

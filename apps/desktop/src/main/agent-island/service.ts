@@ -15,6 +15,7 @@ import { createLocalizedToolRowWording } from './toolWording.js';
 import { MacAgentIslandNativeHost } from './MacAgentIslandNativeHost.js';
 import { readAgentIslandDetachedLayoutPreferences, readAgentIslandLayoutPreferences, writeAgentIslandLayoutPreference, writeAgentIslandLayoutPreferences } from './layoutPreferenceStore.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { getActiveAppSession } from '../appSessionState.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -26,6 +27,7 @@ const runtime = createAgentIslandRuntime<Window, IpcMainInvokeEvent>({
   log, t, ipcMain, getSessionRowSnapshot, patchSessionMetaInDb, withSessionRouteLock, remoteInvoke,
   setAgentIslandCompanionChangeSink, clearAppBadgeSessionAttention, hasAppBadgeSessionAttention,
   isDeviceLinkInvoke, tapWindowBroadcast, createLocalizedToolRowWording, throwIpcError, assertTrustedAppRendererEvent,
+  getActiveAppSession,
   readAgentIslandCompanion, companionAvatarHasArtwork, companionAvatarThumbnail, companionSnapshotWithoutArtwork,
   hasImBinding: id => !!bindingStore.findByTarget(id),
   ui: {
