@@ -7,6 +7,7 @@
  */
 
 import { sql } from 'drizzle-orm';
+import { fastModeFromStorage, fastModeToStorage, type FastMode } from '@cindy/maker-shared';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
   index,
@@ -16,9 +17,16 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  customType,
 } from 'drizzle-orm/sqlite-core';
 
 import type { SessionSource } from '../../shared/sessionSource.js';
+
+const speedSetting = customType<{ data: FastMode; driverData: number }>({
+  dataType: () => 'integer',
+  toDriver: fastModeToStorage,
+  fromDriver: fastModeFromStorage,
+});
 
 /** Historical source identity survives uninstall; revision is only a continuity witness. */
 export const pluginUsageSubjects = sqliteTable('plugin_usage_subjects', {
@@ -88,6 +96,7 @@ const SESSION_SOURCES = [
   'scheduler',
   'learn',
   'review',
+  'side-chat',
   'shared',
   'plugin',
   'bot',
@@ -110,6 +119,8 @@ export const sessions = sqliteTable(
       .notNull()
       .default('project'),
     model: text('model').notNull().default('claude-sonnet-4-6'),
+    /** Owner's selection while an automation temporarily uses another runtime. */
+    scheduledModelBaseline: text('scheduled_model_baseline'),
     effort: text('effort', {
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     })
@@ -139,7 +150,7 @@ export const sessions = sqliteTable(
     /** Last window written by the runtime snapshot writer. Equality with contextWindow
      * proves provenance; a later legacy/import writer changing the value invalidates it. */
     contextWindowRuntime: integer('context_window_runtime'),
-    fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
+    fastMode: speedSetting('fast_mode').notNull().default(false),
     /**
      * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经用户
      * 审批后再执行(Claude 走 SDK plan mode, Codex 走 collaborationMode plan)。
@@ -417,8 +428,9 @@ export const botSessionLinks = sqliteTable(
       .references(() => sessions.id, { onDelete: 'cascade' }),
     /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
     profileVersion: integer('profile_version').notNull().default(1),
-    // TS-only enum (SQLite `text`, no CHECK): `channel` = 伙伴接管的个人 IM 群 / 话题专线。
-    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel'] }).notNull(),
+    // TS-only enum (SQLite `text`, no CHECK): `channel` = 伙伴接管的个人 IM 群 / 话题专线；
+    // `thread` = 主人私聊里的话题（route_key = dm-thread:<根消息 Session>:<根消息 clientId>）。
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),
@@ -1426,14 +1438,19 @@ export const schedules = sqliteTable(
      * runner fire 时透传给 setSessionProvider；与 sessions.provider_id 同语义。
      */
     providerId: text('provider_id'),
+    /**
+     * 每次新建任务时 Agent 在哪台电脑运行(同账号另一台电脑或分享来的供应商)。
+     * NULL = 本机。provider_id 属于那台电脑的已授权目录。绑定的任务仍存在时不使用:
+     * 运行位置跟随被绑定的任务。与 sessions.agent_device_id 同语义。
+     */
+    agentDeviceId: text('agent_device_id'),
     effort: text('effort', {
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
     /**
-     * Codex Fast 模式开关。true → runner fire 时透传给 codex agent，落到
-     * app-server ServiceTier.Fast。仅 Codex 有意义，Claude 忽略。默认 false。
+     * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
-    fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
+    fastMode: speedSetting('fast_mode').notNull().default(false),
     workingDir: text('working_dir'),
     workspaceKind: text('workspace_kind', { enum: ['project', 'dialogue'] })
       .notNull()
@@ -2381,7 +2398,7 @@ export const sessionTaskTags = sqliteTable(
 export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
-  operation: text('operation', { enum: ['create', 'send'] }).notNull(),
+  operation: text('operation', { enum: ['create', 'send', 'target'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),

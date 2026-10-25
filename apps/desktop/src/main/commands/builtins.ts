@@ -49,6 +49,7 @@ export interface DesktopCommandTriggeredPayload {
     | 'cmd'
     | 'issue'
     | 'review'
+    | 'side'
     | 'jump-session'
     | 'goal'
     | 'workflows'
@@ -517,6 +518,12 @@ export function registerBuiltinDesktopCommands(
     description:
       'Clears the current session context in place — wipes its messages and state without creating or switching to a new session. The session stays in the sidebar.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
+  });
+
+  registry.register({
+    name: 'side',
+    get description() { return t('chat.sideChat.commandDescription'); },
+    execute: (ctx) => sendDesktopCommandToSender(ctx, buildPayload('side', ctx)),
   });
 
   registry.register({

@@ -16,6 +16,7 @@ import {
   buildDesktopDevVerdictFromWhoami,
   desktopRestartArgvConflictMessage,
   normalizeDesktopRestartArgv,
+  UI_MOCK_ARG,
   printDesktopDevVerdict,
   resolveIsolatedArg,
   restartContextFromArgv,
@@ -962,6 +963,8 @@ function devEnvEntries(env) {
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
+    // --mock 的 UI 模拟数据开关(main/index.ts 只在隔离沙箱里认)。
+    ['XDT_UI_MOCK', env.XDT_UI_MOCK],
     // Cindy Make 测试窗口标记必须穿过 restart → dev-env → Forge，
     // 否则测试进程会退化成普通开发窗口（数据虽隔离，关闭／前台行为却不再是测试版）。
     ['XDT_CINDY_MAKE_TEST', env.XDT_CINDY_MAKE_TEST],
@@ -1207,6 +1210,10 @@ async function main() {
   let argv = normalizeDesktopRestartArgv(process.argv.slice(2), process.env);
   const sharedArgvConflict = desktopRestartArgvConflictMessage(argv, process.env);
   if (sharedArgvConflict) throw new Error(sharedArgvConflict);
+  // --mock: dev main seeds the shared UI mock tasks into this isolated sandbox
+  // (docs/dev-rules/ui-mock-data.md). Only the flag turns it on, never a stale shell env.
+  if (argv.includes(UI_MOCK_ARG)) process.env.XDT_UI_MOCK = '1';
+  else delete process.env.XDT_UI_MOCK;
   const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
   const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir, foldCaseOption(rootDir));
   if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {

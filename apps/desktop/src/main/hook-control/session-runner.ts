@@ -671,7 +671,7 @@ export function createMakerHookSessionRunner(deps: {
       let model: string | undefined = resolved?.model;
       let effort = resolved?.effort;
       let resumeSessionId: string | undefined;
-      let companionFastMode: boolean | undefined;
+      let companionFastMode: boolean | 'ultrafast' | undefined;
       let effectiveAgentKind: AgentKind = resolved?.agentKind ?? 'claude-code';
       // 新建路径 resolved 必有值(capabilities 校验过); 复用路径由下方 meta 覆盖
       let permissionMode: PermissionMode = (resolved?.permissionMode ??
@@ -701,7 +701,7 @@ export function createMakerHookSessionRunner(deps: {
           // This lane bypasses bootstrapSession. Claude subscription bridges read
           // these stores, not createSession options, including on cold resume.
           setSessionEffort(req.sessionId, effort);
-          setSessionFastMode(req.sessionId, companionFastMode === true);
+          setSessionFastMode(req.sessionId, companionFastMode ?? false);
         }
         permissionMode = meta?.permissionMode ?? 'bypassPermissions';
         rowProviderId = row?.providerId ?? null;

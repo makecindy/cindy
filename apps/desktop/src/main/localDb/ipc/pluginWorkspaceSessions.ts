@@ -77,7 +77,7 @@ export async function createPluginDraftSession(params: {
     agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
   };
   /**
@@ -144,7 +144,7 @@ export async function createPluginTaskSession(params: {
   agentKind?: 'cc' | 'codex' | 'pi';
   model?: string;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
   permissionMode: 'ask' | 'plan' | 'acceptEdits' | 'auto';
   /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */

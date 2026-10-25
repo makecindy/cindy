@@ -22,6 +22,7 @@ import {
   ghostUnknownV3FieldsWithinCap,
   ghostNetworkHostMatches,
   ghostPanelKind,
+  ghostPanelLoopbackEmbedAllowed,
   ghostPermissionBaselineKey,
   ghostPreviewUrlAllowed,
   parseGhostNodeChildToHostMessage,
@@ -2359,6 +2360,38 @@ describe('ghost · panel.position 校验', () => {
     });
     expect(validateGhostManifest(withView({ multiple: false })).ok).toBe(false);
     expect(validateGhostManifest(withView({ multiple: 'yes' })).ok).toBe(false);
+  });
+
+  // - 生产入口与可观察结果:validateGhostManifest / 本地化 / 入口白名单 / 权限差异对 taskView 的处理。
+  // - Bug / 规则依据:插件可声明跟对话的任务页(按任务存在右侧栏,随任务切换)。
+  // - 现有覆盖缺口:taskView 是新字段。
+  // - 最小失败输入:taskView.html 缺失、与 slot 不成对。
+  // - tier:unit。
+  it('taskView:合法声明保留并放行入口、本地化标题、作为新增能力;html 缺失或与槽不成对都拒', () => {
+    const withTask = (taskView: unknown, slots = ['panel', 'task-view']) => ({
+      ...goodChipManifest(),
+      minCindyVersion: '1.2.3',
+      slots,
+      taskView,
+    });
+    const ok = validateGhostManifest(withTask({ title: '模拟器', html: 'task.html' }));
+    expect(ok).toMatchObject({ ok: true, manifest: { taskView: { title: '模拟器', html: 'task.html' } } });
+    if (!ok.ok) throw new Error('expected a valid manifest');
+    expect(ghostWebviewEntryPaths(ok.manifest)).toContain('/task.html');
+    expect(diffGhostPermissionItems({ ...ok.manifest, taskView: undefined }, ok.manifest).added).toEqual([
+      expect.objectContaining({ key: 'task-view', kind: 'task-view', labelKey: 'taskView' }),
+    ]);
+    const locale = validateGhostManifestLocaleResource({ taskView: { title: 'Simulator' } }, ok.manifest);
+    expect(locale.ok && resolveGhostManifestLocale(ok.manifest, locale.resource).taskView?.title).toBe('Simulator');
+
+    // 声明任务页 + node + 回环预览的插件,其页面可嵌入自己的本机画面;缺 node 就不行。
+    const embed = { ...ok.manifest, node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' as const }, preview: { hosts: ['127.0.0.1'] } };
+    expect(ghostPanelLoopbackEmbedAllowed({ ...embed, panel: undefined })).toBe(true);
+    expect(ghostPanelLoopbackEmbedAllowed({ ...embed, panel: undefined, node: undefined })).toBe(false);
+    expect(validateGhostManifest(withTask({ title: '模拟器' })).ok).toBe(false);
+    expect(validateGhostManifest(withTask({ html: '../task.html' })).ok).toBe(false);
+    expect(validateGhostManifest(withTask({ html: 'task.html' }, ['panel'])).ok).toBe(false);
+    expect(validateGhostManifest(withTask(undefined, ['panel', 'task-view'])).ok).toBe(false);
   });
 
   it("'tab'(右侧栏页签)通过;tab 时 minWidth/defaultFraction 收词明确拒绝", () => {

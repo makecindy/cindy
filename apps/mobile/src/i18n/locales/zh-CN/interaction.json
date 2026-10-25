@@ -21,6 +21,7 @@
     "allowOnceConfirm": "确认允许一次",
     "highRisk": "高风险",
     "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
+    "autoReviewReason": "自动审批需要你决定：{{reason}}",
     "fullAccessConfirm": {
       "title": "开启完全访问？",
       "description": "完全访问会关闭工作区沙箱并跳过常规审批。{{appName}} 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
@@ -384,7 +385,12 @@
       "allowTitle": "允许后电脑端会继续执行",
       "tool": "工具：{{tool}}",
       "title": "允许使用 {{tool}}？",
-      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。"
+      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。",
+      "titleCommand": "允许运行这条命令？",
+      "titleFileRead": "允许读取文件？",
+      "titleFileWrite": "允许修改文件？",
+      "titleBrowser": "允许浏览器执行这一步？",
+      "titlePlugin": "允许使用插件「{{plugin}}」？"
     },
     "ask": {
       "progress": "第 {{current}}/{{total}} 个问题",

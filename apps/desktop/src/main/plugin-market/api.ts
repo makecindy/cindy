@@ -73,7 +73,8 @@ export class PluginMarketApi {
   private requestOptions(): Omit<ApiFetchOptions, 'baseUrl'> {
     return {
       cache: 'no-store',
-      headers: { [CINDY_CLIENT_VERSION_HEADER]: this.getClientVersion() },
+      headers: { [CINDY_CLIENT_VERSION_HEADER]: this.getClientVersion(),
+        'x-cindy-plugin-migrations': 'simulator-id-v1' },
       timeoutMs: PLUGIN_MARKET_API_TIMEOUT_MS,
     };
   }

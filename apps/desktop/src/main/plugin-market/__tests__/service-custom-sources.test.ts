@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundRefresh.js';
+import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
+import type { InstalledGhost } from '../../../shared/ghost.js';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
@@ -77,6 +80,11 @@ vi.mock('../../cindy-brain/index.js', () => ({
   refreshPluginUsageBindings: vi.fn(async () => undefined),
   confirmLegacyLibraryReattach: async () => false,
   getGhostManager: () => ({
+    createBackgroundRefresh() {
+      const state = () => ({ owner: JSON.stringify(runtime.session), mutation: runtime, identity: JSON.stringify(runtime.ghosts) });
+      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
+    },
+    async listAsync() { return this.list(); },
     list: () =>
       (runtime.listSequence ? runtime.listSequence() : runtime.ghosts).map((ghost) => ({
         ...ghost,

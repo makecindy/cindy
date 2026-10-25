@@ -731,6 +731,43 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.authError).toBeNull();
   });
 
+
+  // A native browser promise may outlive the screen's explicit reset. Exercise
+  // the real provider epoch fence with success, rejection and dismissal replies.
+  it.each(['success', 'reject', 'cancel'] as const)('can reset a hung browser and fences its late %s result from the next attempt', async result => {
+    let settle!: (value: any) => void;
+    let fail!: (error: Error) => void;
+    native.open.mockImplementationOnce(() => new Promise((resolve, reject) => { settle = resolve; fail = reject; }));
+    let old!: Promise<boolean>;
+    await act(async () => { old = auth.dispatchLoginAction({ type: 'start-social-browser', provider: 'wechat', label: 'WeChat' }); });
+    expect(auth.loginState?.step).toBe('browser-redirect');
+    expect(native.open).toHaveBeenCalledOnce();
+    const oldCallback = callbackUrl();
+    await act(async () => { expect(await auth.dispatchLoginAction({ type: 'reset' })).toBe(true); });
+    expect(auth.isBusy).toBe(false);
+    await start('social');
+    const pending = native.storage.get(pendingKey);
+    const state = auth.loginState;
+    await act(async () => {
+      if (result === 'reject') fail(new Error('old browser failed'));
+      else settle(result === 'success' ? { type: 'success', url: oldCallback } : { type: 'cancel' });
+      expect(await old).toBe(false);
+    });
+    expect(auth.loginState).toBe(state);
+    expect(auth.authError).toBeNull();
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledOnce();
+  });
+  it('reports native browser launch failures without consuming the pending callback identity', async () => {
+    native.open.mockRejectedValueOnce(new Error('BROWSER_UNAVAILABLE'));
+    await start('social');
+    expect(auth.authError).toBe('BROWSER_UNAVAILABLE');
+    expect(auth.isBusy).toBe(false);
+    expect(native.storage.has(pendingKey)).toBe(true);
+  });
+
   it('an earlier attempt cannot consume the new attempt after cancel and retry', async () => {
     await start();
     const oldCallback = callbackUrl();

@@ -176,20 +176,20 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   // 远程 worktree:worktree:create 的 baseRepo 与 create-session 的 workingDir 同口径收敛
   // (决定在被控端哪个仓库下跑 git worktree add)。
-  it('worktree:create 的 baseRepo 是真实存在目录 → 放行到 handler', async () => {
-    const handler = registerHandler('worktree:create', () => ({ ok: true }));
+  it.each(['worktree:create', 'worktree:sync-branch'])('%s 的 baseRepo 是真实存在目录 → 放行到 handler', async (channel) => {
+    const handler = registerHandler(channel, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
-      channel: 'worktree:create',
+      channel,
       args: [{ sessionId: 's-wt', baseRepo: TMP_DIR, name: 'auto-x1', sourceBranch: 'main' }],
     })) as Extract<InvokeResultPayload, { ok: true }>;
     expect(res.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('worktree:create 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async () => {
-    const handler = registerHandler('worktree:create', () => ({ ok: true }));
+  it.each(['worktree:create', 'worktree:sync-branch'])('%s 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async (channel) => {
+    const handler = registerHandler(channel, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
-      channel: 'worktree:create',
+      channel,
       args: [{ sessionId: 's-wt', baseRepo: '/definitely/not/a/real/repo/xyz123', name: 'auto-x1', sourceBranch: 'main' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);

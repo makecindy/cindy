@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), clearSnapshot: vi.fn() }));
+const native = vi.hoisted(() => ({ readSnapshot: vi.fn(), clearSnapshot: vi.fn(), discardSnapshot: vi.fn(), rejectUnreadableSnapshot: vi.fn() }));
 const fs = vi.hoisted(() => {
   const listings = new Map<string, Array<{ uri: string; name: string }> | Error>();
   class Directory {
@@ -20,10 +20,13 @@ const fs = vi.hoisted(() => {
 });
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => native }));
 vi.mock('expo-file-system', () => ({ Directory: fs.Directory }));
-import { getSharedPayloads, clearSharedPayloads } from '@/session/incomingShareNative';
+import { getSharedPayloads, clearSharedPayloads, discardSharedPayloads, rejectUnreadableSharedPayloads } from '@/session/incomingShareNative';
 
 beforeEach(() => {
   vi.resetAllMocks();
+  native.readSnapshot.mockReturnValue(null);
+  getSharedPayloads();
+  native.readSnapshot.mockReset();
   fs.listings.clear();
   native.clearSnapshot.mockReturnValue(true);
 });
@@ -155,4 +158,53 @@ it.each(['throw', 'false'])('preserves all mixed payloads after acknowledgement 
   // A new explicit share of the same file remains receivable.
   slot = snapshot;
   expect(restarted.getSharedPayloads()).toHaveLength(1);
+});
+
+// A shared string that looks like a managed path is still content, not a file capability.
+it('preserves literal file-URL text without consulting or deleting the filesystem', () => {
+  fs.listings.set(root, []);
+  native.readSnapshot.mockReturnValue(JSON.stringify([{ type: 'text', value: uri }]));
+  expect(getSharedPayloads()).toEqual([{ shareType: 'text', value: uri, mimeType: undefined }]);
+  expect(native.clearSnapshot).not.toHaveBeenCalled();
+});
+
+// Only account-boundary discards tombstone; normal failed consumption stays retryable.
+it('discards the exact captured snapshot through the durable rejection API', () => {
+  const snapshot = '[ { "type":"text", "value":"account A private text" } ]';
+  native.readSnapshot.mockReturnValue(snapshot);
+  const raw = getSharedPayloads();
+  native.discardSnapshot.mockImplementation(() => { throw new Error('App Group locked'); });
+  expect(() => discardSharedPayloads(raw)).toThrow('App Group locked');
+  expect(native.discardSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot);
+  expect(native.clearSnapshot).not.toHaveBeenCalled();
+});
+
+it('fences old text before filtering files that account cleanup deleted', () => {
+  fs.listings.set(root, [directory]);
+  fs.listings.set(directory.uri, [{ uri, name: 'report.pdf' }]);
+  const mixed = JSON.stringify([{ type: 'file', value: uri }, { type: 'text', value: 'private A text' }]);
+  native.readSnapshot.mockReturnValue(mixed);
+  const raw = getSharedPayloads();
+  native.discardSnapshot.mockImplementation(() => { throw new Error('storage unavailable'); });
+  expect(() => discardSharedPayloads(raw)).toThrow();
+  fs.listings.set(root, []);
+  native.clearSnapshot.mockReturnValue(false);
+  expect(getSharedPayloads()).toEqual([]);
+  expect(getSharedPayloads()).toEqual([]);
+  native.clearSnapshot.mockReturnValue(true);
+  expect(getSharedPayloads()).toEqual([]);
+  native.readSnapshot.mockReturnValue(null);
+  expect(getSharedPayloads()).toEqual([]);
+  native.readSnapshot.mockReturnValue('[{"type":"text","value":"private A text"}]');
+  expect(getSharedPayloads()).toEqual([{ shareType: 'text', value: 'private A text', mimeType: undefined }]);
+});
+
+// The boundary must be persisted without a second read of the unavailable slot.
+it('persists unknown snapshot rejection without App Group reads', () => {
+  native.readSnapshot.mockImplementation(() => { throw new Error('App Group I/O'); });
+  rejectUnreadableSharedPayloads();
+  expect(native.rejectUnreadableSnapshot).toHaveBeenCalledOnce();
+  expect(native.readSnapshot).not.toHaveBeenCalled();
+  native.rejectUnreadableSnapshot.mockImplementation(() => { throw new Error('rejection flush failed'); });
+  expect(() => rejectUnreadableSharedPayloads()).toThrow('rejection flush failed');
 });

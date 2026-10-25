@@ -1,14 +1,36 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
+import { transferableAbortController } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatGroupSettings } from '../ChatGroupSettings';
+import { BotSettingsDrawer } from '../BotSettingsDrawer';
 import type { BotGroupSummary } from '../../../../shared/botGroupChat';
 const mocks = vi.hoisted(() => ({ manage: vi.fn(), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn() }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+const profiles = vi.hoisted(() => ({
+  list: [{ id: 'bot', name: 'Partner', status: 'active', sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] }],
+}));
+const translate = (key: string, options?: { name?: string }) =>
+  typeof options?.name === 'string' ? `${key}:${options.name}` : key;
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
+vi.mock('../botPronounContext', () => ({
+  useBotTranslation: () => ({ t: translate }),
+  BotPronounProvider: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: () => null }));
+vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ demotedBotIds: [] as string[] }) }));
+vi.mock('../BotsHomeView', () => ({
+  BotSettings: ({ bot, initialPage }: { bot: { id: string; name: string }; initialPage?: string }) => (
+    <div data-testid="bot-settings" data-bot-id={bot.id} data-initial-page={initialPage}>{bot.name}</div>
+  ),
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: mocks.confirm }) }));
-vi.mock('@/components/settings/ProfileEditDialog', () => ({ ProfileEditDialog: () => null }));
-vi.mock('../botStore', () => ({ useBotProfiles: () => [{ id: 'bot' }] }));
+vi.mock('@/components/settings/ProfileEditDialog', () => ({ ProfileEditDialog: ({ open, avatarEditor }: {
+  open: boolean; avatarEditor?: { hint: string; save(avatar: { type: 'reset' }): Promise<void> };
+}) => open && avatarEditor ? <button onClick={() => void avatarEditor.save({ type: 'reset' })}>{avatarEditor.hint}</button> : null }));
+vi.mock('../botStore', () => ({ useBotProfiles: () => profiles.list }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => null }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => true }));
@@ -19,11 +41,30 @@ function group(owned = false): BotGroupSummary {
     { actorId: 'bot', botId: 'bot', actorKind: 'bot', name: 'Partner', role: 'owner', isOwned: owned, guestAccess: 'chat', accessRevision: 1 },
   ] } as BotGroupSummary;
 }
+function activeProfile(id: string, name: string, status = 'active') {
+  return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
+}
 beforeEach(() => {
+  const nativeAbortController = transferableAbortController();
+  vi.stubGlobal('AbortController', nativeAbortController.constructor);
+  vi.stubGlobal('AbortSignal', nativeAbortController.signal.constructor);
+  profiles.list = [activeProfile('bot', 'Partner')];
   vi.clearAllMocks(); mocks.manage.mockResolvedValue({ ok: true }); mocks.ownedBots.mockResolvedValue({ ok: true, bots: [] });
   mocks.confirm.mockResolvedValue(true);
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
 });
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+}
+function renderGroupEntry(groupValue: BotGroupSummary) {
+  return render(<RouterProvider router={createMemoryRouter([
+    { path: '/bots/groups/:groupId', element: <><div data-testid="group-chat" /><LocationProbe /><ChatGroupSettings group={groupValue} /><BotSettingsDrawer /></> },
+    { path: '/bots/list', element: <LocationProbe /> },
+    { path: '/bots/:botId', element: <><LocationProbe /><BotSettingsDrawer /></> },
+    { path: '*', element: <LocationProbe /> },
+  ], { initialEntries: ['/bots/groups/room?groupSettings=1'] })} />);
+}
 
 it('guides a sole owner to archive instead of offering an impossible leave', async () => {
   const alone = group();
@@ -53,7 +94,21 @@ it('keeps a sole archived owner in the group and offers restoring its history', 
     action: { type: 'archive', archived: false, expectedRevision: 1 },
   }));
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+// The actual dialog is covered by ProfileEditDialog.avatarCrop.test.tsx.
+// Here the real group settings must supply a group destination, never account editing.
+it('edits only this member avatar and hides editing on older servers', async () => {
+  const view = render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
+  expect(screen.queryByRole('button', { name: key('editProfile') })).toBeNull();
+  expect(screen.queryByRole('button', { name: key('groupAvatar') })).toBeNull();
+  view.rerender(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsMemberAvatar: true }} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: key('groupAvatar') }));
+  fireEvent.click(screen.getByRole('button', { name: key('groupAvatarHint') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({
+    groupId: 'room', action: { type: 'avatar', actorId: 'me', avatar: { type: 'reset' } },
+  }));
+  expect(mocks.refresh).toHaveBeenCalledOnce();
+});
 it('lets a member change their own nickname while keeping another owner’s grant read-only', async () => {
   render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
   expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).disabled).toBe(true);
@@ -77,6 +132,22 @@ it('labels reply and speaking modes with the same words as the local group setti
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeAll');
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' }).textContent).toContain('bots.groupChat.settings.speakingModeAuto');
   expect(screen.queryByText(key('replyMode'))).toBeNull();
+});
+
+// bot-group-chat.md §4.0 (2026-10-23): single-speaker groups keep 「只有被 @ 的回答」 and the
+// 分工 settings (organizer, project folder); only the speaking mode no longer applies.
+it('keeps reply mode and 分工 settings for single-speaker groups and saves mention-only replies', async () => {
+  render(<MemoryRouter><ChatGroupSettings group={{ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto' }} /></MemoryRouter>);
+  expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
+  expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
+  expect(screen.getByText('bots.groupChat.settings.projectDir')).toBeTruthy();
+  fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
+  fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
+  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: expect.objectContaining({
+    type: 'update', responseMode: 'mentioned', expectedRevision: 1,
+  }) }));
+  expect(mocks.refresh).toHaveBeenCalledOnce();
 });
 
 it('does not offer leaving when this account owns every group owner, including its companion', async () => {
@@ -134,4 +205,71 @@ it('does not refresh or remove the list on failed personal removal', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.lifecycle.hide' }));
   await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
   expect(mocks.refresh).not.toHaveBeenCalled();
+});
+
+// 测试价值
+// - 生产入口与可观察结果：群设置里真实的「工具与授权设置」按钮，以及 BotSettingsDrawer 的关闭按钮。
+//   打开后应看到所选伙伴的能力页，路由仍是原群；关闭后群聊页还在。
+// - Bug／规则依据：#6809。修前该按钮会进入 /bots/<id> 私聊，关闭只去掉设置参数。
+// - 现有覆盖缺口：本组用例只断言按钮是否出现；抽屉用例只覆盖私聊路由上的开关。
+// - 最小失败输入：群里两位已拥有且在本机名单中的伙伴，从 /bots/groups/room?groupSettings=1 打开后者。
+// - tier：unit。真实组件加 React Router，不启动 Electron。
+it('keeps the original group mounted when opening and closing another owned companion’s capability settings', async () => {
+  profiles.list = [activeProfile('bot', 'Partner'), activeProfile('other', 'Other')];
+  const room = group(true);
+  room.members = [...room.members, {
+    actorId: 'other', botId: 'other', actorKind: 'bot', name: 'Other', role: 'member', isOwned: true, guestAccess: 'chat', accessRevision: 1,
+    avatar: 'bot', avatarColor: 'blue', status: 'active',
+  }];
+  renderGroupEntry(room);
+  const buttons = screen.getAllByRole('button', { name: key('configureCapabilities') });
+  expect(buttons).toHaveLength(2);
+  fireEvent.click(buttons[1]!);
+  const opened = screen.getByTestId('location').textContent ?? '';
+  const settings = screen.queryByTestId('bot-settings');
+  const dialog = screen.queryByRole('dialog');
+  fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect({
+    opened,
+    botId: settings?.getAttribute('data-bot-id'),
+    page: settings?.getAttribute('data-initial-page'),
+    scope: dialog?.textContent?.includes(`${key('capabilityScope')}:Other`) ?? false,
+    closed: screen.getByTestId('location').textContent,
+    groupMounted: screen.queryByTestId('group-chat') !== null,
+  }).toEqual({
+    opened: expect.stringContaining('/bots/groups/room?'),
+    botId: 'other',
+    page: 'capabilities',
+    scope: true,
+    closed: '/bots/groups/room',
+    groupMounted: true,
+  });
+});
+
+it('returns a paused companion’s capability settings to the original group instead of the teammate list', async () => {
+  profiles.list = [activeProfile('bot', 'Partner', 'paused')];
+  renderGroupEntry(group(true));
+  fireEvent.click(screen.getByRole('button', { name: key('configureCapabilities') }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(screen.getByTestId('location').textContent).toBe('/bots/groups/room');
+  expect(screen.getByTestId('group-chat')).toBeTruthy();
+});
+
+it('keeps the private chat settings entry on that companion', async () => {
+  profiles.list = [activeProfile('bot', 'Partner'), activeProfile('other', 'Other')];
+  render(<RouterProvider router={createMemoryRouter([
+    { path: '/bots/:botId', element: <><LocationProbe /><BotSettingsDrawer /></> },
+    { path: '/bots/groups/:groupId', element: <LocationProbe /> },
+  ], { initialEntries: ['/bots/bot?settings=1&settingsPage=capabilities&settingsBot=other'] })} />);
+  expect(screen.getByTestId('bot-settings').getAttribute('data-bot-id')).toBe('bot');
+  expect(screen.getByTestId('bot-settings').getAttribute('data-initial-page')).toBe('capabilities');
+  expect(screen.queryByText(`${key('capabilityScope')}:Other`)).toBeNull();
+  expect(screen.queryByText(`${key('capabilityScope')}:Partner`)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  const closed = new URL(screen.getByTestId('location').textContent ?? '', 'https://cindy.local');
+  expect(closed.pathname).toBe('/bots/bot');
+  expect(closed.searchParams.get('settings')).toBeNull();
 });

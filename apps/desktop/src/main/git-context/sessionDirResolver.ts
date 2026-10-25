@@ -1,3 +1,4 @@
+import type { WorkerProjectInfo } from '../../shared/orca-worker-project';
 /**
  * sessionDirResolver — 推断「一个对话当前实际在哪个 git 工作目录干活」。
  *
@@ -521,4 +522,72 @@ export async function findLiveLinkedWorktreeLive(
     });
     return null;
   }
+}
+
+/** Canonical identities for inheritance; directory preserves the caller's spelling. */
+export interface WorkerProjectProbe extends WorkerProjectInfo {
+  commonDir: string | null;
+  checkoutRoot: string | null;
+  realDirectory: string | null;
+}
+
+/** PR2 can reuse this same-repository gate without changing MCP defaults in PR1. */
+export async function resolveWorkerInheritedDirectory(
+  lead: { id: string; workingDir: string | null; worktreePath?: string | null },
+  deps: {
+    infer: typeof resolveSessionGitDirLive;
+    probe: (dir: string) => Promise<WorkerProjectProbe>;
+  },
+): Promise<WorkerProjectProbe> {
+  const recorded = await deps.probe(lead.workingDir ?? '');
+  let inferred: SessionGitDirResult;
+  try {
+    inferred = await deps.infer({
+      sessionId: lead.id,
+      fallbackWorkingDir: lead.workingDir,
+      fallbackWorktreePath: lead.worktreePath ?? null,
+    });
+  } catch {
+    return recorded;
+  }
+  if (
+    inferred.source !== 'telemetry' ||
+    !inferred.workdir ||
+    inferred.workdir === recorded.directory ||
+    !recorded.commonDir ||
+    !recorded.checkoutRoot
+  )
+    return recorded;
+  const samePath = (a: string, b: string) =>
+    process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const candidate = await deps.probe(inferred.workdir);
+  if (
+    !candidate.exists ||
+    !candidate.commonDir ||
+    !candidate.checkoutRoot ||
+    !samePath(candidate.commonDir, recorded.commonDir) ||
+    samePath(candidate.checkoutRoot, recorded.checkoutRoot)
+  )
+    return recorded;
+
+  // Editing src/file.ts is evidence for its checkout, not a request to start in src.
+  const checkout = { ...candidate, directory: candidate.checkoutRoot, realDirectory: candidate.checkoutRoot };
+  if (!recorded.realDirectory) return checkout;
+  const relative = path.relative(recorded.checkoutRoot, recorded.realDirectory);
+  if (
+    !relative ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  )
+    return checkout;
+  const corresponding = await deps.probe(path.join(candidate.checkoutRoot, relative));
+  // Keep a monorepo subproject when present, without crossing into a nested repository.
+  return corresponding.exists &&
+    corresponding.checkoutRoot &&
+    corresponding.commonDir &&
+    samePath(corresponding.checkoutRoot, candidate.checkoutRoot) &&
+    samePath(corresponding.commonDir, candidate.commonDir)
+    ? corresponding
+    : checkout;
 }

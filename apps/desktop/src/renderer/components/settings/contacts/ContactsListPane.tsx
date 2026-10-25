@@ -71,7 +71,7 @@ export function ContactsListPane(props: Props) {
             placeholder={t('settings.contacts.list.searchPlaceholder')}
             className={cn(
               'min-w-0 flex-1 bg-transparent text-13 outline-none',
-              'text-[var(--settings-input-text)] placeholder:text-[var(--settings-section-desc)]',
+              'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
             )}
           />
         </div>
@@ -103,7 +103,7 @@ export function ContactsListPane(props: Props) {
             className={cn(
               'h-8 min-w-0 flex-1 rounded-lg px-2.5 text-13 outline-none',
               'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-              'placeholder:text-[var(--settings-section-desc)]',
+              'placeholder:text-[var(--settings-input-placeholder)]',
             )}
           />
           <button

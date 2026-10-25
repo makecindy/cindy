@@ -60,6 +60,8 @@
     "send": "发送"
   },
   "timeline": {
+    "newMessages_one": "{{count}} 条新消息",
+    "newMessages_other": "{{count}} 条新消息",
     "emptyTitle": "群里还没有消息",
     "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
     "roundEnded": "伙伴们说完了",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
     "deleted": "原消息已删除",
-    "attachments": "{{name}} 等 {{total}} 个附件"
+    "attachments": "{{name}} 等 {{total}} 个附件",
+    "unavailable": "无法找到这条消息。"
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
@@ -113,6 +116,7 @@
     "start": "开始",
     "dismiss": "不用了",
     "editHint": "想换人或改步骤，直接说",
+    "autoNote": "做完一步会自动交给下一位。",
     "pauseNote": "每做完一步会停下来，等你点「继续」。",
     "superseded": "已更新",
     "dismissed": "不用了",
@@ -171,6 +175,7 @@
     "replyModeAll": "大家都可以接话",
     "replyModeMentioned": "只有被 @ 的回答",
     "replyModeNote": "没什么可补充的伙伴不会说话。每轮最多聊 3 圈、10 条，之后等你点「继续讨论」。",
+    "replyModeNoteQueue": "伙伴们排队依次回答，前 5 位自动接着说。引用伙伴的消息或回复它的话题，也会叫到它。",
     "replyModeSaveFailed": "回复方式没能保存，请再试一次",
     "delete": "删除群聊",
     "deleteNote": "只删除这个群和群里的消息，伙伴本身、它们的记忆和私聊都不受影响。",

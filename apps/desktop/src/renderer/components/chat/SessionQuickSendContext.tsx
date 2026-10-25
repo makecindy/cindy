@@ -3,7 +3,7 @@ import { createContext, useContext } from 'react';
 
 export interface SessionQuickSend {
   /** Resolves false when the session refused the message (read-only, locked, failed). */
-  send(text: string): Promise<boolean>;
+  send(text: string, options?: { literalText?: boolean; independent?: boolean }): Promise<boolean>;
 }
 
 const SessionQuickSendContext = createContext<SessionQuickSend | null>(null);

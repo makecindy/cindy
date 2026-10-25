@@ -14,7 +14,7 @@ vi.mock('../worktree/runtimeLeases', () => ({
  *   - dirty → stash 失败保留 / 成功后继续删
  *   - clean 无引用 → git remove + store.del
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -137,6 +137,8 @@ describe('removeWorktreeForSession', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // These Git fixtures consume no simulated time; assert the shared budget exactly.
+    vi.spyOn(performance, 'now').mockReturnValue(0);
     readWorktreeRuntimePathsMock.mockReset().mockResolvedValue(new Set());
     reclaimOrphanedRuntimeLeasesMock.mockReset().mockResolvedValue(0);
     storeMap.clear();
@@ -176,6 +178,8 @@ describe('removeWorktreeForSession', () => {
     });
     manager = await import('../worktree/WorktreeManager');
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it('no store entry → no-op', async () => {
     await manager.removeWorktreeForSession('nope');
@@ -377,7 +381,7 @@ describe('removeWorktreeForSession', () => {
       expect(gitExecMock).toHaveBeenCalledWith(
         ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
         BASE_REPO,
-        { timeoutMs: 10_000 },
+        { timeoutMs: 10_000, deadlineAtMs: 10_000 },
       );
     });
 

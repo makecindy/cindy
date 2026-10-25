@@ -40,7 +40,7 @@ export interface CodexProviderThreadRoute {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface CodexProviderThreadRelinkSource extends CodexProviderThreadRoute {

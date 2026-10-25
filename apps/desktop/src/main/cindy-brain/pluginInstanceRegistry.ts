@@ -3,7 +3,8 @@
  *
  * instanceKey is the directory storage key (helper, _root__helper,
  * _ns__xd__helper). It is not allocated. Logical namespace still lives
- * here, because an old client can rewrite a receipt.
+ * here, because an old client can rewrite a receipt. The official simulator
+ * rename retains its original directory key, proven by the Host receipt.
  *
  * Storage (KV, secrets, OAuth, library, partitions, skills) must use
  * instanceKey. Do not derive a new key from a path or namespace.
@@ -18,6 +19,7 @@ import {
   hasDeliveryNamespace,
 } from '../../shared/pluginIdentity.js';
 import { isValidGhostId } from '../../shared/ghost.js';
+import { simulatorPreviousStoragePart, validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
 const PLUGIN_INSTANCE_REGISTRY_V1_VERSION = 1 as const;
 const PLUGIN_INSTANCE_REGISTRY_VERSION = 2 as const;
@@ -83,11 +85,14 @@ export interface InstanceConfirmationEvidence {
     orgSlug: string | null;
   } | null;
   packageSha256?: string | null;
+  /** Main verified a migrated receipt against the installed and market manifest identities. */
+  legacyManifestVerified?: boolean;
   /** Approved receipt is an agent-forge self-test for this install. */
   forgeSelfTest?: boolean;
 }
 
 export interface PluginInstanceReceiptFact {
+  simulatorPreviousRelId?: string;
   ghostId: string;
   hasNamespace: boolean;
   namespace: string | null;
@@ -123,7 +128,9 @@ export function adoptContentInstall(input: {
   /** Set when the market ledger has exactly one installed record for this ghost. */
   marketPluginId?: string | null;
 }): PluginInstanceRecord | null {
-  const instanceKey = instanceKeyForExistingContent(input.relId);
+  const previous = input.receipt?.simulatorPreviousRelId;
+  const instanceKey = previous && validSimulatorMigration(previous, input.ghostId, input.receipt?.namespace)
+    ? simulatorPreviousStoragePart(previous) : instanceKeyForExistingContent(input.relId);
   if (!instanceKey || !isValidGhostId(input.ghostId)) return null;
   const origin = input.receipt?.installOrigin;
   const identity = parsePluginInstallRelId(input.relId);
@@ -261,7 +268,9 @@ function marketEvidenceConfirms(
   const market = installed[0]!;
   if (market.namespace === undefined || market.namespace !== record.namespace) return false;
   const observed = evidence.packageSha256 ?? record.packageSha256 ?? null;
-  if (!market.packageSha256 || !observed || market.packageSha256 !== observed) return false;
+  if (!market.packageSha256 || (observed === null
+    ? evidence.legacyManifestVerified !== true
+    : market.packageSha256 !== observed)) return false;
   if (!shaDoesNotConflict(evidence.packageSha256, record.packageSha256)) return false;
   if (!shaDoesNotConflict(evidence.packageSha256, market.packageSha256)) return false;
   if (!shaDoesNotConflict(record.packageSha256, market.packageSha256)) return false;
@@ -285,6 +294,7 @@ function marketEvidenceConfirms(
 
 export function marketRowMatchesUnconfirmedInstance(
   row: {
+    pluginId?: string | null;
     installed?: boolean;
     namespace?: string | null;
     scope?: 'public' | 'personal' | 'organization';
@@ -293,6 +303,9 @@ export function marketRowMatchesUnconfirmedInstance(
   record: PluginInstanceRecord,
   currentOrganization: { organizationId: string; orgSlug: string | null } | null,
 ): boolean {
+  // Unlabeled legacy installs still use independent package/manifest evidence;
+  // an existing market binding must never be confirmed by a different plugin.
+  if (record.pluginId !== null && row.pluginId !== record.pluginId) return false;
   const hasNamespace = hasDeliveryNamespace(row);
   if (hasNamespace) return (row.namespace ?? null) === record.namespace;
   if (record.namespace === null) return row.scope !== 'organization';

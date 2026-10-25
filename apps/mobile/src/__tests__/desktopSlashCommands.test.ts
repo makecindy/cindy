@@ -1,14 +1,53 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  MOBILE_SUPPORTED_DESKTOP_COMMANDS,
   buildLearnCardData,
   buildLearnStartRequest,
+  buildMobileSideChatDraft,
   executeMobileGoalCommand,
   mergeMobileGoalCommand,
+  mergeMobileSideChatCommand,
   filterMobileDesktopCommands,
   parseMobileDesktopCommand,
 } from '@/session/desktopSlashCommands';
 import type { MobileSlashCommand } from '@/device-link/mobileMakerTransport';
+import { composerDocumentProjectedText, serializeComposerDocument, sessionLinkComposerNode, type ComposerDocument } from '@/session/composerDocument';
+
+// Unit regression: /side previously flattened a message chip to a URL and lost
+// its body. Command parsing tests only covered strings, not transferred drafts.
+describe('side chat draft transfer', () => {
+  it('preserves message bodies, project references and interleaved quotes for the child send', () => {
+    const reference = sessionLinkComposerNode({
+      href: 'cindy://session/other-task?message=message-1',
+      label: 'Referenced message', agentText: 'The original message body',
+    });
+    const document: ComposerDocument = { version: 1, nodes: [
+      { type: 'text', text: '  /side', slashCommand: '/side' },
+      { type: 'quote', quote: { text: 'quoted answer' } },
+      { type: 'text', text: ' explain ' },
+      reference,
+      { type: 'text', text: ' using ' },
+      { type: 'mention', kind: 'project', label: 'Project', raw: 'cindy://project/%2Fwork',
+        href: 'cindy://project/%2Fwork', workingDir: '/work' },
+    ] };
+    expect(parseMobileDesktopCommand(composerDocumentProjectedText(document))?.name).toBe('side');
+    const draft = buildMobileSideChatDraft(document);
+    expect(draft.nodes[0]).toEqual(document.nodes[1]);
+    const sent = serializeComposerDocument(draft);
+    expect(sent.agentReferences).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'message', messageClientId: 'message-1', text: 'The original message body' }),
+      expect.objectContaining({ kind: 'project', workingDir: '/work' }),
+    ]));
+    expect(sent.text).not.toContain('/side');
+    expect(document.nodes[0]).toMatchObject({ text: '  /side' });
+  });
+
+  it('keeps a quote-only draft when the command has no visible arguments', () => {
+    const document: ComposerDocument = { version: 1, nodes: [
+      { type: 'text', text: '/side' }, { type: 'quote', quote: { text: 'keep' } }, { type: 'text', text: '  ' },
+    ] };
+    expect(buildMobileSideChatDraft(document).nodes).toEqual([document.nodes[1]]);
+  });
+});
 
 describe('filterMobileDesktopCommands', () => {
   it('只保留 desktop kind 且在移动端白名单内的命令', () => {
@@ -55,8 +94,23 @@ describe('parseMobileDesktopCommand', () => {
     expect(parseMobileDesktopCommand('文本里提到 /learn 不算')).toBeNull();
   });
 
-  it('白名单集合包含已实现的 learn 和 goal', () => {
-    expect([...MOBILE_SUPPORTED_DESKTOP_COMMANDS]).toEqual(['learn', 'goal']);
+  // Unit: the new mobile /side entry must open locally rather than reach the
+  // main agent. Existing /learn coverage did not cover bare/prefilled side chats
+  // or a same-name skill in the locally seeded palette.
+  it('opens empty or prefilled side chats without intercepting other text', () => {
+    expect(parseMobileDesktopCommand('/side')).toEqual({ name: 'side', args: '' });
+    expect(parseMobileDesktopCommand('/side 为什么要限制并发？')).toEqual({ name: 'side', args: '为什么要限制并发？' });
+    expect(parseMobileDesktopCommand('/sidebar')).toBeNull();
+    expect(parseMobileDesktopCommand('解释一下 /side')).toBeNull();
+  });
+
+  it('seeds the side entry before catalogue loading and preserves a same-name skill', () => {
+    const seeded = mergeMobileSideChatCommand([], 'Open a side chat');
+    expect(filterMobileDesktopCommands(seeded)).toEqual([{ name: 'side', kind: 'desktop', description: 'Open a side chat' }]);
+    const skill: MobileSlashCommand = { name: 'side', kind: 'agent-skill', source: 'user', description: 'My skill' };
+    const commands = mergeMobileSideChatCommand([skill], 'Open a side chat');
+    expect(commands.find(command => command.name === 'side')).toEqual(skill);
+    expect(parseMobileDesktopCommand('/side inspect', commands)).toBeNull();
   });
 });
 

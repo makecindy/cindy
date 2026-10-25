@@ -18,7 +18,9 @@ const mocks = vi.hoisted(() => ({
   startEngine: vi.fn<() => Promise<void>>(),
   stopEngine: vi.fn(),
   drainEngine: vi.fn(),
-  engines: [] as Array<{ emit: (chunk: PcmChunk) => void }>,
+  engines: [] as Array<{ emit: (chunk: PcmChunk) => void; keepAlive: boolean }>,
+  prepareMicrophone: vi.fn(),
+  releasePreparation: vi.fn(),
   promptExpired: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.translate }) }));
@@ -49,9 +51,10 @@ vi.mock('../audioContextPool', () => ({
 vi.mock('../WebMicAudioEngine', () => ({
   WebMicAudioEngine: class {
     emit = (_chunk: PcmChunk) => {};
-    constructor() {
+    constructor(readonly options: { keepAlive: boolean }) {
       mocks.engines.push(this);
     }
+    get keepAlive() { return this.options.keepAlive; }
     onPcm16k(callback: (chunk: PcmChunk) => void) {
       this.emit = callback;
     }
@@ -74,6 +77,7 @@ vi.mock('../WebMicAudioEngine', () => ({
   disposeKeepAliveVoiceInputMicrophone: vi.fn().mockResolvedValue(undefined),
   prewarmVoiceInputBenchmarkFixture: vi.fn().mockResolvedValue(undefined),
   prewarmVoiceInputMicrophoneWithAutomaticFallback: vi.fn().mockResolvedValue(undefined),
+  prepareVoiceInputMicrophone: mocks.prepareMicrophone,
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
@@ -150,6 +154,8 @@ beforeEach(() => {
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
+  mocks.releasePreparation.mockReset();
+  mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
 });
 afterEach(() => {
   cleanup();
@@ -158,6 +164,31 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  it('prepares only authorized devices without claiming recording or starting ASR', async () => {
+    const h = mount();
+    h.result.current.prepare();
+    expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    const release = h.result.current.prepare();
+    expect(mocks.prepareMicrophone).toHaveBeenCalledOnce();
+    expect(h.result.current.state).toBe('idle');
+    expect(h.api.start).not.toHaveBeenCalled();
+    expect(mocks.engines).toHaveLength(0);
+    await act(async () => { h.result.current.start(); });
+    expect(mocks.engines[0].keepAlive).toBe(true);
+    release?.();
+    expect(mocks.releasePreparation).toHaveBeenCalledOnce();
+  });
+
+  it('releases unused press preparation when the composer unmounts', () => {
+    const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.result.current.prepare();
+    h.unmount();
+    expect(mocks.releasePreparation).toHaveBeenCalledOnce();
+    expect(h.api.start).not.toHaveBeenCalled();
+  });
+
   it('ends before the microphone produces its first frame and closes the late microphone', async () => {
     const h = mount();
     const device = deferred<void>();

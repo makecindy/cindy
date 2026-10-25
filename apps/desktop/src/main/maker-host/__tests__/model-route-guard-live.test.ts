@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@cindy/model-providers', async (importOriginal) => ({
   findCatalogModel: (await importOriginal<typeof import('@cindy/model-providers')>()).findCatalogModel,
-  connectedProvidersForAgent: vi.fn(() => []),
+  connectedProvidersForAgent: (await importOriginal<typeof import('@cindy/model-providers')>()).connectedProvidersForAgent,
   effectiveSourceIdForModel: h.effectiveSourceIdForModel,
   getModel: vi.fn(() => null),
   isExclusiveXaiModelId: (model: string | null | undefined) =>
@@ -64,6 +64,7 @@ describe('resolveDefaultScheduleRoute', () => {
           name: 'Anthropic',
           connected: true,
           source: 'bundled',
+          agents: ['claude-code'], routing: { 'claude-code': {} },
           models: { 'claude-code': [dynamicModel] },
         },
       ];
@@ -139,8 +140,8 @@ describe('scheduled selection uses the live source copy', () => {
   it('reads the current catalog without claiming credentials and preserves the requested route', async () => {
     const selection = { agentKind: 'pi' as const, model: 'same-model', providerId: 'selected', effort: 'ultra' as const, fastMode: true };
     h.listProviders.mockResolvedValue([
-      { id: 'other', connected: true, models: { pi: [{ id: 'same-model', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] } },
-      { id: 'selected', connected: true, models: { pi: [{ id: 'same-model', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }] } },
+      { id: 'other', connected: true, agents: ['pi'], routing: { pi: {} }, models: { pi: [{ id: 'same-model', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] } },
+      { id: 'selected', connected: true, agents: ['pi'], routing: { pi: {} }, models: { pi: [{ id: 'same-model', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }] } },
     ]);
     await expect(resolveScheduledModelSelectionLive(selection)).resolves.toEqual({ ...selection, effort: 'medium', fastMode: false });
     expect(h.listProviders).toHaveBeenLastCalledWith({ allowSideEffects: false, catalog: h.catalog });

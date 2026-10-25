@@ -555,6 +555,58 @@ export function richAction(
   return changes;
 }
 
+/** Optional message action. The host supplies the current conversation; generated
+ * content cannot select a recipient, tool or command. Nothing runs on value changes. */
+export function richSendText(node: RichNode, values: RichValues): string | undefined {
+  if (node.kind !== "button" && node.kind !== "form") return undefined;
+  const text = richEvaluate(node.props.send, values);
+  return typeof text === "string" && text.trim() && text.length <= 16_000
+    ? text.trim() : undefined;
+}
+
+export type RichMessageSender = (text: string) => Promise<boolean>;
+export type RichSubmissionStatus = "idle" | "sending" | "sent" | "failed";
+
+/** Click receipts live outside model-editable bindings. Pending submissions survive
+ * virtualization, and failed sends leave controls untouched for an explicit retry. */
+export class RichSubmissionController {
+  private pending = new Set<string>();
+  private failed = new Set<string>();
+  private listeners = new Set<() => void>();
+  constructor(private memory: RichInteractionMemory) {}
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    const unsubscribe = this.memory.subscribe(listener);
+    return () => { this.listeners.delete(listener); unsubscribe(); };
+  };
+  private notify() { this.listeners.forEach(listener => listener()); }
+  status(key: string, text: string | undefined): RichSubmissionStatus {
+    if (this.pending.has(key)) return "sending";
+    if (text !== undefined && this.memory.get(key).text === text) return "sent";
+    return this.failed.has(key) ? "failed" : "idle";
+  }
+  async submit(key: string, text: string, send: RichMessageSender): Promise<void> {
+    if (["sending", "sent"].includes(this.status(key, text))) return;
+    this.pending.add(key);
+    this.failed.delete(key);
+    this.notify();
+    try {
+      await this.memory.load();
+      if (this.memory.get(key).text === text) return;
+      if (!await send(text)) throw new Error("message-not-accepted");
+      this.memory.set(key, { text });
+      this.memory.flushSync();
+      await this.memory.flush();
+    } catch {
+      this.failed.add(key);
+      if (this.failed.size > 256) this.failed.delete(this.failed.values().next().value!);
+    } finally {
+      this.pending.delete(key);
+      this.notify();
+    }
+  }
+}
+
 /** Route media and links through the existing Markdown trust and file-origin path. */
 export function richMarkdown(node: RichNode): string | null {
   const text = richString(node, "text");

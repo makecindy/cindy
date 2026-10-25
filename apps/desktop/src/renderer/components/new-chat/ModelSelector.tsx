@@ -1,3 +1,5 @@
+import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
+import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
@@ -211,8 +213,8 @@ export interface ModelMemoryAccessors {
   setEffort: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   /** 真正选中 / 使用模型时同时更新该来源 lastModel;只编辑非选中行不调用。 */
   setChoice?: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
-  getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
-  setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | 'ultrafast' | undefined;
+  setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast') => void;
   getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
   /**
@@ -657,7 +659,7 @@ export interface RemoteAgentRelocation {
   agent: AgentKind;
   /** 该行生效档位;不可调档时为 undefined。 */
   effort?: Effort;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
   /** 这一行所属的电脑;null = 本机。 */
   agentDevice: UnifiedSelectionAgentDevice;
 }
@@ -742,7 +744,7 @@ interface ModelSelectorProps {
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
-    reconciledFast?: boolean,
+    reconciledFast?: boolean | 'ultrafast',
   ) => void | boolean | Promise<void | boolean>;
   onNavigateToProviders?: (target?: ProvidersNavigationTarget) => void;
   /**
@@ -757,9 +759,9 @@ interface ModelSelectorProps {
   /** 语义同 ModelSelectorContentProps.taskStarted。 */
   taskStarted?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 语义同 onEffortChange(含返回值口径)。 */
-  onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
@@ -836,6 +838,8 @@ interface ModelSelectorProps {
   unifiedAgents?: readonly AgentKind[];
   /** 统一面板是否只采用目录官方推荐配置，不读取个人引擎偏好与收藏配置。 */
   unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
+  /** 语义同 ModelSelectorContentProps.recordRecentUsage（选中成功后记入「最近使用」）。 */
+  recordRecentUsage?: boolean;
   /**
    * composer pill 尾部的**引擎小标**(model-selector-unified §1.1)。
    *
@@ -924,9 +928,9 @@ interface ModelSelectorContentProps {
     effort: Effort,
     options?: EffortChangeOptions,
   ) => void | boolean | Promise<void | boolean>;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 语义同 onEffortChange(含返回值口径)。 */
-  onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
@@ -965,7 +969,7 @@ interface ModelSelectorContentProps {
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
-    reconciledFast?: boolean,
+    reconciledFast?: boolean | 'ultrafast',
   ) => void | boolean | Promise<void | boolean>;
   onNavigateToProviders?: (target?: ProvidersNavigationTarget) => void;
   /**
@@ -1006,6 +1010,13 @@ interface ModelSelectorContentProps {
    */
   unifiedAgents?: readonly AgentKind[];
   unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
+  /**
+   * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
+   * **默认关**:统一面板被对话之外的入口共用(定时任务 / IM 默认 / Bot / Hook /
+   * Worker / 子代理 / 设置页),那些选择是配置动作;只有对话侧真正的两个入口
+   * (ChatInput 的新任务草稿与会话内)开启,且 SSH / device-link 远程不开启。
+   */
+  recordRecentUsage?: boolean;
   /**
    * 统一面板里被选中的**收藏锚点** uid(规格 §1.5:选中的是那一条收藏副本,不是模型本体)。
    * 由调用方持有(草稿层),因为它与 (来源, 模型) 一样属于「当前选了什么」这份状态。
@@ -1051,7 +1062,7 @@ interface ModelSelectorContentProps {
     /** 该行生效档位;该 (模型, 引擎) 不可调档时为 undefined。 */
     effort?: Effort;
     engine: 'cc' | 'codex' | 'pi';
-    fast: boolean;
+    fast: boolean | 'ultrafast';
     favoriteUid: string | null;
     /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
     resetToRecommended?: true;
@@ -1204,6 +1215,7 @@ function ModelSelectorContentView({
   sessionEngineFilter,
   unifiedAgents: requestedUnifiedAgents,
   unifiedSelectionPolicy = 'personalized',
+  recordRecentUsage = false,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -1254,6 +1266,14 @@ function ModelSelectorContentView({
   // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
   const homeDeviceId = remoteAgent?.homeDeviceId;
   const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
+  /**
+   * 「最近」记录没有设备字段:面板正在浏览**其他电脑**的目录时(远程 Agent 入口的模型格 /
+   * device-link 被控电脑)选中不得写进本机历史 —— 两台电脑若存在同来源同模型 id,回到本机会把
+   * 这条远程记录解析成本机模型,点击就用错运行位置;只在那台存在的记录也白占本机容量
+   * (2026-10-08 review P1)。任务归属判不出草稿(本机草稿的 deviceLinkDeviceId 是 null),
+   * 所以按**当前浏览的目录**再禁一次。
+   */
+  const recordRecentModelsOnSelect = recordRecentUsage && !deviceId;
   /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
   const browsingSelectedCatalog =
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
@@ -2246,7 +2266,7 @@ function ModelSelectorContentView({
 
   // 行内 Fast 闪电:选中行 → 调用方 fastMode(会话 = live;首页草稿 = 全局预设派生);其余行 → (agent,model) 全局预设(本机 =
   // providerModelMemory / 远程 = 被控端镜像),并由 fastEditable 按当前来源 capability 过滤。
-  const fastOnOf = (providerId: string | null, m: RowModel): boolean => {
+  const fastOnOf = (providerId: string | null, m: RowModel): boolean | 'ultrafast' => {
     if (!fastEditable(providerId, m)) return false;
     if (isSelectedRow(providerId, m.id)) return fastMode;
     if (!currentAgentKind || !providerId) return false;
@@ -2317,7 +2337,7 @@ function ModelSelectorContentView({
     id: string,
     dismiss = true,
     effortOverride?: Effort,
-    fastOverride?: boolean,
+    fastOverride?: boolean | 'ultrafast',
   ): void | boolean | Promise<void | boolean> => {
     if (interactionDisabled) return false;
     const dismissAfterSelection = () => {
@@ -2425,7 +2445,7 @@ function ModelSelectorContentView({
    */
   const applyLiveRowConfig = async (
     targetEffort: Effort | undefined,
-    targetFast: boolean,
+    targetFast: boolean | 'ultrafast',
   ): Promise<boolean> => {
     const previousEffort = effort;
     let effortWritten = false;
@@ -2569,7 +2589,7 @@ function ModelSelectorContentView({
   const editEffortValue: Effort | null = editingModel
     ? rowEffortOf(editingProviderId, editingModel)
     : null;
-  const editFastValue: boolean = editingModel
+  const editFastValue: boolean | 'ultrafast' = editingModel
     ? editingIsActive
       ? fastMode
       : ((currentAgentKind && editingProviderId
@@ -2675,7 +2695,7 @@ function ModelSelectorContentView({
         <div {...menuSkipAttrs} className="px-0.5">
           {/* 遵循设计稿:单色反色(轨/文字 --text-primary,钮 --surface-on-card),不用品牌橙。 */}
           <FastModeToggle
-            enabled={editFastValue}
+            enabled={!!editFastValue}
             onToggle={() => handleEditFast(!editFastValue)}
             hideIcon
             accentVar="var(--text-primary)"
@@ -3299,8 +3319,8 @@ function ModelSelectorContentView({
         className={cn(
           'min-w-0 flex-1 bg-transparent text-14 outline-none',
           interactionDisabled
-            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
-            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled)]'
+            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-placeholder)]',
         )}
         aria-label={t('newChat.modelSelector.search.placeholderAll')}
       />
@@ -3357,7 +3377,7 @@ function ModelSelectorContentView({
         ? remoteAgent.onRelocate
         : undefined;
     const relocateRow = (
-      row: { providerId: string; modelId: string; agent: AgentKind; effort?: Effort; fast: boolean },
+      row: { providerId: string; modelId: string; agent: AgentKind; effort?: Effort; fast: boolean | 'ultrafast' },
       dismiss: boolean,
     ): Promise<boolean> =>
       runLiveWrite(() =>
@@ -3441,7 +3461,7 @@ function ModelSelectorContentView({
                   modelId: args.modelId,
                   agent: args.targetAgent,
                   ...(args.effort ? { effort: args.effort } : {}),
-                  fast: args.fast === true,
+                  fast: (args.fast === 'ultrafast' ? 'ultrafast' : args.fast === true),
                 },
                 true,
               ),
@@ -3452,7 +3472,7 @@ function ModelSelectorContentView({
                   modelId: args.modelId,
                   agent: args.targetAgent,
                   ...(args.effort ? { effort: args.effort } : {}),
-                  fast: args.fast === true,
+                  fast: (args.fast === 'ultrafast' ? 'ultrafast' : args.fast === true),
                 },
                 false,
               ),
@@ -3503,8 +3523,8 @@ function ModelSelectorContentView({
               className={cn(
                 'min-w-0 flex-1 bg-transparent text-13 outline-none',
                 interactionDisabled
-                  ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
-                  : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+                  ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled)]'
+                  : 'text-[var(--model-item-text)] placeholder:text-[var(--text-placeholder)]',
               )}
               aria-label={t('newChat.modelSelector.search.placeholderAll')}
             />
@@ -3613,6 +3633,7 @@ function ModelSelectorContentView({
             onPaymentRequired={showPaymentRequired}
             configurationEnabled={configurationEnabled}
             selectionPolicy={unifiedSelectionPolicy}
+            recordRecentUsage={recordRecentModelsOnSelect}
             isRouteDisabled={(providerId, id, rowAgent) => providersOverride ? false : modelDisabledOf(providers.find((provider) => provider.id === providerId) ?? null, id, rowAgent)}
             {...(panelSessionEngineFilter ? { sessionEngineFilter: panelSessionEngineFilter } : {})}
             {...(followSession ? { followSession: {
@@ -4007,6 +4028,7 @@ export function ModelSelector({
   unifiedAgents,
   unifiedSelectionPolicy = 'personalized',
   engineMarkVendor = null,
+  recordRecentUsage = false,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -4027,6 +4049,7 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  useProviderShareQuotaViewing(open || keepOpenForAgentConfirmation);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
   const discovery = useModelDiscoveryPending();
   const [showDiscoveryPending, setShowDiscoveryPending] = useState(false);
@@ -4369,7 +4392,7 @@ export function ModelSelector({
     triggerActiveProvider && currentAgentKind
       ? modelSupportsFastMode(triggerActiveProvider, modelId, currentAgentKind)
       : !!currentModel?.supportsFastMode;
-  const triggerFastOn = fastMode === true && triggerFastSupported;
+  const triggerFastOn = triggerFastSupported ? fastMode ?? false : false;
   // 已建任务的断开态保留模型身份；菜单同时提供重新连接与改选其他来源。
   const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
   // A connected provider lacking this model is unavailable, not signed out.
@@ -4409,7 +4432,7 @@ export function ModelSelector({
     const vendor = selection.agentKind === 'claude-code' ? 'Claude Code' : selection.agentKind === 'pi' ? 'Pi' : 'Codex';
     return [vendor, name ?? t('newChat.modelSelector.trigger.placeholder'), provider ? providerDisplayName(provider, t) : selection.providerId,
       selection.effort ? modelEffortLabel(t, model, selection.effort) : null,
-      selection.fastMode ? t('newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
+      selection.fastMode ? t(selection.fastMode === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
   };
   const pendingSelectionTitle = currentSelection && agentIdentity?.state === 'pending' && currentAgentKind
     ? t('newChat.modelSelector.trigger.currentAndNext', {
@@ -4741,7 +4764,8 @@ export function ModelSelector({
             </>
           )}
           {triggerFastOn && showTriggerTail && (
-            <Zap
+            <SpeedIcon
+              mode={triggerFastOn}
               size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
               className={cn(
                 'ml-0.5 shrink-0',
@@ -4749,7 +4773,6 @@ export function ModelSelector({
                   ? 'text-[var(--create-agent-control-icon)]'
                   : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
               )}
-              aria-label={t('newChat.modelSelector.meta.fastBadge')}
             />
           )}
           {currentModel && remoteModelLoading && (
@@ -4820,6 +4843,8 @@ export function ModelSelector({
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
       unifiedSelectionPolicy={unifiedSelectionPolicy}
+      recordRecentUsage={recordRecentUsage}
+      // 浏览其他电脑目录时的禁记门在 Content 内按 remoteAgent 派生(它才知道 remoteBrowse)。
       selectedFavoriteUid={selectedFavoriteUid}
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
@@ -4868,7 +4893,9 @@ export function ModelSelector({
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
         trigger={trigger}
       >
-        {content}
+        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentConfirmation}>
+          {content}
+        </ProviderShareQuotaViewingContext.Provider>
       </MorphPopover>
     );
   }
@@ -4891,7 +4918,9 @@ export function ModelSelector({
           'border border-[var(--model-dropdown-border)]',
         )}
       >
-        {content}
+        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentConfirmation}>
+          {content}
+        </ProviderShareQuotaViewingContext.Provider>
       </PopoverContent>
     </Popover>
   );

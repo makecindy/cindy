@@ -65,7 +65,7 @@ export function isSessionListRow(
     hasOptionalNullableString(session, 'remoteHostId') &&
     hasOptionalNullableString(session, 'preview') &&
     hasOptionalNullableString(session, 'summary') &&
-    hasOptionalBoolean(session, 'fastMode') &&
+    (hasOptionalBoolean(session, 'fastMode') || session.fastMode === 'ultrafast') &&
     hasOptionalBoolean(session, 'planModeEnabled') &&
     hasOptionalBoolean(session, 'usedProjectContext') &&
     hasOptionalFiniteNumber(session, 'totalTokenUsage') &&

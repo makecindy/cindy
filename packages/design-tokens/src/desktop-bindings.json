@@ -2350,6 +2350,7 @@
         "switch-track-on": "themes.cindy-dark.switch-track-on",
         "switch-thumb-on": "themes.cindy-dark.switch-thumb-on",
         "switch-thumb-off": "themes.cindy-dark.switch-thumb-off",
+        "fast-toggle-track": "themes.cindy-dark.fast-toggle-track",
         "status-badge-fg": "themes.cindy-dark.status-badge-fg",
         "border-default": "themes.cindy-dark.border-default",
         "border-default-hsl": "themes.cindy-dark.border-default-hsl",
@@ -2388,6 +2389,8 @@
         "chat-input-border-focus": "themes.cindy-dark.chat-input-border-focus",
         "chat-input-chip-border": "themes.cindy-dark.chat-input-chip-border",
         "chat-input-text": "themes.cindy-dark.chat-input-text",
+        "chat-input-placeholder-subtle": "themes.cindy-dark.chat-input-placeholder-subtle",
+        "thinking-body-text": "themes.cindy-dark.thinking-body-text",
         "color-primary": "themes.cindy-dark.color-primary",
         "caret-accent": "themes.cindy-dark.caret-accent",
         "confirm-bg": "themes.cindy-dark.confirm-bg",
@@ -2532,6 +2535,7 @@
         "switch-track-on": "themes.cindy-light.switch-track-on",
         "switch-thumb-on": "themes.cindy-light.switch-thumb-on",
         "switch-thumb-off": "themes.cindy-light.switch-thumb-off",
+        "fast-toggle-track": "themes.cindy-light.fast-toggle-track",
         "status-badge-fg": "themes.cindy-light.status-badge-fg",
         "border-default": "themes.cindy-light.border-default",
         "border-default-hsl": "themes.cindy-light.border-default-hsl",
@@ -2567,6 +2571,8 @@
         "chat-input-border-focus": "themes.cindy-light.chat-input-border-focus",
         "chat-input-chip-border": "themes.cindy-light.chat-input-chip-border",
         "chat-input-text": "themes.cindy-light.chat-input-text",
+        "chat-input-placeholder-subtle": "themes.cindy-light.chat-input-placeholder-subtle",
+        "thinking-body-text": "themes.cindy-light.thinking-body-text",
         "color-primary": "themes.cindy-light.color-primary",
         "caret-accent": "themes.cindy-light.caret-accent",
         "confirm-bg": "themes.cindy-light.confirm-bg",
@@ -3840,28 +3846,28 @@
         "ids": [
           "login-control-text"
         ],
-        "use": "figma Dark 填充 / error 态"
+        "use": "墨水正文档 黑 88% / 白 82%（2026-10-23 并入墨水阶梯，同主界面 `text-primary`）"
       },
       {
         "label": "`--login-control-placeholder`（空态字）",
         "ids": [
           "login-control-placeholder"
         ],
-        "use": "figma Dark 空态"
+        "use": "墨水占位档 黑 32% / 白 30%（2026-10-23 并入墨水阶梯，同主界面 `text-placeholder`）"
       },
       {
         "label": "`--login-title-text`",
         "ids": [
           "login-title-text"
         ],
-        "use": "callback-title dark"
+        "use": "墨水正文档 黑 88% / 白 82%（2026-10-23 并入墨水阶梯）"
       },
       {
         "label": "`--login-secondary-text`（副标题 / 倒计时）",
         "ids": [
           "login-secondary-text"
         ],
-        "use": "两模式同值"
+        "use": "墨水次要档 黑 56% / 白 55%（2026-10-23 并入墨水阶梯，同主界面 `text-secondary`；原双模同值 `#6F6F6F` 退役）"
       },
       {
         "label": "`--login-primary-button-bg`",

@@ -56,12 +56,25 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'model'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'model' | 'agentDeviceId'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
   if (schedule.modelAgentKind != null) {
     if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
+  if (schedule.agentDeviceId !== undefined) {
+    // 运行位置只配显式模型:那台电脑的默认模型无法在本机解析。
+    // 与创建任务时 agentDeviceId 的校验同一口径。
+    if (typeof schedule.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.agentDeviceId)) {
+      throw new Error('agentDeviceId must be a valid device id');
+    }
+    if ((schedule.executionMode ?? 'agent') === 'script') {
+      throw new Error('script execution does not support agentDeviceId');
+    }
+    if (!schedule.model?.trim()) {
+      throw new Error('agentDeviceId requires an explicit model');
     }
   }
   if ((schedule.executionMode ?? 'agent') !== 'script') {
@@ -1317,6 +1330,7 @@ export class Scheduler extends EventEmitter {
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
       preRunHook: input.preRunHook ?? undefined,
+      agentDeviceId: input.agentDeviceId ?? undefined,
       executionMode: input.executionMode ?? 'agent',
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
       manual,
@@ -1404,6 +1418,19 @@ export class Scheduler extends EventEmitter {
         if (!Object.prototype.hasOwnProperty.call(patch, key)) updates[key] = undefined;
       }
       if (!Object.prototype.hasOwnProperty.call(patch, 'fastMode')) updates.fastMode = false;
+    }
+    // 运行位置与来源/模型成对:来源属于那台电脑的目录。改了路由却没带运行位置的
+    // 调用方(旧版手机端 / 旧版桌面远程编辑不认识这个字段)选的是本机目录,
+    // 沿用旧位置会把本机来源派到另一台电脑上,所以回到本机。路由原样回传不算改。
+    if (
+      !Object.prototype.hasOwnProperty.call(patch, 'agentDeviceId') &&
+      (['agentKind', 'modelAgentKind', 'model', 'providerId'] as const).some((key) =>
+        Object.prototype.hasOwnProperty.call(patch, key) &&
+        (patch[key] || undefined) !== (existing[key] || undefined))
+    ) {
+      updates.agentDeviceId = undefined;
+    } else if ((patch as { agentDeviceId?: string | null }).agentDeviceId === null) {
+      updates.agentDeviceId = undefined;
     }
     const candidate: Schedule = { ...existing, ...updates };
     validateScheduleExecutionShape(

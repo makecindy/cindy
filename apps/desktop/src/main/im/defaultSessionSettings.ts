@@ -46,7 +46,7 @@ export interface ResolvedImSessionDefaults {
   effort: Effort;
   providerId: string | null;
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** 本次解析所读原始设置的指纹(与上面的值出自同一次读取), 写进任务的跟随记录。 */
   fingerprint: string;
 }

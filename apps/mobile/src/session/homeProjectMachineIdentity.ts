@@ -1,3 +1,4 @@
+import type { DeviceLinkContextValue } from '@/device-link/DeviceLinkContext';
 import type { MobileHomePresentation } from './mobileHome';
 
 export interface HomeProjectMachineIdentity {
@@ -6,10 +7,15 @@ export interface HomeProjectMachineIdentity {
   hideLabel: boolean;
 }
 
+type HomeProjectConnection = Pick<DeviceLinkContextValue, 'status' | 'getPresenceAvailability'> & {
+  unresponsiveDevices: ReadonlySet<string>;
+  revokedDevices: ReadonlySet<string>;
+};
+
 /** Mirrors Desktop remoteProjectIdentity: only visible, distinct devices disambiguate names. */
 export function buildHomeProjectMachineIdentities(
   home: Pick<MobileHomePresentation, 'projects' | 'deviceFilters' | 'selectedDeviceId'>,
-  connectionStates: Readonly<Record<string, string>> = {},
+  connection: HomeProjectConnection,
 ): ReadonlyMap<string, HomeProjectMachineIdentity> {
   const filters = new Map(home.deviceFilters.map((device) => [device.deviceId, device]));
   const deviceName = (project: MobileHomePresentation['projects'][number]) =>
@@ -27,10 +33,14 @@ export function buildHomeProjectMachineIdentities(
     if (!project.deviceId) continue;
     const name = deviceName(project);
     const ambiguous = name && (idsByName.get(name.toLowerCase())?.size ?? 0) > 1;
-    const device = filters.get(project.deviceId);
     identities.set(project.key, {
       displayLabel: ambiguous ? `${name} · ${project.deviceId}` : name || project.deviceId,
-      disconnected: !device?.available || connectionStates[project.deviceId] === 'failed',
+      // A remounted list paints cached projects before its device roster arrives.
+      // Missing/stale roster rows and failed list reads are not connection evidence.
+      disconnected: connection.status !== 'online'
+        || connection.getPresenceAvailability(project.deviceId) === false
+        || connection.unresponsiveDevices.has(project.deviceId)
+        || connection.revokedDevices.has(project.deviceId),
       // As on Desktop, an explicit device heading makes the inline label redundant.
       hideLabel: home.selectedDeviceId === project.deviceId,
     });

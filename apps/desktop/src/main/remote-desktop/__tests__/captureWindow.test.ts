@@ -221,11 +221,11 @@ it('capture CSP forbids arbitrary network, application frames and inline/eval sc
   expect(csp).not.toMatch(/https:|wss:|unsafe-inline|unsafe-eval/);
 });
 
-it('keeps file transport separate and denies capture permissions', async () => {
-  const owner = new DesktopCaptureWindow(vi.fn(), 'files');
+it.each(['files', 'direct'] as const)('keeps %s transport separate and denies capture permissions', async (mode) => {
+  const owner = new DesktopCaptureWindow(vi.fn(), mode);
   const ready = owner.start();
   const win = fake.windows[0], ses = fake.sessions[0];
-  expect(win.webContents.mainFrame.url).toBe('http://localhost:9988/index.html?mode=files');
+  expect(win.webContents.mainFrame.url).toBe(`http://localhost:9988/index.html?mode=${mode}`);
   owner.registered(event(win));
   await ready;
   const check = ses.setPermissionCheckHandler.mock.calls[0][0];

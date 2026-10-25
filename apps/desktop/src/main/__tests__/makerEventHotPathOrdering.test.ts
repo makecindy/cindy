@@ -24,12 +24,29 @@ const bootstrapSource = readFileSync(bootstrapSourcePath, 'utf8').replace(/\r\n?
 const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
+/**
+ * 任务窗口预算的对账函数（源切片，供下面两条用例直接执行）：
+ * 依赖全部注入，避免为了两个记账断言去搭整套 register harness。
+ */
+function loadBudgetReconciler() {
+  const start = source.indexOf('  const reconcileSessionContextWindowBudgetUnderLock = async (');
+  const end = source.indexOf('  setModelContextRuntimeRefreshListener(', start);
+  if (start < 0 || end < 0) throw new Error('budget reconciler source changed');
+  const code = source.slice(start, end);
+  const js = transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  return { code, js };
+}
+
 describe('maker:event hot path ordering', () => {
   it('finishes mandatory runtime cleanup when optional remote refresh throws at an owner boundary', () => {
     const start = source.indexOf('function cleanupClosedSessionRuntime(');
     const code = source.slice(start, source.indexOf('\n// Keep holder reads', start));
     const js = transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
     const cleared = vi.fn();
+    // 任务级窗口预算的应用去重表也在这一段的 `delete` 里（见 register.ts 的
+    // cleanupClosedSessionRuntime）：沙箱必须把它当依赖注入，否则抽样执行会 ReferenceError。
+    const appliedContextWindowBudgets = new Map<string, number | null>([['departing-task', 300_000]]);
+    const pendingSessionContextWindowBudgetReconciles = new Set<string>(['departing-task']);
     const deps = {
       pendingCredentialSwitchHolder: null, deferredCodexRestartHolder: null,
       gatewayCodexRestartHolder: { onSessionSettled: vi.fn() },
@@ -37,6 +54,8 @@ describe('maker:event hot path ordering', () => {
       refreshRemoteCodexMcpOnTurnSettledHolder: () => { throw new Error('App session is switching'); },
       gitSnapshotCoordinator: { onSessionClosed: vi.fn() },
       clearOrcaMcpHydrated: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      appliedContextWindowBudgets,
+      pendingSessionContextWindowBudgetReconciles,
       lastReportedCostUsdBySession: new Map(), lastReportedModelUsageBySession: new Map(),
       turnModelPromiseBySession: new Map(), turnUsageContextBySession: new Map(),
       productTurnWallClockTracker: { clear: cleared }, productTurnUsageTargetTracker: { clear: vi.fn() },
@@ -48,6 +67,9 @@ describe('maker:event hot path ordering', () => {
     expect(() => cleanup({ id: 'departing-task' })).not.toThrow();
     expect(deps.gatewayCodexRestartHolder.onSessionSettled).toHaveBeenCalledOnce();
     expect(cleared).toHaveBeenCalledWith('departing-task');
+    // 关闭任务时必须把窗口预算的去重记账一起清掉，否则同 id 的替换实例会沿用旧值。
+    expect(appliedContextWindowBudgets.has('departing-task')).toBe(false);
+    expect(pendingSessionContextWindowBudgetReconciles.has('departing-task')).toBe(false);
     expect(deps.clearSessionPersistState).toHaveBeenCalledWith('departing-task');
     expect(deps.handleAgentIslandSessionClosedAfterCleanup).toHaveBeenCalledWith('departing-task', 'process-closed');
   });
@@ -877,16 +899,15 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain(
       'if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);',
     );
-    expectOrder(
-      closedBlock,
-      'const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(',
-      'cancelDirectAbortReconciliation(session.id);',
+    // Cross-file race wiring guard: the imported close adapter must retain the
+    // real abort/persist stores. Its execution order and captured Goal outcome
+    // are exercised through the lifecycle in sessionBindingLifecycle.test.ts.
+    expect(closedBlock).toMatch(
+      /beforeCloseTeardown:\s*createSessionCloseTeardown<WiredSession>\(\{/,
     );
-    expect(closedBlock).toContain('cancelDirectAbortReconciliation(session.id);');
-    expectOrder(
-      closedBlock,
-      'cancelDirectAbortReconciliation(session.id);',
-      'pendingFailedTurnAssistantPersistId.delete(session.id);',
+    expect(closedBlock).toMatch(/\bcancelDirectAbortReconciliation\s*,/);
+    expect(closedBlock).toMatch(
+      /clearPendingFailedTurnPersist:\s*sessionId\s*=>\s*\{\s*pendingFailedTurnAssistantPersistId\.delete\(sessionId\);\s*\}/,
     );
     expect(closedBlock).toContain('sessionTurnBoundaryGenerationById.delete(session.id);');
     expectOrder(
@@ -1199,3 +1220,205 @@ function readEventModule(name: string): string {
     .replace(/\r\n?/g, '\n')
     .replaceAll('deps.', '');
 }
+
+describe('session context window budget reconciler', () => {
+  it.each([
+    ['applied', true],
+    ['deferred', false],
+  ] as const)('records the applied budget only after %s reaches the live session', async (status, recorded) => {
+    // 回合中登记的重建会返回 deferred（只挂了 pending）。这时若就记 dedup，之后的同值
+    // 对账全被挡掉；而 pending 又可能被「重选当前模型」清掉（SET_MODEL 成功路径会
+    // agentSwitchPending.clear），预算就永久不生效（Greptile P1，2026-10-24）。
+    const { code, js } = loadBudgetReconciler();
+    const applied = new Map<string, number | null>();
+    const pending = new Set<string>();
+    const applyRuntimeSetModelChange = vi.fn(async () => ({ status }));
+    const deps = {
+      getMakerIfReady: () => ({ getSession: () => ({ model: 'grok-4.6' }) }),
+      getDbClient: () => ({
+        drizzle: {
+          select: () => ({
+            from: () => ({ where: () => ({ limit: async () => [{ agentKind: 'cc', model: 'grok-4.6', providerId: 'xd' }] }) }),
+          }),
+        },
+      }),
+      sessions: { agentKind: 'agentKind', model: 'model', providerId: 'providerId', id: 'id' },
+      eq: () => ({}),
+      dbToMakerAgentKind: () => 'claude-code',
+      getSessionProvider: () => 'xd',
+      getActiveCatalog: () => ({}),
+      readStoredSessionContextWindowBudget: async () => 300_000,
+      appliedContextWindowBudgets: applied,
+      pendingSessionContextWindowBudgetReconciles: pending,
+      contextWindowBudgetChangesEffectiveWindow: () => true,
+      getPendingCredentialSwitchTarget: () => null,
+      registerPendingCredentialSwitchForSession: vi.fn(),
+      applyRuntimeSetModelChange,
+      runtimeMutationDeps: () => ({}),
+      log: { debug: vi.fn(), info: vi.fn() },
+    };
+    expect(code).toContain("result.status === 'applied'");
+    const reconcile = new Function(
+      ...Object.keys(deps),
+      `${js}; return reconcileSessionContextWindowBudgetUnderLock;`,
+    )(...Object.values(deps)) as (sessionId: string, previous: number | null) => Promise<void>;
+
+    await reconcile('task-1', null);
+    expect(applyRuntimeSetModelChange).toHaveBeenCalledOnce();
+    if (recorded) expect(applied.get('task-1')).toBe(300_000);
+    else expect(applied.has('task-1')).toBe(false);
+    // 意图集合才是重放的唯一开关：deferred 留下，applied 清掉。
+    if (recorded) expect(pending.has('task-1')).toBe(false);
+    else expect(pending.has('task-1')).toBe(true);
+  });
+
+  it('keeps a pending rebuild intent when a later save collapses to the same window', async () => {
+    // 实例 300K、模型级上限 500K：回合中先存 500K（有效窗口 300K→500K），再存 600K
+    // （两个保存值都收敛到 500K，判为「没变」）。此时**不能**清意图：实例还是 300K，
+    // 一旦 pending 被取消就永久不生效（Greptile P1，2026-10-24）。
+    const { js } = loadBudgetReconciler();
+    const applied = new Map<string, number | null>();
+    const pending = new Set<string>();
+    const deps = {
+      getMakerIfReady: () => ({ getSession: () => ({ model: 'grok-4.6' }) }),
+      getDbClient: () => ({
+        drizzle: {
+          select: () => ({
+            from: () => ({ where: () => ({ limit: async () => [{ agentKind: 'cc', model: 'grok-4.6', providerId: 'xd' }] }) }),
+          }),
+        },
+      }),
+      sessions: { agentKind: 'agentKind', model: 'model', providerId: 'providerId', id: 'id' },
+      eq: () => ({}),
+      dbToMakerAgentKind: () => 'claude-code',
+      getSessionProvider: () => 'xd',
+      getActiveCatalog: () => ({}),
+      readStoredSessionContextWindowBudget: async () => 600_000,
+      appliedContextWindowBudgets: applied,
+      pendingSessionContextWindowBudgetReconciles: pending,
+      // 第一次：300K→500K 变了；第二次：500K→500K 没变。
+      contextWindowBudgetChangesEffectiveWindow: vi.fn()
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(false),
+      getPendingCredentialSwitchTarget: () => ({ model: 'grok-4.6', providerId: 'xd' }),
+      registerPendingCredentialSwitchForSession: vi.fn(async () => {}),
+      applyRuntimeSetModelChange: vi.fn(),
+      runtimeMutationDeps: () => ({}),
+      withSendToSessionLock: (_id: string, fn: () => Promise<void>) => fn(),
+      log: { debug: vi.fn(), info: vi.fn() },
+    };
+    const applier = new Function(
+      ...Object.keys(deps),
+      `${js}; return sessionContextWindowBudgetApplier;`,
+    )(...Object.values(deps)) as (sessionId: string, change: { previous: number | null }) => Promise<void>;
+
+    await applier('task-1', { previous: null });
+    expect(pending.has('task-1')).toBe(true);
+    await applier('task-1', { previous: 500_000 });
+    expect(pending.has('task-1')).toBe(true);
+    expect(applied.has('task-1')).toBe(false);
+  });
+
+  it('keeps the budget intent when it merges into an already pending route switch', async () => {
+    // 已有待处理的模型/来源切换时，改预算只补 forceSessionRebuild 后返回。用户随后重选
+    // 当前模型 → SET_MODEL 清掉那条 pending → 没人再应用预算（Greptile P1，2026-10-24）。
+    const { js } = loadBudgetReconciler();
+    const applied = new Map<string, number | null>();
+    const pending = new Set<string>();
+    const registerPendingCredentialSwitchForSession = vi.fn(async () => {});
+    const deps = {
+      getMakerIfReady: () => ({ getSession: () => ({ model: 'grok-4.6' }) }),
+      getDbClient: () => ({
+        drizzle: {
+          select: () => ({
+            from: () => ({ where: () => ({ limit: async () => [{ agentKind: 'cc', model: 'grok-4.6', providerId: 'xd' }] }) }),
+          }),
+        },
+      }),
+      sessions: { agentKind: 'agentKind', model: 'model', providerId: 'providerId', id: 'id' },
+      eq: () => ({}),
+      dbToMakerAgentKind: () => 'claude-code',
+      getSessionProvider: () => 'xd',
+      getActiveCatalog: () => ({}),
+      readStoredSessionContextWindowBudget: async () => 300_000,
+      appliedContextWindowBudgets: applied,
+      pendingSessionContextWindowBudgetReconciles: pending,
+      contextWindowBudgetChangesEffectiveWindow: () => true,
+      getPendingCredentialSwitchTarget: () => ({ model: 'grok-4.6', providerId: 'xd' }),
+      registerPendingCredentialSwitchForSession,
+      applyRuntimeSetModelChange: vi.fn(),
+      runtimeMutationDeps: () => ({}),
+      withSendToSessionLock: (_id: string, fn: () => Promise<void>) => fn(),
+      log: { debug: vi.fn(), info: vi.fn() },
+    };
+    const applier = new Function(
+      ...Object.keys(deps),
+      `${js}; return sessionContextWindowBudgetApplier;`,
+    )(...Object.values(deps)) as (sessionId: string, change: { previous: number | null }) => Promise<void>;
+
+    await applier('task-1', { previous: null });
+    // 合并不重建：不记 dedup，但意图必须留下，等发送边界重放。
+    expect(registerPendingCredentialSwitchForSession).toHaveBeenCalledOnce();
+    expect(applied.has('task-1')).toBe(false);
+    expect(pending.has('task-1')).toBe(true);
+  });
+
+  it.each([
+    ['no boundary replay without a pending intent', false, 0],
+    ['replays at the send boundary when an intent is pending', true, 1],
+  ] as const)('replay gate: %s', async (_label, intentPending, expectedReconciles) => {
+    // 任务启动时 create opts 已带上偏好预算（applySessionContextWindowBudgetToCreateOpts），
+    // 此时 dedup 还没有条目 —— 若按「dedup 缺失」重放，首条直发会把刚配置好的实例再关一次
+    // （Greptile P2，2026-10-24）。执行真实的 replay 函数，而不是断言源码文本。
+    const { js } = loadBudgetReconciler();
+    const applied = new Map<string, number | null>();
+    const pending = new Set<string>(intentPending ? ['task-1'] : []);
+    const applyRuntimeSetModelChange = vi.fn(async () => ({ status: 'applied' as const }));
+    const deps = {
+      getMakerIfReady: () => ({ getSession: () => ({ model: 'grok-4.6' }) }),
+      getDbClient: () => ({
+        drizzle: {
+          select: () => ({
+            from: () => ({ where: () => ({ limit: async () => [{ agentKind: 'cc', model: 'grok-4.6', providerId: 'xd' }] }) }),
+          }),
+        },
+      }),
+      sessions: { agentKind: 'agentKind', model: 'model', providerId: 'providerId', id: 'id' },
+      eq: () => ({}),
+      dbToMakerAgentKind: () => 'claude-code',
+      getSessionProvider: () => 'xd',
+      getActiveCatalog: () => ({}),
+      readStoredSessionContextWindowBudget: async () => 300_000,
+      appliedContextWindowBudgets: applied,
+      pendingSessionContextWindowBudgetReconciles: pending,
+      contextWindowBudgetChangesEffectiveWindow: () => true,
+      getPendingCredentialSwitchTarget: () => null,
+      registerPendingCredentialSwitchForSession: vi.fn(),
+      applyRuntimeSetModelChange,
+      runtimeMutationDeps: () => ({}),
+      withSendToSessionLock: (_id: string, fn: () => Promise<void>) => fn(),
+      log: { debug: vi.fn(), info: vi.fn() },
+    };
+    const replay = new Function(
+      ...Object.keys(deps),
+      `${js}; return replayPendingSessionContextWindowBudgetUnderLock;`,
+    )(...Object.values(deps)) as (sessionId: string, before?: () => void) => Promise<void>;
+
+    const before = vi.fn();
+    await replay('task-1', before);
+    expect(applyRuntimeSetModelChange).toHaveBeenCalledTimes(expectedReconciles);
+    expect(before).toHaveBeenCalledTimes(expectedReconciles);
+  });
+
+  it('replays the budget from the desktop send transaction, not only from direct sends', () => {
+    // 桌面 UI 发送（createMakerSendTransaction 的 applyPendingAgentSwitch）必须与直发
+    // 边界共用同一条重放：只挂直发的话，「回合中改预算 → 选择器点选清掉 pending → 从界面
+    // 发消息」这条最普通的路径永远等不到预算生效（GLM-5.3 独立审查，2026-10-24）。
+    const desktopSend = source.slice(
+      source.indexOf('applyPendingAgentSwitch: async (sessionId, options) => {'),
+      source.indexOf('providerGroupService?.beforeSend(', source.indexOf('applyPendingAgentSwitch: async (sessionId, options) => {')),
+    );
+    expect(desktopSend).toContain('applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId)');
+    expect(desktopSend).toContain('replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+  });
+});

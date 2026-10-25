@@ -219,6 +219,13 @@ export async function editBotGroupPlanStep(input: BotGroupPlanEditInput): Promis
   return settlePlanMutation(() => api.editBotGroupPlanStep(input));
 }
 
+/** Whether 分工 you start here go on by themselves; kept on this computer (§7.4). */
+export async function setBotGroupAutoContinue(groupId: string, autoContinue: boolean): Promise<BotGroupMutationResult | null> {
+  const api = botGroupApi();
+  if (!api || typeof api.updateBotGroup !== 'function') return NOT_READY;
+  return settlePlanMutation(() => api.updateBotGroup({ groupId, autoContinue }));
+}
+
 async function settlePlanMutation(
   run: () => Promise<BotGroupMutationResult>,
 ): Promise<BotGroupMutationResult | null> {

@@ -57,6 +57,17 @@ function profile(over: Partial<BotProfile> = {}): BotProfile {
 }
 
 describe('伙伴归属表', () => {
+  // 测试价值: 灵动岛/通知统一入口遇到 IM channel 原先落入不可用的可写页。
+  // 最小失败输入: 只有一条 channel 投影; unit, 直接验证生产路由结果。
+  it('opens hidden IM tasks through the read-only history gate', () => {
+    const bot = profile({ sessions: [
+      { id: 's/feishu', role: 'channel', kind: 'channel', status: 'active' },
+    ] as BotProfile['sessions'] });
+    expect(botRouteForOwnedSession([bot], 's/feishu')).toEqual({
+      route: '/bots/bot-a/history/s%2Ffeishu', consumesAlert: false, gateConsumesAlert: true,
+    });
+  });
+
   it('主对话、渠道任务、归档历史三种都收', () => {
     const owners = buildBotSessionOwners([profile()]);
     expect([...owners.keys()].sort()).toEqual(['s-main', 's-old', 's-telegram']);

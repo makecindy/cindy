@@ -18,10 +18,50 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
   'maker:session-background-activity',
   'maker:session-background-tasks:list',
+  // Next-prompt suggestion after a turn completes: a model request the host answers in
+  // ~2 s. Nobody waits on it, so it must not hold a foreground slot while the user sends.
+  'maker:predict-prompt',
+  // 打字时的 Agent 预热是尽力而为的提示，排在用户正在等待的请求之后。
+  'maker:session:prewarm',
 ]);
 
 export function isBackgroundInvoke(channel: string): boolean {
   return BACKGROUND_INVOKE_CHANNELS.has(channel);
+}
+
+/**
+ * Writes the person is actively waiting on: sending, steering or stopping a turn and
+ * answering an interaction. Every relay round trip costs ~0.5 s, so one of these queued
+ * behind a dozen history/list reads is exactly the slowness users feel. Both ends grant
+ * them a small admission allowance beyond the ordinary limits (InvokeScheduler on the
+ * controller, dispatch admission on the host); nothing here changes authorization,
+ * retries or timeouts, and a listed channel still needs its allowlist entry.
+ * Queue-management edits (reorder, expand, rename) stay foreground: the UI applies them
+ * optimistically and nobody waits on their round trip.
+ */
+const INTERACTIVE_INVOKE_CHANNELS = new Set([
+  'maker:send',
+  'maker:abort-session',
+  'maker:input:enqueue',
+  'maker:input:steer',
+  'maker:input:stop',
+  'maker:input:resume',
+  'maker:input:retry-last-error',
+  'maker:input:remove',
+  'maker:resolve-interaction',
+  'maker:agent-task:stop',
+]);
+
+export function isInteractiveInvoke(channel: string): boolean {
+  return INTERACTIVE_INVOKE_CHANNELS.has(channel);
+}
+
+export type InvokePriority = 'interactive' | 'foreground' | 'background';
+
+/** A caller's background hint never demotes an interactive write. */
+export function resolveInvokePriority(channel: string, backgroundHint?: boolean): InvokePriority {
+  if (isInteractiveInvoke(channel)) return 'interactive';
+  return (backgroundHint ?? isBackgroundInvoke(channel)) ? 'background' : 'foreground';
 }
 
 /** Control traffic must not wait behind business operations to maintain a link/lease. */

@@ -3,6 +3,7 @@
  * 排序、成员名单、轮次标记与分工（安排、下一步、交接文件）的判定，以及提示 / 报错
  * 该用哪一句文案（各端按自己的 i18n 命名空间拼 key）。只依赖群聊契约，不碰 React 与 IPC。
  */
+import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel, richResolvedValues, richChart, richOptions, richCalculationUnavailable } from './richAnswer.js';
 import {
   isBotGroupPlanOpen,
   type BotGroupDetail,
@@ -13,6 +14,7 @@ import {
   type BotGroupNoticeCode,
   type BotGroupPlanStepView,
   type BotGroupPlanView,
+  type BotGroupReplyMode,
   type BotGroupSummary,
 } from './botGroupChat.js';
 
@@ -56,6 +58,19 @@ export function botGroupMemberNames(
 /** Collapse whitespace so a multi-line message fits a one-line preview. */
 export function botGroupPreviewLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+/** New arrivals below a reader's viewport, excluding history pages and repeat snapshots. */
+export function botGroupNewMessageCount(messages: readonly BotGroupMessageView[], seenThrough: number | string | null, threadRootId?: string): number {
+  if (seenThrough === null) return 0;
+  const incoming = new Set<string>();
+  for (const message of messages) {
+    if (BigInt(message.serverSequence ?? message.sequence) <= BigInt(seenThrough) || message.deleted || (message.threadRootId ?? undefined) !== threadRootId || message.isSelf === true
+      || (message.kind !== 'message' && message.kind !== 'plan')
+      || (message.authorKind !== 'bot' && message.isSelf !== false) || message.authorKind === 'system') continue;
+    incoming.add(message.id);
+  }
+  return incoming.size;
 }
 
 /**
@@ -218,15 +233,21 @@ export function botGroupPlanFollowUp(plan: BotGroupPlanView | null): BotGroupPla
 /** Composer copy that follows the open plan (placeholder and the 「安排分工」 gate). */
 export type BotGroupComposerPlanState =
   | { kind: 'proposed' }
-  | { kind: 'running'; botName: string }
+  | { kind: 'running'; botName: string; talk?: boolean }
   | { kind: 'waiting'; botName: string; stepDone: boolean };
 
-export function botGroupComposerPlanState(plan: BotGroupPlanView | null): BotGroupComposerPlanState | null {
+export function botGroupComposerPlanState(plan: BotGroupPlanView | null, replyMode: BotGroupReplyMode = 'all'): BotGroupComposerPlanState | null {
   if (!plan) return null;
   if (plan.status === 'proposed') return { kind: 'proposed' };
   const current = currentBotGroupPlanStep(plan);
-  const botName = current?.botName.trim() ?? '';
+  // Keep the work-plan state for the division gate, but name a recipient only when
+  // ordinary text is actually forwarded to that worker (including legacy plans).
+  const botName = replyMode === 'mentioned' ? '' : current?.botName.trim() ?? '';
+  // Only promise additions when unmentioned words actually reach the speaking teammate.
+  if (plan.status === 'running' && plan.kind === 'talk') return plan.canAdd === false || replyMode === 'mentioned' ? null : { kind: 'running', botName, talk: true };
   if (plan.status === 'running') return { kind: 'running', botName };
+  // A queue waiting for 继续 takes a new request, not changes to the last answer (bot-group-chat.md §4.0).
+  if (plan.status === 'waiting' && plan.kind === 'talk') return null;
   if (plan.status === 'waiting') return { kind: 'waiting', botName, stepDone: current?.status === 'done' };
   return null;
 }
@@ -341,4 +362,57 @@ export function botGroupSidebarPlanPreview(group: BotGroupSummary): BotGroupSide
 export function botGroupPathBasename(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+/** Display-only body fragments. Literal component text never becomes Markdown syntax. */
+export function botGroupBodyParts(content: string, authorKind?: BotGroupMessageView['authorKind']): Array<{ kind: 'text' | 'markdown'; content: string }> {
+  if (authorKind !== 'bot') return [{ kind: 'markdown', content }];
+  const parts = splitRichAnswer(content);
+  return parts.flatMap((part, index) => {
+    const source = content.slice(part.key, parts[index + 1]?.key ?? content.length);
+    if (part.kind === 'markdown') return [{ kind: 'markdown' as const, content: source }];
+    const doc = new RichAnswerStream().update(part.source, true);
+    // Preserve malformed or empty answers rather than silently dropping source content.
+    if (doc.issues) return [{ kind: 'markdown' as const, content: source }];
+    const values = richResolvedValues(doc);
+    let unavailableChart = false;
+    const result: Array<{ kind: 'text' | 'markdown'; content: string }> = [];
+    const add = (text: string, kind: 'text' | 'markdown' = 'text') => {
+      if (text.trim()) result.push({ kind, content: text });
+    };
+    const visit = (id: string) => {
+      const node = doc.nodes.get(id);
+      if (!node) return;
+      const label = richString(node, 'label');
+      if (['image', 'video', 'audio', 'svg'].includes(node.kind)) {
+        // Group body has no task-local media authority. Keep its description readable.
+        add([label, richString(node, 'alt'), richString(node, 'caption'), richString(node, 'src')].filter(Boolean).join('\n'));
+      } else {
+        const markdown = richMarkdown(node);
+        if (markdown !== null) {
+          add(markdown, 'markdown');
+          add(richString(node, 'caption'));
+        }
+        else if (['text', 'heading'].includes(node.kind)) add(richLabel(node, values));
+        else if (node.kind === 'stat') add([label, richLabel(node, values)].filter(Boolean).join(': '));
+        else if (node.kind === 'chart') {
+          unavailableChart ||= richCalculationUnavailable(node, values);
+          add([label, ...richChart(node, values).map(item => `${item.label}: ${item.value}`)].filter(Boolean).join('\n'));
+        }
+        else if (node.kind === 'icon') add([label, richString(node, 'text')].filter(Boolean).join('\n'));
+        else if (node.kind === 'divider') add('---', 'markdown');
+        else {
+          // Show authored defaults only; an untouched control is not a user answer.
+          const current = node.props.default;
+          const selected = node.kind === 'select' ? richOptions(node).find(option => option.value === current)?.label : undefined;
+          const display = selected ?? (typeof current === 'string' || typeof current === 'number' || typeof current === 'boolean' ? String(current) : '');
+          add([label, display && display + richString(node, 'suffix')].filter(Boolean).join(': '));
+        }
+      }
+      node.children.forEach(visit);
+    };
+    doc.roots.forEach(visit);
+    // Do not present a partial chart as complete data; preserve its source block.
+    return result.length && !unavailableChart ? result : [{ kind: 'markdown' as const, content: source }];
+  });
 }

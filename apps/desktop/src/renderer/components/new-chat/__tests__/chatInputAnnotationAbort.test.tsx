@@ -35,9 +35,11 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   draftSource: null as UseVoiceInputResult['draftSource'],
   draftRange: null as UseVoiceInputResult['draftRange'],
   cancel: vi.fn().mockResolvedValue(undefined),
+  prepare: vi.fn(),
   realModelSelector: false,
   listAgentSkills: vi.fn(),
   localProviders: [] as ProviderView[],
+  uploadChatFolder: vi.fn(),
 }));
 
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -87,7 +89,7 @@ vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor |
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
   h.editor = editor;
   const state = h.voiceState ?? (h.listening ? 'listening' : 'idle');
-  return { state, isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: vi.fn(), stop: h.stop, cancel: h.cancel };
+  return { state, prepare: h.prepare, getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'), isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: () => { h.listening = true; return true; }, stop: h.stop, cancel: h.cancel };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, providerOrder: [], loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -99,6 +101,8 @@ const noOp = () => {};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api: any = new Proxy({}, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'uploadChatFolder') return h.uploadChatFolder;
+  if (key === 'getFilePath') return () => '/controller/docs';
   if (key === 'listAgentSkills') return h.listAgentSkills;
   if (key === 'listAgentCommands' || key === 'listDesktopCommands') return async () => ({ success: true, commands: [] });
   if (key === 'listSync') return () => ({ ghosts: [] });
@@ -125,6 +129,7 @@ const annotatedImage: AttachedFile = {
 };
 
 beforeEach(() => {
+  h.uploadChatFolder.mockReset();
   h.listAgentSkills.mockReset().mockResolvedValue({ success: true, skills: [] });
   h.localProviders = [];
   h.editor = null;
@@ -135,6 +140,7 @@ beforeEach(() => {
   h.draftSource = null;
   h.draftRange = null;
   h.stop.mockClear();
+  h.prepare.mockClear();
   h.realModelSelector = false;
   h.cancel.mockReset().mockResolvedValue(undefined);
   h.atPanel = null;
@@ -227,6 +233,75 @@ it('locks editor and attachments for the whole voice run, but keeps permissions 
       expect(h.stop).toHaveBeenCalledExactlyOnceWith({ waitForRefinement: true, onReadyForEndCue: expect.any(Function) });
     }
   }
+});
+
+// User request 2026-10-24: empty composer hints must follow hover/hold/click,
+// and native selection must not take over a recording. Existing voice tests
+// only cover editability; minimal inputs below drive real DOM handlers (unit/jsdom).
+it('shows voice guidance only in an empty composer and distinguishes holding from clicking', async () => {
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const area = view.container.querySelector('[data-recommendation-active]')
+    ?? h.editor!.view.dom.parentElement!.parentElement!;
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerEnter(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.holdComposer');
+    fireEvent.pointerLeave(area);
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    fireEvent.pointerEnter(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    fireEvent.pointerLeave(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    // jsdom has no hit-testing; returning null leaves ProseMirror's ordinary
+    // mousedown path inert while the real composer handler still receives it.
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
+    fireEvent.mouseDown(h.editor!.view.dom, { button: 0, detail: 1, clientX: 10, clientY: 10 });
+    expect(h.prepare).toHaveBeenCalledOnce();
+    expect(h.listening).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    view.rerender(<ChatInput {...view.props} />);
+    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakRelease');
+    for (const type of ['selectstart', 'dragstart', 'mousemove']) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      h.editor!.view.dom.dispatchEvent(event);
+      expect(event.defaultPrevented, type).toBe(true);
+    }
+    await act(async () => { fireEvent.mouseUp(window, { button: 0 }); });
+    expect(h.stop).toHaveBeenCalledOnce();
+    const selection = new Event('selectstart', { bubbles: true, cancelable: true });
+    h.editor!.view.dom.dispatchEvent(selection);
+    expect(selection.defaultPrevented).toBe(true);
+    const releaseClick = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+    h.editor!.view.dom.dispatchEvent(releaseClick);
+    expect(releaseClick.defaultPrevented).toBe(true);
+    fireEvent.pointerDown(document.body, { button: 0 });
+    const nextSelection = new Event('selectstart', { bubbles: true, cancelable: true });
+    h.editor!.view.dom.dispatchEvent(nextSelection);
+    expect(nextSelection.defaultPrevented).toBe(false);
+  } finally {
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    vi.useRealTimers();
+  }
+
+  h.listening = false;
+  view.rerender(<ChatInput {...view.props} />);
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' }));
+  view.rerender(<ChatInput {...view.props} />);
+  expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakPressAgain');
+  h.draftText = 'hello';
+  view.rerender(<ChatInput {...view.props} />);
+  expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+  h.draftText = '';
+  h.listening = false;
+  await act(async () => { h.editor!.commands.setContent('<p>Existing text</p>'); });
+  view.rerender(<ChatInput {...view.props} />);
+  fireEvent.pointerEnter(area);
+  expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
 });
 
 // #374 / voiceInputButtonAnchor: the real toolbar must keep the voice control
@@ -447,6 +522,181 @@ it('inserts queued folders into the mounted editor when the real attachment hook
   expect(Array.from(chips, chip => chip.getAttribute('data-path'))).toEqual([
     '/workspace/docs', '/workspace/src',
   ]);
+});
+
+// Remote-folder regression: the real editor and send pipeline must never
+// send the source folder as a path reference. The ordinary file payload must
+// carry the prepared archive, and failed preparation must preserve the draft.
+it.each([
+  { success: true, pasteOnly: false },
+  { success: false, pasteOnly: false },
+  { success: true, pasteOnly: true },
+])('waits for a remote folder copy before sending ($success, pasteOnly=$pasteOnly)', async ({ success, pasteOnly }) => {
+  supplyRangeGeometry();
+  let finish!: (result: { ok: true; path: string; size: number } | { ok: false; code: string }) => void;
+  h.uploadChatFolder.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const onSend = vi.fn().mockResolvedValue(true);
+  function RemoteComposer() {
+    const attachmentState = useAttachments(undefined, 'composer-regression');
+    return <>
+      <button onClick={() => attachmentState.addFolderPath('/controller/docs', new File([], 'docs'))}>Drop folder</button>
+      <ChatInput draftKey="composer-regression" deviceLinkDeviceId="target"
+        sessionId="remote-folder-session" initialModel="gpt-6-sol"
+        attachmentState={attachmentState} hideRuntimeControls showFolderPicker={false}
+        disableAutofocus onSend={onSend} />
+    </>;
+  }
+  const view = render(<RemoteComposer />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  if (pasteOnly) {
+    fireEvent.paste(h.editor!.view.dom, { clipboardData: {
+      items: [{ kind: 'file', getAsFile: () => new File([], 'docs'),
+        webkitGetAsEntry: () => ({ isDirectory: true }) }],
+      getData: () => '',
+    } });
+  } else {
+    await act(async () => h.editor!.commands.setContent('<p>Read this folder</p>'));
+    fireEvent.click(screen.getByRole('button', { name: 'Drop folder' }));
+  }
+  await waitFor(() => expect(h.uploadChatFolder).toHaveBeenCalledOnce());
+  expect(view.container.querySelector('[data-kind="dir"]')).toBeNull();
+  expect(h.editor!.isEditable).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' }));
+  await waitFor(() => expect(h.editor!.isEditable).toBe(false));
+  expect(onSend).not.toHaveBeenCalled();
+  await act(async () => finish(success
+    ? { ok: true, path: '/cache/docs.bin', size: 100 }
+    : { ok: false, code: 'TRANSFER_FAILED' }));
+  if (success) {
+    await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+    const sent = JSON.stringify(onSend.mock.calls[0]);
+    expect(sent).toContain('/cache/docs.bin');
+    expect(sent).not.toContain('/controller/docs');
+  } else {
+    expect(onSend).not.toHaveBeenCalled();
+    expect(h.editor!.getText()).toContain('Read this folder');
+    expect(screen.getByText('chat.remoteFile.folderFailed')).toBeTruthy();
+    h.uploadChatFolder.mockResolvedValue({ ok: true, path: '/cache/docs.bin', size: 100 });
+    fireEvent.click(screen.getByRole('button', { name: 'Drop folder' }));
+    await waitFor(() => expect(screen.queryByText('chat.remoteFile.folderFailed')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+  }
+});
+
+it.each(['cancel', 'switch', 'queue-switch'] as const)('does not submit a late folder after %s', async action => {
+  supplyRangeGeometry();
+  let finish!: (result: { ok: true; path: string; size: number }) => void;
+  h.uploadChatFolder.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const onSubmit = vi.fn();
+  function RemoteComposer({ device = 'target', queueId = 'queue-a' }: { device?: string; queueId?: string }) {
+    const attachmentState = useAttachments(undefined, 'composer-regression');
+    return <>
+      <button onClick={() => attachmentState.addFolderPath('/controller/docs', new File([], 'docs'))}>Drop folder</button>
+      <ChatInput draftKey="composer-regression" deviceLinkDeviceId={device}
+        sessionId="remote-folder-session" initialModel="gpt-6-sol"
+        attachmentState={attachmentState} hideRuntimeControls showFolderPicker={false}
+        queueEditingClientId={action === 'queue-switch' ? queueId : null}
+        onQueueEditSubmit={onSubmit}
+        disableAutofocus onSend={onSubmit} />
+    </>;
+  }
+  const view = render(<RemoteComposer />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Drop folder' }));
+  await waitFor(() => expect(h.uploadChatFolder).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByRole('button', {
+    name: action === 'queue-switch' ? 'newChat.pendingQueue.editSaveAria' : 'newChat.sendButton.send',
+  }));
+  await waitFor(() => expect(h.editor!.isEditable).toBe(false));
+  if (action === 'cancel') {
+    fireEvent.click(screen.getByRole('button', { name: 'chat.remoteFile.cancelFolderPreparation' }));
+  } else if (action === 'queue-switch') {
+    view.rerender(<RemoteComposer queueId="queue-b" />);
+  } else {
+    view.rerender(<RemoteComposer device="another-computer" />);
+  }
+  await act(async () => finish({ ok: true, path: '/cache/docs.bin', size: 100 }));
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(view.container.querySelector('[title="docs"]')).toBeNull();
+  expect(view.container.querySelector('[data-kind="dir"]')).toBeNull();
+});
+
+it('keeps a folder dragged from the remote task browser as a reference without uploading', async () => {
+  supplyRangeGeometry();
+  function RemoteComposer() {
+    const attachmentState = useAttachments(undefined, 'composer-regression');
+    return <>
+      <button onClick={() => attachmentState.addFolderPath('docs', 'task')}>Reference folder</button>
+      <ChatInput draftKey="composer-regression" deviceLinkDeviceId="target"
+        attachmentState={attachmentState} hideRuntimeControls showFolderPicker={false}
+        disableAutofocus onSend={vi.fn()} />
+    </>;
+  }
+  const view = render(<RemoteComposer />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Reference folder' }));
+  await waitFor(() => expect(view.container.querySelector('[data-kind="dir"]')?.getAttribute('data-path')).toBe('docs'));
+  expect(h.uploadChatFolder).not.toHaveBeenCalled();
+});
+
+// PR #6551: the outer drop zone remains usable while Send waits. A second folder
+// must join the same message, and its failure must preserve the original draft.
+// Unit regression for #6551: the previous Send-only coverage missed queue edits.
+// Submit while A is packing, then drop B: both entry points must use the completed
+// attachment snapshot (including an otherwise empty edit) or preserve the draft.
+it.each([
+  { queueEdit: false, success: true, text: 'Read both folders' },
+  { queueEdit: false, success: false, text: 'Read both folders' },
+  { queueEdit: true, success: true, text: 'Read both folders' },
+  { queueEdit: true, success: true, text: '' },
+  { queueEdit: true, success: false, text: 'Read both folders' },
+])('waits for folders added during submission ($queueEdit, $success, $text)', async ({ queueEdit, success, text }) => {
+  supplyRangeGeometry();
+  const completions: Array<(value: unknown) => void> = [];
+  h.uploadChatFolder.mockImplementation(() => new Promise(resolve => completions.push(resolve)));
+  const onSend = vi.fn().mockResolvedValue(true);
+  function RemoteComposer() {
+    const attachmentState = useAttachments(undefined, 'composer-regression');
+    return <>
+      <button onClick={() => attachmentState.addFolderPath('/controller/a', new File([], 'a'))}>Drop A</button>
+      <button onClick={() => attachmentState.addFolderPath('/controller/b', new File([], 'b'))}>Drop B</button>
+      <ChatInput draftKey="composer-regression" deviceLinkDeviceId="target"
+        sessionId="remote-folder-session" initialModel="gpt-6-sol"
+        attachmentState={attachmentState} hideRuntimeControls showFolderPicker={false}
+        queueEditingClientId={queueEdit ? 'queued-message' : null}
+        onQueueEditSubmit={queueEdit ? onSend : undefined}
+        disableAutofocus onSend={onSend} />
+    </>;
+  }
+  render(<RemoteComposer />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => h.editor!.commands.setContent(`<p>${text}</p>`));
+  fireEvent.click(screen.getByRole('button', { name: 'Drop A' }));
+  await waitFor(() => expect(completions).toHaveLength(1));
+  const submit = screen.getByRole('button', {
+    name: queueEdit ? 'newChat.pendingQueue.editSaveAria' : 'newChat.sendButton.send',
+  });
+  expect((submit as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(submit);
+  await waitFor(() => expect(h.editor!.isEditable).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Drop B' }));
+  await waitFor(() => expect(completions).toHaveLength(2));
+  await act(async () => completions[0]({ ok: true, path: '/cache/a.bin', size: 100 }));
+  expect(onSend).not.toHaveBeenCalled();
+  await act(async () => completions[1](success
+    ? { ok: true, path: '/cache/b.bin', size: 100 }
+    : { ok: false, code: 'TRANSFER_FAILED' }));
+  if (success) {
+    await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+    const sent = JSON.stringify(onSend.mock.calls[0]);
+    expect(sent).toContain('/cache/a.bin');
+    expect(sent).toContain('/cache/b.bin');
+    expect(sent).not.toContain('/controller/');
+  } else {
+    expect(onSend).not.toHaveBeenCalled();
+    expect(h.editor!.getText()).toContain(text);
+  }
 });
 
 it('does not let a pending local resource scan repopulate an SSH composer', async () => {

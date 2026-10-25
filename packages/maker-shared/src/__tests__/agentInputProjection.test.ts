@@ -6,9 +6,11 @@ import {
   CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
   buildBotReferenceHref,
   buildPluginResourceReferenceHref,
+  buildTodoReferenceHref,
   isCodexResumeNotReadyProjectionError,
   parsePluginResourceReferenceHref,
   parseBotReferenceHref,
+  parseTodoReferenceHref,
   projectAgentFacingText,
   projectPersistedAgentFacingUserText,
   readAgentInputReferences,
@@ -260,6 +262,28 @@ describe('agent-facing Composer projection', () => {
     expect(projected.match(/\[\/Referenced Cindy Bot\]/g)).toHaveLength(1);
     expect(projected).not.toContain(href);
     expect(parseBotReferenceHref('cindy://bot/a/b')).toBeNull();
+  });
+
+  // 测试价值：近况里点一条待办 → 引用 chip 带上稳定 Todo ID，伙伴不必按标题猜是哪一条。
+  // 协议：wire 文本只留 `[标题](cindy://bot-todo/<bot>/<todo>)`，模型看到结构化块；坏链接整条丢弃。
+  it('projects a teammate Todo reference by its stable id and drops malformed links', () => {
+    const href = buildTodoReferenceHref('bot-1', 'todo 7');
+    expect(parseTodoReferenceHref(href)).toEqual({ botId: 'bot-1', todoId: 'todo 7' });
+    const wire = `[回 MagicLizi 的邮件](${href})`;
+    const projected = projectAgentFacingText({
+      text: `${wire} 按周四回`,
+      agentReferences: [{ kind: 'todo', start: 0, end: wire.length, href, botId: 'x', todoId: 'x', title: '回 MagicLizi 的邮件' }],
+    });
+    expect(projected).toContain('[Referenced todo]');
+    expect(projected).toContain('Todo ID: "todo 7"');
+    expect(projected).toContain('update_teammate_todo');
+    expect(projected).toContain('按周四回');
+    expect(projected).not.toContain(href);
+    const truncated = href.slice(0, href.lastIndexOf('/'));
+    expect(parseTodoReferenceHref(truncated)).toBeNull();
+    expect(parseTodoReferenceHref(`${href}/extra`)).toBeNull();
+    const badWire = `[t](${truncated})`;
+    expect(readAgentInputReferences([{ kind: 'todo', start: 0, end: badWire.length, href: truncated, title: 't' }], badWire)).toEqual([]);
   });
 
   it('rejects malformed browser-tab and desktop-window references', () => {

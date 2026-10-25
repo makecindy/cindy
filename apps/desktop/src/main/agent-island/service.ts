@@ -75,7 +75,11 @@ import {
   type AgentIslandSoundSettings,
   type AgentIslandScreenLayoutMetrics,
 } from '../../shared/agentIsland.js';
-import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionRowSnapshot, patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
+import { confirmIslandArchive } from './archiveConfirmation.js';
+import { remoteInvoke } from '../device-link/index.js';
+import { bindingStore } from '../im/binding.js';
 import { setAgentIslandCompanionChangeSink } from '../localDb/agentIslandSessionPatch.js';
 import {
   companionAvatarHasArtwork,
@@ -89,6 +93,7 @@ import { t } from '../i18n.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
+  agentIslandCompletionToken,
   readAgentIslandUnreadTerminalStamp,
   applyAgentIslandEvent,
   applyAgentIslandInteractionDismissed,
@@ -146,6 +151,7 @@ import {
 } from './layoutPreferenceStore.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import {
   beginProtectedFolderCheck,
@@ -276,6 +282,7 @@ function sessionActivitySnapshotsEqual(
   right: AgentIslandSessionActivity,
 ): boolean {
   return left.sessionId === right.sessionId
+    && left.completionToken === right.completionToken
     && left.workingPhase === right.workingPhase
     && left.phase === right.phase
     && left.currentTurnActive === right.currentTurnActive
@@ -423,6 +430,7 @@ export class AgentIslandService {
       onExpand: (displayId) => this.handleNativeExpand(displayId),
       onCollapse: () => this.handleNativeCollapse(),
       onFocusSession: (sessionId) => this.focusSession(sessionId),
+      onCompletionAction: (sessionId, action, token) => this.handleCompletionAction(sessionId, action, token),
       onOpenSettings: () => this.dispatchMainWindowCommand('open-agent-island-settings', { playSelectSound: true }),
       onNewMessage: () => this.dispatchMainWindowCommand('new-maker', { playSelectSound: true }),
       onToggleSound: () => this.dispatchMainWindowCommand('toggle-agent-island-sound'),
@@ -541,6 +549,14 @@ export class AgentIslandService {
 
   /** 各平台都注册(含无原生岛的 headless):灵动岛关闭时远程任务靠它发桌面通知。 */
   registerDeviceSessionIpc(): void {
+    ipcMain.handle('agent-island:completion-action', (event, sessionId: unknown, action: unknown, token: unknown) => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || !sessionId || (action !== 'archive' && action !== 'mark-read')
+        || typeof token !== 'string' || !token || token.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'Invalid completion action');
+      }
+      return this.applyOwnedCompletionAction(sessionId, action, token);
+    });
     ipcMain.handle(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL, (event, raw: unknown) => {
       assertTrustedAppRendererEvent(event);
       // 只认主窗:副窗也挂侧栏,多份输入会让跃迁判定来回抖动。
@@ -1757,6 +1773,7 @@ export class AgentIslandService {
    */
   private buildSessionActivityPayload(): AgentIslandSessionActivity[] {
     return buildAllSessionActivitySnapshots(this.state).map((s) => ({
+      ...(s.completionToken ? { completionToken: s.completionToken } : {}),
       ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
       ...projectSessionActivity({
         sessionId: s.sessionId,
@@ -2653,6 +2670,62 @@ export class AgentIslandService {
     openMainWindowSession(nextSessionId, islandEntryId ? { islandEntryId } : undefined);
   }
 
+  private readonly completionActionsPending = new Set<string>();
+
+  async handleCompletionAction(sessionId: string, action: 'mark-read' | 'archive', token: string): Promise<boolean> {
+    const session = this.state.sessions.get(sessionId);
+    if (!session || !token || agentIslandCompletionToken(session) !== token || this.completionActionsPending.has(sessionId)) return false;
+    // Companion main tasks have their own lifecycle; only their notification may be read here.
+    if (action === 'archive' && session.companion) return false;
+    this.completionActionsPending.add(sessionId);
+    try {
+      if (action === 'archive' && !await confirmIslandArchive(sessionId, session.sourceDeviceId)) return false;
+      if (this.state.sessions.get(sessionId) !== session || agentIslandCompletionToken(session) !== token) return false;
+      if (session.sourceDeviceId) {
+        const result = await remoteInvoke(session.sourceDeviceId, 'agent-island:completion-action', [sessionId, action, token]);
+        if (!result.ok) throw new Error(result.error.message);
+        if (result.result !== true) return false;
+        const current = this.state.sessions.get(sessionId);
+        if (current && (current !== session || agentIslandCompletionToken(current) !== token)) return false;
+        clearAppBadgeSessionAttention(sessionId, 'explicit');
+        this.handleSessionAttentionCleared(sessionId, 'explicit');
+        return true;
+      }
+      return await this.applyOwnedCompletionAction(sessionId, action, token);
+    } catch (error) {
+      log.warn('island completion action failed', { action, error });
+      void dialog.showMessageBox({ type: 'error', message: t('agentIsland.native.actionFailed') });
+      return false;
+    } finally {
+      this.completionActionsPending.delete(sessionId);
+    }
+  }
+
+  /** A tunneled action is never forwarded again or downgraded to an unguarded write. */
+  private async applyOwnedCompletionAction(sessionId: string, action: 'mark-read' | 'archive', token: string): Promise<boolean> {
+    return withSessionRouteLock(sessionId, async () => {
+      const session = this.state.sessions.get(sessionId);
+      const isCurrent = () => !!session && !session.sourceDeviceId
+        && this.state.sessions.get(sessionId) === session && agentIslandCompletionToken(session) === token
+        && (action !== 'archive' || !bindingStore.findByTarget(sessionId));
+      if (!isCurrent() || (action === 'archive' && session?.companion)) return false;
+      if (action === 'archive') {
+        await patchSessionMetaInDb(sessionId, { status: 'archived' }, {
+          routeLockHeld: true,
+          // The DB writer invokes this again after its worktree/resource waits.
+          beforeWrite: () => {
+            if (!isCurrent()) throwIpcError('PRECONDITION_FAILED', 'Completed card changed');
+          },
+        });
+      }
+      // Archiving may remove this projection. The route lock still excludes a new send.
+      if (this.state.sessions.has(sessionId) && !isCurrent()) return false;
+      clearAppBadgeSessionAttention(sessionId, 'explicit');
+      this.handleSessionAttentionCleared(sessionId, 'explicit');
+      return true;
+    });
+  }
+
   /** 记下这次点击并取代之前的任何一次;被点的卡不是未读完成 / 报错时不留可处置记录。 */
   private recordIslandEntryAlert(sessionId: string, now: number): string | null {
     const stamp = readAgentIslandUnreadTerminalStamp(this.state, sessionId);
@@ -2757,6 +2830,8 @@ function collapseManualExpandedStateForInactiveDisplay(displayState: AgentIsland
 function buildAgentIslandStrings(): AgentIslandStrings {
   return {
     appName: BRAND_NAME,
+    markRead: t('agentIsland.native.markRead'),
+    archive: t('agentIsland.native.archive'),
     newConversationTitle: t('agentIsland.native.newConversationTitle'),
     newConversationHint: t('agentIsland.native.newConversationHint'),
     muteSound: t('agentIsland.native.muteSound'),

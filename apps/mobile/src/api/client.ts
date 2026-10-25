@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 export class ApiError extends Error {
   constructor(
@@ -75,7 +76,16 @@ export async function apiFetchRaw<T>(
       let nextData: unknown = null;
       try {
         nextData = await nextResponse.json();
-      } catch {
+      } catch (error) {
+        if (nextResponse.status === 204 || nextResponse.status === 205) {
+          return { response: nextResponse, data: null };
+        }
+        // JSON SyntaxError messages/stacks can include response contents.
+        mobileDebugLog('warn', 'network', 'response read failed', { status: nextResponse.status },
+          error instanceof SyntaxError ? 'SyntaxError' : error);
+        if (nextResponse.ok) {
+          throw new ApiError('INVALID_RESPONSE', nextResponse.status, i18n.t('apiErrors.requestFailed'));
+        }
         nextData = null;
       }
       return { response: nextResponse, data: nextData };
@@ -95,6 +105,9 @@ export async function apiFetchRaw<T>(
     response = result.response;
     data = result.data;
   } catch (err) {
+    if (!(err instanceof ApiError) || err.code === 'REQUEST_TIMEOUT') {
+      mobileDebugLog('warn', 'network', 'request failed', err);
+    }
     if (err instanceof ApiError) throw err;
     if (isAbortError(err)) {
       throw new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout'));

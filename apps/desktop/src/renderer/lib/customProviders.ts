@@ -88,6 +88,7 @@ export function customProviderModelConfigFromCatalogModel(
       : [];
   return {
     ...capabilities,
+    ...(model.selectedInterface ? { interfaceId: "auto" } : {}),
     ...(model.api ? { api: model.api } : {}),
     id: model.id,
     name: model.name,

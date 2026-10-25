@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ScheduleRun } from '@cindy/maker-scheduler';
@@ -9,7 +9,7 @@ import type { SessionReference } from '../../../../../shared/sessionReference';
 import { RunHistoryCard } from '../RunHistoryCard';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }),
 }));
 
 afterEach(cleanup);
@@ -49,6 +49,17 @@ describe('RunHistoryCard 会话引用状态', () => {
 });
 
 describe('RunHistoryCard 前置检查结果', () => {
+  // A failed model selection is persisted in errorMsg, not an agent message.
+  // Verify this separate consumer also hides technical text behind details.
+  it('shows switch guidance with expandable diagnostics in failed run history', () => {
+    renderRun({ id: 'run-selection', scheduleId: 'schedule-1', firedAt: 1,
+      finishedAt: 2, status: 'failed', readAt: 2,
+      errorMsg: '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
+    expect(screen.getByText('chat.remoteError.MODEL_SELECTION_UNAVAILABLE')).toBeTruthy();
+    expect(screen.queryByText(/Scheduled model test/)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(/Scheduled model test/)).toBeTruthy();
+  });
   it('通过结果显示摘要且默认折叠', () => {
     const { container } = renderRun({
       id: 'run-passed',

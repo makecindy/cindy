@@ -1,4 +1,4 @@
-import { formatForwardedRequest, captureAgentRequest, type CapturedAgentRequest } from './forwardedRequest.js';
+import type { CapturedAgentRequest } from './forwardedRequest.js';
 import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -104,7 +104,6 @@ export interface BotMessageTransport {
 }
 
 export interface BotDirectMessageServiceDeps {
-  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
   transport?: BotMessageTransport;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
@@ -474,12 +473,12 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return failed('INVALID_ARGS', `message 必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
     }
 
-    const captured = remoteSender
-      ? { message: remoteSender.requestSource ? rawMessage : formatForwardedRequest({ userText: null }, rawMessage),
-          autoReviewUserText: { kind: 'agent-request' as const, request: remoteSender.requestSource ?? { userText: null } } }
-      : await (deps.captureRequest ?? ((id, text) => captureAgentRequest(id, text, null, async () => [])))(input.callerSessionId, input.message);
+    // A peer conversation is not a delegated owner instruction. Preserve old
+    // verified envelopes when receiving them, but never wrap a new message.
+    const captured: CapturedAgentRequest = { message: rawMessage,
+      autoReviewUserText: { kind: 'agent-request',
+        ...(remoteSender?.requestSource ? { request: remoteSender.requestSource } : {}) } };
     const message = captured.message;
-    if (message.length > 200_000) return failed('INVALID_ARGS', '原话与补充合计过长，消息未发送');
 
     const caller = remoteSender ? {
       botId: remoteSender.id, botName: remoteSender.name, sessionSource: 'bot',

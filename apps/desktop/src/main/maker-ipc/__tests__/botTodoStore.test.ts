@@ -26,6 +26,20 @@ const p = {
   ],
 };
 describe('host Todo persistence', () => {
+  // Unit regression: a new automatic observation must not become a user assignment.
+  it('attributes automatic discoveries in the locked write and preserves existing assignments', async () => {
+    const { file } = await fixture();
+    const owner = createBotTodoStore(file, async () => ({}));
+    const automatic = createBotTodoStore(file, async () => ({}), () => {}, () => false);
+    const discovered = await automatic.patch({ ...p, origin: 'assigned' });
+    expect(discovered.origin).toBe('discovered');
+    const assigned = await owner.patch({ ...p, key: 'owner-task' });
+    expect((await automatic.patch({ id: assigned.id, expectedRevision: assigned.revision, progress: 'Observed', origin: 'discovered' })).origin).toBe('assigned');
+    const result = await automatic.ingest({ source: 'event', sequence: 1, patch: { ...p, key: 'event-task', origin: 'assigned' } });
+    expect(result.todo?.origin).toBe('discovered');
+    expect((await owner.read()).items.find(t => t.id === assigned.id)?.origin).toBe('assigned');
+  });
+
   it('preserves fields after partial writes across independent store instances', async () => {
     const { file } = await fixture(),
       a = createBotTodoStore(file, async () => ({})),

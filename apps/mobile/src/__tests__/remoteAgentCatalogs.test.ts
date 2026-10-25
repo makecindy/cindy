@@ -74,6 +74,17 @@ describe('remote Agent catalogs', () => {
     expect(remoteAgentProviders(providers).map((provider) => provider.id)).toEqual(['allowed']);
   });
 
+  // Remote-only policy must narrow the picker without mutating the catalog used by same-account remote control.
+  it('applies model grants only to remote Agent choices and keeps old hosts compatible', () => {
+    const localModels = [{ id: 'small' }, { id: 'large' }];
+    const provider = { id: 'allowed', remoteInvocationEnabled: true, models: { codex: localModels } } as unknown as ProviderView;
+    expect(remoteAgentProviders([provider])[0]).toBe(provider);
+    const restricted = { ...provider, remoteModelIds: ['small'] };
+    expect(remoteAgentProviders([restricted])[0].models.codex).toEqual([{ id: 'small' }]);
+    expect(restricted.models.codex).toBe(localModels);
+    expect(remoteAgentProviders([{ ...restricted, remoteModelIds: [] }])[0].models.codex).toEqual([]);
+  });
+
   it('groups source choices into one block per computer', () => {
     type Filter = { id: string; remote?: { deviceId: string; deviceName: string } };
     const remote = (deviceId: string, deviceName: string, providerId: string): Filter => ({

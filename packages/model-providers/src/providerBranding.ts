@@ -2,7 +2,7 @@
  * Provider branding is pure catalog metadata shared by desktop and mobile.
  *
  * Paths use a 24px viewBox. Simple Icons 16.27.0 paths are CC0-1.0; the xAI
- * and Zhipu Mono paths are from Lobe Icons 5.14.0 under MIT. The LiteLLM
+ * Zhipu Mono and SiliconCloud paths are from Lobe Icons 5.14.0 under MIT. The LiteLLM
  * mascot silhouette is adapted from litellm-docs/static/img/logo.svg under MIT.
  * Ollama / LM Studio / vLLM paths are Simple Icons (CC0-1.0). llama.cpp has no
  * official Simple Icons glyph; `llamacpp` is an original stack mark.
@@ -10,6 +10,7 @@
 
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  siliconflow: 'M22.956 6.521H12.522c-.577 0-1.044.468-1.044 1.044v3.13c0 .577-.466 1.044-1.043 1.044H1.044c-.577 0-1.044.467-1.044 1.044v4.174C0 17.533.467 18 1.044 18h10.434c.577 0 1.044-.467 1.044-1.043v-3.13c0-.578.466-1.044 1.043-1.044h9.391c.577 0 1.044-.467 1.044-1.044V7.565c0-.576-.467-1.044-1.044-1.044z',
   // Original S monogram for the self-hosted Sub2API connection (not upstream artwork).
   sub2api: 'M5 3h14v3H8v4h8a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H5v-3h11v-5H8a3 3 0 0 1-3-3V3z',
   antgroup: "M15.984 1.383c-.259.593-.877.914-1.334 1.348-.702.669-.998 1.726-1.218 2.682 3.37.775 5.995 3.532 6.486 7.025.566 4.016-1.85 7.859-5.744 9.134-3.894 1.276-8.153-.38-10.126-3.935A8.339 8.339 0 016.457 6.833a18.703 18.703 0 01-.376-.802l-.174-.408a8.698 8.698 0 01-.618-1.987 7.523 7.523 0 01-.051-.37 3.717 3.717 0 01-.024-.34 2.506 2.506 0 01.132-.872 1.26 1.26 0 01.384-.594.842.842 0 011.165.11c.694.82.169 2.078.142 3.02.009.575.111 1.144.301 1.684l-.103.052a8.404 8.404 0 001.318-.79c.28-.243.45-.742.781-.864.33-.121.682.146.946.297.278.145.587.219.901.214l.462.007c.076.002.152.005.226.011.212.01.422.026.63.05l.196-1.08c.04-.216.082-.43.126-.645l.141-.641c.14-.7.42-1.367.823-1.96.305-.431.75-.746 1.262-.89.877-.217 1.24.629.937 1.348zm-2.244 5.44c-2.841.002-4.898 2.532-4.628 5.64.27 3.11 2.781 5.642 5.613 5.666 2.832.024 4.932-2.512 4.658-5.644-.273-3.133-2.802-5.666-5.643-5.663zm.357.57a4.707 4.707 0 013.304 1.445 5.703 5.703 0 011.643 3.49 4.841 4.841 0 01-1.141 3.705v.015a3.923 3.923 0 01-2.808 1.303 4.664 4.664 0 01-3.367-1.387 5.678 5.678 0 01-1.71-3.518 4.832 4.832 0 011.14-3.753 3.923 3.923 0 012.813-1.3h.126z",
@@ -146,6 +147,9 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'xiaomi-mimo-api-cn': 'xiaomimimo',
   'xiaomi-mimo-token-plan-cn': 'xiaomimimo',
   'volcengine-coding-plan': 'volcengine',
+  'volcengine-api': 'volcengine',
+  'siliconflow-cn': 'siliconflow',
+  'siliconflow-global': 'siliconflow',
   'volcengine-agent-plan': 'volcengine',
   'tencentcloud-coding-plan': 'tencentcloud',
   'opencode-go': 'opencode',
@@ -164,6 +168,8 @@ const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])
   ["api.ant-ling.com", "antgroup"],
   ["inference.baseten.co", "baseten"],
   ["api.cerebras.ai", "cerebras"],
+  ["api.siliconflow.cn", "siliconflow"],
+  ["api.siliconflow.com", "siliconflow"],
   ["api.fireworks.ai", "fireworks"],
   ["api.groq.com", "groq"],
   ["router.huggingface.co", "huggingface"],

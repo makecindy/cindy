@@ -154,6 +154,23 @@ describe('companion profile uploader', () => {
     expect(log.warn).toHaveBeenCalledWith('Companion upload will retry', { actorId: 'actor', code: 'UNAVAILABLE' });
   });
 
+  it('uploads the capability setup like any value: once, on change, with a hand-over waiting for it too', async () => {
+    const t = setup();
+    const caps = (memory: boolean): CompanionPreferenceValue => ({ key: 'companion.capabilities.v1', value: { skills: ['a'], memory } });
+    t.setValues([profile('soul'), caps(true)]);
+    await t.uploader.syncBot('bot', 'actor', undefined, { requireAll: true });
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.writes().filter(w => w.key === 'companion.capabilities.v1').map(w => w.value)).toEqual([{ skills: ['a'], memory: true }]);
+    t.setValues([profile('soul'), caps(false)]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.writes().filter(w => w.key === 'companion.capabilities.v1')).toHaveLength(2);
+    // A record that could not be read keeps the cloud value; a hand-over refuses to go without it.
+    t.setValues([profile('soul'), { key: 'companion.capabilities.v1', value: null, unread: true }]);
+    await t.uploader.syncBot('bot', 'actor');
+    expect(t.writes().filter(w => w.key === 'companion.capabilities.v1')).toHaveLength(2);
+    await expect(t.uploader.syncBot('bot', 'actor', undefined, { requireAll: true })).rejects.toThrow('COMPANION_READ_INCOMPLETE');
+  });
+
   it('serialises JSON with sorted keys', () => {
     expect(canonicalJson({ b: 1, a: [{ d: null, c: 'x' }], e: undefined })).toBe('{"a":[{"c":"x","d":null}],"b":1}');
   });

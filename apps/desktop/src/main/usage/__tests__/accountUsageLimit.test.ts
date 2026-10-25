@@ -26,6 +26,7 @@ import {
   claudeAccountUsageLimit,
   codexAccountUsageLimit,
   readAccountUsageLimit,
+  readRemoteAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
   xaiAccountUsageLimit,
@@ -38,6 +39,19 @@ import type { CodexAccountUsagePayload } from '../../usageBroadcaster';
 
 // 远程 Agent 的任务撞上限额时,本机订阅快照属于另一个账号(2026-10-09:与 SSH 同一边界)。
 describe('sessionUsesOtherMachineAccount', () => {
+  it('reads the executing computer and rejects an unverified named-account reply', async () => {
+    const reset = Date.now() / 1000 + 86400;
+    const invoke = vi.fn(async () => ({ ok: true, result: {
+      fiveHour: { utilization: 100, resetsAt: reset - 3600 },
+      sevenDay: { utilization: 100, resetsAt: reset }, scoped: [],
+    } }));
+    const route = { deviceId: 'remote', providerId: 'anthropic', family: 'claude' as const, agentKind: 'claude-code' };
+    expect(await readRemoteAccountUsageLimit(route, invoke)).toEqual({ limited: true, resetAtMs: reset * 1000 });
+    expect(invoke).toHaveBeenCalledWith('remote', 'maker:usage:claude-subscription', ['anthropic', true]);
+    expect(await readRemoteAccountUsageLimit({ ...route, providerId: 'named' }, invoke)).toBeNull();
+    expect(mocks.claude).not.toHaveBeenCalled();
+  });
+
   it('SSH 远程工作区与远程 Agent(含分享来的供应商)都用另一台机器的账号', () => {
     expect(sessionUsesOtherMachineAccount({ remoteHostId: 'host-1' })).toBe(true);
     expect(sessionUsesOtherMachineAccount({ agentDeviceId: 'device-agent' })).toBe(true);

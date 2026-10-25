@@ -69,6 +69,7 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
     markTried: vi.fn(() => new Set<string>()),
     triedThisTurn: vi.fn(() => new Set<string>()),
     resetTurn: vi.fn(),
+    rebalanceCandidates: vi.fn(() => []),
   } satisfies ProviderGroupRouter;
   const value = {
     scope: () => ({ router, externalLoad, isCurrent: () => ownerCurrent }),
@@ -91,6 +92,48 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  it('tries another member when the selected executor cannot acknowledge a prohibited Fast policy', async () => {
+    const bind = vi.fn().mockRejectedValueOnce(Error('[REMOTE_AGENT_PEER_TOO_OLD] update')).mockResolvedValue(undefined);
+    const d = deps({ bindFastPolicy: bind });
+    d.router.pick.mockResolvedValueOnce({ kind: 'member', member: MINI, label: 'Mini', resolved: [] })
+      .mockResolvedValueOnce({ kind: 'member', member: CONFIG.members[0], label: 'Local', resolved: [] });
+    expect(await handleProviderGroupRemote(d, 'laptop', { ...PICK, exclude: [] })).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(d.router.pick.mock.calls[1][0].exclude?.has(MINI.key)).toBe(true);
+    expect(bind).toHaveBeenLastCalledWith({ group: 'anthropic', deviceId: null, sessionId: 's1', controllerDeviceId: 'laptop' });
+  });
+  // Unit/protocol: old owners ignored the final rebalance constraints. Verify the real wire and acknowledgement.
+  it('requires the owner to acknowledge the rebalance constraint before accepting its pick', async () => {
+    const d = deps();
+    let legacy = false;
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => {
+      const result = await handleProviderGroupRemote(d, 'laptop', args[0]);
+      if (legacy && result && typeof result === 'object') delete (result as { quotaRebalance?: unknown }).quotaRebalance;
+      return { ok: true, result };
+    });
+    const input = { ...PICK, agentKind: 'claude-code' as const, quotaRebalance: 'local' };
+    expect(await client.pick('mini', input)).toMatchObject({ kind: 'member', member: { key: MINI.key } });
+    expect(d.router.pick).toHaveBeenLastCalledWith(expect.objectContaining({ quotaRebalance: 'local' }));
+    legacy = true;
+    expect(await client.pick('mini', input)).toEqual({ kind: 'none' });
+    expect(await client.pick('mini', { ...PICK, agentKind: 'claude-code' })).toMatchObject({ kind: 'member' });
+  });
+
+  it('carries the confirmed message id to the task host', async () => {
+    const rebalanceDecision = vi.fn(async () => true);
+    const d = deps({ rebalanceDecision });
+    await handleProviderGroupRemote(d, 'laptop', { action: 'rebalance-decision', sessionId: 's1', memberKey: MINI.key, remember: false, clientId: 'message-a' });
+    expect(rebalanceDecision).toHaveBeenCalledWith('s1', MINI.key, false, 'message-a');
+  });
+
+  // Unit protocol regression: the real host/client used to discard the reset at both boundaries.
+  it.each([null, 5_000_000])('preserves verified quota exhaustion across computers (reset=%s)', async (resetAtMs) => {
+    const d = deps();
+    d.router.pick.mockResolvedValueOnce({ kind: 'unavailable', resolved: [], usageLimit: { resetAtMs } } as never);
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true, result: await handleProviderGroupRemote(d, 'laptop', args[0]),
+    }));
+    expect(await client.pick('mini', { ...PICK, agentKind: 'claude-code' })).toEqual({ kind: 'unavailable', usageLimit: { resetAtMs } });
+  });
   it('carries the optional detail request across the same-account client and host without probing on ordinary reads', async () => {
     const d = deps();
     const invoke = vi.fn<ProviderGroupRemoteInvoke>(async (_device, _channel, args) => ({
@@ -101,6 +144,19 @@ describe('provider-group:remote', () => {
     expect(d.router.view).toHaveBeenLastCalledWith('anthropic', { includeGuestSupport: true });
     await client.view('mini', 'anthropic');
     expect(d.router.view).toHaveBeenLastCalledWith('anthropic', { includeGuestSupport: false });
+  });
+
+  // Unit/protocol: a bridge/Pi pre-send read must reach the owner with its harness to select WHAM.
+  // Legacy model-only reads remain valid; invalid harness values cannot become quota selectors.
+  it('carries the optional quota harness through the real client/parser/host path', async () => {
+    const d = deps();
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true, result: await handleProviderGroupRemote(d, 'laptop', args[0]),
+    }));
+    await client.view('mini', 'anthropic', { model: 'gpt-5.3-codex', agentKind: 'pi' });
+    expect(d.router.view).toHaveBeenLastCalledWith('anthropic', { model: 'gpt-5.3-codex', agentKind: 'pi', includeGuestSupport: false });
+    expect(() => parseProviderGroupRemoteRequest({ action: 'view', providerId: 'openai', agentKind: 'unknown' }))
+      .toThrow();
   });
 
   it('only requests compatibility diagnostics when asked and discards a late reply after switching accounts', async () => {

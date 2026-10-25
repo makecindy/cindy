@@ -67,7 +67,7 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
       raw.priceVariant === 'standard' ||
       raw.priceVariant === 'priority' ||
       raw.priceVariant === 'fast' ||
-      raw.priceVariant === 'batch'
+      raw.priceVariant === 'batch' || raw.priceVariant === 'ultrafast'
     ) {
       segment.priceVariant = raw.priceVariant;
     }
@@ -147,7 +147,7 @@ export function computeGatewayTurnCost(
   variant: PriceVariant = 'standard',
 ): number | null {
   if (!price) return null;
-  if (variant === 'batch') return null;
+  if (variant === 'batch' || variant === 'ultrafast') return null;
   const priority = variant === 'priority' || variant === 'fast';
   const tariff = priority ? price.priority : price;
   if (!tariff) return null;

@@ -25,6 +25,12 @@
     "fastTag": "高速"
   },
   "options": {
+    "speed": {
+      "label": "速度",
+      "standard": "標準",
+      "fast": "高速",
+      "ultrafast": "超高速"
+    },
     "fastMode": "高速モード",
     "fastModeAccessibility": "高速モード {{model}}",
     "reasoningEffort": "推論強度",

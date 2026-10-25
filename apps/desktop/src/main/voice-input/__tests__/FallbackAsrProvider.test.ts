@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AsrEvent, AsrProvider } from '@cindy/voice-input-core';
+import type { AsrEvent, AsrProvider, AsrSegment } from '@cindy/voice-input-core';
 import { VoiceInputController, VoiceTimelineLogger } from '@cindy/voice-input-core';
 import { getVoiceInputRateLimitMessage } from '../voiceInputStartError.js';
 import { VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../../shared/voiceInputErrors.js';
@@ -15,6 +15,7 @@ import type { VoiceInputProviderKind } from '../voiceInputAsrConfig.js';
 type MockAsrProvider = AsrProvider & {
   emit: (event: AsrEvent) => void;
   appended: ArrayBuffer[];
+  emitSegment: (segment: AsrSegment) => void;
 };
 
 function makeMockProvider(options?: {
@@ -22,11 +23,16 @@ function makeMockProvider(options?: {
   startGate?: Promise<void>;
   stopGate?: Promise<void>;
   recover?: () => Promise<void>;
+  endpointing?: AsrProvider['endpointing'];
 }): MockAsrProvider {
   const callbacks: Array<(event: AsrEvent) => void> = [];
   const appended: ArrayBuffer[] = [];
+  let onSegment: (segment: AsrSegment) => void = () => {};
   const provider: MockAsrProvider = {
     appended,
+    endpointing: options?.endpointing,
+    onSegment: (callback) => { onSegment = callback; },
+    emitSegment: (segment) => onSegment(segment),
     start: vi.fn(async () => {
       if (options?.startError) throw options.startError;
       await options?.startGate;
@@ -67,6 +73,30 @@ const accountRateLimit = (): Error => Object.assign(new Error('语音请求过�
 describe('FallbackAsrProvider', () => {
   beforeEach(() => {
     resetVoiceInputProviderHealthForTests();
+  });
+
+  // Continuous-input contract: capability and timing must belong to the
+  // candidate that actually won, and late loser events cannot end its turn.
+  it('forwards only the winning provider capability and endpoint metadata', async () => {
+    const first = makeMockProvider({ startError: new Error('unavailable'), endpointing: 'semantic' });
+    const winner = makeMockProvider({ endpointing: 'acoustic' });
+    const provider = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', first),
+      candidate('litellm-qwen3-asr-flash-realtime', winner),
+    ]);
+    const segments = vi.fn();
+    provider.onSegment(segments);
+    try {
+      await provider.start();
+      const result: AsrSegment = { id: 'a', text: 'hello', final: true, audioEndMs: 800, turnEnd: 'acoustic' };
+      first.emitSegment({ ...result, turnEnd: 'semantic' });
+      winner.emitSegment(result);
+      expect(provider.endpointing).toBe('acoustic');
+      expect(segments).toHaveBeenCalledExactlyOnceWith(result);
+    } finally {
+      await provider.stop();
+      await provider.dispose();
+    }
   });
 
   it.each([

@@ -1434,13 +1434,9 @@ describe('Shared create project picker', () => {
    * fetch):任何一端被改动都会在这里失败,而不是等到用户发不出消息。
    */
   it('does not evict same-device snapshots when only the workspace changes', () => {
-    // 上游事实:evict 会把已挂载的 hook 推进 loading 态。
-    expect(agentCapabilitiesHookSource).toContain(
-      "notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });",
-    );
-    expect(deviceProvidersHookSource).toMatch(
-      /notifyDeviceProviders\(deviceId,\s*\{\s*status: 'loading'/,
-    );
+    // 驱逐后挂载中的 loading/清空行为由 agentCapabilitiesDeviceCache、
+    // deviceProvidersRecovery 与 AuthContextInitializeCatch 的生产 hook 用例覆盖。
+    // 这里保留 #807 的跨文件竞态约束：只切项目不能让同设备永久停在 loading。
     // 上游事实:fetch effect 只按 (agentKind, deviceId) 重跑,换项目不会触发它。
     expect(agentCapabilitiesHookSource).toContain('}, [agentKind, deviceId]);');
     expect(deviceProvidersHookSource).toContain('}, [deviceId]);');

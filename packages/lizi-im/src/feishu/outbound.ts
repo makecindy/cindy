@@ -1219,7 +1219,7 @@ export async function patchCardRaw(messageId: string, cardJson: unknown): Promis
 export async function sendCardRaw(
   userId: string,
   cardJson: unknown,
-  opts?: { threadTs?: string },
+  opts?: { threadTs?: string; advanceRound?: boolean },
 ): Promise<{ messageId: string }> {
   return withSendTarget(userId, { advanceRound: true, ...opts }, (target) => createMessage(
     target,

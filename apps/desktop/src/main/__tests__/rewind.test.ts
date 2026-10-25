@@ -27,6 +27,12 @@ import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 
 // ── mock(必须在延迟 import 前 hoist) ─────────────────────────────────────
 
+// Local rewind reuses fork's history helpers, but must not initialize the entire
+// device-link host in this unit fixture (#6563 CI import hook timeout).
+vi.mock('../device-link/index.js', () => ({
+  remoteBackgroundInvoke: () => { throw new Error('unexpected remote invocation in local rewind'); },
+}));
+
 const previewRewindFilesMock = vi.fn();
 const commitRewindFilesMock = vi.fn();
 const isTurnRunningMock = vi.fn(() => false);

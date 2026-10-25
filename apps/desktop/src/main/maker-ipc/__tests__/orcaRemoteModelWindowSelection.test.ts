@@ -66,6 +66,7 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     resolveVerifiedContextWindow, contextOverflowRolloverHolder: rollover,
     agentSwitchDeps: { onPendingSwitchChanged: vi.fn() }, projectPendingAgentSwitchIntent,
     wakeSessionInputAfterCredentialSwitch: vi.fn(), persistSessionFields: persist,
+    updateScheduledPreference: vi.fn(async () => {}),
     isDeviceLinkInvoke: () => false, markRemoteSettingPersistedInsideHandler: vi.fn(),
     setSessionProvider: vi.fn(), setSessionEffort: vi.fn(), setSessionFastMode: vi.fn(), getSessionEffort: () => 'high',
     recordUserSessionRuntimeMutation: () => 1, broadcastSessionRuntimeProjection: async () => {},
@@ -94,7 +95,7 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
 }
 
 describe('Orca remote-Agent window protection at send', () => {
-  const cases = (['cc', 'codex', 'pi'] as const).flatMap(agent => ['lead', 'worker'].flatMap(role =>
+  const cases = (['cc', 'pi'] as const).flatMap(agent => ['lead', 'worker'].flatMap(role =>
     [false, true].map(cold => ({ agent, role, cold }))));
   it.each(cases)('rechecks pressure for $agent $role cold=$cold and retains an unconfirmed intent', async ({ agent, role, cold }) => {
     const h = setup(agent, role, cold);
@@ -120,6 +121,25 @@ describe('Orca remote-Agent window protection at send', () => {
       expect(h.runtime.setModel).not.toHaveBeenCalled();
     }
   });
+
+  // Unit: remote Orca dispatch must preserve Codex native history even when the
+  // fresh target window is smaller than the current turn or an old acknowledgement.
+  // Covers the production send adapter for both roles and cold/live runtimes.
+  it.each(['lead', 'worker'].flatMap(role => [false, true].map(cold => ({ role, cold }))))(
+    'keeps native Codex history for $role cold=$cold despite target pressure', async ({ role, cold }) => {
+      const h = setup('codex', role, cold);
+      await h.stage(1000000);
+      h.state.tokens = 190000;
+      await h.send();
+      expect(h.readProviders).toHaveBeenCalledWith('executor', 'codex', 'new', 'provider');
+      expect(h.pending.get('s1')).toBeUndefined();
+      expect(h.persist).toHaveBeenCalledOnce();
+      expect(h.close).not.toHaveBeenCalled();
+      expect(h.rebuild).not.toHaveBeenCalled();
+      if (cold) expect(h.runtime.setModel).not.toHaveBeenCalled();
+      else expect(h.runtime.setModel).toHaveBeenCalledExactlyOnceWith('new', { providerId: 'provider', effort: 'high' });
+    },
+  );
 
   it('does not treat an unverified catalog window or its old acknowledgement as permission to rebuild', async () => {
     const h = setup();
@@ -156,7 +176,7 @@ describe('Orca remote-Agent window protection at send', () => {
   });
 
   it('does not substitute a stale acknowledged window for the fresh execution-device catalog', async () => {
-    const h = setup();
+    const h = setup('cc');
     await h.stage(1000000);
     h.state.tokens = 190000;
     await expect(h.send()).rejects.toThrow('select the model again');

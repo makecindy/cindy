@@ -31,6 +31,15 @@ Codex 的圆环总窗口由绑定的 CLI 配置和原生模型元数据解析；
 模型目录覆盖。总窗口、可用容量和自动压缩阈值分开展示；读取失败显示未知，不猜 272K。
 模型配置页的上下文上限统一写入该行所有引擎。未保存覆盖值时，Codex 也必须应用该供应商路由在设置页显示的默认窗口，不能只给自定义供应商注入窗口而漏掉 Gateway／订阅。Codex 使用每个任务独立的原生模型目录与
 thread 配置，同时设置窗口和 90% 自动压缩预算，保留原生 5% 可用空间预留及原有压缩方式。
+本地独立目录将预算写到逐模型 `context_window` / `auto_compact_token_limit`，并保留同供应商
+其它原生型号各自的有效预算；不能把目标预算作为全局 `model_context_window` 覆盖旧模型，
+否则 Codex 在恢复后的缩窗检查中看不到旧窗口大于新窗口，无法先用旧模型压缩。
+同一 live 模型临时改变显式预算仍沿用 thread 冷恢复配置，切模型重载目录时撤掉这个覆盖。
+SSH 共享 daemon 保留既有逐 thread 配置，不能传入本机目录路径；原生决定压缩方式。
+缺少旧路由预算只影响先用旧模型压缩的优化，不会关闭原生按目标预算触发的采样前压缩。
+跨供应商同样不把旧来源的型号和预算搬到目标来源；不能保证目标凭证可以调用旧模型。
+这些路径先让原生尝试目标模型压缩，明确失败后才走既有 Cindy 兜底；真实 CLI 回归见
+`apps/desktop/src/main/maker-host/__tests__/codexContextSwitch.native.test.ts`。
 显式设置可以超过原生目录默认最大值；它改变 CLI 预算，不改变供应商实际能接受的长度。
 已运行任务在当前轮结束后重建执行句柄、保留原生历史；恢复默认删除 override。
 保存后的运行时刷新失败时，仅恢复本次修改的原账号 override（保留各引擎原值和缺席状态，
@@ -128,15 +137,22 @@ wire 字段或修改远程目录优先级。Server 仍可按原 schema/revision 
 用户重命名改变匹配；使用稳定的模型 ID。添加系列时补齐五语资源，覆盖测试遍历本地
 Registry 的全部模型及其 routes，防止只翻译当前默认启用的几款。
 
-### GPT 日常窗口与 Codex Chat Completions（2026-09-06 用户裁决）
+### GPT 日常窗口与 Codex Chat Completions（2026-10-20 更新）
 
-- 所有来源的 OpenAI 聊天模型采用至多 272,000 tokens 的日常默认窗口，包括内置订阅、XD、
+- OpenAI 聊天模型未声明订阅工作默认时采用至多 272,000 tokens 的日常默认窗口，包括内置订阅、XD、
   自定义 API／Sub2API、第三方预设和组织连接，覆盖 Claude Code、Codex、Pi。
   覆盖 GPT、Codex、o 系列的原始 ID、`codex/`、`openai/`、`chatgpt/` 别名，以及 Registry
   明确关联到 OpenAI 公共型号的部署 ID。已解析的公共型号身份优先于名称；只有未解析身份时
   才按上述系列与命名空间推断，任意私有命名空间不推断。较小模型不扩容；仅有兼容协议不推断厂商。
   `contextWindowMax` 保留供应商容量；这是客户端工作默认策略，不修改服务端能力声明。
-- 显式上下文 override 仍优先，可设置 1M；恢复默认删除 override 后采用 272K。
+- OpenAI 订阅的日常窗口由 Server 既有 `routes[].defaults.contextWindow` 与
+  `perAgent[引擎].contextWindow` 下发；最终工作预算采用 perAgent，Pi 跟随 Codex 的订阅预算。活动目录以该工作
+  默认限制已解析窗口，不扩容较小的实报，也不从 route 或 `baseModels` 的总容量推导工作默认。
+  GPT-6.1 Sol 的订阅默认为 500,000，Astra 仍为 272,000；自定义 API、XD 和第三方预设
+  不继承订阅工作预算。用户覆盖仍最高。实现及刷新/恢复默认回归见
+  `active-catalog.ts` 与 `openAiContextDefaults.test.ts`。
+- 显式上下文 override 仍优先，可设置 1M；恢复默认删除 override 后重新读取对应订阅工作默认，
+  未声明的路由使用 272K。
   用户显式模型窗口、公共型号与连接／引擎补丁仍优先；非 OpenAI 模型和媒体模型不套用此策略。
   导入、刷新、离线回退、组织同步与本地 addition 经同一活动目录出口投影，不把默认值写回发现快照或用户配置。
 - Codex CLI 0.153.0 已移除原生 Chat Completions。Cindy 的既有转换路径仍可使用，

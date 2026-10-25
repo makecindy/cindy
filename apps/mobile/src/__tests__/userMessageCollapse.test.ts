@@ -185,7 +185,7 @@ const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
   rendererFunction('MarkdownSelectableText').getText(rendererSource) + String.raw`
-function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, selectable, text, layout, code = false }) {
+function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false }) {
   const styles = {};
   const onOpenPayload = undefined;
   const inlinesSelectable = () => true;
@@ -212,6 +212,12 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const presentation = {};
   const rendersSentInlineBody = false;
   const canSelectVisibleText = true;
+  const bubbleTextSelectable = canSelectVisibleText;
+  const companionMenuEnabled = false;
+  const companionQuote = undefined;
+  const replyQuote = undefined;
+  const replyTarget = null;
+  const replyTargetId = null;
   const isStreamingAssistant = false;
   const contentLayout = buildMessageContentLayout({ screenWidth: 402 });
   const t = i18n.t.bind(i18n);
@@ -225,7 +231,7 @@ return { BubbleHarness, MarkdownHarness };
     SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
     Platform: { OS: 'ios' }, StyleSheet: { flatten: (style: unknown) => style },
     selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,
-    View: NativeView, Text, UITextView, ScrollView,
+    View: NativeView, Text, SelectionMenuText: Text, UITextView, ScrollView,
     buildMessageContentLayout, nextSettledContentWidth,
     MarkdownBlockContent: ({ block, renderBlock }: { block: unknown; renderBlock: (block: unknown) => React.ReactNode }) => renderBlock(block),
     HighlightedCodeText: ({ text }: { text: string }) => React.createElement('code', null, text),

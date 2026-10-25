@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -264,6 +265,7 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
+		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
 	]);
 });
 
@@ -719,6 +721,7 @@ test("desktop guard selects source-contract tests only", () => {
 	}
 	assert.deepEqual(
 		selectFilesForTier(workspace, tier, [
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
 			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
@@ -727,6 +730,7 @@ test("desktop guard selects source-contract tests only", () => {
 			"apps/desktop/src/main/localDb/ipc/messages.test.ts",
 		]),
 		[
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
 			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
@@ -1282,7 +1286,7 @@ function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
 	});
 }
 
-test("two real test gate lock holders serialize on the same identity", async () => {
+test("two real test gate lock holders serialize after a probe resets its connection", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
 	let firstLock;
 	let secondLockPromise;
@@ -1298,6 +1302,16 @@ test("two real test gate lock holders serialize on the same identity", async () 
 			lockPortCount: REAL_LOCK_TEST_PORT_COUNT,
 			lockPortStride: REAL_LOCK_TEST_PORT_STRIDE,
 			output: () => {},
+		});
+		// Regression: an early-disconnecting probe emitted an unhandled ECONNRESET
+		// on the holder's accepted socket, terminating the gate before tests finished.
+		// Existing serialization coverage only exercised graceful probes. One real
+		// loopback RST now verifies the public lock entry stays available (runner tier).
+		await new Promise((resolve, reject) => {
+			const probe = net.createConnection({ host: "127.0.0.1", port: firstLock.port });
+			probe.once("error", reject);
+			probe.once("connect", () => probe.resetAndDestroy());
+			probe.once("close", resolve);
 		});
 		secondLockPromise = acquireTestGateLock({
 			repoRoot: root,

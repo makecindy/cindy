@@ -270,7 +270,8 @@ describe('market Ghost session boundary', () => {
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
     expect(helperBody).toContain('onPackagePlaced: () => {');
     expect(helperBody).toContain('packagePlaced = true;');
-    expect(helperBody).toContain('if (!packagePlaced) {\n      restoreMarketRecord();');
+    // The rollback condition and first action are the contract, not nesting indentation.
+    expect(helperBody).toMatch(/if \(!packagePlaced\) \{\n[ \t]+restoreMarketRecord\(\);/);
     expect(updateBody).toContain('releaseMutation();');
     expect(helperBody).not.toContain('GHOST_SOURCE_CONFLICT');
   });

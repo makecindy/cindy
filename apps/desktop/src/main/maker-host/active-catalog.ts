@@ -1910,10 +1910,11 @@ function computeMerged(): Catalog {
         const metadataProviderId = providerCatalogId(provider);
         const rootId = metadataProviderId === 'openai'
           ? model.id.replace(/^chatgpt\//, '') : model.id;
-        const identity = findModelRegistryRoute(
+        const matched = findModelRegistryRoute(
           b.modelRegistry, metadataProviderId, rootId,
           agent === 'pi' ? undefined : agent as RootAgentKind,
-        )?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
+        );
+        const identity = matched?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
         // Known public identities take precedence, including other vendors using
         // GPT-like aliases. Only unresolved GPT/Codex/o-series IDs fall back to
         // family names before the next catalog release; protocol alone never
@@ -1927,11 +1928,27 @@ function computeMerged(): Catalog {
               agent as AgentKind, metadataProviderId) ||
             (rootId !== model.id && hasLocalContextWindowOverride(localOverrides,
               provider.id, model.id, agent as AgentKind, metadataProviderId))) return model;
-        return { ...model, contextWindow: 272_000,
+        // Subscription working budgets are server-maintained per-agent defaults,
+        // separate from public model capacity. Other OpenAI connections retain
+        // the daily fallback. Pi follows the subscription Codex budget; route
+        // defaults and baseModels may contain capacity rather than a working budget.
+        const declaredWindow = isOpenAiSubscriptionProvider(provider)
+          ? matched?.entry.perAgent?.[agent === 'pi' ? 'codex' : agent as RootAgentKind]?.contextWindow
+          : undefined;
+        const contextWindow = Math.min(model.contextWindow, declaredWindow ?? 272_000);
+        if (contextWindow === model.contextWindow) return model;
+        return { ...model, contextWindow,
           contextWindowMax: model.contextWindowMax ?? model.contextWindow };
       }),
     ])),
   }));
+  // Ultrafast is a native Codex account capability; bridge aliases cannot inherit it.
+  providers = providers.map(provider => ({ ...provider, models: Object.fromEntries(
+    Object.entries(provider.models).map(([agent, models]) => [agent,
+      agent === 'codex' ? models : models?.map(model => model.supportsUltrafastMode
+        ? { ...model, supportsUltrafastMode: false } : model),
+    ]),
+  ) }));
   return { ...b, modelRegistry, providers };
 }
 

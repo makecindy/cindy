@@ -40,6 +40,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import {
+  archiveScheduleWarning,
+  loadActiveBoundScheduleNames,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -356,17 +360,23 @@ function WorkdirBrowseContent() {
         // resolveSession 失败不阻断后续 confirm —— 与 sidebar 单条 archive 行为一致。
       }
 
+      const scheduleNames =
+        (await loadActiveBoundScheduleNames([
+          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
+        ])).get(closingId) ?? [];
       const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
         closingId,
         closing?.deviceLinkDeviceId,
       );
       const ok = await confirmDialog({
         title: t('ccAgent.workdirBrowse.archiveSession.title'),
-        description:
-          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }) +
-          (dirtyWorktree
-            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
-            : ''),
+        description: [
+          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+          dirtyWorktree ? t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : '',
+          archiveScheduleWarning(t, scheduleNames),
+        ]
+          .filter(Boolean)
+          .join(' '),
         confirmText: t('ccAgent.workdirBrowse.archiveSession.confirm'),
         cancelText: t('ccAgent.workdirBrowse.archiveSession.cancel'),
       });

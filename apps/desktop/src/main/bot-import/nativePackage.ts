@@ -10,7 +10,7 @@ import { CompanionImportError, type ImportItem, type ImportSnapshot } from './ty
 export const BOT_PACKAGE_IDS = ['engineer-bot', 'nightly-audit-engineer', 'startup-qa-bot',
   'seo-aeo-desk', 'cooper', 'video-editor', 'proto-bot',
   'ad-spend-watch', 'apple-search-ads-review', 'sable-game-art'] as const;
-export const BOT_PACKAGE_VERSION = '0.5.0';
+export const BOT_PACKAGE_VERSION = '0.5.1';
 const MAX_FILE = 2 * 1024 * 1024;
 const MAX_TOTAL = 16 * 1024 * 1024;
 const invalid = (): never => { throw new CompanionImportError('INVALID_PACKAGE'); };

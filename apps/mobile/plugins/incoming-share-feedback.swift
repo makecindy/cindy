@@ -12,9 +12,9 @@ private extension ShareIntoViewController {
     }
   }
 
-  func showShareFeedback(received: Bool) {
+  func showShareFeedback(received: Bool, tooMany: Bool = false) {
     guard !shareClosed else { return }
-    let prefix = received ? "received" : "failed"
+    let prefix = tooMany ? "tooMany" : received ? "received" : "failed"
     let alert = UIAlertController(
       title: shareString(prefix + "Title"),
       message: shareString(prefix + "Message"),

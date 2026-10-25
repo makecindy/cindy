@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { checkpointWorktreeForReuse, recycleManagedWorktree } from './managedRecycle';
 import { withWorktreeResourceLock } from './resourceLock';
 import { readRecycleRecord } from './recycleJournal';
-import { restoreRecordedWorktree } from './restoreRecovery';
+import { hasRecordedRecovery, restoreRecordedWorktree } from './restoreRecovery';
 import { withLegacyWorktreeRuntimeGuard } from './legacyRuntimeGuard';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -392,7 +392,7 @@ async function drainEntry(meta: WorktreeMeta): Promise<void> {
         return false;
       }
       const recovery = await readRecycleRecord(meta.path);
-      return recovery?.phase === 'removing' && Boolean(recovery.archive && recovery.snapshot)
+      return recovery?.phase === 'removing' && hasRecordedRecovery(recovery)
         || !(await isWorktreeDirty(meta.path));
     },
   });

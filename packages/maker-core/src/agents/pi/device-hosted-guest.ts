@@ -47,11 +47,21 @@ function referencedEnvNames(provider: PiNativeProvidersResult['providers'][numbe
 export function restrictPiGuestNativeProviders<T extends PiNativeProvidersResult | null | undefined>(
   result: T,
   providerId: string,
+  modelIds?: readonly string[],
 ): T {
   if (!result) return result;
+  const allowed = modelIds ? new Set(modelIds) : null;
   const shared = piGuestUsesGateway(providerId) ? [] : result.providers.filter(
     (provider) => (provider.sourceProviderId ?? provider.id) === providerId,
-  );
+  ).map(provider => {
+    if (!allowed) return provider;
+    const models = provider.models.filter(model => allowed.has(model.id)
+      || allowed.has(`${providerId === 'openai' ? 'chatgpt' : providerId}/${model.id}`)
+      || Object.entries(provider.modelIdAliases ?? {}).some(([alias, target]) => target === model.id && allowed.has(alias)));
+    const kept = new Set(models.map(model => model.id));
+    return { ...provider, models, modelIdAliases: Object.fromEntries(Object.entries(provider.modelIdAliases ?? {})
+      .filter(([, target]) => kept.has(target))) };
+  });
   const keptKeys = new Set(shared.flatMap(referencedEnvNames));
   return {
     ...result,

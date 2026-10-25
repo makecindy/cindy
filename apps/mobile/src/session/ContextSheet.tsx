@@ -125,12 +125,26 @@ export function ContextSheet({
   );
 }
 
-export function ContextSheetGroup({ label, children }: { label: string; children: ReactNode }) {
+export interface ContextSheetGroupProps {
+  /** 分组小标签;行自己带名称的分组(如 iOS 下拉行)传空串,不再重复一遍。 */
+  label: string;
+  children: ReactNode;
+  /**
+   * 卡片下方的说明(设置类分组惯例,对齐 SettingsGroup 的 footer):卡片里只放
+   * 「名称 + 取值 / 开关 / 箭头」,成句的说明与校验提示写在这里。一组只配一段。
+   */
+  footer?: string | null;
+  footerTone?: 'secondary' | 'error';
+  footerTestID?: string;
+}
+
+export function ContextSheetGroup({ label, children, footer, footerTone, footerTestID }: ContextSheetGroupProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   return (
     <View style={styles.group}>
-      <Text style={styles.groupLabel}>{label}</Text>
+      {label ? <Text style={styles.groupLabel}>{label}</Text> : null}
       <GroupRows>{children}</GroupRows>
+      {footer ? <ContextSheetNote text={footer} tone={footerTone} testID={footerTestID} /> : null}
     </View>
   );
 }
@@ -157,8 +171,11 @@ function flattenChildren(children: ReactNode): ReactNode[] {
 export interface ContextSheetRowProps {
   /** Dismiss the sheet before presenting a system picker. */
   dismissBeforePress?: boolean;
-  icon: ReactNode;
+  /** 行首图标;设置类表单行只放名称与取值,不传。 */
+  icon?: ReactNode;
   label: string;
+  /** 右侧取值(16/22 400 textSecondary),在箭头之前;过长截断。 */
+  value?: string;
   onPress: () => void;
   /** 长按(如协同 Worker 行的管理操作);不传则只有点按。 */
   onLongPress?: () => void;
@@ -180,6 +197,7 @@ export function ContextSheetRow({
   dismissBeforePress = false,
   icon,
   label,
+  value,
   onPress,
   onLongPress,
   trailing,
@@ -225,10 +243,15 @@ export function ContextSheetRow({
       ]}>
         {busy ? (
           <ActivityIndicator color={colors.textSecondary} size="small" />
-        ) : trailing === 'chevron' ? (
-          <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
         ) : (
-          trailing ?? null
+          <>
+            {value ? <Text numberOfLines={1} style={styles.rowValue}>{value}</Text> : null}
+            {trailing === 'chevron' ? (
+              <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+            ) : (
+              trailing ?? null
+            )}
+          </>
         )}
       </View>
     </Pressable>
@@ -431,10 +454,12 @@ function makeContextSheetStyles(colors: ThemeColors) {
     group: {
       paddingTop: spacing.lg,
     },
+    // 分组小标签:13/18 600 textTertiary(设置类分组同一档)。
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
     },
     separator: {
       backgroundColor: colors.border,
@@ -462,6 +487,15 @@ function makeContextSheetStyles(colors: ThemeColors) {
       lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
+    // 行右侧取值:16/22 400 textSecondary。
+    rowValue: {
+      color: colors.textSecondary,
+      flexShrink: 1,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.regular,
+      maxWidth: '60%' as const,
+    },
     rowTextColumn: {
       flexShrink: 1,
       gap: 2,
@@ -471,10 +505,12 @@ function makeContextSheetStyles(colors: ThemeColors) {
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
+    // 说明、提示(成句的话):13/18 400 textSecondary。
     note: {
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
       paddingVertical: spacing.sm,
     },
     noteError: {
@@ -534,6 +570,7 @@ function makeContextSheetStyles(colors: ThemeColors) {
     rowTrailing: {
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
+      flexShrink: 1,
       gap: spacing.sm,
     },
   };

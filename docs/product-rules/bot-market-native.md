@@ -12,6 +12,7 @@
   - 技能：名称 + 描述，描述最多两行。开场设置技能是宿主开场流程，已由头部气泡体现，不在技能里列出。
   - 知识与记忆：知识标题 + 最多三行说明；其下一行带小标题“会记住你的”和偏好标签（开场确认后会记住的偏好，如时区、关注的主题）。
   - 工作工具：一张卡内逐个插件一行，名称 + 作者写的一句用途在同一行，行首不放插件图标或占位块，与其它模块卡片内文字左对齐（窄宽度时用途换行）。安装状态在右，只读取已安装/目录投影，不触发安装、授权或模型调用；投影晚到时只淡入状态文字，行高不变。没有插件依赖则整块隐藏。投影没拿到时显示 `bundledPluginNames`（`botMarketDisplay.ts`）里的正式名称，新包依赖新插件时必须登记（测试逐包校验）。包只能依赖插件市场公开的插件（不得依赖组织内插件或仅本机已装的插件）。
+  - 工具声明只用于展示：`dependencies.plugins` 与“工作工具”只列有代表性的几个插件（全部 `required: false`），运行时不据此限制伙伴能用什么（读取时只校验详情工具行与它一一对应、顺序一致）。伙伴按能力类别用工具（代码托管、表格、邮箱、文档与知识库、云盘、网页检索、出图与设计、设备与模拟器）：先看用户已有的同类工具，有什么用什么，本机已有的 CLI 与现有工具（git、gh、glab、浏览器等）也可用；默认只读，写入前须用户确认，不索要密码或令牌。具体插件名在技能里只作举例，GitHub 读 PR、GitLab 读 MR 各用各的说法。插件的发现、安装和连接不在包里复写：起步技能的“工具”一节只指向宿主伙伴指南（`teammateGuide.ts`），由它按运行时给出完整规则（有 cindy 网关时的发现与市场安装、有连接卡时的 `connect_account` 与等待完成通知、远程会话没有连接卡时引导到可信桌面的插件页、没有 cindy 网关时整段隐藏）。技能里不出现 `ghost_*` / `connect_account` 等工具名，也不写进身份提示（`identitySource` 会进入 system 段，改动受 system prompt 门禁约束，需与 0.5.0 保持一致）。
   - 例行任务：标题 +“·”+ 人话节奏（只是包内示例节奏，不带时区；用当前语言说不出来的节奏，如按月份或周末的写法，只隐藏节奏，不显示英文或 cron 原文）同一行，下一行单行省略的说明，右侧“默认关闭”。
   - 滚动与加载：大头像滚出视野后，顶栏淡入小头像、名称和紧凑主按钮（与身份区按钮共用状态）。加载超过 300ms 才显示静态占位。
   - 开场气泡：在身份组下方，做成不带头像的对话气泡，左下角带同色小尾巴（仅此一处，见设计决策日志）。样式与主按钮明显区分：底 `--surface-elevated`、1px `--border-default` 描边、正文 `--text-primary`，与用户自己的消息气泡 `--msg-user-*` 同配方；悬停/键盘焦点底色升到 `--surface-hover`；尾部小发送图标 `--text-secondary-mid`；尾巴的填充随气泡底色，描边续接气泡边框。
@@ -25,7 +26,7 @@
 
 ## 文件责任与验证
 
-`main/bot-import/nativePackage.ts` 负责受信内置包解析与目录投影；`host.ts`、`transfer.ts` 沿用唯一导入请求与恢复；Desktop shared/preload 提供最小 typed IPC；`renderer/features/bots/BotMarketDialog.tsx` 实现列表/详情并沿原伙伴导航和删除确认。`resources/bot-packages` 只内置十包 0.5.0（工程交付、代码审计、产品巡检、选题策划、研究信号、视频剪辑、原型开发、投放监控、搜索广告复盘、游戏美术）。已从目录移除的包，已安装的伙伴按原回执照常使用与删除，目录不再列出它。旧版本构建源保存在设计资料目录，不随仓库分发。
+`main/bot-import/nativePackage.ts` 负责受信内置包解析与目录投影；`host.ts`、`transfer.ts` 沿用唯一导入请求与恢复；Desktop shared/preload 提供最小 typed IPC；`renderer/features/bots/BotMarketDialog.tsx` 实现列表/详情并沿原伙伴导航和删除确认。`resources/bot-packages` 只内置十包 0.5.1（工程交付、代码审计、产品巡检、选题策划、研究信号、视频剪辑、原型开发、投放监控、搜索广告复盘、游戏美术）。已从目录移除的包，已安装的伙伴按原回执照常使用与删除，目录不再列出它。旧版本构建源保存在设计资料目录，不随仓库分发。
 
 每个内置包是离线编译器产出的「客户端发布版」，只含客户端会读的文件：`manifest.json`（紧凑 JSON，`integrity.files` 只列随包文件，例行任务不带 `sourcePaths`）、`assets/avatar.webp`、`knowledge/method.md` 和 `skills/<slug>/` 下各技能的全部文件（共 10 个文件）。身份提示读 manifest 里的 `profile.identitySource`，署名、来源、适配与行为评估等审计记录不随包进入仓库，留在设计资料目录的完整包里。`packageHash` 是 manifest 规范化 JSON 的哈希，与缩进、键序无关；发布版与完整包的 manifest 不同，所以哈希也不同。十个包合计约 409 KB（单文件均小于 100 KB），逐字节核对见 `nativePackage.test`。头像进入伙伴后沿既有路径：`avatarImageBase64` → `decodeBotAvatarImage`（PNG/JPEG/WebP 白名单）→ `toSdrAvatarImage`（SDR 原样保留）→ 托管媒体（`.webp`）；列表与详情的 `<img>`、云端头像上传（oss avatar 场景允许 webp）、通知头像（sharp 转 JPEG）和手机缩略图（本就是 WebP）都接受 WebP。
 

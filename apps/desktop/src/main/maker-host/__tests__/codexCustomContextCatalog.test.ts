@@ -8,6 +8,7 @@ import nativeFallbackPrompt from '../codex-native-fallback-prompt.md?raw';
 import {
   extractBundledCodexModelCatalog,
   prepareCodexCustomContextCatalog,
+  prepareCodexGuestModelCatalog,
   patchCodexModelMaxContextWindow,
   nativeCodexFallbackModel,
 } from '../codex-custom-context-catalog.js';
@@ -38,6 +39,18 @@ async function createFixtureBinary(
 }
 
 describe('Codex custom context model catalog', () => {
+  // Unit: a guest's native Codex children used the unfiltered binary catalog.
+  // One granted model must keep native metadata while the ungranted sibling
+  // disappears from the actual model_catalog_json passed to app-server.
+  it('writes only granted models for the guest app-server and preserves custom context metadata', async () => {
+    const granted = { slug: 'gpt-5.5', base_instructions: 'native prompt', context_window: 272000 };
+    const { root, binaryPath } = await createFixtureBinary({ models: [granted, { slug: 'private-model' }] });
+    const prepared = await prepareCodexGuestModelCatalog({ binaryPath, codexHome: root,
+      modelIds: ['gpt-5.5'], baseCatalog: { models: [{ ...granted, max_context_window: 1000000 }, { slug: 'private-model' }] } });
+    expect(JSON.parse(await fs.readFile(prepared.catalogPath, 'utf8')).models).toEqual([{ ...granted, max_context_window: 1000000 }]);
+    expect(prepared.extraArgs).toEqual(['-c', `model_catalog_json=${JSON.stringify(prepared.catalogPath)}`]);
+    await expect(prepareCodexGuestModelCatalog({ binaryPath, codexHome: root, modelIds: [] })).rejects.toThrow('no authorized models');
+  });
   it('extracts the complete embedded catalog across chunk boundaries', async () => {
     const catalog = {
       models: [
@@ -67,7 +80,7 @@ describe('Codex custom context model catalog', () => {
     ).resolves.toEqual(catalog);
   });
 
-  it('keeps context_window at 272K and only raises the selected model maximum', async () => {
+  it('sets the selected model budget in its descriptor without changing its sibling', async () => {
     const otherModel = {
       slug: 'gpt-5.4-mini',
       context_window: 128_000,
@@ -99,8 +112,9 @@ describe('Codex custom context model catalog', () => {
 
     expect(written.models[0]).toMatchObject({
       slug: 'gpt-5.6-sol',
-      context_window: 272_000,
+      context_window: 700_000,
       max_context_window: 700_000,
+      auto_compact_token_limit: 630_000,
       base_instructions: 'preserve the full descriptor',
     });
     expect(written.models[1]).toEqual(otherModel);
@@ -146,7 +160,9 @@ describe('Codex custom context model catalog', () => {
     expect(written.models).toContainEqual(smartModel);
     expect(written.models).toContainEqual({
       ...bundledRoot,
+      context_window: 1_050_000,
       max_context_window: 1_050_000,
+      auto_compact_token_limit: 945_000,
     });
   });
 
@@ -172,8 +188,31 @@ describe('Codex custom context model catalog', () => {
     const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
       modelId: 'codex/gpt-6-astra', contextWindow: 1_000_000, scanChunkBytes: 64 });
     const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
-    expect(catalog.models).toContainEqual({ ...native, slug: 'codex/gpt-6-astra', max_context_window: 1_000_000 });
+    expect(catalog.models).toContainEqual({ ...native, slug: 'codex/gpt-6-astra', context_window: 1_000_000,
+      max_context_window: 1_000_000, auto_compact_token_limit: 900_000 });
     expect(catalog.models).toContainEqual(native);
+  });
+
+  // Unit: cold resume previously omitted an old wire alias absent from native
+  // discovery, hiding its larger saved budget. Exercise the persisted spawn catalog,
+  // including the smart Subagent base, while leaving the native sibling untouched.
+  it.each([false, true])('keeps the previous alias budget absent from native discovery (smart=%s)', async smart => {
+    const native = { slug: 'gpt-6-astra', context_window: 272_000, max_context_window: 872_000,
+      base_instructions: 'native prompt', comp_hash: 'opaque' };
+    const { root, binaryPath } = await createFixtureBinary({ models: [native] });
+    const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
+      modelId: 'gpt-6-astra-small', contextWindow: 500_000,
+      modelIds: ['codex/gpt-6-astra', 'gpt-6-astra-small'],
+      resolveContextWindow: model => model === 'codex/gpt-6-astra' ? 1_000_000 : null,
+      ...(smart ? { baseCatalog: { models: [{ slug: 'smart-route' }] } } : {}),
+    });
+    const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
+    expect(catalog.models).toContainEqual({ ...native, slug: 'codex/gpt-6-astra',
+      context_window: 1_000_000, max_context_window: 1_000_000, auto_compact_token_limit: 900_000 });
+    expect(catalog.models).toContainEqual({ ...native, slug: 'gpt-6-astra-small',
+      context_window: 500_000, max_context_window: 872_000, auto_compact_token_limit: 450_000 });
+    if (smart) expect(catalog.models).toContainEqual({ slug: 'smart-route' });
+    else expect(catalog.models).toContainEqual(native);
   });
 
   it.each(['\n', '\r\n'] as const)('preserves verified native unknown-model behavior with %j line endings', async (lineEnding) => {
@@ -183,7 +222,8 @@ describe('Codex custom context model catalog', () => {
     const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
       modelId: 'glm-5.3', contextWindow: 500_000, scanChunkBytes: 64 });
     const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
-    expect(catalog.models[1]).toEqual({ ...nativeCodexFallbackModel('glm-5.3', instructions), max_context_window: 500_000 });
+    expect(catalog.models[1]).toEqual({ ...nativeCodexFallbackModel('glm-5.3', instructions),
+      context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000 });
   });
 
   it('keeps user-owned catalog instructions untouched', async () => {
@@ -194,7 +234,8 @@ describe('Codex custom context model catalog', () => {
     const result = await prepareCodexCustomContextCatalog({ binaryPath, codexHome: root,
       modelId: 'glm', contextWindow: 500_000, scanChunkBytes: 64 });
     const catalog = JSON.parse(await fs.readFile(result.catalogPath, 'utf8'));
-    expect(catalog.models[0]).toEqual({ ...native, max_context_window: 500_000 });
+    expect(catalog.models[0]).toEqual({ ...native, context_window: 500_000,
+      max_context_window: 500_000, auto_compact_token_limit: 450_000 });
   });
 
   it('keeps wire aliases independent and preserves native instructions and tools', () => {

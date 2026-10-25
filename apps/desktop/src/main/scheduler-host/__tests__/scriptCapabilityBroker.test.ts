@@ -14,6 +14,9 @@ import { installedGhostStoragePart, resolveInstalledGhost } from '../../../share
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
+const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
+const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
+vi.mock('../../localDb/ipc/sessions', () => ({ restoreArchivedSessionForSend, getSessionRowSnapshotStrict }));
 // ghost pipe 统一入口:缺省回显请求(jira/feishu 用例断言请求形状),
 // 单个用例可 mockResolvedValueOnce 覆盖返回(断言 data 解包 / 错误映射)。
 const callGhostToolMock = vi.hoisted(() =>
@@ -79,6 +82,8 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
 describe('SchedulerScriptCapabilityBroker', () => {
   beforeEach(() => {
     sendToSessionMock.mockReset();
+    restoreArchivedSessionForSend.mockReset();
+    getSessionRowSnapshotStrict.mockReset().mockResolvedValue({ status: 'active', source: 'user' });
     callGhostToolMock.mockReset();
     callGhostToolMock.mockImplementation(async (request: unknown) => ({ ok: true, result: request }));
     registerCallMock.mockReset();
@@ -502,6 +507,55 @@ describe('SchedulerScriptCapabilityBroker', () => {
       { schedule: schedule() },
     );
     expect(sendToSessionMock.mock.calls[0]?.[0][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+  });
+
+  // User decision 2026-10-23: unbound scripts select a target only at dispatch;
+  // they must restore it before the normal sender rejects ARCHIVED. Unit, no I/O.
+  it('restores an explicitly selected archived target before delivering the message', async () => {
+    let status = 'archived';
+    restoreArchivedSessionForSend.mockImplementation(async () => { status = 'active'; });
+    sendToSessionMock.mockImplementation(async () => {
+      expect(status).toBe('active');
+      return { ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' };
+    });
+    const result = await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    );
+    expect(result).toMatchObject({ target_session_id: 'owner', wake_kind: 'queued' });
+    expect(status).toBe('active');
+  });
+
+  // PR #6864: rejected Review input must not reactivate an archived audit task.
+  // Exercise the real broker/policy boundary; previous happy-path mocks missed it.
+  it.each(['active', 'archived'])('rejects a %s Review target without changing its lifecycle', async (status) => {
+    const target = { status, source: 'review' };
+    getSessionRowSnapshotStrict.mockResolvedValue(target);
+    restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    sendToSessionMock.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Review input rejected' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'review', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(target.status).toBe(status);
+    expect(restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: 'bot' },
+    { orcaRole: 'worker' },
+    { orcaRemoteLead: '{"leadSessionId":"lead"}' },
+  ])('leaves an archived managed dispatch target to its service lifecycle: %j', async (managed) => {
+    const target = { status: 'archived', ...managed };
+    getSessionRowSnapshotStrict.mockResolvedValue(target);
+    sendToSessionMock.mockResolvedValue({ ok: false, errorCode: 'ARCHIVED', message: 'Target archived' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'ARCHIVED' });
+    expect(target.status).toBe('archived');
+    expect(restoreArchivedSessionForSend).not.toHaveBeenCalled();
   });
 
   it('dispatches sessions with host-owned create defaults from the schedule', async () => {

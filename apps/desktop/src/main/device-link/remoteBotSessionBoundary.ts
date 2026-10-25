@@ -178,6 +178,25 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
+  if (channel === 'local-db:conversations:search') {
+    if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+    const row = record(value);
+    if (!row || !Array.isArray(row.results)) return value;
+    // Search pages can wait in the transport cache while a companion is hidden.
+    // Re-check personal ownership before returning snippets or identity metadata.
+    const ids = [...new Set(row.results.flatMap(item => {
+      const id = record(record(record(item)?.session)?.companion)?.id;
+      return typeof id === 'string' ? [id] : [];
+    }))];
+    const access = batchLookup
+      ? await batchLookup(ids, 'bot')
+      : new Map(await Promise.all(ids.map(async id => [id, await lookup!(id, 'bot')] as const)));
+    const results = row.results.filter(item => {
+      const id = record(record(record(item)?.session)?.companion)?.id;
+      return typeof id !== 'string' || access.get(id) === 'visible';
+    });
+    return { ...row, results };
+  }
   if (channel === DL_HISTORY_QUERY_CHANNEL) {
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     // Rechecked on normal, cached and queued delivery by the existing dispatch path.

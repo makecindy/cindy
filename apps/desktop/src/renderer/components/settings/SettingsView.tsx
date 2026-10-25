@@ -30,6 +30,7 @@ import { VisionBridgeSection } from './VisionBridgeSection';
 import { ProvidersSection } from './ProvidersSection';
 import { McpServersSection } from './McpServersSection';
 import { RemoteControlSection } from './RemoteControlSection';
+import { LocalAgentSection } from './LocalAgentSection';
 import { SharedTaskDialog } from '@/features/device-link/SharedTaskDialog';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
@@ -607,6 +608,7 @@ export function SettingsView() {
               >
                 <section aria-label={t('settings.sections.remoteControl')}>
                   <RemoteControlSection />
+                  <LocalAgentSection />
                 </section>
               </div>
             )}

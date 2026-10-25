@@ -84,14 +84,15 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
     render(<I18nextProvider i18n={i18n}><ErrorMessageCard message={message} /></I18nextProvider>);
     const expected = locales[locale].chat.remoteError[code as keyof typeof en.chat.remoteError];
     expect(typeof expected).toBe('string');
-    expect(screen.getByText(expected)).toBeTruthy();
+    expect(screen.getByText(code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED'
+      ? i18n.t('chat.errorBanner.attachmentAccessDeniedRecovery') : expected)).toBeTruthy();
     expect(screen.queryByText(i18n.t('chat.errorBanner.replyFailed'))).toBeNull();
     expect(screen.queryByText(/upstream fallback/)).toBeNull();
     fireEvent.click(screen.getByText(i18n.t('chat.errorBanner.networkShowRaw')));
@@ -99,8 +100,26 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(/private-test-value/)).toBeNull();
     const next = locale === 'en' ? 'ja' : 'en';
     await act(async () => { await i18n.changeLanguage(next); });
-    expect(screen.getByText(i18n.t(`chat.remoteError.${code}`))).toBeTruthy();
+    expect(screen.getByText(i18n.t(code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED'
+      ? 'chat.errorBanner.attachmentAccessDeniedRecovery' : `chat.remoteError.${code}`))).toBeTruthy();
     expect(screen.queryByText(locales[locale].chat.remoteError[code as keyof typeof en.chat.remoteError])).toBeNull();
+  });
+
+  // #6530 real-device gap: recovery must be visible before expanding details on every desktop surface.
+  it.each(['live', 'tail', 'history'] as const)('shows attachment recovery outside details on %s', async surface => {
+    const i18n = createInstance();
+    await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
+    const error = '[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.';
+    render(<I18nextProvider i18n={i18n}>{surface === 'live'
+      ? <ErrorBanner error={error} onRetry={vi.fn()} />
+      : surface === 'tail'
+        ? <ErrorTailErrorBanner errorText={error} onContinue={vi.fn()} onDismiss={vi.fn()} />
+        : <ErrorMessageCard message={error} />}</I18nextProvider>);
+    expect(screen.getByText(i18n.t('chat.errorBanner.attachmentAccessDeniedTitle'))).toBeTruthy();
+    expect(screen.getByText(i18n.t('chat.errorBanner.attachmentAccessDeniedRecovery'))).toBeTruthy();
+    expect(screen.getByText(i18n.t('chat.errorBanner.networkShowRaw')).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText(i18n.t('chat.errorBanner.replyFailed'))).toBeNull();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it.each(['live', 'tail'] as const)('keeps known remote recovery guidance in the %s banner across language changes', async surface => {

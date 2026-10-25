@@ -21,6 +21,7 @@ import type {
   BotGroupPlanStepView,
   BotGroupPlanView,
   BotGroupQuoteView,
+  BotGroupThreadSummary,
 } from '../../../shared/botGroupChat';
 import type { BotGroupOutboxEntry } from './botGroupOutbox';
 import { mergeBotGroupMessages, mergeBotGroupPlans } from './botGroupPresentation';
@@ -53,6 +54,23 @@ function signature(value: object): string {
  * `next` with every entry whose content equals the previous entry of the same id replaced by
  * that previous object; the previous array itself when nothing changed at all.
  */
+/**
+ * Pages opened through 「查看更早」 are not re-read, so their Thread roots take the unread state
+ * from the latest Thread list; otherwise a Thread read here or on another computer keeps its badge.
+ */
+function withThreadUnread(older: BotGroupMessageView[], threads: readonly BotGroupThreadSummary[] | undefined): BotGroupMessageView[] {
+  if (!threads?.length || !older.length) return older;
+  const unread = new Map(threads.map(thread => [thread.rootId, thread.unread]));
+  let changed = false;
+  const next = older.map((message) => {
+    const latest = unread.get(message.id);
+    if (!latest || signature(latest) === signature(message.threadUnread ?? {})) return message;
+    changed = true;
+    return { ...message, threadUnread: latest };
+  });
+  return changed ? next : older;
+}
+
 export function stabilizeById<T extends { id: string }>(
   previous: readonly T[],
   next: readonly T[],
@@ -105,9 +123,9 @@ export function mergeBotGroupLatestPage(
   const pushedOut = next.hasMoreBefore
     ? previous.group.messages.filter((message) => message.sequence < floor)
     : [];
-  const older = pushedOut.length > 0
+  const older = withThreadUnread(pushedOut.length > 0
     ? stabilizeById(previous.older, mergeBotGroupMessages(previous.older, pushedOut))
-    : previous.older;
+    : previous.older, next.threads);
   // The first rows moving down take over what the old latest page said about earlier history.
   const olderHasMore = pushedOut.length > 0 && previous.older.length === 0 ? previous.group.hasMoreBefore : previous.olderHasMore;
   const messages = stabilizeById(previous.group.messages, page, previous.older);

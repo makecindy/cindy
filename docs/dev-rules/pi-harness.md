@@ -57,7 +57,11 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
   始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
   input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
-  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
+  当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
+  首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的
+  server／tool 并说明重发即可放行（模型补完 `cindy_mcp_list_tools` 后重发即通过，重发那次
+  正常过一次权限）。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
   Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
@@ -100,7 +104,25 @@ Codex / Claude Code 复用的 `pi-provider-transport.ts` 原生桥接也沿用�
 
 Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
-`set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
+`set_auto_compaction{enabled:true}` / `set_thinking_level`。切换模型成功后按目标模型的思考意图
+再下发一次 `set_thinking_level`（Pi 的 `set_model` 不重置 level；不收敛会让上一个模型的 off/旧档位
+漂移给新模型——实测推理模型在 off 下把思考写进正文）。思考意图由 renderer 的原子 selection 携带
+（主进程只对 Pi 转成 `thinkingEnabled`，点选暂存与 deferred 重放一并回放）；目标档位不在启动快照内时
+按默认档/首档回落（同 `reconcilePiStartupEffort` 口径），目标声明不支持思考时明确 `off`，能力未知
+则不动。**载体缺失（旁路入口热切模型）时同样按目标快照收敛**：目标支持思考就按会话档位重新下发一次，
+否则保留现有档位——历史实现的「无意图就不动」会让这类切换静默丢思考通道（2026-10-06 实报：Orca lead
+切到 `commandcode/deepseek-v4.1-flash` 后 `usage.reasoning` 归零、推理整段写进正文，Pi 侧无任何
+`set_thinking_level` 记录，直到用户手动改一次档位才恢复）。实现见
+`packages/maker-core/src/agents/pi/index.ts` 的 `switchModel` 末尾，
+回归见 `pi-provider-routing.test.ts` 的 thinking-level 用例。跨引擎切换提交时还会把这次选择写进
+本机偏好镜像（普通 send 走 lazy-create 只读镜像、不经过 bootstrap），避免远端推送未回流时新建会话
+用旧值。**仍未覆盖**：Bot 设置保存、agent/scheduler/IM 回滚等**旁路入口**热切 Pi 模型时没有 thinking
+载体（`SessionRuntimeProfile` 不含该字段）。按目标快照收敛保证推理模型不丢通道；用户明确关过的
+思考（`setThinkingEnabled(false)` / 显式 `thinkingEnabled:false` / 启动关闭）由运行期意图标记
+保护，无载体切换不会重新开启。剩下的是本机偏好镜像里的 per-model 开关意图（记忆里关了、运行期
+从未显式下发过）仍无法携带，要完全对齐需给这些入口补载体（镜像已有 `getThinkingEnabledFromMemory`，
+目前只在会话启动钩子接入）。
+Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
 下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复
 Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveTokens`
@@ -409,6 +431,22 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   `/review` 对 SSH 远端会话前置拦截(device-link 同款);无自动重连(用户手动 Retry,
   与 CC/Codex 对齐);版本差 + daemon 活着时 defer 并显示 UpgradeBanner, 用户确认
   后才 kill + 重装(daemon 已死则静默升级磁盘 bundle)。
+
+### 本机普通会话空闲回收(2026-10)
+
+- **动机**：`pi --mode rpc` 每个约 150~300MB，普通会话此前只有退出应用/切换 Agent
+  才回收（Orca 工人另有 `workerIdleReleaseMinutes`，默认关闭），长时间使用进程与内存
+  持续累积（upstream #5830）。
+- **实现**：`apps/desktop/src/main/maker-ipc/piIdleReleaseWatcher.ts`（30min TTL /
+  5min 扫描）。候选只取本机桌面来源、无 Orca 角色、非远程、未隐藏的 pi 会话
+  （归档也纳入——归档不会关运行时）；释放前在发送锁内复查回合/后台任务/silent-stop
+  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；最后由
+  `Session.closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
+  （手动压缩 / rewind / 切模）在途的会话（pi 侧由 `runExclusivePiRpc` 计数，
+  见 `hasPendingHostOperation`）。
+- **重建语义**：释放不影响会话数据；下一次发送走既有 lazy create-session，resume 自
+  `sdk_session_id`，与冷启动一致。闲置后首次发送因此可能多等一次冷启动。
+- **回归**：`apps/desktop/src/main/maker-ipc/__tests__/piIdleReleaseWatcher.test.ts`。
 
 ## 6. 上线门禁
 

@@ -41,6 +41,8 @@ export const AUTONOMY_EVENT_FIELDS: readonly (keyof AutonomyEventData)[] = [
   'creatorBotId',
   'followerBotId',
   'occurrence',
+  'executionInstanceId',
+  'executionGeneration',
 ];
 
 /** 宿主内置事件源声明；引擎每次创建后由宿主重新登记。 */
@@ -166,6 +168,10 @@ export function toRoutineEvent(candidate: AutonomyEventCandidate, now: number): 
     creatorBotId: row.creatorBotId ?? '',
     followerBotId: row.followerBotId ?? '',
     occurrence: candidate.occurrence,
+    ...(row.execution ? {
+      executionInstanceId: row.execution.instanceId,
+      executionGeneration: row.execution.generation,
+    } : {}),
   };
   return {
     id: candidate.id,

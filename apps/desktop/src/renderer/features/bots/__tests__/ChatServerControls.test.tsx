@@ -15,7 +15,7 @@ import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareConversationImage';
 
 const mocks = vi.hoisted(() => ({
-  status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
+  status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
   refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
 }));
 // Partial: the 话题 reply box shares the group composer, whose attachment pieces pull in the app i18n instance.
@@ -90,6 +90,75 @@ describe('chat interaction controls', () => {
     if (more) fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
     expect(screen.queryByRole('menuitem', { name: k('thread.postToMain') })).toBeNull();
     expect(mocks.shareToMain).toHaveBeenCalledOnce();
+  });
+
+  // bot-group-chat.md §10「关注开关」: the server keeps the reader's last click.
+  it('still sends the last follow click when an earlier save failed but may have been kept', async () => {
+    mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [], hasMore: false, following: false });
+    let failFirst: (error: Error) => void = () => {};
+    mocks.followThread.mockReturnValueOnce(new Promise((_resolve, reject) => { failFirst = reject; }))
+      .mockResolvedValueOnce({ ok: true, following: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const follow = await waitFor(() => {
+      const button = document.querySelector('[data-thread-follow]') as HTMLButtonElement | null;
+      if (!button) throw new Error('follow switch not shown');
+      return button;
+    });
+    fireEvent.click(follow);
+    expect(follow.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(follow);
+    expect(follow.getAttribute('aria-pressed')).toBe('false');
+    // The first save times out after the server may already have kept it.
+    await act(async () => { failFirst(new Error('timeout')); });
+    await waitFor(() => expect(mocks.followThread).toHaveBeenCalledTimes(2));
+    expect(mocks.followThread.mock.calls.map(([input]) => input.following)).toEqual([true, false]);
+    expect(follow.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('saves the last follow click even after the Thread panel closes', async () => {
+    mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [], hasMore: false, following: false });
+    let finishFirst: (value: { ok: true; following: boolean }) => void = () => {};
+    mocks.followThread.mockReturnValueOnce(new Promise(resolve => { finishFirst = resolve; }))
+      .mockResolvedValueOnce({ ok: true, following: false });
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const follow = await waitFor(() => {
+      const button = document.querySelector('[data-thread-follow]') as HTMLButtonElement | null;
+      if (!button) throw new Error('follow switch not shown');
+      return button;
+    });
+    fireEvent.click(follow);
+    fireEvent.click(follow);
+    view.unmount();
+    await act(async () => { finishFirst({ ok: true, following: true }); });
+    await waitFor(() => expect(mocks.followThread).toHaveBeenCalledTimes(2));
+    expect(mocks.followThread.mock.calls.map(([input]) => input.following)).toEqual([true, false]);
+  });
+
+  it('joins the running follow save when the same Thread reopens, so the last click is saved last', async () => {
+    mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [], hasMore: false, following: false });
+    let active = 0, most = 0;
+    const pending: Array<() => void> = [];
+    mocks.followThread.mockImplementation((input: { following: boolean }) => {
+      active += 1; most = Math.max(most, active);
+      return new Promise(resolve => pending.push(() => { active -= 1; resolve({ ok: true, following: input.following }); }));
+    });
+    const followSwitch = () => waitFor(() => {
+      const button = document.querySelector('[data-thread-follow]') as HTMLButtonElement | null;
+      if (!button) throw new Error('follow switch not shown');
+      return button;
+    });
+    const first = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(await followSwitch());
+    fireEvent.click(await followSwitch());
+    first.unmount();
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    // The reopened panel shows the reader's last click while the earlier save runs.
+    await waitFor(async () => expect((await followSwitch()).getAttribute('aria-pressed')).toBe('false'));
+    fireEvent.click(await followSwitch());
+    while (pending.length) await act(async () => { pending.shift()!(); });
+    await waitFor(() => expect((document.querySelector('[data-thread-follow]') as HTMLButtonElement).getAttribute('aria-pressed')).toBe('true'));
+    expect(most).toBe(1);
+    expect(mocks.followThread.mock.calls.at(-1)![0].following).toBe(true);
   });
 
   it('refits a typed thread reply when the panel width changes, not when only its height does', () => {
@@ -379,7 +448,9 @@ describe('chat interaction controls', () => {
   it('shares thread messages separately from the main timeline and excludes controls from the image', async () => {
     const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
     const article = (await screen.findByText('Root message')).closest('article')!;
-    fireEvent.click(within(article).getByRole('button', { name: 'chat.shareImage.entry' }));
+    // Share lives in the bubble toolbar's more menu.
+    fireEvent.pointerDown(within(article).getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'chat.shareImage.entry' }));
     const scope = 'bot-group:room:thread:root';
     expect(shareSelectionStore.isActive(scope)).toBe(true);
     expect(queryShareableMessageIds(scope)).toEqual(['root']);

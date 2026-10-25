@@ -12,10 +12,12 @@ import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { toast } from '@/lib/toast';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { CreateWorkerPopover } from './CreateWorkerPopover';
+import { EditWorkerPopover } from './EditWorkerPopover';
 import { RemoteWorkerSessionPane } from './RemoteWorkerSessionPane';
 import { WorkerListToolbar } from './RolePillDropdown';
 import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
@@ -100,6 +102,10 @@ export function OrcaWorkerPanel({
     workerSessionId,
     createOpen,
     setCreateOpen,
+    editWorker,
+    handleCloseEditWorker,
+    handleOpenEditWorker,
+    handleUpdateWorker,
     handleCreateWorker,
     handleSwitchFocus,
     handleArchiveWorker,
@@ -120,6 +126,18 @@ export function OrcaWorkerPanel({
     shownWorker && shownWorker.sessionId === workerSessionId
       ? shownWorker.executionDevice
       : undefined;
+
+  // 改名入口的远程兼容门:归属已确认本机时始终可编辑；device-link 被控端必须显式
+  // 声明支持 maker:worker:update(旧被控端 allowlist 不认该 channel)。
+  // 归属未解析(undefined)与「设置」入口同口径 fail closed。
+  const editingRemote = typeof deviceId === 'string';
+  const editCapabilities = useAgentCapabilities(
+    (selectedWorkerRecord ?? focusedWorker)?.agent ?? 'codex',
+    editingRemote ? deviceId : undefined,
+  );
+  const canEditWorker =
+    deviceId !== undefined &&
+    (!editingRemote || editCapabilities.capabilities?.supportsOrcaWorkerUpdate === true);
 
   const handleOpenCreate = useCallback(async () => {
     const result = await refreshCreationState();
@@ -199,6 +217,7 @@ export function OrcaWorkerPanel({
     <div className="flex h-full min-h-0 w-full flex-col bg-content-area">
       <div className="flex h-8 shrink-0 items-center border-b border-border/40 px-3 text-11 font-medium leading-none text-muted-foreground">
         <WorkerListToolbar
+          leadSessionId={leadSessionId}
           worker={selectedWorkerRecord ?? focusedWorker}
           workers={workers}
           selectedWorkerId={selectedWorkerId}
@@ -209,6 +228,7 @@ export function OrcaWorkerPanel({
           onOpenCreate={() => void handleOpenCreate()}
           onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}
           onArchiveWorker={handleArchiveWorker}
+          onEditWorker={canEditWorker ? handleOpenEditWorker : undefined}
           clearAttentionWhenVisible={workerConversationVisible}
         />
       </div>
@@ -257,17 +277,24 @@ export function OrcaWorkerPanel({
         )}
       </div>
       <CreateWorkerPopover
+        leadSessionId={leadSessionId}
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreate={handleCreateWorker}
         deviceId={deviceId ?? undefined}
         sshRemote={sshRemote}
-        // 仅任务与 Agent 均已确认在本机的 Lead 可选择 Worker 运行设备，与主进程限制一致。
-        executionDevicesEnabled={deviceId === null && agentDeviceId === null && !sshRemote}
+        // 工作电脑与 Lead 的 Agent 位置独立；SSH 沿用原限制。
+        executionDevicesEnabled={deviceId === null && !sshRemote}
         // Worker 的模型目录默认跟 Lead 的 Agent 所在电脑；可在面板里换到本机或其他电脑。控制端读不到
         // 那台目录时(见 useWorkerAgentDevices)维持被控电脑的目录，Worker 跟 Lead。
         leadAgentDeviceId={workerAgentDevices.leadAgentDeviceId}
         remoteAgentDevices={workerAgentDevices.devices}
+      />
+      <EditWorkerPopover
+        open={!!editWorker}
+        worker={editWorker}
+        onClose={handleCloseEditWorker}
+        onSave={handleUpdateWorker}
       />
     </div>
   );

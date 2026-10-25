@@ -110,14 +110,32 @@ export interface BotGroupLaneTerminal {
   undispatched?: boolean;
 }
 
+/** Ordinary and recovery-held replies must read their fallback text after queued writes. */
+export async function settleBotGroupLaneTerminal(
+  service: Pick<BotGroupChatService, 'settleLaneTurn'>,
+  terminal: BotGroupLaneTerminal,
+  drainPersistQueue: () => Promise<void>,
+): Promise<boolean> {
+  if (terminal.outcome === 'done' && !terminal.resultText.trim() && terminal.resultMessageClientId) {
+    await drainPersistQueue();
+  }
+  return service.settleLaneTurn(terminal);
+}
+
 export interface BotGroupChatServiceDeps {
-  /** With `plan`, the Bot's 分工 Session for that plan (bot-group-chat.md §7.4). */
+  /**
+   * With `plan`, the Bot's 分工 Session for that plan (bot-group-chat.md §7.4); with
+   * `threadRootId`, the Bot's own lane for that Thread (§3); with `talkPlanId`, its own
+   * lane for that queue (§7.0).
+   */
   ensureLane: (input: {
     botId: string;
     groupId: string;
     title: string;
     chatAccess?: import('../../shared/botGroupChat.js').ChatLaneAccess;
     plan?: { planId: string; workDir: string; sessionId?: string };
+    threadRootId?: string;
+    talkPlanId?: string;
   }) => Promise<LaneResult>;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
@@ -165,6 +183,7 @@ export interface BotGroupChatServiceDeps {
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
+  onChatMessageNotification?: (payload: import('./chatMessageNotifications.js').ChatMessageNotification, current: () => boolean) => void;
   /** Cloud companions (cloud-companions.md); absent keeps the Chat Server per-computer only. */
   companionCloud?: import('../companion-cloud/runtime.js').CompanionCloudHost;
   now?: () => number;
@@ -2050,8 +2069,12 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           parallelFirstCircle: isParallelBroadcast(group, mentions, responders),
           scope,
         });
-        // Naming specific Bots is ordinary chat; everything else goes through 分工 routing (§7.2–7.4),
-        // including 「@所有人」 and groups where only mentioned Bots reply.
+        // Mention-only applies to planning too: ordinary messages must not wake
+        // the organizer. Explicit arrangements and @all remain actionable.
+        if (!division && group.replyMode === 'mentioned' && !mentions.all && !mentions.botIds.length) {
+          return { ok: true, messageId: appended.id } as const;
+        }
+        // Naming specific Bots is ordinary chat; @all may use 分工 routing (§7.2–7.4).
         const direct = mentions.botIds.length > 0;
         if (direct && !division) {
           chatRound();
@@ -2128,7 +2151,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     });
   };
 
-  const stopRound = async (groupIdInput: unknown): Promise<BotGroupMutationResult> => {
+  // Local groups have one owner; the stop scope only matters in multi-account server groups.
+  const stopRound = async (groupIdInput: unknown, _scope?: unknown): Promise<BotGroupMutationResult> => {
     const groupId = readId(groupIdInput);
     if (!groupId) return failure('INVALID_PARAMS', 'groupId 无效');
     return serialize(groupId, async () => {
@@ -2194,6 +2218,8 @@ export interface BotGroupTaskPostInput {
   card: BotGroupTaskCard;
   /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
   files?: Array<{ absolutePath: string }>;
+  /** A task started in a Thread reports back into that Thread. */
+  threadRootId?: string;
 }
 export type BotGroupTaskPostResult =
   | { ok: true; messageId: string }

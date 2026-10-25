@@ -7,7 +7,7 @@
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Check, CornerDownRight, MessageSquareShare, X } from 'lucide-react';
+import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -36,6 +36,7 @@ import {
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
 import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import type { ThreadPanelResize } from './useThreadPanelResize';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
 const STICK_TO_BOTTOM_PX = 48;
@@ -71,6 +72,69 @@ function useUnposted(key: string): ReadonlySet<string> {
     () => unpostedReplies().get(key) ?? NONE_UNPOSTED);
 }
 
+/**
+ * Follow saves per group and Thread (bot-group-chat.md §10「关注开关」), kept outside the panel:
+ * a save keeps running after its panel closes, and a reopened panel joins it rather than starting a
+ * second one, so the server keeps the reader's last click. One data owner's saves never reach another.
+ */
+interface FollowSave {
+  saving: boolean;
+  /** The newest click not yet sent, and the newest click at all (shown by a panel that reopens mid-save). */
+  wanted: boolean | null;
+  intent?: boolean;
+  /** What the server confirmed; undefined until read. */
+  saved: boolean | undefined;
+  /** Bumped when a save starts and ends: a read begun before it ended may carry the old choice. */
+  writes: number;
+  /** The open panel; a closed one shows nothing. */
+  panel?: { show: (following: boolean | undefined) => void; fail: (message: string) => void; reread: () => void };
+}
+const followSaveStore = { owner: getDataOwnerGeneration().dataOwnerId, saves: new Map<string, FollowSave>() };
+function followSave(key: string): FollowSave {
+  const owner = getDataOwnerGeneration().dataOwnerId;
+  if (followSaveStore.owner !== owner) { followSaveStore.owner = owner; followSaveStore.saves.clear(); }
+  let save = followSaveStore.saves.get(key);
+  if (!save) { save = { saving: false, wanted: null, saved: undefined, writes: 0 }; followSaveStore.saves.set(key, save); }
+  return save;
+}
+/** Sends the newest click, one save at a time; only an account change stops it. */
+async function runFollowSave(key: string, groupId: string, rootId: string, save: FollowSave, failureText: (code?: string) => string) {
+  if (save.saving) return;
+  save.saving = true;
+  save.writes += 1;
+  // Only a change of account stops the queue: a same-account generation repair keeps it.
+  const ownerId = getDataOwnerGeneration().dataOwnerId;
+  const ownerCurrent = () => getDataOwnerGeneration().dataOwnerId === ownerId;
+  // A failed write may still have been saved (a timeout or a dropped connection): until a later
+  // write succeeds, the server's value is unknown and the newest click is always sent.
+  let uncertain = false;
+  try {
+    while (save.wanted !== null && (uncertain || save.wanted !== save.saved)) {
+      const wanted: boolean = save.wanted;
+      save.wanted = null;
+      let failure: string | null = null;
+      try {
+        const result = await api().followThread({ groupId, rootId, following: wanted });
+        if (result.ok) { save.saved = result.following; uncertain = false; }
+        else failure = failureText(result.errorCode);
+      } catch { failure = failureText(); }
+      if (failure) uncertain = true;
+      if (!ownerCurrent()) return;
+      // A newer click is saved next; only the last outcome is shown.
+      if (save.wanted !== null) continue;
+      save.panel?.show(save.saved);
+      if (failure) save.panel?.fail(failure);
+    }
+  } finally {
+    save.saving = false;
+    save.wanted = null;
+    save.writes += 1;
+    // Read what the server kept after a failure: the switch then shows the real choice.
+    if (uncertain && ownerCurrent()) save.panel?.reread();
+    if (!save.panel && followSaveStore.saves.get(key) === save) followSaveStore.saves.delete(key);
+  }
+}
+
 export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: string): Animation | null {
   const style = getComputedStyle(panel);
   const token = style.getPropertyValue('--motion-base').trim();
@@ -85,7 +149,7 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onRevealShare, onClose }: {
+export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onRevealShare, onClose, resize }: {
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
@@ -93,6 +157,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
   onClose: () => void;
+  resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
@@ -135,6 +200,12 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   /** Lowest sequence of the last latest-page read; replies below it live only on opened older pages. */
   const latestFloorRef = useRef(Number.POSITIVE_INFINITY);
+  /** Where the reader had read up to when the panel opened; fixed for the panel's life. */
+  const [readBefore, setReadBefore] = useState<number | null>(null);
+  const readBeforeRef = useRef<number | null>(null);
+  /** Whether the reader follows this Thread; undefined until known, or when the server keeps no read state. */
+  const [following, setFollowing] = useState<boolean | undefined>(undefined);
+  const followKey = `${group.id}:${rootId}`;
 
   /**
    * Reads the latest page, or the page before `before`. `rereadOnly` re-reads an opened page for a
@@ -149,9 +220,23 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const anchorId = before ? shown[0]?.id : undefined;
     const anchored = (replies: BotGroupMessageView[]) => !anchorId || replies.some(reply => reply.id === anchorId);
     try {
-      const result = await api().thread({ groupId: group.id, rootId, before, sourceMessageIds: shown.map(message => message.id) });
+      // Reading the latest page marks the Thread read only while the reader is at the newest reply:
+      // a reply that arrives while they read further up stays unread until they scroll down to it.
+      const markRead = !before && stickToBottomRef.current;
+      const save = followSave(followKey);
+      const followWrites = save.writes;
+      const result = await api().thread({ groupId: group.id, rootId, before, sourceMessageIds: shown.map(message => message.id), markRead });
       if (!current()) return;
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
+      // A read that overlaps a follow save may carry the old choice; the save's own answer wins.
+      if (!before && followWrites === save.writes && !save.saving) {
+        save.saved = result.following;
+        setFollowing(result.following);
+      }
+      if (readBeforeRef.current === null && result.readBefore !== undefined) {
+        readBeforeRef.current = result.readBefore;
+        setReadBefore(result.readBefore);
+      }
       setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
       setError('');
       setExecutionFailures(result.executionFailures ?? []);
@@ -197,6 +282,27 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   }, [read]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
+  /** Following is the reader's own switch, off by default: replying or being named never turns it on. */
+  const toggleFollowing = useCallback(() => {
+    if (following === undefined) return;
+    const save = followSave(followKey);
+    save.wanted = !following;
+    save.intent = save.wanted;
+    setFollowing(save.wanted);
+    void runFollowSave(followKey, group.id, rootId, save, code => t(code ? chatErrorKey(code) : key('requestFailed')));
+  }, [following, followKey, group.id, rootId, t]);
+  useEffect(() => {
+    const save = followSave(followKey);
+    const panel = { show: setFollowing, fail: (message: string) => toast.error(message), reread: () => refreshRef.current() };
+    save.panel = panel;
+    // Reopened while an earlier panel's save still runs: show the reader's last click.
+    if (save.saving && save.intent !== undefined) setFollowing(save.intent);
+    return () => {
+      if (save.panel !== panel) return;
+      save.panel = undefined;
+      if (!save.saving && followSaveStore.saves.get(followKey) === save) followSaveStore.saves.delete(followKey);
+    };
+  }, [followKey]);
   useEffect(() => {
     aliveRef.current = true;
     refreshRef.current();
@@ -374,21 +480,41 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     );
   };
   const replyCount = Math.max(root?.replyCount ?? 0, realReplies.filter(reply => reply.kind === 'message').length);
+  // The first reply from someone else after where the reader had read; only worth a divider
+  // when older replies sit above it.
+  const firstNewIndex = readBefore === null ? -1 : replyRows.findIndex(message => message.sequence > readBefore && !message.isSelf && !message.deleted && message.authorKind !== 'system');
+  const firstNewId = firstNewIndex > 0 ? replyRows[firstNewIndex]!.id : null;
 
   return <aside ref={panelRef} aria-labelledby={titleId}
-        className="flex h-full min-w-0 w-1/2 max-w-[min(50%,28rem)] shrink-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]">
+        style={resize?.width === undefined ? undefined : { width: resize.width, maxWidth: 'none' }}
+        className="relative flex h-full min-w-0 w-1/2 max-w-[min(50%,28rem)] shrink-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
           <h2 id={titleId} className="text-15 font-medium text-[var(--text-primary)]">{t(key('topic'))}</h2>
-          <Tip text={t('bots.close')}>
-            <Button variant="secondary" tone="quiet" size="md"
-              className="w-8 rounded-none px-0 [&::before]:rounded-full"
-              aria-label={t('bots.close')} onClick={onClose}><X size={17} aria-hidden /></Button>
-          </Tip>
+          <div className="flex items-center gap-1">
+            {following !== undefined ? (
+              <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
+                <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
+                  className={cn('gap-1.5 px-2.5', following ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}
+                  onClick={() => void toggleFollowing()}>
+                  {following ? <BellRing size={14} aria-hidden /> : <Bell size={14} aria-hidden />}
+                  {t(key(following ? 'thread.following' : 'thread.follow'))}
+                </Button>
+              </Tip>
+            ) : null}
+            <Tip text={t('bots.close')}>
+              <Button variant="secondary" tone="quiet" size="md"
+                className="w-8 rounded-none px-0 [&::before]:rounded-full"
+                aria-label={t('bots.close')} onClick={onClose}><X size={17} aria-hidden /></Button>
+            </Tip>
+          </div>
         </header>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onScroll={(event) => {
             const element = event.currentTarget;
+            const wasAtBottom = stickToBottomRef.current;
             stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
+            // Back at the newest reply: what arrived meanwhile has now been seen.
+            if (!wasAtBottom && stickToBottomRef.current) refreshRef.current();
           }}>
           <div ref={contentRef} className="flex min-w-0 flex-col">
             {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
@@ -399,7 +525,13 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
             {replyRows.map(message => (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
-                {renderRow(message, layout.get(message.id)?.continued ?? false)}
+                {message.id === firstNewId ? (
+                  <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
+                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
+                    <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
+                  </div>
+                ) : null}
+                {renderRow(message, firstNewId === message.id ? false : layout.get(message.id)?.continued ?? false)}
               </Fragment>
             ))}
           </div>
@@ -439,5 +571,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             />
           </div>
         </>}
+        {/* Keep the existing Shift+Tab route from Close back into the group. */}
+        {resize && <div role="separator" aria-orientation="vertical" aria-label={t('diffPanel.shell.resizeHandleAria')}
+          tabIndex={0} {...resize.handleProps}
+          className="absolute inset-y-0 left-0 z-10 w-2 touch-none cursor-col-resize hover:border-l hover:border-[var(--text-tertiary)] focus-visible:border-l focus-visible:border-[var(--focus-ring)] focus-visible:outline-none" />}
   </aside>;
 }

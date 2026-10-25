@@ -57,6 +57,7 @@ const SHARE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$/;
 type Region = 'cn' | 'global';
 
 export interface ProviderShareGuestEvents {
+  catalogChanged?(agentDeviceId: string): void;
   changed(received: readonly ProviderShareReceived[]): void;
   /** 发出的申请有了结果(同意、拒绝、过期、撤回)。 */
   settled(state: ProviderShareRequestState, preview: ProviderShareLinkPreview | null): void;
@@ -230,7 +231,9 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
   };
   runtime = rt;
   void refreshReceivedShares('start');
-  if (options.userDataDir) startProviderShareCrossRegion({ changed: () => emitChanged(rt) }, { userDataDir: options.userDataDir });
+  if (options.userDataDir) startProviderShareCrossRegion({ changed: () => emitChanged(rt),
+    catalogChanged: device => { if (current(rt)) rt.events.catalogChanged?.(device); },
+  }, { userDataDir: options.userDataDir });
 }
 
 export function stopProviderShareGuest(): void {

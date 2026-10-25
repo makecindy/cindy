@@ -187,7 +187,7 @@ async function defaultResolveBotId(
       readOnly,
     );
     if (!laneAccess.ok) return laneAccess;
-  } else if (row.role !== 'canonical' && row.role !== 'delegation' && !authority) {
+  } else if (row.role !== 'canonical' && row.role !== 'thread' && row.role !== 'delegation' && !authority) {
     return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
   }
   // Runtime hydration cannot mount the local personal shelf on an SSH host.
@@ -375,7 +375,7 @@ export async function collectBotOwnSkillMounts(
 ): Promise<{
   pluginRoot: string;
   baseline: Awaited<ReturnType<typeof collectTeammateGuideMount>>;
-  skills: { name: string; description: string; path: string; filePath: string }[];
+  skills: { name: string; description: string; path: string; filePath: string; updatedAt?: string }[];
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);

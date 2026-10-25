@@ -15,6 +15,8 @@ export interface ComposerSheetProps {
   onClosed?(): void;
   title: string;
   onBack?(): void;
+  /** Dim the back arrow while its action would be ignored (for example a save in flight). */
+  backDisabled?: boolean;
   backLabel?: string;
   children: ReactNode;
   aboveContent?: ReactNode;

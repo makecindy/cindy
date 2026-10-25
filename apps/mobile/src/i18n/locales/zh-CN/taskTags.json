@@ -34,6 +34,7 @@
   "editLabel": "编辑“{{name}}”",
   "reorderLabel": "调整“{{name}}”的顺序",
   "reorderHint": "长按手柄并拖动排序",
+  "reorderFooter": "长按拖动可调整顺序。",
   "pink": "粉色",
   "coral": "珊瑚色",
   "teal": "青色",

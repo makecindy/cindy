@@ -218,9 +218,13 @@ export function canOfferCodexHistoryRecovery(input: {
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'SSH_HARNESS_SWITCH_UNSUPPORTED',
+  'MODEL_SELECTION_UNAVAILABLE',
+  'HARNESS_SWITCH_NOT_READY',
   'DEVICE_LINK_BUSY',
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+  'DEVICE_LINK_MEDIA_ACCESS_DENIED',
   'AUTO_REVIEW_UNAVAILABLE',
   'AUTO_REVIEW_CONFIRM_UNDELIVERED',
   'MCP_APPROVAL_AUTO_BLOCKED',
@@ -228,12 +232,12 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE',
 ]);
 
-/** Parse the existing runtime error envelope, including Electron's IPC wrapper.
+/** Parse the runtime envelope, including Electron and device-link IPC wrappers.
  * A parsed code is only a translation candidate: unknown REMOTE codes must not
  * promote their upstream fallback text into localized user-facing guidance.
  */
 export function parseAgentErrorCode(message: string): { code: string; fallback: string } | null {
-  const match = /(?:^|: Error: )\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
+  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
   if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
     return null;
   }

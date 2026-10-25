@@ -78,6 +78,7 @@ export type DeepLinkPayload =
    * 供 renderer 在导航落地后申请处置被点的那张卡。
    */
   | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+  | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
   | { type: 'project'; workingDir: string }
   /**
    * 由 --open-folder argv 触发的 "新建对话 + 预填工作目录"。
@@ -424,6 +425,11 @@ export function openMainWindowSession(
       : { type: 'session', id: sessionId },
     options?.focus !== false,
   );
+}
+
+/** An authenticated chat notification opens its exact message through the existing navigation queue. */
+export function openMainWindowChatMessage(groupId: string, messageId: string, threadRootId?: string, conversationKind?: 'direct'): void {
+  dispatchDeepLink({ type: 'chat-message', groupId, messageId, ...(conversationKind ? { conversationKind } : {}), ...(threadRootId ? { threadRootId } : {}) });
 }
 
 /** Sends a typed internal event to the primary renderer without broadcasting to utility windows. */

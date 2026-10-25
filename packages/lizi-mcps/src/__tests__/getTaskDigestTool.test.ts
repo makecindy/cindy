@@ -2,8 +2,8 @@
  * 测试价值
  * - 生产入口与可观察结果:get_task_digest 经 registry.call 返回给模型的 JSON(字段、大小、错误码)。
  * - 规则依据:被程序叫醒的伙伴先读 ≤2KB 摘要再决定;每段文字 ≤300 字;只读调用方可读范围内的任务。
- * - 现有覆盖缺口:新工具。
- * - 最小失败输入:每段文字都是长中文(UTF-8 三字节)的摘要;受限历史范围里请求范围外的任务。
+ * - 现有覆盖缺口:长助手回复只截开头,丢掉末尾结果;总预算收紧时也须保留结论。
+ * - 最小失败输入:超过 300 字、末尾才写失败结论的回复,分别带有/不带其他长字段;受限范围外任务。
  * - tier:unit(纯工具层,宿主回调 mock)。
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -71,6 +71,27 @@ describe('get_task_digest', () => {
   it('leaves a short digest untouched', () => {
     const short = { ...digest, title: '修登录', last_user_ask: '先修登录', last_assistant_line: '好', pending_question: null, error: null, pr_status: null };
     expect(boundTaskDigest(short)).toEqual(short);
+  });
+
+  it.each([false, true])('retains the opening and final blocker of a long reply (budget pressure=%s)', async (pressure) => {
+    const opening = '构建进展：';
+    const conclusion = '最终结果：部署失败，需要回滚。';
+    const raw = {
+      ...digest,
+      title: '部署结果',
+      last_user_ask: pressure ? longText : '检查部署结果',
+      last_assistant_line: `${opening}${'正在检查日志与测试结果。'.repeat(80)}\n${conclusion}`,
+      pending_question: pressure ? longText : null,
+      error: pressure ? longText : null,
+      pr_status: pressure ? longText : null,
+    };
+    const reg = setup({ taskDigest: async () => ({ ok: true as const, digest: raw }) });
+    const { text, json } = parse(await reg.call('get_task_digest', { session_id: raw.session_id }));
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
+    const reply = String(json.last_assistant_line);
+    expect(reply.startsWith(opening)).toBe(true);
+    expect(reply.endsWith(conclusion)).toBe(true);
+    expect(Array.from(reply).length).toBeLessThanOrEqual(pressure ? 299 : 300);
   });
 
   it('refuses a task outside a scoped caller\'s readable history and passes host errors through', async () => {

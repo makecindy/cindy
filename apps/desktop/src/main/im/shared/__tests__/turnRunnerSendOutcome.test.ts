@@ -194,6 +194,7 @@ vi.mock('../fbotTitle', () => ({
 }));
 
 import { getActiveInteractionRoute } from '../../../maker-ipc/interactionRouter';
+import { readChannelToolScope, type ChannelToolScope } from '../channelToolScope';
 import { createTurnRunner, type ImRunAgentTurnArgs, type ImTurnRunner } from '../turnRunner';
 import {
   readGroupHistoryAccess,
@@ -451,6 +452,7 @@ interface TurnOverrides {
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
+  channelToolScope?: ChannelToolScope;
   prePersistedUserMessage?: { sessionId: string; clientId: string };
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
   attachments?: ImRunAgentTurnArgs['attachments'];
@@ -478,6 +480,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
     ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
     ...(overrides.protectedContent === true ? { protectedContent: true } : {}),
     ...(overrides.groupHistoryAccess ? { groupHistoryAccess: overrides.groupHistoryAccess } : {}),
+    ...(overrides.channelToolScope ? { channelToolScope: overrides.channelToolScope } : {}),
     ...(overrides.prePersistedUserMessage
       ? { prePersistedUserMessage: overrides.prePersistedUserMessage }
       : {}),
@@ -673,15 +676,30 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   it('anchors direct IM capture to the durable accepted user message', async () => {
     mocks.persistUserMessage.mockResolvedValue({ clientId: 'im-anchor-client' });
     const h = setupSession(async () => ({ accepted: true }));
+    const scope: ChannelToolScope = {
+      channel: 'discord', botId: 'bot', laneUserId: 'lane', chatId: 'chat',
+      chatKind: 'group', requesterIsOwner: true, companion: true,
+      inputClientId: 'stale-input',
+    };
+    mocks.persistUserMessage.mockImplementationOnce(async () => {
+      // Before persistence, a reused scope must not attribute this turn to the old input.
+      expect(readChannelToolScope({ sessionId: h.session.id, sessionInstanceId: h.session.instanceId })?.inputClientId).toBeUndefined();
+      return { clientId: 'im-anchor-client' };
+    });
 
-    await runDefaultTurn();
+    await runDefaultTurn(vi.fn(), { channelToolScope: scope });
 
     expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(h.session, 'im-anchor-client');
+    expect(readChannelToolScope({ sessionId: h.session.id, sessionInstanceId: h.session.instanceId })?.inputClientId).toBe('im-anchor-client');
+    expect(readChannelToolScope({ sessionId: h.session.id, sessionInstanceId: 'stale-instance' })).toBeNull();
     expect(mocks.persistUserMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         source: expect.objectContaining({ im: 'feishu', contextSnapshot: {} }),
       }),
     );
+    h.emit({ type: 'done', data: {} });
+    await flushMicrotasks();
+    expect(readChannelToolScope({ sessionId: h.session.id, sessionInstanceId: h.session.instanceId })).toBeNull();
   });
 
   it('uses the adapter service identity for both early persistence and accepted enrichment', async () => {
@@ -2538,7 +2556,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       runner = createTurnRunner(
         {
           ...fakeAdapter,
-          processingEmoji: '👨‍💻',
+          processingEmoji: '👩🏻‍💻',
           queuedEmoji: '👀',
           terminalReactionEmoji: (kind) => (kind === 'error' ? '👎' : null),
         },
@@ -2562,14 +2580,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       h.emit({ type: 'done', data: {} });
       await waitForAssertion(() => {
         expect(h.send).toHaveBeenCalledTimes(1);
-        expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👨‍💻');
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👩🏻‍💻');
       });
       expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👀');
 
       mocks.feishuIm.removeMessageReaction.mockClear();
       h.emit({ type: 'done', data: {} });
       await waitForAssertion(() => {
-        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👨‍💻');
+        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👩🏻‍💻');
       });
       expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👍');
     });
@@ -2641,9 +2659,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(1));
       h.emit({ type: 'done', data: {} });
       await waitForAssertion(() => expect(completed).toHaveBeenCalledTimes(1));
-      ack.resolve('👨‍💻');
+      ack.resolve('👩🏻‍💻');
       await waitForAssertion(() => {
-        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👨‍💻');
+        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👩🏻‍💻');
       });
       expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👍');
       expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👀');

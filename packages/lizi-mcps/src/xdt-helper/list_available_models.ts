@@ -74,6 +74,7 @@ export interface ListAvailableModelsDeps {
   listAvailableModels: (params: {
     agent?: 'claude-code' | 'codex' | 'pi';
     callerSessionId?: string;
+    executionDeviceId?: string;
     /** 列哪里的模型：省略 = Lead 所在位置；null = 任务所在电脑；string = 那台电脑或分享。 */
     agentDeviceId?: string | null;
   }) => Promise<ControlResult<{
@@ -98,7 +99,8 @@ const DESCRIPTION = [
   '',
   '参数:',
   '- agent: 可选, codex / claude-code / pi; 不传返三者',
-  '- agent_device_id: 可选, 列哪里的模型(Worker 的 Agent 可在别的电脑或分享来的供应商上运行): 取返回的 locations[].agent_device_id, "local" 为这台电脑; 不传列 Lead 所在位置',
+  '- execution_device_id: 可选, 查询该 Worker 工作电脑可用的模型与来源，取 execution_devices 的 device_id。',
+  '- agent_device_id: 可选, 模型所在位置: locations[].agent_device_id 或 "local"。指定 execution_device_id 时相对工作电脑，否则不传跟 Lead。',
   '',
   '返回值:',
   '- agent_device_id: 本次列出的位置; locations: 其他可选位置 [{agent_device_id, name}]。create_worker 传同一个 agent_device_id 并用这里列出的 model / provider_id',
@@ -136,13 +138,16 @@ export function registerListAvailableModelsTool(
         .min(1)
         .max(128)
         .optional()
-        .describe('可选, 列哪里的模型: locations[].agent_device_id 或 "local"(这台电脑); 不传列 Lead 所在位置'),
+        .describe('可选, 模型位置: locations[].agent_device_id 或 "local"；指定工作电脑时相对它，否则不传跟 Lead'),
+      execution_device_id: z.string().trim().min(1).max(128).optional()
+        .describe('可选，Worker 的工作电脑；查询它可用的模型与远程供应商'),
     },
-    handler: async ({ agent, agent_device_id }) => {
+    handler: async ({ agent, agent_device_id, execution_device_id }) => {
       const callerSessionId = deps.getSessionContext?.().sessionId;
       const result = await deps.listAvailableModels({
         agent,
         ...(callerSessionId ? { callerSessionId } : {}),
+        ...(execution_device_id !== undefined ? { executionDeviceId: execution_device_id } : {}),
         ...toHostAgentDeviceId(agent_device_id),
       });
       if (!result.ok) {
@@ -151,7 +156,7 @@ export function registerListAvailableModelsTool(
         }
         // 那台电脑 / 分享不可用时保留原因，Lead 才能如实告诉用户。
         return errorPayload(
-          result.errorCode.startsWith('REMOTE_AGENT_') ? result.errorCode : 'INTERNAL',
+          result.errorCode.startsWith('REMOTE_AGENT_') || result.errorCode === 'UNSUPPORTED_CAPABILITY' ? result.errorCode : 'INTERNAL',
           result.message,
         );
       }

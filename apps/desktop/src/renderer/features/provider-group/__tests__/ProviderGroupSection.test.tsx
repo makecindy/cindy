@@ -315,7 +315,7 @@ describe('ProviderGroupSection', () => {
     providerState.providers[0].connected = false;
     stored = { strategy: 'usage', autoSwitch: true, members: [LOCAL] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Claude" />);
-    expect(await screen.findByText('能读取 Claude 订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(await screen.findByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '最少占用' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('给最闲的那台')).toBeTruthy();
     expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
@@ -334,7 +334,7 @@ describe('ProviderGroupSection', () => {
     stored = { strategy: 'order', autoSwitch: true, members };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('能读取 Claude 订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '按顺序' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
   });
@@ -480,11 +480,24 @@ describe('ProviderGroupSection', () => {
     }));
   });
 
-  it('shows the quota hint for a subscription group', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
-    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+  // unit：用户要求订阅通用说明；旧测试只覆盖 Anthropic，遗漏了 OpenAI 页面显示 Claude 专属提示。
+  // 最小输入是 OpenAI 单成员组，经真实组件验证本机和远程管理都显示通用说明。
+  it.each([
+    { kind: 'local', deviceId: undefined },
+    { kind: 'remote', deviceId: 'owner-computer' },
+  ])('shows a generic subscription quota hint for a $kind OpenAI group', async ({ deviceId }) => {
+    realLocale = createInstance();
+    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
+    stored = { strategy: 'least', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] };
+    if (deviceId) command.mockResolvedValue(viewOf(stored));
+    render(<ProviderGroupSection
+      providerId="openai"
+      providerName="OpenAI"
+      deviceId={deviceId}
+      initialConfig={stored}
+    />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('providerGroup.strategy.quotaFirst')).toBeTruthy();
+    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
   });
 });
 

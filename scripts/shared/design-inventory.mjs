@@ -574,6 +574,7 @@ export function catalogSurfaces() {
         '/bots/roster',
         '/bots/groups/:groupId',
         '/bots/remote/:deviceId/:botId',
+        '/bots/remote/:deviceId/:botId/history/:sessionId',
       ],
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
@@ -586,6 +587,7 @@ export function catalogSurfaces() {
         '/bots/roster': 'BotRosterView',
         '/bots/groups/:groupId': 'BotGroupChatView',
         '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
+        '/bots/remote/:deviceId/:botId/history/:sessionId': 'BotHistorySessionView',
       },
     },
     {
@@ -1407,6 +1409,7 @@ export function mobileCatalogSurfaces() {
     ['companions.cloud', '云端伙伴：主力电脑离线时的对话与换电脑', ['companions/cloud/[actorId].tsx']],
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
     ['chat.sharing', '共享任务邀请与成员；供应商分享链接提示', ['shared-session.tsx', 'provider-share.tsx']],
+    ['chat.incoming-share', '外部分享内容预览与任务、伙伴目标选择', ['incoming-share.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx']],
@@ -1436,6 +1439,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     ['+native-intent.ts', 'native intent routing; no screen'],
     ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
+    ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1446,6 +1450,9 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
       if (route === 'splash-preview.tsx' && !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
+      if (route === 'plugin-management-preview.tsx' &&
+        (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||
+          !source.includes('__DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"'))) missing.push(file);
       if (route === 'listperf.tsx' && !source.includes('if (!__DEV__)')) missing.push(file);
       exclusions.push({ path: file, reason: excluded.get(route) });
       continue;

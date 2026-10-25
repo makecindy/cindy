@@ -60,7 +60,7 @@ async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOpti
 /**
  * Reuse the market snapshot reconciliation outside the Plugins page so
  * default-install plugins are provisioned and stable-source updates are applied
- * as soon as an app owner is ready. The Plugins page remains a later retry path.
+ * as soon as an app owner is ready. Resume and periodic maintenance retry it.
  */
 export type DefaultMarketPluginSyncOutcome = 'completed' | 'deferred' | 'failed';
 
@@ -89,10 +89,13 @@ export function defaultMarketPluginSyncOutcome(
   return 'failed';
 }
 
-export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome> {
+export async function syncDefaultMarketPlugins(
+  trigger: PluginMarketSnapshotOptions['trigger'] = 'background',
+): Promise<DefaultMarketPluginSyncOutcome> {
   try {
     let reconciliationOutcome: 'completed' | 'failed' | null = null;
     const snapshot = await snapshotAndSignalRemovalNotice({
+      trigger,
       onDefaultReconciliationOutcome: (outcome) => {
         reconciliationOutcome = outcome;
       },
@@ -113,6 +116,16 @@ export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyn
       error: error instanceof Error ? error.message : String(error),
     });
     return 'failed';
+  }
+}
+
+/** Signal foreground removals without requesting another snapshot or disk scan. */
+export async function refreshForegroundMarketPlugins(): Promise<'completed' | 'failed'> {
+  try {
+    return await service().refreshCatalogForForeground();
+  } finally {
+    // A removal can succeed before a later maintenance step fails.
+    signalRemovalNoticeAvailable();
   }
 }
 
@@ -147,7 +160,7 @@ export function registerPluginMarketIpc(): void {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       snapshotAndSignalRemovalNotice({
-        deferReconciliation: true,
+        discoveryOnly: true,
         onConsentHoldsChanged: signalUpdateConsentHoldsChanged,
       }),
     );

@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
 import { Stack } from "expo-router";
 import { centeredHomeTitleWidth, HomeStackHeader } from "./HomeStackHeader";
+import { homeDisplayAttentionIcon, homeDisplayIcon } from "./homeDisplayIcon";
 import { nativeToolbarMenuItems } from "./nativeToolbarMenuItems";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
@@ -36,6 +37,7 @@ import { lineHeight, navigationChrome, spacing } from "@/theme/tokens";
 export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   displayA11y,
   displayActions,
+  displayBadge,
   menuA11y,
   onDisplayAction,
   onOpenDeviceMenu,
@@ -52,6 +54,8 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
 }: {
   displayA11y: string;
   displayActions: readonly NativePullDownAction[];
+  /** 在看已归档任务时,显示菜单按钮带一个点提醒。 */
+  displayBadge: boolean;
   menuA11y: string;
   onDisplayAction(id: string): void;
   onOpenDeviceMenu(): void;
@@ -66,7 +70,7 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   title: string;
   titleA11y: string;
 }) {
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const nativeMenus = usesNativePullDownMenu();
   const { width } = useSafeAreaFrame();
@@ -162,7 +166,11 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
         <Stack.Toolbar placement="right">
           {onOpenRemoteDesktop ? <Stack.Toolbar.Button icon={require("../../../assets/navigation/monitor.png")} iconRenderingMode="template"
             accessibilityLabel={remoteDesktopA11y} onPress={onOpenRemoteDesktop} /> : null}
-          <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel={displayA11y}>
+          <Stack.Toolbar.Menu
+            icon={displayBadge ? homeDisplayAttentionIcon[mode === "dark" ? "dark" : "light"] : homeDisplayIcon}
+            iconRenderingMode={displayBadge ? "original" : "template"}
+            accessibilityLabel={displayA11y}
+          >
             {nativeToolbarMenuItems(displayActions, onDisplayAction)}
           </Stack.Toolbar.Menu>
         </Stack.Toolbar>

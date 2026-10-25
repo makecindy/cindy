@@ -101,6 +101,7 @@ import {
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
 import { queueSessionWorktreeRecycle } from '../worktree/recycleQueue';
+import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -134,6 +135,33 @@ afterEach(async () => {
 });
 
 describe('setSessionsStatusInDb', () => {
+  // #6399, unit: existing lifecycle tests do not revoke the admitted input while
+  // route/resource preparation or recycle intent waits. No status write may follow.
+  it.each([
+    ['archived', 'read'],
+    ['active', 'read'],
+    ['archived', 'recycle'],
+  ] as const)('rejects %s after authorization changes during %s', async (status, phase) => {
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : 'archive_sessions', sessionId: 'caller', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('Expected admission');
+    if (phase === 'read') h.readBindings.mockImplementationOnce(async () => { current = false; return []; });
+    else h.requestRecycle.mockImplementationOnce(async () => { current = false; });
+    h.tx.mockResolvedValueOnce([]);
+    await expect(decision.run(() => setSessionsStatusInDb(['target'], status, assertTaskActionCurrent)))
+      .rejects.toThrow();
+    expect(h.tx).not.toHaveBeenCalled();
+    if (phase === 'read') expect(h.requestRecycle).not.toHaveBeenCalled();
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    h.tx.mockReset();
+  });
+
   it('returns batch status changes promptly and serializes their cleanup chains', async () => {
     const ids = ['one', 'two', 'three'];
     h.tx.mockResolvedValueOnce(

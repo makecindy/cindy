@@ -191,3 +191,23 @@ await cindy.library({
 
 `write`/`writeCommit`/`read` 都回 `sha256`(宿主对实字节计算)——
 外自称的哈希只当对账参考,不是凭证。
+
+### 4.10.2 同账号电脑间的插件资料同步
+
+声明 `"deviceSync": true`，使用 `cindy.deviceSync(req)`。这是通用加密传输，不是数据库自动同步；
+合并、持久化、幂等和删除标记由插件负责。需要自动接收时声明 `"launch": "resident"`。
+先检查 `typeof cindy.deviceSync === 'function'`，旧 Host 保留本地功能，不伪报已同步。
+
+- `{op:'status'}` 返回 `{ok:true, version:1, online, peers:[{deviceId,deviceName}], maxBytes}`。
+- `{op:'request', peer, data}` 向同一插件发一个有界 JSON 请求，成功返回 `{ok:true,data}`。
+- 对端收到 `{type:'device-sync-request', requestId, peer, data}`；实际持久化后用
+  `{op:'reply',requestId,data}` 回复。requestId 由 Host 生成并绑定对端、插件实例和批准版本。
+- 单个加密前 envelope（含协议字段）最多 64 KiB，每个插件最多 2 个并发请求，整机 32 个，
+  30 秒无应用回执返回 `SYNC_RESULT_UNKNOWN`。它可能已经执行；先对账，只有幂等同步才可重发。
+- `SYNC_CONNECTING` 表示密钥握手中，`SYNC_OFFLINE` 表示目前不可达；退出账号、停用、卸载或
+  替换插件使旧请求失效。未知错误保留本地资料，并展示可行动状态。
+- 双方必须已登录同一账号、在线、是未撤权的电脑，并安装启用 namespace 已确认、声明该能力的
+  同一插件（namespace + id）。手机是执行电脑的控制端，不保存独立同步副本；共享任务访客和
+  供应商分享不能使用此通道。Node Worker 不获得账号凭证或设备密钥。
+- Host 复用 owner-scoped safeStorage 的设备密钥和首次公钥固定机制，采用 X25519 / AES-GCM。
+  Device Link relay 只搬运密文；离线没有云端存储，不承诺两台从不同时在线的电脑能够交换。

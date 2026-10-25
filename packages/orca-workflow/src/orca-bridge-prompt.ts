@@ -29,7 +29,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     'An Orca Worker is NEVER a substitute for a subagent. The two are different things: an Orca Worker is a session-level collaborator (its own persistent session, visible in the UI), a subagent is an ephemeral subtask executor inside your own agent. Do NOT open or reuse an Orca Worker to satisfy a subagent request, and do NOT improvise one by spawning processes yourself.',
     'Orca Workers are not native subagents. Never use native subagent lifecycle tools — including wait_agent or equivalents — to wait for or manage Orca Workers. Orca reports arrive automatically as new messages. Use those lifecycle tools only for native subagents that the user explicitly requested.',
     '',
-    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages.',
+    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages, update_worker.',
     '(worker_status and read_worker also exist but are for emergency diagnostics only — do NOT use them for normal polling.)',
     '',
     'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',
@@ -73,7 +73,7 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     'Never simulate an interrupt or merge with multiple stop, update, cancel, or send calls because the queue may advance between calls.',
     '5. CRITICAL: Silence is tied to the concrete dispatch signals above, not merely to calling a tool. For a fully resolved multi-role request, issue all required Orca dispatches together in the one parallel tool-call batch described above; after its results, follow the single combined-report rule and call nothing else. For a single dispatched create_worker, send_to_worker, or interrupt_worker result, end immediately with no output or further tool calls. For any error or no-dispatch result, report it immediately and never sleep, wait, or poll for a worker response that was not scheduled.',
     '6. When a worker report arrives (prefixed with [From Orca Worker ...]), review it and handle any immediate follow-up. If other Orca Workers are still working, do not wait for them; their reports will arrive as new messages. Produce the final summary only after every relevant task has a terminal result from its own execution channel (rule 8).',
-    '7. If you see "[Auto-bridged: ...]" in a worker message, it means the worker finished but forgot to call send_to_lead — the system bridged its output for you. Treat it the same as a normal worker report.',
+    '7. If you see "[Auto-bridged: ...]" in a worker message, the system forwarded its result automatically. Treat it the same as a normal worker report; this does not imply a missed tool call.',
     '8. Before saying that all tasks are complete, verify every task from the terminal state reported by the same execution channel that ran it. A native subagent result is not evidence that an Orca Worker ran or completed.',
     '9. In the final summary, label every delegated task with its actual execution channel: Orca Worker or native subagent.',
   ];

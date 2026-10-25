@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   language: "en", focused: true,
   t: (key: string) => key, metadataVerified: true,
-  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '',
+  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '', resourceHistorySessionId: '',
   markRead: vi.fn(),
   store: { getSessionDeviceId: vi.fn(), upsertDeviceSession: vi.fn() },
   router: { replace: vi.fn(), setParams: vi.fn() },
@@ -27,7 +27,7 @@ vi.mock('expo-router', async () => {
   return {
     useIsFocused: () => h.focused,
     useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
-    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch }),
+    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch, resourceHistorySessionId: h.resourceHistorySessionId }),
     useRouter: () => h.router,
   };
 });
@@ -77,7 +77,7 @@ async function render(canMarkRead = false) {
   // A viewport receipt is separate from loading/entering the chat.
   result.markReadThrough(200);
 }
-beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.openSearch = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.openSearch = ''; h.resourceHistorySessionId = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 
 describe('companion task visibility refresh', () => {
@@ -309,6 +309,7 @@ it.each(['failed', 'identity'])('keeps %s invitation history visible without ena
 
   // The same invitation still redirects on ordinary entry.
   h.openSearch = '';
+  h.resourceHistorySessionId = '';
   await render(true);
   expect(h.router.replace).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));
 });
@@ -395,4 +396,18 @@ it.each(['/context', '/learn keep this', '/help', 'keep this message'])('preserv
     expect(consume).toHaveBeenCalledTimes(remote ? 0 : 1);
     expect(error).toHaveBeenCalledTimes(remote ? 1 : 0);
   }
+});
+
+// A search hit in an old thread must not silently jump to today's main chat.
+// Real hook entry; existing cases only covered following the canonical link. Unit tier.
+it.each([true, false])('keeps a searched historical transcript read-only after verifying ownership (%s)', async owned => {
+  h.resourceHistorySessionId = 'task-1';
+  h.get.mockResolvedValue({ display: { title: 'Melody' }, links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'current-chat' } }] });
+  h.link.invoke.mockResolvedValue({ sessions: [{ id: owned ? 'task-1' : 'unrelated', role: 'history', status: 'archived' }] });
+  await render(true);
+  expect(result.canCompose).toBe(false);
+  expect(result.ready).toBe(false);
+  expect(result.error === null).toBe(owned);
+  expect(h.router.setParams).not.toHaveBeenCalled();
+  expect(h.markRead).not.toHaveBeenCalled();
 });

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import { portableBotAvatarOrFallback, BOT_AVATAR_MAX_BYTES } from '../../shared/botAvatarValue.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -14,9 +14,16 @@ import { createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotPr
 import { decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { commitChatImageUrls } from '../cindy-media/chatAttachments.js';
-import { botProfileVersions, botProfiles, botSessionLinks, messages } from '../localDb/schema.js';
+import { botProfileVersions, botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema.js';
+import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.js';
+import { sessionCanRead } from '../cindy-media/ledger.js';
+import { taskImageRoots } from '../cindy-media/taskImageDelivery.js';
+import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegistry.js';
+import { readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
 import { deleteBotSkillForBot, listBotSkillSourcesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
@@ -27,11 +34,16 @@ import type { TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 import { portableTodo, travellingTodos } from './travel.js';
 import type { CompanionMaterializeHost } from './materialize.js';
 import { companionHomes } from './homes.js';
-import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
+import { createMcpServerNamesReader } from './mcpServerNames.js';
+import { companionCapabilitiesPatch, portableCompanionCapabilities, type CompanionArrivalNotice } from './capabilities.js';
+import { MIRROR_ATTACHMENT_MAX_BYTES, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
+import { replyArtifactAttachments, replyTextWithFiles } from './replyArtifacts.js';
+import { mirrorColumns, readTurnImageUrls, visibleRows } from './turnImages.js';
 import type { CompanionCloudHost } from './runtime.js';
 import { createCompanionCloudState } from './state.js';
 import type { CompanionLog } from './types.js';
 import {
+  COMPANION_CAPABILITIES_KEY,
   COMPANION_MEMORY_PREFIX,
   COMPANION_PROFILE_KEY,
   COMPANION_ROUTINE_PREFIX,
@@ -52,6 +64,8 @@ function profileTemplateId(capabilitiesJson: string | null, identitySource: stri
   return inferBotTemplatePresetId(identitySource);
 }
 
+const readMcpServerNames = createMcpServerNamesReader(listCustomMcpServers, activeOwnerScopeKey);
+
 export async function readCompanionValues(botId: string, selfDeviceId: string | null = null): Promise<CompanionPreferenceValue[]> {
   const userDataDir = ownerScopedUserDataPath();
   const [row] = await getDbClient().drizzle
@@ -69,6 +83,16 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     name: row.displayName, description: row.description, soul: folder.identitySource,
     systemPrompt: folder.systemPromptOverride, user: folder.userContextSource, ...(templateId ? { templateId } : {}),
   } }];
+  // The setup that means the same on any computer. A record that cannot be read keeps its cloud
+  // value (the uploader never tombstones what was merely unreadable).
+  try {
+    const config = JSON.parse(row.capabilities ?? '{}') as unknown;
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('CAPABILITIES_UNREADABLE');
+    // Names of this computer's own MCP servers, so a computer without them can still say which one it is.
+    const mcpNames = await readMcpServerNames();
+    values.push({ key: COMPANION_CAPABILITIES_KEY, value: portableCompanionCapabilities(
+      config as Record<string, unknown>, readExplicitBotModelChain(config as Record<string, unknown>), mcpNames) });
+  } catch { values.push({ key: COMPANION_CAPABILITIES_KEY, value: null, unread: true }); }
   const memoryDir = botProfileMemoryDir(userDataDir, botId);
   // Only a missing folder means "no memories"; any other read error aborts this cycle so the
   // uploader never tombstones memories it merely failed to read.
@@ -173,25 +197,42 @@ function createMaterializer(input: {
       return row ?? null;
     },
     // Normal creation path: no invitation, no generated persona, the new home's default model.
-    createProfile: async ({ id, name, description, identitySource, userContextSource, avatar }, fence) => {
+    createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
       const restored = await cloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
       await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
-        ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) });
+        ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
+      { templateId });
     },
-    updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar }, fence) => {
+    updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
       const restored = await cloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
       await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
         ...(description !== undefined ? { description } : {}),
         ...(identitySource !== undefined ? { identitySource } : {}),
         ...(userContextSource !== undefined ? { userContextSource } : {}),
-        ...('portable' in restored ? { avatar: restored.portable } : {}) });
+        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined, { templateId });
       if ('imageBase64' in restored) {
         const image = decodeBotAvatarImage(restored.imageBase64);
         fence.assertCurrent();
         if (image) await setBotProfileAvatar(id, image);
       }
+    },
+    applyCapabilities: async (botId, value, fence) => {
+      // Only the same provider + model that this computer can use is kept (no credential travels);
+      // otherwise the companion follows this computer's default model.
+      const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
+        .filter((route): route is BotModelRoute => route !== null);
+      const chain = value.modelChain ? await usable(value.modelChain) : [];
+      const task = value.taskModel ? (await usable([value.taskModel]))[0] ?? null : null;
+      fence.assertCurrent();
+      const patch = companionCapabilitiesPatch(value, { chain, task });
+      if (Object.keys(patch).length || value.gender) {
+        await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
+      }
+      const notices: CompanionArrivalNotice[] = [];
+      if ((value.modelChain && chain.length < value.modelChain.length) || (value.taskModel && !task)) notices.push('model');
+      return notices;
     },
     writeSystemPrompt: async (botId, text, fence) => {
       const root = ownerScopedUserDataPath();
@@ -237,7 +278,6 @@ function createMaterializer(input: {
       const files = row.attachments ?? [];
       const images = files.flatMap(file => file.url ? [{ url: file.url, mimeType: file.mimeType, originalName: file.name, size: file.size }] : []);
       const others = files.flatMap(file => !file.url && file.path ? [{ name: file.name, path: file.path }] : []);
-      const names = row.role === 'assistant' ? files.map(file => `[附件: ${file.name}]`) : [];
       // The room's image copies were cached only: they belong to this task before the message is
       // written. A failed commit fails the import while the message is still absent, so the retry
       // downloads and commits again instead of treating it as imported with recyclable images.
@@ -247,19 +287,30 @@ function createMaterializer(input: {
         fence.assertCurrent();
       }
       await createMessage(sessionId, { clientId: row.clientId, role: row.role, createdAt: row.createdAt,
-        content: row.role === 'user' ? { text: row.text, images, files: others }
-          : [{ type: 'text', text: [row.text, ...names].filter(Boolean).join('\n') }] });
+        // An assistant row holds its reply as a plain string, like every other reply the chat shows.
+        content: row.role === 'user' ? { text: row.text, images, files: others } : replyTextWithFiles(row.text, files) });
     },
     rebuildContext: sessionId => input.rebuildContext(sessionId),
   };
 }
 
-const mirrorColumns = {
-  id: messages.id, clientId: messages.clientId, role: messages.role, content: messages.content,
-  agentMeta: messages.agentMeta, createdAt: messages.createdAt,
-};
-const visibleRows = (sessionId: string) => and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt),
-  inArray(messages.role, ['user', 'assistant']));
+/** The folders a task's own files live in (its work folder); none for a deleted or remote task. */
+async function readTaskFileRoots(sessionId: string): Promise<string[]> {
+  const [session] = await getDbClient().drizzle
+    .select({ id: sessions.id, workingDir: sessions.workingDir, sdkSessionId: sessions.sdkSessionId, agentKind: sessions.agentKind,
+      remoteHostId: sessions.remoteHostId, status: sessions.status, clearedAt: sessions.clearedAt })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  return session ? taskImageRoots(session) : [];
+}
+
+/** A media blob this task may read and this computer still has (the reply only names its address). */
+async function readReplyBlob(url: string, sessionId: string): Promise<{ mimeType: string; size: number } | null> {
+  const blob = parseBlobUrl(url);
+  if (!blob || !await sessionCanRead(blob.hash, sessionId, getDbClient().drizzle)) return null;
+  const { absPath, mimeType } = resolveSafe(url);
+  const stat = await fs.stat(absPath);
+  return stat.isFile() ? { mimeType, size: stat.size } : null;
+}
 
 export async function readMirrorRowsAfter(sessionId: string, cursor: CompanionMirrorCursor, limit: number): Promise<CompanionMirrorRow[]> {
   return getDbClient().drizzle.select(mirrorColumns).from(messages)
@@ -344,6 +395,13 @@ export function createCompanionCloudHost(input: {
     },
     rowsAfter: readMirrorRowsAfter,
     latestRows: readLatestMirrorRows,
+    replyAttachments: (_botId, sessionId, row, text) => replyArtifactAttachments(row, text, sessionId, {
+      roots: readTaskFileRoots,
+      blob: readReplyBlob,
+      turnImages: (sessionId, row) => readTurnImageUrls(getDbClient().drizzle, sessionId, row),
+      maxBytes: MIRROR_ATTACHMENT_MAX_BYTES,
+      ...(input.log ? { log: input.log } : {}),
+    }),
     deliverToCanonical: input.deliverToCanonical,
     onLocalChange: onBotRemoteResourceChanged,
     materializer: createMaterializer(input),

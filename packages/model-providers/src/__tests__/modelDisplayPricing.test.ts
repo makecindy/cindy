@@ -67,3 +67,77 @@ describe("display pricing contract", () => {
     ).toEqual({ items: [row] });
   });
 });
+
+// Contract regression: the old parser dropped a valid summary. Unit tier; existing cases only covered items.
+// Minimum input: one summary.input quote. Invalid roles must drop the summary, preserving the full table.
+describe("optional primary quote summary", () => {
+  const quote = { price: 0, unit: "image", quantity: 1 };
+  it("preserves all roles, ranges, units and conditions but strips unknown fields", () => {
+    const summary = {
+      input: [quote, { price: 140, unit: "character", quantity: 1000000 }],
+      output: [
+        {
+          price: 6,
+          maxPrice: 10,
+          unit: "token",
+          quantity: 1000000,
+          tier: "480P/720P",
+          priceType: "estimated",
+        },
+      ],
+      cacheRead: [{ ...quote, priceType: "exact" }],
+      cacheWrite: [{ ...quote, priceType: "estimated" }],
+    };
+    expect(
+      parseModelDisplayPricing({
+        ...table,
+        summary: { ...summary, future: true },
+      }),
+    ).toEqual({ ...table, summary });
+  });
+  it.each([
+    undefined,
+    null,
+    {},
+    [],
+    "summary",
+    { input: null },
+    { input: [] },
+    { input: Array(5).fill(quote) },
+    { input: [quote, quote] },
+    ...[
+      { price: -1 },
+      { price: Infinity },
+      { price: "1" },
+      { quantity: 0 },
+      { quantity: NaN },
+      { unit: " " },
+      { unit: "x".repeat(129) },
+      { tier: "" },
+      { priceType: "future" },
+      // Summary-only contract: one unsupported segment invalidates all roles, not the table.
+      { priceType: "starting_at" },
+      { priceType: "starting_at", maxPrice: 2 },
+      { maxPrice: 0 },
+      { maxPrice: -1 },
+      { maxPrice: Infinity },
+      { maxPrice: null },
+      { maxPrice: "2" },
+    ].map((patch) => ({ output: [quote], input: [{ ...quote, ...patch }] })),
+  ])("drops absent or invalid summary only: %j", (summary) => {
+    expect(parseModelDisplayPricing({ ...table, summary })).toEqual(table);
+  });
+  it("allows four distinct denominators and preserves unknown units", () => {
+    const summary = {
+      input: [
+        quote,
+        { ...quote, quantity: 2 },
+        { ...quote, unit: "future" },
+        { ...quote, quantity: 0.5 },
+      ],
+    };
+    expect(parseModelDisplayPricing({ ...table, summary })?.summary).toEqual(
+      summary,
+    );
+  });
+});

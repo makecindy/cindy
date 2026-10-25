@@ -83,6 +83,16 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
     : 'session.tail.replyFailed';
 }
 
+/**
+ * Copy for a recognized remote / runtime code in a one-shot action error (fork and the like).
+ * Unknown codes return null so the caller keeps its own fallback instead of "reply failed".
+ */
+export function remoteActionErrorI18nKey(message: string): string | null {
+  const code = parseAgentErrorCode(message)?.code;
+  const key = code ? `session.remoteError.${code}` : null;
+  return key && i18n.exists(key) ? key : null;
+}
+
 export function localizeUnclassifiedAgentError(message: string, sessionSource?: unknown): string {
   return i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
 }

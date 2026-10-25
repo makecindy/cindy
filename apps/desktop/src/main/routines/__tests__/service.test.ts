@@ -1,7 +1,8 @@
-import type { RoutineState, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { RoutineState, RoutineRun, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   scope: 'owner-a',
+  followUpEvents: vi.fn<(botId: string, events: RoutineRun['events']) => RoutineRun['events'] | null>((_id, events) => events),
   boundaryPending: false,
   schedulerReady: true,
   dbReady: true,
@@ -25,6 +26,10 @@ const mock = vi.hoisted(() => ({
     delete: vi.fn(async () => {}),
   },
 }));
+vi.mock('../../bot-autonomy/hub.js', () => ({ currentFollowUpEvents: async (botId: string, input: RoutineRun['events']) => {
+  const events = mock.followUpEvents(botId, input);
+  return events === null ? null : { events, canDispatch: () => mock.followUpEvents(botId, input)?.length === events.length };
+} }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mock.scope,
   getActiveAppSession: () => ({ dataOwnerId: mock.scope }),
@@ -59,6 +64,7 @@ import { configureRoutineHost, getRoutineEngine, routineTools, stopRoutines, upd
 import { handleRoutineRequest } from '../../cindy-brain/routineSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { companionHomes } from '../../companion-cloud/homes.js';
+import { admitTaskAction, assertTaskActionCurrent, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
 beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profiles); });
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot,
@@ -68,6 +74,7 @@ beforeEach(() => configureRoutineHost({
 afterEach(async () => {
   await stopRoutines();
   vi.clearAllMocks();
+  mock.followUpEvents.mockImplementation((_id, events) => events);
   mock.scope = 'owner-a';
   mock.boundaryPending = false;
   mock.schedulerReady = true;
@@ -100,6 +107,19 @@ it('dispatches into the current canonical task through the existing silent runne
     }),
   );
   expect((await routineTools.history('bot', routine.id))[0].resultText).toBe('Reviewed PR');
+});
+
+it('turns the teammate\'s weekday todo check on and off as one built-in routine', async () => {
+  // 近况里的「每天帮我查一次」：打开建内置例行任务，关掉只暂停，再打开复用同一条，不重复建。
+  expect(await routineTools.todoCheckEnabled('bot')).toBe(false);
+  expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
+  const [routine] = await routineTools.list('bot');
+  expect(routine).toMatchObject({ builtin: 'todo-check', enabled: true, silentWhenIdle: true,
+    triggers: [{ kind: 'cron', expression: '0 9 * * 1-5' }] });
+  expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
+  expect(await routineTools.todoCheckEnabled('bot')).toBe(false);
+  expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
+  expect((await routineTools.list('bot')).map(row => [row.id, row.enabled])).toEqual([[routine.id, true]]);
 });
 
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {
@@ -301,6 +321,106 @@ it('keeps a busy batch queued for 30 seconds and then executes it once', async (
   const history = await routineTools.history('bot', routine.id);
   expect(history).toHaveLength(1);
   expect(history[0]).toMatchObject({ id: pending.id, status: 'success', resultText: 'Reviewed PR' });
+});
+
+// #7044 / unit: publish through the real engine under an admitted tool's ALS,
+// then revoke that turn before dispatch. Existing busy-batch coverage has no
+// ambient credential, so it cannot catch failure before the busy check.
+it('defers a completion event under an expired tool context and retries the same batch once', async () => {
+  vi.useFakeTimers();
+  const engine = await getRoutineEngine();
+  engine.registerSource({ id: 'host:sessions', name: 'Sessions', status: 'listening',
+    events: [{ type: 'finished', name: 'Finished', fields: [] }] });
+  const routine = await routineTools.save('bot', {
+    name: 'Read-only watcher', prompt: 'Read the execution history', enabled: true,
+    triggers: [{ id: 'done', kind: 'event', sourceId: 'host:sessions', eventType: 'finished', filters: [] }],
+  });
+  const event = { id: 'completed-task', type: 'finished', subject: 'other-task', occurredAt: Date.now(), data: {} };
+  let current = true;
+  const admission = await admitTaskAction({ server: 'cindy_helper', tool: 'start_session_task', sessionId: 'parent', args: {} }, {
+    key: 'parent-turn', ownerInput: true, delegated: false,
+    assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); },
+  });
+  if (!admission.ok || !admission.run) throw new Error('Missing tool admission');
+  mock.scheduler.runNow.mockImplementationOnce(async () => {
+    // Exercise the queued Host delivery guard without loading the Electron dispatch graph.
+    await assertTaskActionCurrent();
+    return { runId: 'busy', deferred: true };
+  });
+  await admission.run(async () => {
+    current = false;
+    await engine.publish('host:sessions', event);
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = (await routineTools.history('bot', routine.id))[0];
+    expect(pending.error).toBeUndefined();
+    expect(pending).toMatchObject({ status: 'queued', events: [{ sourceId: 'host:sessions', event }] });
+    expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await routineTools.history('bot', routine.id)).toEqual([
+      expect.objectContaining({ id: pending.id, status: 'success', events: pending.events, resultText: 'Reviewed PR' }),
+    ]);
+    await engine.publish('host:sessions', event);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mock.scheduler.runNow).toHaveBeenCalledTimes(2);
+    // Isolation is local to execution; it must not revive the caller's grant.
+    await expect(assertTaskActionCurrent()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+});
+
+// #7044 / unit: even a still-valid caller grant must not become authority for
+// independent manual, timer or plugin-event runs (including later async work).
+it.each(['manual', 'interval', 'event'] as const)('isolates a %s routine from a valid caller grant', async (trigger) => {
+  vi.useFakeTimers();
+  const engine = await getRoutineEngine();
+  engine.registerSource({ id: 'plugin:mail', name: 'Mail', status: 'listening',
+    events: [{ type: 'mail', name: 'Mail', fields: [] }] });
+  const routine = await routineTools.save('bot', {
+    name: 'Watch', prompt: 'Read history', enabled: true,
+    triggers: trigger === 'event'
+      ? [{ id: 'mail', kind: 'event', sourceId: 'plugin:mail', eventType: 'mail', filters: [] }]
+      : [{ id: 'tick', kind: 'interval', intervalMs: 60_000 }],
+  });
+  const admission = await admitTaskAction({ server: 'cindy_helper', tool: 'start_session_task', sessionId: 'parent', args: {} }, {
+    key: 'parent-turn', ownerInput: true, delegated: false, assertCurrent: async () => {},
+  });
+  if (!admission.ok || !admission.run) throw new Error('Missing tool admission');
+  const observed: boolean[] = [];
+  mock.scheduler.runNow.mockImplementationOnce(async () => {
+    await Promise.resolve();
+    observed.push(hasTaskActionAuthorization());
+    return { runId: 'execution' };
+  });
+  await admission.run(async () => {
+    if (trigger === 'manual') await routineTools.runNow('bot', routine.id);
+    else if (trigger === 'event') await engine.publish('plugin:mail', { id: 'mail-1', type: 'mail', occurredAt: Date.now(), data: {} });
+    else { vi.setSystemTime(Date.now() + 60_000); await engine.tick(); }
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ status: 'success' });
+    expect(observed).toEqual([false]);
+    expect(hasTaskActionAuthorization('parent')).toBe(true);
+  });
+});
+
+// #7044 / unit: isolation is not a blanket authorization-error retry. A failure
+// returned by the independent execution may follow side effects and stays final.
+it('keeps an independent execution failure visible without replaying its batch', async () => {
+  vi.useFakeTimers();
+  const routine = await routineTools.save('bot', {
+    name: 'Watch', prompt: 'Read history', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60_000 }],
+  });
+  mock.storage.listRuns.mockResolvedValueOnce([
+    { id: 'execution', scheduleId: 'backing', firedAt: 1, status: 'failed', errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' },
+  ]);
+  await routineTools.runNow('bot', routine.id);
+  await vi.advanceTimersByTimeAsync(0);
+  expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    status: 'failed', error: 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+  });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
 });
 
 it('keeps attacker-controlled event strings on one escaped JSON line inside the data boundary', async () => {
@@ -647,4 +767,48 @@ it('persists all imported paused routines before tool-policy setup and never dis
   expect(routines.every(routine => !routine.enabled)).toBe(true);
   expect(mock.scheduler.runNow).not.toHaveBeenCalled();
   await expect(routineTools.runNow('bot', routines[0].id)).rejects.toThrow('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
+});
+
+// Regression: persisted queued batches survive app upgrades and settings changes.
+it('skips revoked follow-up batches and still dispatches authorized delegated events', async () => {
+  const engine = await getRoutineEngine();
+  const source = { id: 'host:sessions', name: 'Sessions', status: 'listening' as const,
+    events: [{ type: 'errored', name: 'Error', fields: [] }] };
+  engine.registerSource(source);
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow up', prompt: 'Follow', enabled: true,
+    triggers: [{ id: 'error', kind: 'event', sourceId: 'host:sessions', eventType: 'errored', filters: [] }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Follow-up routine was not created');
+  mock.followUpEvents.mockReturnValue([]);
+  await engine.publish('host:sessions', { id: 'old', type: 'errored', subject: 'revoked', occurredAt: Date.now(), data: { title: 'PRIVATE_OLD_SUMMARY' } });
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('skipped'));
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  expect(mock.storage.insert).not.toHaveBeenCalled();
+
+  mock.followUpEvents.mockImplementation((_id, events) => events.filter(({ event }) => event.subject === 'delegated'));
+  await engine.publish('host:sessions', { id: 'authorized', type: 'errored', subject: 'delegated', occurredAt: Date.now(), data: { title: 'Assigned work' } });
+  await vi.waitFor(() => expect(mock.scheduler.runNow).toHaveBeenCalledOnce());
+  expect(mock.storage.insert.mock.calls[0][0].prompt).toContain('Assigned work');
+  expect(mock.storage.insert.mock.calls[0][0].prompt).not.toContain('PRIVATE_OLD_SUMMARY');
+});
+
+// #6440 / unit: one completion can match both built-in and explicitly configured
+// follow-up. A receipt-owned batch must skip only the former, before model work.
+it('preserves user routines while skipping receipt-owned built-in completion', async () => {
+  const engine = await getRoutineEngine();
+  engine.registerSource({ id: 'host:sessions', name: 'Sessions', status: 'listening',
+    events: [{ type: 'finished', name: 'Finished', fields: [] }] });
+  const input = { name: 'Completion', prompt: 'Handle result', enabled: true,
+    triggers: [{ id: 'done', kind: 'event' as const, sourceId: 'host:sessions', eventType: 'finished', filters: [] }] };
+  const builtin = await engine.ensureBuiltin('bot', 'follow-up', input, 'builtin-follow-up-bot');
+  const custom = await routineTools.save('bot', input);
+  if (!builtin) throw new Error('Follow-up routine was not created');
+  mock.followUpEvents.mockReturnValue([]);
+  await engine.publish('host:sessions', { id: 'done', type: 'finished', subject: 'delegated', occurredAt: Date.now(), data: {} });
+  await vi.waitFor(async () => {
+    expect((await routineTools.history('bot', builtin.id))[0]?.status).toBe('skipped');
+    expect((await routineTools.history('bot', custom.id))[0]?.status).toBe('success');
+  });
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
 });

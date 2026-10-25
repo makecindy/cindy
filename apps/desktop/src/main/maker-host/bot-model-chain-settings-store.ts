@@ -22,7 +22,6 @@ import {
 } from './override-settings-file.js';
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
-import { getSelectedNewMakerRoute } from './newMakerDefaultsCache.js';
 
 const log = desktopMakerLogger.child('bot-model-chain-settings-store');
 
@@ -98,17 +97,6 @@ export async function readBotModelChainSettingsState(
   // Capture the owner before reading live connections; never persist derived defaults.
   const owner = activeOwnerScopeKey();
   await waitForModelVisibilityMirror();
-  const preferredRoute = getSelectedNewMakerRoute(owner);
-  if (preferredRoute?.agentDeviceId) {
-    const { resolveAvailableTaskModels } = await import('../maker-ipc/appDefaultModelControl.js');
-    const [route] = await resolveAvailableTaskModels([preferredRoute]).catch(() => [null]);
-    if (activeOwnerScopeKey() !== owner) throw new Error('Bot model defaults owner changed');
-    store.invalidateIfChanged();
-    const confirmed = store.readState();
-    if (confirmed.isCustomized) return confirmed;
-    const value = { modelChain: route ? [route] : [] };
-    return { ...confirmed, value, defaults: value };
-  }
   const providers = options?.providers ?? await readConnectedProviders(owner);
   if (activeOwnerScopeKey() !== owner) throw new Error('Bot model defaults owner changed');
   store.invalidateIfChanged();
@@ -119,7 +107,6 @@ export async function readBotModelChainSettingsState(
   );
   const value = { modelChain: defaultBotModelChain({ providers, providersLoading: false,
     availableAgents, availableAgentsLoaded: true,
-    preferredRoute: getSelectedNewMakerRoute(owner),
     isModelEnabled: (agent, providerId, model) => isModelVisible(
       getModelVisibilityOverride(agent, providerId, model.id), model.defaultEnabled),
   }) };
@@ -214,7 +201,7 @@ export async function readEffectiveBotModelSelection(
     };
   }
   const state = await readBotModelChainSettingsState(options);
-  // 跟随 Cindy 默认时链路由实时目录推导，已经是当前位置；只有用户自定义的设置是存下来的。
+  // 未自定义的伙伴默认由实时目录推导，已经是当前位置；只有用户自定义的设置是存下来的。
   const chain = state.isCustomized
     ? await followMovedCindyAuto(state.value.modelChain, options?.providers)
     : state.value.modelChain;

@@ -104,10 +104,16 @@
   },
   "notifications": {
     "sectionTitle": "Notifications",
-    "taskDone": "Task Completion Notifications",
-    "taskDoneHint": "Get notified when a task on your computer finishes, fails, or needs your reply, with the latest response.",
-    "permissionDenied": "Notifications are off. Allow them in iOS Settings → Notifications → {{appName}}.",
-    "unregisterQueued": "Turned off. Unregistering will finish once you’re back online."
+    "taskDone": "Message and task notifications",
+    "taskDoneHint": "Get notified about chat messages and tasks that finish, fail, or need your reply.",
+    "permissionDenied": "Allow Cindy notifications in your system settings.",
+    "unregisterQueued": "Turned off. Unregistering will finish once you’re back online.",
+    "preview": "Show chat previews",
+    "background": "Keep chat connected in background",
+    "backgroundActive": "Receiving chat messages in background",
+    "backgroundStop": "Stop receiving",
+    "backgroundHint": "The background connection works without Google and shows an ongoing notification. You can stop it from that notification.",
+    "googleUnavailable": "Google push is unavailable. Enable the background chat connection to receive messages."
   },
   "about": {
     "sectionTitle": "About This Phone",

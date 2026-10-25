@@ -14,9 +14,8 @@
  *                                   2) parse xdt-file URLs (dedup), send each
  *                                      as a separate file message
  *                                   3) strip xdt-file from card text
- *                                   4) patch card with mixed text + img
- *                                      elements (or plain markdown card if no
- *                                      images)
+ *                                   4) send final card with text/images, then
+ *                                      recall the progress card
  *   handle.close()                → cancel pending throttle, no further patches
  *
  * Design parity: matches the legacy feishuBot/replyClient.ts behaviour
@@ -37,7 +36,7 @@ import {
 } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { resolveFeishuMediaUrl } from './mediaCache.js';
-import { getHost, getLog } from './moduleScope.js';
+import { bindScope, getHost, getLog, getScope } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { StreamingTextHandle } from '../types.js';
 // xdt-* 引用解析抽到渠道无关模块(slack streamingText 共用同一套语义)
@@ -105,7 +104,10 @@ async function uploadExtraImageKeys(absPaths: readonly string[]): Promise<string
 }
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
-  readonly messageId: string;
+  private messageIdValue: string;
+  get messageId(): string {
+    return this.messageIdValue;
+  }
   private readonly openId: string;
   private buffer: string;
   private flushed: string;
@@ -120,8 +122,8 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    */
   private extraImageAbsPaths: string[] = [];
 
-  constructor(messageId: string, openId: string, initial: string, private readonly opts?: { threadTs?: string }, private readonly openerEpoch?: number) {
-    this.messageId = messageId;
+  constructor(messageId: string, openId: string, initial: string, private readonly opts?: { threadTs?: string }, private readonly accountEpoch = getAccountEpoch(), private readonly claimedOpener = false) {
+    this.messageIdValue = messageId;
     this.openId = openId;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
     // `buffer` is what we've ACCUMULATED to display — starts empty so the
@@ -129,6 +131,13 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     // to it (otherwise the placeholder permanently prefixes the message).
     this.buffer = '';
     this.flushed = initial;
+    // The handle outlives FeishuIM.startStreamingText's ALS call. Agent events
+    // may arrive from outside that scope (or another bot's), so bind both I/O
+    // paths to the connection that created the card, including timer callbacks,
+    // media uploads, empty-reply recalls and delivery-failure fallbacks.
+    const scope = getScope();
+    this.flushIntermediate = bindScope(scope, this.flushIntermediate.bind(this));
+    this.doFinalize = bindScope(scope, this.doFinalize.bind(this));
   }
 
   append(delta: string): void {
@@ -195,7 +204,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
         /* swallow */
       }
     }
-    if (this.buffer === this.flushed) return;
+    if (this.finalized || getAccountEpoch() !== this.accountEpoch || this.buffer === this.flushed) return;
     // Friendlier placeholder when buffer is xdt-only (model sent images/files
     // but no narration yet) — `classifyXdtOnly` returns the kind so we can
     // show a hint instead of stripped placeholders.
@@ -221,17 +230,17 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
     await this.inFlight;
   }
 
-  // ── finalize: upload images, send files, patch with mixed elements ────────
+  // ── finalize: upload media, send final, recall progress ───────────────────
 
   private async doFinalize(): Promise<void> {
     const log = getLog();
     const text = this.buffer;
+    if (getAccountEpoch() !== this.accountEpoch) return;
     if (!text.trim() && this.extraImageAbsPaths.length === 0) {
       // A claimed opener is also the topic's reply anchor. Only its owning
       // account/round may restore that anchor after a successful recall.
-      if (this.openerEpoch !== undefined && getAccountEpoch() !== this.openerEpoch) return;
       await recallMessage(this.messageId);
-      if (this.openerEpoch !== undefined && getAccountEpoch() === this.openerEpoch) {
+      if (this.claimedOpener && getAccountEpoch() === this.accountEpoch) {
         rearmAnchorToTrigger(this.openId, this.messageId);
       }
       return;
@@ -292,7 +301,9 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
         `[feishu/streamingText] uploading ${extrasToUpload.length} extra image(s) from tool_result`,
       );
     }
+    if (getAccountEpoch() !== this.accountEpoch) return;
     const extraImageKeys = await uploadExtraImageKeys(extrasToUpload);
+    if (getAccountEpoch() !== this.accountEpoch) return;
 
     // 2. Send xdt-file links as separate file messages.
     const fileLinks = collectXdtFileLinks(text);
@@ -312,19 +323,21 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       );
     }
 
+    if (getAccountEpoch() !== this.accountEpoch) return;
+
     // 3. Strip xdt-file from card text (delivered separately, no placeholder).
     const cardText = stripXdtFileLinks(text);
     const cardTextTrimmed = cardText.trim();
 
-    // 4. Patch the card. Terminal shapes:
+    // 4. Send a new final message, then remove the progress card. Terminal shapes:
     //    a) text only → plain markdown card v2
     //    b) text + images (markdown 内联 OR tool_result 追加) → mixed elements card
     //    c) empty text + only files → "🎉 N 个文件已送达" placeholder
     //    d) extra images all failed → delivery failure (truly empty finals returned above)
     const hasAnyImage = imageUrls.length > 0 || extraImageKeys.length > 0;
     const fileOnly = cardTextTrimmed.length === 0 && !hasAnyImage && fileLinks.length > 0;
+    let card: unknown;
     try {
-      let card: unknown;
       if (fileOnly) {
         card = buildMarkdownCardV2(transportMessages.streaming.fileSentDone(fileLinks.length));
       } else if (hasAnyImage) {
@@ -340,18 +353,33 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           ? buildMixedMarkdownCardV2(visibleText, imageMap, extraImageKeys)
           : buildMarkdownCardV2(visibleText),
       );
-      await patchCardRaw(this.messageId, card);
+      const progressId = this.messageId;
+      const result = await sendCardRaw(this.openId, card, { ...this.opts, advanceRound: false });
+      this.messageIdValue = result.messageId;
       this.flushed = this.buffer;
+      // Cleanup is best-effort: a failed recall must never resend the final.
+      if (getAccountEpoch() !== this.accountEpoch) return;
+      try {
+        await recallMessage(progressId);
+        if (this.claimedOpener && getAccountEpoch() === this.accountEpoch) {
+          rearmAnchorToTrigger(this.openId, progressId);
+        }
+      } catch (err) {
+        log.warn(`[feishu/streamingText] progress recall failed: ${String(err)}`);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
+      log.warn(`[feishu/streamingText] finalize send failed: ${msg}`);
+      if (getAccountEpoch() !== this.accountEpoch) return;
       const notice = transportMessages.streaming.deliveryFailed;
       try {
-        await patchCardRaw(this.messageId, buildMarkdownCardV2(notice));
+        // Preserve the answer on the progress card when fresh delivery fails.
+        await patchCardRaw(this.messageId, card ?? buildMarkdownCardV2(notice));
       } catch (fallbackErr) {
         const fallbackMsg =
           fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         log.warn(`[feishu/streamingText] fallback patch failed: ${fallbackMsg}`);
+        if (getAccountEpoch() !== this.accountEpoch) return;
         try {
           await sendText(this.openId, notice, this.opts);
         } catch (textErr) {
@@ -368,14 +396,14 @@ export async function start(
   initial: string = transportMessages.streaming.randomThinking(),
   opts?: { threadTs?: string },
 ): Promise<StreamingTextHandle> {
-  // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
-  // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
+  // Preserve explicit opener callers; ordinary inbound messages never create topics.
+  const epoch = getAccountEpoch();
   const claimed = opts?.threadTs ? null : claimPatchableOpener(openId);
   if (claimed) {
-    return new FeishuStreamingTextHandle(claimed, openId, initial, opts, getAccountEpoch());
+    return new FeishuStreamingTextHandle(claimed, openId, initial, opts, epoch, true);
   }
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial), opts);
-  return new FeishuStreamingTextHandle(messageId, openId, initial, opts);
+  return new FeishuStreamingTextHandle(messageId, openId, initial, opts, epoch);
 }
 
 /**

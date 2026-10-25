@@ -1,0 +1,4 @@
+{
+  "platforms": ["android"],
+  "android": { "modules": ["app.cindy.notifications.CindyChatNotificationsModule"] }
+}

@@ -85,6 +85,7 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({
+  app: { once: vi.fn() },
   ipcMain: { handle: vi.fn() },
   BrowserWindow: {
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
@@ -207,7 +208,7 @@ describe('cross-agent committed model projection', () => {
     };
     type Snapshot = {
       agentKind: string; model: string; providerId: string | null; effort: SessionRuntimeProfile['effort'];
-      fastMode: boolean; runtimeEffective: SessionRuntimeProfile; agentSwitchIntent: PublicAgentSwitchIntent | null;
+      fastMode: SessionRuntimeProfile['fastMode']; runtimeEffective: SessionRuntimeProfile; agentSwitchIntent: PublicAgentSwitchIntent | null;
     };
     let snapshot: Snapshot = { ...initial, agentKind: makerToDbAgentKind(initial.agentKind), runtimeEffective: initial, agentSwitchIntent: null };
     const buffer = createSessionSnapshotPatchBuffer<Snapshot>();

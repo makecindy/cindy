@@ -18,6 +18,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  restoreArchivedSessionForSend: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
@@ -31,6 +32,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  restoreArchivedSessionForSend: mocks.restoreArchivedSessionForSend,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -421,7 +423,12 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('retires an archived target and releases an acquired lock (racing=%s)', async (racing) => {
+  it.each([
+    { racing: false, target: { status: 'deleted' } },
+    { racing: true, target: { status: 'deleted' } },
+    { racing: false, target: { status: 'archived', orcaRole: 'worker' } },
+    { racing: true, target: { status: 'archived', orcaRole: 'worker' } },
+  ])('retires an unavailable managed/deleted target and releases its lock: %j', async ({ racing, target }) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => ({ accepted: true }));
     const releaseAgentSwitchLock = vi.fn(() => {
@@ -433,7 +440,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       order.push('notify');
     });
     mocks.getSessionRowSnapshot.mockResolvedValue({
-      status: 'archived',
+      ...target,
       userSendAt: null,
       providerId: null,
     });
@@ -452,6 +459,56 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(racing ? 1 : 0);
     expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
     expect(notifier.notify).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  // Scheduled input must keep both the business task and native history after
+  // restoration; the old archived-target test only covered pausing. Unit fixture.
+  it.each([false, true])('restores and completes in the original task without rearchiving (persistent=%s)', async (persistentSession) => {
+    const target = { status: 'archived', providerId: null, agentDeviceId: 'other-computer' };
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({ ...target }));
+    mocks.restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    const h = createSessionHarness(async (_message, options) => {
+      await options?.onAccepted?.();
+      h.emit({ type: 'done', sessionId: h.session.id, data: {} } as AgentEvent);
+      return { accepted: true };
+    });
+    const { runner, maker } = createRunnerHarness(h.session, {
+      acquirePendingAgentSwitch: async () => {
+        expect(target.status).toBe('active');
+        return vi.fn();
+      },
+    });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({ workDir: '/work', sdkSessionId: 'native-history', model: 'gpt-6-astra' } as never);
+    const pause = vi.fn();
+    const update = vi.fn();
+    runner.attachScheduler({ pause, update, isRunSilenced: () => false } as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id, persistentSession }), createFireContext()))
+      .resolves.toMatchObject({ sessionId: h.session.id });
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: h.session.id, resumeSessionId: 'native-history', agentDeviceId: 'other-computer',
+    }));
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(target.status).toBe('active');
+    expect(mocks.restoreArchivedSessionForSend).toHaveBeenCalledOnce();
+    expect(pause).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the schedule active when the target is archived again during preparation', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active' })
+      .mockResolvedValue({ status: 'archived' });
+    const release = vi.fn();
+    const { runner } = createRunnerHarness(h.session, { acquirePendingAgentSwitch: async () => release });
+    const pause = vi.fn();
+    const update = vi.fn();
+    runner.attachScheduler({ pause, update } as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id, persistentSession: true }), createFireContext()))
+      .resolves.toMatchObject({ skipped: true, sessionId: h.session.id });
+    expect(release).toHaveBeenCalledOnce();
+    expect(pause).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
     expect(h.send).not.toHaveBeenCalled();
   });
 

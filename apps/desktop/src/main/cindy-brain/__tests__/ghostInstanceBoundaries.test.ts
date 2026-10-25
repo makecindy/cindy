@@ -42,6 +42,7 @@ function harness() {
     requireGhostAvailableForActiveSession: vi.fn(), getGhostManager: () => ({ setEnabled,
       findInstalledInstance: (key: string) => ghosts.find((ghost) => installedGhostStoragePart(ghost) === key) }),
     beginGhostMutation: () => vi.fn(), captureGhostMutationOwner: vi.fn(),
+    pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
     getGhostNodeRuntimeBroker: () => ({ stop }), getGhostSubscriptionGateway: () => ({ dropGhost: vi.fn() }),
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
     getGhostLibrarySlot: () => ({ disposeGhost: vi.fn() }),

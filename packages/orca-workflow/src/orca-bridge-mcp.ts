@@ -36,7 +36,7 @@ export interface OrcaPersistedSession {
   providerId?: string | null;
   effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   permissionMode?: 'ask' | 'auto' | 'bypassPermissions' | 'acceptEdits' | 'plan' | 'default';
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   sdkSessionId?: string;
   title?: string;
   /**
@@ -120,6 +120,12 @@ export interface OrcaWorkerVendorOptions extends Record<string, unknown> {
 }
 
 export interface OrcaBridgeMcpDeps {
+  /** Host-owned routing for execution-device Workers; null means a local caller. */
+  forwardRemoteWorkerTool?: (
+    ctx: McpProviderContext,
+    tool: string,
+    args: Record<string, unknown>,
+  ) => Promise<OrcaToolResult | null>;
   getMaker: () => Maker;
   logger: Logger;
   persistUserMessage: (
@@ -202,7 +208,14 @@ function text(data: unknown, isError = false) {
   };
 }
 
-type OrcaToolResult = ReturnType<typeof text>;
+export type OrcaToolResult = ReturnType<typeof text>;
+
+type RegisterWorkerTool = <S extends z.ZodRawShape>(
+  name: string,
+  description: string,
+  shape: S,
+  handler: (args: z.output<z.ZodObject<S>>) => Promise<OrcaToolResult>,
+) => void;
 
 type OrcaSendSource = 'mcp-tool' | 'auto-bridge';
 type HostOrcaDispatch = {
@@ -715,29 +728,16 @@ async function ensureCapturedSession(
 
 
 // 契约锚点：归属校验与 auto-bridge settle 见 docs/dev-rules/orca-team-architecture.md「协同运行时行为契约」「坑点与不变量 #3」。
-// Codex MCP HTTP bridge 仍然从全局 ctx 注册 server 名称，所以 worker bridge 必须
-// 对 Codex 可见。真正的执行边界在工具调用时 fail-closed：resolveWorkerLink 会读
+// Codex/Pi MCP HTTP bridge 从全局 ctx 注册 server 名称，所以 worker bridge 必须
+// 对共享桥接可见。真正的执行边界在工具调用时 fail-closed：resolveWorkerLink 会读
 // 本次调用绑定的 session ctx，并校验它确实拥有解析出的 worker link。
-export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpProvider {
+export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
   const log = deps.logger.child('mcp/orca_worker_bridge');
   const leadCaptures = new CapturedSessionRegistry();
-  return {
-    name: 'orca_worker_bridge',
-    // Global HTTP bridges (Codex and Pi) bind the real session only at request time.
-    // Keep the server registered when a dynamic context resolver exists; every tool
-    // call still fails closed in resolveWorkerLink against that runtime identity.
-    isEnabled: (ctx) =>
-      ctx.vendorOptions?.orcaRole === 'worker'
-      || ctx.agentKind === 'codex'
-      || typeof ctx.getSessionContext === 'function',
-    toClaudeSdkConfig: (ctx) => {
-      if (
-        ctx.vendorOptions?.orcaRole !== 'worker'
-        && ctx.agentKind !== 'codex'
-        && typeof ctx.getSessionContext !== 'function'
-      ) return null;
-      const server = new McpServer({ name: 'orca_worker_bridge', version: '0.1.0' });
-
+  function defineTools(
+    ctx: McpProviderContext, register: RegisterWorkerTool,
+    options: { manageWorkerStatus?: boolean } = {},
+  ): void {
       async function resolveLead(workerId?: string) {
         const resolved = await resolveWorkerLink(deps, ctx, workerId);
         if (!resolved.ok) return resolved;
@@ -755,7 +755,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         return { ok: true as const, link, entry };
       }
 
-      server.tool(
+      register(
         'send_to_lead',
         SEND_TO_LEAD_TOOL_DESCRIPTION,
         {
@@ -808,7 +808,10 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
           const settleWorkerReport = () => {
             if (workerReportSettled) return;
             workerReportSettled = true;
-            updatePersistedWorkerStatus(deps, link.workerId, 'done', log);
+            // The remote Host owns input-specific settlement; a later queued assignment
+            // must not be marked done by this older turn's report. Local MCP stays unchanged.
+            if (options.manageWorkerStatus !== false)
+              updatePersistedWorkerStatus(deps, link.workerId, 'done', log);
           };
           const dispatchError = await dispatchOrcaToolMessage({
             session: liveEntry.session,
@@ -886,7 +889,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      server.tool(
+      register(
         'read_lead_history',
         'Read user/assistant transcript rows from your owning Lead without waking or modifying the Lead. Use only when an [Orca UI Assignment] depends on Lead context. You MUST pass your worker_id.',
         {
@@ -959,7 +962,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      server.tool(
+      register(
         'read_lead',
         'You MUST pass your worker_id (see the Bridge note at the end of the most recent lead message). Read captured output from the lead session.',
         {
@@ -980,7 +983,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      server.tool(
+      register(
         'lead_status',
         'You MUST pass your worker_id (see the Bridge note at the end of the most recent lead message). Check the lead session state.',
         {
@@ -1000,11 +1003,60 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         },
       );
 
-      return {
-        type: 'sdk',
-        name: 'orca_worker_bridge',
-        instance: server,
-      };
+  }
+
+  const registerRoutedTools = (
+    ctx: McpProviderContext, register: RegisterWorkerTool,
+    options: { manageWorkerStatus?: boolean } = {},
+  ) => {
+    defineTools(ctx, (name, description, shape, handler) => {
+      register(name, description, shape, async (args) => {
+        const runtime = resolveRuntimeMcpContext(ctx);
+        if (name === 'send_to_lead') {
+          const authorization = authorizeSendToLeadCaller(runtime);
+          if (!authorization.ok) return text(authorization.error, true);
+        }
+        const forwarded = await deps.forwardRemoteWorkerTool?.(runtime, name, args);
+        return forwarded ?? handler(args);
+      });
+    }, options);
+  };
+  const enabled = (ctx: McpProviderContext) =>
+    ctx.vendorOptions?.orcaRole === 'worker'
+    || ctx.vendorOptions?.orcaRemoteWorker === true
+    || ctx.agentKind === 'codex'
+    // Claude also has this accessor on ordinary per-session contexts; it is not a role.
+    || (ctx.agentKind === 'pi' && typeof ctx.getSessionContext === 'function');
+
+  return {
+    name: 'orca_worker_bridge',
+    isEnabled: enabled,
+    toClaudeSdkConfig: (ctx: McpProviderContext) => {
+      if (!enabled(ctx)) return null;
+      const server = new McpServer({ name: 'orca_worker_bridge', version: '0.1.0' });
+      registerRoutedTools(ctx, (name, description, shape, handler) => {
+        // MCP validates the shape before calling this handler; direct Host invocation below
+        // validates explicitly. Erase only the SDK's generic zod-v3/v4 compatibility wrapper.
+        server.tool<z.ZodRawShape>(name, description, shape, async args => handler(args as z.output<z.ZodObject<typeof shape>>));
+      });
+      return { type: 'sdk' as const, name: 'orca_worker_bridge', instance: server };
     },
+    /** Same handlers and schemas as MCP, after the Host attests a remote Worker link. */
+    async invokeTool(
+      ctx: McpProviderContext, tool: string, args: Record<string, unknown>,
+      options: { manageWorkerStatus?: boolean } = {},
+    ): Promise<OrcaToolResult> {
+      let invoke: (() => Promise<OrcaToolResult>) | undefined;
+      registerRoutedTools(ctx, (name, _description, shape, handler) => {
+        if (name === tool) invoke = () => handler(z.object(shape).parse(args));
+      }, options);
+      if (!invoke) return text({ error: 'unknown worker bridge tool' }, true);
+      return invoke();
+    },
+  } satisfies McpProvider & {
+    invokeTool(
+      ctx: McpProviderContext, tool: string, args: Record<string, unknown>,
+      options?: { manageWorkerStatus?: boolean },
+    ): Promise<OrcaToolResult>;
   };
 }

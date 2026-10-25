@@ -135,7 +135,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
         {
           fallbackModel: newTaskDefault?.model,
           desiredEffort: originMeta?.effort,
-          desiredFastMode: originMeta?.fastMode === true,
+          desiredFastMode: originMeta?.fastMode ?? false,
         },
       );
       if (route.degraded) {

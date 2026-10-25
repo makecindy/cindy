@@ -6,6 +6,7 @@ import { SwipeableProjectHeader } from "@/session/SwipeableProjectHeader";
 import { createSwipeRowRegistry } from "@/session/swipeRowRegistry";
 
 const native = vi.hoisted(() => ({
+  width: 400,
   props: null as any,
   offset: { value: 0 },
   close: vi.fn(),
@@ -22,7 +23,7 @@ vi.mock("react-native", async () => {
         children,
       ),
     StyleSheet: { create: (value: unknown) => value },
-    useWindowDimensions: () => ({ width: 400 }),
+    useWindowDimensions: () => ({ width: native.width }),
   };
 });
 vi.mock("react-native-reanimated", async () => {
@@ -109,6 +110,7 @@ function render(projectKey = "project-a") {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  native.width = 400;
   native.offset.value = 0;
   registry = createSwipeRowRegistry();
   destination = "home";
@@ -124,6 +126,24 @@ afterEach(() => act(() => root.unmount()));
 // The requested side swap moves new-task and its full-swipe trigger to the right
 // panel; clicking the revealed left panel must still open tasks/search (unit).
 describe("project header navigation and swipe lifecycle", () => {
+  // #7083 unit: repeated parent renders/rotation must retain the native gesture
+  // inputs; full-swipe still uses the latest width and current project action.
+  it("does not re-register gestures on refresh or rotation", () => {
+    render();
+    const initial = native.props;
+    native.width = 800;
+    render("project-b");
+    for (const key of ["onSwipeableOpenStartDrag", "onSwipeableClose", "onSwipeableWillOpen", "hitSlop"]) {
+      expect(native.props[key]).toBe(initial[key]);
+    }
+    native.offset.value = -260;
+    act(() => native.props.onSwipeableWillOpen("left"));
+    expect(destination).toBe("home");
+    native.offset.value = -500;
+    act(() => native.props.onSwipeableWillOpen("left"));
+    expect(destination).toBe("new");
+    expect(registry.closeOpenRow()).toBe(false);
+  });
   it.each([
     ["left", -260, "new"],
     ["left", -100, "home"],

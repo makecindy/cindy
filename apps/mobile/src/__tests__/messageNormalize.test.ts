@@ -27,6 +27,17 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  it('renders a host model-change record as one separator, without an empty reply', () => {
+    const output = normalizeRemoteMessages([message({
+      id: 'model-boundary', role: 'assistant', content: '',
+      agentMeta: { modelChange: { fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true } },
+    })]);
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      kind: 'system', systemCardType: 'agent-switch',
+      systemCardData: { fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true },
+    });
+  });
   // #6351: historical failure metadata must survive remote normalization even
   // when usage accounting is later attached to the same failed text row.
   it('keeps failed sampling prose readable without inferring a completed reply from its cost', () => {
@@ -1518,6 +1529,19 @@ describe('normalizeRemoteMessages', () => {
       align: 'agent',
     });
   });
+
+  // Unit / PR #6611: quota recovery before the first dispatch must keep the
+  // original bubble and add the same activity as an active-turn continuation.
+  it('keeps the original input alongside a quota-reset activity after reload', () => {
+    const info = { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 0 };
+    const items = normalizeRemoteMessages([
+      message({ id: 'original', role: 'user', content: 'original task', agentMeta: { autoResumeInfo: info } }),
+    ]);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ key: 'original', body: 'original task', label: 'user' });
+    expect(items[1]).toMatchObject({ key: 'original:usage-limit-resume', kind: 'system',
+      body: '', systemCardType: 'auto-resume', systemCardData: info });
+  });
 });
 
 describe('context rebuild boundaries', () => {
@@ -1666,4 +1690,21 @@ it('keeps durable coordination hidden on phone history without hiding user-facin
   expect(JSON.stringify(rendered)).not.toContain('File ownership agreement');
   expect(JSON.stringify(rendered)).toContain('Requested status');
   expect(JSON.stringify(rendered)).toContain('Final result');
+});
+
+
+// Unit regression: historical machine inputs used to expose JSON escapes in bubbles/copy.
+// Same bytes from a human must remain untouched; source content still drives replay.
+it('projects forwarded machine history without rewriting human text or persisted bytes', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  const rows = normalizeRemoteMessages([
+    message({ id: 'forwarded', role: 'user', content, agentMeta: { origin: { kind: 'session', senderSessionId: 'sender' } } }),
+    message({ id: 'human', role: 'user', content }),
+  ]);
+  expect(rows[0].body).toContain('第一段\n\n保留 `\\n`');
+  expect(rows[0].source.content).toBe(content);
+  expect(rows[0].draftBody).toBe(content);
+  expect(composerDocumentFromSerializedMessage(rows[0].draftBody!).nodes).toEqual([{ type: 'text', text: content }]);
+  expect(rows[1].body).toBe(content);
+  expect(rows[1].draftBody).toBeUndefined();
 });

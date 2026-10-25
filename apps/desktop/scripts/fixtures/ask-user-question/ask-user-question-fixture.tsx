@@ -1,14 +1,30 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { mountPage, forbid } from '../../ui-page/harness';
 import { AskUserQuestionPrompt } from '../../../src/renderer/components/new-chat/AskUserQuestionPrompt';
 import type { AskUserDraft, AskUserViewerState } from '../../../src/renderer/lib/makerChatStore';
+import type { VoiceQuestionTarget } from '../../../src/renderer/components/new-chat/voiceQuestionSelection';
+import { CompanionVoiceToolbar } from '../../../src/renderer/features/bots/voice/CompanionVoiceToolbar';
 
-function Fixture({ question }: { question: string }) {
+function Fixture({ question, voice, multi }: { question: string; voice?: boolean; multi?: boolean }) {
   const [draft, setDraft] = useState<AskUserDraft | null>(null);
   const [viewerState, setViewerState] = useState<AskUserViewerState>('expanded');
+  const bridge = useRef<VoiceQuestionTarget | null>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (voice && multi) bridge.current?.receive('第一项和第二项');
+  }, [voice, multi]);
   return <main className="mx-auto w-full max-w-[720px] min-w-0 p-4">
+    {voice ? <div className="mb-4"><CompanionVoiceToolbar
+      bot={{ id: 'fixture', name: 'Cindy' }}
+      state={{ phase: 'listening', transcript: '', unsent: '', level: 0, error: null,
+        muted: false, microphonePending: false, microphoneError: false, exitCountdown: null }}
+      questionPending loading={false} blocked={false} configurationError={false} titleRef={titleRef}
+      onResume={forbid('resume')} onMute={forbid('mute')} onInterrupt={forbid('interrupt')}
+      onSend={forbid('send')} onCancelExit={forbid('cancel exit')} onClose={forbid('close')}
+      onConfigure={forbid('configure')} /></div> : null}
     <AskUserQuestionPrompt sessionId="question-evidence" workingDir="/project"
-      pending={{ requestId: 'review', questions: [{ header: '确认原型', question, options: [
+      voiceBridge={voice ? bridge : undefined}
+      pending={{ requestId: 'review', questions: [{ header: '确认原型', question, multiSelect: multi, options: [
         { label: '可以，按这版实现' }, { label: '还需要调整' },
       ] }] }}
       onAnswer={forbid('answer question')}
@@ -24,5 +40,5 @@ void mountPage({
         : { status: 'unique', candidates: [href.startsWith('/') ? href : '/project/' + href], kind: 'file' },
     ])),
   },
-  render: (ctx) => <Fixture question={String(ctx.data.question)} />,
+  render: (ctx) => <Fixture question={String(ctx.data.question)} voice={ctx.data.voice === true} multi={ctx.data.multi === true} />,
 });

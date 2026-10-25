@@ -72,6 +72,7 @@
     "noFileRead": "업로드할 파일을 읽지 못했습니다."
   },
   "voice": {
+    "cancelled": "음성 입력을 취소했습니다.",
     "recordingEmpty": "녹음이 비어 있어 전사할 수 없습니다.",
     "recordingTooLarge": "녹음이 상한 {{size}}MB를 초과했습니다.",
     "invalidUploadUrl": "서버가 유효한 음성 업로드 URL을 반환하지 않았습니다.",
@@ -97,11 +98,26 @@
     "sessionExpiredOrForbidden": "{{appName}} 음성 서비스 로그인이 만료되었거나 권한이 없습니다. 로그인 상태를 확인한 후 다시 시도하세요(상태 코드 {{status}}).",
     "incomplete": "음성 입력이 완료되지 않았습니다. 다시 시도하세요.",
     "missingRefinerTargetProvider": "음성 다듬기를 사용할 수 없습니다. {{appName}}에 다시 로그인한 후 다시 시도하세요.",
-    "emptyTranscript": "잘 듣지 못했습니다. 마이크를 확인하거나 더 가까이에서 다시 시도해 주세요.",
+    "emptyTranscript": "음성 인식 결과가 비어 있습니다. 다시 녹음해 주세요.",
     "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
     "micPermission": "마이크 권한이 꺼져 있습니다. 시스템 설정에서 {{appName}}의 마이크 사용을 허용해 주세요.",
     "realtimeAudioUnavailable": "현재 설치 패키지는 실시간 음성 입력을 지원하지 않습니다. 네이티브 녹음 모듈이 포함된 테스트 빌드를 설치해 주세요."
+  },
+  "incomingShare": {
+    "title": "Cindy로 보내기",
+    "empty": "받을 공유 내용이 없습니다",
+    "file": "파일",
+    "fileCount": "파일 {{count}}개",
+    "hint": "대상을 선택한 후 지시를 추가하고 보내세요.",
+    "search": "작업 및 파트너 검색",
+    "newTask": "새 작업",
+    "companions": "파트너",
+    "tasks": "기존 작업",
+    "unavailable": "현재 공유를 받을 수 없습니다",
+    "noCompanions": "아직 파트너가 없습니다",
+    "noTasks": "아직 작업이 없습니다",
+    "retry": "일부 내용을 불러오지 못했습니다. 눌러서 다시 시도하세요."
   }
 }

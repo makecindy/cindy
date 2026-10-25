@@ -54,6 +54,7 @@ import {
 import * as store from './worktreeStore';
 import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
 import { createLogger } from '../logger';
+import { realpathWorkingDirectory } from '../workdir-probe-host/index';
 import { getDbClient } from '../localDb/client/current';
 import {
   getManagedWorktreeBasePath,
@@ -407,18 +408,37 @@ async function withPrecreatedWorktreeOperationQueue<T>(
  */
 export const detectCwd = createCwdProbeScheduler(detectCwdOnce);
 
-// 每条探测命令都有界；复用 gitExec 的整树清理后才释放 scheduler slot。
-const CWD_PROBE_GIT_OPTS = { timeoutMs: 10_000 };
+// Share the work budget across realpath and every Git query. Git's additional
+// 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
+const CWD_PROBE_TIMEOUT_MS = 10_000;
 
 async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
+  const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
+  const probeGit = async (args: readonly string[], dir?: string) => {
+    const timeoutMs = Math.ceil(deadline - performance.now());
+    if (timeoutMs <= 0) {
+      throw new GitExecError({
+        args, exitCode: null, stdout: '', stderr: 'directory probe deadline exceeded', timedOut: true,
+      });
+    }
+    return gitExec(args, dir, { timeoutMs, deadlineAtMs: deadline });
+  };
+  // Git resolves relative metadata paths from the physical process cwd. A
+  // symlink spelling can otherwise make an ordinary repo look like a linked
+  // worktree. Keep Git's existing error handling if the directory is unavailable.
+  cwd = await realpathWorkingDirectory(cwd).catch((err) => {
+    // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
+    // could recreate the false linked-worktree result we are trying to avoid.
+    if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
+    return cwd;
+  });
   // One Git process returns the same snapshot that previously needed five.
   // Unborn HEADs, older Git versions and newline-containing paths retain the
   // individual-query fallback below rather than changing the IPC contract.
   try {
-    const { stdout } = await gitExec(
+    const { stdout } = await probeGit(
       ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
       cwd,
-      CWD_PROBE_GIT_OPTS,
     );
     const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
     if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
@@ -444,7 +464,7 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
   };
   // 1. git --version 探测安装
   try {
-    await gitExec(['--version'], undefined, CWD_PROBE_GIT_OPTS);
+    await probeGit(['--version']);
   } catch (err) {
     if (err instanceof GitExecError && err.timedOut) throw err;
     if (err instanceof GitExecError && err.cause?.code === 'ENOENT') {
@@ -458,7 +478,7 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
 
   // 2. rev-parse --show-toplevel: 拿 repo 根
   try {
-    const { stdout } = await gitExec(['rev-parse', '--show-toplevel'], cwd, CWD_PROBE_GIT_OPTS);
+    const { stdout } = await probeGit(['rev-parse', '--show-toplevel'], cwd);
     const toplevel = gitPathOutput(stdout);
     if (toplevel) {
       out.isGitRepo = true;
@@ -473,7 +493,7 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
 
   // 3. 当前分支
   try {
-    const { stdout } = await gitExec(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, CWD_PROBE_GIT_OPTS);
+    const { stdout } = await probeGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
     const branch = stdout.trim();
     if (branch && branch !== 'HEAD') out.currentBranch = branch;
   } catch (err) {
@@ -489,8 +509,8 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
   try {
     // 任一命令失败后仍等另一条完成清理，不能提前释放目录探测槽位。
     const results = await Promise.allSettled([
-      gitExec(['rev-parse', '--git-dir'], cwd, CWD_PROBE_GIT_OPTS),
-      gitExec(['rev-parse', '--git-common-dir'], cwd, CWD_PROBE_GIT_OPTS),
+      probeGit(['rev-parse', '--git-dir'], cwd),
+      probeGit(['rev-parse', '--git-common-dir'], cwd),
     ]);
     for (const result of results) {
       if (result.status === 'rejected' && result.reason instanceof GitExecError && result.reason.timedOut) {
@@ -1025,15 +1045,21 @@ export async function copyClaudeSiviDirs(
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
-export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+// Only opt-in creators retain a handle for failure compensation; normal startup stays asynchronous.
+const backgroundCheckouts = new Map<string, Promise<void>>();
+export async function awaitBackgroundCheckout(sessionId: string): Promise<void> {
+  await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
+}
+
+export async function createWorktree(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req);
+    return createWorktreeInner(req, options);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1178,6 +1204,13 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
           (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
         ));
         bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+        if (options?.trackBackgroundCheckout) {
+          const settled = bgPromise.catch(() => undefined);
+          backgroundCheckouts.set(req.sessionId, settled);
+          void settled.finally(() => {
+            if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+          });
+        }
       } catch (err) {
         await releaseWorktreeRuntimeLease(checkoutLease);
         // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
@@ -1193,6 +1226,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       try {
         await timed('configure hooks', () => configureHooksPath(worktreePath, baseRepo));
       } catch (err) {
+        if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
         await rollbackPartialCreate(snap);
         return { ok: false, error: classifyError(classifyAny(err)) };
       }
@@ -1255,6 +1289,8 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       return { ok: true, meta };
     });
   } catch (err) {
+    // Failed worker creation must also wait when metadata has not been published yet.
+    if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
     // 兜底: 任何未捕获的异常走 classifier + rollback
     await rollbackPartialCreate(snap);
     log.warn(

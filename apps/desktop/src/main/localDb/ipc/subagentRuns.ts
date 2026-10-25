@@ -23,9 +23,10 @@ import {
 } from '@cindy/maker-shared/subagent-workspace';
 
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp } from '../../appSessionState.js';
-import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import {
   isDataOwnerBroadcastScopeCurrent,
+  tapWindowBroadcast,
   type DataOwnerBroadcastScope,
 } from '../../device-link/broadcast-tap.js';
 import {
@@ -331,6 +332,10 @@ export function broadcastSubagentRunsChanged(
   const ownerStamp = hasCapturedScope
     ? ownerScope.ownerStamp
     : getActiveDataOwnerPushStamp();
+  // Controllers of this task receive the same change over device-link (session topic),
+  // so their Subagent tab discovery can stop polling the list every few seconds.
+  if (hasCapturedScope) tapWindowBroadcast(SUBAGENT_RUNS_CHANGED_CHANNEL, payload, ownerStamp);
+  else tapWindowBroadcast(SUBAGENT_RUNS_CHANGED_CHANNEL, payload);
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && isTrustedAppRendererWindow(window)) {
       try {
@@ -417,6 +422,10 @@ export function registerSubagentRunsIpc(
       supported: page !== null,
       runs: (page?.runs ?? []).map((run) => maskUnavailableResume(run, sessionId)),
       ...(page?.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      // This Host forwards local-db:subagent-runs:changed to the task's controllers.
+      // Shared-task guests may read the list but their capture fence does not admit
+      // the push channel, so declaring it would only slow their polling down.
+      ...(getDeviceLinkInvokeContext()?.sharedTask ? {} : { changePush: true }),
     } satisfies SubagentRunsListResponse;
   });
 

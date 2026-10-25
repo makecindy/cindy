@@ -17,17 +17,18 @@ import type { RemoteSession } from './types';
 
 /** Follow a companion's current host-owned task on focus/reconnect, retaining its permanent identity. */
 export function useRemoteResourceSession(deviceId: string, deviceName: string, sessionId: string, canMarkRead: boolean, metadataVerified = false) {
-  const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string; openSearch?: string }>();
+  const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string; openSearch?: string; resourceHistorySessionId?: string }>();
   const collectionId = typeof params.resourceCollectionId === 'string' ? params.resourceCollectionId : '';
   const resourceId = typeof params.resourceId === 'string' ? params.resourceId : '';
   const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : '';
   const historyEntry = params.openSearch === '1';
+  const transcriptEntry = params.resourceHistorySessionId === sessionId;
   const { invoke, openLink, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   const { user, accountGeneration } = useAuth();
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const focused = useIsFocused();
-  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId, historyEntry]);
+  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId, historyEntry, transcriptEntry]);
   const [display, setDisplay] = useState<{ identity: string; resource: RemoteResource } | null>(null);
   const binding = JSON.stringify([identity, connectionEpoch, i18n.language]);
   const current = useRef(binding); current.current = binding;
@@ -44,14 +45,15 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     : undefined)?.stage;
   const cachedTarget = resource?.links.find(link => link.rel === 'conversation')?.target;
   // Local editing and durable queuing do not confer permission to dispatch.
-  const canCompose = !required || (!!resource && cachedTarget?.kind === 'session' && cachedTarget.sessionId === sessionId
-    && (!stage || stage === 'ready') && (!failure || failure.binding !== binding || isAutoRecoveringRemoteError(failure.message)));
-  const ready = !required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified);
+  const canCompose = !transcriptEntry && (!required || (!!resource && cachedTarget?.kind === 'session' && cachedTarget.sessionId === sessionId
+    && (!stage || stage === 'ready') && (!failure || failure.binding !== binding || isAutoRecoveringRemoteError(failure.message))));
+  // `ready` also unlocks queued sends and runtime controls in the session screen.
+  const ready = !transcriptEntry && (!required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified));
   const markReadThrough = useCallback((at: number) => {
-    if (current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
+    if (!transcriptEntry && current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
       void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, Math.min(at, resource.display.lastReplyAt ?? 0));
     }
-  }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id]);
+  }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id, transcriptEntry]);
   useFocusEffect(useCallback(() => {
     if (!collectionId || !resourceId || !resourceKind || !deviceId || status !== 'online') return;
     setVerified(null);
@@ -70,6 +72,21 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
           return getRemoteResource(invoke, { deviceId, deviceName }, { collectionId, id: resourceId, kind: resourceKind }, i18n.language);
         });
         if (!valid()) return;
+        if (transcriptEntry) {
+          const profile = await retryRemoteSyncRead(run, () => invoke<{
+            sessions?: Array<{ id: string; role: string; status: string }>;
+          }>(deviceId, 'local-db:bots:get', [resourceId]));
+          if (!valid()) return;
+          if (!profile?.sessions?.some(row => row.id === sessionId && row.status !== 'deleted'
+            && (row.role === 'canonical' || row.role === 'history'))) {
+            throw new Error(t('devices.resources.noConversation'));
+          }
+          setDisplay({ identity, resource });
+          setFailure(null);
+          setVerified(binding);
+          recovery.succeeded();
+          return;
+        }
         // Reuse this existing read rather than issuing a second profile request per turn.
         setDisplay({ identity, resource });
         setFailure(null);
@@ -130,6 +147,6 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     const appState = AppState.addEventListener('change', (state) => { generation += 1; setVerified(null); if (state === 'active') { coordinator.setContext(binding); refresh(); } else coordinator.setContext('background'); });
     refresh();
     return () => { disposed = true; recovery.dispose(); coordinator.setContext('disposed'); setVerified(null); offPush(); offTopic(); appState.remove(); if (timer) clearTimeout(timer); };
-  }, [attempt, binding, historyEntry, collectionId, deviceId, deviceName, identity, invoke, openLink, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
-  return { resource, ready, canCompose, markReadThrough, error: failure?.binding === binding ? failure.message : null, retry };
+  }, [attempt, binding, historyEntry, transcriptEntry, collectionId, deviceId, deviceName, identity, invoke, openLink, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
+  return { resource, ready, canCompose, readOnly: transcriptEntry, markReadThrough, error: failure?.binding === binding ? failure.message : null, retry };
 }

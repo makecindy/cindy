@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   NS_LEDGER_FILE,
@@ -59,6 +59,24 @@ function sameNameNamespaceHarness(rootInstalled = true) {
 }
 
 describe('PluginMarketLedger', () => {
+  // Unit/performance: one synchronous registry scan must not read three ledgers
+  // per installed plugin. The next scan must still observe a changed ledger.
+  it('shares migration ledger reads within a scan without retaining stale authority', () => {
+    const { filePath, ledger } = sameNameNamespaceHarness();
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      const lookup = ledger.createNamespaceMigrationLookup();
+      const count = read.mock.calls.length;
+      expect(lookup('helper')).toMatchObject({ kind: 'found' });
+      expect(lookup('unrelated')).toEqual({ kind: 'absent' });
+      expect(read.mock.calls.length).toBe(count);
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      raw.installations.helper.sha256 = 42;
+      fs.writeFileSync(filePath, JSON.stringify(raw));
+      expect(ledger.createNamespaceMigrationLookup()('helper')).toEqual({ kind: 'invalid' });
+    } finally { read.mockRestore(); }
+  });
+
   it.each(['main', 'custom', 'namespaced'] as const)(
     'keeps namespace migration invalid instead of absent for a malformed target in %s',
     (source) => {

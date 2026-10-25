@@ -12,6 +12,7 @@ import {
   beginInteractionRoute, installDesktopInteractionHandler, requestHostInteraction,
 } from '../../../maker-ipc/interactionRouter';
 import type { SharedPermission } from '../../../maker-ipc/sharedPermission';
+import { encryptWechatContextToken } from '../contextCrypto';
 import { __testing, sessionIdFor, WechatIM, type WechatIMDeps } from '../WechatIM';
 
 const mediaMocks = vi.hoisted(() => ({
@@ -27,6 +28,46 @@ vi.mock('../mediaStaging', async (importOriginal) => {
 });
 
 describe('WechatIM host boundary', () => {
+
+  // Exercise the durable inbox through the public host lifecycle. Only the
+  // credential-verified owner can request native permissions on a resolved companion route.
+  it.each([
+    { companion: true, peer: 'owner' },
+    { companion: true, peer: 'guest' },
+    { companion: true, peer: '' },
+    { companion: false, peer: 'owner' },
+  ])('preserves the permission boundary: %j', async ({ companion, peer }) => {
+    const { im, db } = restoredConnection(() => 0);
+    let leased = false;
+    vi.mocked(db.tx).mockImplementation((async (name: string) => {
+      if (name !== 'wechatLeaseNextTask' || leased) return null;
+      leased = true;
+      return {
+        id: 'permission-task', bindingEpoch: 'epoch', peerId: peer,
+        sessionId: 'permission-session', conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', 'permission-task'),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      };
+    }) as DbClient['tx']);
+    const dispatchAgentTurn = vi.fn(async (_input: {
+      turnPermissionPolicy?: { confirmationSurface: string }; requesterIsOwner?: boolean;
+      inheritCompanionOwnerPermissions?: boolean;
+    }) => ({ kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) }));
+    im.attachTurnRuntime({ runner: {
+      companionBotIdFor: () => companion ? 'cindy' : undefined,
+      dispatchAgentTurn,
+    } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(dispatchAgentTurn).toHaveBeenCalledOnce());
+      const input = dispatchAgentTurn.mock.calls[0]![0];
+      expect(input.inheritCompanionOwnerPermissions).toBe(true);
+      expect(input.requesterIsOwner).toBe(companion ? peer === 'owner' : undefined);
+      expect(input.turnPermissionPolicy?.confirmationSurface).toBe('channel');
+    } finally { await im.dispose(); }
+  });
+
   it.each([
     { text: '解释这张图', delivered: true },
     { text: '', delivered: true },
@@ -120,7 +161,7 @@ describe('WechatIM host boundary', () => {
   });
 
   it('distinguishes agent-unsupported from permission-mode-unsupported pre-dispatch failures', () => {
-    // Agent 未声明 turnPermissionPolicy(如 Pi):换权限模式无效,文案引导换 Agent。
+    // 未声明 turnPermissionPolicy 的 Agent：换权限模式无效。
     expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask')).toContain(
       '换成 Claude Code 或 Codex',
     );
@@ -157,8 +198,8 @@ describe('WechatIM host boundary', () => {
       'TURN_PERMISSION_POLICY_UNSUPPORTED:agent:bypassPermissions', true,
     );
     expect(companionFailure).toContain('伙伴设置');
-    expect(companionFailure).toContain('Claude Code 或 Codex');
-    expect(companionFailure).toContain('自动审查或询问');
+    expect(companionFailure).toContain('对话输入框下方');
+    expect(companionFailure).toContain('默认权限或自动审批');
     expect(companionFailure).not.toContain('/permission');
   });
 
@@ -274,6 +315,18 @@ describe('WechatIM host boundary', () => {
       kind: 'ask_user_question',
       answers: { 选择环境: '生产' },
     });
+  });
+
+  it('确认提示显示要执行的具体操作和审核原因', () => {
+    const prompt = __testing.formatWechatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-2',
+      toolName: 'mcp:cindy_browser:call_tool',
+      input: { name: 'browser', args: { action: 'click', selector: '[data-testid="tweetButton"]' } },
+      metadata: { autoReviewReason: '这会公开发帖。' },
+    });
+    expect(prompt).toContain('操作：\nclick {"selector":"[data-testid=\\"tweetButton\\"]"}');
+    expect(prompt).toContain('自动审批需要你决定：这会公开发帖。');
   });
 
   it('自动审批故障时在微信确认提示里写明原因', () => {

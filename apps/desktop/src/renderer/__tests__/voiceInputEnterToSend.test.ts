@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+// Guard tier, engineering-conventions §3.2: these cross-hook race contracts
+// protect source-draft ownership and stop/refine completion across task switches.
+// The wiring lives in component-local closures, not an exported helper. Keep
+// runtime dispatch coverage in chatInputModelLoading.test.tsx as well.
 const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
@@ -262,9 +266,13 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const latestStorageKeyRef = useRef<string | undefined>(storageKey);',
     );
     expect(restoreEffectBlock).toContain('if (!hasHydratedRef.current) return;');
-    expect(restoreEffectBlock).toContain('let cancelled = false;');
+    // Initial state and transition ownership matter; let versus const does not.
+    // CI on ca67ca85f9 failed here after an equivalent prefer-const lint fix.
+    expect(restoreEffectBlock).toMatch(/\b(?:const|let)\s+cancelled\s*=\s*false\s*;/);
     expect(restoreEffectBlock).toContain('!cancelled');
     expect(restoreEffectBlock).toContain('!editor.isDestroyed');
+    expect(restoreEffectBlock).toContain('isDataOwnerGenerationCurrent(dataOwnerAtTransition)');
+    expect(restoreEffectBlock).toContain('storageKeyTransitionSeqRef.current === transitionSeq');
     expect(restoreEffectBlock).toContain('latestStorageKeyRef.current === storageKey');
     expect(restoreEffectBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreEffectBlock).toContain('restoreNextDraft();');

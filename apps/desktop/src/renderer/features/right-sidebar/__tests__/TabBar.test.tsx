@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactElement } from 'react';
+import type { RenderOptions } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Sortable, { type SortableEvent } from 'sortablejs';
+import type { ComponentProps } from 'react';
+
+const render = (ui: ReactElement, options?: RenderOptions) =>
+  testingRender(ui, { wrapper: MemoryRouter, ...options });
 
 // react-i18next 走 key 透传(仓库同款,见 RightSidebarShell.test.ts):label 直接是 i18n key。
 // 「+」菜单的插件分组:声明面板 / mainView 的已启用插件。无桥环境下用桩供数据。
@@ -13,9 +20,19 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => [] }));
+vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { subscribe: () => () => {}, findById: () => null } }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ useRemoteProjectSessions: () => [] }));
+vi.mock('../lib/openSideChatTab', () => ({ canOpenSideChat: () => false, openSideChatTab: vi.fn() }));
 
 import { TabStrip } from '../TabBar';
+import { useTabCreationMenu } from '../lib/useTabCreationMenu';
 import type { TabState } from '../types';
+
+function StripWithMenu(props: Omit<ComponentProps<typeof TabStrip>, 'creationMenu'>) {
+  const menu = useTabCreationMenu({ sessionId: 'task-1', subagentsAvailable: false, onSelect: vi.fn() });
+  return <TabStrip {...props} creationMenu={menu} />;
+}
 
 // 两个不同 kind 的 tab —— 未注册 plugin 时走 fallback 图标/标题,label 即 KIND_LABEL_KEY。
 const TABS: TabState[] = [
@@ -45,82 +62,21 @@ function renderStrip(overrides?: {
   onClose?: () => void;
   onActivate?: () => void;
   onReorder?: (orderedIds: string[]) => void;
-  subagentsAvailable?: boolean;
 }) {
   const onClose = vi.fn(overrides?.onClose);
   const onActivate = vi.fn(overrides?.onActivate);
   const onReorder = vi.fn(overrides?.onReorder);
   render(
-    <TabStrip
+    <StripWithMenu
       tabs={TABS}
       activeTabId={null}
       onActivate={onActivate}
       onClose={onClose}
       onReorder={onReorder}
-      onAdd={vi.fn()}
-      subagentsAvailable={overrides?.subagentsAvailable}
     />,
   );
   return { onClose, onActivate, onReorder };
 }
-
-describe('TabStrip retired feature boundary', () => {
-  it('does not expose the Host viewer before the product plugin is enabled', () => {
-    renderStrip();
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
-  });
-
-  it('does not offer the removed viewer in the add menu', () => {
-    renderStrip();
-    const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
-    vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
-      x: 20,
-      y: 20,
-      top: 20,
-      right: 44,
-      bottom: 44,
-      left: 20,
-      width: 24,
-      height: 24,
-      toJSON: () => ({}),
-    });
-    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
-    expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
-  });
-});
-
-describe('TabStrip Pi Subagents gate', () => {
-  it('does not expose Subagents for Claude Code or Codex tasks', () => {
-    renderStrip();
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
-  });
-
-  it('exposes Subagents for Pi tasks', () => {
-    renderStrip({ subagentsAvailable: true });
-    const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
-    vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
-      x: 20,
-      y: 20,
-      top: 20,
-      right: 44,
-      bottom: 44,
-      left: 20,
-      width: 24,
-      height: 24,
-      toJSON: () => ({}),
-    });
-    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
-    expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy();
-  });
-});
 
 describe('TabStrip Cindy Make menu visibility', () => {
   it('keeps Cindy Make out of the add menu', () => {
@@ -192,7 +148,7 @@ describe('TabStrip context menu · move to group', () => {
         onActivate={vi.fn()}
         onClose={vi.fn()}
         onReorder={vi.fn()}
-        onAdd={vi.fn()}
+        creationMenu={{ items: [], select: vi.fn() }}
         groupId="right"
         onMoveTab={onMoveTab}
       />,
@@ -231,7 +187,7 @@ describe('TabStrip context menu · popped-out windows', () => {
         onActivate={vi.fn()}
         onClose={vi.fn()}
         onReorder={vi.fn()}
-        onAdd={vi.fn()}
+        creationMenu={{ items: [], select: vi.fn() }}
         onDetachTab={onDetachTab}
         popoutWindows={[{ windowId: 'w7', label: <span>Docs</span> }]}
         onMergeBackTab={onMergeBackTab}
@@ -331,7 +287,7 @@ describe('TabStrip 未知 kind 前向兼容(2026-07-09 React #130 事故回归)'
         onActivate={vi.fn()}
         onClose={vi.fn()}
         onReorder={vi.fn()}
-        onAdd={vi.fn()}
+        creationMenu={{ items: [], select: vi.fn() }}
       />,
     );
     // 已知 tab 不受影响,未知 tab 以 fallback label 显示
@@ -348,7 +304,7 @@ describe('TabStrip 未知 kind 前向兼容(2026-07-09 React #130 事故回归)'
         onActivate={vi.fn()}
         onClose={onClose}
         onReorder={vi.fn()}
-        onAdd={vi.fn()}
+        creationMenu={{ items: [], select: vi.fn() }}
       />,
     );
     fireAux(pillFor(LABEL_UNKNOWN), 1);

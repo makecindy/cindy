@@ -225,3 +225,52 @@ it("ignores model backgrounds and color values and keeps borders on the host bor
   expect(richVisualStyle(card, palette)).toEqual({ padding: 20, borderWidth: 1, borderStyle: "solid", borderColor: "B" });
   expect(richVisualStyle(card)).toEqual({ padding: 20, borderWidth: 1 });
 });
+
+// Unit: new explicit send protocol. Existing local-state tests cannot detect a
+// message duplicated on double-click/remount or an invalid expression submitted.
+it('resolves only bounded message text and keeps local actions independent', async () => {
+  const { richSendText, richAction } = await import('../richAnswer');
+  const node = { id: 'send', kind: 'button' as const, children: [], props: {
+    send: { op: 'concat', args: ['Plan: ', { ref: 'choice' }] },
+    set: { choice: 'local' },
+  } };
+  expect(richSendText(node, { choice: 'Park' })).toBe('Plan: Park');
+  expect(richSendText(node, {})).toBeUndefined();
+  for (const send of ['', '   ', false, { op: 'execute', args: ['bad'] }, 'x'.repeat(16001)])
+    expect(richSendText({ ...node, props: { send } }, {})).toBeUndefined();
+  expect(richAction(node, {})).toEqual({ choice: 'local' });
+});
+
+it('holds an in-flight submission across remounts and restores accepted receipts', async () => {
+  const { RichSubmissionController } = await import('../richAnswer');
+  let persisted = '';
+  const storage = { read: async () => persisted, write: async (v: string) => { persisted = v; } };
+  const memory = new RichInteractionMemory(storage), controller = new RichSubmissionController(memory);
+  let finish!: (accepted: boolean) => void;
+  const messages: string[] = [];
+  const send = (text: string) => { messages.push(text); return new Promise<boolean>(resolve => { finish = resolve; }); };
+  const first = controller.submit('owner:message:send', 'Plan: Park', send);
+  await memory.load();
+  await Promise.resolve();
+  await controller.submit('owner:message:send', 'Plan: Park', send);
+  expect(controller.status('owner:message:send', 'Plan: Park')).toBe('sending');
+  expect(messages).toEqual(['Plan: Park']);
+  finish(true); await first;
+  const restored = new RichSubmissionController(new RichInteractionMemory(storage));
+  await restored.submit('owner:message:send', 'Plan: Park', send);
+  expect(messages).toEqual(['Plan: Park']);
+  expect(restored.status('owner:message:send', 'Plan: Park')).toBe('sent');
+  expect(restored.status('owner:message:send', 'Plan: Museum')).toBe('idle');
+  expect(restored.status('other-owner:message:send', 'Plan: Park')).toBe('idle');
+});
+
+it('lets the user retry a refused submission without consuming field values', async () => {
+  const { RichSubmissionController } = await import('../richAnswer');
+  const memory = new RichInteractionMemory(), controller = new RichSubmissionController(memory);
+  memory.set('fields', { choice: 'Park' });
+  await controller.submit('receipt', 'Park', async () => false);
+  expect(controller.status('receipt', 'Park')).toBe('failed');
+  expect(memory.get('fields')).toEqual({ choice: 'Park' });
+  await controller.submit('receipt', 'Park', async () => true);
+  expect(controller.status('receipt', 'Park')).toBe('sent');
+});

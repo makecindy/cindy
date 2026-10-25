@@ -60,6 +60,8 @@
     "send": "Send"
   },
   "timeline": {
+    "newMessages_one": "{{count}} new message",
+    "newMessages_other": "{{count}} new messages",
     "emptyTitle": "No messages in this group yet",
     "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
     "roundEnded": "Teammates are done",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "Quoting {{name}}: {{summary}}",
     "deleted": "Original message was deleted",
-    "attachments": "{{name}} and others ({{total}} files)"
+    "attachments": "{{name}} and others ({{total}} files)",
+    "unavailable": "This message is no longer available."
   },
   "notice": {
     "memberJoined": "{{name}} joined the group",
@@ -113,6 +116,7 @@
     "start": "Start Plan",
     "dismiss": "Skip Plan",
     "editHint": "To change who does what, just say so",
+    "autoNote": "Each finished step starts the next one automatically.",
     "pauseNote": "Work pauses after each step until you click “Start Next Step”.",
     "superseded": "Updated",
     "dismissed": "Skipped",
@@ -171,6 +175,7 @@
     "replyModeAll": "Anyone Can Reply",
     "replyModeMentioned": "Only @Mentioned Reply",
     "replyModeNote": "Teammates with nothing to add stay quiet. Each round runs up to 3 passes and 10 messages, then waits for you to click “Continue Discussion”.",
+    "replyModeNoteQueue": "Teammates answer one at a time; the first five go on by themselves. Quoting a teammate or replying in its thread also calls it.",
     "replyModeSaveFailed": "Couldn’t save the reply setting. Try again.",
     "delete": "Delete Group Chat",
     "deleteNote": "Only this group chat and its messages are deleted. The teammates, their memory, and their private chats aren’t affected.",

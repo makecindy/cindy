@@ -82,7 +82,7 @@ export interface SessionRouteRow {
   providerId: string | null;
   effort: string | null;
   /** Fast 不属于路由; 只有跟随切换用得到(保留任务自己的开关), 回填选择不带它。 */
-  fastMode?: boolean | null;
+  fastMode?: boolean | 'ultrafast' | null;
   imDefaultRoute: string | null;
   feishuBotAppId: string | null;
   imBotContextId: string | null;
@@ -176,7 +176,7 @@ interface Evaluation {
    * 任务当前的 Fast 开关。渠道默认不存 Fast, 跟随切换只管 Agent/模型/来源/档位,
    * 单独开过 Fast 的任务不能被顺手清掉(chatgpt-codex-connector P2, PR #5155)。
    */
-  currentFastMode: boolean;
+  currentFastMode: boolean | 'ultrafast';
 }
 
 export function createImChannelDefaultRouteSync(deps: {
@@ -249,7 +249,7 @@ export function createDefaultRouteFollower(deps: {
       target,
       targetFingerprint: defaults.fingerprint,
       providers,
-      currentFastMode: row.fastMode === true,
+      currentFastMode: row.fastMode ?? false,
     };
   }
 

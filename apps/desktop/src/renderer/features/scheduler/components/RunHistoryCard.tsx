@@ -20,6 +20,8 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind, RunStatus, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
 import {
@@ -143,7 +145,9 @@ export function RunHistoryCard({
   onRestart,
   sessionReference,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const errorCode = run.errorMsg ? parseAgentErrorCode(run.errorMsg)?.code : undefined;
+  const errorKey = errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const showError =
@@ -353,7 +357,9 @@ export function RunHistoryCard({
         )}
       </div>
 
-      {showError && (
+      {showError && (errorKey && i18n.exists(errorKey) ? (
+        <ErrorNotice message={t(errorKey)} details={run.errorMsg!} />
+      ) : (
         <p
           className={cn(
             'rounded-[8px] border px-2 py-1.5 font-mono text-11 break-words',
@@ -362,7 +368,7 @@ export function RunHistoryCard({
         >
           {run.errorMsg}
         </p>
-      )}
+      ))}
 
       {/* skipped:展示前置检查摘要(exit code / 耗时 / stdout 首行),灰阶弱化 —— 让
           "为什么这轮没跑"在历史里可追溯,与调度器故障区分。 */}

@@ -1377,6 +1377,7 @@ struct AgentIslandCompanion: Codable, Equatable {
 
 struct AgentIslandSession: Codable, Equatable, Identifiable {
   let sessionId: String
+  var completionToken: String? = nil
   let title: String
   // Older main-process payloads have no companion field.
   var companion: AgentIslandCompanion? = nil
@@ -1447,6 +1448,8 @@ struct AgentIslandStrings: Codable, Equatable {
   let allowOnce: String
   let alwaysAllowForSession: String
   let deny: String
+  var markRead: String? = nil
+  var archive: String? = nil
 
   // Older main-process payloads do not contain appName; keep their idle view brand-current.
   var displayAppName: String { appName ?? "Cindy" }
@@ -1608,6 +1611,8 @@ struct AgentIslandDisplayState: Codable {
 
 struct IncomingMessage: Codable {
   let type: String
+  let requestId: String?
+  let success: Bool?
   let state: AgentIslandDisplayState?
   let frame: AgentIslandCarrierFrame?
   let frames: [AgentIslandCarrierFrame]?
@@ -1657,7 +1662,7 @@ private let compactIslandStatusIconWidth: CGFloat = 18
 private let compactIslandCarrierInset: CGFloat = 20
 private let expandedIslandCarrierExpandedInset: CGFloat = 80
 private let expandedIslandMinContentWidth: CGFloat = 360
-private let expandedIslandDefaultContentWidth: CGFloat = 640
+private let expandedIslandDefaultContentWidth: CGFloat = 440
 private let expandedIslandMaxContentWidth: CGFloat = 920
 private let expandedIslandHardwareNotchSideWidth: CGFloat = 96
 private let expandedIslandHardwareNotchHorizontalPadding: CGFloat = 36
@@ -1691,6 +1696,8 @@ private let agentIslandDebugLoggingEnabled =
 private let agentIslandOrange = Color(red: 1.0, green: 0.4, blue: 0.0)
 private let agentIslandBlue = Color(red: 0.0, green: 0.851, blue: 0.773)
 private let agentIslandErrorRed = Color(red: 0.937, green: 0.267, blue: 0.267)
+// 滑动归档沿用手机版 swipeActionArchive 的蓝色（2026-10-24 用户裁决）。
+private let agentIslandArchiveBlue = Color(red: 59.0 / 255, green: 130.0 / 255, blue: 246.0 / 255)
 private let agentIslandUnreadGreen = Color(red: 0.133, green: 0.773, blue: 0.369)
 private let runningAgentGifFileName = "running-agent.gif"
 private let tararaMascotFileName = "tarara.png"
@@ -3330,7 +3337,10 @@ struct ExpandedSessionsView: View {
         onFocus: {
           eventSink(["type": "focus-session", "sessionId": current.sessionId])
         },
-        onPermissionAction: emitPermissionAction
+        onPermissionAction: emitPermissionAction,
+        onCompletionAction: { action, requestId in
+          eventSink(["type": "completion-action", "sessionId": current.sessionId, "action": action, "requestId": requestId, "completionToken": current.completionToken ?? ""])
+        }
       )
       .equatable()
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -3370,7 +3380,10 @@ struct ExpandedSessionsView: View {
           onFocus: {
             eventSink(["type": "focus-session", "sessionId": session.sessionId])
           },
-          onPermissionAction: emitPermissionAction
+          onPermissionAction: emitPermissionAction,
+          onCompletionAction: { action, requestId in
+            eventSink(["type": "completion-action", "sessionId": session.sessionId, "action": action, "requestId": requestId, "completionToken": session.completionToken ?? ""])
+          }
         )
         .equatable()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3395,6 +3408,7 @@ struct ExpandedSessionRow: View, Equatable {
   let mascotSkin: String
   let onFocus: () -> Void
   let onPermissionAction: (AgentIslandPermissionAction, String) -> Void
+  let onCompletionAction: (String, String) -> Void
   @State private var isHovered = false
 
   static func == (lhs: ExpandedSessionRow, rhs: ExpandedSessionRow) -> Bool {
@@ -3407,6 +3421,18 @@ struct ExpandedSessionRow: View, Equatable {
   }
 
   var body: some View {
+    if session.phase == "completed", let completionToken = session.completionToken {
+      CompletedSessionSwipeRow(strings: strings, canArchive: session.companion == nil,
+        onFocus: onFocus, onAction: onCompletionAction) {
+        card
+      }
+      .id("\(session.sessionId):\(completionToken)")
+    } else {
+      card
+    }
+  }
+
+  @ViewBuilder private var card: some View {
     let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
     VStack(alignment: .leading, spacing: rowSpacing) {
       if session.permissionAction == nil {
@@ -3494,6 +3520,210 @@ struct ExpandedSessionRow: View, Equatable {
     default:
       return true
     }
+  }
+}
+
+/// One displacement shared by mouse dragging and AppKit's phased trackpad events.
+/// Momentum never commits an action: only the user's release can do that.
+struct CompletedSessionSwipeRow<Content: View>: View {
+  let strings: AgentIslandStrings
+  let canArchive: Bool
+  let onFocus: () -> Void
+  let onAction: (String, String) -> Void
+  @ViewBuilder let content: () -> Content
+  @State private var offset: CGFloat = 0
+  @State private var armed = false
+  @State private var commitRequestId: String?
+  @State private var collapsed = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private let reveal: CGFloat = 80
+  private var settleAnimation: Animation? { reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86) }
+
+  var body: some View {
+    content()
+      .offset(x: offset)
+      .background(GeometryReader { geometry in
+        let right = offset >= 0
+        Button { commit(width: geometry.size.width) } label: {
+          VStack(spacing: 5) {
+            Image(systemName: right ? "checkmark" : "archivebox")
+              .font(.system(size: 18, weight: .medium))
+            Text(right ? (strings.markRead ?? "Mark as read") : (strings.archive ?? "Archive"))
+              .font(.system(size: 11, weight: .medium))
+              .lineLimit(1)
+          }
+          .foregroundColor(.white.opacity(0.95))
+          .fixedSize(horizontal: true, vertical: false)
+          .frame(width: reveal, height: geometry.size.height)
+          // Lay out the label once behind the card. The opening clips it; it never reflows.
+          .frame(width: geometry.size.width, alignment: right ? .leading : .trailing)
+          .background((right ? agentIslandBlue : agentIslandArchiveBlue).opacity(armed ? 1 : 0.8))
+          .mask(alignment: right ? .leading : .trailing) {
+            Rectangle().frame(width: abs(offset))
+          }
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: right ? .leading : .trailing)
+        .opacity(offset == 0 ? 0 : 1)
+        .accessibilityHidden(offset == 0)
+      })
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay(GeometryReader { geometry in
+        CompletionSwipeInput(offset: offset,
+          onChange: { proposed in
+            guard commitRequestId == nil else { return }
+            offset = min(geometry.size.width, max(canArchive ? -geometry.size.width : 0, proposed))
+            let nextArmed = abs(offset) >= max(140, geometry.size.width * 0.72)
+            if nextArmed && !armed {
+              NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+            armed = nextArmed
+          },
+          onEnd: { cancelled in
+            guard commitRequestId == nil else { return }
+            if armed && !cancelled {
+              commit(width: geometry.size.width)
+              return
+            }
+            withAnimation(settleAnimation) {
+              offset = !cancelled && abs(offset) >= 24 ? (offset > 0 ? reveal : -reveal) : 0
+              armed = false
+            }
+          },
+          onClick: { x in
+            guard commitRequestId == nil else { return }
+            if (offset > 0 && x < offset) || (offset < 0 && x > geometry.size.width + offset) {
+              commit(width: geometry.size.width)
+            }
+            else if offset != 0 {
+              withAnimation(settleAnimation) { offset = 0 }
+            } else { onFocus() }
+          })
+      })
+      .frame(height: collapsed ? 0 : nil)
+      .clipped()
+      .allowsHitTesting(commitRequestId == nil)
+      .task(id: commitRequestId) {
+        guard commitRequestId != nil else { return }
+        // Fill first, then collapse locally. Neither animation waits for disk or the remote host.
+        do {
+          if !reduceMotion { try await Task.sleep(nanoseconds: 120_000_000) }
+          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) { collapsed = true }
+        } catch { /* View disappeared or a newer completion replaced it. */ }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .islandCompletionActionResult)) { notification in
+        guard notification.userInfo?["requestId"] as? String == commitRequestId,
+          notification.userInfo?["success"] as? Bool == false else { return }
+        offset = 0
+        armed = false
+        commitRequestId = nil
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { collapsed = false }
+      }
+  }
+
+  private func commit(width: CGFloat) {
+    guard commitRequestId == nil else { return }
+    let requestId = UUID().uuidString
+    let action = offset >= 0 ? "mark-read" : "archive"
+    commitRequestId = requestId
+    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+      offset = offset >= 0 ? width : -width
+      armed = true
+    }
+    // A committed user action survives the island closing during its brief animation.
+    let send = onAction
+    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.22)) {
+      send(action, requestId)
+    }
+  }
+}
+
+extension Notification.Name {
+  static let islandCompletionActionResult = Notification.Name("islandCompletionActionResult")
+}
+
+struct CompletionSwipeInput: NSViewRepresentable {
+  let offset: CGFloat
+  let onChange: (CGFloat) -> Void
+  let onEnd: (Bool) -> Void
+  let onClick: (CGFloat) -> Void
+
+  func makeNSView(context: Context) -> CompletionSwipeInputView { CompletionSwipeInputView() }
+  func updateNSView(_ view: CompletionSwipeInputView, context: Context) {
+    view.input = self
+  }
+}
+
+final class CompletionSwipeInputView: NSView {
+  var input: CompletionSwipeInput?
+  private var origin: NSPoint?
+  private var startOffset: CGFloat = 0
+  private var translation = NSPoint.zero
+  private var axis = 0 // 0 undecided, 1 horizontal, 2 vertical
+  private var wheelActive = false
+  private var suppressWheelMomentum = false
+  private var wheelEnd: DispatchWorkItem?
+  override var acceptsFirstResponder: Bool { true }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  override func mouseDown(with event: NSEvent) {
+    origin = event.locationInWindow
+    startOffset = input?.offset ?? 0
+    axis = 0
+  }
+  override func mouseDragged(with event: NSEvent) {
+    guard let origin else { return }
+    update(x: event.locationInWindow.x - origin.x, y: event.locationInWindow.y - origin.y)
+  }
+  override func mouseUp(with event: NSEvent) {
+    guard origin != nil else { return }
+    origin = nil
+    if axis == 1 { input?.onEnd(false) }
+    else if axis == 0 { input?.onClick(convert(event.locationInWindow, from: nil).x) }
+    axis = 0
+  }
+  private func update(x: CGFloat, y: CGFloat) {
+    if axis == 0 && max(abs(x), abs(y)) >= 6 { axis = abs(x) > abs(y) ? 1 : 2 }
+    if axis == 1 { input?.onChange(startOffset + x) }
+  }
+  override func scrollWheel(with event: NSEvent) {
+    // Vertical inertia belongs to the list; horizontal inertia cannot commit another row.
+    if !event.momentumPhase.isEmpty {
+      if !suppressWheelMomentum { super.scrollWheel(with: event) }
+      return
+    }
+    if !wheelActive || event.phase.contains(.began) {
+      wheelActive = true
+      suppressWheelMomentum = false
+      startOffset = input?.offset ?? 0
+      translation = .zero
+      axis = 0
+    }
+    translation.x += event.scrollingDeltaX
+    translation.y += event.scrollingDeltaY
+    update(x: translation.x, y: translation.y)
+    if axis != 1 { super.scrollWheel(with: event) }
+    wheelEnd?.cancel()
+    if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+      finishWheel(cancelled: event.phase.contains(.cancelled))
+    } else if event.phase.isEmpty {
+      let work = DispatchWorkItem { [weak self] in self?.finishWheel(cancelled: false) }
+      wheelEnd = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+  }
+  private func finishWheel(cancelled: Bool) {
+    suppressWheelMomentum = axis == 1
+    if axis == 1 { input?.onEnd(cancelled) }
+    wheelActive = false
+    axis = 0
+  }
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == 53 { input?.onEnd(true) }
+    else { super.keyDown(with: event) }
+  }
+  override func viewDidMoveToWindow() {
+    if window == nil { wheelEnd?.cancel() }
   }
 }
 
@@ -6893,6 +7123,13 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
     guard let data = line.data(using: .utf8) else { return }
     do {
       let message = try decoder.decode(IncomingMessage.self, from: data)
+      if message.type == "completion-action-result", let requestId = message.requestId {
+        DispatchQueue.main.async {
+          NotificationCenter.default.post(name: .islandCompletionActionResult, object: nil,
+            userInfo: ["requestId": requestId, "success": message.success == true])
+        }
+        return
+      }
       if message.type == "shutdown" {
         DispatchQueue.main.async { [controllerManager] in
           controllerManager.closeAll()

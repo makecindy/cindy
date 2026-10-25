@@ -10,7 +10,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
   const channelDisclosureRule =
     'label every delegated task with its actual execution channel: Orca Worker or native subagent.';
   const toolSurfaceRule =
-    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages.';
+    'Tools: get_workspace_info, create_worker, create_workers, send_to_worker, interrupt_worker, get_worker_queue_status, update_queued_message, cancel_queued_message, merge_queued_messages, update_worker.';
   const explicitCreationBoundary =
     'Use create_worker only when the user explicitly asks to open one new worker, and use create_workers only when the user explicitly asks to open multiple new workers.';
   const missingWorkerBoundary =

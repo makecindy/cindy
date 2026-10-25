@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 import {
   isCompactingWorkingStatus,
@@ -186,6 +187,15 @@ interface AgentIslandSessionState {
    * {@link syncAgentIslandDeviceSessions} 的输入决定;本机 Maker 事件不会触达它。
    */
   sourceDeviceId: string | null;
+  sourceCompletionToken?: string;
+}
+
+const completionTokenEpoch = randomUUID();
+
+export function agentIslandCompletionToken(session: AgentIslandSessionState): string | undefined {
+  if (session.phase !== 'completed') return undefined;
+  return session.sourceDeviceId ? session.sourceCompletionToken
+    : `${completionTokenEpoch}:${session.activityGeneration}`;
 }
 
 export interface AgentIslandUserPromptRollbackToken {
@@ -1211,10 +1221,12 @@ function applyDeviceSessionMeta(
   const projectName = [project, input.deviceName].filter(Boolean).join(' · ') || null;
   const agentKind = dbToMakerAgentKind(input.agentKind);
   const changed = session.title !== input.title
+    || session.sourceCompletionToken !== input.completionToken
     || session.companion !== companion
     || session.projectName !== projectName
     || session.agentKind !== agentKind;
   session.title = input.title;
+  session.sourceCompletionToken = input.completionToken;
   session.companion = companion;
   session.projectName = projectName;
   session.agentKind = agentKind;
@@ -2647,10 +2659,12 @@ function applyMeta(session: AgentIslandSessionState, meta: AgentIslandSessionMet
 
 function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapshot {
   const reconnectStatus = session.phase === 'running' ? session.reconnectStatus : null;
+  const completionToken = agentIslandCompletionToken(session);
   return {
     ...(session.phase === 'completed' && session.completionNotification ? { completionNotification: session.completionNotification } : {}),
     sessionId: session.sessionId,
     title: session.companion?.name || session.title || session.projectName || session.sessionId.slice(0, 8),
+    ...(completionToken ? { completionToken } : {}),
     ...(session.companion ? { companion: session.companion } : {}),
     projectName: session.projectName,
     detail: reconnectStatus ?? session.detail,

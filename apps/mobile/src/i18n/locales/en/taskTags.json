@@ -34,6 +34,7 @@
   "editLabel": "Edit “{{name}}”",
   "reorderLabel": "Reorder “{{name}}”",
   "reorderHint": "Hold the handle and drag to reorder",
+  "reorderFooter": "Touch and hold, then drag to reorder.",
   "pink": "Pink",
   "coral": "Coral",
   "teal": "Teal",

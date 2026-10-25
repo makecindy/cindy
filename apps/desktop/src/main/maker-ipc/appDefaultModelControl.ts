@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { isModelVisible, type ProviderView } from '@cindy/model-providers';
-import { defaultBotModelChain } from '../../shared/botDefaultModelChain.js';
+import { effectiveSourceIdForModel, isModelVisible, type ProviderView } from '@cindy/model-providers';
+import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -15,16 +15,33 @@ export function configureAppDefaultModelSelection(dispatch: typeof dispatchSelec
   dispatchSelection = dispatch;
 }
 
+/** Validate exactly the requested model; recommendations belong to default
+ * selection, never to admission of an explicit task or teammate route. */
+function resolveAvailableLocalRoute(
+  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: BotModelRoute | null },
+): BotModelRoute | null {
+  const preferred = args.preferredRoute;
+  // Remote routes are validated against their own authorized catalog below.
+  if (!preferred || preferred.agentDeviceId || args.providersLoading || !args.availableAgentsLoaded) return null;
+  const agent = preferred.harness === 'claude' ? 'claude-code' : preferred.harness;
+  if (!args.availableAgents.has(agent === 'claude-code' ? 'cc' : agent)) return null;
+  const providers = args.providers.filter(p => p.connected && !p.suspended && !p.modelDiscoveryFailure)
+    .map(p => ({ ...p, models: { ...p.models, [agent]: (p.models[agent] ?? []).filter(m =>
+      args.isModelEnabled?.(agent, p.id, m) ?? m.defaultEnabled !== false) } }));
+  const providerId = effectiveSourceIdForModel(providers, preferred.providerId, preferred.model, agent);
+  return providerId ? { ...preferred, providerId } : null;
+}
+
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
   currentRoute?: BotModelRoute | null;
-  tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean };
+  tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
   availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
-  enabled: NonNullable<Parameters<typeof defaultBotModelChain>[0]['isModelEnabled']>;
+  enabled: NonNullable<Parameters<typeof resolveAvailableLocalRoute>[0]['isModelEnabled']>;
 }) {
-  const current = defaultBotModelChain({ providers: input.providers, providersLoading: false,
+  const current = resolveAvailableLocalRoute({ providers: input.providers, providersLoading: false,
     availableAgents: input.availableAgents, availableAgentsLoaded: true,
-    preferredRoute: input.currentRoute ?? undefined, isModelEnabled: input.enabled })[0];
+    preferredRoute: input.currentRoute ?? undefined, isModelEnabled: input.enabled });
   return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi'] as const).flatMap(agent =>
     (provider.models[agent] ?? []).flatMap(model => {
       const remembered = input.tuning?.(agent, provider.id, model.id);
@@ -41,11 +58,12 @@ export function availableAppDefaultModels(input: {
       if (remembered?.effort !== undefined) route.effort = model.efforts.some(effort => effort === remembered.effort)
         ? remembered.effort : (model.defaultEffort && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : '');
       if (remembered?.fastMode !== undefined) route.fastMode = model.supportsFastMode === true && remembered.fastMode;
-      const valid = defaultBotModelChain({ providers: input.providers, providersLoading: false,
+      const valid = resolveAvailableLocalRoute({ providers: input.providers, providersLoading: false,
         availableAgents: input.availableAgents, availableAgentsLoaded: true,
         preferredRoute: route, isModelEnabled: input.enabled });
-      return valid.length ? [{ id: JSON.stringify([route.harness, route.providerId, route.model]),
-        route, efforts: model.efforts, supportsFastMode: model.supportsFastMode === true }] : [];
+      return valid ? [{ id: JSON.stringify([route.harness, route.providerId, route.model]),
+        route, efforts: model.efforts, supportsFastMode: model.supportsFastMode === true,
+        supportsUltrafastMode: agent === 'codex' && model.supportsUltrafastMode === true }] : [];
     }),
   ));
 }
@@ -77,7 +95,7 @@ export async function inspectAppDefaultModel() {
 export interface TaskModelSelection {
   id: string;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 /** Resolve one per-task selection from the live catalog; never mutate picker/default preferences. */
@@ -88,7 +106,7 @@ export async function resolveTaskModelSelection(selection: TaskModelSelection): 
   if (selection.effort !== undefined && !option.efforts.some(effort => effort === selection.effort)) {
     throw new Error('任务模型不支持所选思考深度，请重新选择');
   }
-  if (selection.fastMode === true && !option.supportsFastMode) {
+  if (selection.fastMode && (!option.supportsFastMode || (selection.fastMode === 'ultrafast' && !option.supportsUltrafastMode))) {
     throw new Error('任务模型不支持 Fast，请重新选择');
   }
   return { ...option.route,
@@ -122,9 +140,9 @@ export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[
     }
     if (!local) return null;
     const { available, inputs } = local;
-    const resolved = defaultBotModelChain({ providers: inputs.providers, providersLoading: false,
+    const resolved = resolveAvailableLocalRoute({ providers: inputs.providers, providersLoading: false,
       availableAgents: inputs.availableAgents, availableAgentsLoaded: true,
-      preferredRoute: route, isModelEnabled: inputs.enabled })[0];
+      preferredRoute: route, isModelEnabled: inputs.enabled });
     if (!resolved) return null;
     const entry = available.find(item => item.route.harness === resolved.harness
       && item.route.model === resolved.model && item.route.providerId === resolved.providerId);

@@ -7,6 +7,9 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({

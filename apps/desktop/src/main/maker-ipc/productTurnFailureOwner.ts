@@ -60,6 +60,8 @@ export interface ProductTurnFailureOwner {
   readonly instanceId: string;
   readonly generation: number;
   readonly fingerprint: ProductTurnFailureFingerprint;
+  /** The product receipt still belongs to the failed execution after a runtime-only rebuild. */
+  readonly originalExecution?: { readonly instanceId: string; readonly generation: number };
 }
 
 export function captureProductTurnFailureOwner(
@@ -91,7 +93,7 @@ export interface DeferredProductTurnFailureGate {
   /** Remove only the exact owner captured by a terminal boundary. */
   clear(owner: ProductTurnFailureOwner): void;
   /** Remove owners belonging to a replaced Session instance. */
-  clearSession(sessionId: string, session?: Session): void;
+  clearSession(sessionId: string, session?: Session, options?: { preserveRecovery: boolean }): void;
   /** Transfer a logical recovery owner to a replacement runtime for the same task. */
   rebindSession(sessionId: string, session: Session): void;
   /**
@@ -140,7 +142,10 @@ export function createDeferredProductTurnFailureGate(): DeferredProductTurnFailu
     clear(owner) {
       removeOwner(owner.sessionId, (pending) => sameOwner(pending, owner));
     },
-    clearSession(sessionId, session) {
+    clearSession(sessionId, session, options) {
+      // A provider-group handoff owns the logical failure across its suppressed
+      // close/bootstrap window. Explicit stop/dispatch still clear without a Session.
+      if (session && options?.preserveRecovery) return;
       if (session === undefined) pendingOwners.delete(sessionId);
       else removeOwner(sessionId, (pending) => pending.session === session);
     },
@@ -154,6 +159,10 @@ export function createDeferredProductTurnFailureGate(): DeferredProductTurnFailu
             ? pending
             : {
                 ...pending,
+                originalExecution: pending.originalExecution ?? {
+                  instanceId: pending.instanceId,
+                  generation: pending.generation,
+                },
                 session,
                 instanceId: session.instanceId,
                 generation: session.getTurnGeneration(),

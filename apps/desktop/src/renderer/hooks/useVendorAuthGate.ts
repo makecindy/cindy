@@ -47,7 +47,7 @@ interface DialogCopy {
 }
 
 type GatePurpose = 'send' | 'voice-input';
-type SettingsTab = 'api-keys' | 'connections' | 'providers';
+type SettingsTab = 'api-keys' | 'connections' | 'providers' | 'about';
 
 type CopyKey =
   | 'no-source'
@@ -102,7 +102,7 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       description: t('logic.confirm.piBinaryMissingDescription'),
       confirmText: t('logic.confirm.goToSettings'),
       cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
+      settingsTab: 'about',
     },
   };
 }

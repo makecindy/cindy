@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
   imageKeys: new Map<string, string>(),
+  speechKey: null as string | null,
   secretsClearedListeners: new Set<() => void>(),
   canUseCindyGateway: true,
   loads: [] as Array<{
@@ -26,8 +27,8 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
-  casUpdate: vi.fn(async (..._args: unknown[]) => true),
-  migrateManaged: vi.fn((_config?: unknown) => null as unknown),
+  casUpdate: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
+  migrateManaged: vi.fn<(config?: unknown) => unknown>(() => null),
   getGrokAccessToken: vi.fn(),
   recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
@@ -148,7 +149,7 @@ vi.mock('../generic-oauth.js', () => ({
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   readCustomProviderHeaders: () => null,
-  readCustomProviderKey: () => null,
+  readCustomProviderKey: (providerId: string) => providerId === 'speech-review' ? h.speechKey : null,
   getProviderSecretStore: () => ({
     get: (id: string) => id === 'openai-images' ? h.imageKeys.get(h.owner) ?? null : null,
     invalidateCaches: () => h.secretsClearedListeners.forEach((listener) => listener()),
@@ -219,6 +220,7 @@ import {
   __testing,
   ensureActiveCatalogLoaded,
   getDesktopSelectableCatalog,
+  getDesktopProviderService,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
@@ -248,6 +250,27 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #6768 unit regression: a hidden TTS route needs channel readiness in the
+  // actual provider-list wiring before its management switch can be used.
+  // Renderer tests inject that snapshot and could not catch missing Main wiring.
+  it('projects admitted hidden speech routes as manageable and clears readiness when their key is removed', async () => {
+    const previous = getActiveCatalog();
+    const provider = buildUserProvider({ id: 'speech-review', name: 'Speech review', runtimes: {
+      codex: { baseUrl: 'https://api.elevenlabs.io/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'eleven_v3', name: 'Later speech', mode: 'audio_speech', defaultEnabled: false }] },
+    } });
+    try {
+      setActiveCatalog({ ...BUNDLED_CATALOG, providers: [provider] });
+      h.speechKey = 'fake-speech-key';
+      const list = () => getDesktopProviderService().listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect((await list()).find(item => item.id === provider.id)?.availableMediaModelIds).toEqual(['eleven_v3']);
+      h.speechKey = null;
+      expect((await list()).find(item => item.id === provider.id)?.availableMediaModelIds).toEqual([]);
+    } finally {
+      h.speechKey = null;
+      setActiveCatalog(previous);
+    }
+  });
   it('passes xAI rejection context into forced recovery and never replays the stale token', async () => {
     h.getGrokAccessToken.mockReset();
     h.recoverGrokAuthAfterRejection.mockReset();

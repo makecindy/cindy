@@ -62,7 +62,7 @@ export interface MobileScheduleDraft {
   model: string;
   providerId: string;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   workspaceKind: RemoteScheduleWorkspaceKind;
   workingDir: string;
   useWorktree: boolean;
@@ -181,7 +181,7 @@ export function createMobileScheduleDraft(
     model: schedule.model ?? '',
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
-    fastMode: !!schedule.fastMode,
+    fastMode: (schedule.fastMode ?? false),
     workspaceKind,
     workingDir: schedule.workingDir ?? '',
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
@@ -230,7 +230,7 @@ export function applyTemplateToMobileScheduleDraft(
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
     providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
     effort: template.effort ?? '',
-    fastMode: template.fastMode === true,
+    fastMode: (template.fastMode === 'ultrafast' ? 'ultrafast' : template.fastMode === true),
     useWorktree: template.useWorktree ?? draft.useWorktree,
     // useWorktree 只在 project workspace 且无会话绑定时会被 buildMobileScheduleInput
     // 保留；模板要求 worktree 时把 draft 一并切到 project 模式并清掉绑定会话

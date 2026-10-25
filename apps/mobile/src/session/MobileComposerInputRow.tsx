@@ -399,8 +399,8 @@ export function MobileComposerInputRow({
         <GestureDetector gesture={bodyScrollGesture}>
           <ScrollView
             ref={bodyScrollRef}
-            style={styles.bodyScroll}
-            contentContainerStyle={styles.bodyScrollContent}
+            style={[styles.bodyScroll, geometricSingleLine && styles.bodyScrollCollapsed]}
+            contentContainerStyle={[styles.bodyScrollContent, geometricSingleLine && styles.bodyScrollCollapsed]}
             keyboardShouldPersistTaps="handled"
             bounces={false}
             scrollEnabled={cardLayout && bodyScrollEnabled}
@@ -755,6 +755,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   // otherwise keeps the old attachment height and absorbs input resize changes.
   bodyScroll: { flexGrow: 0, flexShrink: 1 },
   bodyScrollContent: { flexGrow: 0 },
+  // 收起态胶囊(collapsedHeight)比 44pt 输入行高;viewport 与内容都要铺满胶囊,
+  // mainRow 才能在胶囊里垂直居中,否则 + 与停止钮贴顶、比浮动语音钮偏上。
+  bodyScrollCollapsed: { flexGrow: 1 },
   toolbarRow: {
     alignItems: 'center',
     flexDirection: 'row',

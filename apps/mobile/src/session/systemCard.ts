@@ -208,6 +208,7 @@ type AgentSwitchTranslate = (key: string, options?: Record<string, unknown>) => 
  * 远程 Agent:边界行带 toAgentDeviceId 键 = 这次切换把 Agent 换到了另一台电脑上运行
  * (null = 被控电脑本机),标题改说位置;引擎同时换了再以「 · 目标引擎」带上。没换电脑
  * 返回 null,调用方沿用「已从 X 切换到 Y」。名称是切换时的快照,缺名时按位置给通用说法。
+ * 用户确认为了先用那台的配额换过去的(switchReason: 'quota-rebalance')最后写明原因,与桌面一致。
  */
 export function formatAgentSwitchLocationLabel(
   data: Record<string, unknown> | undefined,
@@ -215,14 +216,17 @@ export function formatAgentSwitchLocationLabel(
 ): string | null {
   const location = readAgentSwitchLocationTarget(data);
   if (!location) return null;
-  const label = location.kind === 'named'
+  const place = location.kind === 'named'
     ? translate('message.systemCard.agentSwitchLocation', { device: location.name })
     : translate(location.kind === 'thisComputer'
       ? 'message.systemCard.agentSwitchLocationThisComputer'
       : 'message.systemCard.agentSwitchLocationOtherComputer');
   const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
   const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
-  return from === to ? label : `${label} · ${to}`;
+  const label = from === to ? place : `${place} · ${to}`;
+  return data?.switchReason === 'quota-rebalance'
+    ? `${label} · ${translate('message.systemCard.agentSwitchLocationQuotaRebalance')}`
+    : label;
 }
 
 /**

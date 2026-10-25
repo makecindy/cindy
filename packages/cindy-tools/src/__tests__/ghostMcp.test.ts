@@ -100,9 +100,10 @@ function fakeDeps(
 }
 
 function parsePayload(result: {
-  content: { text: string }[];
+  content: Array<{ type: string; text?: string }>;
 }): Record<string, unknown> {
-  return JSON.parse(result.content[0].text) as Record<string, unknown>;
+  // The first block is always the JSON text (ghost_call may append images).
+  return JSON.parse(result.content[0].text ?? "") as Record<string, unknown>;
 }
 
 const READY_WITH_REAUTH_SUGGEST = {
@@ -592,6 +593,22 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
       tool: "gen_image",
       args: {},
     });
+  });
+
+  it("images the plugin shows the model follow the JSON text as image content and stay out of the JSON", async () => {
+    const callGhostTool = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { path: "/tmp/s.jpg" },
+      images: [{ data: "AAAA", mimeType: "image/jpeg" }],
+      imagesOmitted: 1,
+    });
+    const result = await handleGhostCall(fakeDeps({ callGhostTool }), { ghost_id: "sim", tool: "screenshot" });
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1]).toEqual({ type: "image", data: "AAAA", mimeType: "image/jpeg" });
+    const payload = parsePayload(result);
+    expect(payload).toMatchObject({ ok: true, result: { path: "/tmp/s.jpg" }, images_omitted: 1 });
+    expect(payload).not.toHaveProperty("images");
+    expect(payload).not.toHaveProperty("imagesOmitted");
   });
 
   it("成功调用可附 setup.reauthSuggest，仍保持 ok:true", async () => {
@@ -1596,7 +1613,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
   });
 
   it("forge_install 透传源码目录与可选图标并返回真实安装动作;失败标 isError", async () => {
-    const requests: Array<{ dir: string; iconSource?: string }> = [];
+    const requests: Array<{ dir: string; iconSource?: string; targetInstanceId?: string }> = [];
     const installed = await handleForgeInstall(
       fakeDeps({
         forgeInstall: async (request) => {
@@ -1615,6 +1632,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       {
         dir: "/src/my-ghost",
         icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
+        target_instance_id: '_root__my-ghost',
       },
     );
     expect(parsePayload(installed)).toMatchObject({
@@ -1627,6 +1645,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       {
         dir: "/src/my-ghost",
         iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
+        targetInstanceId: '_root__my-ghost',
       },
     ]);
 
@@ -1874,7 +1893,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
         ],
       }),
     ) as unknown as {
-      _registeredTools: Record<string, { description?: string } | undefined>;
+      _registeredTools: Record<string, { description?: string; inputSchema?: { shape?: Record<string, { description?: string }> } } | undefined>;
     };
 
     const listDesc = server._registeredTools.ghost_list?.description ?? "";
@@ -1894,10 +1913,17 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     // ghost_call 仍保留自身基线描述(去重不等于把描述删空)。
     expect(callDesc).toContain("调用某个插件(Ghost)提供的工具。");
     expect(callDesc).toContain("ghost_info 或 ghost_list");
-    // 权限契约必须进入模型可见描述:本地 Full Access 自动交接,远程/降档
-    // 仍 fail closed，且自动交接不伪装成人工永久授权。
-    expect(callDesc).toContain("Full Access(bypassPermissions)");
-    expect(callDesc).toContain("远程会话仍向用户弹确认卡");
+    // PR #6731 权限协议：原生审核读取真实注册的工具/参数说明；不能因
+    // “之后还有确认卡”的错误承诺放行。旧测试只覆盖 Full Access 总说明，
+    // 漏掉 Auto 与四个参数入口。unit：核验模型可见协议，而非扫描源码。
+    const callTool = server._registeredTools.ghost_call;
+    for (const description of [callDesc, ...['grant_only', 'attachments', 'dir', 'save_dir'].map(
+      (name) => callTool?.inputSchema?.shape?.[name]?.description ?? '',
+    )]) {
+      expect(description).toContain("Auto 沿用实际审批负责人，可能直接交接");
+      expect(description).toContain("Ask 需用户确认");
+      expect(description).toContain("不保证另有确认卡");
+    }
     expect(callDesc).toContain("不写人工永久授权");
   });
 

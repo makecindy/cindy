@@ -26,6 +26,9 @@ vi.mock("react-native", async () => {
     testID?: string;
     onPress?: () => void;
     accessibilityState?: { selected?: boolean };
+    pointerEvents?: string;
+    accessibilityElementsHidden?: boolean;
+    importantForAccessibility?: string;
     ref?: import("react").Ref<HTMLDivElement>;
   };
   const View = ({
@@ -33,6 +36,9 @@ vi.mock("react-native", async () => {
     testID,
     onPress,
     accessibilityState,
+    pointerEvents,
+    accessibilityElementsHidden,
+    importantForAccessibility,
     ref,
   }: Props) =>
     createElement(
@@ -41,6 +47,9 @@ vi.mock("react-native", async () => {
         "data-testid": testID,
         onClick: onPress,
         "aria-selected": accessibilityState?.selected,
+        "data-pointer-events": pointerEvents,
+        "data-accessibility-hidden": accessibilityElementsHidden,
+        "data-accessibility-importance": importantForAccessibility,
         ref,
       },
       children,
@@ -191,8 +200,16 @@ describe('shared Home drawer host', () => {
   it('unmounts the invisible blocker even when the animation never calls completion', async () => {
     native.reduceMotion = false;
     await act(async () => root.render(<SessionListDrawer {...props} />));
+    const content = () => container.querySelector('[data-testid="sessionDrawer.panel"]')!.firstElementChild!;
+    expect(content().getAttribute('data-pointer-events')).toBe('auto');
     await act(async () => root.render(<SessionListDrawer {...props} open={false} />));
     expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).not.toBeNull();
+    // PR #7079: RN's native input/accessibility contract must stop a second selection during
+    // exit; otherwise it updates lastTeammate while the coordinator retains the first route.
+    // Existing close-settlement coverage only checked eventual unmount. Unit tier, fake clock.
+    expect(content().getAttribute('data-pointer-events')).toBe('none');
+    expect(content().getAttribute('data-accessibility-hidden')).toBe('true');
+    expect(content().getAttribute('data-accessibility-importance')).toBe('no-hide-descendants');
     expect(props.onClosed).not.toHaveBeenCalled();
     // withTiming deliberately never delivers a completion in this test driver.
     await act(async () => vi.advanceTimersByTime(motionDuration.exit));
@@ -208,6 +225,10 @@ describe('shared Home drawer host', () => {
     await act(async () => root.render(<SessionListDrawer {...props} />));
     await act(async () => vi.advanceTimersByTime(motionDuration.exit));
     expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).not.toBeNull();
+    const content = container.querySelector('[data-testid="sessionDrawer.panel"]')!.firstElementChild!;
+    expect(content.getAttribute('data-pointer-events')).toBe('auto');
+    expect(content.getAttribute('data-accessibility-hidden')).toBe('false');
+    expect(content.getAttribute('data-accessibility-importance')).toBe('auto');
     expect(props.onClosed).not.toHaveBeenCalled();
     await act(async () => root.render(<SessionListDrawer {...props} open={false} />));
     await act(async () => vi.advanceTimersByTime(motionDuration.exit));

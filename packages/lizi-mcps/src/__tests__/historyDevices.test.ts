@@ -99,6 +99,22 @@ function setup() {
 }
 
 describe("history device discovery and queries", () => {
+  // The execution-device Worker has no local orcaRole. Keep its persisted origin
+  // visible through the real list_sessions projection so it can identify its Lead.
+  it("projects remote Worker origin while leaving local role and Fork fields absent", async () => {
+    const s = setup();
+    const base = await s.history.listSessions({ sessionIds: null, workdir: null, fromMs: null, toMs: null,
+      agentKind: null, includeDeleted: false, limit: 1, cursor: null, order: "desc" });
+    if (!base.ok) throw new Error("fixture unavailable");
+    const lead = { leadDeviceId: "pc", leadDeviceName: "PC", leadSessionId: "lead-1", leadTitle: "Lead", workerLabel: "tester" };
+    vi.mocked(s.history.listSessions).mockResolvedValueOnce({ ...base,
+      page: { ...base.page, items: [{ ...base.page.items[0]!, orcaRemoteLead: lead }] } });
+    const result = await s.call("list_sessions");
+    expect(result.sessions[0]).toMatchObject({ orcaRemoteLead: lead });
+    expect(result.sessions[0]).not.toHaveProperty("orcaRole");
+    expect(result.sessions[0]).not.toHaveProperty("parentSessionId");
+  });
+
   it("keeps legacy local queries local and preserves their response", async () => {
     const s = setup();
     expect(await s.call("list_sessions")).toMatchObject({
@@ -134,6 +150,23 @@ describe("history device discovery and queries", () => {
       "list_sessions",
       expect.objectContaining({ device: "local", cursor: "remote-cursor" }),
     );
+  });
+  // Optional filters survive forwarding; an old schema failure must never retry unscoped.
+  it("forwards teammate filters and reports an old schema rejection without dropping them", async () => {
+    const s = setup();
+    s.remoteQuery.mockResolvedValueOnce({ ok: false, errorCode: "INVALID_ARGS", message: "Unrecognized key: teammate_id" } as any);
+    const result = await s.call("list_sessions", {
+      device: "all", teammate_id: "bot-a", source: "bot", time_field: "activity",
+    });
+    expect(s.history.listSessions).toHaveBeenCalledWith(expect.objectContaining({ teammateId: "bot-a", source: "bot", timeField: "activity" }));
+    expect(s.remoteQuery).toHaveBeenCalledExactlyOnceWith("mac", "list_sessions", expect.objectContaining({
+      device: "local", teammate_id: "bot-a", source: "bot", time_field: "activity",
+    }));
+    expect(result).toMatchObject({ partial: true, groups: expect.arrayContaining([
+      expect.objectContaining({ deviceId: "mac", ok: false, errorCode: "INVALID_ARGS" }),
+    ]) });
+    await s.call("search_chat_history", { device: "mac", query: "topic", teammate_id: "bot-a", source: "bot" });
+    expect(s.remoteQuery).toHaveBeenLastCalledWith("mac", "search_chat_history", expect.objectContaining({ teammate_id: "bot-a", source: "bot" }));
   });
   it("qualifies search hits, metadata and context and supports reading the returned identity", async () => {
     const s = setup();

@@ -99,7 +99,9 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'>;
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
+  scheduledModelBaseline?: string | null;
+};
 type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
@@ -259,7 +261,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
-    fastMode: !!row.fastMode,
+    fastMode: (row.fastMode ?? false),
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
@@ -308,7 +310,18 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     hasPendingSessionInterruption(candidate)
       ? base.activeTurnStartedAt
       : null;
-  return { ...base, ...projectSessionRuntimeFields(base) };
+  return { ...base, ...projectSessionRuntimeFields({ ...base, scheduledModelBaseline: row.scheduledModelBaseline }) };
+}
+
+function importedReplyText(content: unknown): unknown {
+  if (!Array.isArray(content) || !content.length) return content;
+  const texts: string[] = [];
+  for (const block of content) {
+    const record = block && typeof block === 'object' ? (block as { type?: unknown; text?: unknown }) : null;
+    if (record?.type !== 'text' || typeof record.text !== 'string') return content;
+    texts.push(record.text);
+  }
+  return texts.join('');
 }
 
 export function messageToCamel(row: MessageRow): Message {
@@ -318,6 +331,11 @@ export function messageToCamel(row: MessageRow): Message {
   } catch {
     // 容错：极端情况下 content 可能不是合法 JSON（例如旧手工写入），保留原字符串
     content = row.content;
+  }
+  // Replies imported from the cloud room (`cloud-history:`, companion-cloud/mirror.ts) were once
+  // stored as text blocks; every reader expects a reply as a plain string, so they read as one.
+  if (row.role === 'assistant' && row.clientId?.startsWith('cloud-history:')) {
+    content = importedReplyText(content);
   }
   if (row.role === 'assistant' && typeof content === 'string') {
     content = stripInternalWebCitations(content);
@@ -372,7 +390,7 @@ export function sessionCreateToRow(
         model?: string;
         effort?: string;
         permissionMode?: string;
-        fastMode?: boolean;
+        fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
         agentKind?: AgentKind;
         orcaRole?: OrcaRole | null;
@@ -416,7 +434,7 @@ export function sessionCreateToRow(
     contextTokens: 0,
     contextWindow: 0,
     // 新建 session 默认 Fast Mode OFF；调用方显式传 true 时才打开。
-    fastMode: !!body?.fastMode,
+    fastMode: (body?.fastMode ?? false),
     // 计划模式默认 OFF；草稿里开了计划模式的会话显式传 true。
     planModeEnabled: !!body?.planModeEnabled,
     clearedAt: null,
@@ -460,7 +478,7 @@ export function sessionPatchToRow(
     effort?: string | null;
     permissionMode?: string;
     providerId?: string | null;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     planModeEnabled?: boolean;
     sdkSessionId?: string | null;
     totalTokenUsage?: number;
@@ -487,7 +505,7 @@ export function sessionPatchToRow(
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];
   if (patch.providerId !== undefined) out.providerId = patch.providerId;
-  if (patch.fastMode !== undefined) out.fastMode = !!patch.fastMode;
+  if (patch.fastMode !== undefined) out.fastMode = (patch.fastMode ?? false);
   if (patch.planModeEnabled !== undefined) out.planModeEnabled = !!patch.planModeEnabled;
   if (patch.sdkSessionId !== undefined) out.sdkSessionId = patch.sdkSessionId;
   if (patch.totalTokenUsage !== undefined) out.totalTokenUsage = patch.totalTokenUsage;
@@ -699,8 +717,9 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     modelAgentKind: row.modelAgentKind ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
+    agentDeviceId: row.agentDeviceId ?? undefined,
     effort: row.effort ?? undefined,
-    fastMode: !!row.fastMode,
+    fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
@@ -751,8 +770,9 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     modelAgentKind: s.modelAgentKind ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
+    agentDeviceId: s.agentDeviceId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
-    fastMode: !!s.fastMode,
+    fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
@@ -806,8 +826,9 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
+  if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
-  if (hasKey(patch, 'fastMode')) out.fastMode = !!patch.fastMode;
+  if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;

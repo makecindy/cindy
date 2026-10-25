@@ -5,6 +5,7 @@ import type {
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
+import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards } from './taskActionAuthorization.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type {
@@ -99,7 +100,7 @@ export interface SessionControlServiceDeps {
       model?: string;
       providerId?: string | null;
       effort?: Effort | null;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
     };
   }): Promise<SessionRuntimeSetResult>;
   assertExternalInputAllowed(sessionId: string): Promise<void>;
@@ -159,8 +160,12 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         queuedMessageId: params.queuedMessageId,
         message: params.message,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: params.beforeMutation,
-        rebuild: rebuildSessionQueueItem,
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
+        rebuild: (item, message) => {
+          const next = rebuildSessionQueueItem(item, message);
+          bindTaskActionInput(params.targetSessionId, next);
+          return next;
+        },
       });
     },
 
@@ -177,7 +182,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: params.beforeMutation,
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
       });
     },
 
@@ -191,6 +196,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       return queueControl.steer({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
+        beforeMutation: assertTaskActionCurrent,
         authorize: (item) =>
           authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
@@ -208,6 +214,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         position: params.position,
+        beforeMutation: assertTaskActionCurrent,
         authorize: (item) =>
           authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
@@ -221,13 +228,14 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       queuedMessageId?: string;
       beforeMutation?: () => Promise<void>;
     }): Promise<SessionSteerResult> {
+      const beforeMutation = combineInputGuards(params.beforeMutation, assertTaskActionCurrent);
       const missing = await ensureTarget(params.targetSessionId);
-      await params.beforeMutation?.();
+      await beforeMutation?.();
       if (missing) return missing;
       try {
         await deps.assertExternalInputAllowed(params.targetSessionId);
       } catch (error) {
-        await params.beforeMutation?.();
+        await beforeMutation?.();
         if ((error as { code?: unknown }).code === 'UNSUPPORTED_CAPABILITY') {
           return {
             ok: false,
@@ -237,7 +245,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         }
         throw error;
       }
-      await params.beforeMutation?.();
+      await beforeMutation?.();
       const live = deps.getLiveSession(params.targetSessionId);
       if (!live?.isTurnRunning()) {
         return {
@@ -259,7 +267,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         ...params,
         queuedMessageId,
       });
-      await params.beforeMutation?.();
+      await beforeMutation?.();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
         current !== live ||
@@ -272,7 +280,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
           message: `session ${params.targetSessionId} changed turns before steer was accepted`,
         };
       }
-      const expectedTurn = { session: live, turnGeneration, ...(params.beforeMutation ? { beforeMutation: params.beforeMutation } : {}) };
+      const expectedTurn = { session: live, turnGeneration, beforeMutation };
       const accepted = await deps.steerQueuedMessage(params.targetSessionId, item, expectedTurn);
       if (!accepted) {
         const latest = deps.getLiveSession(params.targetSessionId);
@@ -295,7 +303,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
 
     async stopSessionTurn(params: { targetSessionId: string; beforeMutation?: () => Promise<void> }): Promise<SessionStopResult> {
       const missing = await ensureTarget(params.targetSessionId);
-      if (params.beforeMutation) await params.beforeMutation();
+      await combineInputGuards(params.beforeMutation, assertTaskActionCurrent)?.();
       if (missing) return missing;
       const live = deps.getLiveSession(params.targetSessionId);
       if (!live) return { ok: true, status: 'no-active-turn' };
@@ -343,13 +351,15 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         model?: string;
         providerId?: string | null;
         effort?: Effort | null;
-        fastMode?: boolean;
+        fastMode?: boolean | 'ultrafast';
       };
     }): Promise<SessionRuntimeSetResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
-      return deps.setSessionRuntime(params);
+      return deps.setSessionRuntime({ ...params,
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
+      });
     },
   };
 }

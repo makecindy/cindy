@@ -168,6 +168,21 @@ describe('sidebar display settings menu', () => {
     expect(screen.getAllByRole('menu').length).toBeGreaterThan(1);
   });
 
+  it('marks the trigger with a dot only while the list shows archived tasks', () => {
+    // Dash 反馈:切到「已归档」后列表和平常几乎一样,误以为内容没更新。
+    // 「全部」不提醒,所以不能用 status !== 'active' 代替。
+    const dot = (status: 'active' | 'archived' | 'all') => {
+      const { unmount } = render(
+        <SidebarFilterPopover filter={makeFilter({ status })} allKnownProjects={[]} open={false} />,
+      );
+      const trigger = screen.getByRole('button', { name: /^侧边栏显示设置/ });
+      const found = trigger.querySelector('span[aria-hidden]') !== null;
+      unmount();
+      return found;
+    };
+    expect([dot('active'), dot('archived'), dot('all')]).toEqual([false, true, false]);
+  });
+
   it('hides unavailable grouping choices and their summary without clearing saved device preference', async () => {
     const filter = makeFilter({ groupBy: 'flat' });
     render(<Preview filter={filter} remote={false} />);

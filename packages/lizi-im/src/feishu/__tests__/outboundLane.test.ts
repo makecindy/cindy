@@ -1,7 +1,7 @@
 /**
  * 群 lane 出站路由: open_id / chat_id / reply 三分支与回挂锚点领取语义。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const larkMocks = vi.hoisted(() => {
   const request = vi.fn(async () => ({ code: 0 }));
@@ -31,13 +31,13 @@ const larkMocks = vi.hoisted(() => {
     },
   );
   const deleteMessage = vi.fn(
-    function (this: unknown): Promise<{ code?: number; msg?: string; data?: {} }> {
+    function (this: unknown): Promise<{ code?: number; msg?: string; data?: object }> {
       deleteOwners.push(this);
       return Promise.resolve({ data: {} });
     },
   );
   const patch = vi.fn(
-    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+    async (): Promise<{ code?: number; msg?: string; data?: object }> => ({ data: {} }),
   );
   const getMessage = vi.fn(
     function (
@@ -106,6 +106,7 @@ vi.mock('../moduleScope.js', async (importOriginal) => ({
 
 import * as outbound from '../outbound.js';
 import { start } from '../streamingText.js';
+import { createFeishuScope, runInScope } from '../moduleScope.js';
 
 const creds = { appId: 'cli_test', appSecret: 'secret', service: 'feishu' as const };
 const otherCreds = { appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const };
@@ -119,9 +120,83 @@ function rebindFresh(next = creds): void {
 }
 
 describe('feishu outbound lane routing', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     rebindFresh();
+  });
+
+  // Regression: companion streaming handles escape FeishuIM's ALS boundary when
+  // an already-running agent emits events. Existing lane cases stayed in the
+  // default scope. Exercise real start/outbound routing, with only the SDK faked
+  // (unit tier): an unbound or different caller must never receive the patches.
+  it.each([false, true])(
+    'keeps streamed and final cards on their creating connection (caller connected=%s)',
+    async (callerConnected) => {
+      vi.useFakeTimers();
+      if (!callerConnected) outbound.unbindClient();
+      const companion = createFeishuScope({ host: null, secretKeyPrefix: 'companion' });
+      const handle = await runInScope(companion, () => {
+        outbound.bindClient(otherCreds);
+        return start('ou_companion_owner');
+      });
+      const creator = larkMocks.create.mock.contexts.at(-1);
+      handle.append('draft');
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(larkMocks.patch).toHaveBeenCalledTimes(1);
+      expect(larkMocks.patch.mock.contexts[0]).toBe(creator);
+
+      handle.replace('revised');
+      await vi.advanceTimersByTimeAsync(1500);
+      await handle.finalize('finished');
+      expect(larkMocks.patch).toHaveBeenCalledTimes(2);
+      for (const client of larkMocks.patch.mock.contexts) expect(client).toBe(creator);
+      expect(larkMocks.create.mock.contexts.at(-1)).toBe(creator);
+      expect(larkMocks.create).toHaveBeenLastCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ content: expect.stringContaining('finished') }),
+      }));
+    },
+  );
+
+  it('recalls an empty companion reply in its own scope even from another connection', async () => {
+    const companion = createFeishuScope({ host: null, secretKeyPrefix: 'companion' });
+    const handle = await runInScope(companion, () => {
+      outbound.bindClient(otherCreds);
+      return start('ou_companion_owner');
+    });
+    await handle.finalize('');
+    expect(larkMocks.request.mock.contexts.at(-1)).toBe(
+      runInScope(companion, () => outbound.getBoundClient()),
+    );
+    expect(larkMocks.request).toHaveBeenLastCalledWith({
+      method: 'DELETE',
+      url: `open-apis/im/v1/messages/${handle.messageId}`,
+    });
+  });
+
+  it.each([false, true])('final stays in its lane and does not consume the next queued turn (thread=%s)', async (thread) => {
+    const lane = thread ? 'g/oc_chat/omt_topic' : 'g/oc_chat';
+    outbound.pushReplyAnchor(lane, 'om_first');
+    outbound.pushReplyAnchor(lane, 'om_second');
+    const handle = await start(lane);
+    expect(larkMocks.reply.mock.calls[0][0].path).toEqual({ message_id: 'om_first' });
+    await handle.finalize('answer');
+    if (thread) {
+      expect(larkMocks.reply.mock.calls[1][0].path).toEqual({ message_id: 'om_first' });
+      expect(larkMocks.create).not.toHaveBeenCalled();
+    } else {
+      expect(larkMocks.reply.mock.calls[0][0].data).not.toHaveProperty('reply_in_thread');
+      expect(larkMocks.create).toHaveBeenCalledWith(expect.objectContaining({
+        params: { receive_id_type: 'chat_id' },
+        data: expect.objectContaining({ receive_id: 'oc_chat', content: expect.stringContaining('answer') }),
+      }));
+    }
+    const next = await start(lane);
+    expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
+    next.close();
   });
 
   it('sends p2p messages via open_id unchanged', async () => {

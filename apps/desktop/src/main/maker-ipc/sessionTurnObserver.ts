@@ -9,6 +9,7 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { verdictForModelRoute } from '../maker-host/model-route-guard-live.js';
 import { describeModelRouteRejection } from '../maker-host/model-route-guard.js';
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
+import { prepareBotPermissionDispatch } from './botPermissionDispatch.js';
 
 export interface InstallSessionTurnObserverDeps {
   readonly beforeLocalProviderStart?: (session: Session) => Promise<void>;
@@ -25,12 +26,16 @@ export interface InstallSessionTurnObserverDeps {
 }
 
 export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session) {
+  let assertPermissionDispatch: (() => void) | undefined;
   session.setTurnLifecycleObserver({
+    onDispatching: () => assertPermissionDispatch?.(),
     beforeProviderStart: async (turnGeneration) => {
+      assertPermissionDispatch = undefined;
       if (session.remoteHostId) {
         await publishChannelTurn(session, 'starting');
         return;
       }
+      assertPermissionDispatch = await prepareBotPermissionDispatch(session);
       await deps.beforeLocalProviderStart?.(session);
       // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
       // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。

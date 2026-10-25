@@ -5,9 +5,13 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import {
+  resolveSessionMessageEmptyState,
+  type SessionMessageEmptyStateInput,
   shouldSuppressEmptyMessageState,
   shouldSuppressRemoteListEmptyState,
 } from '@/session/sessionEmptyState';
+import { HistoryViewController } from '@cindy/maker-shared/message-window';
+import zhMessages from '@/i18n/locales/zh-CN/message.json';
 
 // Run the real detail-page sync callback without loading native navigation.
 // Existing policy tests cannot detect an old active/archive response publishing
@@ -131,6 +135,45 @@ const base = {
   hasSyncedThisOpen: false,
   remoteUnavailable: false,
 };
+
+// #6519 / #6527, unit: these presentation cases import the screen's production
+// selector directly. Legacy page callback fixtures could not exercise a restored
+// empty cache without also extracting unrelated screen source.
+describe('session message empty presentation', () => {
+  const input: SessionMessageEmptyStateInput = {
+    subscriptionIdentity: JSON.stringify(['d1', 's1', 1]), historyRead: null,
+    historySnapshot: { ready: false, items: [] }, messageCount: 0,
+    loading: false, showSyncingShell: false, remoteUnavailableReason: null,
+    status: 'online', targetAvailable: true,
+    historyNotCachedMessage: zhMessages.renderer.historyNotCached,
+  };
+
+  it('explains uncached offline history immediately', () => {
+    expect(resolveSessionMessageEmptyState({ ...input, status: 'stopped' })).toEqual({
+      syncingWhileEmpty: false, emptyMessage: '历史消息尚未缓存，连接电脑后同步',
+    });
+  });
+
+  it('honors an empty restored history cache on an offline cold reopen', async () => {
+    const view = new HistoryViewController({
+      page: async () => ({ version: 1 as const, items: [], hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    view.setNetworkAvailable(false);
+    await view.restoreCachedView(async () => ({ ...view.getSnapshot(), ready: true }));
+    expect(resolveSessionMessageEmptyState({ ...input, status: 'stopped', historySnapshot: view.getSnapshot() }))
+      .toEqual({ syncingWhileEmpty: false, emptyMessage: undefined });
+  });
+
+  it.each([
+    { status: 'connecting', presence: null, syncing: true, copy: undefined },
+    { status: 'online', presence: false, syncing: false, copy: '历史消息尚未缓存，连接电脑后同步' },
+  ] as const)('distinguishes $status with presence=$presence from confirmed unavailability', ({ status, presence, syncing, copy }) => {
+    expect(resolveSessionMessageEmptyState({ ...input, status, targetAvailable: presence }))
+      .toEqual({ syncingWhileEmpty: syncing, emptyMessage: copy });
+  });
+});
 
 describe('shouldSuppressEmptyMessageState', () => {
   it('suppresses the empty state on cold open before the first sync (0 msgs, not synced, online)', () => {

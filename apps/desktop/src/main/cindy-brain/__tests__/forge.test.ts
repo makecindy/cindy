@@ -2002,6 +2002,12 @@ describe('FORGE_GUIDE', () => {
   it('手册覆盖关键章节(身份卡/工具面/管子/聊天卡片/订阅拦截/网络代发/系统提示/沙箱红线/打包)', () => {
     for (const marker of [
       'ghost.json',
+      // 2026-10-20 同账号插件资料同步：manifest 声明、API 与结果不明语义同步交付。
+      '`library`、`deviceSync`、`sessionContext`',
+      '4.10.2 同账号电脑间的插件资料同步',
+      '"deviceSync": true',
+      'cindy.deviceSync',
+      'SYNC_RESULT_UNKNOWN',
       '两段式',
       'call_tool',
       'tool-result',

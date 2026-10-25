@@ -91,28 +91,12 @@ import {
 } from './lib/markdownAutosave';
 
 /**
- * 数 source text 中 `query`(case-insensitive) 在 `targetLine`(1-indexed) 之前
- * 出现了多少次。用作 project-search 跳转: 知道目标行后, 这个计数 = 在 in-file
- * 搜索结果列表里目标行第一个匹配的 0-based index(因为 in-file 搜索也是按
- * 文档顺序、case-insensitive 排出来的)。
+ * project-search 跳转要的是「目标行第一个**可见**命中的下标」。
+ * 它由 PlaintextEditor.search.indexOfLine 从 findAll() 的同一份命中集合里算
+ * (findAll 已剔除图片 alt / mermaid 块 / conceal 标记等看不见的命中),所以这里
+ * 不再对源码计数 —— 源码计数会把那些被剔除的同词命中一起算进去,序号偏大,
+ * 跳到后面的另一处。
  */
-function countMatchesBeforeLine(content: string, query: string, targetLine: number): number {
-  if (!query) return 0;
-  const lines = content.split(/\r?\n/);
-  const target = Math.min(Math.max(targetLine, 1), lines.length);
-  const needle = query.toLowerCase();
-  if (!needle) return 0;
-  let count = 0;
-  for (let i = 0; i < target - 1; i++) {
-    const text = lines[i].toLowerCase();
-    let pos = 0;
-    while ((pos = text.indexOf(needle, pos)) !== -1) {
-      count++;
-      pos += needle.length;
-    }
-  }
-  return count;
-}
 
 const MARKDOWN_AUTOSAVE_DELAY_MS = 900;
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
@@ -626,7 +610,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     ) {
       const jumpKey = `${relPath}|${jumpQuery}|${jumpLine}`;
       if (lastJumpKeyRef.current !== jumpKey) {
-        const idx = countMatchesBeforeLine(content.content, jumpQuery, jumpLine);
+        const idx = editorRef.current?.search.indexOfLine(jumpLine) ?? 0;
         initialActive = Math.min(idx, total - 1);
         // 这里不立刻消费 jumpKey —— 留给下面 jumpEffect 兜底(防止 runner 在
         // 某些 race 下没跑到 scroll 那段时, jumpEffect 还能补一次)。
@@ -729,10 +713,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     }
 
     const targetLine = jumpLine ?? null;
-    const idx =
-      targetLine !== null
-        ? countMatchesBeforeLine(content.content, jumpQuery, targetLine)
-        : 0;
+    const idx = targetLine !== null ? (editorRef.current?.search.indexOfLine(targetLine) ?? 0) : 0;
     const active = Math.min(idx, lastRun.total - 1);
     setSearchActive(active);
     editorRef.current?.search.setActive(active);

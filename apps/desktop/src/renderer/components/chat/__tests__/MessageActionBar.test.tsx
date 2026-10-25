@@ -4,9 +4,16 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => {
+  const { default: en } = await import('@/i18n/locales/en/common.json');
+  const voice: Record<string, unknown> = en.bots.voiceMode;
+  return {
+    useTranslation: () => ({ t: (key: string) => {
+      const value = key.startsWith('bots.voiceMode.') ? voice[key.slice('bots.voiceMode.'.length)] : null;
+      return typeof value === 'string' ? value : key;
+    } }),
+  };
+});
 
 vi.mock('@/components/ui/tooltip', async (importOriginal) => ({
   // Keep Tip's real ref/event forwarding for the composed menu trigger.
@@ -28,6 +35,60 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
+import { MessageReadAloudContext, type MessageReadAloud } from '../MessageReadAloudContext';
+
+describe('companion message read-aloud', () => {
+  const identity = { sessionId: 'companion-task', messageId: 'reply' };
+  const capability = (patch: Partial<MessageReadAloud> = {}): MessageReadAloud => ({
+    sessionId: identity.sessionId, available: true, disabled: false,
+    messageId: null, phase: 'idle', canRead: () => true, toggle: vi.fn(), ...patch,
+  });
+  const bar = (value: MessageReadAloud | null, companion = true, eligible = true, compact = false) => (
+    <MessageReadAloudContext.Provider value={value}>
+      <MessageActionBar copyText="Saved reply" align="left" hovered={false}
+        simplifiedBotConversation={companion}
+        compact={compact}
+        readAloudMessage={eligible ? identity : undefined} />
+    </MessageReadAloudContext.Provider>
+  );
+
+  it.each([false, true])('shows an accessible action only for eligible configured companion replies (compact=%s)', (compact) => {
+    const value = capability();
+    const { rerender } = render(bar(value, true, true, compact));
+    fireEvent.click(screen.getByRole('button', { name: 'Read aloud' }));
+    expect(value.toggle).toHaveBeenCalledWith('reply', 'Saved reply');
+    for (const unavailable of [null, capability({ available: false }), capability({ sessionId: 'other' }), capability({ canRead: () => false })]) {
+      rerender(bar(unavailable, true, true, compact));
+      expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+    }
+    rerender(bar(value, false, true, compact));
+    expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+    rerender(bar(value, true, false, compact));
+    expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+  });
+
+  it.each([
+    { phase: 'preparing', compact: false }, { phase: 'playing', compact: false },
+    { phase: 'preparing', compact: true }, { phase: 'playing', compact: true },
+  ] as const)('keeps the $phase action cancellable (compact=$compact)', ({ phase, compact }) => {
+    const value = capability({ messageId: 'reply', phase });
+    render(bar(value, true, true, compact));
+    const stop = screen.getByRole('button', { name: 'Stop reading' });
+    expect(stop.getAttribute('aria-pressed')).toBe('true');
+    expect(stop.getAttribute('aria-busy')).toBe(String(phase === 'preparing'));
+    fireEvent.click(stop);
+    expect(value.toggle).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('disables concurrent message playback during continuous voice mode (compact=%s)', (compact) => {
+    const value = capability({ disabled: true });
+    render(bar(value, true, true, compact));
+    const button = screen.getByRole('button', { name: 'Read aloud' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(button);
+    expect(value.toggle).not.toHaveBeenCalled();
+  });
+});
 
 describe('MessageActionBar', () => {
   const writeText = vi.fn(async () => undefined);

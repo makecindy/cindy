@@ -165,22 +165,15 @@ describe('Bot task route recovery', () => {
   it('passes the live Bot roster and the teammate identity into the shared task composer', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list(');
     expect(source).toContain('lastReadAtByBotId: { [botId]: lastReadAt }');
-    expect(source).toContain('botMentions={gate.mentions}');
+    expect(source).toContain('botMentions={mentions}');
     expect(source).toContain('botIdentity={chatIdentity ?? gate.identity}');
     // The live identity is wrapped with canonicalChat so only the main private chat offers add-to-group.
     expect(source).toContain('{ ...(identity ?? gateIdentity), canonicalChat }');
     expect(source).toContain('botUnreadBoundaryAt={gate.unreadBoundaryAt}');
   });
 
-  it.each(['\n', '\r\n'])('keeps the teammate a teammate in archived transcripts with line ending %j, without touching the write path', (lineEnding) => {
-    const history = readFileSync(resolve(__dirname, '..', 'BotHistorySessionView.tsx'), 'utf8')
-      .replace(/\r?\n/g, lineEnding);
-    // 只读历史也带头像与伙伴 lockup:这个视图本来就已经查过 history(botId) 确认归属。
-    expect(history).toMatch(/window\.electronAPI\.localDb\.bots\s*\.get\(botId\)/);
-    expect(history).toContain(
-      "botIdentity={{ ...(identity ?? { id: botId, name: '' }), sessionId }}",
-    );
-  });
+  // Archived transcript identity/read-only coverage lives in the rendered
+  // BotHistorySessionView cases in botSessionPresentation.test.tsx.
 
   it('keeps welcome delivery out of the renderer navigation projection', () => {
     // 欢迎语由 main 在创建伙伴和持久任务关系的同一边界内落库。URL 只负责

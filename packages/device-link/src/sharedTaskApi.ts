@@ -8,7 +8,8 @@ export type SharedTaskHostCommand =
   | { action: 'invite' | 'close'; sharedTaskId: string }
   | { action: 'remove'; sharedTaskId: string; memberId: string };
 export type SharedTaskAccountCommand =
-  | { action: 'list' }
+  /** `fresh`: Desktop-local hint to skip Main's short list reuse after an external event. */
+  | { action: 'list'; fresh?: true }
   | { action: 'owned' }
   | { action: 'close'; sharedTaskId?: string; all?: true }
   | { action: 'get' | 'leave'; sharedTaskId: string }

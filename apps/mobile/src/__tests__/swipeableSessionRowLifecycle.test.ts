@@ -46,7 +46,7 @@ vi.mock('@/platform/gestureHandler', async () => {
   }) };
 });
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff'].map((name) => [name, () => null]),
+  ['Check', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff'].map((name) => [name, () => null]),
 ));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/session/listDisclosureTransition', () => ({ useDisclosurePrepare: () => () => {} }));
@@ -63,7 +63,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let host: HTMLDivElement;
 const controls = {
-  onArchive: vi.fn(), onTogglePin: vi.fn(), onShowOptions: vi.fn(),
+  onMarkRead: vi.fn(), onArchive: vi.fn(), onTogglePin: vi.fn(), onShowOptions: vi.fn(),
   registry: { onRowOpen: vi.fn(), onRowClose: vi.fn(), closeOpenRow: vi.fn() },
 };
 function render(id = 'row') {
@@ -84,15 +84,15 @@ describe('classic swipe row lifecycle', () => {
   it.each([
     ['right', -260, -100, false, 'onArchive'],
     ['right', -260, -260, true, 'onArchive'],
-    ['left', 260, 100, false, 'onTogglePin'],
-    ['left', 260, 260, true, 'onTogglePin'],
+    ['left', 260, 100, false, 'onMarkRead'],
+    ['left', 260, 260, true, 'onMarkRead'],
   ] as const)('uses release position for %s after peak=%s, end=%s', (direction, peak, end, fires, action) => {
     render();
     expect(runtime.listeners.size).toBe(0);
     expect(host.querySelector('button')).toBeNull();
     act(() => runtime.props.onSwipeableOpenStartDrag());
     expect(runtime.listeners.size).toBe(2);
-    expect(host.querySelectorAll('button')).toHaveLength(3);
+    expect(host.querySelectorAll('button')).toHaveLength(4);
     act(() => {
       for (const listener of runtime.listeners.values()) listener({ value: peak });
       runtime.release = end;

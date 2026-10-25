@@ -70,6 +70,90 @@ describe('orcaTeamStore', () => {
     expect(h.runtimeCleanup).not.toHaveBeenCalled();
   });
 
+  it('updates worker identity and rewrites only the generated session title', async () => {
+    const { updateWorkerIdentity } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_workers SET role = ?, label = ? WHERE id = ?', [
+      'developer',
+      'developer-2',
+      'worker-1',
+    ]);
+    await client.exec('UPDATE sessions SET title = ? WHERE id = ?', [
+      'Worker · developer · developer-2',
+      'worker-session-1',
+    ]);
+
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'reviewer-2',
+        previousRole: 'developer',
+        previousLabel: 'developer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
+    ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+    await expect(
+      client.queryOne('SELECT title FROM sessions WHERE id = ?', ['worker-session-1']),
+    ).resolves.toEqual({ title: 'Worker · reviewer · reviewer-2' });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'worker-session-1',
+      patch: { title: 'Worker · reviewer · reviewer-2' },
+    });
+  });
+
+  it('keeps a customized session title and rejects a duplicate label with zero side effects', async () => {
+    const { updateWorkerIdentity } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_workers SET role = ?, label = ? WHERE id = ?', [
+      'developer',
+      'developer-2',
+      'worker-1',
+    ]);
+    await client.exec('UPDATE sessions SET title = ? WHERE id = ?', [
+      'My custom title',
+      'worker-session-1',
+    ]);
+
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'reviewer-2',
+        previousRole: 'developer',
+        previousLabel: 'developer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      client.queryOne('SELECT title FROM sessions WHERE id = ?', ['worker-session-1']),
+    ).resolves.toEqual({ title: 'My custom title' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'worker-session-1',
+      patch: { title: 'Worker · reviewer · reviewer-2' },
+    });
+
+    await client.exec('UPDATE orca_workers SET label = ? WHERE id = ?', ['tester-2', 'worker-2']);
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'tester-2',
+        previousRole: 'reviewer',
+        previousLabel: 'reviewer-2',
+      }),
+    ).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+    await expect(
+      client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
+    ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+  });
+
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
     const { getWorkerLink } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -117,6 +201,31 @@ describe('orcaTeamStore', () => {
       lastBridgedMessageId: 'reply-1', remoteStopConfirmedAt: 1234 });
   });
 
+  // PR #6659 discussion_r4335615412: status and retirement used separate writes.
+  // Real store API + SQLite abort proves they roll back together; a reread after
+  // retry must contain done with no pending to prevent replay after restart. Unit
+  // tier, existing in-memory DB fixture; old cursor tests did not cover status.
+  it('commits remote report retirement and done status atomically', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await store.setWorkerRemoteExecution('worker-1', { deviceId: 'device-b', remoteSessionId: 'remote-1' });
+    const pending = { clientIds: ['c-1'], baselineMessageId: 'old-reply' };
+    await store.updateWorkerStatus('worker-1', 'running');
+    await store.saveWorkerRemoteReport('worker-1', pending);
+    await client.exec(`CREATE TRIGGER reject_retirement BEFORE UPDATE OF pending_remote_report ON orca_workers
+      WHEN NEW.pending_remote_report IS NULL BEGIN SELECT RAISE(ABORT, 'retirement failed'); END`);
+    await expect(store.saveWorkerRemoteReport('worker-1', null, undefined, true)).rejects.toThrow('retirement failed');
+    expect(await client.queryOne('SELECT status, pending_remote_report FROM orca_workers WHERE id = ?', ['worker-1']))
+      .toEqual({ status: 'running', pending_remote_report: JSON.stringify(pending) });
+    await client.exec('DROP TRIGGER reject_retirement');
+    await store.saveWorkerRemoteReport('worker-1', null, undefined, true);
+    expect(await client.queryOne('SELECT status, pending_remote_report FROM orca_workers WHERE id = ?', ['worker-1']))
+      .toEqual({ status: 'done', pending_remote_report: null });
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: null });
+  });
+
   it('does not classify an associated remote open as orphaned even if removing its intent was interrupted', async () => {
     const store = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -127,6 +236,29 @@ describe('orcaTeamStore', () => {
     expect(await store.listOrphanRemoteWorkerOpens()).toHaveLength(0);
     await store.saveRemoteWorkerOpen('device-b', 'orphan-1');
     expect(await store.listOrphanRemoteWorkerOpens()).toEqual([expect.objectContaining({ remoteSessionId: 'orphan-1' })]);
+  });
+
+  // PR #6787, unit: real addRemoteWorker transaction + listWorkersByLead reread.
+  // Existing tests only associated an existing proxy and missed proxy creation.
+  // B executes the task while C supplies the Agent; explicit local / old-host
+  // omission must stay null rather than acquire B's execution-device identity.
+  it.each(['device-c', null, undefined])('retains the remote proxy Agent location %s across a Worker list refresh', async agentDeviceId => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await store.addRemoteWorker({ workerId: 'remote-worker', teamId: 'team-1', proxySessionId: 'remote-proxy',
+      deviceId: 'device-b', remoteSessionId: 'remote-1', label: 'remote', role: 'developer',
+      proxySession: { title: 'Remote', agentKind: 'codex', model: 'remote-model', effort: null,
+        permissionMode: 'auto', fastMode: false,
+        ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+      },
+    });
+    const workers = await store.listWorkersByLead('lead-session-1');
+    expect(workers.find(worker => worker.id === 'remote-worker')).toMatchObject({
+      session: { agentDeviceId: agentDeviceId ?? null },
+      executionDevice: { deviceId: 'device-b', remoteSessionId: 'remote-1' },
+    });
   });
 
   it('keeps a rolled-back remote Worker available for cleanup across database rereads', async () => {
@@ -451,6 +583,7 @@ describe('orcaTeamStore', () => {
         working_dir TEXT,
         workspace_kind TEXT NOT NULL DEFAULT 'project',
         model TEXT NOT NULL DEFAULT 'gpt-5.4',
+        scheduled_model_baseline TEXT,
         effort TEXT NOT NULL DEFAULT 'high',
         permission_mode TEXT NOT NULL DEFAULT 'ask',
         status TEXT NOT NULL DEFAULT 'active',
@@ -540,6 +673,7 @@ describe('orcaTeamStore', () => {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE UNIQUE INDEX uniq_orca_workers_team_label ON orca_workers (team_id, lower(label));
     `);
     const db = drizzle(dbHandle, { schema });
     const client: DbClient = {

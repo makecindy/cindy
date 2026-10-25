@@ -98,7 +98,45 @@ Pi 读取独立的设置页百分比，在每次启动或恢复任务时冻结�
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 
-本机占用 ≥ 100%，或 host／bridge 自动 compact 已确定性失败（空摘要、compact 路径上的
+### 任务级窗口预算（分母）
+
+用户可以在单个任务上选择工作上下文窗口（tokens）：有效窗口 =
+`min(任务预算 ?? 模型级上限, 模型级上限, 目录 contextWindowMax)`，由
+`maker-host/model-context-settings.ts` 的 `resolveConfiguredContextWindow` 解析，经 start options
+（`StartSessionOptions.contextWindowBudget`）下发给引擎：Claude Code 落到
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`／`CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Pi 落到工作窗口与
+`compaction.reserveTokens` 的换算预算，Codex 落到 `model_context_window` 与 90% 压缩线。
+
+它是**分母**，与设置页的自动压缩阈值百分比（**分子／触发点**）正交：改变预算只改变「这个任务
+能用多大窗口」，不改变「在窗口的哪一点压缩」。任务预算不得越过目录声明的物理上限，也不得越过
+用户在同一路由上设过的模型级上限（两者取更紧者）；未自定义的任务完全跟随原判定（老任务零行为
+变化）。
+
+渲染层档位表（`shared/sessionContextWindowBudget.ts` 的 `buildContextWindowBudgetOptions`）给的是
+**模型默认档 + 占有效上限 25%/50%/100% 的比例档**（最多三档，超出时优先保留大比例）：比例档值按
+`round(基准 × 百分比)` 精确换算、不贴 K 网格，低于 `MIN_PERCENT_TIER_TOKENS`（200K）或与默认档
+重合的不出现；100% 档只在有效上限高于默认窗口时出现，保证「开满窗口」不丢。新增引擎或改档位规则时，
+不要退回「写死 256K/512K/1M」的固定阶梯——1.048M/1.05M 这类窗口会让固定档出现「1M 与 1.0M 并列」
+且档数涨到 4~5 档。
+
+档位表的**权威边界**来自 main（本地 `maker:get-context-window-bounds`／远程 device-link 同名 channel，
+被控端自己算）：查询必须携带**界面上正在显示的路由**（`{ agent, providerId, model }`）。同一引擎内换模型是
+延迟切换（发送边界才落库），期间会话行还是旧模型 —— 不带路由会被按旧行回答，档位表与显示值一起停在旧模型上
+（实测：262K 的模型切到 1M 的模型后仍显示 262K）。缓存键也必须含 `providerId`：同一模型跨来源的上限可能不同。
+
+落库后由 main 应用：空闲任务立即关 handle、下一条消息冷重建；回合中登记 pending，回合结束后生效。
+运行期真值仍以引擎上报为准（`sessions.context_window`／`context_window_runtime` 的快照口径不变，
+任务预算不参与快照覆盖）。切模时目标窗口同样按任务预算在**目标路由**上重新收敛，避免旧模型的收敛值
+被沿用。
+
+任务预算存在 main 侧偏好文件（`session-context-budget-store.ts` → owner 隔离 userData 下的
+`session-context-budget-prefs.json`，形如 `{ budgets: { "<sessionId>": tokens } }`，null／缺条目 = 跟随
+模型默认），**不是会话列**：它不影响会话行读取、不参与任何副本同步、也不需要数据库迁移，因此同一条库
+可以在不同版本的包之间自由切换。删除任务时清理条目；fork 时把条目复制给新任务（源未自定义则不动目标，
+新任务继续跟随模型默认而不是快照一个当时的默认值）。远程任务同样由**被控端**读自己的偏好文件并在
+`maker:get-context-window-bounds` 响应里回带（`budget` / `budgetCustomized`）。
+
+Claude Code／Pi 本机占用 ≥ 100%，或 host／bridge 自动 compact 已确定性失败（空摘要、compact 路径上的
 invalid-request 400）时，走
 `host-controlled rollover + model-controlled bounded retrieval`：host 关闭旧原生窗口、写交接并
 在下一次发送前 fresh bootstrap，不再继续 compact。Pi 原生 threshold／overflow compact 出现同类
@@ -109,7 +147,7 @@ upstream idle watchdog 打断静默 `/compact` 时只清 fired，不得在本次
 该锁存只活在当前 live
 controller／进程内；重启后没有 live handle 时不凭估算换窗。Orca 空闲 live 直发必须先走与
 `sendToSessionInternal` 相同的 `prepareUnhealthySession`，不能把消息打进应被关闭的旧窗口。切到更小窗口模型的 `danger`／`overflow`
-预检仍按 `assessModelSwitchContext`，与同模型 compact 解耦。不要关闭 Claude Code SDK 或 Pi 原生
+预检在 Claude Code／Pi 仍按 `assessModelSwitchContext`，与同模型 compact 解耦。不要关闭 Claude Code SDK 或 Pi 原生
 自动压缩。远端 Pi 同样依赖原生 auto-compaction；远端没有本地换窗，确定性失败不得伪装成已交接。
 明确 `context-overflow` 且本轮没有助手输出或
 工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
@@ -129,9 +167,11 @@ Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不�
 带调用关联的文本结果摘要，省略图片数据；伙伴主对话及显式重启也保留这些结果，其他交接沿用原规则。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
-伙伴 canonical 主对话在发送边界达到已知窗口的 90%，或本地 Codex 图片活尾巴实测超限时，
-复用同一持久交接提前重建；保留有界工具结果、按输入取消恢复，后台原生工作未结束时不换窗。
-权限依据为有效 Bot link 与 active Profile；其它任务保留原来的满窗门槛。
+伙伴主对话、话题和 IM 专线与普通 Session 一样依赖原生压缩，不按空闲时长或 70%/90%
+伙伴阈值提前重建，也不在正常压缩后重启实例。Claude Code／Pi 保留普通 Session 共用的
+真实满窗保护；Codex 不按本地 token 占用提前重建，只在明确失败后检测历史并走恢复。
+实际恢复复用持久交接、保留有界工具结果、按输入取消；后台原生工作未结束时不换窗。
+伙伴权限依据仍为有效 Bot link 与 active Profile。
 伙伴下一次发送也识别已记录、明确来自压缩的空摘要／invalid-request 错误；不扩大原生 latch
 规则，不把普通空回复、网络、鉴权或额度错误当作压缩损坏。
 Codex 图片历史重建后，普通用户任务和伙伴主对话可在同一任务内自动续接未完成工作。交接包含原请求
@@ -153,11 +193,21 @@ Codex 图片历史重建后，普通用户任务和伙伴主对话可在同一�
 同引擎切到更小窗口时，main 在实际 send 持有的 session 锁内按目标窗口评估；
 用户发送即同意为最终选择执行必要的上下文整理，不再弹出二次确认。
 仅选择或反复切换模型不构成整理授权；同窗或扩窗不因此触发摘要重建。
-Claude Code／Codex／Pi 的强制换窗线
+Claude Code／Pi 的强制换窗线
 统一固定为目标窗口 90%，与各 harness 的日常 auto-compaction 百分比解耦；Claude Code
 与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
 `danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
 route，不能 resume 旧原生窗口。
+Codex 同引擎切模（包括自动任务、Orca、设备互联与 SSH）保留原生历史，由 Codex 自己判断并执行
+压缩；本地同供应商冷恢复时可先用旧的大窗口模型压缩，再执行目标模型。跨供应商不假定目标凭证
+能调用旧模型；旧模型预算不可用时，原生仍按目标预算在采样前压缩。SSH 的逐 thread 预算也保留
+这条目标模型原生压缩路径，不能因无法使用旧模型而提前拒绝切模。不得仅因目标窗口较小、占用到
+90%／100% 或伙伴账本新鲜而抢先生成 Cindy 交接。窗口预算与用户 override 保持不变；重载模型
+目录或凭证执行句柄不等于重建历史。Cindy 只在明确的上下文超限、原生压缩失败或历史字节超限后
+沿用既有兜底及副作用保护。跨引擎交接和显式重启仍按各自生命周期规则处理；伙伴不再执行空闲间隔刷新。
+真实 CLI 的同供应商、跨供应商与逐 thread 预算回归见
+`apps/desktop/src/main/maker-host/__tests__/codexContextSwitch.native.test.ts`；逐 thread 回归在本机
+模拟服务运行，不代表完成了真实 SSH 端到端验收。
 Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 host、旧 host 仍持有原生 writer
 时，关闭该任务的业务 handle 后使用不剥离历史的原生 fork，并等待一次性 fork host 退出，
 再以任务 owner 与旧 SDK／路由版本为条件原子保存新 SDK thread 和目标路由。任务 ID 与
@@ -242,7 +292,7 @@ HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 S
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
 正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
 先热切再发送。三个 harness 的同模型自动压缩所有权保持不变。token 破了只认：终态超限、
-占用 ≥ 100%、官方 compact 确定性失败；普通 timeout 不算。
+Claude Code／Pi 占用 ≥ 100%、官方 compact 确定性失败；Codex 单纯占用到线和普通 timeout 不算。
 
 Codex 已选远端压缩的本地任务，在原生 `contextCompaction` 生命周期内收到终态失败时，
 只有明确的 HTTP 400/404/405/422/500/501/502/503 拒绝或失败响应，才自动改用同一模型的
@@ -392,6 +442,11 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
   发送失败不重投新 turn。Claude 会把已排队的答案合并为下一 SDK 段：仅在答案已被接收
   时复用现有 continuation claim 保留产品边界，避免提前完成或重复完成；未回答不建 claim。
+  Claude 前台已结束、仍等待后台任务的 continuation 也接受用户插话，送入原 SDK 输入队列；
+  已接收的补充归当前等待段，不能额外制造一个后继 claim，后台任务停止也不能丢弃补充。
+  插话被拒绝不等于产品结束，宿主必须复核实际运行态后才能合成结束边界。
+  回归见 `abort-stops-background-tasks.test.ts`、`background-steer.native.test.ts` 与 Desktop
+  `agent-input-coordinator.test.ts`；原生测试使用真实 CLI 和本地模型端点，不消耗订阅额度。
   Pi 在原生 RPC 排队后再核对执行代次与取消信号，防止答案串到
   下一次执行。Claude 的本机 hook 与远端 root-only guard 禁止原生子代理直接提问；工具
   入口只接受宿主标明 `mcpCallerKind=root` 且 `mcpCallerAttested=true` 的请求，身份未知、
@@ -481,8 +536,49 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 
 ### Desktop Auto 审核的模型回退
 
-Desktop 的 Auto 审核先按固定顺序尝试 `cindy/auto-review`、内置 OpenAI 订阅的
-`gpt-5.4-nano`、`gpt-6-luna`。只有这些候选全部不可用、请求失败或输出无效时，才使用
+2026-10-24 用户确认的分工：模型订阅自带自动审核时优先用它（Claude 订阅用 Claude 原生 Auto，
+ChatGPT 订阅用 Codex Guardian），Cindy 审核只在原生不可用、故障或必须由 Cindy 判断时保底，
+同一次调用不审两次；安全上接受适当放宽换取效率。
+
+Auto 优先效率，定位是防止严重后果，不是第二次任务规划或逐步骤索要授权。
+Cindy 审核向 Codex／Claude 原生审核看齐：先判动作本身的风险（low／medium／high／critical），
+低、中风险直接放行（只受明确限制、访客身份与无关的不可信指令约束），低风险只回
+`{"verdict":"allow"}` 以缩短耗时；只有高风险才看授权，未授权但与任务相关才 `ask`，
+越界或有更安全做法则 `block`；critical 一律 `block`。没有任何用户原话也没有委派时只放行读取。
+相关、有限、可恢复的操作以及同任务截图/文档交付、临时输出路径按完成任务所需步骤判断；
+重点拦重大不可逆损失、凭据泄露、私密数据外发、大额资金、生产破坏与长期安全削弱。
+明确禁止、撤权、访客身份、只读授权和委派范围仍严格生效。审阅器只看到用户原话，看不到
+Agent 的计划与结果：报问题或要求改动即覆盖排查、修改、探针、构建、测试、版本／验证记录和清理
+本任务创建之物等未被点名的步骤，「无法确认这一步在范围内」不构成 ask 或 block 的理由；审阅器
+不判断代码或记录内容的真伪（2026-10-24 真实误判案例见 eval 脚本 `real-*`）。
+模型给出的 `reason` 面向用户：用用户消息的语言写一两句白话、不出现字段名；`ask` 时 harness 用
+`annotatePermissionRequestForAutoReview` 把它写进确认请求 `metadata.autoReviewReason`，桌面、手机、
+IM 与官方 Hook 确认卡统一显示为「自动审批需要你决定：…」，故障降级仍只显示固定文案。共用规则在
+`agents/shared/continuation-policy.ts`，真实模型配对比较入口为 `scripts/eval-auto-approval.mts`
+的 `--baseline-bundle`（隔离打包的旧审核器）；只审核合成操作，不执行副作用。
+
+原生审批已接管的本地工具调用不叠加 Cindy 模型复审，以 Handle 的实时
+`getAutoReviewOwner()` 为准；Codex Guardian 故障切换后恢复 Cindy 负责。
+路径解析暴露不同目标时，由 Cindy 审核 canonical 路径；只有 canonical 路径、
+无法核对原始参数的 Host 回调不享受免复审。
+Claude 订阅的本地会话即使挂了 Host MCP 也保持原生 Auto：原生会跳过 `canUseTool`，由
+`nativeAutoPolicyHook`（PreToolUse，排在其他守卫之后）只把 Cindy 必须判断的调用交回
+`canUseTool`——可信 MCP（由 Host 快捷放行、不调用模型，但插件委派任务仍先复核实时委派范围）、逐次确认的 MCP 与 IM 轮次（原生看不到发起者身份，
+此时 `getAutoReviewOwner()` 返回 `cindy`）一律返回 `ask`，其余只由原生 classifier 判断。
+远程 SSH 与设备托管会话无法在本机执行该 hook，挂 MCP 时仍回落 Cindy；额外目录授权仍回落 Cindy。
+插件委派任务与 Codex 现状一致交给原生审核，不再额外套用 Cindy 的委派范围。
+Codex 的 IM 轮次继续由 Cindy 审核（策略轮次需要 Host 观察每次执行）。
+原生明确拒绝不触发第二次模型判断。独立 Host 操作继续使用自身审批入口。
+
+Browser 的 `action=recipe` 调用复用现有逐次会话审批，不继承整个第一方 server 的静默放行；
+Full Access、Auto、Ask 的含义保持不变。不以配方自报的 read/write 分类免审，用户覆盖层
+也可能改变其实际动作。渐进参数（含 JSON 字符串）、直接工具调用及省略工具名共用
+`maker-host/mcp-tool-approval-policy.ts`，发现和普通浏览器操作沿用原策略；
+不新增配方确认 token 或独立授权状态。回归见 `mcpToolApprovalPolicy.test.ts`。
+
+由 Cindy 负责的 Auto 审核先按固定顺序尝试 `cindy/auto-review`、内置 OpenAI 订阅的
+`codex-auto-review`（Codex 原生审核模型，ChatGPT 账号可调用但不是可选目录模型，候选标
+`catalogExempt`；原 `gpt-5.4-nano` 已不支持 ChatGPT 账号）、`gpt-6-luna`。只有这些候选全部不可用、请求失败或输出无效时，才使用
 系统设置中用户明确自定义的辅助模型链，按已选顺序尝试最多 3 个模型；自动辅助链和
 环境变量辅助链不参与。任一候选返回有效的 `allow`、`block` 或 `ask` 后立即结束，
 不能为了争取放行而继续换模型。全部失败继续交回人工确认。
@@ -543,7 +639,7 @@ Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入
 Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
 Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
 不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
-管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0 与打包运行时 0.153.4，并分别完整保留其默认租户
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0 与 0.159.2（后三者默认租户策略一致），完整保留其默认租户
 策略；未知版本保留原生策略，不能拿旧版本策略覆盖新默认。原生行为验证见
 `agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），
 需显式指定 `CINDY_CODEX_TEST_BINARY`；它使用假模型与假 MCP 验证配置传递和默认策略

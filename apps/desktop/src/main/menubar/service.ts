@@ -560,6 +560,7 @@ export class MenubarService {
       quota: {
         resetsAtMs: Number.isFinite(resetsAtMs) ? resetsAtMs : null,
         todaySpend: Number.isFinite(quota.todaySpend) ? quota.todaySpend : null,
+        dailyLimitEnabled: quota.dailyLimitEnabled,
       },
     };
   }

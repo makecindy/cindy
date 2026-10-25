@@ -7,8 +7,10 @@ import { sessions } from '../localDb/schema.js';
 export function createTaskToolCallAuthorizer(deps: {
   getDb(): Pick<DbClient, 'drizzle'> | null;
   isScopeCurrent(db: Pick<DbClient, 'drizzle'>): boolean;
+  authorizeAction?: ToolCallAuthorizer;
 }): ToolCallAuthorizer {
-  return async ({ sessionId }) => {
+  return async (call) => {
+    const { sessionId } = call;
     if (!sessionId) return { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: '无法识别调用任务。' };
     const db = deps.getDb();
     if (!db) return { ok: false, errorCode: 'HOST_NOT_READY', message: '任务数据尚未就绪。' };
@@ -18,6 +20,6 @@ export function createTaskToolCallAuthorizer(deps: {
     // Archive changes list visibility; an already-running turn may still finish.
     if (!task || (task.status !== 'active' && task.status !== 'archived'))
       return { ok: false, errorCode: 'TASK_UNAVAILABLE', message: '调用任务已删除或不存在。' };
-    return { ok: true };
+    return deps.authorizeAction ? deps.authorizeAction(call) : { ok: true };
   };
 }

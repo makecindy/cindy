@@ -46,7 +46,9 @@ const STORAGE_KEY = 'xdt:providerModelMemory:v2';
 /** 历史单槽版本 key —— 冷启动迁移源(只读,不再写)。 */
 const LEGACY_STORAGE_KEY_V1 = 'xdt:providerModelMemory:v1';
 /** v2 schema 内的保留来源 id:同一 agent 下跨真实 provider 共享的模型级预设槽。 */
-export const MODEL_PRESET_SLOT_ID = '*';
+// 定义在 modelConfigCopy(配置副本的归一化要拒绝它),这里 re-export 给既有消费方。
+import { MODEL_PRESET_SLOT_ID } from './modelConfigCopy';
+export { MODEL_PRESET_SLOT_ID };
 
 let activeDataOwnerId: string | null = null;
 
@@ -66,7 +68,7 @@ function storageKey(): string {
 interface ProviderMemory {
   lastModel: string;
   effortByModel: Record<string, Effort>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
   thinkingByModel: Record<string, boolean>;
 }
 
@@ -106,7 +108,7 @@ function agentOfSlotKey(key: string): AgentKind | undefined {
  */
 function backfillGlobalPresets(map: Record<string, ProviderMemory>): Record<string, ProviderMemory> {
   const presetEffort = new Map<string, Record<string, Effort>>();
-  const presetFast = new Map<string, Record<string, boolean>>();
+  const presetFast = new Map<string, Record<string, boolean | 'ultrafast'>>();
   const presetThinking = new Map<string, Record<string, boolean>>();
   for (const [key, slot] of Object.entries(map)) {
     const agent = agentOfSlotKey(key);
@@ -147,7 +149,7 @@ function backfillGlobalPresets(map: Record<string, ProviderMemory>): Record<stri
   for (const [presetKey, effort] of presetEffort) {
     const existing = out[presetKey];
     const nextEffort: Record<string, Effort> = { ...(existing?.effortByModel ?? {}) };
-    const nextFast: Record<string, boolean> = { ...(existing?.fastByModel ?? {}) };
+    const nextFast: Record<string, boolean | 'ultrafast'> = { ...(existing?.fastByModel ?? {}) };
     const nextThinking: Record<string, boolean> = { ...(existing?.thinkingByModel ?? {}) };
     // 三个维度必须**逐个**合并:写成 `merge(a) || merge(b) || merge(c)` 会因为短路
     // 在第一个命中后就跳过剩下的 —— 只回填 effort 而漏掉 fast / thinking,与回填本身
@@ -198,10 +200,10 @@ function sanitize(raw: unknown): Record<string, ProviderMemory> {
         if (mid && typeof eff === 'string' && eff.length > 0) effortByModel[mid] = eff as Effort;
       }
     }
-    const fastByModel: Record<string, boolean> = {};
+    const fastByModel: Record<string, boolean | 'ultrafast'> = {};
     if (rec.fastByModel && typeof rec.fastByModel === 'object' && !Array.isArray(rec.fastByModel)) {
       for (const [mid, fb] of Object.entries(rec.fastByModel as Record<string, unknown>)) {
-        if (mid && typeof fb === 'boolean') fastByModel[mid] = fb;
+        if (mid && (typeof fb === 'boolean' || fb === 'ultrafast')) fastByModel[mid] = fb;
       }
     }
     const thinkingByModel: Record<string, boolean> = {};
@@ -297,7 +299,7 @@ type ProviderMemoryOp =
       effort: Effort;
     }
   | { kind: 'set-last-model'; agent: AgentKind; providerId: string; model: string }
-  | { kind: 'set-fast'; agent: AgentKind; providerId: string; model: string; enabled: boolean }
+  | { kind: 'set-fast'; agent: AgentKind; providerId: string; model: string; enabled: boolean | 'ultrafast' }
   | { kind: 'set-thinking'; agent: AgentKind; providerId: string; model: string; enabled: boolean }
   | { kind: 'clear-effort'; agent: AgentKind; providerId: string; model: string }
   | { kind: 'clear-fast'; agent: AgentKind; providerId: string; model: string };
@@ -850,7 +852,7 @@ export function getProviderModelFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-): boolean | undefined {
+): boolean | 'ultrafast' | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
   return (
@@ -865,7 +867,7 @@ export function setProviderModelFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-  enabled: boolean,
+  enabled: boolean | 'ultrafast',
 ): void {
   if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
   const map = freshMap();
@@ -921,7 +923,7 @@ function withModelKey<K extends 'effortByModel' | 'fastByModel' | 'thinkingByMod
     [slotKey]: {
       lastModel: slot?.lastModel ?? '',
       effortByModel: field === 'effortByModel' ? (nextField as Record<string, Effort>) : slot?.effortByModel ?? {},
-      fastByModel: field === 'fastByModel' ? (nextField as Record<string, boolean>) : slot?.fastByModel ?? {},
+      fastByModel: field === 'fastByModel' ? (nextField as Record<string, boolean | 'ultrafast'>) : slot?.fastByModel ?? {},
       thinkingByModel:
         field === 'thinkingByModel' ? (nextField as Record<string, boolean>) : slot?.thinkingByModel ?? {},
     },

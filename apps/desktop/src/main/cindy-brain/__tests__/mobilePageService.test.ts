@@ -504,6 +504,8 @@ it('projects optional Host ordering facts without changing legacy lists on metad
 });
 
 
+// The real get projection must retain semantic icon keys alongside localized copy;
+// checking both prevents controllers from having to infer permission kinds from text.
 it('projects PC permission facts in the phone locale, excludes tools and keeps OAuth scopes', async () => {
   const h = setup();
   h.ghost.manifest.tools = [{name: 'calendar_events', description: 'Read events', parameters: {type: 'object'}}];
@@ -518,10 +520,14 @@ it('projects PC permission facts in the phone locale, excludes tools and keeps O
     ref: {collectionId: 'plugins', kind: 'plugin', id: 'practice'},
     client: {protocolVersion: 1, primitives: ['plugin-capabilities'], locale: 'zh-CN'},
   });
-  const facts = detail.blocks?.find(block => block.id === 'capabilities')?.data as {tools: unknown[]; permissions: Array<{title: string; description: string}>};
+  const facts = detail.blocks?.find(block => block.id === 'capabilities')?.data as {tools: unknown[]; permissions: Array<{kind?: string; labelKey?: string; title: string; description: string}>};
   expect(facts.tools).toEqual([{name: 'calendar_events', description: 'Read events'}]);
-  expect(facts.permissions.some(item => item.title.includes('calendar.example'))).toBe(true);
-  expect(facts.permissions.some(item => item.description.includes('calendar.read'))).toBe(true);
+  expect(facts.permissions.find(item => item.title.includes('calendar.example'))).toMatchObject({
+    kind: 'network', labelKey: 'networkHost',
+  });
+  expect(facts.permissions.find(item => item.description.includes('calendar.read'))).toMatchObject({
+    kind: 'network', labelKey: 'networkSecretOauth',
+  });
   expect(JSON.stringify(facts.permissions)).not.toContain('calendar_events');
   expect(JSON.stringify(facts.permissions)).not.toContain('public-client-id');
   expect(JSON.stringify(facts.permissions)).not.toContain('settings.ghosts.perm');

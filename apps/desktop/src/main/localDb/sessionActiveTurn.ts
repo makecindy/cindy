@@ -426,8 +426,8 @@ export async function listInterruptedPendingSessionIds(): Promise<string[]> {
  *  1. content 是 TEXT 列而非 JSON 列,可能存非法 JSON(见 mergeDismissedIntoErrorContent
  *     的 fallback 分支)。json_extract 遇非法 JSON 直接抛 malformed JSON,故先用
  *     json_valid 守卫,非法内容按「未 dismissed」处理 —— 宁可多提示一次,不吞掉报错。
- *  2. 「最后一条」用 (created_at, rowid) 双键严格大于,同毫秒靠插入序区分,并且两侧
- *     都要 rewind_at IS NULL —— 漏掉会把已被 rewind 截断的历史行当成尾行。口径与
+ *  2. 「最后一条」按 (created_at DESC, rowid DESC) 取一行,同毫秒靠插入序区分,
+ *     必须过滤 rewind_at IS NULL —— 漏掉会把已被 rewind 截断的历史行当成尾行。口径与
  *     hasAssistantProgressAfterMessage 完全一致。
  *  3. **必须带 /clear 可见性边界**(created_at > cleared_at):`/clear` 不删消息行,
  *     只推进 sessions.cleared_at,消息读取路径靠它把旧历史挡在视图外。漏掉这条会
@@ -443,29 +443,27 @@ export async function listErrorTailPendingRows(): Promise<
   const db = getDbClient().drizzle;
   const rows = await db
     .select({ sessionId: messages.sessionId, clientId: messages.clientId })
-    .from(messages)
-    .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+    .from(sessions)
+    // 从每个可见会话按既有 (session_id, created_at) 索引取尾行,再用 rowid 定点读取。
+    // 不能从全局 error 候选出发:SQLite 可能选 rewind_at 索引扫描全部未 rewind 消息 (#6513)。
+    .innerJoin(messages, sql`${sql.raw('"messages"."rowid"')} = (
+      SELECT tail.rowid FROM messages tail
+      WHERE tail.session_id = ${sessions.id}
+        AND tail.rewind_at IS NULL
+        AND tail.created_at > COALESCE(${sessions.clearedAt}, 0)
+      ORDER BY tail.created_at DESC, tail.rowid DESC
+      LIMIT 1
+    )`)
     .where(
       and(
         eq(sessions.status, 'active'),
         inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
         isNull(sessions.hiddenAt),
+        // 先取可见尾行,再判 role/dismissed;不能回退到更早的未处理 error。
         eq(messages.role, 'error'),
-        isNull(messages.rewindAt),
-        // /clear 可见性边界(见上方 ⚠️ 3):clear 之前的行在视图里已不可见,不能算告警。
-        gt(messages.createdAt, sql`COALESCE(${sessions.clearedAt}, 0)`),
         // 顶层 dismissed:true = 用户点过「忽略」(mergeDismissedIntoErrorContent 写入)。
         sql`(json_valid(${messages.content}) = 0
           OR json_extract(${messages.content}, '$.dismissed') IS NOT 1)`,
-        // 该 error 行必须是会话尾行(见上方 ⚠️ 2)。
-        sql`NOT EXISTS (
-          SELECT 1 FROM messages m2
-          WHERE m2.session_id = ${messages.sessionId}
-            AND m2.rewind_at IS NULL
-            AND (m2.created_at > ${messages.createdAt}
-              OR (m2.created_at = ${messages.createdAt}
-                AND m2.rowid > ${sql.raw('"messages"."rowid"')}))
-        )`,
       ),
     );
   // 尾行判定保证每会话最多一行(同毫秒同 rowid 不可能并存)。

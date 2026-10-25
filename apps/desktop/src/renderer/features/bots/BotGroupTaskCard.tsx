@@ -20,8 +20,8 @@ export function BotGroupTaskCard({ task, owned, botId }: { task: BotGroupTaskCar
   const cloud = useCompanionCloud();
   if (owned && botId !== null && companionRunsHere(cloud, profiles.map((bot) => bot.id), botId)) {
     return (
-      <div data-testid="bot-group-task" data-state={task.state} className="my-1 max-w-[520px]">
-        <BotTaskCard card={task.meta} sessionId={task.meta.parentSessionId ?? undefined} />
+      <div data-testid="bot-group-task" data-state={task.state} className="min-w-0 max-w-full">
+        <BotTaskCard card={task.meta} sessionId={task.meta.parentSessionId ?? undefined} inset />
       </div>
     );
   }
@@ -30,11 +30,11 @@ export function BotGroupTaskCard({ task, owned, botId }: { task: BotGroupTaskCar
     <div
       data-testid="bot-group-task"
       data-state={task.state}
-      className="my-1 flex min-w-0 max-w-[520px] items-start gap-2.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
+      className="flex w-fit min-w-0 max-w-full items-start gap-2.5 rounded-lg bg-[var(--surface)] px-3 py-2"
     >
       <ListTodo size={14} aria-hidden className="mt-[5px] shrink-0 text-[var(--text-tertiary)]" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-14 leading-6 text-[var(--text-primary)]">{task.title}</span>
+        <span className="truncate text-13 font-medium leading-6 text-[var(--text-primary)]">{task.title}</span>
         <span className="min-w-0 break-words text-12 leading-5 text-[var(--text-tertiary)]">
           {task.state === 'waiting' && task.summary ? `${state} · ${task.summary}` : state}
         </span>

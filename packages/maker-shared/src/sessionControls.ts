@@ -14,7 +14,7 @@ export interface SessionControlsSessionLike {
   contextTokens?: number;
   contextWindow?: number;
   effort?: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   model: string;
   permissionMode: string;
   status: 'active' | 'archived' | 'deleted' | string;

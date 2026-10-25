@@ -272,9 +272,9 @@ describe('companion invitation with SQLite and real skill files', () => {
     expect(h.generate).not.toHaveBeenCalled();
     const { message, persistedContent } = h.welcome.mock.calls[0]![0];
     expect(message).toContain(`Write the entire greeting in ${expectedLocale},`);
-    expect(message).toContain('3–4 short paragraphs separated by blank lines');
-    expect(message).toContain('coding, making games, automating repetitive work');
-    expect(message).toContain('where your memory settings allow');
+    expect(message).toContain('using paragraph breaks where they read naturally');
+    expect(message).toContain('fit your own role and responsibilities');
+    expect(message).toContain('Mention learning or memory only when directly useful');
     expect(message).toContain('do not call tools, inspect history or start work');
     expect(message.startsWith('[UI_ACTION_TRIGGER]')).toBe(true);
     expect(persistedContent).toBe(message);
@@ -744,7 +744,7 @@ describe('Bot Market package opening', () => {
     await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.welcome).toHaveBeenCalledOnce();
     expect(h.createMessage).not.toHaveBeenCalled();
-    expect(h.welcome.mock.calls[0]![0].message).toContain('making games');
+    expect(h.welcome.mock.calls[0]![0].message).toContain('introduce the help that fits your role');
   });
 });
 

@@ -1,12 +1,26 @@
 {
   "id": "bluesky-user-posts",
-  "match": ["bsky.app"],
-  "description": "拉取某个 Bluesky 账号的最新公开帖子(正文/点赞/转发/回复/时间)。走 AT-proto 公开只读 API,无需登录。输入键 username 填账号 handle,如 bsky.app、jay.bsky.team。",
-  "inputs": { "username": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor={{username|url}}&limit=25" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "bsky.app"
   ],
-  "output": "{{json}}"
+  "description": "Get recent posts from a Bluesky user",
+  "access": "read",
+  "adapter": "bluesky/user",
+  "adapterInputMap": {
+    "username": "handle"
+  },
+  "inputs": {
+    "username": {
+      "required": true,
+      "type": "str",
+      "description": "Bluesky handle (e.g. bsky.app)"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of posts"
+    }
+  },
+  "steps": []
 }

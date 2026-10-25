@@ -650,6 +650,114 @@ describe('gitExec dubious-ownership safe.directory', () => {
     for (let i = 0; i < 20; i += 1) await Promise.resolve();
   }
 
+  // PR #6544: caller deadlines must include ownership repair, not restart for
+  // config/read/add/retry. Existing timeoutMs tests cover only individual steps.
+  // Production entry gitExec, unit tier: virtual 4999ms realpath + slow repair.
+  it.each(['read', 'add', 'retry'])('shares the absolute deadline through ownership %s', async (stage) => {
+    setPlatform('linux');
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation(async (_lp, _opts, task) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return task({ held: true });
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    let failure: unknown;
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 5_001, deadlineAtMs: 10_000 })
+      .catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(4_000);
+      cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+      await vi.advanceTimersByTimeAsync(500);
+      if (stage !== 'read') {
+        await vi.advanceTimersByTimeAsync(100);
+        cbs[1](Object.assign(new Error('absent'), { code: 1 }), '', '');
+        await flushDeep();
+      }
+      if (stage === 'retry') {
+        await vi.advanceTimersByTimeAsync(100);
+        cbs[2](null, '', '');
+        await flushDeep();
+      }
+      await vi.advanceTimersByTimeAsync(10_000 - performance.now());
+      expect(failure).toMatchObject({ timedOut: true });
+      await pending;
+      expect(calls).toHaveLength(stage === 'read' ? 2 : stage === 'add' ? 3 : 4);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cbs.at(-1)?.(null, '/repo\n', '');
+      await vi.runAllTimersAsync();
+      await pending;
+    }
+  });
+
+  it.each([false, true])('caps lock waiting and never starts config after expiry (held=%s)', async (held) => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation(async (_lp, opts, task) => {
+      await new Promise((resolve) => setTimeout(resolve, opts.waitMs));
+      return task({ held, reason: held ? undefined : 'busy' });
+    });
+    let failure: unknown;
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 10_000, deadlineAtMs: 10_000 })
+      .catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(9_999);
+      cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(failure).toMatchObject({ timedOut: true });
+      expect(mocks.withCrossProcessLock.mock.calls[0][1].waitMs).toBe(1);
+      expect(calls).toEqual([['rev-parse']]);
+      await pending;
+    } finally {
+      await vi.runAllTimersAsync();
+      await pending;
+    }
+  });
+
+  it('completes ownership repair and retry within the shared deadline', async () => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation(async (_lp, _opts, task) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return task({ held: true });
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    const pending = gitExec(['rev-parse'], '/repo', { timeoutMs: 5_001, deadlineAtMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(4_000);
+    cbs[0](new Error('dubious'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(100);
+    cbs[1](Object.assign(new Error('absent'), { code: 1 }), '', '');
+    await flushDeep();
+    await vi.advanceTimersByTimeAsync(100);
+    cbs[2](null, '', '');
+    await flushDeep();
+    await vi.advanceTimersByTimeAsync(100);
+    cbs[3](null, '/repo\n', '');
+    await expect(pending).resolves.toEqual({ stdout: '/repo\n', stderr: '' });
+    expect(calls).toEqual([
+      ['rev-parse'],
+      ['config', '--global', '--get-all', 'safe.directory'],
+      ['config', '--global', '--add', 'safe.directory', '/repo'],
+      ['rev-parse'],
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects an expired deadline before starting a Git process', async () => {
+    const { calls, cbs } = installSequenceMock();
+    let failure: unknown;
+    const pending = gitExec(['status'], '/repo', { deadlineAtMs: performance.now() })
+      .catch((error) => { failure = error; });
+    try {
+      await flushDeep();
+      expect(failure).toMatchObject({ timedOut: true });
+      expect(calls).toHaveLength(0);
+      await pending;
+    } finally {
+      cbs.at(-1)?.(null, '', '');
+      await pending;
+    }
+  });
+
   it.each(['read', 'add', 'retry'])('bounds the safe.directory %s stage with the caller timeout', async (stage) => {
     setPlatform('linux');
     const { calls, cbs } = installSequenceMock();

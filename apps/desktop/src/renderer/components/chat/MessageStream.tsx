@@ -1,7 +1,9 @@
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
+import { historyAfter } from './historyAfter';
 import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
 export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
@@ -366,7 +368,6 @@ import {
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
-import { AgentOnOtherDeviceContext } from './AgentOnOtherDeviceContext';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -438,6 +439,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  historyVisibleAfter?: number;
+  onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
@@ -449,8 +452,6 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
-  /** 任务的 Agent 在另一台电脑运行(消息级分叉暂不可用)。 */
-  agentOnOtherDevice?: boolean;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
@@ -475,6 +476,8 @@ interface MessageStreamProps {
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
+  /** The ongoing call appears only in its transcript popover, including history replays. */
+  activeVoiceCallId?: string | null;
   /** This task's preparation card is shown in the composer, including after history reload. */
   cindyMakeSessionId?: string;
   cindyMakeCompletionInComposer?: boolean;
@@ -1535,6 +1538,7 @@ export function buildRenderItems(
     historyArtifacts?: readonly import('@cindy/maker-shared/message-window').HistoryFileArtifact[];
     /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
     botSessionId?: string;
+    activeVoiceCallId?: string | null;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
     markdownImageTargetCache?: MarkdownImageTargetCache;
     /** Keep the stored preparation report out of its own task's visible timeline. */
@@ -1551,6 +1555,9 @@ export function buildRenderItems(
   // shared store for the dialog to observe, but never enter the chat timeline.
   allMessages = allMessages.filter(
     (message) =>
+      // History snapshots bypass the task view's raw-list filter. Keep this
+      // rule at the shared render boundary, before time/turn/work grouping.
+      isVisibleVoiceCallMessage(message, opts?.activeVoiceCallId) &&
       message.systemCardData?.modalOnly !== true &&
       !(opts?.cindyMakeCompletionInComposer && isCindyMakeCompletionMessage(message)) &&
       !isCindyMakePreparationMessage(message, opts?.cindyMakeSessionId),
@@ -2451,6 +2458,7 @@ export function buildCachedRenderItems(
     opts?.turnChangeSets,
     opts?.workingDir,
     opts?.botSessionId,
+    opts?.activeVoiceCallId,
     opts?.subagentRunStatuses,
     opts?.historyArtifacts,
     opts?.cindyMakeSessionId,
@@ -2484,8 +2492,17 @@ export function buildCachedRenderItems(
 
 /** Build the displayed remote history without evaluating the raw transcript fallback. */
 export function buildMessageStreamRenderProjection({
-  historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
-  taskUpdates, ghostCardSnapshot, renderOptions, generatedFilesItemCache, buildRaw,
+  historyView,
+  historySnapshot,
+  historyLiveMessages,
+  isSessionStreaming,
+  handoff,
+  taskUpdates,
+  ghostCardSnapshot,
+  renderOptions,
+  generatedFilesItemCache,
+  historyProjection,
+  buildRaw,
 }: {
   historyView: HistoryViewController<HistoryChatMessage> | null | undefined;
   historySnapshot: HistoryViewSnapshot<HistoryChatMessage> | null;
@@ -2496,71 +2513,109 @@ export function buildMessageStreamRenderProjection({
   ghostCardSnapshot?: Parameters<typeof buildRenderItems>[2];
   renderOptions?: Parameters<typeof buildRenderItems>[3];
   generatedFilesItemCache: Map<string, GeneratedFilesRenderItemRef>;
+  /** Mounted-view cache for ready history, separate from the raw fallback. */
+  historyProjection?: ReturnType<typeof createStreamingMessageProjection>;
   buildRaw: () => RenderProjection;
 }): RenderProjection {
   if (historyView && historySnapshot?.ready) {
-    // Build only the displayed projection; the raw fallback is lazy below.
-    const results = new Map<string, string>();
-    const items = renderHistoryView<HistoryChatMessage, RenderItem>({
-      view: historyView,
-      snapshot: historySnapshot,
-      liveMessages: historyLiveMessages,
-      streaming: isSessionStreaming,
-      isLive: (row) => row.isStreaming === true,
-      pendingHandoff: handoff?.pending,
-      staleTail: handoff?.tail,
-      isLocalMessage: (row) => row.isLocalSystemCard === true,
-      isLocalUser: (row) =>
-        row.role === 'user' &&
-        (row.isPendingPersist === true ||
-          !!row.blockedByGhost ||
-          !!row.localSendPrecedingClientIds),
-      build: (rows, _streaming, historyArtifacts) => {
-        // History chunks are freshly assembled arrays, not reusable source snapshots.
-        const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
-          ...renderOptions,
-          historyWindowIncomplete: true,
-          historyArtifacts,
-        });
-        for (const [key, value] of chunk.singleResultMap) results.set(key, value);
-        return groupWorkRuns(chunk.items, isSessionStreaming);
-      },
-      structure: {
-        placeholder: (summary) => ({
-          id: summary.firstMessageId,
-          clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
-          role: 'thinking',
-          content: '',
-          createdAt: new Date(summary.startedAtMs).toISOString(),
-          thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
-          thinkingRedacted: true,
-          isStreaming: summary.isStreaming,
-        }),
-        children: (item) => (item.type === 'work_group' ? item.children : undefined),
-        sourceIds: (item) =>
-          item.type === 'message'
-            ? [item.message.clientId]
-            : item.type === 'tool_segment'
-              ? item.toolCalls.map((tool) => tool.clientId)
-              : item.type === 'agent_task' && item.toolCall
-                ? [item.toolCall.clientId]
-                : [],
-        rebuild: (item, children, deferred) =>
-          item.type === 'work_group'
-            ? { ...item, children: children as WorkGroupChildItem[], deferred }
-            : item,
-      },
-    });
-    const keys = new Set<string>();
-    const unique = items.filter((item) => {
-      if (keys.has(item.key)) return false;
-      keys.add(item.key);
-      return true;
-    });
-    return {
-      items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCache),
-      singleResultMap: results,
+    const buildHistory = (): RenderProjection => {
+      // Build only the displayed projection; the raw fallback is lazy below.
+      const results = new Map<string, string>();
+      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
+        view: historyView,
+        snapshot: historySnapshot,
+        liveMessages: historyLiveMessages,
+        streaming: isSessionStreaming,
+        isLive: (row) => row.isStreaming === true,
+        pendingHandoff: handoff?.pending,
+        staleTail: handoff?.tail,
+        isLocalMessage: (row) => row.isLocalSystemCard === true,
+        isLocalUser: (row) =>
+          row.role === 'user' &&
+          (row.isPendingPersist === true ||
+            !!row.blockedByGhost ||
+            !!row.localSendPrecedingClientIds),
+        build: (rows, _streaming, historyArtifacts) => {
+          // History chunks are freshly assembled arrays, not reusable source snapshots.
+          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
+            ...renderOptions,
+            historyWindowIncomplete: true,
+            historyArtifacts,
+          });
+          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
+          return groupWorkRuns(chunk.items, isSessionStreaming);
+        },
+        structure: {
+          placeholder: (summary) => ({
+            id: summary.firstMessageId,
+            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
+            role: 'thinking',
+            content: '',
+            createdAt: new Date(summary.startedAtMs).toISOString(),
+            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
+            thinkingRedacted: true,
+            isStreaming: summary.isStreaming,
+          }),
+          children: (item) => (item.type === 'work_group' ? item.children : undefined),
+          sourceIds: (item) =>
+            item.type === 'message'
+              ? [item.message.clientId]
+              : item.type === 'tool_segment'
+                ? item.toolCalls.map((tool) => tool.clientId)
+                : item.type === 'agent_task' && item.toolCall
+                  ? [item.toolCall.clientId]
+                  : [],
+          rebuild: (item, children, deferred) =>
+            item.type === 'work_group'
+              ? { ...item, children: children as WorkGroupChildItem[], deferred }
+              : item,
+        },
+      });
+      const keys = new Set<string>();
+      const unique = items.filter((item) => {
+        if (keys.has(item.key)) return false;
+        keys.add(item.key);
+        return true;
+      });
+      return {
+        items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCache),
+        singleResultMap: results,
+      };
     };
+    if (!historyProjection) return buildHistory();
+    const tail = historyLiveMessages.at(-1);
+    return historyProjection(
+      historyLiveMessages,
+      [
+        getDataOwnerGeneration(),
+        historyView,
+        historySnapshot,
+        isSessionStreaming,
+        taskUpdates,
+        ghostCardSnapshot,
+        ghostCardSnapshot?.version,
+        renderOptions?.sessionId,
+        renderOptions?.turnChangeSets,
+        renderOptions?.workingDir,
+        renderOptions?.botSessionId,
+        renderOptions?.activeVoiceCallId,
+        renderOptions?.subagentRunStatuses,
+        renderOptions?.cindyMakeSessionId,
+        renderOptions?.cindyMakeCompletionInComposer,
+        handoff?.pending.size,
+        ...(handoff?.pending ?? []),
+        handoff?.tail.size,
+        ...(handoff?.tail ?? []),
+      ],
+      buildHistory,
+      // Already-grouped history can only replace a standalone unsealed tail.
+      // Bot ordering and completed-answer grouping remain content dependent.
+      isSessionStreaming &&
+        !renderOptions?.botSessionId &&
+        !!tail &&
+        !isCompletedAssistantMessage(tail),
+      true,
+    );
   }
   const built = buildRaw();
   return {
@@ -2912,6 +2967,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       childItems={childItems}
       compact={compact}
       deferred={item.deferred}
+      fitHeader={Boolean(replyColumnSpacer)}
     />
   );
   return (
@@ -2931,11 +2987,12 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
 });
 
 export function MessageStream({
+  onAskInSideChat,
+  historyVisibleAfter,
   sessionId,
   sessionTitle,
   agentKind,
   remoteHostId,
-  agentOnOtherDevice = false,
   sessionSource,
   workingDir,
   assistantAvatar,
@@ -2943,6 +3000,7 @@ export function MessageStream({
   botUnreadBoundaryAt = null,
   onBotReadThrough,
   messages,
+  activeVoiceCallId = null,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
   historyLoaded,
@@ -2954,7 +3012,7 @@ export function MessageStream({
   continuationInFlightProjectionCapability = 'unknown',
   onLoadMore,
   isLoadingMore,
-  hasMoreMessages,
+  hasMoreMessages: fullHasMoreMessages,
   historyWindowHasIsland = false,
   bottomPadding,
   bottomCenterClearanceOffset,
@@ -2970,11 +3028,14 @@ export function MessageStream({
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
   const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
-  const historySnapshot = useSyncExternalStore(
+  const fullHistorySnapshot = useSyncExternalStore(
     historyView?.subscribe ?? (() => () => undefined),
     historyView?.getSnapshot ?? (() => null),
     historyView?.getSnapshot ?? (() => null),
   );
+  const historySnapshot = useMemo(() => historyAfter(fullHistorySnapshot, historyVisibleAfter), [fullHistorySnapshot, historyVisibleAfter]);
+  const hasMoreMessages = historyVisibleAfter !== undefined && historySnapshot
+    ? historySnapshot.hasMore : fullHasMoreMessages;
   const displayMessages = useMemo(() => {
     if (!historySnapshot) return messages;
     const historyIds = new Set(
@@ -3197,6 +3258,7 @@ export function MessageStream({
     [metadataMessages],
   );
   const streamProjection = useMemo(createStreamingMessageProjection, [sessionId]);
+  const historyProjection = useMemo(createStreamingMessageProjection, [sessionId]);
   const workGroupProjection = useMemo(createStreamingWorkGroupProjection, [sessionId]);
   const renderMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
   const visibleMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
@@ -3215,10 +3277,12 @@ export function MessageStream({
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => buildMessageStreamRenderProjection({
     historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
     taskUpdates, ghostCardSnapshot,
+    historyProjection,
     generatedFilesItemCache: generatedFilesItemCacheRef.current,
     renderOptions: {
       sessionId, turnChangeSets, workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
+      activeVoiceCallId,
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
       cindyMakeSessionId, cindyMakeCompletionInComposer, subagentRunStatuses,
     },
@@ -3235,6 +3299,7 @@ export function MessageStream({
         turnChangeSets,
         workingDir,
         simplifiedBotConversation,
+        activeVoiceCallId,
         sessionId,
         cindyMakeSessionId,
         cindyMakeCompletionInComposer,
@@ -3249,6 +3314,7 @@ export function MessageStream({
           turnChangeSets,
           workingDir,
           botSessionId: simplifiedBotConversation ? sessionId : undefined,
+          activeVoiceCallId,
           markdownImageTargetCache: markdownImageTargetCacheRef.current,
           cindyMakeSessionId,
           cindyMakeCompletionInComposer,
@@ -3258,6 +3324,7 @@ export function MessageStream({
     ),
   }), [
     displayMessages,
+    activeVoiceCallId,
     cindyMakeSessionId,
     cindyMakeCompletionInComposer,
     historyView,
@@ -3276,6 +3343,7 @@ export function MessageStream({
     simplifiedBotConversation,
     sessionId,
     streamProjection,
+    historyProjection,
   ]);
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMetadataMessages),
@@ -6365,14 +6433,13 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
-      <AgentOnOtherDeviceContext.Provider value={agentOnOtherDevice}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <ImageGalleryContext.Provider value={sessionImageSrcs}>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} />
+              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
@@ -6548,7 +6615,7 @@ export function MessageStream({
                           item={item}
                           context={workGroupRenderContext}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
-                          // 完成后收成「已工作 Xs」，不另走 compact 分支。
+                          // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
                           replyColumnSpacer={botReplyColumnSpacer}
                         />
@@ -6678,7 +6745,11 @@ export function MessageStream({
                         }
                       : {};
                     if (simplifiedBotConversation) {
-                      const groupTimestamp = botMessageTimeGroups.get(msg.clientId);
+                      // Call cards carry their own date/time in the compact header.
+                      const groupTimestamp =
+                        msg.systemCardType === 'voice-call'
+                          ? undefined
+                          : botMessageTimeGroups.get(msg.clientId);
                       const startsUnread = botUnreadBoundaryClientId === msg.clientId;
                       return (
                         <div
@@ -6798,7 +6869,6 @@ export function MessageStream({
           </div>
         </ImageGalleryContext.Provider>
       </GhostFulfillmentContext.Provider>
-      </AgentOnOtherDeviceContext.Provider>
     </ChatSessionFileProvider>
   );
 }
@@ -6938,34 +7008,45 @@ const MessageItem = memo(function MessageItem({
   switch (message.role) {
     case 'user':
       return (
-        <UserMessage
-          sharedAuthorName={message.sharedAuthorName}
-          sharedAuthorMemberId={message.sharedAuthorMemberId}
-          workingDir={workingDir}
-          content={message.content}
-          quotesEncoded={message.quotesEncoded}
-          agentReferences={message.agentReferences}
-          pastedTextRanges={message.pastedTextRanges}
-          slashCommandRanges={message.slashCommandRanges}
-          images={message.images}
-          files={message.files}
-          createdAt={message.createdAt}
-          sessionId={sessionId}
-          agentKind={agentKind}
-          remoteHostId={remoteHostId}
-          messageClientId={message.clientId}
-          sessionRunning={sessionRunning}
-          isFirstUserMessage={isFirstUserMessage}
-          isLastUserMessage={isLastUserMessage}
-          automationOrigin={message.automationOrigin}
-          hookSource={message.hookSource}
-          sourceDevice={message.sourceDevice}
-          sourcePlugin={message.sourcePlugin}
-          delivery={message.delivery}
-          goalBadge={message.goalBadge}
-          blockedByGhost={message.blockedByGhost}
-          simplifiedBotConversation={simplifiedBotConversation}
-        />
+        <>
+          <UserMessage
+            sharedAuthorName={message.sharedAuthorName}
+            sharedAuthorMemberId={message.sharedAuthorMemberId}
+            workingDir={workingDir}
+            content={message.content}
+            quotesEncoded={message.quotesEncoded}
+            agentReferences={message.agentReferences}
+            pastedTextRanges={message.pastedTextRanges}
+            slashCommandRanges={message.slashCommandRanges}
+            images={message.images}
+            files={message.files}
+            createdAt={message.createdAt}
+            sessionId={sessionId}
+            agentKind={agentKind}
+            remoteHostId={remoteHostId}
+            messageClientId={message.clientId}
+            sessionRunning={sessionRunning}
+            isFirstUserMessage={isFirstUserMessage}
+            isLastUserMessage={isLastUserMessage}
+            automationOrigin={message.automationOrigin}
+            hookSource={message.hookSource}
+            sourceDevice={message.sourceDevice}
+            sourcePlugin={message.sourcePlugin}
+            delivery={message.delivery}
+            goalBadge={message.goalBadge}
+            blockedByGhost={message.blockedByGhost}
+            simplifiedBotConversation={simplifiedBotConversation}
+            replyQuote={message.replyQuote}
+          />
+          {message.usageLimitAutoResumeInfo && (
+            <SystemCard
+              cardType="auto-resume"
+              data={message.usageLimitAutoResumeInfo}
+              sessionId={sessionId}
+              workingDir={workingDir}
+            />
+          )}
+        </>
       );
     case 'assistant':
       if (message.systemCardType === 'mcp-app') {
@@ -7011,6 +7092,7 @@ const MessageItem = memo(function MessageItem({
             isStreaming={message.isStreaming}
             createdAt={message.createdAt}
             messageClientId={message.clientId}
+            replyToClientId={message.replyToClientId}
             agentKind={agentKind}
             remoteHostId={remoteHostId}
             forkBlocked={assistantForkBlocked}

@@ -1147,6 +1147,25 @@ export const sessionsStore = {
     if (touched) notify();
   },
 
+  /**
+   * 新建页的未发送任务被真正删掉：直接移出缓存，不登记「已删除」状态——同一个 id 之后
+   * 还可能重新建出来(继续输入)，登记过的删除状态会把重建的任务挡在列表外。
+   */
+  removeLocal(id: string): void {
+    autoTitlePreviews.delete(id);
+    sessionTitleOverrides.delete(id);
+    sessionSpendOverrides.delete(id);
+    sessionStatusOverrides.delete(id);
+    let touched = false;
+    for (const [filter, list] of cache) {
+      const next = list.filter((item) => item.id !== id);
+      if (next.length === list.length) continue;
+      cache.set(filter, next);
+      touched = true;
+    }
+    if (touched) notify();
+  },
+
   /** 仅供测试 / 登出清理。 */
   reset(): void {
     cache.clear();
@@ -1193,8 +1212,15 @@ if (typeof window !== 'undefined') {
   // 那个串与这里预览的是同一个(共用 normalizeAutoTitle),所以回流时不跳变。
   onAutoTitlePreview((sessionId, title) => {
     const current = sessionsStore.findById(sessionId);
-    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。
-    if (current && !isDefaultDraftSessionTitle(current.title)) return;
+    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。仍显示着上一次预览时
+    // 可以换成新的预览(新建页的未发送任务随输入实时更新标题)。
+    if (
+      current &&
+      !isDefaultDraftSessionTitle(current.title) &&
+      current.title !== autoTitlePreviews.get(sessionId)
+    ) {
+      return;
+    }
     // 乐观写入走专门的门:不登记权威 override、不回收叠加层,顺序无所谓。
     autoTitlePreviews.set(sessionId, title);
     if (current) applyOptimisticTitle(sessionId, title);

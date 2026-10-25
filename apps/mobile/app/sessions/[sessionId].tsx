@@ -1,3 +1,9 @@
+import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
+import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
+import { useIncomingShareComposer } from '@/session/useIncomingShareComposer';
+import { incomingShareDestination } from '@/session/incomingShare';
+import { CompanionFollowUpInvitation } from '@/session/CompanionFollowUpInvitation';
+import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
 import { modelNeedsReselection } from '@/session/modelReselection';
@@ -5,17 +11,18 @@ import { getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { conversationSearchCompanionParams } from '@/session/conversationSearch';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
-import { keyboardControlRegion, type LayoutRect } from '@/platform/windowGeometry';
+import { keyboardControlRegion, sharedStatusRowDrawerTop, type LayoutRect } from '@/platform/windowGeometry';
 import { useAdaptiveWindow, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
-import { sessionPaneLayout } from '@/session/sessionPaneLayout';
+import { useSessionPaneLayout } from '@/session/ResidentHomeList';
 import { ComposerExpandButton } from '@/session/ComposerExpandButton';
 import { nativeComposerAvailable } from '@/session/ComposerNativeInput';
 import { getActiveMobileSessionRealm } from '@/config/env';
@@ -38,7 +45,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxSettled, isDurableOutboxUnsent, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -56,6 +63,7 @@ import {
   ListTodo,
   Monitor,
   Menu,
+  MessagesSquare,
   Mic,
   Pencil,
   Pin,
@@ -120,6 +128,7 @@ import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndica
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { subscribeCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useSharedTaskAccess } from '@/device-link/useSharedTaskAccess';
@@ -158,7 +167,10 @@ import { shouldClearOperationErrorAfterSync, type SessionOperationError } from '
 import { createTransientTopicSubscriptionCoordinator } from '@/device-link/transientTopicSubscription';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { findRemoteHistoryView, useRemoteHistoryView } from '@/session/remoteHistoryView';
-import { HistoryViewHandoff, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { HistoryViewHandoff, historyAfter, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { SideChatsSheet } from '@/session/SideChatsSheet';
+import { useSideChatCount } from '@/session/useSideChatCount';
+import { SessionTaskLayout, type SessionTaskChrome } from '@/session/SessionTaskLayout';
 import { buildMobileSessionRenderWindow } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -167,9 +179,19 @@ import { PreviewTabEntry } from '@/remote-desktop/PreviewTabEntry';
 import {
   COMPANION_AVATAR_SIZE,
   MessageRenderer,
+  type CompanionQuoteOptions,
   type MobileMessageActionBusyKind,
   type MobileMessageDraft,
 } from '@/session/MessageRenderer';
+import { BotGroupQuote } from '@/session/BotGroupQuote';
+import {
+  clearSentCompanionReplyQuote,
+  companionReplyQuoteDisplay,
+  getPendingCompanionReplyQuote,
+  setPendingCompanionReplyQuote,
+  usePendingCompanionReplyQuote,
+} from '@/session/companionReplyQuote';
+import { useCompanionReplyTargetPreference } from '@/session/companionReplyTargetPreference';
 import {
   bundledAssetToDataUri,
   cleanupConversationSharePngTemps,
@@ -207,6 +229,7 @@ import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/Compo
 import { createComposerDraftSource, useComposerVoiceDraftWriter, type ComposerDraftSource } from '@/session/composerDraftSource';
 import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
+import { remoteActionErrorI18nKey } from '@/session/agentErrorI18n';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
@@ -347,6 +370,7 @@ import {
   replaceComposerTextRange,
   serializeComposerDocument,
   sessionLinkComposerNode,
+  todoReferenceComposerNode,
   slashCommandTextNode,
   textComposerDocument,
   type ComposerDocument,
@@ -386,6 +410,11 @@ import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
 import { isProviderShareAgentDeviceId } from '@/session/providerShareAgentDevice';
 import { useSessionProviderGroup } from '@/session/useSessionProviderGroup';
 import {
+  askMobileSessionRebalance,
+  offerMobileSessionRebalance,
+  useMobileSessionRebalancePrefetch,
+} from '@/session/sessionRebalancePrompt';
+import {
   drainComposerAnnotationSubmissions,
   drainComposerAttachments,
   queueComposerAnnotationSubmission,
@@ -395,6 +424,7 @@ import {
   buildQueueRowPresentation,
   createQueueEditTextState,
   queuedMessageHasEncodedQuotes,
+  queuedMessageReplyQuote,
   resolveQueueEditTextSubmission,
   stopOptionsForProjection,
   type QueueEditTextState,
@@ -404,7 +434,9 @@ import {
   buildPendingSendItems,
   pendingSendItemKey,
   type MobilePendingSendActions,
+  type MobilePendingSendWaitingFor,
 } from '@/session/pendingSendItems';
+import { noteLocalSend } from '@/session/localSendMotion';
 import { isSourceDeviceRemoved } from '@/session/messageSourceLabels';
 import {
   appendOptimisticUserMessage,
@@ -414,7 +446,7 @@ import {
   reconcileOptimisticUserMessages,
   type OptimisticUserMessage,
 } from '@/session/optimisticUserMessages';
-import type { PendingSendBubbleActions } from '@/session/PendingSendBubble';
+import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import {
   acquireQueueEditLock,
   commitQueueEdit,
@@ -425,6 +457,8 @@ import { findErrorTailClientId, isContinuationQueueItem, resolveSessionTailBanne
 import { SessionTailBanner } from '@/session/SessionTailBanner';
 import { buildErrorDiagnosisPrompt, type ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 import { useHistoryRecoveryNavigation } from '@/session/useHistoryRecoveryNavigation';
+import { useSessionActivityInvalidation } from '@/session/useSessionActivityInvalidation';
+import { useSessionMessageHistoryRead } from '@/session/useSessionMessageHistoryRead';
 import { canOfferCodexHistoryRecovery } from '@cindy/maker-shared/error-redaction';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -585,9 +619,14 @@ import {
   commitMobileStreamingPrefixItems,
   type MobileStreamingRenderPrefixCache,
 } from '@/session/messageRenderStreamingCache';
-import { shouldSuppressEmptyMessageState } from '@/session/sessionEmptyState';
+import {
+  resolveSessionMessageEmptyState,
+  shouldShowCachedHistoryNotice,
+} from '@/session/sessionEmptyState';
 import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
+import { confirmArchiveWithSchedules, loadActiveBoundScheduleNames } from '@/session/archiveScheduleConfirm';
+import { useSessionListActions } from '@/session/useSessionListActions';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
@@ -633,7 +672,7 @@ import {
   sessionMetaWriteQueue,
   sessionPendingWrites,
   type RemoteSessionRunStatus,
-  useRemoteSessions,
+  useRemoteSessionDetail,
   useSessionGoalStatus,
   useSessionInputProjection,
   useSessionMessages,
@@ -644,7 +683,6 @@ import {
   useSessionRunning,
   useSessionTaskUpdates,
 } from '@/session/remoteSessionStore';
-import { CindyMakeSessionGate } from '@/session/CindyMakeSessionGate';
 import { useFailedCreationReturnToEdit } from '@/session/useFailedCreationReturnToEdit';
 import type {
   MobileGoalLimitsInput,
@@ -682,6 +720,8 @@ import { normalizeRemoteOpDirEntries, parentRelPath } from '@/session/fileBrowse
 import * as Clipboard from 'expo-clipboard';
 import { createRemoteMediaDiskCache, imageMimeFromUrl, type RemoteMediaDiskCache } from '@/session/remoteMediaDiskCache';
 import { createExpoRemoteMediaDiskCacheIO, downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
+import { Paths } from 'expo-file-system';
+import { PEER_FILE_DISK_RESERVE_BYTES } from '@/device-link/peerFileRegistry';
 import {
   buildRewindPreviewState,
   isCommitReadyRewindState,
@@ -711,6 +751,8 @@ import {
   buildLearnStartRequest,
   executeMobileGoalCommand,
   mergeMobileGoalCommand,
+  mergeMobileSideChatCommand,
+  buildMobileSideChatDraft,
   filterMobileDesktopCommands,
   parseMobileDesktopCommand,
 } from '@/session/desktopSlashCommands';
@@ -745,7 +787,7 @@ const SESSION_ACTION_TEST_IDS = {
 } satisfies Record<SessionActionStripActionId, string>;
 const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 /**
- * The companion chat draws its own header row (back, identity, settings). Hide the native bar the
+ * When the companion uses an in-content header row, hide the native bar the
  * task header may have configured while the entry was still resolving, so its title and sync
  * spinner never sit on top of the companion identity. Stable object: expo-router applies screen
  * options in a layout effect.
@@ -857,6 +899,11 @@ const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
  * 闪一下、计时还被重置回 0s。真停了推迟这点时间熄灭无感,交接空隙则被吃掉。
  */
 const COMPOSER_ACTIVITY_SETTLE_MS = 600;
+/**
+ * 打字预热提醒的最短间隔；被控端每次提醒都会顺延预热进程的空闲回收。换了模型、深度、
+ * 权限、引擎或目录时被控端可能已关掉旧进程，下一次输入立即重新提醒。
+ */
+const MOBILE_AGENT_PREWARM_INTERVAL_MS = 30_000;
 /** 另一台电脑的目录还没读到时的空供应商列表(稳定引用,不触发下游 memo 重算)。 */
 const EMPTY_PROVIDER_VIEWS: readonly ProviderView[] = [];
 
@@ -973,15 +1020,10 @@ function composerDraftScopeKey(sessionId: string, routeDraft: string | null): st
 }
 
 export default function SessionScreen() {
-  const { sessionId, deviceId } = useLocalSearchParams<{ sessionId: string; deviceId?: string }>();
-  return (
-    <CindyMakeSessionGate sessionId={readRouteParam(sessionId) ?? ''} deviceId={readRouteParam(deviceId) ?? undefined} ownsSessionSubscription>
-      <SessionScreenContent />
-    </CindyMakeSessionGate>
-  );
+  return <SessionTaskLayout>{chrome => <SessionScreenContent {...chrome} />}</SessionTaskLayout>;
 }
 
-function SessionScreenContent() {
+function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: SessionTaskChrome) {
   const styles = useThemedStyles(makeStyles);
   const composerPullThrough = useComposerPullThroughBridge();
   const renderMessageScroll = useCallback(
@@ -1124,15 +1166,21 @@ function SessionScreenContent() {
   // blocking both history and sync until a presence change happens to arrive.
   const remoteHistoryAvailable = status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
-  const showCachedHistoryNotice = status !== 'connecting'
-    && (status !== 'online' || getPresenceAvailability(deviceId) === false);
-  const historyView = useRemoteHistoryView(deviceId, sessionId, maker,
+  const showCachedHistoryNotice = shouldShowCachedHistoryNotice(status, getPresenceAvailability(deviceId));
+  const currentSession = useRemoteSessionDetail(deviceId, sessionId);
+  const sideChatParent = useRemoteSessionDetail(deviceId, currentSession?.source === 'side-chat' ? currentSession.parentSessionId ?? '' : '');
+  const sideChatBoundary = currentSession?.source === 'side-chat' ? Date.parse(currentSession.createdAt) : undefined;
+  const unfilteredHistoryView = useRemoteHistoryView(deviceId, sessionId, maker,
     () => messageScreenFocusedRef.current && messageAppActiveRef.current, remoteHistoryAvailable);
+  const historyView = useMemo(() => ({ ...unfilteredHistoryView,
+    snapshot: historyAfter(unfilteredHistoryView.snapshot, sideChatBoundary)!,
+  }), [unfilteredHistoryView.view, unfilteredHistoryView.snapshot, sideChatBoundary]);
   useEffect(() => {
     if (messageScreenFocusedRef.current && messageAppActiveRef.current) historyView.view.setActive(true);
   }, [connectionEpoch, messageReloadRevision, historyView.view]);
-  const sessions = useRemoteSessions();
-  const rawMessages = useSessionMessages(sessionId, deviceId);
+  const inheritedMessages = useSessionMessages(sessionId, deviceId);
+  const rawMessages = useMemo(() => sideChatBoundary === undefined ? inheritedMessages
+    : inheritedMessages.filter(message => Date.parse(message.createdAt) >= sideChatBoundary), [inheritedMessages, sideChatBoundary]);
   const historyHandoff = useMemo(() => new HistoryViewHandoff<RemoteMessage>(
     (row) => row.agentMeta?.isStreaming === true,
   ), [historyView.view]);
@@ -1140,8 +1188,9 @@ function SessionScreenContent() {
     [historyHandoff, rawMessages, historyView.snapshot]);
   const messages = handoff.messages;
   const messageStructureToken = remoteSessionStore.getSessionMessageStructureToken(sessionId);
-  const messageStructureChangedIndexes = remoteSessionStore
-    .getSessionMessageStructureChangedIndexes(sessionId);
+  const filteredMessageIndexes = useMemo(() => new Set(sideChatBoundary === undefined ? [] : messages.keys()), [messages, sideChatBoundary]);
+  const messageStructureChangedIndexes = sideChatBoundary === undefined ? remoteSessionStore
+    .getSessionMessageStructureChangedIndexes(sessionId) : filteredMessageIndexes;
   const latestMessagesRef = useRef(messages);
   latestMessagesRef.current = messages;
   const sessionRetention = useSyncExternalStore(
@@ -1155,7 +1204,7 @@ function SessionScreenContent() {
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
-  const recommendationSession = sessions.find((item) => item.id === sessionId);
+  const recommendationSession = currentSession;
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
   const taskUpdates = useSessionTaskUpdates(sessionId);
   const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
@@ -1321,6 +1370,7 @@ function SessionScreenContent() {
     waitForPendingUploads,
     beginOutboxAttachmentHandoff,
     getUploadedSource,
+    insertUploadedAttachment,
     getUploadedAttachmentId,
     releaseUploadedSources,
     waitForPastePlaceholdersSettled,
@@ -1338,7 +1388,7 @@ function SessionScreenContent() {
         ?.decorateUploadedAttachment(rawAttachment, candidate) ?? rawAttachment;
       // send() 在 waitForPendingUploads 落定后同步读 ref,而 setState 到 commit 有
       // 微任务延迟——这里派发时同步镜像,保证「上传完成→立即发送」不丢刚落定的附件。
-      attachmentsRef.current = [...attachmentsRef.current, attachment];
+      attachmentsRef.current = insertUploadedAttachment(attachmentsRef.current, attachment);
       if (candidate.kind === 'image') {
         setAttachmentPreviews((current) => ({ ...current, [attachment.id]: candidate.uri }));
       }
@@ -1347,7 +1397,7 @@ function SessionScreenContent() {
         const sourceId = candidate.sourceId;
         setMediaAssetAttachments((current) => ({ ...current, [sourceId]: attachment.id }));
       }
-      setAttachments((current) => [...current, attachment]);
+      setAttachments((current) => insertUploadedAttachment(current, attachment));
     },
     onError: (message) => {
       setAttachmentError(message);
@@ -1383,6 +1433,11 @@ function SessionScreenContent() {
   });
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
+  // 听写期间原生光标停在插入前的位置;停止后要等最终识别与润色完成才定位到插入末尾。
+  // 这段时间继续隐藏光标,避免先在文字中间闪现再跳到末尾。
+  const [voiceCaretPlacementPending, setVoiceCaretPlacementPending] = useState(false);
+  // 隐藏光标属于发起停止的那个任务:切任务时作废,迟到的停止收尾不得改动新任务的标记。
+  const voiceCaretPlacementSeqRef = useRef(0);
   // 「语音结束保持展开」hold:语音真实收尾(busy → done/error)时布防,草稿仍有
   // 内容即生效、一行文字也不收(composerVoiceHoldActive);下拉收起 / 失焦 / 草稿清空解除。
   const [composerVoiceHoldArmed, setComposerVoiceHoldArmed] = useState(false);
@@ -1403,6 +1458,13 @@ function SessionScreenContent() {
     readRouteParam(params.openSearch), readRouteParam(params.openSearchRequest));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuInitialView, setMenuInitialView] = useState<SessionMenuView>('menu');
+  const [sideChatsOpen, setSideChatsOpen] = useState(false);
+  const [sideChatsPendingOpen, setSideChatsPendingOpen] = useState(false);
+  const sideChatCreatingRef = useRef(false);
+  useEffect(() => {
+    setSideChatsOpen(false);
+    setSideChatsPendingOpen(false);
+  }, [deviceId, sessionId]);
   const [sessionSearchPendingOpen, setSessionSearchPendingOpen] = useState(false);
   // inline 排队区:展开操作行的条目(同时只展开一条;null=全收起)。
   const [queueSelectedClientId, setQueueSelectedClientId] = useState<string | null>(null);
@@ -1466,6 +1528,16 @@ function SessionScreenContent() {
     discardAllPendingUploadsForScopeChange();
     discardSessionComposerAttachmentStateRef.current();
   }, [discardAllPendingUploadsForScopeChange, sessionId]);
+  useLayoutEffect(() => {
+    const discard = () => {
+      discardAllPendingUploadsForScopeChange();
+      discardSessionComposerAttachmentStateRef.current();
+    };
+    beforeSessionSwitchRef.current = discard;
+    return () => {
+      if (beforeSessionSwitchRef.current === discard) beforeSessionSwitchRef.current = null;
+    };
+  }, [beforeSessionSwitchRef, discardAllPendingUploadsForScopeChange]);
   const queueEditLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
   const queueEditSaveOwnerRef = useRef<QueueEditLockOwner | null>(null);
   // 「已出队、消息尚未回流」的落定中条目:桌面端 drain 会先从 pendingQueue 摘除、
@@ -1793,6 +1865,9 @@ function SessionScreenContent() {
   // 后台订阅重试不能越过任务/设备/连接代切换，也不能在页面卸载后把已清理的 owner
   // 重新登记回来。render 阶段先发布最新 identity；旧 effect 的 cleanup 只清自己。
   const sessionSubscriptionIdentity = JSON.stringify([deviceId, sessionId, connectionEpoch]);
+  const [messageHistoryRead, setMessageHistoryRead] = useSessionMessageHistoryRead({
+    deviceId, sessionId, notificationResponse, subscriptionIdentity: sessionSubscriptionIdentity,
+  });
   const sessionSubscriptionIdentityRef = useRef<string | null>(sessionSubscriptionIdentity);
   sessionSubscriptionIdentityRef.current = sessionSubscriptionIdentity;
   useEffect(() => () => {
@@ -1839,7 +1914,13 @@ function SessionScreenContent() {
   // 图片磁盘缓存(跨会话屏 / 跨启动):命中直接回本地 file://,零取件零桌面上传;
   // 未命中取件成功后后台落盘。forceRefresh(skipCache)时绕过并覆盖写自愈。
   const remoteMediaDiskCacheRef = useRef<RemoteMediaDiskCache | null>(null);
-  remoteMediaDiskCacheRef.current ??= createRemoteMediaDiskCache(createExpoRemoteMediaDiskCacheIO());
+  remoteMediaDiskCacheRef.current ??= createRemoteMediaDiskCache(createExpoRemoteMediaDiskCacheIO(), {
+    availableBytes: () => Paths.availableDiskSpace,
+    reserveBytes: PEER_FILE_DISK_RESERVE_BYTES,
+    // Preserve manual image retention; only the new regenerable video copies
+    // join pressure cleanup, with mounted players holding a protection lease.
+    canEvict: mimeType => mimeType.startsWith('video/'),
+  });
   // 磁盘缓存源键加设备命名空间:缓存跨账号/设备存续,不同被控端可能产生相同的
   // xdt-image:// url 字符串,裸 url 作键会把上一账号/设备的缓存文件当命中返回
   // (隐私 + 内容错乱)。经 ref 读当前 deviceId,队列工厂闭包不依赖它重建。
@@ -1913,6 +1994,13 @@ function SessionScreenContent() {
         }
         const resolved = await resolveMobileRemoteMedia(media, {
           fetchRemoteMedia: deps.maker.fetchRemoteMedia,
+          ...(diskCache ? { retainLocalVideo: async (video: MobileResolvedRemoteMedia) => {
+            const stored = await diskCache.store(bareDiskSource, video.url, video.mimeType, video.size);
+            const copy = stored ? await diskCache.lookup(bareDiskSource) : null;
+            if (!copy) throw new Error('VIDEO_CACHE_FAILED');
+            return { ...video, url: copy.uri, expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
+              protectLocalFile: () => diskCache.protect(bareDiskSource) };
+          } } : {}),
           presignGet: (ossKey) => deps.auth.apiFetch<MobileRemoteMediaPresignResult>(
             '/api/device-link/media/presign-get',
             { baseUrl: DEVICE_LINK_API_BASE_URL, method: 'POST', body: { key: ossKey } },
@@ -1999,7 +2087,7 @@ function SessionScreenContent() {
     | ((options?: {
     draftOverride?: string;
     documentOverride?: ComposerDocument;
-  }) => Promise<void>) | null>(null);
+  }) => Promise<boolean | void>) | null>(null);
   const sendButtonRef = useRef<View>(null);
   const composerSendTargetEnabledRef = useRef(false);
   // Match the keyed palette lifetime. Old requests/cleanup retain their old
@@ -2029,10 +2117,6 @@ function SessionScreenContent() {
   // 记录已为哪个连接 epoch 触发过 resync;初值 = 首渲染时的 epoch,使首开由 mount effect 单独负责,
   // 这个 epoch effect 只在真正重连(epoch 变化)时再同步,避免首开连环重 sync 导致列表重排跳动。
   const syncedConnectionEpochRef = useRef(connectionEpoch);
-  const currentSession = useMemo(
-    () => sessions.find((item) => item.id === sessionId) ?? null,
-    [sessionId, sessions],
-  );
   const sessionManagedByHost = useHostManagedSession(
     JSON.stringify([auth.accountGeneration, deviceId, sessionId]),
     currentSession,
@@ -2252,6 +2336,15 @@ function SessionScreenContent() {
   const outboxConnectionDispatchBlocked = shouldHoldOutboxDispatchForConnection(
     outboxConnectionState,
   );
+  // 待发气泡写「等…后发送」只看真正断开:只有系统确认手机没网才归因于网络(relay 连接中 /
+  // 服务重连不算);电脑不可达或无响应归因于电脑;同步中、自动恢复中几秒就过去,不提示。
+  const localNetworkStatus = useLocalNetworkStatus();
+  const outboxWaitingFor: MobilePendingSendWaitingFor | null = localNetworkStatus === 'unavailable'
+    ? 'network'
+    : outboxConnectionState.relayOnline
+      && (outboxConnectionState.targetAvailable === false || outboxConnectionState.deviceUnresponsive)
+      ? 'computer'
+      : null;
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
   const connectionRecoveryError = companionEntry.error ?? activeOutboxTransportError ?? connectionError;
   const bannerError = connectionRecoveryError ?? historyError;
@@ -2517,7 +2610,8 @@ function SessionScreenContent() {
   const composerDisabledReasonKey = composerDisabledReasonI18nKey(
     sessionOperationLayout.composerDisabledReasonSource,
   );
-  const composerDisabledReason = !companionEntry.canCompose ? t('shared.syncing') : composerDisabledReasonKey
+  const composerDisabledReason = companionEntry.readOnly ? t('session.presentation.overview.readOnly')
+    : !companionEntry.canCompose ? t('shared.syncing') : composerDisabledReasonKey
     ? t(composerDisabledReasonKey)
     : sessionOperationLayout.composerDisabledReason
       ?? (sessionResourceCards.blocked
@@ -2540,19 +2634,21 @@ function SessionScreenContent() {
   // 立即渲染真壳(标题乐观显示、消息区骨架、输入框可编辑、发送禁用),而不是阻塞式占位。
   const showSyncingShell = sessionOperationLayout.composerSlot === 'missing-session'
     && !remoteUnavailableReason;
-  // 同步/加载期消息区不显示「暂无消息」(会话其实在加载、不是空),改为渲染「正在同步」
-  // loading 占位(MessageRenderer 的 SyncingMessages);看过的会话
-  // 此时已被本地缓存(②)填充正常渲染,不进 empty 分支。还包含冷开首帧:currentSession 立即
-  // 就有但消息未到、loading 尚未翻 true 的窗口(本次打开未同步过)。只有同步完成过
-  // (lastSyncedAt 有值)且确实 0 条时才显示「暂无消息」;离线/被撤销(remoteUnavailableReason)
-  // 不进此分支,保留原占位。判定见 shouldSuppressEmptyMessageState。
-  const syncingWhileEmpty = shouldSuppressEmptyMessageState({
+  // 无内容且读取结果未知时显示同步占位；已知远端不可用时解释历史未缓存。
+  // 成功读取的历史（含恢复的空缓存）可以确认空态，新活动后的旧结果必须等待重读。
+  const messageEmptyState = resolveSessionMessageEmptyState({
     loading,
     showSyncingShell,
-    messageCount: historyView.snapshot.ready ? historyView.snapshot.items.length : messages.length,
-    hasSyncedThisOpen: lastSyncedAt !== null,
-    remoteUnavailable: !!remoteUnavailableReason || status !== 'online' || targetAvailableForDispatch === false,
+    subscriptionIdentity: sessionSubscriptionIdentity,
+    historyRead: messageHistoryRead,
+    historySnapshot: historyView.snapshot,
+    messageCount: messages.length,
+    status,
+    targetAvailable: targetAvailableForDispatch,
+    remoteUnavailableReason,
+    historyNotCachedMessage: t('message.renderer.historyNotCached'),
   });
+  const { syncingWhileEmpty } = messageEmptyState;
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   const composerSendUnavailableReason = canUseComposer ? null : composerDisabledReason;
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
@@ -2563,6 +2659,13 @@ function SessionScreenContent() {
     () => currentTurnHasStreamingAssistant(latestMessagesRef.current),
     [messageStructureToken],
   );
+  // 任务空闲时预先问好要不要换号，点发送时不多等一次往返(provider-groups.md §6.2「任务进行中换号」)。
+  useMobileSessionRebalancePrefetch({
+    invoke,
+    hostDeviceId: deviceId,
+    sessionId,
+    idle: status === 'online' && !remoteSessionRunning && !currentTurnStreaming,
+  });
   const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)
     && !inputProjection.queueAbortPending;
   const canStopComposer = canStopQueue || canStopCurrentRun;
@@ -2655,7 +2758,7 @@ function SessionScreenContent() {
       && !isSharedTaskPeer(deviceId)
       && collab.workerForm.agentLocationSelectable
       && collab.workerForm.modelPicker.open,
-    controlledDeviceId: deviceId,
+    controlledDeviceId: collabWorkerDeviceId,
     keepDeviceIds: workerAgentKeepDeviceIds,
   });
   // Agent 在另一台电脑时,模型 / 来源都属于那台的目录:展示与校验按那份,读不到时按加载中处理。
@@ -2887,14 +2990,13 @@ function SessionScreenContent() {
     ? composerDisplaySession?.providerId ?? null
     : composerPillSourceProvider?.id ?? null;
   const composerPillFastOn = agentSwitchIntent
-    ? agentSwitchIntent.fastMode === true
-    : !composerSelectedSourceDisconnected && !!currentSession?.fastMode
-      && rowFastEditable({
+    ? (agentSwitchIntent.fastMode ?? false)
+    : !composerSelectedSourceDisconnected && rowFastEditable({
         provider: composerActiveSourceProvider ?? undefined,
         modelId: currentSession?.model ?? '',
         agentKind: sessionAgentKind,
         hasFastModeCap: capabilities?.hasFastMode === true,
-      });
+      }) && (currentSession?.fastMode ?? false);
   const composerRuntimeLabel = composerRuntimeSummary
     ? agentSwitchIntent && composerSwitchesAgent
       ? `${mobileAgentLabel(agentSwitchIntent.targetAgentKind)} · ${composerRuntimeSummary.modelSummary}`
@@ -2926,9 +3028,9 @@ function SessionScreenContent() {
     [remoteAgentCatalogs],
   );
   const adaptiveWindow = useAdaptiveWindow();
-  const paneLayout = sessionPaneLayout(adaptiveWindow);
+  const paneLayout = useSessionPaneLayout();
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
-    && !paneLayout.persistent && !shareSelectionActive && !companionChat;
+    && !paneLayout.persistent && !shareSelectionActive;
   const composerRegion = keyboardControlRegion(adaptiveWindow, keyboardState.height);
   const detailViewport = useMemo(() => ({ x: paneLayout.detail.x, y: paneLayout.detail.y, width: paneLayout.detail.width, height: windowDimensions.height }),
     [paneLayout.detail.x, paneLayout.detail.y, paneLayout.detail.width, windowDimensions.height]);
@@ -2971,6 +3073,14 @@ function SessionScreenContent() {
     windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
     insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
   ]), sessionListDrawerOverlayMounted);
+  // Duo shares the status area with its native toolbar. Its measured height
+  // already includes that area; safeArea.top + 44 would count the toolbar twice.
+  const topChromeHeight = Math.max(topOverlayHeight,
+    horizontalSystemHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
+  // The drawer hides that toolbar; put the drawer's own header in the same row instead of
+  // below the whole status area.
+  const sessionListDrawerTopInset = horizontalSystemHeader
+    ? sharedStatusRowDrawerTop(nativeHeaderHeight, insets.top) : undefined;
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
   const sessionListDrawerWidthRef = useRef(wideSessionNav.drawerWidth);
   if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;
@@ -3059,13 +3169,14 @@ function SessionScreenContent() {
         deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
         sessionId: targetSession.id,
         ...(focusClientId ? { focusClientId } : {}),
+        ...conversationSearchCompanionParams(item),
       });
     });
   }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();
-  const homeNewSessionActionRef = useRef<(() => void) | null>(null);
+  const homeNewSessionActionRef = newSessionActionRef;
   const handleDrawerNewSession = useCallback(() => {
     if (homeNewSessionActionRef.current) { homeNewSessionActionRef.current(); return; }
     queueDrawerNavigation(() => {
@@ -3097,11 +3208,15 @@ function SessionScreenContent() {
     setSettingsOpen(true);
   }, []);
   const handleSessionMenuClosed = useCallback(() => {
+    if (sideChatsPendingOpen) {
+      setSideChatsPendingOpen(false);
+      setSideChatsOpen(true);
+    }
     if (sessionSearchPendingOpen) {
       setSessionSearchPendingOpen(false);
       setSearchOpen(true);
     }
-  }, [sessionSearchPendingOpen]);
+  }, [sessionSearchPendingOpen, sideChatsPendingOpen]);
   const measureSendButtonTarget = useCallback(() => {
     sendButtonRef.current?.measureInWindow((x, y, width, height) => {
       sendButtonFrameRef.current = { x, y, width, height };
@@ -3184,6 +3299,49 @@ function SessionScreenContent() {
     // 那一拍恢复正常持久化,草稿库与内存重新对齐。
     applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
+
+  useIncomingShareComposer({
+    destination: [incomingShareDestination(deviceId, sessionId), incomingShareDestination(deviceId, sessionId, {
+      collectionId: readRouteParam(params.resourceCollectionId) ?? '',
+      kind: readRouteParam(params.resourceKind) ?? '', id: readRouteParam(params.resourceId) ?? '',
+    })],
+    ready: composerDraftHydrated && canUseComposer && companionEntry.ready && !queueEditingRef.current,
+    appendText: text => setComposerDraft(current => [current, text].filter(Boolean).join('\n\n')),
+    attachmentCount: attachments.length,
+    enqueueUploads, getPendingUploadCount, onError: setAttachmentError,
+  });
+
+  // 开始打字（含粘贴）或开始语音输入时请被控端提前启动 Agent，把冷启动藏进输入时间。同一任务 30 秒最多提醒一次；
+  // 任务在跑、在排队编辑或旧被控端不支持时什么都不做。
+  const lastAgentPrewarmRef = useRef<{ at: number; settings: string } | null>(null);
+  const prewarmAgentOnTyping = useCallback(() => {
+    if (queueEditingRef.current) return;
+    const session = remoteSessionStore.getSessions().find((item) => item.id === sessionId) ?? currentSession;
+    if (!session?.workingDir || remoteSessionStore.isSessionRunning(sessionId)) return;
+    const now = Date.now();
+    const { createOpts } = buildQueuedTextMessage(session, '', new Date(now));
+    const settings = JSON.stringify([
+      createOpts.agentKind,
+      createOpts.workingDir,
+      createOpts.model,
+      createOpts.providerId ?? null,
+      createOpts.effort,
+      createOpts.permissionMode,
+      createOpts.fastMode ?? null,
+    ]);
+    const last = lastAgentPrewarmRef.current;
+    if (last && last.settings === settings && now - last.at < MOBILE_AGENT_PREWARM_INTERVAL_MS) return;
+    lastAgentPrewarmRef.current = { at: now, settings };
+    void maker.prewarmSession(sessionId, createOpts).catch(() => undefined);
+  }, [currentSession, maker, sessionId]);
+  const applyTypedComposerChange = useCallback((value: ComposerDocument) => {
+    applyRichComposerChange(value);
+    prewarmAgentOnTyping();
+  }, [applyRichComposerChange, prewarmAgentOnTyping]);
+  const setTypedComposerDraft = useCallback((next: SetStateAction<string>) => {
+    setComposerDraft(next);
+    prewarmAgentOnTyping();
+  }, [prewarmAgentOnTyping, setComposerDraft]);
 
   const writeVoiceDraft = useComposerVoiceDraftWriter(sessionId, (update: ComposerVoiceDraftUpdate) => {
     applyRichComposerChange(reconcileComposerVoiceDraft(composerDocumentRef.current, update));
@@ -3803,6 +3961,12 @@ function SessionScreenContent() {
         && syncedNotificationResponseRef.current !== notificationResponse;
       let usedHistoryView = false;
       const messageRead = syncSessionMessageWindow({
+        historyConfirmation: {
+          key: subscriptionIdentityAtStart,
+          generation: readAckGateGenAtStart,
+          generationRef: readAckGateGenRef,
+          commit: setMessageHistoryRead,
+        },
         readMetadata: () => retryRead(fetchSessionMetadata),
         isReopen,
         storedSession: storedSessionAtStart,
@@ -3840,7 +4004,10 @@ function SessionScreenContent() {
         },
         isCurrent,
         commitMessages: (history) => {
-          if (usedHistoryView) { messageWindowReconciledRef.current = true; return; }
+          if (usedHistoryView) {
+            messageWindowReconciledRef.current = true;
+            return;
+          }
           const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
           const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
           if (options.replaceMessages) {
@@ -4195,19 +4362,16 @@ function SessionScreenContent() {
     if (!activity) return 'none';
     return `${activity.phase}|${activity.attention === true ? 1 : 0}|${activity.compactDetail}`;
   });
-  const prevLiveActivitySigRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prevSig = prevLiveActivitySigRef.current ?? liveActivitySig;
-    if (liveAttention && liveActivitySig !== prevSig) {
-      setReadAckSyncedKey(null);
-      setSessionMetadataSyncedKey(null);
-      // 代号递增:变化点之前启动的 in-flight load / 在飞重试(数据不含本 turn 终帧)
-      // 不得重新落 key / 不得继续发送。
-      readAckGateGenRef.current += 1;
-      void load();
-    }
-    prevLiveActivitySigRef.current = liveActivitySig;
-  }, [liveActivitySig, liveAttention, load]);
+  useSessionActivityInvalidation({
+    liveActivitySig,
+    liveAttention,
+    sessionSubscriptionIdentity,
+    readAckGateGenRef,
+    setReadAckSyncedKey,
+    setSessionMetadataSyncedKey,
+    setMessageHistoryRead,
+    load,
+  });
 
   // 领取其它路由(文件浏览器「发送到会话」等)投递的 composer 附件:会话页在
   // 栈下层保持挂载,返回不会重新 mount,靠 focus 时机领取信箱。
@@ -4508,7 +4672,7 @@ function SessionScreenContent() {
   const composerActivityTokenUsage = remoteSessionRunStatus.tokenUsage;
   const forkOrigin = useMemo(
     () => (
-      currentSession?.parentSessionId && currentSession.forkedAtMessageId
+      currentSession?.source !== 'side-chat' && currentSession?.parentSessionId && currentSession.forkedAtMessageId
         ? {
             parentSessionId: currentSession.parentSessionId,
             forkedAtMessageId: currentSession.forkedAtMessageId,
@@ -4516,7 +4680,7 @@ function SessionScreenContent() {
           }
         : null
     ),
-    [currentSession?.createdAt, currentSession?.forkedAtMessageId, currentSession?.parentSessionId],
+    [currentSession?.source, currentSession?.createdAt, currentSession?.forkedAtMessageId, currentSession?.parentSessionId],
   );
   // inline 排队区去重集:已回流进消息流的 clientId 不再渲染排队气泡(排队气泡消失的
   // 同帧正式气泡已在流里,视觉上原位变实心,无跳变)。
@@ -5272,6 +5436,48 @@ function SessionScreenContent() {
     sessionId,
   ]);
 
+  const canUseSideChats = !!currentSession && !sessionManagedByHost && !currentSession.remoteHostId
+    && !isSharedTaskPeer(deviceId) && !['bot', 'review'].includes(currentSession.source ?? '')
+    && !currentSession.pendingLocalCreation;
+  const sideChatCount = useSideChatCount({ deviceId, sessionId, maker, owner: outboxOwner,
+    enabled: canUseSideChats && currentSession?.source !== 'side-chat' && remoteHistoryAvailable,
+    refreshKey: `${connectionEpoch}:${sideChatsOpen}`,
+  });
+  const openSideChat = useCallback((row: RemoteSession) => {
+    remoteSessionStore.upsertDeviceSession(deviceId, deviceName, row);
+    Keyboard.dismiss();
+    openCollabSession(row.id);
+  }, [deviceId, deviceName, openCollabSession]);
+  const createSideChat = useCallback(async (quoteText?: string, draft?: ComposerDocument): Promise<RemoteSession | null> => {
+    if (!canUseSideChats || !currentSession || sideChatCreatingRef.current) return null;
+    const parentId = currentSession.source === 'side-chat' ? currentSession.parentSessionId : sessionId;
+    if (!parentId) return null;
+    const owner = getMobileAuthOwner();
+    const authority = messageAuthorityRef.current;
+    const isCurrent = () => isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId
+      && messageScreenFocusedRef.current && messageAuthorityRef.current === authority;
+    sideChatCreatingRef.current = true;
+    setError(null);
+    try {
+      const child = await maker.createSideChat(parentId);
+      if (!isCurrent()) return null;
+      remoteSessionStore.upsertDeviceSession(deviceId, deviceName, child);
+      if (draft || quoteText) saveComposerDocumentDraft(child.id, draft ?? {
+        version: 1, nodes: [{ type: 'quote', quote: { text: truncateQuoteText(quoteText!) } }],
+      });
+      return child;
+    } catch (err) {
+      if (isCurrent()) setError(/CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY|No handler/.test(String(err))
+        ? t('session.sideChat.unsupported') : /NO_PRIOR_ASSISTANT/.test(String(err))
+          ? t('session.sideChat.waitForReply') : t('session.sideChat.createFailed'));
+      return null;
+    } finally { sideChatCreatingRef.current = false; }
+  }, [canUseSideChats, currentSession, deviceId, deviceName, maker, sessionId, t]);
+  const askInSideChat = useCallback((text?: string) => {
+    void createSideChat(text).then(child => {
+      if (child && messageScreenFocusedRef.current) openSideChat(child);
+    });
+  }, [createSideChat, openSideChat]);
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
     // 点选 agent-skill 时记录名字+会话 id:palette 关闭后 slashCommands 被清,发送侧
     // 凭此 ref 识别「用户明确选中的 skill」;sid 绑定防止切换会话后旧点选残留。
@@ -5291,7 +5497,10 @@ function SessionScreenContent() {
       queueEditingRef.current ? { persist: false } : undefined,
     );
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(nextDocument);
-  }, [applyComposerDocument, sessionId]);
+    if (command.kind === 'desktop' && command.name === 'side' && canUseSideChats && !queueEditingRef.current) {
+      void sendLatestRef.current?.({ documentOverride: nextDocument });
+    }
+  }, [applyComposerDocument, canUseSideChats, sessionId]);
 
   const openPluginPalette = useCallback(() => {
     const document = appendComposerPluginTrigger(composerDocumentRef.current);
@@ -5331,6 +5540,8 @@ function SessionScreenContent() {
       || voiceState === 'listening'
       || voiceIsProcessing
     ) return;
+    // 开始语音输入和打字一样，是要发消息的信号。
+    prewarmAgentOnTyping();
     voiceStopAfterStartRef.current = false;
     setVoiceError(null);
     setVoiceReleaseToSendActive(false);
@@ -5560,7 +5771,7 @@ function SessionScreenContent() {
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [deviceId, openLink, renderItems, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
+  }, [deviceId, openLink, prewarmAgentOnTyping, renderItems, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
@@ -5639,6 +5850,8 @@ function SessionScreenContent() {
       // 不依赖旧 controller 的迟到 done 回调来复位新页面。
       setVoiceState('idle');
       setComposerVoiceHoldArmed(false);
+      voiceCaretPlacementSeqRef.current += 1;
+      setVoiceCaretPlacementPending(false);
       if (controller) void controller.cancel().catch(() => undefined);
       discardPendingPrewarm();
     };
@@ -5657,6 +5870,8 @@ function SessionScreenContent() {
     voiceSuppressNextPressRef.current = false;
     voiceRecordingActiveRef.current = false;
     setVoiceReleaseToSendActive(false);
+    const caretPlacementSeq = ++voiceCaretPlacementSeqRef.current;
+    setVoiceCaretPlacementPending(true);
     setVoiceState('submitting');
     setVoiceError(null);
     try {
@@ -5679,6 +5894,7 @@ function SessionScreenContent() {
           if (options.focusInput) inputBeforeStop.applyDocumentAndFocusSelection(composerDocumentRef.current, insertionEnd);
           else inputBeforeStop.applyDocumentAndSetSelection(composerDocumentRef.current, insertionEnd);
         }
+        if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
       });
       if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0)) {
         const sendLatest = sendLatestRef.current;
@@ -5688,6 +5904,7 @@ function SessionScreenContent() {
     } catch (err) {
       voiceControllerSessionRef.current = null;
       voiceRecordingActiveRef.current = false;
+      if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     } finally {
@@ -5865,59 +6082,15 @@ function SessionScreenContent() {
     return outboxConnectionBlockedNow() || isRemoteSessionMissing(row) || row?.cacheSeeded === true
       || getNewSessionCreationTask(sessionId) !== null;
   };
-  const findDurableOutboxRecord = (clientId: string) => getCurrentMobileOutboxRecords().find((r) =>
-    r.deviceId === deviceId && r.item.sessionId === sessionId && r.item.clientId === clientId);
-  const retryOutboxItem = (clientId: string) => {
-    const record = findDurableOutboxRecord(clientId);
-    if (!record || record.state !== 'failed') return;
-    if (record.creation && !record.prepared && !record.template) {
-      const owner = getMobileAuthOwner();
-      void mobileDurableOutbox.update(record, { suspended: true }).then(() => {
-        if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) {
-          router.push({ pathname: '/sessions/new', params: { recoverySessionId: sessionId, deviceId, deviceName } });
-        }
-      }).catch((err) => setError(formatRemoteError(err)));
-      return;
-    }
-    setQueueSelectedClientId(null);
-    void mobileDurableOutbox.update(record, {
-      state: record.prepared ? 'confirming' : 'queued', error: undefined,
-    }).catch((err) => setError(formatRemoteError(err)));
-  };
-  const removeOutboxItem = (clientId: string) => {
-    const record = findDurableOutboxRecord(clientId);
-    if (!record) return;
-    // Until creation succeeds, this row also owns the recovery form for every later message.
-    if (record.creation && !record.prepared && !record.template) {
-      setError(t('session.outbox.creationRecoveryRequired'));
-      return;
-    }
-    // 删除发送失败的消息不可撤销:先确认(破坏性按钮),确认后才真正移除。
-    const confirmRemove = () => {
-      setQueueSelectedClientId(null);
-      const owner = getMobileAuthOwner();
-      const remove = async () => {
-        if (isDurableOutboxUnsent(record)) {
-          await mobileDurableOutbox.update(record, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true, error: undefined });
-        } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
-      };
-      void remove().catch((err) => {
-        if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
-      });
-    };
-    Alert.alert(
-      t('session.outbox.deleteConfirmTitle'),
-      t('session.outbox.deleteConfirmBody'),
-      [
-        { text: t('session.common.cancel'), style: 'cancel' },
-        { text: t('session.common.delete'), style: 'destructive', onPress: confirmRemove },
-      ],
-    );
-  };
+  const { findDurableOutboxRecord, retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+    deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
+    setError, setQueueSelectedClientId, t,
+  });
   const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
     const record = findDurableOutboxRecord(item.clientId);
     return {
       ...outboxDisplayItem(item),
+      ...(record ? { sentAt: record.createdAt } : {}),
       canCancel: !(record?.creation && !record.prepared && !record.template),
     };
   }), [outboxItems, deviceId, sessionId]);
@@ -5989,6 +6162,7 @@ function SessionScreenContent() {
         steeringClientIds: new Set(inputProjection.steeringQueueClientIds),
         presentationByClientId,
         getImagePreview: getSentImagePreview,
+        outboxWaitingFor,
       });
     },
     [
@@ -6000,6 +6174,7 @@ function SessionScreenContent() {
       livePendingSendClientIds,
       outboxItems,
       outboxDisplayItems,
+      outboxWaitingFor,
       queueBusy,
       queueEditing?.clientId,
       queueHiddenClientIds,
@@ -6028,6 +6203,9 @@ function SessionScreenContent() {
   const companionDisplay = useCompanionDisplayResource(deviceId, sessionId, companionResource, companionChat);
   const [companionSettingsRequest, setCompanionSettingsRequest] = useState<{ sessionId: string; page: 'memory' | 'capabilities'; sequence: number }>();
   const openCompanionSettings = useCallback((page: 'memory' | 'capabilities') => setCompanionSettingsRequest(previous => ({ sessionId, page, sequence: (previous?.sequence ?? 0) + 1 })), [sessionId]);
+  const followUpScope = JSON.stringify([auth.accountGeneration, deviceId, sessionId]);
+  const [followUpEngaged, setFollowUpEngaged] = useState<string | null>(null);
+  useEffect(() => setFollowUpEngaged(null), [followUpScope]);
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
   const companionAvatarData = companionDisplay?.display.avatar;
@@ -6042,6 +6220,26 @@ function SessionScreenContent() {
     companionName, companionOnline, deviceId]);
   const companionReplyAvatar = useMemo(() => companionChat ? companionPortrait(COMPANION_AVATAR_SIZE) : undefined,
     [companionChat, companionPortrait]);
+  const showCompanionReplyTargets = useCompanionReplyTargetPreference();
+  const pendingCompanionReplyQuote = usePendingCompanionReplyQuote(companionChat ? sessionId : null);
+  const companionQuoteNames = useMemo(() => ({ owner: t('message.renderer.you'), companion: companionName }), [companionName, t]);
+  const companionQuoteOptions = useMemo<CompanionQuoteOptions | undefined>(() => (companionChat && sessionId ? {
+    names: companionQuoteNames,
+    showReplyTargets: showCompanionReplyTargets,
+    onQuote: (quote) => {
+      setPendingCompanionReplyQuote(sessionId, quote);
+      requestAnimationFrame(() => composerInputRef.current?.focus());
+    },
+    onLocate: (clientId) => router.setParams({ focusClientId: clientId, focusRequestKey: String(Date.now()) }),
+  } : undefined), [companionChat, companionQuoteNames, router, sessionId, showCompanionReplyTargets]);
+  const pendingCompanionQuoteOriginal = useMemo(() => {
+    const clientId = pendingCompanionReplyQuote?.clientId;
+    if (!clientId) return undefined;
+    for (const entry of messageListItems) {
+      if (entry.type === 'message' && (entry.message.source.clientId || entry.message.source.id) === clientId) return entry.message;
+    }
+    return undefined;
+  }, [messageListItems, pendingCompanionReplyQuote?.clientId]);
   const companionInteractionIdentity = useMemo(() => companionChat && companionName
     ? { name: companionName, avatar: companionPortrait(COMPANION_AVATAR_SIZE) } : null,
   [companionChat, companionName, companionPortrait]);
@@ -6225,12 +6423,15 @@ function SessionScreenContent() {
   async function send(options: {
     draftOverride?: string;
     documentOverride?: ComposerDocument;
+    independentText?: string;
   } = {}) {
+    const independent = options.independentText !== undefined;
+    let messageAccepted = false;
     // A committed outbox item may still own the draft shown during hydration.
     // Do not submit that snapshot before its durable handoff is reconciled.
     if (!composerDraftHydrated) return;
     if (
-      voiceState === 'listening' &&
+      !independent && voiceState === 'listening' &&
       options.draftOverride === undefined &&
       options.documentOverride === undefined
     ) {
@@ -6238,14 +6439,14 @@ function SessionScreenContent() {
       return;
     }
     const commandsAtSend = slashCommandsRef.current;
-    const documentAtSend = options.documentOverride
+    const documentAtSend = independent ? textComposerDocument(options.independentText!) : options.documentOverride
       ?? (options.draftOverride === undefined
         ? composerDocumentRef.current
         : reconcileComposerProjectedText(composerDocumentRef.current, options.draftOverride));
     const visibleDraft = composerDocumentProjectedText(documentAtSend);
     const body = visibleDraft.trim();
     const serializedAtSend = serializeComposerDocument(documentAtSend);
-    const queueEditAtSendStart = queueEditingRef.current;
+    const queueEditAtSendStart = independent ? null : queueEditingRef.current;
     const queueEditSubmission = queueEditAtSendStart
       ? resolveQueueEditTextSubmission(queueEditAtSendStart.textState, documentAtSend)
       : null;
@@ -6254,7 +6455,7 @@ function SessionScreenContent() {
     const quotesEncodedAtSend = queueEditSubmission?.quotesEncoded ?? serializedAtSend.quotesEncoded;
     let agentReferencesAtSend = queueEditSubmission?.agentReferences ?? serializedAtSend.agentReferences;
     const pastedTextRangesAtSend = queueEditSubmission?.pastedTextRanges ?? serializedAtSend.pastedTextRanges;
-    const slashCommandRangesAtSend = queueEditSubmission?.slashCommandRanges ?? serializedAtSend.slashCommandRanges;
+    const slashCommandRangesAtSend = independent ? [] : queueEditSubmission?.slashCommandRanges ?? serializedAtSend.slashCommandRanges;
     if (!canUseComposer) {
       if (options.documentOverride) applyComposerDocument(options.documentOverride);
       else if (options.draftOverride !== undefined) setComposerDraft(options.draftOverride);
@@ -6284,12 +6485,14 @@ function SessionScreenContent() {
     // 立刻撞回断链。真正恢复后的 load / connection epoch 会负责清理并唤醒 pump。
     if (!connectionDispatchBlockedAtSend) setError(null);
     const outboxEligible = !queueEditAtSendStart;
-    const uploadsInFlight = outboxEligible ? getPendingUploadCount() : 0;
-    const willHaveAttachments = attachmentsRef.current.length > 0 || uploadsInFlight > 0;
-    const earlyLocalCommand = willHaveAttachments ? null : parseMobileLocalSystemCommand(body);
+    // 伙伴私聊的待发引用随这条消息写进信封；送达交接后才撤下，失败时保留以便重发。
+    const replyQuoteAtSend = outboxEligible && !independent ? getPendingCompanionReplyQuote(sessionId) ?? undefined : undefined;
+    const uploadsInFlight = outboxEligible && !independent ? getPendingUploadCount() : 0;
+    const willHaveAttachments = !independent && (attachmentsRef.current.length > 0 || uploadsInFlight > 0);
+    const earlyLocalCommand = independent || willHaveAttachments ? null : parseMobileLocalSystemCommand(body);
     const pendingSkillAtSend = pendingSkillSelectionRef.current;
-    const parsedDesktopCommandAtSend = parseMobileDesktopCommand(body, commandsAtSend);
-    const eligibleDesktopCommand = willHaveAttachments && parsedDesktopCommandAtSend?.name !== 'goal'
+    const parsedDesktopCommandAtSend = independent ? null : parseMobileDesktopCommand(body, commandsAtSend);
+    const eligibleDesktopCommand = willHaveAttachments && !['goal', 'side'].includes(parsedDesktopCommandAtSend?.name ?? '')
       ? null : parsedDesktopCommandAtSend;
     const earlyDesktopCommand =
       eligibleDesktopCommand
@@ -6297,6 +6500,17 @@ function SessionScreenContent() {
       && pendingSkillAtSend.name === eligibleDesktopCommand.name
         ? null
         : eligibleDesktopCommand;
+    if (outboxEligible && earlyDesktopCommand?.name === 'side') {
+      if (!canUseSideChats) { setError(t('session.sideChat.unavailable')); return; }
+      if (willHaveAttachments || hasAttachmentInput()) { setError(t('session.sideChat.commandAttachments')); return; }
+      const child = await createSideChat(undefined, buildMobileSideChatDraft(documentAtSend));
+      if (!child) return;
+      if (composerDocumentsEqual(composerDocumentRef.current, documentAtSend)) {
+        applyComposerDocument(normalizeComposerDocument({ version: 1, nodes: [] }));
+      }
+      openSideChat(child);
+      return;
+    }
     if (outboxEligible && earlyDesktopCommand?.name === 'goal') {
       if (willHaveAttachments) {
         setError(t('session.screen.goalCommandAttachments'));
@@ -6399,11 +6613,29 @@ function SessionScreenContent() {
       return;
     }
     const useDurableOutbox = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand && !legacyPlanRequiresLiveDispatch;
+    const outboxClientId = useDurableOutbox ? createOutboxClientId() : undefined;
     const planModeAtSend = runtimeOptions?.planModeSupported === true
       ? (readSessionRowNow() ?? currentSession).planModeEnabled === true
       : undefined;
-    pendingSkillSelectionRef.current = null;
-    dismissPromptRecommendation();
+    // 上一轮已经结束、用户发下一条消息：供应商组里另一个账号的配额明显更该先用时，问要不要换过去
+    // (provider-groups.md §6.2「任务进行中换号」，与电脑一致)。只把选择记到任务所在电脑，这条消息照常发出；
+    // 前面还有没发出的消息、断线或正在回复时不问。
+    if (
+      useDurableOutbox
+      && !dispatchBlockedAtSend
+      && outboxRef.current.length === 0
+      && !remoteSessionRunning
+      && !currentTurnStreaming
+      && !isRemoteSessionMissing(readSessionRowNow())
+    ) {
+      await offerMobileSessionRebalance({ invoke, hostDeviceId: deviceId, sessionId, clientId: outboxClientId!, ask: askMobileSessionRebalance });
+      // 弹窗期间离开了这个任务：草稿还没清空，留在原处，不发。
+      if (outboxSessionAliveRef.current !== sessionId) return;
+    }
+    if (!independent) {
+      pendingSkillSelectionRef.current = null;
+      dismissPromptRecommendation();
+    }
     // 乐观第一拍:点发送立刻清空输入框并跟到底部,不等任何网络往返(enqueue 是
     // device-link 远程调用,弱网下数秒;文字已捕获进 text)。失败时若输入框仍为空
     // 则恢复原文——用户可能在 await 期间又打了字,不能覆盖。
@@ -6425,6 +6657,7 @@ function SessionScreenContent() {
       slashCommandRanges: slashCommandRangesAtSend ?? [],
     });
     const restoreDraftAfterFailure = () => {
+      if (independent) return;
       // 走持久化写回(setComposerDraft 而非 restoreComposerDraft):乐观清空那拍已把
       // 草稿库删除并打了 cleared 标,只回内存的话 remount 后草稿读到 null、原文丢失
       // (codex review R16)。restoreComposerDraft 的 persist:false 语义只适用于
@@ -6434,6 +6667,7 @@ function SessionScreenContent() {
       }
     };
     const restoreDirectSendDraftAfterFailure = () => {
+      if (independent) return;
       if (
         !legacyPlanRequiresLiveDispatch
         || composerDocumentsEqual(composerDocumentRef.current, documentAfterOptimisticClear)
@@ -6456,13 +6690,13 @@ function SessionScreenContent() {
     let scopeExitDraftRecovered = false;
     const sendScopeStillAlive = () => outboxSessionAliveRef.current === sessionId;
     const recoverCapturedDraftForScopeExit = () => {
-      if (scopeExitDraftRecovered || !outboxEligible || useDurableOutbox) return;
+      if (independent || scopeExitDraftRecovered || !outboxEligible || useDurableOutbox) return;
       scopeExitDraftRecovered = true;
       // 乐观清空已持久删除 A 草稿；切到 B 后不能再读写共享 composer ref。
       // 直接按捕获的发送快照合并回 A 的草稿库，并保留 A 期间新输入的后续文字。
       restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);
     };
-    if (text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);
+    if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);
     // A pasted message link is committed to the editor synchronously, while
     // its readable body is fetched from the source device asynchronously.
     // The optimistic clear above preserves the existing "tap sends this
@@ -6505,7 +6739,7 @@ function SessionScreenContent() {
         // 已入 controller;失败 / 超时 60s 兜底后同样放行,错误 toast 已由占位路径
         // 给出),不等上传本身。等待通常数百 ms(本机剪贴板),极端跨设备剪贴板由
         // 发送按钮转圈承载;等待期间 sendInFlightRef 挡住重入。
-        if (hasPastePlaceholders()) {
+        if (!independent && hasPastePlaceholders()) {
           await waitForPastePlaceholdersSettled();
           if (!sendScopeStillAlive()) {
             recoverCapturedDraftForScopeExit();
@@ -6513,20 +6747,25 @@ function SessionScreenContent() {
           }
         }
         const ownerAtSend = getMobileAuthOwner();
-        const handoff = await beginOutboxAttachmentHandoff();
+        const handoff = independent ? null : await beginOutboxAttachmentHandoff();
         let record: DurableOutboxRecord | undefined;
         let committed = false;
         try {
-          const pendingSources = await handoff.prepare();
+          const pendingSources = handoff ? await handoff.prepare() : [];
           if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) return;
-          const readyAttachments = [...attachmentsRef.current];
+          const readyAttachments = independent ? [] : [...attachmentsRef.current];
           const readyPreviews = readyAttachments.map((attachment) => attachmentPreviews[attachment.id] ?? null);
           const permissionModeAtSend = permissionModeOrAsk(currentSession.permissionMode);
           const item = buildOutboxItem({
-            clientId: createOutboxClientId(), sessionId, text, quotesEncoded: quotesEncodedAtSend,
+            clientId: outboxClientId!, sessionId, text, quotesEncoded: quotesEncodedAtSend,
             sessionRefs: sessionRefsAtSend, agentReferences: agentReferencesAtSend,
             pastedTextRanges: pastedTextRangesAtSend, slashCommandRanges: slashCommandRangesAtSend ?? [],
+            ...(replyQuoteAtSend ? { replyQuote: replyQuoteAtSend } : {}),
             permissionModeAtSend, planModeAtSend, readyAttachments, readyPreviews,
+            attachmentOrder: incomingShareSlotOrder([
+              ...readyAttachments.map(attachment => getUploadedSource(attachment.id)?.incomingShareOrder),
+              ...pendingSources.map(({ source }) => source.incomingShareOrder),
+            ]),
             claimedUploads: pendingSources.map(({ localId, source }) => ({ localId, failed: false, kind: source.kind, previewUri: source.uri })),
           });
           const clearedAt = currentSession.clearedAt ? Date.parse(currentSession.clearedAt) : null;
@@ -6534,39 +6773,42 @@ function SessionScreenContent() {
             version: 1, accountId: ownerAtSend.accountKey, deviceId, item, createdAt: Date.now(),
             ...(readRouteParam(params.resourceKind) === 'bot' && readRouteParam(params.resourceCollectionId) && readRouteParam(params.resourceId)
               ? { resourceRef: { collectionId: readRouteParam(params.resourceCollectionId)!, kind: 'bot', id: readRouteParam(params.resourceId)! } } : {}),
-            draftHandoff: { before: documentBeforeSend, after: documentAfterOptimisticClear },
+            ...(!independent ? { draftHandoff: { before: documentBeforeSend, after: documentAfterOptimisticClear } } : {}),
             state: 'queued', uploads: [], clearBoundaryMs: clearedAt !== null && Number.isFinite(clearedAt) ? clearedAt : null,
           };
           for (let slot = 0; slot < readyAttachments.length; slot++) {
             const source = getUploadedSource(readyAttachments[slot].id);
             if (!source && !outboxAttachmentNeedsLocalBytes(readyAttachments[slot])) continue;
             if (!source) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
-            record.uploads.push(await retainOutboxFile(record, slot, source));
+            record.uploads.push(await retainOutboxFile(record, item.attachmentSlots.findIndex(attachment => attachment?.id === readyAttachments[slot].id), source));
           }
           for (const { localId, source } of pendingSources) {
             record.uploads.push(await retainOutboxFile(record, item.slotByLocalId[localId]!, source));
           }
           if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) return;
+          noteLocalSend(record.item.clientId);
           await mobileDurableOutbox.add(record);
           committed = true;
-          handoff.release(true);
+          messageAccepted = true;
+          if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
+          handoff?.release(true);
           // Durable ownership precedes clearing the composer or deleting annotation sources.
           if (!isMobileAuthOwnerCurrent(ownerAtSend) || !sendScopeStillAlive()) {
             const stored = readComposerDocumentDraftSync(sessionId);
-            if (stored && composerDocumentsEqual(stored, documentBeforeSend)) {
+            if (!independent && stored && composerDocumentsEqual(stored, documentBeforeSend)) {
               saveComposerDraft(sessionId, '');
               saveComposerDocumentDraft(sessionId, emptyComposerDocument());
               clearQuotes(sessionId);
             }
-            return;
+            return messageAccepted;
           }
-          if (composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
+          if (!independent && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
             applyComposerDocument(documentAfterOptimisticClear);
           }
           rememberSentAttachmentPreviews(record.item.clientId, readyAttachments, (attachment) => {
-            const slot = readyAttachments.findIndex((a) => a.id === attachment.id);
+            const slot = item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
             const upload = record?.uploads.find((u) => u.slot === slot);
-            return record && upload ? durableOutboxUploadUri(record, upload) : readyPreviews[slot] ?? null;
+            return record && upload ? durableOutboxUploadUri(record, upload) : readyPreviews[readyAttachments.findIndex(a => a.id === attachment.id)] ?? null;
           }, (attachment) => {
             const slot = item.attachmentSlots.findIndex((entry) => entry?.id === attachment.id);
             return slot >= 0 ? `${item.clientId}-slot-${slot}` : undefined;
@@ -6586,7 +6828,7 @@ function SessionScreenContent() {
         const remainingAttachments = attachmentsRef.current.filter((a) => !sentAttachmentIds.has(a.id));
         setAttachments(remainingAttachments);
         attachmentsRef.current = remainingAttachments;
-        setAttachmentError(null);
+        if (!independent) setAttachmentError(null);
         // plan 一次性语义:权限档快照进条目(派发按快照发),chip 立即恢复——
         // 不等附件上传完,与「消息已发出」的乐观语义一致。
         if (permissionModeAtSend === 'plan') {
@@ -6595,10 +6837,10 @@ function SessionScreenContent() {
           const restored = remembered && remembered !== 'plan' ? remembered : fallback;
           void maker.setPermissionMode(sessionId, restored).catch(() => undefined);
         }
-        voiceDictionaryLearningTrackerRef.current?.flush();
+        if (!independent) voiceDictionaryLearningTrackerRef.current?.flush();
         requestMessageListFollowLatest();
         } finally {
-          handoff.release(committed);
+          handoff?.release(committed);
           if (!committed && record) await removeOutboxFiles(record).catch(() => undefined);
         }
       } catch (err) {
@@ -6607,12 +6849,12 @@ function SessionScreenContent() {
         sendInFlightRef.current = false;
         setSending(false);
       }
-      return;
+      return messageAccepted;
     }
     try {
       // 拍照 / 选图后立刻点发送是常见路径:等在途图片上传落定(乐观托盘)。
       // 有失败就中止发送——错误文案已由上传回调写入 attachmentError,让用户处理。
-      const { failedCount } = await waitForPendingUploads();
+      const { failedCount } = independent ? { failedCount: 0 } : await waitForPendingUploads();
       if (!sendScopeStillAlive()) {
         recoverCapturedDraftForScopeExit();
         return;
@@ -6622,7 +6864,7 @@ function SessionScreenContent() {
         return;
       }
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
-      const sendAttachments = attachmentsRef.current;
+      const sendAttachments = independent ? [] : attachmentsRef.current;
       // currentSession 同理是等待前的快照:上传等待期间(sending 不锁控制面板)用户
       // 可能已切 model / effort / permission / fast,重读 store 拿最新会话字段,
       // 排队消息与 UI 显示的运行时保持一致(codex review R19)。
@@ -6654,6 +6896,7 @@ function SessionScreenContent() {
             agentReferences: agentReferencesAtSend,
             pastedTextRanges: pastedTextRangesAtSend,
             slashCommandRanges: slashCommandRangesAtSend,
+            replyQuote: queuedMessageReplyQuote(original),
           }),
           ...(original.sessionRefs && original.sessionRefs.length > 0
             ? { sessionRefs: [...original.sessionRefs] }
@@ -6790,7 +7033,7 @@ function SessionScreenContent() {
         if (queueEditingRef.current?.clientId === editingQueueItem.clientId) {
           cancelQueueEdit();
         }
-        voiceDictionaryLearningTrackerRef.current?.flush();
+        if (!independent) voiceDictionaryLearningTrackerRef.current?.flush();
         return;
       }
       // 命令判定用 body(不含引用块):带引用时 /context 等本地命令仍生效,且不消费引用。
@@ -6823,7 +7066,7 @@ function SessionScreenContent() {
           restoreDraftAfterFailure();
         }
         remoteSessionStore.appendLocalSystemCard(sessionId, 'learn', cardData);
-        voiceDictionaryLearningTrackerRef.current?.flush();
+        if (!independent) voiceDictionaryLearningTrackerRef.current?.flush();
         // 成功时草稿已在乐观第一拍清空;失败时上方已恢复——两路都跟到底部。
         requestMessageListFollowLatest();
         return;
@@ -6858,7 +7101,7 @@ function SessionScreenContent() {
           });
         }
         remoteSessionStore.appendLocalSystemCard(sessionId, localSystemCommand, data);
-        voiceDictionaryLearningTrackerRef.current?.flush();
+        if (!independent) voiceDictionaryLearningTrackerRef.current?.flush();
         // 草稿已在乐观第一拍清空,这里只需跟到底部。
         requestMessageListFollowLatest();
         return;
@@ -6869,6 +7112,7 @@ function SessionScreenContent() {
         agentReferences: agentReferencesAtSend,
         pastedTextRanges: pastedTextRangesAtSend,
         slashCommandRanges: slashCommandRangesAtSend,
+        replyQuote: replyQuoteAtSend,
       });
       let queued: QueuedRemoteMessage;
       try {
@@ -6887,6 +7131,7 @@ function SessionScreenContent() {
       // previews / mediaAssetAttachments 映射保留到成功后再清:它们不入消息体,失败
       // 恢复 attachments 时缩略图能原样回来。
       const projectionBeforeSend = remoteSessionStore.getInputProjection(sessionId);
+      noteLocalSend(queued.clientId);
       markQueueItemSending(queued);
       remoteSessionStore.setInputProjectionOptimistically(sessionId, {
         ...projectionBeforeSend,
@@ -6903,11 +7148,13 @@ function SessionScreenContent() {
       // 排队 icon(或随回滚一起消失)。
       const projectionRemoteEpochAtRequestStart =
         remoteSessionStore.captureInputProjectionRemoteEpoch(sessionId);
-      setAttachments([]);
-      attachmentsRef.current = [];
+      if (!independent) {
+        setAttachments([]);
+        attachmentsRef.current = [];
+      }
       // 标注再编辑真相(矢量笔迹 + 原图副本)不在乐观段清:enqueue 失败回滚恢复
       // 托盘后,标注附件必须还能继续编辑/撤销(review P2);成功收尾按本批精确清。
-      setAttachmentError(null);
+      if (!independent) setAttachmentError(null);
       requestMessageListFollowLatest();
       const projectionEpochAtRequestStart =
         remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
@@ -6939,6 +7186,7 @@ function SessionScreenContent() {
           queued.clientId,
         );
         enqueueAccepted = true;
+        if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
       } catch (err) {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:优先 refetch 权威
         // projection 判断。只有权威证据能保留乐观气泡；证据不可用时回到现有
@@ -6975,7 +7223,9 @@ function SessionScreenContent() {
       }
       // 消息已由 A 路径落定；若等待期间切到 B，只停止旧 continuation，不能再用
       // A 的附件 id / plan 状态去清理 B 的 composer UI。
-      if (!sendScopeStillAlive()) return;
+      messageAccepted = enqueueAccepted;
+      if (!sendScopeStillAlive()) return messageAccepted;
+      if (enqueueAccepted) setFollowUpEngaged(followUpScope);
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
         // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
@@ -6985,7 +7235,7 @@ function SessionScreenContent() {
         const restored = remembered && remembered !== 'plan' ? remembered : fallback;
         void maker.setPermissionMode(sessionId, restored).catch(() => undefined);
       }
-      voiceDictionaryLearningTrackerRef.current?.flush();
+      if (!independent) voiceDictionaryLearningTrackerRef.current?.flush();
       // 只清本次实际发出那批(sendAttachments)的映射:enqueue 在途期间(弱网数秒)
       // composer 全程可交互,期间新落定的附件已写进这两个映射——全量清空会把它们的
       // 托盘缩略图与相册面板勾选角标误清掉,而附件本身还留在 attachments 里随下一条
@@ -7009,6 +7259,7 @@ function SessionScreenContent() {
       setSending(false);
       messageWorkLease.release();
     }
+    return messageAccepted;
   }
 
   // Keep the latest send available to imperative callers (voice release-to-send, long-press)
@@ -7458,11 +7709,20 @@ function SessionScreenContent() {
     };
   };
 
+  // Shared by queue receipts and file actions; declared before memoized consumers.
+  const [transientNotice, setTransientNotice] = useState<SessionTransientNoticeValue | null>(null);
+  const transientNoticeSeqRef = useRef(0);
+  const showTransientNotice = useCallback((message: string) => {
+    transientNoticeSeqRef.current += 1;
+    setTransientNotice({ id: transientNoticeSeqRef.current, message });
+  }, []);
+  const dismissTransientNotice = useCallback(() => setTransientNotice(null), []);
+
   const resumeQueue = () => {
     void runQueueAction(() => maker.input.resume(sessionId));
   };
 
-  const steerQueueItem = (item: QueuedRemoteMessage) => {
+  const steerQueueItem = useCallback((item: QueuedRemoteMessage) => {
     void runQueueAction(async () => {
       // Projections omit trusted bodies. Prefer fresh source data, while allowing the
       // target to restore its main-owned snapshot when the source is unavailable.
@@ -7476,14 +7736,39 @@ function SessionScreenContent() {
       const projectionEpochAtRequestStart =
         remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
       const projection = await maker.input.getProjection(sessionId);
-      remoteSessionStore.setInputProjectionIfCurrent(
+      const projectionApplied = remoteSessionStore.setInputProjectionIfCurrent(
         sessionId,
         projection,
         projectionEpochAtRequestStart,
       );
+      // The boolean ACK can also mean "kept for the next turn" on older hosts.
+      // Only a successfully applied snapshot proves it is still queued. A turn
+      // boundary can invalidate the query while leaving the old queue visible.
+      if (projectionApplied && remoteSessionStore.getInputProjection(sessionId).pendingQueue
+        .some((entry) => entry.clientId === item.clientId)) {
+        showTransientNotice(t('message.queue.steerQueued'));
+      }
       return accepted;
     });
-  };
+  }, [deviceId, invoke, maker, runQueueAction, sessionId, showTransientNotice, t]);
+
+  const moveQueueItem = useCallback((clientId: string, direction: 'up' | 'down') => {
+    // 菜单打开期间队列可能变化：按最新位置重新判断方向和目标。
+    const projection = remoteSessionStore.getInputProjection(sessionId);
+    const originalIndex = projection.pendingQueue.findIndex((entry) => entry.clientId === clientId);
+    const item = projection.pendingQueue[originalIndex];
+    if (!item) return;
+    const { actions } = buildQueueRowPresentation({
+      busy: queueBusy, item, originalIndex, projection,
+      queueLength: projection.pendingQueue.length,
+      readOnlyReason: queueAvailabilityReason,
+    });
+    const action = actions[direction === 'up' ? 'moveUp' : 'moveDown'];
+    if (action.disabled || action.targetIndex == null) return;
+    const targetIndex = action.targetIndex;
+    setQueueSelectedClientId(null);
+    void runQueueAction(() => maker.input.move(sessionId, clientId, targetIndex));
+  }, [maker, queueAvailabilityReason, queueBusy, runQueueAction, sessionId]);
 
   const setQueueEditLock = useCallback((clientId: string, locked: boolean) => {
     const projectionEpochAtRequestStart =
@@ -7498,7 +7783,7 @@ function SessionScreenContent() {
       });
   }, [applyProjectionIfCurrent, maker, sessionId]);
 
-  const removeQueueItem = (clientId: string) => {
+  const removeQueueItem = useCallback((clientId: string) => {
     const before = remoteSessionStore.getInputProjection(sessionId);
     const index = before.pendingQueue.findIndex((item) => item.clientId === clientId);
     const removed = index >= 0 ? before.pendingQueue[index] : undefined;
@@ -7532,7 +7817,7 @@ function SessionScreenContent() {
       },
       action: () => maker.input.remove(sessionId, clientId),
     });
-  };
+  }, [maker, runOptimisticQueueAction, runQueueAction, sessionId]);
 
   /**
    * 回收某次排队编辑期间"新增"的附件(不在 stash、也不是该队列条目自身 files):
@@ -7590,7 +7875,7 @@ function SessionScreenContent() {
    * 已在编辑另一条时切换目标:沿用最初的 stash(用户真正的草稿),旧条目解锁,
    * 且旧条目编辑期间新增的附件先回收再覆写托盘(否则成为 OSS 孤儿,review P2)。
    */
-  const beginQueueEdit = (item: QueuedRemoteMessage) => {
+  const beginQueueEdit = useCallback((item: QueuedRemoteMessage) => {
     if (queueAvailabilityReason || queueBusy) return;
     // 上一条的保存(update-content)在途时不允许进入/切换编辑:切换路径会立即解锁
     // 旧条目并回收其编辑期附件,与在途 RPC 竞争——桌面端可能用旧内容抢先派发,或
@@ -7642,35 +7927,14 @@ function SessionScreenContent() {
       setQueueEditLock,
     );
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(textState.document);
-  };
+  }, [applyComposerDocument, discardQueueEditTransientAttachments, pendingUploads.length,
+    queueAvailabilityReason, queueBusy, setQueueEditLock, t]);
 
-  /** 放弃排队消息编辑:解锁 + 回收编辑期新增附件 + 恢复进入前的草稿与附件托盘。 */
-  const pendingSendActions = useMemo<PendingSendBubbleActions>(
-    () => ({
-      busy: queueBusy,
-      selectedClientId: queueSelectedClientId,
-      onSelect: setQueueSelectedClientId,
-      onRemove: (clientId: string) => {
-        setQueueSelectedClientId(null);
-        removeQueueItem(clientId);
-      },
-      onBeginEdit: (clientId: string) => {
-        const target = remoteSessionStore.getInputProjection(sessionId).pendingQueue
-          .find((entry) => entry.clientId === clientId);
-        if (target) beginQueueEdit(target);
-      },
-      onSteer: (clientId: string) => {
-        const target = remoteSessionStore.getInputProjection(sessionId).pendingQueue
-          .find((entry) => entry.clientId === clientId);
-        if (!target) return;
-        setQueueSelectedClientId(null);
-        steerQueueItem(target);
-      },
-      onRetryOutbox: retryOutboxItem,
-      onRemoveOutbox: removeOutboxItem,
-    }),
-    [beginQueueEdit, queueBusy, queueSelectedClientId, removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId, steerQueueItem],
-  );
+  const pendingSendActions = usePendingSendActions({
+    beginQueueEdit, moveQueueItem, queueBusy, queueSelectedClientId,
+    removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId,
+    setQueueSelectedClientId, steerQueueItem,
+  });
 
   // ⚠️ 临时取证(定位「气泡凭空消失」,定位完成后删):会话页实例身份 + 挂载/卸载。
   // settlingDiag 只在两次「首帧」打出 prev=0,之后再没跑过 —— 强烈指向组件被换了实例
@@ -8351,7 +8615,7 @@ function SessionScreenContent() {
     model: string;
     providerId?: string;
     targetContextWindow?: number;
-    selection?: { effort: string | null; fastMode: boolean };
+    selection?: { effort: string | null; fastMode: boolean | 'ultrafast' };
   }): Promise<boolean> => {
     if (!canConfigureSessionModel) return false;
     if (shouldBlockLegacyRemoteModelWindowSwitch({
@@ -8541,7 +8805,7 @@ function SessionScreenContent() {
         targetContextWindow:capability.contextWindow,selection});
       if (!applied) return false;
       if (!selection && config.effort && config.effort !== currentSession.effort) await maker.setEffort(sessionId,config.effort);
-      if (!selection && config.fast !== !!currentSession.fastMode) await maker.setFastMode(sessionId,config.fast);
+      if (!selection && config.fast !== (currentSession.fastMode ?? false)) await maker.setFastMode(sessionId,config.fast);
       return true;
     }, {model:config.modelId,providerId:config.providerId,effort:config.effort,fastMode:config.fast,
       ...(agentSwitchIntent ? {agentSwitchIntent:null} : {})}, {recover:'refetch'});
@@ -8813,14 +9077,6 @@ function SessionScreenContent() {
 
   // chip 长按菜单(浮动面板,ContextSheet/模型选择面板同款):target 即开关。
   const [chipMenuTarget, setChipMenuTarget] = useState<ChatFilePathTarget | null>(null);
-  // 会话页的短暂提示(复制路径等),与文件浏览器「已复制路径」同口径。
-  const [transientNotice, setTransientNotice] = useState<SessionTransientNoticeValue | null>(null);
-  const transientNoticeSeqRef = useRef(0);
-  const showTransientNotice = useCallback((message: string) => {
-    transientNoticeSeqRef.current += 1;
-    setTransientNotice({ id: transientNoticeSeqRef.current, message });
-  }, []);
-  const dismissTransientNotice = useCallback(() => setTransientNotice(null), []);
   const [chipShareBusy, setChipShareBusy] = useState(false);
 
   // 聊天正文文件 chip 上下文(消息树内 inline chip 经 context 消费,不走多层 prop):
@@ -8998,20 +9254,33 @@ function SessionScreenContent() {
   //(sessionMetaWriteGuard / sessionMetaWriteQueue / sessionPendingWrites),
   // 首页与本页是同组元数据写的两个入口,写序必须跨页面共享(review P1:首页
   // 置顶在退避中,本页取消置顶——实例级守卫感知不到对方,退避恢复后旧写覆盖
-  // 新写)。点击当帧 applySessionPatch 即时生效,归档 / 删除立即退回首页,RPC
+  // 新写)。归档经列表事务先预览、确认后退出；删除立即退回首页。RPC
   // 经共享队列串行出网;成功仅在本笔仍是最新写时用回包对账,失败时最新写整体
   // 还原会话对象(归档 / 删除把行移出了列表,反向 patch 复活不了)、非最新写
   // requestReseed 收敛,并 Alert 提示(人可能已回到首页,会话页 error 条看不见)。
+  const { patchSession: patchSessionFromList } = useSessionListActions({ preferredRpcDeviceId: deviceId });
   const patchSessionMeta = useCallback((
     patch: Parameters<typeof maker.patchSessionMeta>[1],
+    prepare?: (isCurrent: () => boolean) => Promise<boolean>,
   ) => {
     const session = currentSession;
     if (!deviceId || !session) return;
+    if (patch.status === 'archived') {
+      // 列表与详情共用预览、确认、写序与失败回滚；只在实际提交时退出详情。
+      const isCurrent = () => sessionSubscriptionIdentityRef.current === sessionSubscriptionIdentity;
+      if (!isCurrent()) return;
+      return patchSessionFromList(session, patch, async (isLatest) => {
+        const canConfirm = () => isCurrent() && isLatest();
+        return canConfirm() && (await (prepare?.(canConfirm) ?? true)) && canConfirm();
+      }, goBackToHome).catch((err: unknown) => {
+        Alert.alert(t('session.screen.operationFailed'), humanizeRemoteError(err));
+      });
+    }
     // 出网沿用本页路由设备;乐观 patch / 回滚 / reseed 落行真实所在的物理 shard(与首页
     // 同一解析):re-link 后两者可能不同,按路由 id 落 shard 会让归档移行落空、回滚插错 shard。
     const { rpcDeviceId, shardId } = resolveSessionWriteDevices(sessionId, session, deviceId)
       ?? { rpcDeviceId: deviceId, shardId: deviceId };
-    const leavesDetailScreen = patch.status === 'archived' || patch.status === 'deleted';
+    const leavesDetailScreen = patch.status === 'deleted';
     if (leavesDetailScreen) {
       goBackToHome();
     }
@@ -9095,7 +9364,7 @@ function SessionScreenContent() {
         releasePending();
       }
     })();
-  }, [currentSession, deviceId, goBackToHome, invoke, maker, sessionId]);
+  }, [currentSession, deviceId, goBackToHome, invoke, maker, patchSessionFromList, sessionId, sessionSubscriptionIdentity, t]);
 
   const previewRewindAtMessage = useCallback(async (clientId: string, draft: MobileMessageDraft) => {
     if (messageActionBusy) return;
@@ -9140,6 +9409,7 @@ function SessionScreenContent() {
     }
   }, [maker, messageActionBusy, sessionId]);
 
+
   const performForkAtMessage = useCallback(async (clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
     setMessageActionBusy({ clientId, kind: 'fork' });
@@ -9161,8 +9431,9 @@ function SessionScreenContent() {
       });
     } catch (err) {
       const detail = formatRemoteError(err);
-      const projectionKey = inputProjectionErrorI18nKey(detail);
-      setError(projectionKey ? t(projectionKey) : detail);
+      // 远程 Agent 的分叉失败(如 REMOTE_AGENT_FORK_FAILED)用 session.remoteError 的本地化文案，不显示原始错误码。
+      const key = inputProjectionErrorI18nKey(detail) ?? remoteActionErrorI18nKey(detail);
+      setError(key ? t(key) : detail);
     } finally {
       setMessageActionBusy(null);
     }
@@ -9387,6 +9658,33 @@ function SessionScreenContent() {
     requestAnimationFrame(() => composerInputRef.current?.focus());
   }, [applyComposerDocument, canUseComposer, currentSession, deviceId, messages, sessionId]);
 
+  // 伙伴近况里点一条待办：作为待办引用放进输入框，主人写一句话交代，伙伴按话更新它。
+  const quoteTodoInComposer = useCallback((todo: { id: string; title: string }) => {
+    if (!canUseComposer || !companionResource) return;
+    const node = todoReferenceComposerNode({ botId: companionResource.ref.id, todoId: todo.id, title: todo.title });
+    const editor = composerInputRef.current;
+    if (editor) editor.insertNode(node);
+    else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+  }, [applyComposerDocument, canUseComposer, companionResource]);
+
+  // 伙伴近况里的「帮我查查」：输入框空着就作为主人的一句话直接发出（与手动发送同一条路径，带来源设备）；
+  // 已有草稿或附件时不替主人连同草稿一起发，只把这句话放进输入框。
+  const askCompanionInComposer = useCallback((text: string) => {
+    if (!canUseComposer || !composerDraftHydrated) return;
+    const idle = !composerDocumentHasContent(composerDocumentRef.current)
+      && attachments.length === 0 && pendingUploads.length === 0 && !queueEditingRef.current;
+    if (idle && sendLatestRef.current) {
+      void sendLatestRef.current({ documentOverride: textComposerDocument(text) });
+      return;
+    }
+    const node = { type: 'text' as const, text: composerDocumentHasContent(composerDocumentRef.current) ? `\n${text}` : text };
+    const editor = composerInputRef.current;
+    if (editor) editor.insertNode(node);
+    else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+  }, [applyComposerDocument, attachments.length, canUseComposer, composerDraftHydrated, pendingUploads.length]);
+
   const deleteMessage = useCallback((clientId: string) => {
     if (!deviceId || messageActionBusy) return;
     // 运行中能否删由被控端判定:点停止后本地运行态可能晚于被控端收敛,
@@ -9483,11 +9781,16 @@ function SessionScreenContent() {
     <>
     <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted }} />
     {companionHeaderShown ? <>
-      <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />
+      {horizontalSystemHeader ? null : <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />}
       <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
+        nativeHeader={horizontalSystemHeader}
         resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
         settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
         working={!!companionWorkingLabel}
+        sessionId={sessionId ?? ''}
+        onQuoteTodo={quoteTodoInComposer}
+        onAskCompanion={askCompanionInComposer}
+        askCompanionReady={canUseComposer && composerDraftHydrated}
         onSearch={() => setSearchOpen(true)}
         onBack={goBackToHome} />
     </> : <SessionHeaderBar
@@ -9508,6 +9811,8 @@ function SessionScreenContent() {
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               messageOnly={sessionManagedByHost}
               onBack={sessionListDrawerOverlayMounted ? closeSessionListDrawer : goBackToHome}
+              noticeOverride={currentSession?.source === 'side-chat'
+                ? t('session.sideChat.fromMain', { title: sideChatParent?.title || t('session.sideChat.mainTask') }) : undefined}
               onOpenSessionList={!paneLayout.persistent && wideSessionNav.enabled ? openSessionListDrawer : undefined}
               onNewSession={paneLayout.persistent ? handleDrawerNewSession : undefined}
               onOpenFiles={() => {
@@ -9541,6 +9846,7 @@ function SessionScreenContent() {
               searchOpen={searchOpen}
               title={isDeviceAccessRevoked
                 ? t('session.screen.accessRevokedShort')
+                : currentSession?.source === 'side-chat' ? t('session.sideChat.title')
                 // 哨兵先过投影再进兜底链:会话头是发出第一句话后停留最久的位置,
                 // 原样显示会把内部哨兵 "New Maker" 摆在标题栏上。
                 : projectDraftSessionTitle(currentSession?.title, t('session.menu.unnamedTitle'))
@@ -9566,7 +9872,7 @@ function SessionScreenContent() {
         style={[styles.keyboard, { marginLeft: paneLayout.detail.x, marginRight: Math.max(0, windowDimensions.width - paneLayout.detail.x - paneLayout.detail.width) }]}
       >
         {Platform.OS === 'ios' ? (
-          <SessionHeaderNativeBlur height={Math.max(topOverlayHeight, insets.top + 44)}
+          <SessionHeaderNativeBlur height={topChromeHeight}
             fadeInside={companionHeaderShown ? CHAT_HEADER_BLUR_FADE_INSIDE : undefined} />
         ) : null}
         <SessionChromeLayer
@@ -9620,6 +9926,10 @@ function SessionScreenContent() {
         <MountOnFirstOpen open={settingsOpen}>{() => (
           currentSession ? (
           <SessionMenuSheet
+            onOpenSideChats={canUseSideChats ? () => {
+              setSideChatsPendingOpen(true);
+              setSettingsOpen(false);
+            } : undefined}
             tagDeviceId={deviceId}
             onLeaveSharing={() => void sharedTaskExit.leave()}
             leavingSharing={sharedTaskExit.busy}
@@ -9645,7 +9955,13 @@ function SessionScreenContent() {
             extraDirBrowser={extraDirBrowser}
             initialView={menuInitialView}
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
-            onArchive={() => patchSessionMeta({ status: 'archived' })}
+            onArchive={(prepare) => { void patchSessionMeta({ status: 'archived' }, prepare); }}
+            confirmArchive={async (isCurrent) => {
+              const names = deviceId
+                ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+                : [];
+              return isCurrent() && confirmArchiveWithSchedules(t, names);
+            }}
             onClose={() => setSettingsOpen(false)}
             onClosed={handleSessionMenuClosed}
             onDelete={() => patchSessionMeta({ status: 'deleted' })}
@@ -9688,6 +10004,9 @@ function SessionScreenContent() {
           />
         ) : null
         )}</MountOnFirstOpen>
+        {currentSession ? <SideChatsSheet key={`${deviceId}:${sessionId}`} visible={sideChatsOpen}
+          session={currentSession} maker={maker} onClose={() => setSideChatsOpen(false)}
+          onCreate={() => createSideChat()} onSelect={openSideChat} /> : null}
         <SessionSearchSheet
           activeIndex={activeSearchIndex}
           hasOlderMessages={hasOlderMessages && !isScheduleDetail}
@@ -9887,7 +10206,7 @@ function SessionScreenContent() {
           currentSession && canConfigureSessionModel && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
             unified={{
-              currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: !!currentSession.fastMode },
+              currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: (currentSession.fastMode ?? false) },
               scope: JSON.stringify([auth.user?.id, deviceId, orcaRemoteAgentDeviceId]),
               agents: sessionAgentSwitchSupported ? ['claude-code','codex','pi'] : [sessionAgentKind],
               loadCapabilities: async agent => {
@@ -10012,7 +10331,7 @@ function SessionScreenContent() {
             providersReady={collabDeviceProviders.ready}
             providersUnsupported={collabDeviceProviders.unsupported}
             selectedEffort={collab.workerForm.form.model?.effort ?? ''}
-            selectedFastMode={!!collab.workerForm.form.model?.fast}
+            selectedFastMode={collab.workerForm.form.model?.fast ?? false}
             selectedProviderId={collab.workerForm.form.model?.providerId ?? null}
             testID="session.collabModelSheet"
             visible={collab.workerForm.modelPicker.open}
@@ -10086,8 +10405,9 @@ function SessionScreenContent() {
                   bottomInset={androidFrostedComposer ? 0 : bottomOverlayHeight}
                   interactive={!sessionListDrawerOverlayMounted}>
 
+                <SessionQuickSendProvider value={canUseComposer ? async text => (await send({ independentText: text })) === true : null}>
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
-                  <MessageRenderer companion={companionChat}
+                  <MessageRenderer companion={companionChat} companionQuote={companionQuoteOptions}
                     onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
@@ -10105,9 +10425,7 @@ function SessionScreenContent() {
                     busyClientId={messageActionBusy?.clientId ?? null}
                     canLoadEarlier={canLoadEarlierHistory}
                     emptyTestID="session.messageList.empty"
-                    emptyMessage={companionChat && lastSyncedAt === null
-                      && (status !== 'online' || targetAvailableForDispatch === false)
-                      ? t('message.renderer.historyNotCached') : undefined}
+                    emptyMessage={messageEmptyState.emptyMessage}
                     focusedItemKey={focusedMessageItemKey ?? null}
                     focusedRequestKey={focusedMessageRequestKey}
                     followLatestRequestKey={messageListFollowLatestRequestKey}
@@ -10126,6 +10444,7 @@ function SessionScreenContent() {
                     loadEarlierProgressKey={oldestLoadedMessageCursor}
                     onCopyMessageLink={copyMessageLink}
                     onAddMessageToComposer={canUseComposer ? addMessageToComposer : undefined}
+                    onSideChatMessage={canUseSideChats && currentSession?.source !== 'side-chat' ? askInSideChat : undefined}
                     onDeleteMessage={isSharedTaskPeer(deviceId) ? undefined : deleteMessage}
                     onForkMessage={isSharedTaskPeer(deviceId) ? undefined : forkAtMessage}
                     onLoadEarlier={loadEarlierMessages}
@@ -10210,6 +10529,7 @@ function SessionScreenContent() {
                     testID="session.messageList"
                   />
                 </ChatFilePathContext.Provider>
+                </SessionQuickSendProvider>
                 </RecentMessageHistories>
               ) : null}
 
@@ -10327,6 +10647,7 @@ function SessionScreenContent() {
             pendingSkillSelectionRef={pendingSkillSelectionRef}
             canUseComposer={canUseComposer}
             canUseRemoteSessionControls={canUseRemoteSessionControls}
+            canUseSideChats={canUseSideChats}
             currentSession={currentSession}
             deviceId={deviceId}
             maker={maker}
@@ -10515,6 +10836,12 @@ function SessionScreenContent() {
                   ) : null}
                 </View>
               ) : null}
+              {companionChat && companionResource?.ref.id === 'cindy-default'
+                && companionResource.links.some(link => link.rel === 'conversation' && link.target.kind === 'session' && link.target.sessionId === sessionId)
+                && followUpEngaged === followUpScope && !remoteSessionRunning && !isSessionStreaming
+                && pending.length === 0 && !shareSelectionActive && !remoteUnavailableReason ? (
+                <CompanionFollowUpInvitation key={followUpScope} deviceId={deviceId} deviceName={deviceName} botId="cindy-default" />
+              ) : null}
               {/* Desktop BotWorkingStatus: a teammate's paced public status stays above the composer,
                   also while the user reads older messages. Interactions carry their own panel. */}
               {companionChat && companionWorkingLabel && !companionInlineInteraction
@@ -10531,6 +10858,19 @@ function SessionScreenContent() {
                     avatar={companionPortrait(COMPANION_STATUS_AVATAR_SIZE)}
                   />
                 </View>
+              ) : null}
+              {!shareSelectionActive && currentSession?.source === 'side-chat'
+                && currentSession.parentSessionId ? (
+                <Pressable accessibilityRole="button"
+                  onPress={() => openCollabSession(currentSession.parentSessionId!)}
+                  style={({ pressed }) => [styles.queueEditBar,
+                    { marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
+                    pressed && styles.collabBarPressed]}
+                  testID="session.sideChat.returnMain">
+                  <MessagesSquare color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                  <Text numberOfLines={1} style={styles.queueEditBarText}>{t('session.sideChat.returnMain')}</Text>
+                  <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                </Pressable>
               ) : null}
               {/* 协同状态条:Lead 显示 Worker 概况并打开协同面板;Worker 回到所属 Lead。 */}
               {!companionChat && !shareSelectionActive
@@ -10607,6 +10947,40 @@ function SessionScreenContent() {
                   <Text style={styles.queueEditBarText}>{composerAgentAuthHint}</Text>
                 </View>
               ) : null}
+              {sideChatCount > 0 && !companionChat && !shareSelectionActive
+                && sessionOperationLayout.composerSlot === 'editable' ? (
+                <Pressable accessibilityRole="button" accessibilityLabel={t('session.sideChat.summary', { count: sideChatCount })}
+                  onPress={() => { Keyboard.dismiss(); setModelSheetOpen(false); setSideChatsOpen(true); }}
+                  style={({ pressed }) => [styles.queueEditBar,
+                    { marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
+                    pressed && styles.collabBarPressed]}
+                  testID="session.sideChat.bar">
+                  <MessagesSquare size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+                  <Text numberOfLines={1} style={styles.queueEditBarText}>{t('session.sideChat.summary', { count: sideChatCount })}</Text>
+                  <ChevronRight size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+                </Pressable>
+              ) : null}
+              {companionChat && pendingCompanionReplyQuote && sessionId && !shareSelectionActive
+                && sessionOperationLayout.composerSlot === 'editable' ? (
+                <View
+                  style={[styles.companionQuoteBar, { marginHorizontal: composerTouchLayout.composerPaddingHorizontal }]}
+                  testID="session.companionQuoteBar"
+                >
+                  <View style={styles.companionQuoteBarBody}>
+                    <BotGroupQuote display={companionReplyQuoteDisplay(pendingCompanionReplyQuote,
+                      pendingCompanionQuoteOriginal, companionQuoteNames)} />
+                  </View>
+                  <RouteActionButton
+                    accessibilityLabel={t('message.quote.remove')}
+                    hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                    onPress={() => setPendingCompanionReplyQuote(sessionId, null)}
+                    style={styles.queueEditBarClose}
+                    testID="session.companionQuoteRemove"
+                  >
+                    <X color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                  </RouteActionButton>
+                </View>
+              ) : null}
               <SessionResourceCards state={sessionResourceCards} />
               {!sessionResourceCards.blocked ? <SessionComposerInput
                 promptRecommendation={promptRecommendation}
@@ -10621,6 +10995,7 @@ function SessionScreenContent() {
                 remoteUnavailableReason={remoteUnavailableReason}
                 voiceState={voiceState}
                 voiceStartPending={voiceStartPending}
+                voiceCaretPlacementPending={voiceCaretPlacementPending}
                 voiceError={voiceError}
                 composerVoiceHoldArmed={composerVoiceHoldArmed}
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
@@ -10633,8 +11008,8 @@ function SessionScreenContent() {
                 keyboardState={keyboardState}
                 attachmentError={attachmentError}
                 visualFocusComposer={visualFocusComposer}
-                applyRichComposerChange={applyRichComposerChange}
-                setComposerDraft={setComposerDraft}
+                applyRichComposerChange={applyTypedComposerChange}
+                setComposerDraft={setTypedComposerDraft}
                 handleComposerInputPressIn={handleComposerInputPressIn}
                 beginPastePlaceholders={beginPastePlaceholders}
                 failPastePlaceholders={failPastePlaceholders}
@@ -10643,7 +11018,10 @@ function SessionScreenContent() {
                 composerSendUnavailableReason={canUseComposer ? null : composerDisabledReason}
                 attachmentCount={attachments.length}
                 pendingUploadCount={pendingUploads.length}
-                onPasteImages={(uris) => void addPastedImageAttachments(uris)}
+                onPasteImages={(uris) => {
+                  prewarmAgentOnTyping();
+                  void addPastedImageAttachments(uris);
+                }}
                 onDragActiveChange={handleComposerDragActiveChange}
                 onInputTopLayout={handleComposerInputTopLayout}
                 composerPullThrough={composerPullThrough}
@@ -10686,12 +11064,13 @@ function SessionScreenContent() {
         <SessionTransientNotice
           notice={transientNotice}
           onDismiss={dismissTransientNotice}
-          top={Math.max(topOverlayHeight, insets.top + 44) + spacing.sm}
+          top={topChromeHeight + spacing.sm}
         />
       </MessageHistoryOverlay>
-      <MessageHistoryOverlay enabled={!paneLayout.persistent || sessionListDrawerOverlayMounted}>
-        {/* The persistent panel stays below the shared resident list. Only modal
-            drawers cover resident histories, including their closing animation. */}
+      <MessageHistoryOverlay>
+        {/* The persistent panel belongs to SessionTaskLayout, outside this keyed
+            task. Modal drawers keep their exit/navigation lifecycle here. */}
+        {!paneLayout.persistent || sessionListDrawerOverlayMounted ? (
         <SessionListDrawer
           newSessionActionRef={homeNewSessionActionRef}
           newSessionInSystemBar={paneLayout.persistent && Platform.OS === 'ios' && adaptiveWindow.barEdge !== 'none'}
@@ -10700,10 +11079,11 @@ function SessionScreenContent() {
           onClosed={handleSessionListDrawerClosed}
           runNavigation={queueDrawerNavigation}
           onSelectSession={handleDrawerSelectSession}
-          persistent={paneLayout.persistent && !sessionListDrawerOverlayMounted}
-          open={(paneLayout.persistent && !sessionListDrawerOverlayMounted) || sessionListDrawerOpen}
-          width={paneLayout.persistent && !sessionListDrawerOverlayMounted ? paneLayout.sidebarWidth : sessionListDrawerWidthRef.current}
+          open={sessionListDrawerOpen}
+          topInset={sessionListDrawerTopInset}
+          width={sessionListDrawerWidthRef.current}
         />
+        ) : null}
       </MessageHistoryOverlay>
     </View>
   );
@@ -10754,6 +11134,7 @@ type SessionHeaderIcon = typeof Folder;
 function SessionHeaderBar({
   horizontalSystemHeader,
   systemBarHidden = false,
+  noticeOverride,
   currentSession,
   diffCount,
   isDeviceAccessRevoked,
@@ -10783,6 +11164,7 @@ function SessionHeaderBar({
   horizontalSystemHeader: boolean;
   /** 临时任务列表抽屉存续期间收起系统栏,让抽屉顶部控件可见可点。 */
   systemBarHidden?: boolean;
+  noticeOverride?: string;
   currentSession: RemoteSession | null;
   diffCount: number;
   isDeviceAccessRevoked: boolean;
@@ -10832,7 +11214,7 @@ function SessionHeaderBar({
   // queue 入口已退役:排队消息 inline 到消息流(InlineQueueSection),不再有独立面板。
   // 两端顶栏右侧同为「远程桌面、文件、更多」;搜索从「更多 → 任务详情」进入(ios-native-design §2、§4)。
   // 协同 Worker 任务在 Lead 的工作区里跑,不单独提供远程桌面 / 文件入口,只留「更多」。
-  const workerHeader = currentSession?.orcaRole === 'worker';
+  const workerHeader = currentSession?.orcaRole === 'worker' || currentSession?.source === 'side-chat';
   const headerActions = (actionProjection?.primaryActions ?? [])
     .filter((action) => action.id === 'files');
   const visibleHeaderActions = workerHeader ? [] : headerActions;
@@ -10843,7 +11225,7 @@ function SessionHeaderBar({
     settings: onOpenSettings,
     usage: onOpenUsage,
   } satisfies Record<SessionActionStripActionId, () => void>;
-  const notice = sharedTaskEnded ? null : compactSessionHeaderNotice({
+  const notice = sharedTaskEnded ? null : noticeOverride ?? compactSessionHeaderNotice({
     isDeviceAccessRevoked,
     pendingCount,
     queuePaused,
@@ -10891,10 +11273,10 @@ function SessionHeaderBar({
         ),
       }} />
       <Stack.Toolbar placement="left">
-        {sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}
         <Stack.Toolbar.View hidesSharedBackground>
           <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
         </Stack.Toolbar.View>
+        {sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.View hidesSharedBackground>
@@ -10930,14 +11312,14 @@ function SessionHeaderBar({
       <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
       {sessionListButton}
       {systemBack ? <Stack.Toolbar placement="right">
-        {workerHeader ? null : <>
+        {workerHeader ? null :
         <Stack.Toolbar.Button icon={require('../../assets/navigation/monitor.png')} iconRenderingMode="template"
-          accessibilityLabel={t('remoteDesktop.title')} disabled={!currentSession} onPress={onOpenRemoteDesktop} />
+          accessibilityLabel={t('remoteDesktop.title')} disabled={!currentSession} onPress={onOpenRemoteDesktop} />}
+        {workerHeader ? null :
         <Stack.Toolbar.Button icon={require('../../assets/navigation/folder.png')} iconRenderingMode="template"
           accessibilityLabel={t('session.presentation.overview.actions.files.a11y')}
           disabled={!currentSession || !overview?.actions.some(action => action.id === 'files' && !action.disabled)}
-          onPress={onOpenFiles} />
-        </>}
+          onPress={onOpenFiles} />}
         <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('session.menu.details')}
           disabled={!currentSession} onPress={onOpenSettings} />
       </Stack.Toolbar> : null}
@@ -11127,6 +11509,7 @@ interface SessionComposerPaletteProps {
   pendingSkillSelectionRef: RefObject<{ name: string; sid: string } | null>;
   canUseComposer: boolean;
   canUseRemoteSessionControls: boolean;
+  canUseSideChats: boolean;
   currentSession: RemoteSession | null | undefined;
   deviceId: string;
   maker: ReturnType<typeof useMobileMakerTransport>;
@@ -11142,7 +11525,7 @@ interface SessionComposerPaletteProps {
 
 /** Candidate filtering and remote query effects subscribe beside the editor. */
 function SessionComposerPalette({
-  source, commandsRef, pendingSkillSelectionRef, canUseComposer, canUseRemoteSessionControls,
+  source, commandsRef, pendingSkillSelectionRef, canUseComposer, canUseRemoteSessionControls, canUseSideChats,
   currentSession, deviceId, maker, openLink, shareSelectionActive, nativeShellLayout,
   contextSheetOpen, composerHorizontalInset, selectSlashCommand, selectComposerPlugin, selectAtResource,
 }: SessionComposerPaletteProps) {
@@ -11170,9 +11553,12 @@ function SessionComposerPalette({
   const pluginPaletteVisible = useMemo(() => detectComposerPluginTrigger(draft) !== null, [draft]);
   const visibleSlashCommands = useMemo(
     () => canUseComposer && composerTrigger.kind === 'slash'
-      ? filterSlashCommands(mergeMobileLocalSlashCommands(mergeMobileGoalCommand(slashCommands, t('session.common.goalMode'))), composerTrigger.query, 5)
+      ? filterSlashCommands(mergeMobileLocalSlashCommands(mergeMobileGoalCommand(
+        canUseSideChats ? mergeMobileSideChatCommand(slashCommands, t('session.sideChat.commandDescription'))
+          : slashCommands.filter(command => command.kind !== 'desktop' || command.name !== 'side'),
+        t('session.common.goalMode'))), composerTrigger.query, 5)
       : [],
-    [canUseComposer, composerTrigger, slashCommands, t],
+    [canUseComposer, canUseSideChats, composerTrigger, slashCommands, t],
   );
   const visibleAtResources = useMemo(
     () => canUseComposer && composerTrigger.kind === 'at'
@@ -11481,6 +11867,7 @@ interface SessionComposerInputProps {
   composerSendUnavailableReason: string | null;
   voiceState: MobileVoiceState;
   voiceStartPending: boolean;
+  voiceCaretPlacementPending: boolean;
   voiceError: string | null;
   composerVoiceHoldArmed: boolean;
   setComposerVoiceHoldArmed: (value: boolean) => void;
@@ -11515,7 +11902,7 @@ interface SessionComposerInputProps {
 function SessionComposerInput({
   promptRecommendation,
   onDismissPromptRecommendation,
-  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
@@ -11939,7 +12326,7 @@ function SessionComposerInput({
                         height={composerInputVisibleHeight}
                         animatedHeight={composerResize.contentHeight}
                         hidden={voiceIsListening && !nativeComposerAvailable}
-                        caretHidden={voiceIsListening}
+                        caretHidden={voiceIsListening || voiceCaretPlacementPending}
                         maxHeight={composerResize.inputMaxHeight}
                         opticalPadding={composerCardActive}
                         onBlur={() => {
@@ -12373,7 +12760,7 @@ function ComposerRuntimePill({
   disabled?: boolean;
   icon?: typeof Hand;
   /** Fast 已生效 → label 后缀 Zap 闪电(对齐桌面 trigger)。 */
-  fastOn?: boolean;
+  fastOn?: boolean | 'ultrafast';
   label: string;
   /** 前缀节点(模型药丸传来源官方 mark);与 icon 二选一。 */
   leading?: ReactNode;
@@ -12404,7 +12791,7 @@ function ComposerRuntimePill({
       >
         {label}
       </Text>
-      {fastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
+      {fastOn ? <ModelSpeedIcon mode={fastOn} color={colors.textTertiary} size={iconSize.sm} /> : null}
       <ChevronDown color={color} size={iconSize.sm} strokeWidth={iconStroke.regular} />
     </RouteActionButton>
   );
@@ -12722,6 +13109,21 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: 'transparent',
     overflow: 'visible',
   },
+  // Same card as the other bars above the composer, so the transcript never shows through.
+  companionQuoteBar: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
+    paddingVertical: spacing.sm,
+  },
+  companionQuoteBarBody: { flex: 1, minWidth: 0 },
   // 排队消息编辑提示条(composer 上方):✎ + 「正在编辑第 N 条排队消息」 + × 放弃。
   queueEditBar: {
     alignItems: 'center',

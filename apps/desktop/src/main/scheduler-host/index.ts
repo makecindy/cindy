@@ -39,10 +39,14 @@ import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
   applyPiImModelSelectionUnderLock,
   acquirePendingAgentSwitchForDirectSend,
+  prepareScheduledModelPreferencesUnderLock,
+  recordDispatchedModel,
   broadcastSessionCreated,
   cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
   ensureSchedulerQueueRestored,
+  findSchedulerUsageLimitWait,
+  getSessionLastUserActionAt,
   hasQueuedSchedulerPrompt,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
@@ -126,7 +130,10 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
       return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
     },
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
+    findUsageLimitWait: findSchedulerUsageLimitWait,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    prepareModelPreferences: prepareScheduledModelPreferencesUnderLock,
+    onModelDispatched: recordDispatchedModel,
     applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
     resolveModelSelection: resolveScheduledModelSelectionLive,
     onSessionCreated: broadcastSessionCreated,
@@ -147,6 +154,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
     // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
     schedulerQueue: {
+      getLastUserActionAt: getSessionLastUserActionAt,
       ensureQueueRestored: ensureSchedulerQueueRestored,
       isSessionBusy: isSchedulerTargetSessionBusy,
       hasQueuedPrompt: hasQueuedSchedulerPrompt,

@@ -88,7 +88,10 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
       while (offset < selected.length && current()) {
         const host = selected[offset++];
         try {
-          if (status !== 'online' || getPresenceAvailability(host.deviceId) === false) throw new Error(t('devices.resources.hostOffline'));
+          if (status !== 'online') throw new Error(t('devices.resources.hostOffline'));
+          // An explicitly offline peer is an expected cached shard, not a failed
+          // refresh of the whole roster. Presence changes already schedule a read.
+          if (getPresenceAvailability(host.deviceId) === false) continue;
           const response = await retryRemoteSyncRead({ signal, isStale: () => !current() }, async () => {
             await openLink(host.deviceId);
             return listRemoteCollection(invoke, host, collectionId, i18n.language);

@@ -103,6 +103,30 @@ describe('server group feature parity', () => {
     });
   }
   async function flush() { await vi.advanceTimersByTimeAsync(0); }
+  // Mention-only must suppress the auxiliary planning request as well as model replies.
+  it.each([undefined, 'proposed', 'waiting'] as const)('keeps unaddressed mention-only messages idle with plan=%s', async status => {
+    arrange(status ? { ...proposed, status } : undefined);
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => route.endsWith('/snapshot')
+      ? { body: { room: { ...room(roomId), response_mode: 'mentioned' }, members, messages: [], cursor: '1' } }
+      : base(route, method, data));
+    expect((await send()).ok).toBe(true); await flush();
+    expect(deps.decidePlan).not.toHaveBeenCalled();
+    expect(planPosts()).toHaveLength(0);
+    expect(fixture.handle.mock.calls.some(([route, method]) => route.includes(`/plans/${planId}`) && method === 'POST')).toBe(false);
+    const posted = fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')![2];
+    expect(posted).toMatchObject({ deferExecution: false, mentions: [] });
+  });
+  it.each([{ division: true }, { mentions: { all: true, botIds: [] } }])('keeps directed planning available in mention-only rooms: %j', async input => {
+    arrange();
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => route.endsWith('/snapshot')
+      ? { body: { room: { ...room(roomId), response_mode: 'mentioned' }, members, messages: [], cursor: '1' } }
+      : base(route, method, data));
+    expect((await send(input)).ok).toBe(true); await flush();
+    expect(deps.decidePlan).toHaveBeenCalledTimes(1);
+    expect(planPosts()).toHaveLength(1);
+  });
   it.each([
     ['proposed', 'dismiss'],
     ['waiting', 'stop'],

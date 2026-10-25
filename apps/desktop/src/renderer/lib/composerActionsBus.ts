@@ -28,6 +28,31 @@ export function subscribeSessionLinkInsert(
   return () => window.removeEventListener(INSERT_SESSION_LINK_EVENT, wrapped);
 }
 
+const INSERT_TODO_REFERENCE_EVENT = 'cindy-composer-insert-todo-reference';
+
+/** A request to insert one teammate Todo reference chip; the user still writes and sends. */
+export interface InsertTodoReferenceDetail {
+  targetSessionId: string;
+  href: string;
+  title: string;
+}
+
+export function insertTodoReferenceIntoComposer(detail: InsertTodoReferenceDetail): void {
+  window.dispatchEvent(
+    new CustomEvent<InsertTodoReferenceDetail>(INSERT_TODO_REFERENCE_EVENT, { detail }),
+  );
+}
+
+export function subscribeTodoReferenceInsert(
+  handler: (detail: InsertTodoReferenceDetail) => void,
+): () => void {
+  const wrapped = (event: Event) => {
+    handler((event as CustomEvent<InsertTodoReferenceDetail>).detail);
+  };
+  window.addEventListener(INSERT_TODO_REFERENCE_EVENT, wrapped);
+  return () => window.removeEventListener(INSERT_TODO_REFERENCE_EVENT, wrapped);
+}
+
 /**
  * A request to prefill plain prompt text into a composer. The composer only
  * inserts and focuses; the user still decides whether to send.

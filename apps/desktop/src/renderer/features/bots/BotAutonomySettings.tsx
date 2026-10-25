@@ -1,25 +1,21 @@
 /**
  * 伙伴设置「例行任务」页顶部的两项自动跟进设置。
  *
- * - 自动跟进所有任务：账号里只有一个伙伴负责（默认出厂 Cindy 助理）。在这里打开 = 把它移到
- *   这位伙伴，原来负责的伙伴的开关随宿主推送自动关上；关闭 = 没有伙伴统一跟进，先确认一次。
+ * - 自动跟进所有任务：账号里只有一个伙伴负责（默认关闭）。在这里打开 = 把它移到
+ *   这位伙伴，原来负责的伙伴的开关随宿主推送自动关上；开启前说明读取范围与用量，关闭直接生效。
  *   只在用户改过时显示「恢复默认」，恢复 = 删除 override（docs/dev-rules/configuration-and-overrides.md）。
  * - 它开的任务也交给负责所有任务的伙伴跟：每伙伴的能力位（默认关 = 只看不跟），随伙伴设置自动保存；
  *   负责所有任务的伙伴自己、以及当前没有伙伴负责时不显示。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
-import {
-  resetBotAutonomySettings,
-  setBotSchedulerBotId,
-  useBotAutonomySettings,
-  useBotProfiles,
-} from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 
 const TITLE_CLASS = 'text-13 font-medium leading-5 text-[var(--text-primary)]';
 const HINT_CLASS = 'mt-1 text-12 leading-5 text-[var(--text-secondary)]';
@@ -37,9 +33,12 @@ export function BotAutonomySettings({
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const settings = useBotAutonomySettings();
-  const profiles = useBotProfiles();
+  const target = useBotSettingsTarget();
+  const settings = target.autonomy.useSettings();
+  const profiles = target.useRoster();
   const [pending, setPending] = useState(false);
+  const saving = useRef(false);
+  const currentBot = useRef(botId); currentBot.current = botId;
   const [movedFrom, setMovedFrom] = useState<string | null>(null);
   useEffect(() => setMovedFrom(null), [botId]);
 
@@ -48,31 +47,32 @@ export function BotAutonomySettings({
   const holderId = settings.schedulerBotId;
   const isHolder = holderId === botId;
   const holderName = nameOf(holderId);
-  const defaultName = nameOf(settings.defaults.schedulerBotId);
 
   const run = (operation: () => Promise<void>, onDone?: () => void) => {
-    if (pending) return;
+    if (saving.current) return;
+    saving.current = true;
     setPending(true);
+    const owner = getDataOwnerGeneration();
     void operation()
-      .then(onDone)
-      .catch(() => toast.error(t('bots.autonomy.saveFailed')))
-      .finally(() => setPending(false));
+      .then(() => { if (isDataOwnerGenerationCurrent(owner) && currentBot.current === botId) onDone?.(); })
+      .catch(() => { if (isDataOwnerGenerationCurrent(owner)) toast.error(t('bots.autonomy.saveFailed')); })
+      .finally(() => { saving.current = false; setPending(false); });
   };
 
   const toggle = (next: boolean) => {
-    if (next) {
-      const previous = holderId && holderId !== botId ? holderName : null;
-      run(() => setBotSchedulerBotId(botId), () => setMovedFrom(previous));
-      return;
-    }
-    void confirm({
-      presentation: 'standard',
-      title: t('bots.autonomy.turnOff.title'),
-      description: t('bots.autonomy.turnOff.description'),
-      confirmText: t('bots.autonomy.turnOff.confirm'),
-      cancelText: t('bots.autonomy.turnOff.cancel'),
-    }).then((ok) => {
-      if (ok) run(() => setBotSchedulerBotId(null), () => setMovedFrom(null));
+    const owner = getDataOwnerGeneration();
+    const previous = holderId && holderId !== botId ? holderName : null;
+    run(async () => {
+      if (next && !await confirm({
+        presentation: 'standard',
+        title: t('bots.autonomy.invitation.title'),
+        description: t('bots.autonomy.consent'),
+        confirmText: t('bots.autonomy.invitation.start'),
+        cancelText: t('bots.autonomy.invitation.notNow'),
+      })) return;
+      if (!isDataOwnerGenerationCurrent(owner) || currentBot.current !== botId) return;
+      await target.autonomy.setSchedulerBotId(next ? botId : null);
+      if (isDataOwnerGenerationCurrent(owner) && currentBot.current === botId) setMovedFrom(next ? previous : null);
     });
   };
 
@@ -90,6 +90,7 @@ export function BotAutonomySettings({
         <div className="min-w-0 flex-1">
           <p className={TITLE_CLASS}>{t('bots.autonomy.title')}</p>
           <p className={HINT_CLASS} role="status">{status}</p>
+          <p className={HINT_CLASS}>{t('bots.autonomy.routineScopeHint')}</p>
           {settings.isCustomized ? (
             <Button
               variant="secondary"
@@ -98,9 +99,9 @@ export function BotAutonomySettings({
               tone="quiet"
               className="-ml-3 mt-1"
               disabled={pending}
-              onClick={() => run(resetBotAutonomySettings, () => setMovedFrom(null))}
+              onClick={() => run(target.autonomy.reset, () => setMovedFrom(null))}
             >
-              {defaultName ? t('bots.autonomy.restoreDefault', { name: defaultName }) : t('settings.defaults.restore')}
+              {t('settings.defaults.restore')}
             </Button>
           ) : null}
         </div>

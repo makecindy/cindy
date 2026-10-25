@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { findCapability, listCapabilityIndex } from './capabilities.js';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 
-export interface RuntimeCapabilityQuery { server?: string; category?: string; }
+export interface RuntimeCapabilityQuery { server?: string; category?: string; toolQuery?: string; offset?: number; }
 export type RuntimeCapabilityReader = (query: RuntimeCapabilityQuery) => Promise<unknown>;
 
 export function registerGetCapabilitiesTool(registry: XdtHelperToolRegistry, readRuntime?: RuntimeCapabilityReader): void {
@@ -32,14 +32,16 @@ export function registerGetCapabilitiesTool(registry: XdtHelperToolRegistry, rea
       scope: z.enum(['product', 'runtime']).optional().describe('product 查询产品介绍；runtime 查询实际注册与启用状态。'),
       server: z.string().optional().describe('从 runtime 目录返回的 server 标识。'),
       category: z.string().optional().describe('该 server 的 list_tools 返回的类目。'),
+      toolQuery: z.string().trim().max(200).optional().describe('引擎管理的 MCP 工具按名称或说明筛选；每页最多 50 项。'),
+      offset: z.number().int().min(0).max(100_000).optional().describe('引擎工具目录的分页起点，沿用同一 server 和 toolQuery，传上页 nextOffset。'),
       key: z
         .string()
         .optional()
         .describe('能力 key(从不传参的索引返回中获取)。不传 = 返回索引列表。'),
     },
-    handler: async ({ key, scope, server, category }) => {
+    handler: async ({ key, scope, server, category, toolQuery, offset }) => {
       if (scope === 'runtime') {
-        const result = readRuntime ? await readRuntime({ server, category })
+        const result = readRuntime ? await readRuntime({ server, category, ...(toolQuery !== undefined ? { toolQuery } : {}), ...(offset !== undefined ? { offset } : {}) })
           : { ok: false, errorCode: 'RUNTIME_CATALOG_UNAVAILABLE', message: '当前宿主尚未提供运行能力目录。' };
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
       }

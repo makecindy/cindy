@@ -1,7 +1,9 @@
 import { BrowserWindow } from 'electron';
 import { and, desc, eq, gt, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
+import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 
 import { getDbClient } from './client/current.js';
 import type { OrcaRemoteWorkerProxySessionSeed } from './client/tx/types.js';
@@ -60,7 +62,7 @@ export interface OrcaWorkerRecord {
     model: string;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     sdkSessionId?: string;
     /** Worker 的 Agent 在另一台电脑或分享上运行(远程供应商)；null = 任务所在电脑。旧端缺省。 */
     agentDeviceId?: string | null;
@@ -104,7 +106,7 @@ export interface OrcaWorkerLinkRecord {
     providerId?: string | null;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     sdkSessionId?: string;
     title: string;
     /** SSH 远端 lead 的 host id;bridge rehydrate 必须带回 createSession。 */
@@ -445,6 +447,62 @@ export async function addOrUpdateWorker(input: {
   return worker;
 }
 
+/** Worker label 唯一性由 uniq_orca_workers_team_label 保证；约束错误翻译成稳定业务码。 */
+function isWorkerLabelConstraintError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.message.includes('uniq_orca_workers_team_label');
+}
+
+export type OrcaWorkerIdentityUpdateResult =
+  | { ok: true }
+  | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' };
+
+/**
+ * 更新 worker 的 role/label；当 worker session 的标题仍是「上一个生成标题」时同步改写。
+ *
+ * 标题同步只认 `Worker · role · label` 这一生成形态：用户自定义/重命名过的标题保持不动。
+ * label 唯一性由 `uniq_orca_workers_team_label` 在 UPDATE 时最终把关（含已归档 worker）。
+ */
+export async function updateWorkerIdentity(input: {
+  workerId: string;
+  role: string;
+  label: string | null;
+  previousRole: string;
+  previousLabel: string | null;
+}): Promise<OrcaWorkerIdentityUpdateResult> {
+  const db = getDbClient().drizzle;
+  const now = Date.now();
+  const [existing] = await db
+    .select({ id: orcaWorkers.id, sessionId: orcaWorkers.sessionId })
+    .from(orcaWorkers)
+    .where(eq(orcaWorkers.id, input.workerId))
+    .limit(1);
+  if (!existing) return { ok: false, errorCode: 'NOT_FOUND' };
+
+  try {
+    await db
+      .update(orcaWorkers)
+      .set({ role: input.role, label: input.label, updatedAt: now })
+      .where(eq(orcaWorkers.id, input.workerId));
+  } catch (err) {
+    if (isWorkerLabelConstraintError(err)) return { ok: false, errorCode: 'DUPLICATE_LABEL' };
+    throw err;
+  }
+
+  // previousLabel 为空（旧行/已清空）时无法证明旧标题是生成标题，跳过标题同步。
+  if (input.label !== null && input.previousLabel !== null) {
+    const previousTitle = orcaWorkerSessionTitle(input.previousRole, input.previousLabel);
+    const nextTitle = orcaWorkerSessionTitle(input.role, input.label);
+    const updated = await db
+      .update(sessions)
+      .set({ title: nextTitle, updatedAt: now })
+      .where(and(eq(sessions.id, existing.sessionId), eq(sessions.title, previousTitle)))
+      .returning({ id: sessions.id });
+    if (updated.length > 0) broadcastSessionPatch(existing.sessionId, { title: nextTitle });
+  }
+  return { ok: true };
+}
+
 export async function listWorkersByLead(
   leadSessionId: string,
 ): Promise<OrcaWorkerRecord[]> {
@@ -511,7 +569,7 @@ export async function getWorkerLink(input: {
       providerId: row.leadSession.providerId ?? null,
       effort: row.leadSession.effort,
       permissionMode: row.leadSession.permissionMode,
-      fastMode: !!row.leadSession.fastMode,
+      fastMode: (row.leadSession.fastMode ?? false),
       sdkSessionId: row.leadSession.sdkSessionId ?? undefined,
       title: row.leadSession.title,
       remoteHostId: row.leadSession.remoteHostId ?? null,
@@ -527,6 +585,14 @@ export async function getSessionOrcaRole(sessionId: string): Promise<OrcaRole | 
     .where(eq(sessions.id, sessionId))
     .limit(1);
   return row?.orcaRole === 'lead' || row?.orcaRole === 'worker' ? row.orcaRole : null;
+}
+
+/** Persisted execution-device identity; never inferred from model-supplied vendor options. */
+export async function getRemoteOrcaSession(sessionId: string) {
+  const [row] = await getDbClient().drizzle
+    .select({ status: sessions.status, orcaRemoteLead: sessions.orcaRemoteLead })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  return row ? { status: row.status, orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead) } : null;
 }
 
 /**
@@ -709,7 +775,7 @@ function workerToRecord(
       model: session.model,
       effort: session.effort,
       permissionMode: session.permissionMode,
-      fastMode: !!session.fastMode,
+      fastMode: (session.fastMode ?? false),
       sdkSessionId: session.sdkSessionId ?? undefined,
       agentDeviceId: session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null,
     },
@@ -769,12 +835,15 @@ export async function saveWorkerRemoteReport(
   workerId: string,
   pending: OrcaRemotePendingReport | null,
   lastBridgedMessageId?: string,
+  markWorkerDone = false,
 ): Promise<void> {
   const db = getDbClient();
   await db
     .drizzle.update(orcaWorkers)
     .set({ pendingRemoteReport: pending ? JSON.stringify(pending) : null,
-      ...(lastBridgedMessageId ? { lastBridgedMessageId } : {}) })
+      ...(lastBridgedMessageId ? { lastBridgedMessageId } : {}),
+      // One SQL update commits retirement and status together; neither can succeed alone.
+      ...(markWorkerDone ? { status: 'done' as const, updatedAt: Date.now() } : {}) })
     .where(eq(orcaWorkers.id, workerId));
 }
 

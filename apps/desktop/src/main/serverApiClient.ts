@@ -14,6 +14,7 @@ import * as authManager from './authManager';
 import { getResolvedMainLocale } from './i18n.js';
 
 import { createLogger } from './logger';
+import { requestErrorMessage } from './requestErrorMessage';
 
 const log = createLogger('serverApiClient');
 
@@ -106,7 +107,10 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     let data: T | null = null;
     try {
       data = (await response.json()) as T;
-    } catch {
+    } catch (error) {
+      log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
+        { status: response.status },
+        opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
     return { ok: response.ok, status: response.status, data };
@@ -118,7 +122,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
         'method=' + method,
       );
     } else {
-      log.error('fetch failed', opts.logLabel ?? apiPath, err);
+      log.error('fetch failed', opts.logLabel ?? apiPath, requestErrorMessage(err));
     }
     return { ok: false, status: 0, data: null };
   } finally {

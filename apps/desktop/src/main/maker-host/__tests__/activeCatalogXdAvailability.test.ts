@@ -821,7 +821,7 @@ describe('XD 网关权威模型清单重建', () => {
   });
 
   it.each(['google/gemini-4-argon', 'gemini-4-argon'])(
-    'Gemini 4 Argon 网关条目 %s 按公共型号补齐三引擎资料，只在原生 Pi 默认显示',
+    'Gemini 4 Argon 网关条目 %s 采用 Server Responses 兼容配置，在 Codex / Pi 默认显示',
     (id) => {
       setActiveCatalog(BUNDLED_CATALOG);
       setXdGatewayModels([{ id, agents: ['claude-code', 'codex', 'pi'] }]);
@@ -830,17 +830,17 @@ describe('XD 网关权威模型清单重建', () => {
         expect(model, agent).toMatchObject({
           name: 'Gemini 4 Argon',
           group: 'google',
-          nativeApi: 'google-generative-ai',
+          nativeApi: 'openai-responses',
           contextWindow: 1_048_576,
           supportsImageInput: true,
           efforts: ['low', 'medium', 'high'],
           defaultEffort: 'medium',
         });
-        // Claude Code / Codex 走跨 Harness bridge，默认关闭；Pi 原生支持 Google 协议。
-        if (agent === 'pi') expect(model?.defaultEnabled).not.toBe(false);
-        else expect(model?.defaultEnabled).toBe(false);
+        // 现有 Server 配置避开 Gateway 的 Google 原生端点限制；Claude Code bridge 仍默认关闭。
+        if (agent === 'claude-code') expect(model?.defaultEnabled).toBe(false);
+        else expect(model?.defaultEnabled).not.toBe(false);
       }
-      expect(resolveXdPiGatewayApi(id)).toBe('google-generative-ai');
+      expect(resolveXdPiGatewayApi(id)).toBe('openai-responses');
     },
   );
 

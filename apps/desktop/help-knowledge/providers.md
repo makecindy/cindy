@@ -23,5 +23,5 @@ Claude Code, Codex, and lightweight utility models can use **Cindy AI** for pay-
 
 **Notes:**
 
-- Direct service keys such as Brave Search and Tavily are **not** managed here — they live on the matching plugin detail pages under Plugins (Cindy Web Search).
+- Direct service keys such as Brave Search, Tavily, and DeepSeek search are **not** managed here — they live on the matching plugin detail pages under Plugins (Cindy Web Search). They are optional; web search works through Cindy AI without them.
 - Rotating or replacing credentials takes effect for new turns; in-flight requests finish on the previous key.

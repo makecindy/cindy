@@ -259,7 +259,7 @@ export function WecomBotSection({
             >
               {t('settings.notifications.wecomGroupLabel')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {wecomGroup.configured
                 ? t('settings.notifications.wecomGroupConfiguredHint', {
                     maskedKey: wecomGroup.maskedKey,

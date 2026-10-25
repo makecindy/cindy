@@ -111,7 +111,8 @@ describeMigrationReplay('migration replay', () => {
       if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130]);
+      expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
       expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
       expect(tableExists(db, 'plugin_usage_events')).toBe(true);
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });

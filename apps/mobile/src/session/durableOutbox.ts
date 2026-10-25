@@ -46,6 +46,8 @@ export interface DurableOutboxRecord {
   suspended?: boolean;
   template?: QueuedRemoteMessage;
   refreshUploads?: boolean;
+  /** Slot whose upload threw on the last attempt; the bubble offers a re-upload on that image only. */
+  failedUploadSlot?: number;
   creation?: {
     draft: NewSessionDraft;
     originalWorkingDir?: string;

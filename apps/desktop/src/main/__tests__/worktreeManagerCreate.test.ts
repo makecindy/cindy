@@ -132,6 +132,44 @@ describe('createWorktree naming authority', () => {
     await vi.waitFor(() => expect(checkoutLease.release).toHaveBeenCalledExactlyOnceWith({}));
   });
 
+  // Worker failure compensation must wait for checkout; successful creation must not.
+  // Existing lease tests do not exercise the new opt-in wait handle (unit tier, fake I/O).
+  it.each([false, true])('tracks checkout without delaying success; setup failure=%s waits before rollback', async (failSetup) => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishCheckout!: () => void;
+    const checkout = new Promise<{stdout: string; stderr: string}>(resolve => {
+      finishCheckout = () => resolve({stdout: '', stderr: ''});
+    });
+    let reachedSetup!: () => void;
+    const setup = new Promise<void>(resolve => { reachedSetup = resolve; });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      if (args.includes('core.hooksPath')) {
+        reachedSetup();
+        if (failSetup) return Promise.reject(new Error('hooks failed'));
+      }
+      return previousGit(args, ...rest);
+    });
+    const sessionId = `tracked-${failSetup}`;
+    const creating = manager.createWorktree({sessionId, baseRepo, name: 'tracked', sourceBranch: 'main'}, {trackBackgroundCheckout: true});
+    await setup;
+    let waited = false;
+    const waiting = manager.awaitBackgroundCheckout(sessionId).then(() => { waited = true; });
+    try {
+      if (!failSetup) await expect(creating).resolves.toMatchObject({ok: true});
+      await Promise.resolve();
+      expect(waited).toBe(false);
+      expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
+    } finally {
+      finishCheckout();
+      await waiting;
+    }
+    await expect(creating).resolves.toMatchObject({ok: !failSetup});
+    expect(checkoutLease.release).toHaveBeenCalledOnce();
+    expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(failSetup);
+    await manager.awaitBackgroundCheckout(sessionId);
+  });
+
   it.each(['', '   \t'])('generates a meaningful final name for blank input %j', async (name) => {
     const result = await create(name);
 

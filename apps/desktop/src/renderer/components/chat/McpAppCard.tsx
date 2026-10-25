@@ -271,7 +271,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     >
       <div className="flex min-h-9 items-center justify-between gap-3 px-3 text-13 text-[var(--text-secondary)]">
         <span>{title ? t('mcpApps.cardTitle', { title }) : appTitle}</span>
-        {loading && visible && <Spinner size="sm" />}
+        {loading && visible && <Spinner size={16} />}
         {mode === 'fullscreen' && (
           <Button
             data-exit-fullscreen

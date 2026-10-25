@@ -25,6 +25,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { isSameProvider } from './matching.js';
+import type { ProviderGroupCodexUsageSnapshot } from './usage.js';
 
 export interface ProviderGroupDirectoryDeps {
   /** 本机供应商(含未连接 / 停用的，便于给出原因)。 */
@@ -41,6 +42,9 @@ export interface ProviderGroupDirectoryDeps {
   localRunning?(providerId: string): Promise<number | null>;
   /** Same-account subscription snapshots only; absence/failure keeps the member usable. */
   readClaudeUsage?(member: ProviderGroupMember): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readCodexUsage?(member: ProviderGroupMember): Promise<ProviderGroupCodexUsageSnapshot | null>;
+  /** At the quick-pick deadline, include completed sources without waiting for a pending sibling. */
+  peekCodexUsage?(member: ProviderGroupMember): ProviderGroupCodexUsageSnapshot | null;
   invalidateUsage?(): void;
   now(): number;
 }
@@ -63,6 +67,7 @@ export interface ResolvedProviderGroupMember {
   reportedRunning?: number;
   /** Internal only: never included in the group wire projection or shared with guests. */
   claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
+  codexUsage?: ProviderGroupCodexUsageSnapshot | null;
   /**
    * 选电脑时到点还没读完(那台慢或不响应)：这次按不能用算，不代表读到了离线；读取照常在后台完成、留在缓存里。
    */
@@ -290,7 +295,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       clearTimeout(timer);
     }
     const enough = options.enough;
-    const resolved = members.map((member, index) => settled[index] ?? partial[index] ?? pendingMember(member));
+    const resolved = members.map((member, index) => {
+      if (settled[index]) return settled[index];
+      const value = partial[index];
+      if (value?.state === 'ok' && member.kind !== 'share' && value.view
+        && providerWeeklyQuotaSource(value.view) === 'codex' && deps.peekCodexUsage) {
+        return { ...value, codexUsage: deps.peekCodexUsage(member) };
+      }
+      return value ?? pendingMember(member);
+    });
     if (!enough || !resolved.some(enough)) return all;
     return resolved;
   }
@@ -317,10 +330,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       const reads = partialReads.map(async (read, index) => {
         const member = config.members[index]!;
         const resolved = await read;
-        if (member.kind === 'share' || resolved.state !== 'ok' || !resolved.view?.auth
-          || providerWeeklyQuotaSource(resolved.view) !== 'claude' || !deps.readClaudeUsage) return resolved;
-        const claudeUsage = await deps.readClaudeUsage(member).catch(() => null);
-        return { ...resolved, claudeUsage };
+        if (member.kind === 'share' || resolved.state !== 'ok' || !resolved.view?.auth) return resolved;
+        const source = providerWeeklyQuotaSource(resolved.view);
+        if (source === 'codex' && deps.readCodexUsage) {
+          return { ...resolved, codexUsage: await deps.readCodexUsage(member).catch(() => null) };
+        }
+        if (source === 'claude' && deps.readClaudeUsage) {
+          return { ...resolved, claudeUsage: await deps.readClaudeUsage(member).catch(() => null) };
+        }
+        return resolved;
       });
       if (options?.quickMs === undefined) return Promise.all(reads);
       return settleQuickly(config.members, reads, partialReads, options);

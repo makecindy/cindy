@@ -132,6 +132,7 @@ export const router = createHashRouter([
                       // :botId 之前,/bots/groups/<id> 不会被当成一个叫 "groups" 的伙伴。
                       { path: 'groups/:groupId', element: <BotGroupChatView /> },
                       { path: 'remote/:deviceId/:botId', element: <RemoteBotSessionView /> },
+                      { path: 'remote/:deviceId/:botId/history/:sessionId', element: <BotHistorySessionView /> },
                       // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
                       { path: ':botId/direct/:threadId', element: <BotDirectMessageView /> },
                       { path: ':botId', element: <BotsHomeView /> },

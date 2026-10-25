@@ -171,7 +171,9 @@
     "diffEditCount": "{{n}} 件の編集",
     "groupSentNamed": "グループ「{{name}}」から送信",
     "groupSent": "グループから送信",
-    "sourceGroupId": "グループ ID: {{id}}"
+    "sourceGroupId": "グループ ID: {{id}}",
+    "selectText": "テキストを選択",
+    "you": "あなた"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
@@ -182,6 +184,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "元の画像を読み込めません",
+    "retryOriginal": "元の画像を再読み込み",
+    "loadingOriginal": "元の画像を読み込み中…",
     "sourceMissing": "このコンピューターに元の画像がありません。元のファイルを再度インポートしてください。",
     "deviceOffline": "コンピューターが未接続です。再接続してからお試しください。",
     "cancelAnnotation": "注釈をキャンセル",
@@ -229,6 +234,10 @@
     "cancel": "キャンセル",
     "edit": "編集",
     "steer": "割り込み",
+    "steerQueued": "まだ届いていません。メッセージはキューに残っています。",
+    "moveUp": "1つ前へ",
+    "moveDown": "1つ後ろへ",
+    "cancelSend": "送信をキャンセル",
     "collapseQueued": "キュー内メッセージを折りたたむ",
     "expandRemainingQueued": "残り {{n}} 件のキュー内メッセージを展開",
     "collapse": "折りたたむ",
@@ -237,7 +246,15 @@
     "sendingMessage": "送信中のメッセージ:{{text}}",
     "uploadingAttachments": "添付ファイルをアップロード中 {{uploaded}}/{{total}}",
     "delete": "削除",
-    "retry": "再試行"
+    "retry": "再試行",
+    "notSent": "未送信",
+    "imagesNotUploaded_one": "{{count}} 枚の画像を送れませんでした",
+    "imagesNotUploaded_other": "{{count}} 枚の画像を送れませんでした",
+    "waitingForComputer": "パソコンにつながったら送信",
+    "waitingForNetwork": "ネットワークが戻ったら送信",
+    "queued": "順番待ち",
+    "retryImage": "この画像を再アップロード",
+    "waitingMessage": "送信待ちのメッセージ:{{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -291,6 +308,7 @@
     "agentSwitchLocation": "Agent の実行先を {{device}} に変更しました",
     "agentSwitchLocationThisComputer": "Agent の実行先をこのパソコンに戻しました",
     "agentSwitchLocationOtherComputer": "Agent の実行先を別のパソコンに変更しました",
+    "agentSwitchLocationQuotaRebalance": "こちらのクォータを先に使うため",
     "learnStarted": "スキル学習を開始しました",
     "learnStartedBody": "蒸留はデスクトップのバックグラウンドで進行します。完了後、デスクトップでスキルの草案を確認・レビューしてください。",
     "learnFailed": "スキル学習を開始できませんでした",
@@ -393,6 +411,10 @@
     "skillUpdated": "スキルを更新：{{title}}"
   },
   "richAnswer": {
+    "send": "メッセージを送信",
+    "sending": "送信中…",
+    "sent": "送信済み",
+    "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
     "openVideoSource": "元の動画を開く",
     "calculationUnavailable": "この値を計算できません。",

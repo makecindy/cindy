@@ -149,6 +149,9 @@ export function createLiziMcpProviders(
           name: 'cindy_browser',
           instance: createBrowserMcpServer({
             ...baseDeps,
+            recipeFiles: baseDeps.recipeFiles
+              ? () => baseDeps.recipeFiles!(resolveLiziMcpSessionContext(ctx).sessionId)
+              : undefined,
             getRuntime: () => {
               const inner = baseDeps.getRuntime();
               return {

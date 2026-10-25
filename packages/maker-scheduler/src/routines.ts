@@ -36,7 +36,8 @@ export type RoutineTrigger =
       }>;
     };
 
-export type RoutineBuiltin = "follow-up";
+/** Host-owned rules: per-teammate follow-up, the owner-enabled daily todo check, and nightly learning. */
+export type RoutineBuiltin = "follow-up" | "todo-check" | "nightly-learning";
 
 /** Stable error prefix for attempts to delete or rewrite a host-owned routine. */
 export const BUILTIN_ROUTINE_ERROR = "BUILTIN_ROUTINE";
@@ -56,7 +57,7 @@ export interface Routine {
   /** null explicitly removes the check; omission preserves it on older clients. */
   preRunHook?: PreRunHookConfig | null;
   /**
-   * 宿主内置规则（目前只有每个伙伴一条的「跟进」）。由宿主模板生成，不接受用户/模型
+   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」，以及主人在近况里打开的「每天查待办」）。由宿主模板生成，不接受用户/模型
    * 改写指令与触发条件、不能删除，只能暂停（enabled）。可选字段：旧数据与旧客户端缺省即普通规则，
    * state 版本不变。
    */

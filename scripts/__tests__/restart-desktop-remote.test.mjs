@@ -50,6 +50,7 @@ import {
 	WORKTREE_ISOLATED_ARG,
 	SHARED_USERDATA_ARG,
 	DEFAULT_ISOLATED_ARG,
+	UI_MOCK_ISOLATED_ARG,
 	buildDesktopDevVerdictFromFailure,
 	buildDesktopDevVerdictFromWhoami,
 	desktopRestartArgvConflictMessage,
@@ -350,6 +351,22 @@ test("--shared conflicts with explicit or ambient isolation", () => {
 		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
 	);
 	assert.equal(desktopRestartArgvConflictMessage(["--shared"], {}), null);
+});
+
+// --mock writes demo tasks (docs/dev-rules/ui-mock-data.md): it gets its own sandbox
+// by default and must never reach the shared official profile.
+test("--mock defaults to the ui-mock sandbox and refuses shared userData", () => {
+	assert.deepEqual(normalizeDesktopRestartArgv(["--mock"], {}), ["--mock", UI_MOCK_ISOLATED_ARG]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--mock", "--isolated=review"], {}),
+		["--mock", "--isolated=review"],
+	);
+	for (const shared of [SHARED_USERDATA_ARG, "--preserve-running"]) {
+		assert.match(
+			desktopRestartArgvConflictMessage(normalizeDesktopRestartArgv(["--mock", shared], {}), {}),
+			/--mock .* isolated sandbox/,
+		);
+	}
 });
 
 test("isOfficialProductionUserDataDir matches every official region profile", () => {

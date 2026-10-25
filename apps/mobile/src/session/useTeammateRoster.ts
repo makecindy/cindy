@@ -196,7 +196,8 @@ export function useTeammateRoster(enabled = true) {
     // Stable reference (revocation is applied at discovery and again to the listed rows).
     groupTargets: ready ? discovery.groupTargets : NO_TARGETS,
     createTargets: ready && status === 'online' ? discovery.createTargets.filter((host) => !revoked.has(host.deviceId) && list.isOnline(host)) : NO_TARGETS,
-    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
+    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error
+      && (!discovery.targets.length || (!list.error && discovery.targets.every(list.isOnline))),
     loading: !ready || !discovery.settled || list.loading,
     refreshing: list.refreshing,
     error: ready ? discovery.error ?? (discovery.targets.length ? list.error : null) : null, refresh };

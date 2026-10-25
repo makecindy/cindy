@@ -25,6 +25,7 @@ const families: ReadonlyArray<readonly [RegExp, string]> = [
   [/^deepseek-/, 'reasoning'],
   [/^qwen(?:\d|[-/])/, 'writingAndCoding'],
   [/^kimi-.*-code(?:-|$)/, 'coding'],
+  [/^k3(?:\.\d+)?(?:-|$)/, 'coding'],
   [/^kimi-/, 'readingAndWriting'],
   [/^glm-/, 'writingAndCoding'],
   [/^(?:doubao-)?seed-\d/, 'everydayWork'],
@@ -44,13 +45,17 @@ const categoryKeys: Readonly<Record<string, string>> = {
 };
 
 export function modelDescriptionKey(model: { id: string; group?: string; mode?: string }): string | undefined {
+  if ((model.id === 'auto' || model.id === 'xd/auto') &&
+      (model.mode === undefined || model.mode === 'chat' || model.mode === 'responses')) {
+    return 'automaticRouting';
+  }
   // A vendor grouping like "gpt" must not turn GPT Image into a coding model.
   const inferredCategory = classifyModel({ id: model.id, mode: model.mode });
   const category = model.mode !== undefined || Object.hasOwn(categoryKeys, inferredCategory)
     ? inferredCategory : classifyModel(model);
   if (Object.hasOwn(categoryKeys, category)) return categoryKeys[category];
   // An explicitly non-chat/unknown mode must not inherit a chat-family blurb.
-  if (category === 'other' || category === 'audio') return undefined;
+  if (category === 'other' || category === 'audio' || category === 'decision') return undefined;
   let id = model.id.toLowerCase().split('/').at(-1) ?? '';
   // Registry internal XD IDs have flattened route prefixes. Wire IDs usually don't.
   if (model.id.startsWith('xd/')) {

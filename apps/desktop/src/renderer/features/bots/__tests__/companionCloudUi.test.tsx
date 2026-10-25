@@ -121,6 +121,14 @@ describe('CloudCompanionOfflineView', () => {
     expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
   });
 
+  it('says the main computer is offline unless it is online with remote control off', async () => {
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    const { rerender } = renderView();
+    expect(screen.getByText('bots.cloud.homeOffline:{"device":"Laptop"}')).toBeTruthy();
+    rerender(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" controlOff />);
+    expect(screen.getByText('bots.cloud.homeControlOff:{"device":"Laptop"}')).toBeTruthy();
+  });
+
   it('shows the files of a cloud message, brought from the room', async () => {
     maker.getCompanionTranscript.mockResolvedValue({ messages: [
       { id: 'm1', seq: '1', role: 'user', text: '', createdAt: 1, attachments: [{ mediaId: 'media-1', name: 'cat.png' }] }] });
@@ -291,6 +299,15 @@ describe('BotHomeComputerSetting', () => {
     show(snapshot('desk'));
     openMenu();
     expect(await screen.findByText('bots.cloud.noTargets')).toBeTruthy();
+  });
+
+  it('explains why this computer is missing from the choices of a remote home', async () => {
+    maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'remote', thisComputer: 'REMOTE_CONTROL_OFF',
+      targets: [{ deviceId: 'tablet', name: 'Tablet', online: true, isSelf: false }] });
+    show(snapshot('laptop'));
+    openMenu();
+    expect(await screen.findByText('bots.cloud.hereControlOff')).toBeTruthy();
+    expect(screen.getByText('bots.cloud.switchTo:{"device":"Tablet"}')).toBeTruthy();
   });
 
   it('counts a companion as arrived only once it is built here and no longer demoted', () => {

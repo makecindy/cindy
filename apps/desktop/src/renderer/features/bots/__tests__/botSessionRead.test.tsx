@@ -4,7 +4,6 @@ import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // 工作台在右侧栏里有自己的数据订阅，这里只验证伙伴对话的挂载与读位。
-vi.mock('@/features/right-sidebar/lib/openBotWorkbenchTab', () => ({ ensureBotWorkbenchTab: vi.fn(async () => {}) }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -22,6 +21,8 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
   useParams: () => mocks.params,
 }));
+// The private-chat topic host belongs to the chat surface these tests isolate.
+vi.mock('../BotDmThreadHost', () => ({ BotDmThreadHost: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
   CCAgentSessionView: ({ botUnreadBoundaryAt, onBotReadThrough, readOnly, botIdentity }: { botUnreadBoundaryAt?: number | null; onBotReadThrough?: (at: number) => void; readOnly?: boolean; botIdentity?: { canonicalChat?: boolean } }) => {
     mocks.read = onBotReadThrough;

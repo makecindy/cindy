@@ -147,6 +147,12 @@ function agentReferenceNode(reference: AgentInputReference, sourceText: string):
       },
     };
   }
+  if (reference.kind === 'todo') {
+    return {
+      type: 'mentionChip',
+      attrs: { kind: 'todo', label: reference.title, path: reference.href },
+    };
+  }
   return {
     type: 'mentionChip',
     attrs: { kind: 'bot', label: reference.name, path: reference.botId },

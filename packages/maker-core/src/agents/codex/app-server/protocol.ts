@@ -208,7 +208,7 @@ export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none';
  * 'default' = 显式 standard 档:关 Fast 后 server 在 thread/settings/updated 通知里
  * 实际回带的就是这个值 (实测 0.142.0, 切到不支持 fast 的模型时 serviceTier→'default')。
  */
-export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex';
+export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex' | 'ultrafast';
 
 export interface ThreadStartParams {
   /** 缺省走 server 端 config 的默认 model。 */
@@ -1240,6 +1240,8 @@ export const Method = {
   ConfigRead: 'config/read',
   /** EXPERIMENTAL. Register a remote exec-server as a named environment. */
   EnvironmentAdd: 'environment/add',
+  /** EXPERIMENTAL. Read a named environment's status without starting or recovering it. */
+  EnvironmentStatus: 'environment/status',
   ExperimentalFeatureList: 'experimentalFeature/list',
   ExperimentalFeatureEnablementSet: 'experimentalFeature/enablement/set',
   MemoryReset: 'memory/reset',

@@ -6,6 +6,8 @@ import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock';
 import { effectiveSourceIdForModel, findCatalogModel, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl';
+import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
+import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
 // Execute the actual picker admission branches (local and agent-device), with
 // everything after admission represented by applyLive. No Electron bootstrap.
@@ -16,10 +18,18 @@ const confirmationChecks: string[] = [];
 let applySelectionAdapter = '';
 let piWindowOverride = '';
 let directSendAdapter = '';
+let directSendEntry = '';
 let archivedAdmission = '';
 let terminalGuard = '';
 let stageAxisAdapter = '';
+let scheduledAxisAdapter = '';
 function visit(node: ts.Node) {
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
+    directSendEntry = node.getText(source).replace(/^export /, '');
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'updateSavedScheduledAxis') {
+    scheduledAxisAdapter = node.initializer!.getText(source);
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'stagePendingUserRuntimeAxis') {
     stageAxisAdapter = node.initializer!.getText(source);
   }
@@ -73,6 +83,24 @@ function axisCatalogBindings(row: object = {}) {
     throwIpcError: (code: string, message: string) => { throw new Error(`[${code}] ${message}`); },
   };
 }
+
+describe('owner settings during an automatic turn', () => {
+  it.each([{ effort: 'high' as const }, { fastMode: true }])('saves %j against the owner model', async (patch) => {
+    const baseline = { scopeId: 'run', agentKind: 'codex', model: 'target', providerId: 'provider',
+      effort: 'low', fastMode: false };
+    const updateScheduledPreference = vi.fn(async () => {});
+    const assertCurrent = vi.fn();
+    const query = { from: () => query, where: () => query, limit: async () => [{ baseline: JSON.stringify(baseline) }] };
+    const update = compile(scheduledAxisAdapter, {
+      ...axisCatalogBindings(), parseScheduledModelBaseline,
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      sessions: {}, eq: vi.fn(), updateScheduledPreference,
+    });
+    expect(await update('s1', patch, assertCurrent)).toBe(true);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', patch);
+  });
+});
 
 // Unit: stale UI axes must be admitted against the pending execution route,
 // before publishing or persisting a recovery tail. Previous send tests only
@@ -140,6 +168,58 @@ describe('pending target axis admission', () => {
 // Renderer persistence. Exercise the real queue/lease and recovery boundary;
 // Renderer-to-IPC persistence is covered in the existing cross-file guard suite.
 describe('complete selection commit boundaries', () => {
+  // 2026-10-23: the real direct-send adapter restored the owner's smaller
+  // window before applying the next automation. Existing tests covered picker
+  // intents only. Unit tier: preserve native history across repeated automation
+  // sends and restore the durable owner preference only for an ordinary send.
+  // PR #6831: legacy schedules have no complete selection, but still must
+  // preserve the native context before the runner applies their model override.
+  it.each(['explicit', 'legacy', 'ordinary'])('applies only the next send route (%s)', async route => {
+    const owner: ScheduledModelSelection = {
+      agentKind: 'codex', model: 'owner-model', providerId: 'provider', effort: 'high', fastMode: false,
+    };
+    const automatic = { ...owner, model: 'automatic-model' };
+    let profile = owner;
+    let baseline: string | null = null;
+    const transitions: string[] = [];
+    const apply = async (_id: string, next: ScheduledModelSelection) => {
+      transitions.push(next.model);
+      profile = next;
+      return next;
+    };
+    const deps = {
+      createId: () => 'saved-owner', read: async () => ({ profile, baseline }),
+      write: async (_id: string, saved: unknown) => { baseline = saved ? JSON.stringify(saved) : null; },
+      isBusy: () => false,
+      apply: async (id: string, next: ScheduledModelSelection) => { await apply(id, next); },
+    };
+    await createScheduledModelScope(deps).begin('scheduled-task');
+    profile = automatic;
+    // A new scope instance also exercises a restart between turns.
+    const adapter = compile(directSendAdapter, {
+      scheduledModelScope: createScheduledModelScope(deps),
+      acquireSendToSessionLock, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: vi.fn(), agentSwitchDeps: {},
+      applyScheduledProfile: apply, contextOverflowRolloverHolder: null,
+      // 发送边界的预算对账（register.ts）：本用例只关心路由选择，注入 no-op。
+      reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      appliedContextWindowBudgets: new Map<string, number | null>(),
+      pendingSessionContextWindowBudgetReconciles: new Set<string>(),
+    });
+    const directSend = compile(directSendEntry, { pendingAgentSwitchApplyHolder: adapter });
+    const lease = await directSend('scheduled-task', undefined,
+      route === 'explicit' ? automatic : undefined, route === 'legacy');
+    // The legacy runner applies its model later under this same lease.
+    if (route === 'legacy') await apply('scheduled-task', automatic);
+    if (typeof lease === 'function') lease();
+    else lease.release();
+    expect(transitions).toEqual([route === 'ordinary' ? owner.model : automatic.model]);
+    expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
+    expect(baseline === null).toBe(route === 'ordinary');
+  });
+
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
     const pending = createPendingAgentSwitchRegistry();
     let status = 'archived';
@@ -159,9 +239,14 @@ describe('complete selection commit boundaries', () => {
     const deps = { pendingSwitches: pending, getLiveSession: () => null, selectSameAgentModel: selected,
       bootstrapSwitchedSession: vi.fn(), log: { warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, { agentSwitchPending: pending, acquireSendToSessionLock,
+      scheduledModelScope: { restore: vi.fn(async () => {}) },
       restoreArchivedSessionForSend: async () => { status = 'active'; },
       reconcileBotModelRoute: vi.fn(), applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent,
-      agentSwitchDeps: deps, contextOverflowRolloverHolder: null });
+      agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
+      reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      appliedContextWindowBudgets: new Map<string, number | null>(),
+      pendingSessionContextWindowBudgetReconciles: new Set<string>() });
     const sending = directSend('queued-picker');
     finishPicker();
     await picker;
@@ -255,9 +340,14 @@ describe('Orca model-only picker intent admission', () => {
       bootstrapSwitchedSession: vi.fn(), withCloseSuppressed: (_id: string, fn: () => Promise<unknown>) => fn(),
       log: { info: vi.fn(), warn: vi.fn() } } as unknown as MakerSessionAgentSwitchHandlerDeps;
     const directSend = compile(directSendAdapter, {
+      scheduledModelScope: { restore: vi.fn(async () => {}) },
       agentSwitchPending: pending, restoreArchivedSessionForSend: restore,
       acquireSendToSessionLock: acquire, reconcileBotModelRoute: vi.fn(),
       applyPendingAgentSwitchIfIdle, isUserPendingAgentSwitchIntent, agentSwitchDeps: deps, contextOverflowRolloverHolder: null,
+      reconcileSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      appliedContextWindowBudgets: new Map<string, number | null>(),
+      pendingSessionContextWindowBudgetReconciles: new Set<string>(),
     });
     if (mode === 'cross-engine' || mode === 'relocation') {
       const stageAxis = compile(stageAxisAdapter, { ...axisCatalogBindings(row), agentSwitchPending: pending, agentSwitchDeps: deps,

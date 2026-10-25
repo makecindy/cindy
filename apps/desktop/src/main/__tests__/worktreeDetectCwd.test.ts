@@ -10,13 +10,20 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { detectCwd } from '../worktree/WorktreeManager';
 import { GitExecError, type GitExecOpts } from '../worktree/gitExec';
 
 // ── mock gitExec, 控制 detectCwd 看到的 git 输出 ──────────────────────────
-const { gitExecMock } = vi.hoisted(() => ({
+const { gitExecMock, realpathMock } = vi.hoisted(() => ({
   gitExecMock: vi.fn(),
+  realpathMock: vi.fn(),
 }));
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  // Share the fake across default and named imports used by the real probe pool.
+  return { ...actual, realpath: realpathMock, default: { ...actual, realpath: realpathMock } };
+});
 vi.mock('../worktree/gitExec', async () => {
   const actual = await vi.importActual<typeof import('../worktree/gitExec')>('../worktree/gitExec');
   return {
@@ -27,9 +34,16 @@ vi.mock('../worktree/gitExec', async () => {
 
 beforeEach(() => {
   gitExecMock.mockReset();
+  // Synchronous Git fixtures consume no work budget; fake-timer cases replace this clock.
+  vi.spyOn(performance, 'now').mockReturnValue(0);
+  // Synthetic paths need no filesystem I/O, including fake-timer timeout tests.
+  realpathMock.mockReset().mockRejectedValue(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
 });
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function timeoutError() {
   return new GitExecError({ args: ['rev-parse'], exitCode: null, stderr: 'timed out', stdout: '', timedOut: true });
@@ -62,6 +76,96 @@ function setupGitMock(opts: {
 }
 
 describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
+  // PR #6544: 5s realpath + 10s Git leaves no headroom in Mobile's 15s wait.
+  // Existing coverage bounds each phase separately, not their sum (unit tier).
+  it.each([
+    { fallback: false, realpathMs: 4_999 },
+    { fallback: true, realpathMs: 4_999 },
+    { fallback: true, realpathMs: 4_000 },
+  ])('shares the deadline across slow realpath and Git ($fallback, $realpathMs ms)', async ({ fallback, realpathMs }) => {
+    vi.useFakeTimers();
+    realpathMock.mockImplementation(() => new Promise((resolve) => {
+      setTimeout(() => resolve(path.resolve('/repo')), realpathMs);
+    }));
+    gitExecMock.mockImplementation((args: readonly string[], _cwd: string, opts: GitExecOpts) => {
+      const duration = fallback ? 2_000 : 6_000;
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          if (duration > opts.timeoutMs!) reject(timeoutError());
+          else resolve({ stdout: args.length > 3 && !fallback ? '/repo\nmain\n.git\n.git\n'
+            : args.includes('--show-toplevel') && args.length === 2 ? '/repo' : '.git' });
+        }, Math.min(duration, opts.timeoutMs!));
+      });
+    });
+    let failure: unknown;
+    const probe = detectCwd('/repo').catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(failure).toMatchObject({ timedOut: true });
+      await probe;
+      expect(gitExecMock.mock.calls[0][2].timeoutMs).toBe(10_000 - realpathMs);
+      for (const [, , opts] of gitExecMock.mock.calls) {
+        expect(opts.deadlineAtMs).toBe(10_000);
+      }
+      if (realpathMs === 4_000) expect(gitExecMock).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await vi.runAllTimersAsync();
+      await probe;
+    }
+  });
+
+  // PR #6544: Git deadlines do not cover a stalled realpath. Four unresolved
+  // lookups must reject as unknown state and release queued probes (unit tier).
+  it('bounds physical-directory lookups and releases queued probes and same-path retries', async () => {
+    vi.useFakeTimers();
+    const finishLookups: Array<() => void> = [];
+    vi.mocked(fs.realpath).mockImplementation((cwd) => new Promise<string>((resolve) => {
+      finishLookups.push(() => resolve(String(cwd)));
+    }));
+    gitExecMock.mockResolvedValue({ stdout: '/repo\nmain\n.git\n.git\n' });
+    const pending = Array.from({ length: 4 }, (_, i) => detectCwd(path.resolve('/tmp', `physical-hung-${i}`)));
+    const errors: unknown[] = [];
+    const failures = pending.map((probe) => probe.catch((error) => { errors.push(error); }));
+    const queued = detectCwd('/tmp/physical-healthy');
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(gitExecMock).not.toHaveBeenCalled();
+      expect(finishLookups).toHaveLength(2);
+      vi.mocked(fs.realpath).mockResolvedValue(path.resolve('/tmp/physical-healthy'));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(errors).toHaveLength(4);
+      expect(errors.every((error) => (error as { code?: string }).code === 'WORKDIR_PROBE_TIMEOUT')).toBe(true);
+      await Promise.all(failures);
+      // Uncancellable I/O retains its bounded pool slots and same-path single flight.
+      await expect(detectCwd('/tmp/physical-hung-0')).rejects.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+      finishLookups.forEach((finish) => finish());
+      await expect(queued).resolves.toMatchObject({ isGitRepo: true });
+      await expect(detectCwd('/tmp/physical-hung-0')).resolves.toMatchObject({ isGitRepo: true });
+      // Timeout never launches Git for the stalled paths or caches a negative result.
+      expect(gitExecMock).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      // Settle even the intentionally unresponsive fake I/O after a red run.
+      finishLookups.forEach((finish) => finish());
+      await Promise.allSettled([...pending, queued]);
+    }
+  });
+
+  // #6409: a failed physical-cwd lookup must preserve Git's partial/error result.
+  it.each([true, false])('preserves missing-directory results when gitInstalled=%s', async (gitInstalled) => {
+    gitExecMock.mockImplementation(async (args: readonly string[]) => {
+      if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
+      throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
+        cause: Object.assign(new Error('not found'), { code: 'ENOENT' }) });
+    });
+    expect(await detectCwd('/missing')).toMatchObject({
+      isGitRepo: false,
+      isInsideWorktree: false,
+      gitInstalled,
+    });
+  });
+
   it('releases all four hung probes after Git timeout and allows queued work and same-path retries', async () => {
     vi.useFakeTimers();
     gitExecMock.mockImplementation((_args: readonly string[], _cwd: string, opts: GitExecOpts) => (

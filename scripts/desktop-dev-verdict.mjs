@@ -6,6 +6,9 @@ export const DESKTOP_DEV_VERDICT_PREFIX = 'DESKTOP_DEV_VERDICT';
 export const WORKTREE_ISOLATED_ARG = '--isolated=@worktree';
 export const SHARED_USERDATA_ARG = '--shared';
 export const DEFAULT_ISOLATED_ARG = '--isolated=dev';
+/** `--mock`: login-free UI mock data, in its own sandbox unless one is named. */
+export const UI_MOCK_ARG = '--mock';
+export const UI_MOCK_ISOLATED_ARG = '--isolated=ui-mock';
 const WORKTREE_NAME_DIGEST_LEN = 6;
 
 const VERDICT_FIELDS = Object.freeze([
@@ -104,10 +107,14 @@ export function normalizeDesktopRestartArgv(argv = [], env = process.env) {
   if (argv.includes(SHARED_USERDATA_ARG) || argv.includes('--preserve-running')) {
     return argv;
   }
-  return [...argv, DEFAULT_ISOLATED_ARG];
+  return [...argv, argv.includes(UI_MOCK_ARG) ? UI_MOCK_ISOLATED_ARG : DEFAULT_ISOLATED_ARG];
 }
 
 export function desktopRestartArgvConflictMessage(argv = [], env = process.env) {
+  if (argv.includes(UI_MOCK_ARG)
+    && (argv.includes(SHARED_USERDATA_ARG) || argv.includes('--preserve-running'))) {
+    return '--mock writes demo tasks and only runs in an isolated sandbox; drop --shared / --preserve-running';
+  }
   if (!argv.includes(SHARED_USERDATA_ARG)) return null;
   if (
     argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='))

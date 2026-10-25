@@ -6,6 +6,17 @@ const schemas = new Map(
   fixture.tools.map((tool) => [tool.name, tool.inputSchema as ComputerDriverToolSchema]),
 );
 describe('installed Computer Use contract', () => {
+  // Production argument adapter, unit tier: new incremental evidence requests
+  // must still dispatch with the existing old-driver fixture (previously untested).
+  it('preserves Markdown evidence diffs only for drivers advertising since', () => {
+    const input = { pid: 1, window_id: 2, include_screenshot: false, tree_format: 'markdown', since: 'latest' };
+    const modern = new Map<string, ComputerDriverToolSchema>([['get_window_state', {
+      properties: { pid: {}, window_id: {}, include_screenshot: {}, tree_format: {}, since: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('get_window_state', input, modern)).toEqual(input);
+    expect(adaptComputerDriverArgs('get_window_state', input, schemas)).not.toHaveProperty('since');
+  });
   it('preserves driver credentials and rejects missing observation provenance', () => {
     const args = {
       pid: 1,
@@ -46,6 +57,32 @@ describe('installed Computer Use contract', () => {
     expect(
       adaptComputerDriverArgs('get_window_state', { include_screenshot: false }, legacy),
     ).toEqual({ capture_mode: 'ax' });
+  });
+  it('addresses token-only drivers with the observed row and asks for structured elements', () => {
+    // cua-driver 0.35+: Markdown-only reads by default, actions take only element_token.
+    const tokenOnly = new Map<string, ComputerDriverToolSchema>([
+      ['click', { properties: { pid: {}, window_id: {}, element_token: {} }, additionalProperties: false }],
+      ['get_window_state', {
+        properties: { pid: {}, window_id: {}, include_screenshot: {}, max_elements: {}, max_depth: {}, tree_format: {} },
+        required: ['pid', 'window_id'],
+        additionalProperties: false,
+      }],
+    ]);
+    expect(adaptComputerDriverArgs('click', {
+      pid: 1, window_id: 2, element_index: 5, snapshot_id: 's0000002d',
+    }, tokenOnly)).toEqual({ pid: 1, window_id: 2, element_token: 's0000002d:5' });
+    expect(adaptComputerDriverArgs('click', {
+      pid: 1, window_id: 2, element_index: 5, element_token: 's0000002d:5', snapshot_id: 's0000002d',
+    }, tokenOnly)).toEqual({ pid: 1, window_id: 2, element_token: 's0000002d:5' });
+    expect(() => adaptComputerDriverArgs('click', { pid: 1, window_id: 2, element_index: 5 }, tokenOnly))
+      .toThrow('fresh snapshot_id or element_token');
+    expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2 }, tokenOnly))
+      .toMatchObject({ tree_format: 'both' });
+    expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2, tree_format: 'markdown' }, tokenOnly))
+      .toMatchObject({ tree_format: 'markdown' });
+    // Older drivers have no tree_format; Cindy's internal reads must still dispatch.
+    expect(adaptComputerDriverArgs('get_window_state', { pid: 1, window_id: 2, tree_format: 'markdown' }, schemas))
+      .not.toHaveProperty('tree_format');
   });
   it('rejects unavailable tools and incompatible arguments before dispatch', () => {
     expect(() => adaptComputerDriverArgs('missing', {}, schemas)).toThrow('does not advertise');

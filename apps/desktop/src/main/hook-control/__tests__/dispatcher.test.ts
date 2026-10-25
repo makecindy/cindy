@@ -5014,7 +5014,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
 
     expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
     // 第一条已经处理中，第二条仍显示排队。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']);
   });
 
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
@@ -5033,7 +5033,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
 
     // 取消排队任务时清掉它的状态，不影响正在执行的任务。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀', '']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀', '']);
   });
 
   it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
@@ -5052,7 +5052,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']); // 两条各一个在册
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
@@ -5074,7 +5074,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
-    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     d.onDisconnected('conn-1');
     fr.finish({ status: 'ok' });
@@ -5128,7 +5128,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
   });
 
   it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
@@ -5139,7 +5139,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     const draining = d.deactivateAccount();
     fr.finish({ status: 'ok' });

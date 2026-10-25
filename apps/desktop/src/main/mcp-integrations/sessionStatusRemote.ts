@@ -1,5 +1,6 @@
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 import type { ArchiveSessionsDeps, SessionStatusChangeItem } from '@cindy/mcps';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 
 type Failure = { errorCode: string; message: string };
 const unknownOutcome = (): Failure => ({
@@ -65,6 +66,7 @@ export function createRemoteSessionsStatusSetter(deps: {
   ): Promise<InvokeResultPayload>;
 }): NonNullable<ArchiveSessionsDeps['setRemoteSessionsStatus']> {
   return async ({ deviceId, sessionIds, status }) => {
+    const assertActionCurrent = captureTaskActionSyncGuard();
     const changed: SessionStatusChangeItem[] = [];
     const fail = (index: number, reason: Failure) => ({
       ok: false as const,
@@ -87,12 +89,37 @@ export function createRemoteSessionsStatusSetter(deps: {
         changed.forEach((item) => { item.title = null; item.workingDir = null; });
         return fail(index, { errorCode: 'HOST_NOT_READY', message: '账号已切换，当前项及后续项未执行。' });
       }
+      try {
+        await assertTaskActionCurrent();
+        assertCurrent();
+      } catch {
+        // The async authorization check can also cross an account boundary.
+        changed.forEach((item) => { item.title = null; item.workingDir = null; });
+        return fail(index, {
+          errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+          message: '请求来源已失效，当前项及后续项未执行。',
+        });
+      }
       let response: InvokeResultPayload;
+      let actionExpiredBeforeSend = false;
       try {
         response = await deps.invoke(deviceId, 'local-db:sessions:patch-meta', [sessionId, { status }], {
-          preSend: assertCurrent,
+          preSend: () => {
+            assertCurrent();
+            try { assertActionCurrent?.(); } catch (error) {
+              actionExpiredBeforeSend = true;
+              throw error;
+            }
+          },
         });
       } catch (error) {
+        if (actionExpiredBeforeSend) {
+          changed.forEach((item) => { item.title = null; item.workingDir = null; });
+          return fail(index, {
+            errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+            message: '请求来源已失效，当前项及后续项未执行。',
+          });
+        }
         try { assertCurrent(); } catch {
           changed.forEach((item) => { item.title = null; item.workingDir = null; });
         }

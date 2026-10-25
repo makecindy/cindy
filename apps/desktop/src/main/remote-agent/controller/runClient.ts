@@ -59,7 +59,10 @@ export interface RemoteAgentRunHandlers {
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest, signal: AbortSignal): Promise<RemoteAgentReply>;
   onWs(item: Extract<RemoteAgentStreamItem, { t: 'ws' }>): void;
-  onClosed(reason: string, error?: RemoteAgentErrorInfo): void;
+  /** idleReclaimed：对方按主人设置的时长收回了这个闲置任务(事件流 `closed` 带 idleReclaimed)。 */
+  onClosed(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed?: boolean): void;
+  /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
+  holdsRemote?(): boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -177,7 +180,7 @@ export class RemoteAgentRunClient implements PolledRun {
       for (let attempt = 1; ; attempt += 1) {
         if (this.closed) return;
         try {
-          await this.invoke([{ op: 'push', runId: this.runId, seq, frames }]);
+          await this.invoke([{ op: 'push', runId: this.runId, seq, frames, ...(this.holdsRemote() ? { hold: true } : {}) }]);
           return;
         } catch (error) {
           const retryable = isRetryableLinkError(error) && attempt < MAX_PUSH_DELIVER_ATTEMPTS;
@@ -219,12 +222,16 @@ export class RemoteAgentRunClient implements PolledRun {
     return this.closed;
   }
 
+  holdsRemote(): boolean {
+    return !this.closed && this.handlers.holdsRemote?.() === true;
+  }
+
   /** 还有没收尾的往来：在等的方法结果、正在回答的反向请求(权限确认、执行器 / MCP 请求等)或在推的帧。 */
   get hasPendingWork(): boolean {
     return this.pendingCalls.size > 0 || this.answering > 0 || this.pushing > 0 || this.started !== null;
   }
 
-  private finish(reason: string, error?: RemoteAgentErrorInfo): void {
+  private finish(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed = false): void {
     if (this.closed) return;
     this.closed = true;
     this.poller.unregister(this.runId);
@@ -236,7 +243,7 @@ export class RemoteAgentRunClient implements PolledRun {
     this.inflight.clear();
     for (const pending of this.pendingCalls.values()) pending.reject(failure);
     this.pendingCalls.clear();
-    this.handlers.onClosed(reason, error);
+    this.handlers.onClosed(reason, error, idleReclaimed);
   }
 
   /** 拉取器交付的新数据(已去重，从上次的游标开始)。 */
@@ -305,7 +312,7 @@ export class RemoteAgentRunClient implements PolledRun {
         this.handlers.onWs(item);
         return;
       case 'closed':
-        this.finish(item.reason, item.error);
+        this.finish(item.reason, item.error, item.idleReclaimed === true);
         return;
     }
   }

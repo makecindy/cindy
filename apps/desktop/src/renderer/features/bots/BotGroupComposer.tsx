@@ -164,11 +164,13 @@ const NO_ATTACHMENTS: BotGroupComposerAttachments = {
 export function BotGroupComposer({
   groupId,
   mode = 'group',
+  conversationKind,
   draftKey,
   members,
   running,
   disabled = false,
   planState = null,
+  divisionSteps = false,
   attachments: attachmentState = NO_ATTACHMENTS,
   attachmentScope = '',
   dragOver = false,
@@ -182,6 +184,7 @@ export function BotGroupComposer({
   footerStart,
 }: {
   groupId: string;
+  conversationKind?: 'direct';
   /** `thread`: a 话题's reply box (no 「+」 menu, attachments or quotes). */
   mode?: 'group' | 'thread';
   /** Where the unsent text is kept (the group's attachment scope, or the 话题's own key). */
@@ -192,6 +195,8 @@ export function BotGroupComposer({
   disabled?: boolean;
   /** The group's open plan, for placeholders and the 「安排分工」 gate. */
   planState?: BotGroupComposerPlanState | null;
+  /** Server groups: a 分工 that writes out who does what starts as written; otherwise the organizer arranges it (§7.0). */
+  divisionSteps?: boolean;
   attachments?: BotGroupComposerAttachments;
   /** Scope for writing annotated images before send (see botGroupAttachmentScope). */
   attachmentScope?: string;
@@ -403,6 +408,7 @@ export function BotGroupComposer({
     const sentQuote = quoteRef.current;
     const fields = {
       groupId,
+      ...(conversationKind ? { conversationKind } : {}),
       text: trimmed,
       mentions,
       ...(division ? { division: true } : {}),
@@ -500,11 +506,11 @@ export function BotGroupComposer({
     : !hasMembers
     ? t('bots.groupChat.composer.noMembers')
     : division
-      ? t('bots.groupChat.composer.placeholderDivision')
+      ? t(divisionSteps ? 'bots.groupChat.composer.placeholderDivisionSteps' : 'bots.groupChat.composer.placeholderDivision')
       : planState?.kind === 'proposed'
         ? t('bots.groupChat.composer.placeholderPlanProposed')
         : planState?.kind === 'running' && planState.botName
-          ? t('bots.groupChat.composer.placeholderPlanRunning', { name: planState.botName })
+          ? t(planState.talk ? 'bots.groupChat.composer.placeholderQueueRunning' : 'bots.groupChat.composer.placeholderPlanRunning', { name: planState.botName })
           : planState?.kind === 'waiting' && planState.stepDone && planState.botName
             ? t('bots.groupChat.composer.placeholderPlanWaiting', { name: planState.botName })
             : t('bots.groupChat.composer.placeholder');
@@ -664,7 +670,7 @@ export function BotGroupComposer({
                       {t('extraDirs.addFiles')}
                     </span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem
+                  {conversationKind !== 'direct' && <DropdownMenuItem
                     disabled={divisionBlocked}
                     className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}
                     onSelect={() => {
@@ -681,11 +687,11 @@ export function BotGroupComposer({
                         {t(
                           divisionBlocked
                             ? 'bots.groupChat.composer.divisionBusy'
-                            : 'bots.groupChat.composer.divisionDescription',
+                            : divisionSteps ? 'bots.groupChat.composer.divisionDescriptionSteps' : 'bots.groupChat.composer.divisionDescription',
                         )}
                       </span>
                     </span>
-                  </DropdownMenuItem>
+                  </DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
               </>)}

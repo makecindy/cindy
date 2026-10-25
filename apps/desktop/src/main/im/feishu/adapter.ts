@@ -9,10 +9,8 @@ import { captureImContext } from '../../../shared/imMessageSource';
  *     MCP (send_file_to_user)
  *   - ack emoji: REACTION_PROCESSING
  *   - 群 lane(senderId = `g/{chatId}[/{threadId}]`, @cindy/im feishu/codec.ts):
- *     群主流 @ 入站即开话题(每话题一个会话, 群 lane 仅开话题失败的降级路径);
- *     **`/ctr` 接管严格按话题记账**: binding 的 userId 就是话题 lane, 一个话题
- *     一份接管, 群主流的 @ 恒开新话题走该话题自己的会话(不会被任何接管吃掉);
- *     要跟接管会话说话就在那个话题里说 —— 群主流不是接管的入口;
+ *     群主流提问留在群 lane, 话题内提问留在原话题 lane, 不自动开新话题;
+ *     接管绑定按完整 lane 区分, 群主流不会改道进入某个话题的接管会话;
  *     群里新建的会话一律用渠道设置「群聊新建任务权限档」(sessions.permissionModeFor,
  *     `/ctr` 新建走 cardActionHandler 读同一设置);
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 5 页,
@@ -316,9 +314,8 @@ export function buildFeishuAdapter(
        * 面向私聊的 `permissionMode`。
        *
        * 覆盖到的建会话路径(都经 sessionRepo.prepareNewSession):
-       *   - 群主流 @bot 开新话题 → 话题 lane 首条消息建行(turnRunner)
+       *   - 群主流 / 话题 @bot → 对应 lane 首条消息建行(turnRunner)
        *   - 群里 `/new` 重开上下文(slashCommands → resetSessionToDefaults)
-       *   - 群主流降级 lane(开话题失败时)建行
        * `/ctr` 新建接管会话不走这里(它建的是 desktop 会话, 见
        * cardActionHandler), 那边读的是同一个设置项。
        *
@@ -340,7 +337,7 @@ export function buildFeishuAdapter(
         if (!name) return null;
         return `${groupPrefix(lane.threadId)}${name}`;
       },
-      // 群主流 lane(仅开话题失败的降级路径)标题是稳定的群名, 不参与首条消息
+      // 群主流 lane 标题是稳定的群名, 不参与首条消息
       // oneshot 起名; 话题 lane 需要 oneshot 出「话题简介」, 照常参与。
       skipOneshotTitleFor: (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
@@ -463,15 +460,8 @@ export function buildFeishuAdapter(
           replyContext: safeReply,
         };
       }
-      // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
-      // IMMessageEvent.groupContextLane) — 触发消息发在群主流(只是回复被折成
-      // 了新话题), 所以群历史仍按群主流拉取, 「总结上面」才拿得到上下文。
-      //
-      // 话题里发的消息一律按**话题容器**取数(contextLane = lane): 会话里只看
-      // 会话。`/ctr` 曾把「开话题之前的群主流讨论」记下来补给话题里第一条消息,
-      // 已按产品裁决去掉 —— 它让 /ctr 后的第一句要回翻整条群主流(5 页 + 每页
-      // 一次模型判断), 首句实测被拖到 87s; 而话题的语义本就是「另起一摊」,
-      // 需要群里的上文时在群主流里 @ 即可。
+      // Ordinary inbound context follows its originating group/topic lane.
+      // Retain explicit context overrides for existing callers.
       const contextLane = event.groupContextLane ?? lane;
       const built = await buildFeishuGroupContext({
         lane: contextLane,

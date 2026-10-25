@@ -48,6 +48,18 @@ describe('bot remote resource projection', () => {
     });
   });
 
+  // Mobile task rows draw the follow mark from these links; the revision must move when they do.
+  it('links the open tasks a teammate looks after and revises the row when they change', () => {
+    const before = botRemoteCollectionItemFromSource(source);
+    const after = botRemoteCollectionItemFromSource({ ...source, followingSessionIds: ['task-a', 'task-b'] });
+    expect(after.links).toEqual([
+      { rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } },
+      { rel: 'following', target: { kind: 'session', sessionId: 'task-a' } },
+      { rel: 'following', target: { kind: 'session', sessionId: 'task-b' } },
+    ]);
+    expect(after.revision).not.toBe(before.revision);
+  });
+
   it('uses generic attention presentation without exposing Bot internals', () => {
     const projected = botRemoteCollectionItemFromSource({
       ...source,

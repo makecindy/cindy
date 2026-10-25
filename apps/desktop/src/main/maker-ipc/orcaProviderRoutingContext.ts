@@ -14,6 +14,7 @@ import type { ProviderService } from '../maker-host/provider-service.js';
 import {
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerProviderRoutingContext,
+  type OrcaWorkerProviderSnapshot,
 } from './orcaWorkerCreationService.js';
 
 /** The SSH discovery projection is native OpenAI only and already ordered by remote default. */
@@ -26,6 +27,7 @@ export function sshCodexWorkerRoutingContext(views: ProviderView[]): OrcaWorkerP
       codex: models.length ? [{
         id: 'openai', name: views[0]!.name, models: models.map((model) => model.id),
         fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
+        ultrafastModels: models.filter((model) => model.supportsUltrafastMode).map((model) => model.id),
         effortMetaByModel: Object.fromEntries(models.map((model) =>
           [model.id, {
             efforts: model.efforts,
@@ -53,6 +55,7 @@ export function deviceWorkerRoutingContext(views: ProviderView[], agent: AgentKi
         name: provider.name,
         models: models.map((model) => model.id),
         fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
+        ultrafastModels: models.filter((model) => kind === 'codex' && model.supportsUltrafastMode).map((model) => model.id),
         effortMetaByModel: Object.fromEntries(
           models.map((model) => [model.id, { efforts: model.efforts, defaultEffort: model.defaultEffort }]),
         ),
@@ -112,6 +115,35 @@ export function deviceAvailableModels(views: ProviderView[], agent: AgentKind): 
 }
 
 /**
+ * list_available_models 用：本机某种 Agent 的模型、提供它的来源与默认来源。
+ * 没有任何已启用来源提供的模型(提供商被关/断连后只剩目录骨架)不进返回，
+ * 否则 Lead 会把 `providers: []` 的模型当成仍可选(#6970)，与 deviceAvailableModels 口径一致。
+ */
+export function localAvailableModels(
+  availableModels: ReadonlyArray<{ id: string; displayName: string }>,
+  providers: ReadonlyArray<OrcaWorkerProviderSnapshot>,
+  resolveDefaultProviderIdForModel: (agent: AgentKind, model: string) => string | null,
+  agent: AgentKind,
+): Array<{
+  id: string;
+  label: string;
+  providers: Array<{ id: string; name: string }>;
+  defaultProviderId: string | null;
+}> {
+  return availableModels.flatMap((m) => {
+    const modelProviders = providers
+      .filter((provider) => provider.models.includes(m.id))
+      .map((provider) => ({ id: provider.id, name: provider.name }));
+    return modelProviders.length === 0 ? [] : [{
+      id: m.id,
+      label: m.displayName,
+      providers: modelProviders,
+      defaultProviderId: resolveDefaultProviderIdForModel(agent, m.id),
+    }];
+  });
+}
+
+/**
  * Build the Orca worker route snapshot from one post-claim full catalog.
  *
  * `listProviders` invokes `getCatalog` after all connection readers settle. Keeping the exact
@@ -160,6 +192,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
         models: models.map((model) => model.id),
         registryIdentityByModel,
         fastModels: models.filter((model) => model.supportsFastMode).map((model) => model.id),
+        ultrafastModels: models.filter((model) => agent === 'codex' && model.supportsUltrafastMode).map((model) => model.id),
         effortMetaByModel: Object.fromEntries(
           models.map((model) => [
             model.id,

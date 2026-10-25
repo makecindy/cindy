@@ -34,6 +34,7 @@ export type GhostSetupEnsureResult =
         | 'TIMEOUT'
         | 'INTERNAL'
         | 'GHOST_NOT_FOUND'
+        | 'GHOST_NAMESPACE_MISMATCH'
         | 'GHOST_RETIRED'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'
@@ -49,6 +50,7 @@ export type GhostSetupTargetValidation =
       ok: false;
       errorCode:
         | 'GHOST_NOT_FOUND'
+        | 'GHOST_NAMESPACE_MISMATCH'
         | 'GHOST_RETIRED'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'

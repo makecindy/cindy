@@ -42,6 +42,12 @@ correctly`。`pnpm test:unit` 等 workspace 测试开跑前也会只读检查一
 在该 worktree 内重新运行 `pnpm install`；不要加 `--ignore-scripts`，上述补装都在安装
 脚本里完成。
 
+Mobile 的 Global / CN 开发与打包只需仓内公开端点清单，不要求本机存在
+`config/endpoint.dev.json`。Metro 在这两个区域将私有 dev 清单排除出依赖图；不能靠从
+另一个 checkout 复制私有配置来修复新 worktree。只有显式选择 `--region=dev` 时才需要
+按 `config/endpoint.dev.json.example` 准备该文件，缺失时保持明确失败，不切换区域或端点。
+模拟器与运行源码身份检查使用 [Mobile 开发入口](mobile-development.md#日常模拟器入口)。
+
 Cindy Make 的设置入口和指令前置弹窗共用源码准备流程：切到 `cindy-personal` 后，
 按锁文件预热包含开发依赖的 pnpm store 缓存，成功后才标记源码就绪。预热使用
 `pnpm fetch --frozen-lockfile --prefer-offline --prod=false --ignore-scripts

@@ -7,6 +7,7 @@
  */
 import type { DeviceView } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
+import { remoteInvocationModels } from '@cindy/model-providers';
 import type { NewSessionRemoteAgentPick } from './newSession';
 import { matchesEntry, mobileUnifiedEntries } from './unifiedMobileModels';
 
@@ -31,7 +32,7 @@ export interface RemoteAgentCatalog {
 export function remoteAgentProviders(providers: readonly ProviderView[]): ProviderView[] {
   return providers.filter(
     (provider) => (provider as { remoteInvocationEnabled?: unknown }).remoteInvocationEnabled === true,
-  );
+  ).map(remoteInvocationModels);
 }
 
 /**

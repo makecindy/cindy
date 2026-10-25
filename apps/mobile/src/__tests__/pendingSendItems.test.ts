@@ -20,6 +20,7 @@ import {
   isPendingSendItemSelected,
   mergePendingSendItems,
   pendingSendItemKey,
+  pendingSendBubbleText,
   pendingSendSpins,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -312,6 +313,8 @@ describe('buildPendingSendItems', () => {
       queue: [queued('same')],
       presentationByClientId: new Map([['same', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -348,6 +351,29 @@ describe('buildPendingSendItems', () => {
     expect(items[2].errorText).toBe('boom');
     // 失败条目不给队列操作(它还没入队),重试 / 删除走 outbox 侧动作。
     expect(items[2].actions).toBeNull();
+  });
+
+  it('holds local sends as waiting while disconnected, including unfinished uploads, but keeps failures', () => {
+    const [ready, uploading, failed, handed] = build({
+      outboxWaitingFor: 'computer',
+      outbox: [
+        outboxItem('ready'),
+        outboxItem('uploading', { attachmentCount: 1, uploadedCount: 0, thumbnails: [{ key: 'uploading-slot-0', uri: 'file:///a.jpg', ossRef: null, uploading: true }] }),
+        outboxItem('failed', { failed: true }),
+        outboxItem('handed', { dispatching: true, sentAt: 1_700_000_000_000 }),
+      ],
+    });
+    expect(ready).toMatchObject({ phase: 'waiting', waitingFor: 'computer' });
+    expect(isPendingSendItemSelected(ready, 'ready')).toBe(true);
+    // 断开时附件上传也停着:写等待,图片不转圈。
+    expect(uploading).toMatchObject({ phase: 'waiting', waitingFor: 'computer' });
+    expect(uploading.thumbs.every((thumb) => !thumb.uploading)).toBe(true);
+    expect(failed.phase).toBe('failed');
+    // 已交给电脑的条目在等对账,不是在等着发。
+    expect(handed.phase).toBe('sending');
+    // 发件箱的发送时刻带进气泡,伙伴对话按它分组。
+    expect(handed.sentAt).toBe(1_700_000_000_000);
+    expect(build({ outbox: [outboxItem('ready')] })[0].phase).toBe('sending');
   });
 
   it('keeps a first-message creation row non-interactive until creation recovery is available', () => {
@@ -408,6 +434,8 @@ describe('pending_send 渲染接线', () => {
       queue: [queued('selected')],
       presentationByClientId: new Map([['selected', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -569,4 +597,15 @@ describe('pending bubble source labels', () => {
     const [bubble] = build({ outbox: [outboxItem('o1')] });
     expect(bubble.source).toBeNull();
   });
+});
+
+
+// Unit regression: remote pending bubble used to expose transport escapes. The
+// original queue item is retained for sending; a human draft is not decoded.
+it('decodes only attributed forwarded pending bubbles', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const item = { ...queued('forwarded', content), origin: { kind: 'session' as const, senderSessionId: 'sender' } };
+  expect(pendingSendBubbleText(item)).toContain('第一段\n第二段');
+  expect(item.persistedContent).toBe(content);
+  expect(pendingSendBubbleText(queued('human', content))).toBe(content);
 });

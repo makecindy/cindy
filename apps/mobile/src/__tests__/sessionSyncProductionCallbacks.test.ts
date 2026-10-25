@@ -21,11 +21,15 @@ import { HistoryViewController, isHistoryViewUnavailable, projectHistoryView } f
 const source = ts.createSourceFile('screen.tsx', readFileSync(
   resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const compiledCallbacks = new Map<string, string>();
 function pageCallback(name: string, bindings: Record<string, unknown>): (...args: any[]) => Promise<void> {
+  const cached = compiledCallbacks.get(name);
+  if (cached) return new Function(...Object.keys(bindings), `${cached}\nreturn callback;`)(...Object.values(bindings));
   let expression: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === name
-      && node.initializer && ts.isCallExpression(node.initializer)) {
+      && node.initializer && ts.isCallExpression(node.initializer)
+      && node.initializer.expression.getText(source) === 'useCallback') {
       expression = node.initializer.arguments[0];
     }
     ts.forEachChild(node, visit);
@@ -35,6 +39,7 @@ function pageCallback(name: string, bindings: Record<string, unknown>): (...args
   const compiled = ts.transpileModule(`const callback = ${expression.getText(source)};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
+  compiledCallbacks.set(name, compiled);
   return new Function(...Object.keys(bindings), `${compiled}\nreturn callback;`)(...Object.values(bindings));
 }
 function deferred<T>() {
@@ -139,6 +144,7 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     setOutboxTransportHold: (update: (value: typeof state.hold) => typeof state.hold) => { state.hold = update(state.hold); },
     latchOutboxTransportHold: (error: string) => { state.hold = { deviceId: 'd1', error }; },
     setLastSyncedAt: (value: number) => { state.synced = value; },
+    setMessageHistoryRead: vi.fn(),
     setContentSyncedKey: vi.fn(), contentRecoveryKeyRef: { current: null },
     setSessionMetadataSyncedKey: vi.fn(),
     setReadAckSyncedKey: (value: string) => { state.readAck = value; },

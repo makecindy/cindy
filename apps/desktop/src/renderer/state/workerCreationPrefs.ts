@@ -19,7 +19,7 @@ export type WorkerAgentKind = 'codex' | 'claude-code' | 'pi';
 export interface WorkerAgentPrefs {
   model: string;
   effort: Effort;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
   /** 上次显式选定的模型来源；null = 未显式选择，跟随默认路由解析。 */
   providerId: string | null;
 }
@@ -70,7 +70,7 @@ export function readWorkerCreationPrefs(): WorkerCreationPrefs {
       return {
         ...fallback,
         ...(value ?? {}),
-        fast: value?.fast === true,
+        fast: (value?.fast === 'ultrafast' ? 'ultrafast' : value?.fast === true),
         providerId:
           typeof value?.providerId === 'string' && value.providerId.trim()
             ? value.providerId.trim()
@@ -112,7 +112,7 @@ function readModelSelections(value: unknown): Record<string, WorkerModelSelectio
       agentDeviceId: item.agentDeviceId,
       model: item.model,
       effort: item.effort,
-      fast: item.fast === true,
+      fast: (item.fast === 'ultrafast' ? 'ultrafast' : item.fast === true),
       providerId: item.providerId,
     }]];
   }));

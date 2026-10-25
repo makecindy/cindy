@@ -198,6 +198,34 @@ describe('useCodexRateLimits', () => {
     expect(accountB.result.current.snapshot).toBe(refreshedB);
   });
 
+  it('ignores a replacement identity quota read that finishes after login rollback', async () => {
+    const original = { ...result, providerId: 'openai-a', account: { ...result.account, accountId: 'original' } };
+    const replacement = { ...original, account: { ...result.account, accountId: 'replacement' } };
+    let authStarted: (() => void) | undefined;
+    let authReady: (() => void) | undefined;
+    let resolveReplacement!: (value: MobileCodexRateLimitsResult) => void;
+    const reader = vi.fn().mockResolvedValueOnce(original)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveReplacement = resolve; }))
+      .mockResolvedValueOnce(original);
+    vi.stubGlobal('electronAPI', { maker: { usage: {
+      getCodexRateLimits: reader,
+      onCodexAccountAuthStarted: (callback: () => void) => { authStarted = callback; return vi.fn(); },
+      onCodexAccountAuthReady: (callback: () => void) => { authReady = callback; return vi.fn(); },
+    } } });
+    const hook = renderHook(() => useCodexRateLimits(true, 'openai-a'));
+    await waitFor(() => expect(hook.result.current.snapshot).toBe(original));
+    act(() => { authStarted?.(); authReady?.(); });
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.snapshot).toBeNull();
+
+    // Capability commit failed: rollback publishes start/ready after restoring credentials.
+    act(() => { authStarted?.(); authReady?.(); });
+    await waitFor(() => expect(hook.result.current.snapshot).toBe(original));
+    expect(reader).toHaveBeenCalledTimes(3);
+    await act(async () => resolveReplacement(replacement));
+    expect(hook.result.current.snapshot).toBe(original);
+  });
+
   it('does not treat an unrelated scoped clear as a credential replacement', async () => {
     const accountChanges = new Map<string, (payload: unknown) => void>();
     const accountA = { ...result, providerId: 'openai-a' };

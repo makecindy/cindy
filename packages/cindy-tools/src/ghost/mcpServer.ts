@@ -32,7 +32,7 @@ const ghostNamespaceInput = z
   .union([z.string().min(1).max(128), z.null()])
   .optional()
   .describe(
-    "插件企业身份。字符串为企业 orgSlug。null 表示已确认 root；候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。",
+    '插件企业身份。字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 表示名为 null 的企业，不是 root。按发现结果保留类型，不要把 null 转成字符串。候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。',
   );
 
 const D_GHOST_LIST = [
@@ -56,6 +56,7 @@ const D_GHOST_INFO = [
   "返回单条完整形态:id、namespace(null=root，字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 仅当同名实例唯一。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
+  "GHOST_NAMESPACE_MISMATCH 表示插件已安装但 namespace 不匹配；按返回身份核对并修正参数，保留 JSON 类型，不能据此判断插件已卸载或自动改选其他实例。",
   "结构化错误:GHOST_NOT_FOUND / GHOST_AMBIGUOUS(同名多实例,candidates 为 {ghostId, namespace}。已确认 root 的 namespace 是 null；没有 namespace 字段的待迁移旧安装在候选里也会标成 null。旁边还有另一个同名实例、且没有已确认 root 时，传 namespace:null 会选中那份旧安装。按候选补 namespace 后重试，不要改选公开版) / GHOST_ASLEEP / GHOST_DISABLED_IN_WORKDIR / INTERNAL。升级普查中的旧插件没有 namespace 字段，省略 namespace 且同名唯一时才能解析。",
 ].join("\n");
 
@@ -69,10 +70,15 @@ const D_GHOST_MANUAL = [
   "每次调用都实时检查插件是否存在、账号可用、当前工作目录是否停用以及是否已启用；可见性错误码与 ghost_info 一致。",
 ].join("\n");
 
+// Model-visible handoff authorization must describe the same flow in the tool
+// overview and every path parameter; native review must not assume later consent.
+const D_FILE_HANDOFF_PERMISSION = "工作目录内按现有路径校验交接；工作目录外：本地 Full Access 自动交接，Auto 沿用实际审批负责人，可能直接交接，Ask 需用户确认。不保证另有确认卡；远程任务不能借权限档位自动访问控制端文件。";
+
 const D_GHOST_CALL = [
   "调用某个插件(Ghost)提供的工具。ghost_id 与 tool 来自 ghost_info 或 ghost_list 的返回,",
   "或用户消息[插件指令]附带的工具清单;",
   "args 按该工具声明的参数 schema 传 JSON 对象。",
+  'namespace 按发现结果原样传入；root 使用 JSON null，不是字符串 "null"。GHOST_NAMESPACE_MISMATCH 表示地址不匹配、插件未执行；核对目标后修正参数，不要原样重试或自动改选其他实例。',
   "邮件默认先创建并展示 Cindy 草稿卡，供用户核对收件人和内容，等确认后再发送。只有用户已明确确认这封邮件，或有效的用户/任务指令明确授权该范围内直接发送时，才可不再询问；‘帮我写/回一封邮件’、修改草稿、自动审批或完全访问模式本身不等于确认发送。",
   "即使明确授权直接发送，也必须通过同一草稿卡的公共发送流程，使用最新编辑内容，并保留 10 秒倒计时、撤销和立即发送；不能用底层直发、CLI 或其他旁路跳过。卡片发送点击即为确认，不重复询问；等待最终回执才报告已发送，撤销后不得自动重试。",
   "伙伴中需要授权时，Host 发出独立持久卡并立即返回 SETUP_REQUIRED；结束本轮，等 Host 授权成功后自动续接，不要轮询或重复调用。普通任务仍沿用原调用等待。",
@@ -90,15 +96,13 @@ const D_GHOST_CALL = [
   "要把一个本地目录或单个文件交给插件上传(如部署构建产物)时,把其**绝对路径**放进",
   "顶层 dir(不是塞进 args):主机会收集文件并以",
   "一次性票据注入 args.dir_deposit,供需要把选定目录或单文件整体交给插件的工具上传。",
-  "过户钳制(attachments / dir / save_dir 通用):路径在当前会话工作目录内直接放行;",
-  "工作目录外若是本地 Full Access(bypassPermissions)会话则自动过户、不弹卡;其它权限档及",
-  "远程会话仍向用户弹确认卡,被拒绝/超时后不要重试,转告用户即可。Full Access 自动交接",
-  "不写人工永久授权,热切回其它权限档后会恢复确认;用户已明确允许的同一文件(按内容指纹)",
+  D_FILE_HANDOFF_PERMISSION,
+  "原生接管且真实目标未变时不再调用 Cindy 复审；symlink/junction 解析暴露新目标时由 Cindy 审核真实路径。",
+  "被拒绝/超时后不要重试,转告用户即可。Auto / Full Access 自动交接不写人工永久授权，切回 Ask 后恢复确认；用户已明确允许的同一文件(按内容指纹)",
   "对同一插件永久生效,同一目录在本会话内生效。",
-  "批量预授权:非 Full Access 下计划连续多次调用同一插件、每次用一个工作目录外文件时",
-  "(如逐张图生成视频),**必须**先发一次 grant_only:true + attachments 列出整批文件",
-  "(≤32 张,tool 随便填会被忽略)——用户只需在一张卡上批一次。Full Access 下普通调用本就",
-  "自动过户;grant_only 只做提前交接,不会建立降档后仍生效的人工授权。",
+  "批量交接：需要连续使用多个文件时，可用 grant_only:true + attachments 列出整批文件",
+  "(≤32 张,tool 随便填会被忽略)。Ask 可一次确认整批；Auto / Full Access 普通调用已按当前权限交接，无需为审批额外预授权。",
+  "grant_only 只做提前交接,不会建立降档后仍生效的人工授权。",
   "结构化错误:GHOST_NOT_FOUND(未安装或已卸载)/ GHOST_ASLEEP(未启用,可提示用户到主界面侧边栏「插件」中启用)/",
   "GHOST_DISABLED_IN_WORKDIR(用户在当前工作目录停用了该插件——不要重试,改用其它方式完成)/",
   "TOOL_NOT_FOUND(常见是把二级分派操作名当成了顶层 tool,按上文 call_tool 形态改写后重试)/ GHOST_CRASHED /",
@@ -117,7 +121,7 @@ const D_MEDIA = [
   "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
-  "展示、改图和附件交接都直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址，不需要本地路径。仅当用户明确询问文件存储位置或本地路径时，才调用 resolve_local_path 并原样传入 url；Host 会要求用户点击确认后才返回路径。不要猜路径或扫描磁盘。",
+  "展示、改图和附件交接都直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址，不需要本地路径。仅当用户明确询问文件存储位置或本地路径时，才调用 resolve_local_path 并原样传入 url；此调用会把该受管媒体的本机绝对路径返回给 Agent 并写入任务记录。Host 按当前权限处理：Ask 需点击确认，Auto 由当前审批负责人审核，本地 Full Access 自动允许。不要假定稍后还会有确认卡；不要猜路径或扫描磁盘。",
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
@@ -156,7 +160,9 @@ const D_GHOST_FORGE_PACK = [
 const D_GHOST_FORGE_INSTALL = [
   "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 已安装时原位更新。",
   "只有用户明确要求安装或更新当前插件时才调用。不要因为 scaffold 或 pack 成功就自动调用。",
-  "首次安装后直接启用；更新保留原有启用状态、配置、数据与面板位置，同版本也可覆盖。",
+  "新装默认个人范围(namespace:null)，不会因登录组织而新建组织副本；已有个人实例优先更新，唯一的旧组织实例原位更新。只有用户明确要求组织安装时传当前组织 namespace，不能从登录身份推断安装归属。",
+  "首次安装后直接启用；同来源更新保留启用状态、配置、数据与面板位置；换源会隔离旧账号与数据，需要重新连接。",
+  "遇到 INSTALL_TARGET_REQUIRED，向用户展示 targets 的身份与版本，让用户选择更新已有实例(target_instance_id)，或另装一份(install_copy:true)。不得替用户默认另装或迁移账号。",
   "dir 传插件源码目录绝对路径(工作目录外走与 pack 相同的会话权限)。成功返回本次真实执行的是 installed 还是 updated；",
   "仅当用户明确选择 AI 生成图标时，可像 ghost_forge_pack 一样传 icon_source。",
   "失败返回打包校验或 Host 安装事务的结构化错误。ghost_forge_pack 始终只打包，不受本工具影响。",
@@ -315,6 +321,13 @@ interface McpTextResult {
   // SDK 的 CallToolResult 带开放索引签名,这里保持结构兼容。
   [key: string]: unknown;
   content: { type: "text"; text: string }[];
+  isError?: boolean;
+}
+
+/** ghost_call's result: the JSON text first, then any images the plugin shows the model. */
+interface McpGhostCallResult {
+  [key: string]: unknown;
+  content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
   isError?: boolean;
 }
 
@@ -688,7 +701,7 @@ export async function handleGhostList(
       ghosts,
       hint:
         ghosts.length > 0
-          ? "按 manual 索引用 ghost_manual 读取手册;有工具时用 ghost_call({ghost_id, namespace, tool, args}) 调用已声明工具。同名插件必须带 namespace（null=root）。清单实时,勿缓存。"
+          ? '按 manual 索引用 ghost_manual 读取手册;有工具时用 ghost_call({ghost_id, namespace, tool, args}) 调用已声明工具。namespace 按条目原样保留类型：JSON null（不带引号）=root，字符串 "null" 是企业名；条目未提供该字段时省略。同名插件须按返回身份区分。清单实时,勿缓存。'
           : "当前没有已启用的插件。用户可在主界面侧边栏「插件」中安装或启用插件。",
     });
   } catch (err) {
@@ -915,7 +928,7 @@ export async function handleGhostCall(
   },
   agentToolUseId?: string,
   signal?: AbortSignal,
-): Promise<McpTextResult> {
+): Promise<McpGhostCallResult> {
   try {
     const result = await deps.callGhostTool({
       ghostId: input.ghost_id,
@@ -967,7 +980,7 @@ export async function handleGhostCall(
     // IM/hook 出站消费它,保证"意识画卡后删字段"也不影响媒体送达 IM 用户。
     // 声明了媒体字段(含 xdt_audio_tracks)时以声明为准,账本不注入
     // (声明是意图表达,能覆盖 render:false 抑制等语义)。
-    const { producedMedia, setup: unsafeSetup, ...resultForModel } = result;
+    const { producedMedia, setup: unsafeSetup, images, imagesOmitted, ...resultForModel } = result;
     const setup = sanitizeGhostSetupAssessment(unsafeSetup);
     const advisory = setup?.state === "ready" && setup.reauthSuggest ? { setup } : {};
     const declaredMedia = [
@@ -1013,13 +1026,19 @@ export async function handleGhostCall(
           : typeof hoisted.xdt_card_id === "string" || typeof hoisted.xdt_anchor_card_id === "string"
             ? { hint: "xdt_card_id / xdt_anchor_card_id 是卡片配对令牌，不代表所有客户端已经展示。请在最终回复中概括实际结果，不要复述令牌。" }
             : {};
-    return textResult({
+    const response: McpGhostCallResult = textResult({
       ...resultForModel,
       ...advisory,
       ...hoisted,
       ...producedFallback,
       ...mediaHint,
+      ...(imagesOmitted ? { images_omitted: imagesOmitted } : {}),
     });
+    // Images the plugin shows the model follow the JSON text as image content.
+    if (Array.isArray(images)) {
+      for (const image of images) response.content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+    }
+    return response;
   } catch (err) {
     return textResult(
       {
@@ -1138,11 +1157,14 @@ export async function handleForgePack(
 /** ghost_forge_install 的 handler 主体(导出供单测)。 */
 export async function handleForgeInstall(
   deps: CindyGhostsMcpDeps,
-  input: { dir: string; icon_source?: string },
+  input: { dir: string; icon_source?: string; target_instance_id?: string; install_copy?: boolean; namespace?: string | null },
 ): Promise<McpTextResult> {
   try {
     const result = await deps.forgeInstall({
       dir: input.dir,
+      ...(input.target_instance_id !== undefined ? { targetInstanceId: input.target_instance_id } : {}),
+      ...(input.install_copy !== undefined ? { installCopy: input.install_copy } : {}),
+      ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
       ...(input.icon_source !== undefined ? { iconSource: input.icon_source } : {}),
     });
     if (!result.ok) {
@@ -1320,26 +1342,26 @@ export function createCindyGhostsMcpServer(
         .boolean()
         .optional()
         .describe(
-          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)。非 Full Access 下计划连续使用多个工作目录外文件时必须先走一次,attachments 上限放宽到 32 项,让用户在一张确认卡上批完。Full Access 下不弹卡,且该自动交接不会建立降档后仍生效的人工永久授权。",
+          "可选:true = 本次调用只做 attachments 批量交接、不执行工具(tool/args/dir/save_dir 全部被忽略)，上限放宽到 32 项。Ask 可一次确认整批；Auto / Full Access 无需为审批额外预授权，自动交接不建立人工永久授权。" + D_FILE_HANDOFF_PERMISSION,
         ),
       attachments: z
         .array(z.string())
         .max(32)
         .optional()
         .describe(
-          "可选,普通调用 ≤4 项(grant_only 批量交接 ≤32 项):要交给插件处理或收录的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径——工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。用户明确交出的媒体与当前 Agent / Core 工具刚生成、目标插件工具明确要求接收的结果都可使用;非媒体类型文件改用顶层 dir。",
+          "可选,普通调用 ≤4 项(grant_only 批量交接 ≤32 项):要交给插件处理或收录的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径。" + D_FILE_HANDOFF_PERMISSION + "不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。用户明确交出的媒体与当前 Agent / Core 工具刚生成、目标插件工具明确要求接收的结果都可使用;非媒体类型文件改用顶层 dir。",
         ),
       dir: z
         .string()
         .optional()
         .describe(
-          "可选:要交给插件上传的本地目录或单个文件的绝对路径(如站点部署的构建产物目录、要传的附件文件)。位于当前会话工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。主机收集文件(自动排除 node_modules/.git/.env 等)并以一次性票据注入 args.dir_deposit,插件凭票上传,摸不到路径与字节。仅当目标工具的说明要求交付目录/文件时使用。",
+          "可选:要交给插件上传的本地目录或单个文件的绝对路径(如站点部署的构建产物目录、要传的附件文件)。" + D_FILE_HANDOFF_PERMISSION + "主机收集文件(自动排除 node_modules/.git/.env 等)并以一次性票据注入 args.dir_deposit,插件凭票上传,摸不到路径与字节。仅当目标工具的说明要求交付目录/文件时使用。",
         ),
       save_dir: z
         .string()
         .optional()
         .describe(
-          "可选:让插件把下载的文件存进的本地目录绝对路径(如附件下载目标目录)。必须是已存在的目录;位于当前会话工作目录内直接放行;工作目录外在本地 Full Access 下自动过户,其它权限档及远程会话弹确认卡。主机发限时票据注入 args.save_deposit = { token, dir_name },插件凭票让主机把下载字节直接写进该目录(文件名主机消毒、不覆盖已有文件),插件摸不到绝对路径与字节。仅当目标工具的说明要求提供落盘目录时使用。",
+          "可选:让插件把下载的文件存进的本地目录绝对路径(如附件下载目标目录)。必须是已存在的目录。" + D_FILE_HANDOFF_PERMISSION + "主机发限时票据注入 args.save_deposit = { token, dir_name },插件凭票让主机把下载字节直接写进该目录(文件名主机消毒、不覆盖已有文件),插件摸不到绝对路径与字节。仅当目标工具的说明要求提供落盘目录时使用。",
         ),
       setup_plan: ghostSetupPlanInputSchema
         .optional()
@@ -1382,7 +1404,7 @@ export function createCindyGhostsMcpServer(
         .string()
         .max(4096)
         .optional()
-        .describe("resolve_local_path 时必填；原样传入 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址。仅在用户明确询问本地存储路径时使用，Host 会要求用户点击确认"),
+        .describe("resolve_local_path 时必填；原样传入 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址。调用会向 Agent 返回该媒体的本机绝对路径并写入任务记录，仅在用户明确询问时使用；按当前权限审核，不保证另有确认卡"),
       invocation_id: z
         .string()
         .max(128)
@@ -1460,6 +1482,9 @@ export function createCindyGhostsMcpServer(
     D_GHOST_FORGE_INSTALL,
     {
       dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
+      target_instance_id: z.string().max(256).optional().describe("用户选择更新的已有实例 ID，来自 INSTALL_TARGET_REQUIRED.targets；不能与 install_copy:true 同用"),
+      namespace: z.string().min(1).max(128).nullable().optional().describe("仅用户明确选择安装范围时传；null 为个人，字符串仅允许当前组织。新装默认个人，更新保留已有实例；不能与 target_instance_id 同用"),
+      install_copy: z.boolean().optional().describe("仅用户明确另装一份时传 true；不覆盖或停用其它身份的插件，需要独立连接账号"),
       icon_source: z
         .string()
         .optional()

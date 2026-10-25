@@ -52,6 +52,10 @@ vi.mock('lucide-react-native', () => ({
   ...Object.fromEntries(['Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
+vi.mock('react-native-svg', () => ({
+  default: ({ children, ...props }: any) => createElement('svg', props, children),
+  Path: (props: any) => createElement('path', props),
+}));
 vi.mock('@expo/ui/swift-ui', async () => {
   const { useRef } = await import('react');
   const Container = ({ children, modifiers, testID }: any) => createElement('div', {
@@ -65,6 +69,8 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
+  ['containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
+), ...Object.fromEntries(
   ['background', 'fixedSize', 'accessibilityElement', 'accessibilityHidden', 'opacity', 'scrollDisabled', 'scrollContentBackground', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'contentShape', 'accessibilityLabel', 'buttonStyle', 'disabled', 'font', 'foregroundStyle', 'frame', 'pickerStyle', 'progressViewStyle', 'tint', 'tag', 'padding', 'autocorrectionDisabled', 'textInputAutocapitalization', 'lineLimit'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), shapes:{rectangle:()=>({}), roundedRectangle:(value: any)=>value}}));
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));

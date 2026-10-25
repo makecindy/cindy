@@ -54,6 +54,8 @@ import {
   isInsideCacheDir,
   putCachedContent,
   sweepCacheOnStartup,
+  stageLocalFileToCache,
+  cleanupOwnedUnpersistedStagedChatAttachments,
 } from './remote-file-cache.js';
 import {
   fetchChatFile,
@@ -73,6 +75,9 @@ import { watcherManager, type FileTreeEvent } from './watcher.js';
 import { registerHtmlPreviewIpc } from './html-preview-ipc.js';
 import { statSshPreviewMetadata } from './html-preview-read.js';
 import { toWorkdirRel } from '../../shared/workdirPath.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { uploadChatFolder, type ChatFolderUploadArgs } from './chat-folder-transfer.js';
+import { parseSharedTaskPeer } from '@cindy/device-link';
 
 const log = createLogger('file-browser/ipc');
 
@@ -109,6 +114,7 @@ export const FILE_BROWSER_INVOKE = {
   CHAT_FILE_DOWNLOAD: 'maker:chat-file:download',
   /** 取消进行中的聊天文件取回 / 下载(按发起时的 requestId)。 */
   CHAT_FILE_CANCEL: 'maker:chat-file:cancel',
+  CHAT_FOLDER_UPLOAD: 'maker:chat-folder:upload',
 } as const;
 
 export const FILE_BROWSER_PUSH = {
@@ -138,6 +144,8 @@ interface ListDirArgs extends RemoteRoutedArgs {
   hideMetaFiles?: boolean;
   /** Doc mode: only `.md` files + dirs that contain `.md` descendants. */
   docMode?: boolean;
+  /** 用户开关「显示被忽略的目录」——列出依赖 / 构建产物 / 缓存目录。默认 false。 */
+  showIgnoredDirs?: boolean;
 }
 
 interface ReadFileArgs extends RemoteRoutedArgs {
@@ -170,6 +178,8 @@ interface StatArgs extends RemoteRoutedArgs {
 interface WatchArgs extends RemoteRoutedArgs {
   workdir: string;
   hideMetaFiles?: boolean;
+  /** 与 listDir 同源:开关变了要带新 matcher 重建 watcher。 */
+  showIgnoredDirs?: boolean;
 }
 
 /**
@@ -648,6 +658,39 @@ export function registerFileBrowserIpc(): void {
     if (key) chatTransfers.get(key)?.abort();
   });
 
+  ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FOLDER_UPLOAD, async (event, args: ChatFolderUploadArgs) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = activeOwnerScopeKey();
+    const ownerId = getActiveAppSession().dataOwnerId;
+    const transfer = beginChatTransfer(event.sender, args?.requestId);
+    const assertCurrent = () => {
+      assertTrustedAppRendererEvent(event);
+      if (event.sender.isDestroyed() || isAppSessionBoundaryPending() ||
+          owner !== activeOwnerScopeKey()) throw new Error('CANCELLED');
+    };
+    const progress = createFileTransferProgressReporter({
+      workdir: '', relPath: args?.sourcePath ?? '', requestId: args?.requestId,
+    }, value => {
+      if (!event.sender.isDestroyed()) event.sender.send(FILE_BROWSER_PUSH.TRANSFER, value);
+    });
+    try {
+      if (!ownerId || !fileTransferRequestId(args?.requestId) || !args?.deviceId ||
+          parseSharedTaskPeer(args.deviceId)) throw new Error('REMOTE_UNSUPPORTED');
+      const prepared = await uploadChatFolder(args, {
+        tempRoot: () => app.getPath('temp'), assertCurrent,
+        stage: params => stageLocalFileToCache({ ...params, ownerId }),
+        discard: filePath => cleanupOwnedUnpersistedStagedChatAttachments({ ownerId, filePaths: [filePath] }),
+        op: (deviceId, request) => deviceOpInvoke(deviceId, request),
+      }, progress, transfer.signal);
+      return { ok: true as const, ...prepared };
+    } catch (error) {
+      return { ok: false as const, code: String(error).includes('REMOTE_UNSUPPORTED')
+        ? 'REMOTE_UNSUPPORTED' as const : 'TRANSFER_FAILED' as const };
+    } finally {
+      transfer.end();
+    }
+  });
+
   // chip 点亮预检:远端精确 stat,verdict 见 statChatFile 注释。查询型接口,
   // 任何异常都折叠进 verdict(unknown),不 throw。
   ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_STAT, async (_event, args: ChatFileFetchArgs) => {
@@ -739,6 +782,7 @@ export function registerFileBrowserIpc(): void {
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
           includeIgnored: args.includeIgnored,
+          showIgnoredDirs: args.showIgnoredDirs === true,
         });
         return entries;
       } catch (err) {
@@ -746,12 +790,15 @@ export function registerFileBrowserIpc(): void {
         throwRemoteFsIpcError(err);
       }
     }
+    // includeIgnored 是完全绕过展示过滤（手机 HTML 快照枚举用）；showIgnoredDirs
+    // 只放行可放行层（依赖 / 构建产物 / 缓存），VCS / OS 垃圾仍隐藏。前者优先。
     const matcher =
       args.includeIgnored === true
         ? null
         : await loadIgnoreMatcher(args.workdir, {
             hideMetaFiles: args.hideMetaFiles ?? true,
             honorVcsIgnore: false,
+            showIgnoredDirs: args.showIgnoredDirs === true,
           });
     return listDir(args.workdir, args.relPath ?? '', matcher, {
       docMode: args.includeIgnored === true ? false : args.docMode,
@@ -935,7 +982,7 @@ export function registerFileBrowserIpc(): void {
           window,
           args.remoteHostId,
           args.workdir,
-          { hideMetaFiles: args.hideMetaFiles ?? true },
+          { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
           (fsEvent) => {
             if (window.isDestroyed()) return;
             window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
@@ -949,7 +996,7 @@ export function registerFileBrowserIpc(): void {
     await watcherManager.start(
       window,
       args.workdir,
-      { hideMetaFiles: args.hideMetaFiles ?? true },
+      { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
       (fsEvent: FileTreeEvent) => {
         if (window.isDestroyed()) return;
         window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);

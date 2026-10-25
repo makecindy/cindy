@@ -210,7 +210,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     model: typeof item.model === 'string' ? truncateText(item.model) : '',
     effort: typeof item.effort === 'string' ? item.effort : '',
     permissionMode: typeof item.permissionMode === 'string' ? item.permissionMode : '',
-    fastMode: item.fastMode === true,
+    fastMode: (item.fastMode === 'ultrafast' ? 'ultrafast' : item.fastMode === true),
     status,
     agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
@@ -226,6 +226,9 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   }
   const totalMoney = normalizeRemoteMoney(item.totalMoney);
   if (totalMoney) session.totalMoney = totalMoney;
+  // Project aliases distinguish a host's local directory from its SSH workspaces.
+  // Keep that identity in the cold-start list too; otherwise an SSH row can borrow a local alias.
+  if (typeof item.remoteHostId === 'string') session.remoteHostId = item.remoteHostId;
   if (typeof item.source === 'string') session.source = item.source;
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;

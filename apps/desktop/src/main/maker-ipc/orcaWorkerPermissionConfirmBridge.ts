@@ -15,6 +15,8 @@ export type OrcaWorkerPermissionConfirmDecision =
 export interface OrcaWorkerPermissionConfirmCopy {
   title: string;
   description: string;
+  /** Optional Host-owned action. These fields are never accepted from an Agent decision. */
+  action?: { toolName: string; input: Record<string, unknown>; confirmation: string };
 }
 
 export interface OrcaWorkerPermissionConfirmBridgeDeps {
@@ -49,17 +51,20 @@ export class OrcaWorkerPermissionConfirmBridge {
   ): Promise<OrcaWorkerPermissionConfirmDecision> {
     const existingRequestId = this.pendingRequestIdBySession.get(sessionId);
     const existing = existingRequestId ? this.pending.get(existingRequestId) : undefined;
-    if (existing) return existing.promise;
+    // A confirmation for one action must never approve another concurrent call.
+    if (existing) return copy.action
+      ? Promise.resolve({ confirmed: false, reason: 'cancelled' })
+      : existing.promise;
 
     const requestId = randomUUID();
     const request: Extract<InteractionRequest, { kind: 'permission' }> = {
       kind: 'permission',
       requestId,
-      toolName: 'mcp__cindy_orca__start_team',
-      input: { worker_permission_mode: 'bypassPermissions' },
+      toolName: copy.action?.toolName ?? 'mcp__cindy_orca__start_team',
+      input: copy.action ? structuredClone(copy.action.input) : { worker_permission_mode: 'bypassPermissions' },
       title: copy.title,
       description: copy.description,
-      metadata: { hostOwnedConfirmation: 'orca_worker_full_access' },
+      metadata: { hostOwnedConfirmation: copy.action?.confirmation ?? 'orca_worker_full_access' },
     };
     let settlePromise!: (decision: OrcaWorkerPermissionConfirmDecision) => void;
     const promise = new Promise<OrcaWorkerPermissionConfirmDecision>((resolve) => {

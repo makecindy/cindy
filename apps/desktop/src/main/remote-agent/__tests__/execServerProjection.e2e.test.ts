@@ -13,6 +13,68 @@ const REPO = path.resolve(__dirname, '../../../../../..');
 const CODEX = path.join(REPO, 'apps', 'codex-package-bin', process.platform + '-' + process.arch, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
 
 describe.skipIf(!fs.existsSync(CODEX))('native exec-server workspace projection', () => {
+  // 测试价值：生产入口 ExecServerRelay → 原生 exec-server 必须能从含空格的别名目录
+  // 启动程序。#6743 的旧实现把 argv[0] 当 Shell 文本引用，Windows 实际报 os error 123；
+  // 现有 E2E 只使用未映射的 process.execPath。最小失败输入是一个程序目录别名，e2e tier。
+  it('starts an executable through an alias without adding shell quoting', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-exec-argv-')));
+    const programs = path.join(root, 'Program Files');
+    const executableName = process.platform === 'win32' ? 'node.exe' : 'node';
+    const executable = path.join(programs, executableName);
+    fs.mkdirSync(programs);
+    if (process.platform === 'win32') {
+      fs.copyFileSync(process.execPath, executable);
+    } else {
+      fs.symlinkSync(process.execPath, executable);
+    }
+    const virtual = '/agent/programs';
+    const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: virtual, to: programs }] });
+    const messages: Array<Record<string, any>> = [];
+    const actions: ExecutorAction[] = [];
+    let parts = '';
+    const relay = new ExecServerRelay({
+      codexPath: CODEX,
+      cwd: root,
+      workspace,
+      authorize: (action) => { actions.push(action); return { ok: true }; },
+      push: async (frames) => {
+        for (const frame of frames) {
+          if (frame.kind !== 'message') continue;
+          parts += frame.data;
+          if (!frame.more) { messages.push(JSON.parse(parts)); parts = ''; }
+        }
+      },
+    });
+    const send = (message: unknown) => relay.handle({
+      t: 'ws', connId: 'argv', kind: 'message', data: JSON.stringify(message),
+    });
+    try {
+      relay.handle({ t: 'ws', connId: 'argv', kind: 'open', path: '/ws/exec-server' });
+      send({ id: 1, method: 'initialize', params: { clientName: 'cindy-test', clientVersion: '1' } });
+      await expect.poll(() => messages.find((item) => item.id === 1), { timeout: 5000 }).toBeDefined();
+      expect(messages.find((item) => item.id === 1)?.error).toBeUndefined();
+      send({ method: 'initialized', params: {} });
+      send({ id: 2, method: 'process/start', params: {
+        processId: 'argv',
+        argv: [`${virtual}/${executableName}`, '-e', 'console.log(JSON.stringify(process.argv.slice(1)))', 'space in argument', 'literal "quotes"'],
+        cwd: pathToFileURL(root).href,
+        env: { PATH: programs, ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, TEMP: os.tmpdir() } : {}) },
+        tty: false,
+      } });
+      await expect.poll(() => messages.find((item) => item.id === 2), { timeout: 5000 }).toBeDefined();
+      expect(messages.find((item) => item.id === 2)?.error).toBeUndefined();
+      await expect.poll(() => messages.find((item) => item.method === 'process/exited'), { timeout: 5000 }).toBeDefined();
+      expect(messages.find((item) => item.method === 'process/exited')?.params.exitCode).toBe(0);
+      const output = messages.filter((item) => item.method === 'process/output')
+        .map((item) => Buffer.from(item.params.chunk, 'base64').toString()).join('');
+      expect(JSON.parse(output)).toEqual(['space in argument', 'literal "quotes"']);
+      expect(actions).toEqual([expect.objectContaining({ kind: 'exec', cwd: root })]);
+    } finally {
+      relay.close();
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
   it('initializes and executes with virtual paths while the file and authorization stay on this computer', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-exec-projection-')));
     const project = path.join(root, 'project');

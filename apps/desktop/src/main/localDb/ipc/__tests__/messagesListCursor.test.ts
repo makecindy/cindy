@@ -106,6 +106,7 @@ function createDb(): Database.Database {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
+      source TEXT NOT NULL DEFAULT 'desktop',
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -313,6 +314,23 @@ describe('local-db:messages:list cursor', () => {
       const rows=await listMessagesForAgentHandoff('s1',null,undefined,'authorization');
       expect(rows).toHaveLength(109);expect(rows[0]?.clientId).toBe('human-20');expect(rows.at(-1)?.clientId).toBe('human-128');
       expect(await listMessagesForAgentHandoff('s1',100,undefined,'authorization')).toHaveLength(100);
+    } finally { sqlite.close(); }
+  });
+
+  // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
+  // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
+  it('keeps inherited context out of side-chat authorization, including late answers to old cards', async () => {
+    const sqlite = createDb();
+    try {
+      sqlite.prepare("INSERT INTO sessions (id, source, created_at) VALUES ('s1', 'side-chat', 100)").run();
+      insertCostMessage(sqlite, { id: 'parent-grant', role: 'user', createdAt: 10 });
+      insertCostMessage(sqlite, { id: 'parent-card', role: 'ask_user', createdAt: 20,
+        agentMeta: { autoReviewUserText: { text: 'Deploy now', acceptedAt: 150 } } });
+      insertCostMessage(sqlite, { id: 'side-question', role: 'user', createdAt: 100 });
+      expect((await listMessagesForAgentHandoff('s1', null)).map(row => row.clientId))
+        .toEqual(['parent-grant', 'parent-card', 'side-question']);
+      expect((await listMessagesForAgentHandoff('s1', null, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['side-question']);
     } finally { sqlite.close(); }
   });
 

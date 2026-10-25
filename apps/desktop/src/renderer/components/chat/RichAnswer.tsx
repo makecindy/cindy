@@ -33,6 +33,8 @@ import {
   richVector,
   RichAnswerStream,
   RichInteractionMemory,
+  RichSubmissionController,
+  richSendText,
   richAction,
   richChart,
   richLinePlot,
@@ -52,6 +54,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
+import { useSessionQuickSend } from './SessionQuickSendContext';
 import './rich-answer.css';
 
 /** Answer colors are Cindy theme tokens, so they follow the mode without re-rendering. */
@@ -90,6 +93,25 @@ const memory = new RichInteractionMemory({
     localStorage.setItem('cindy.richAnswer.viewState.v1', value);
   },
 });
+const submissions = new RichSubmissionController(memory);
+
+function RichSendAction({ node, text, receiptKey, ready, style }: {
+  node: RichNode; text: string | undefined; receiptKey: string; ready: boolean;
+  style?: CSSProperties;
+}) {
+  const { t } = useTranslation();
+  const sender = useSessionQuickSend();
+  const status = useSyncExternalStore(submissions.subscribe, () => submissions.status(receiptKey, text));
+  const disabled = !ready || !sender || !text || status === 'sending' || status === 'sent';
+  return <div className="rich-answer-layout rich-answer-stack" style={style}>
+    {text && <p className="rich-answer-caption" style={{ whiteSpace: 'pre-wrap' }}>{text}</p>}
+    <Button type="button" variant="secondary" disabled={disabled}
+      onClick={() => { if (!disabled) void submissions.submit(receiptKey, text, value => sender.send(value, { literalText: true, independent: true })); }}>
+      {status === 'sending' ? t('richAnswer.sending') : status === 'sent' ? t('richAnswer.sent') : richString(node, 'label', richString(node, 'text')) || t('richAnswer.send')}
+    </Button>
+    {status === 'failed' && <p className="rich-answer-caption" role="alert">{t('richAnswer.sendFailed')}</p>}
+  </div>;
+}
 /** Component identities and user input survive content patches; no generated HTML executes. */
 export function RichAnswer({
   source,
@@ -352,12 +374,16 @@ function RichAnswerDocument({
           </label>
         );
       case 'button':
+        if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
+          return <RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} />;
         return (
-          <Button variant="secondary" tone="quiet" onClick={() => apply(node)}>
+          <Button type="button" variant="secondary" tone="quiet" onClick={() => apply(node)}>
             {label || richString(node, 'text')}
           </Button>
         );
       case 'form':
+        if (Object.prototype.hasOwnProperty.call(node.props, 'send'))
+          return <div className="rich-answer-layout rich-answer-stack">{children}<RichSendAction node={node} text={richSendText(node, values)} receiptKey={`${stateKey}:sent:${id}`} ready={complete && !doc.issues} /></div>;
         return (
           <form
             className="rich-answer-layout rich-answer-stack"

@@ -21,6 +21,7 @@ import { remoteProjectsStore, isRemoteDeviceMarkedDisconnected } from './remoteP
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 import { closeOwnedSharedTask } from './closeOwnedSharedTask';
 import { filterVisibleSharedTasks } from './sharedTaskVisibility';
+import { notifySharedTaskMembershipChanged } from './useSharedTaskTasks';
 
 type Tab = 'join' | 'joined' | 'owned';
 type Target = { sessionId: string; title: string; deviceId?: string; sharedTaskId?: string; guestId?: string; connect?: boolean };
@@ -232,6 +233,8 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
       setConfirm(null); await loadDetail(snapshot.target); restore(confirmationOrigin.current);
     } else {
       await window.electronAPI.sharedTask.account({ action: 'leave', sharedTaskId: snapshot.item.sharedTaskId });
+      // A directory read already in flight may still list it; reread after.
+      notifySharedTaskMembershipChanged();
       if (!current()) return;
       const peer = sharedTaskHostPeer(snapshot.item.sharedTaskId, snapshot.item.hostDeviceId);
       resetRemoteDataOwnerPushFence(peer);
@@ -249,6 +252,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
     void run(async current => {
       try {
         const result = await window.electronAPI.sharedTask.account({ action: 'join', invitation: invitation.trim(), displayName: sharedTaskAccountName(user?.name) }) as { sharedTaskId: string };
+        notifySharedTaskMembershipChanged();
         if (!current()) return;
         const joinedDetail = await window.electronAPI.sharedTask.account({ action: 'get', sharedTaskId: result.sharedTaskId }) as SharedTaskDetail;
         if (!current()) return;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AgentInputProjection } from '../../../shared/agentInputQueue.js';
 
 import {
   createOrcaRemoteWorkerRuntime,
@@ -33,6 +34,7 @@ interface FakeDevice {
   acceptedAgents: Record<string, string>;
   assistant: { id: string; content: unknown } | null;
   terminalError: boolean;
+  inputProjection?: Partial<AgentInputProjection>;
   history?: FakeHistoryMessage[];
   enqueueError?: Error & { inFlight?: boolean };
   enqueued: unknown[];
@@ -110,6 +112,7 @@ function setup(device: Partial<FakeDevice> = {}) {
       case 'maker:input:get-projection': {
         const ids = (args[1] as { deliveryClientIds: string[] }).deliveryClientIds;
         return {
+          ...state.inputProjection,
           deliveryReceipts: ids.map((clientId) => ({
             clientId,
             state: state.receipts[clientId] ?? 'unknown',
@@ -159,7 +162,7 @@ describe('orca remote worker runtime', () => {
     expect(state.enqueued[0]).toMatchObject({
       clientId: 'c-1',
       durableDelivery: true,
-      text: '[From Orca Lead]\n转写这段访谈',
+      text: expect.stringContaining('[From Orca Lead]\n转写这段访谈'),
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: '转写这段访谈' },
       createOpts: {
         agentKind: 'claude-code',
@@ -168,7 +171,7 @@ describe('orca remote worker runtime', () => {
         resumeSessionId: 'sdk-1',
       },
     });
-    expect((state.enqueued[0] as { text: string }).text).not.toContain('worker_id');
+    expect((state.enqueued[0] as { text: string }).text).toContain('worker_id for tool calls is worker-1');
     expect(runtime.hasPendingReport('proxy-1')).toBe(true);
   });
 
@@ -195,6 +198,164 @@ describe('orca remote worker runtime', () => {
 
     await runtime.pollNow();
     expect(deps.onTurnEnded).toHaveBeenCalledTimes(1);
+  });
+
+  // A manual bridge report must retire the same persisted poll identity, even before
+  // the first running poll; otherwise the next poll reopens running and reports twice.
+  it('retires a manual report before the first running poll without auto-reporting it again', async () => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'report', clientId: 'c-1' });
+    await expect(runtime.captureReportSettlement('proxy-1', ['c-1'])()).resolves.toBe(true);
+    expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', null);
+    state.running = true;
+    await runtime.pollNow();
+    state.running = false;
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'msg-1', content: 'already reported' };
+    await runtime.pollNow();
+    expect(deps.onTurnStarted).not.toHaveBeenCalled();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+  });
+
+  it('does not let an older manual report settle a newly dispatched task', async () => {
+    const { runtime } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'old', clientId: 'c-1' });
+    const settleOld = runtime.captureReportSettlement('proxy-1', ['c-1']);
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'new', clientId: 'c-2' });
+    await expect(settleOld()).resolves.toBe(false);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+  });
+
+  // Unit regression for the 2026-10-21 review: capture used to retire the whole A+B
+  // group when A reported after B was already queued. The older test captured before B.
+  // Public dispatch/settlement/poll must keep B's durable identity and deliver its result,
+  // including after track restores the saved pending record; no timers or real device IO.
+  it.each([false, true])('reports queued B after A reports, restored=%s', async (restore) => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    state.receipts.a = 'accepted';
+    state.running = true;
+    await runtime.pollNow();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'B', clientId: 'b' });
+
+    await expect(runtime.captureReportSettlement('proxy-1', ['a'])()).resolves.toBe(false);
+    expect(state.receipts.b).toBe('pending');
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', {
+      clientIds: ['b'], baselineMessageId: 'msg-0',
+    });
+    if (restore) {
+      runtime.untrack('proxy-1');
+      runtime.track({ ...ref, pendingReport: { clientIds: ['b'], baselineMessageId: 'msg-0' } });
+    }
+    state.receipts.b = 'accepted';
+    state.running = false;
+    state.assistant = { id: 'result-b', content: 'B completed' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', {
+      status: 'done', finalText: 'B completed',
+    });
+  });
+
+  it('waits for an in-flight running notification before settling a manual report', async () => {
+    const { runtime, deps, state } = setup();
+    let release!: () => void;
+    vi.mocked(deps.onTurnStarted).mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'report', clientId: 'c-1' });
+    state.running = true;
+    const poll = runtime.pollNow();
+    await vi.waitFor(() => expect(deps.onTurnStarted).toHaveBeenCalledTimes(1));
+    const settled = runtime.captureReportSettlement('proxy-1', ['c-1'])();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    release();
+    await poll;
+    await expect(settled).resolves.toBe(true);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+  });
+
+  it('keeps automatic reporting when an older peer supplies no input identity', async () => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    await expect(runtime.captureReportSettlement('proxy-1')()).resolves.toBe(false);
+    state.receipts.a = 'accepted';
+    state.assistant = { id: 'result-a', content: 'A completed' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', {
+      status: 'done', finalText: 'A completed',
+    });
+  });
+
+  // The settlement save can overlap a new dispatch; its failed enqueue must not roll
+  // back to already reported A. Public dispatch/poll and persisted state are the contract.
+  it('does not resurrect reported A when B is prepared during settlement then rejected', async () => {
+    const { runtime, deps, state, invoke } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    let release!: () => void;
+    vi.mocked(deps.saveReport).mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const settle = runtime.captureReportSettlement('proxy-1', ['a'])();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    invoke.mockClear();
+    const dispatch = runtime.dispatch({
+      proxySessionId: 'proxy-1', rawContent: 'B', clientId: 'b',
+      beforeEnqueue: () => { throw new Error('B rejected'); },
+    }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(ref.deviceId, 'local-db:sessions:get', ['remote-1']));
+    release();
+    await settle;
+    expect(await dispatch).toMatchObject({ message: 'B rejected' });
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+    expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', null, undefined);
+    state.receipts.a = 'accepted';
+    state.assistant = { id: 'result-a', content: 'already reported' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+  });
+
+  it('preserves automatic reporting when persisting manual settlement fails', async () => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'report', clientId: 'c-1' });
+    vi.mocked(deps.saveReport).mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(runtime.captureReportSettlement('proxy-1', ['c-1'])()).rejects.toThrow('storage unavailable');
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'msg-1', content: 'result' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledTimes(1);
+  });
+
+  // The Team commit callback adds an asynchronous boundary to report retirement.
+  // Public dispatch/settlement/poll must preserve B prepared while that callback waits;
+  // the old save-only races did not exercise this boundary. Unit, no real IO/timers.
+  it('preserves B prepared while the Team settlement is waiting', async () => {
+    const { runtime, deps, invoke, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const settle = runtime.captureReportSettlement('proxy-1', ['a'], async commit => {
+      entered(); await gate; await commit(true);
+    })();
+    try {
+      await started;
+      invoke.mockClear();
+      const dispatch = runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'B', clientId: 'b' });
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(ref.deviceId, 'local-db:sessions:get', ['remote-1']));
+      release();
+      await expect(settle).resolves.toBe(false);
+      await dispatch;
+      expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+      expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', {
+        clientIds: ['b'], baselineMessageId: 'msg-0',
+      }, undefined);
+      state.receipts.b = 'accepted';
+      state.assistant = { id: 'result-b', content: 'B completed' };
+      await runtime.pollNow();
+      expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', {
+        status: 'done', finalText: 'B completed',
+      });
+    } finally { release(); await settle; }
   });
 
   it('keeps waiting while the message is still queued behind other input on the device', async () => {
@@ -343,6 +504,175 @@ describe('orca remote worker runtime', () => {
     await runtime.pollNow();
     expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Finished on another computer' });
     expect(deps.saveReport).toHaveBeenCalledWith('worker-1', null, 'final');
+  });
+
+  // Test value: dispatch/pollNow must keep the Lead input through overload recovery
+  // (Orca contract 5a and the 2026-10-21 capacity failure). The existing autoResume
+  // test polls only after the final. These unit cases poll during recovery first;
+  // they verify no premature report, then one recovered final or one surfaced error.
+  const recoveryInfo = { attempt: 1, maxAttempts: 5, sessionTotal: 1 };
+  const recoveringProjections: Array<{ phase: string; projection: Partial<AgentInputProjection> }> = [
+    { phase: 'backoff', projection: { autoResumePending: recoveryInfo } },
+    { phase: 'queued continuation', projection: { pendingQueue: [{
+      clientId: 'continue-1', autoResume: true, retrySourceClientId: 'c-1',
+    } as AgentInputProjection['pendingQueue'][number]] } },
+    { phase: 'dispatch preparation', projection: { autoResumePending: recoveryInfo, turnInProgress: true } },
+    { phase: 'vendor running after the idle snapshot', projection: { turnInProgress: true } },
+    { phase: 'usage reset wait', projection: { usageLimitWait: { resumeAt: 1_900_000_000_000 } } },
+    { phase: 'queued retry waiting for usage reset', projection: {
+      usageLimitWait: { resumeAt: 1_900_000_000_000 },
+      recovery: { kind: 'queue-head', clientId: 'retry-1' },
+      pendingQueue: [{ clientId: 'retry-1', retrySourceClientId: 'c-1' } as AgentInputProjection['pendingQueue'][number]],
+    } },
+  ];
+  it.each(recoveringProjections)('holds the dispatch during $phase and reports its recovered final once', async ({ projection }) => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      { id: 'partial', role: 'assistant', content: 'Progress before capacity error' },
+    ];
+    state.inputProjection = projection;
+    state.terminalError = true;
+    for (let i = 0; i < 16; i += 1) await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    state.inputProjection = { turnInProgress: false };
+    state.terminalError = false;
+    state.history.push(
+      { id: 'continue', role: 'user', content: 'Continue', agentMeta: { autoResume: true } },
+      { id: 'final', role: 'assistant', content: 'Recovered final' },
+    );
+    await runtime.pollNow();
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', { status: 'done', finalText: 'Recovered final' });
+    expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', null, 'final');
+  });
+
+  it('reports a surfaced recovery failure once when the execution host gives up', async () => {
+    const { runtime, deps, state } = setup({ inputProjection: { autoResumePending: recoveryInfo } });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.terminalError = true;
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    state.inputProjection = { turnInProgress: false };
+    await runtime.pollNow();
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledOnce();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', expect.objectContaining({ status: 'error' }));
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+  });
+
+  it.each([false, true])('discards the old history candidate when recovery starts during the history read (paged=%s)', async paged => {
+    const { runtime, deps, state, invoke } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'partial', content: 'Progress before capacity error' };
+    if (paged) state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      ...Array.from({ length: 2001 }, (_, i): FakeHistoryMessage => ({ id: `partial-${i}`, role: 'assistant', content: 'Progress' })),
+    ];
+    const original = invoke.getMockImplementation()!;
+    let inject = true;
+    invoke.mockImplementation(async (deviceId, channel, args) => {
+      const result = await original(deviceId, channel, args);
+      if (inject && channel === 'local-db:history:messages' && (args[0] as { roles: string[] }).roles.includes('user')) {
+        inject = false;
+        state.inputProjection = { autoResumePending: recoveryInfo };
+      }
+      return result;
+    });
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    state.inputProjection = {};
+    state.assistant = { id: 'final', content: 'Recovered final' };
+    state.history?.push({ id: 'final', role: 'assistant', content: 'Recovered final' });
+    await runtime.pollNow();
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', { status: 'done', finalText: 'Recovered final' });
+  });
+
+  it('keeps a no-output recovery pending beyond the missing-reply budget', async () => {
+    const { runtime, deps, state } = setup({ assistant: null });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.inputProjection = { autoResumePending: recoveryInfo };
+    for (let i = 0; i < 16; i += 1) await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    state.inputProjection = {};
+    state.assistant = { id: 'final', content: 'Recovered first reply' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', { status: 'done', finalText: 'Recovered first reply' });
+  });
+
+  it('keeps another Worker on the same execution device reporting while one is recovering', async () => {
+    const { runtime, deps, state, invoke } = setup();
+    const pendingReport = { clientIds: ['c-1'], baselineMessageId: null };
+    runtime.untrack('proxy-1');
+    runtime.track({ ...ref, pendingReport });
+    runtime.track({ ...ref, workerId: 'worker-2', proxySessionId: 'proxy-2', remoteSessionId: 'remote-2', pendingReport });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'final', content: 'Other Worker result' };
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (deviceId, channel, args) => {
+      const value = await original(deviceId, channel, args);
+      return channel === 'maker:input:get-projection' && args[0] === 'remote-1'
+        ? { ...(value as object), autoResumePending: recoveryInfo } : value;
+    });
+    await runtime.pollNow();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(runtime.hasPendingReport('proxy-2')).toBe(false);
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-2', { status: 'done', finalText: 'Other Worker result' });
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'maker:list-active')).toHaveLength(1);
+    expect(invoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session' || channel === 'maker:input:enqueue')).toBe(false);
+  });
+
+  it('does not hold an older completed Lead reply for a later phone input waiting to recover', async () => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      { id: 'lead-final', role: 'assistant', content: 'Lead final' },
+      { id: 'phone-input', clientId: 'phone-1', role: 'user', content: 'Phone task' },
+    ];
+    state.inputProjection = {
+      autoResumePending: recoveryInfo,
+      recovery: { kind: 'active-turn', item: { clientId: 'phone-1' } as AgentInputProjection['pendingQueue'][number] },
+      pendingQueue: [{ clientId: 'phone-continue', autoResume: true, retrySourceClientId: 'phone-1' } as AgentInputProjection['pendingQueue'][number]],
+    };
+    state.terminalError = true;
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', { status: 'done', finalText: 'Lead final' });
+  });
+
+  // PR #6787 / Orca contract 5a, unit: the active-turn case above misses a phone
+  // input rejected before acceptance. pollNow must report the completed Lead input
+  // once even while that unrelated queue head waits for its provider group quota.
+  it.each([false, true])('reports a completed Lead reply while an unrelated queue head waits for quota (continuation=%s)', async continuation => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      { id: 'lead-final', role: 'assistant', content: 'Lead final' },
+      ...(continuation ? [{ id: 'phone-input', clientId: 'phone-1', role: 'user' as const, content: 'Phone task' }] : []),
+    ];
+    const queued = continuation
+      ? { clientId: 'phone-continue', autoResume: true, retrySourceClientId: 'phone-1' }
+      : { clientId: 'phone-1' };
+    state.inputProjection = {
+      usageLimitWait: { resumeAt: 1_900_000_000_000 },
+      recovery: { kind: 'queue-head', clientId: queued.clientId },
+      pendingQueue: [queued as AgentInputProjection['pendingQueue'][number]],
+    };
+    await runtime.pollNow();
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledExactlyOnceWith('proxy-1', { status: 'done', finalText: 'Lead final' });
+    expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', null, 'lead-final');
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
   });
 
   it('retains a new dispatch accepted while reading the previous reply', async () => {

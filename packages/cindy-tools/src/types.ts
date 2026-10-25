@@ -144,6 +144,7 @@ export interface CindyGhostInfo {
 export type CindyGhostCallErrorCode =
   | 'GHOST_NOT_FOUND' // 未装入或已抽离
   | 'GHOST_AMBIGUOUS' // 同名多实例，需指定 namespace
+  | 'GHOST_NAMESPACE_MISMATCH' // 插件已安装，但指定的 namespace 不匹配；按返回身份修正参数
   | 'GHOST_ASLEEP' // 沉睡中(用户可在主界面侧边栏「插件」中唤醒)
   | 'GHOST_RETIRED' // 功能已下线，不可唤醒或重试
   | 'GHOST_DISABLED_IN_WORKDIR' // 用户在当前工作目录停用了该意识(不要重试)
@@ -158,7 +159,7 @@ export type CindyGhostCallErrorCode =
 
 export type CindyGhostInfoErrorCode = Extract<
   CindyGhostCallErrorCode,
-  'GHOST_NOT_FOUND' | 'GHOST_AMBIGUOUS' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
+  'GHOST_NOT_FOUND' | 'GHOST_AMBIGUOUS' | 'GHOST_NAMESPACE_MISMATCH' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
 >;
 
 /** host 可见性判序回调(getAwakeGhost)的返回:只产可见性错误,不产 INTERNAL。 */
@@ -216,6 +217,14 @@ export type CindyGhostCallResult =
        * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
        */
       xdt_media_descriptions?: Array<{ url: string; description: string }>;
+      /**
+       * Images the plugin shows the model (host-checked and re-encoded under
+       * the inline budget). ghost_call returns them as MCP image content after
+       * the JSON text; they are not part of the JSON.
+       */
+      images?: Array<{ data: string; mimeType: string }>;
+      /** Images the plugin offered that did not fit the inline budget. */
+      imagesOmitted?: number;
     }
   | {
       ok: false;
@@ -265,12 +274,16 @@ export type CindyForgeInstallResult =
       name: string;
       version: string;
       enabled: boolean;
+      instanceId?: string;
+      namespace?: string | null;
       note: string;
     }
   | {
       ok: false;
       errorCode: CindyForgePackErrorCode | (string & {});
       message: string;
+      targets?: Array<{ instanceId: string; name: string; namespace: string | null; version: string; enabled: boolean }>;
+      copyNamespace?: string | null;
     };
 
 /** ghost_forge_publish 立即返回时的失败分类。传输开始后的失败走 status.errorCode。 */
@@ -403,8 +416,8 @@ export interface CindyGhostsMcpDeps {
     /**
      * 批量交接(可选):true 时本次调用**只做 attachments 过户、不派发
      * 工具**(tool/args 被忽略)。用途:agent 计划连续多次调用同一意识、
-     * 每次用一个 workdir 外文件时,先把整批文件一次性过户——非 Full Access
-     * 下用户只见一张列出全部文件的确认卡；Full Access 下自动交接、不弹卡，
+     * 每次用一个 workdir 外文件时,可把整批文件一次性交接。Ask 可整批确认；
+     * Auto 沿用实际审批负责人，本地 Full Access 自动交接，
      * 且不会形成降档后仍生效的人工永久授权。
      * 普通调用 attachments 上限 4 项,grant_only 放宽(上限由 host 定)。
      */
@@ -412,7 +425,8 @@ export interface CindyGhostsMcpDeps {
     /**
      * 目录过户(可选):要整体交给意识上传的本地目录**绝对路径**(部署
      * 构建产物等场景)。host 验证路径；workdir 内直接放行，workdir 外仅
-     * 本地 Full Access 自动过户，其它权限档及远程会话须用户确认。随后收集
+     * 本地 Full Access 自动交接，Auto 沿用实际审批负责人，Ask 须确认；远程
+     * 任务不能借档位自动授权控制端文件。随后收集
      * 文件并预检限额、发一次性限时票据,以 args.dir_deposit =
      * { token, file_count, total_bytes, rel_paths } 注入交给意识——意识拿到
      * 的只有票据与相对路径清单,摸不到绝对路径与文件字节;上传时经
@@ -422,8 +436,8 @@ export interface CindyGhostsMcpDeps {
     /**
      * 下行落盘过户(可选):让意识把下载的文件存进的本地目录**绝对路径**
      * (附件下载等场景)。host 验证为已存在目录；workdir 内直接放行，
-     * workdir 外仅本地 Full Access 自动过户，其它权限档及远程会话须用户
-     * 确认。随后发限时票据,以 args.save_deposit = { token, dir_name } 注入
+     * workdir 外本地 Full Access 自动交接，Auto 沿用实际审批负责人，Ask 须
+     * 确认；远程任务不能借档位自动授权控制端文件。随后发限时票据,以 args.save_deposit = { token, dir_name } 注入
      * 交给意识——意识经 fetch-request 的 as:'file' + saveTo 报 token,主机
      * 把响应字节直接写进该目录(文件名消毒去重,不覆盖);意识全程摸不到
      * 绝对路径与文件字节。
@@ -483,7 +497,7 @@ export interface CindyGhostsMcpDeps {
    * 重新校验并打包源码目录，然后把这次产生的确切包安装或原位更新。
    * 只有显式调用本工具才安装；forgePack 本身始终保持纯打包。
    */
-  forgeInstall(request: { dir: string; iconSource?: string }): Promise<CindyForgeInstallResult>;
+  forgeInstall(request: { dir: string; iconSource?: string; targetInstanceId?: string; installCopy?: boolean; namespace?: string | null }): Promise<CindyForgeInstallResult>;
   /**
    * 消费 forgePack(intent=publish) 签发的一次性票据，把该次打包的确切字节
    * 提交到当前组织发布。立即返回 transferId / uploadId,传输在后台跑。

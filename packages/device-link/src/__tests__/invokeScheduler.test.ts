@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InvokeScheduler } from "../invokeScheduler.js";
 import { DeviceLinkError } from "../protocol.js";
-import { isBackgroundInvoke, bypassInvokeScheduling } from "../invokePolicy.js";
+import { isBackgroundInvoke, bypassInvokeScheduling, isInteractiveInvoke, resolveInvokePriority } from "../invokePolicy.js";
 import { sharedTaskGuestPeer, sharedTaskHostPeer } from "../sharedTaskPeer.js";
 
 function deferred() {
@@ -221,6 +221,49 @@ describe("invoke admission", () => {
     scheduler.clear(new DeviceLinkError("NOT_CONNECTED", "stop"));
     active.resolve();
     await Promise.all(pending);
+  });
+
+  // A task view keeps up to twelve history/list reads in flight; before the allowance
+  // a send queued behind them until one settled (one relay round trip ≈ 0.5 s each).
+  it("admits interactive writes beyond the twelve-slot limit and ahead of queued reads", async () => {
+    const scheduler = new InvokeScheduler();
+    const reads = Array.from({ length: 12 }, deferred);
+    const running = reads.map((job) => scheduler.run("a", "foreground", 30_000, () => job.promise));
+    const started: string[] = [];
+    const queuedRead = scheduler.run("a", "foreground", 30_000, async () => { started.push("read"); });
+    const sends = Array.from({ length: 3 }, deferred);
+    const sent = sends.map((job, index) => scheduler.run("a", "interactive", 30_000, () => {
+      started.push(`send-${index}`);
+      return job.promise;
+    }));
+    // Two extra slots: the third send waits, but still ahead of the queued read.
+    expect(started).toEqual(["send-0", "send-1"]);
+    sends[0].resolve();
+    await flush();
+    expect(started).toEqual(["send-0", "send-1", "send-2"]);
+    sends[1].resolve();
+    sends[2].resolve();
+    await flush();
+    // Sends never borrow from the read limit: twelve reads are still running.
+    expect(started).toEqual(["send-0", "send-1", "send-2"]);
+    reads[0].resolve();
+    await flush();
+    expect(started).toEqual(["send-0", "send-1", "send-2", "read"]);
+    reads.forEach((job) => job.resolve());
+    await Promise.all([...running, queuedRead, ...sent]);
+  });
+
+  it("classifies sends and interaction answers as interactive, never demoted by a background hint", () => {
+    for (const channel of ["maker:input:enqueue", "maker:input:steer", "maker:input:stop", "maker:send", "maker:resolve-interaction", "maker:agent-task:stop"]) {
+      expect(isInteractiveInvoke(channel)).toBe(true);
+      expect(resolveInvokePriority(channel, true)).toBe("interactive");
+    }
+    // Queue-management edits and reads stay where they were.
+    expect(resolveInvokePriority("maker:input:move")).toBe("foreground");
+    expect(resolveInvokePriority("local-db:messages:view")).toBe("foreground");
+    expect(resolveInvokePriority("local-db:messages:view", true)).toBe("background");
+    expect(resolveInvokePriority("git-context:pr-status")).toBe("background");
+    expect(resolveInvokePriority("maker:predict-prompt")).toBe("background");
   });
 
   it("classifies PR reads as background and keeps control/lease maintenance outside the queue", () => {

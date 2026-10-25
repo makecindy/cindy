@@ -3,7 +3,8 @@ import { act, createContext, useEffect, useImperativeHandle, useRef, useState, t
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
-const state = vi.hoisted(() => ({ focused: true, onTask: true, width: 390, height: 844, native: false, upgrade: false }));
+const state = vi.hoisted(() => ({ focused: true, onTask: true, width: 390, height: 844, native: false, upgrade: false,
+  sheetParams: {} as Record<string, string> }));
 vi.mock('@/session/NativeResidentHistory', () => {
   const Host = ({ children, surfaceId }: { children: ReactNode; surfaceId: string }) => <div data-host={surfaceId}>{children}</div>;
   const Slot = ({ surfaceId, selected }: { surfaceId: string; selected: boolean }) => <div data-slot={surfaceId} data-selected={selected} />;
@@ -11,7 +12,8 @@ vi.mock('@/session/NativeResidentHistory', () => {
     get NativeHistorySlot() { return state.native ? Slot : null; },
     get needsResidentHistoryUpgrade() { return state.upgrade; } };
 });
-vi.mock('expo-router', () => ({ useSegments: () => state.onTask ? ['sessions', '[sessionId]'] : ['index'] }));
+vi.mock('expo-router', () => ({ useSegments: () => state.onTask ? ['sessions', '[sessionId]'] : ['index'],
+  useGlobalSearchParams: () => state.sheetParams }));
 vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focused,
   NavigationContext: createContext(null), NavigationRouteContext: createContext(null) }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({
@@ -94,6 +96,7 @@ describe('resident five-task message lists outside route lifetimes', () => {
     setMobileAuthOwner(null); setMobileAuthOwner('one'); state.focused = true; state.onTask = true;
     state.width = 390; state.height = 844;
     state.native = false; state.upgrade = false;
+    state.sheetParams = {};
     mounts.clear(); unmounts.length = 0;
     container = document.createElement('div'); root = createRoot(container);
   });
@@ -132,6 +135,26 @@ describe('resident five-task message lists outside route lifetimes', () => {
     expect(original.textContent).toBe('a:420');
     expect(original.closest('[data-layout*="844"]')).not.toBeNull();
     expect(mounts.get('a')).toBe(1);
+  });
+  // Android modal regression: opening a side chat previously hid its main task.
+  // Unit tier: retain only that parent visually; input and live subscriptions stay paused.
+  it('keeps the covered parent visible without activating hidden histories', async () => {
+    await show('b'); await show('a');
+    state.focused = false;
+    state.sheetParams = { sideChat: '1', sideChatParentId: 'a', deviceId: 'pc' };
+    await show('a');
+    const parent = container.querySelector<HTMLElement>('[data-task="a"]')!;
+    const clip = parent.closest<HTMLElement>('[data-layout*="opacity"]')!;
+    expect(JSON.parse(clip.dataset.layout!).at(-1).opacity).toBe(1);
+    expect(clip.dataset.input).toBe('none');
+    expect(clip.getAttribute('aria-hidden')).toBe('true');
+    expect(parent.dataset.active).toBe('false');
+    expect(parent.closest('[data-store-gate]')?.getAttribute('data-store-gate')).toBe('false');
+    const other = container.querySelector('[data-task="b"]')!.closest<HTMLElement>('[data-layout*="opacity"]')!;
+    expect(JSON.parse(other.dataset.layout!).at(-1).opacity).toBe(0);
+    state.sheetParams = { ...state.sheetParams, deviceId: 'another-pc' };
+    await show('a');
+    expect(JSON.parse(clip.dataset.layout!).at(-1).opacity).toBe(0);
   });
   it('keeps native-host children when route slots disappear and reconnects the same surface', async () => {
     state.native = true;

@@ -1,7 +1,7 @@
 import { getSessionRewindGeneration, withSendToSessionLock } from './sendToSessionLock.js';
 import { shell } from 'electron';
 import { t } from '../i18n.js';
-import { and, eq, isNull, ne, or, gt, like, desc } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, or, gt, like, desc } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, botProfiles, sessions, messages } from '../localDb/schema.js';
 import {
@@ -53,7 +53,8 @@ export async function isBotAuthorizationSession(sessionId: string): Promise<bool
     .where(
       and(
         eq(botSessionLinks.sessionId, sessionId),
-        eq(botSessionLinks.role, 'canonical'),
+        // The owner's Bot Chat: the permanent Chat and its private-chat topics.
+        inArray(botSessionLinks.role, ['canonical', 'thread']),
         isNull(botSessionLinks.archivedAt),
         ne(sessions.status, 'deleted'),
         ne(sessions.status, 'archived'),

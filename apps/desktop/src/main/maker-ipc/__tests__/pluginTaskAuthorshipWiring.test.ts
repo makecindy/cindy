@@ -1,3 +1,4 @@
+import { bindTaskActionInput } from '../taskActionAuthorization.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
@@ -6,7 +7,7 @@ import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_RE
 import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
 import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
-import { captureAgentRequest, formatForwardedRequest } from '../forwardedRequest.js';
+import { captureAgentRequest } from '../forwardedRequest.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
@@ -122,9 +123,9 @@ it('builds a durable queued plugin input without promoting plugin text to user i
   const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
   expect(start).toBeGreaterThan(0);
   const createOpts = { model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/answer' };
-  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX',
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', 'bindTaskActionInput',
     compile(source.slice(start, end) + '\nreturn buildSessionControlInputItem;'))(
-      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX,
+      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX, bindTaskActionInput,
     );
   const base = { targetSessionId: 'lead', clientId: 'plugin-input', message: 'Plugin instructions', persistedContent: 'Plugin instructions', meta: {} };
   const queued = JSON.parse(JSON.stringify(await build({ ...base, autoReviewUserText: { kind: 'delegated-continuation' } })));
@@ -141,9 +142,9 @@ it('keeps host receipts hidden in the queue while the model text omits the trigg
   const start = source.indexOf('  async function buildSessionControlInputItem(params: {');
   const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
   const createOpts = { model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/answer' };
-  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX',
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', 'bindTaskActionInput',
     compile(source.slice(start, end) + '\nreturn buildSessionControlInputItem;'))(
-      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX,
+      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]', HOST_ONLY_AGENT_PREFIX, bindTaskActionInput,
     );
   const receipt = '[任务回执] 后台任务已完成。task_id: d-1';
   const queued = await build({
@@ -245,28 +246,30 @@ it('routes trusted script follow-ups through durable authorization restoration, 
   expect(end).toBeGreaterThan(start);
   const sendToSessionInternal = vi.fn(async (params) => params);
   const request = { userText: 'Inspect only.', sessionId: 'caller', clientId: 'owner-input' };
+  const capture = vi.fn((sessionId: string, message: string) => captureAgentRequest(sessionId, message,
+    { clientId: request.clientId, authoredText: request.userText }, async () => []));
   const send = new Function(
     'captureDataOwnerBroadcastScope', 'classifySessionMessagePurpose', 'isDataOwnerBroadcastScopeCurrent',
     'sendToSessionInternal', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'coordinationInput', 'captureSessionAgentRequest',
     compile(`return ({ ${source.slice(start, end)} }).sendToSession;`),
   )(() => 'owner', async () => ({ coordination: null, delegatedContinuation: false }), () => true,
     sendToSessionInternal, AUTO_REVIEW_DELEGATED_CONTINUATION, () => { throw new Error('not coordination'); },
-    (sessionId: string, message: string) => captureAgentRequest(sessionId, message,
-      { clientId: request.clientId, authoredText: request.userText }, async () => []));
+    capture);
   const params = { dispatcherSessionId: 'caller', targetSessionId: 'task', message: 'CI failed; repair and push the PR' };
   expect(await send({ ...params, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true })).toMatchObject({
-    message: formatForwardedRequest(request, params.message),
-    autoReviewUserText: { kind: 'delegated-continuation', request },
+    message: params.message,
+    autoReviewUserText: { kind: 'delegated-continuation' },
     forceQueue: true,
     resumeWithStoredPermissionMode: true,
   });
+  expect(capture).not.toHaveBeenCalled();
   const untrusted = await send({ ...params, AUTO_REVIEW_DELEGATED_CONTINUATION: true });
   expect(untrusted).toMatchObject({
-    message: formatForwardedRequest(request, params.message),
-    autoReviewUserText: { kind: 'agent-request', request },
+    message: params.message,
+    autoReviewUserText: { kind: 'agent-request' },
   });
   expect(untrusted).not.toHaveProperty('forceQueue');
   expect(untrusted).not.toHaveProperty('resumeWithStoredPermissionMode');
   expect(await send({ dispatcherSessionId: 'caller', message: 'new task', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
-    .toMatchObject({ autoReviewUserText: { kind: 'agent-request', request } });
+    .toMatchObject({ autoReviewUserText: { kind: 'agent-request' } });
 });

@@ -1,0 +1,35 @@
+{
+  "id": "google-play-search",
+  "match": [
+    "play.google.com"
+  ],
+  "description": "搜索 Google Play 应用，返回应用 ID、名称、列表可见的评分与开发者信息。",
+  "access": "read",
+  "inputs": {
+    "query": {
+      "required": true,
+      "description": "应用关键词"
+    },
+    "country": {
+      "required": true,
+      "description": "两位地区代码，例如 us、jp、nz"
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://play.google.com/store/search?q={{query|url}}&c=apps&hl=en&gl={{country|url}}"
+    },
+    {
+      "action": "wait",
+      "selector": "a[href*=\"/store/apps/details?id=\"]"
+    },
+    {
+      "action": "evaluate",
+      "as": "result",
+      "fn": "() => {\n if (location.hostname !== 'play.google.com' || !location.pathname.startsWith('/store/search')) throw new Error('Google Play 搜索被重定向，请查看当前页面');\n const items = new Map();\n for (const a of document.querySelectorAll('a[href*=\"/store/apps/details?id=\"]')) {\n  const url = new URL(a.href); const id = url.searchParams.get('id');\n  const lines = a.innerText.split('\\n').map(s => s.trim()).filter(Boolean);\n  const name = a.getAttribute('aria-label') || lines[0];\n  if (!id || !name || items.has(id)) continue;\n  items.set(id, {id, name, listingText: lines.join(' · '), ratingLabel: a.querySelector('[role=\"img\"][aria-label]')?.getAttribute('aria-label') || null, url: url.href});\n }\n if (!items.size) throw new Error('未找到应用结果：可能无匹配、页面验证或页面结构发生变化，请查看页面确认');\n return [...items.values()].slice(0,20);\n}",
+      "timeoutMs": 30000
+    }
+  ],
+  "output": "{{result}}"
+}

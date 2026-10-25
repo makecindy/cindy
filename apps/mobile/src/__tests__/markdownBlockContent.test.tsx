@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownBlockContent } from '@/session/MarkdownBlockContent';
 import { useMarkdownSessionLinkTitles } from '@/session/useMarkdownSessionLinkTitles';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
+import type { RemoteSession } from '@/session/types';
 import {
   groupMobileMarkdownSelectableBlocks,
   parseMobileMarkdownIncremental,
@@ -49,6 +51,7 @@ function Body({ parse, renderBlock, baseline = false, options }: {
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  remoteSessionStore.clear();
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   host = document.createElement('div');
   document.body.append(host);
@@ -162,30 +165,74 @@ describe('streaming Markdown React block boundaries', () => {
     const linkedText = `[task](cindy://session/${sessionId})\n\ntail`;
     let parse = parseMobileMarkdownIncremental(linkedText);
     const renders = vi.fn();
-    function LinkedBody({ document, sessions }: {
+    const bodyRenders = vi.fn();
+    function LinkedBody({ document }: {
       document: MobileMarkdownParseResult;
-      sessions: { id: string; title: string }[];
     }) {
-      const titles = useMarkdownSessionLinkTitles(document.source, sessions);
+      bodyRenders();
+      const titles = useMarkdownSessionLinkTitles(document.source);
       const renderBlock = useCallback<RenderBlock>((block, gap) => {
         renders();
         return <span data-title={titles?.[sessionId]}>{renderText(block, gap)}</span>;
       }, [titles]);
       return <Body parse={document} renderBlock={renderBlock} />;
     }
-    const sessions = [{ id: sessionId, title: 'First title' }];
-    act(() => root.render(<LinkedBody document={parse} sessions={sessions} />));
+    const sessions = [{ id: sessionId, title: 'First title' }, { id: 'other', title: 'Other' }] as RemoteSession[];
+    remoteSessionStore.setDeviceSessions('computer', 'Computer', sessions);
+    act(() => root.render(<LinkedBody document={parse} />));
+    bodyRenders.mockClear();
+    // Unit regression: a title-only consumer must not render on other task activity.
+    for (let n = 0; n < 30; n += 1) {
+      act(() => remoteSessionStore.applySessionPatch('computer', 'other', { updatedAt: String(n) }));
+    }
+    expect(bodyRenders).not.toHaveBeenCalled();
     renders.mockClear();
     for (let n = 0; n < 10; n += 1) {
       parse = parseMobileMarkdownIncremental(`${parse.source}x`, parse);
-      act(() => root.render(<LinkedBody document={parse} sessions={[...sessions, { id: 'other', title: `Other ${n}` }]} />));
+      act(() => root.render(<LinkedBody document={parse} />));
     }
     expect(renders).toHaveBeenCalledTimes(10);
     renders.mockClear();
-    act(() => root.render(<LinkedBody document={parse} sessions={[{ id: sessionId, title: 'Renamed' }]} />));
+    act(() => remoteSessionStore.applySessionPatch('computer', sessionId, { title: 'Renamed' }));
     expect(renders).toHaveBeenCalledTimes(2);
     expect(host.querySelectorAll('[data-title="Renamed"]')).toHaveLength(2);
-    act(() => root.render(<LinkedBody document={parse} sessions={[]} />));
+    act(() => remoteSessionStore.setDeviceSessions('computer', 'Computer', []));
     expect(host.querySelector('[data-title]')).toBeNull();
+    act(() => remoteSessionStore.setDeviceSessions('computer', 'Computer', sessions));
+    expect(host.querySelectorAll('[data-title="First title"]')).toHaveLength(2);
+  });
+
+  it('does not subscribe plain text to task changes and follows a changed link target', () => {
+    const first = '03e0c22d-19db-4ac5-814f-1ea04040b471';
+    const second = '03e0c22d-19db-4ac5-814f-1ea04040b472';
+    remoteSessionStore.setDeviceSessions('computer', 'Computer', [
+      { id: first, title: 'First' }, { id: second, title: 'Second' },
+    ] as RemoteSession[]);
+    const subscribe = vi.spyOn(remoteSessionStore, 'subscribe');
+    const renders = vi.fn();
+    function Titles({ text }: { text: string }) {
+      const titles = useMarkdownSessionLinkTitles(text);
+      renders();
+      return <span>{JSON.stringify(titles)}</span>;
+    }
+    try {
+      act(() => root.render(<Titles text="plain text" />));
+      expect(subscribe).not.toHaveBeenCalled();
+      act(() => root.render(<Titles text={`cindy://session/${first}`} />));
+      expect(host.textContent).toContain('First');
+      act(() => root.render(<Titles text={`cindy://session/${second}`} />));
+      renders.mockClear();
+      act(() => remoteSessionStore.applySessionPatch('computer', first, { title: 'Old link renamed' }));
+      expect(renders).not.toHaveBeenCalled();
+      expect(host.textContent).toContain('Second');
+      act(() => remoteSessionStore.applySessionPatch('computer', second, { title: 'New title' }));
+      expect(host.textContent).toContain('New title');
+      act(() => root.render(<Titles text="plain again" />));
+      renders.mockClear();
+      act(() => remoteSessionStore.applySessionPatch('computer', second, { title: 'Later' }));
+      expect(renders).not.toHaveBeenCalled();
+    } finally {
+      subscribe.mockRestore();
+    }
   });
 });

@@ -19,6 +19,8 @@ import {
   type PooledRemoteConnection,
 } from '../controller/connectionPool';
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
+import { ExecServerRelay } from '../controller/execServerRelay';
+import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 
@@ -155,6 +157,32 @@ describe('remote connection pool', () => {
     pool.noteMaxRuns(1);
     await pool.beforeOpen(self);
     expect(a.released).toBe(1);
+  });
+
+  // provider-sharing.md §3：提供方关闭或延长闲置收回后，不能按打开时缓存的旧时长继续让出；
+  // 读不到当前设置也不能用旧值关进程。原来的用例只在打开前手动更新 caps，未覆盖定时 trim。
+  it.each([0, 120, undefined, 'offline'] as const)('refreshes the provider policy before releasing when it becomes %s', async policy => {
+    let offline = policy === 'offline';
+    let minutes: number | undefined = typeof policy === 'number' ? policy : undefined;
+    const pool = new RemoteConnectionPool({
+      now: () => now, checkMs: 3_600_000,
+      readCaps: async () => {
+        if (offline) throw new Error('DEVICE_OFFLINE');
+        return { maxRuns: 5, idleReclaimMinutes: minutes };
+      },
+    });
+    pool.noteMaxRuns(5);
+    pool.noteIdleReclaimMinutes(1);
+    const members = Array.from({ length: 4 }, (_, index) => member(`m${index}`, now - 10 * MINUTE));
+    const remove = members.map(item => pool.add(item));
+    try {
+      await pool.trim();
+      expect(members.every(item => item.released === 0)).toBe(true);
+      offline = false;
+      minutes = 1;
+      await pool.trim();
+      expect(members.reduce((sum, item) => sum + item.released, 0)).toBe(1);
+    } finally { remove.forEach(unregister => unregister()); }
   });
 
   it('after a capacity rejection releases one eligible connection, none when nothing qualifies', async () => {
@@ -587,6 +615,116 @@ afterEach(async () => {
 });
 
 describe('remote connection pool with a real host', () => {
+  // #6921 unit: startRemoteAgentSession must attempt every local cleanup and keep
+  // its failure for repeated teardown. Existing pool cases only failed remote close.
+  // Minimal input: one live run, with each local disposer failing after releasing
+  // its real resource. Reuses the loopback host harness without a real Agent process.
+  it('attempts every local disposer and retains all failures across account-boundary teardown', async () => {
+    const pool = newPool();
+    const failures = ['pool', 'relay', 'mcp', 'executor'].map((name) => new Error(`${name} cleanup failed`));
+    const remove = vi.fn();
+    const add = pool.add.bind(pool);
+    const addSpy = vi.spyOn(pool, 'add').mockImplementation((member) => {
+      const leave = add(member);
+      return () => { leave(); remove(); throw failures[0]; };
+    });
+    const closeRelay = ExecServerRelay.prototype.close;
+    const relaySpy = vi.spyOn(ExecServerRelay.prototype, 'close').mockImplementation(function (this: ExecServerRelay) {
+      closeRelay.call(this);
+      throw failures[1];
+    });
+    const closeExecutor = RemoteExecutor.prototype.close;
+    const executorSpy = vi.spyOn(RemoteExecutor.prototype, 'close').mockImplementation(async function (this: RemoteExecutor) {
+      await closeExecutor.call(this);
+      throw failures[3];
+    });
+    const disposeMcp = vi.fn(() => { throw failures[2]; });
+    try {
+      const handle = await startRemoteAgentSession('codex', {
+        sessionId: randomUUID(), workingDir: project, model: 'm1',
+      }, {
+        ...deps(pool),
+        // The fake Agent does not open exec-server; no Codex process is launched.
+        codexPath: () => path.join(root, 'unused-codex'),
+        prepareMcp: async () => ({ servers: new Map(), dispose: disposeMcp }),
+      });
+      opened.push(handle);
+      const first = await Promise.allSettled([handle.close({ reason: 'account-boundary' })]);
+      expect(first[0].status).toBe('rejected');
+      if (first[0].status !== 'rejected') throw new Error('Local cleanup failure must reach the owner');
+      expect(first[0].reason).toBeInstanceOf(AggregateError);
+      expect((first[0].reason as AggregateError).errors).toEqual(failures);
+      const repeated = await Promise.allSettled([handle.detach!({ reason: 'account-boundary' })]);
+      expect(repeated[0].status).toBe('rejected');
+      if (repeated[0].status === 'rejected') expect(repeated[0].reason).toBe(first[0].reason);
+      expect(remove).toHaveBeenCalledOnce();
+      expect(relaySpy).toHaveBeenCalledOnce();
+      expect(disposeMcp).toHaveBeenCalledOnce();
+      expect(executorSpy).toHaveBeenCalledOnce();
+      expect(pool.size).toBe(0);
+    } finally {
+      addSpy.mockRestore();
+      relaySpy.mockRestore();
+      executorSpy.mockRestore();
+    }
+  });
+
+  // 回归：重启恢复遇到 1.5s 建连超时就失败；原用例只覆盖已连上的打开/连回。
+  // 生产入口 startRemoteAgentSession，最小输入为 caps 连续两次 NOT_CONNECTED；
+  // unit，假计时器验证等待期间另一控制端仍可请求，且恢复后只打开一个 run。
+  it('waits for a reconnect before opening, without blocking another controller', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ready = deps();
+    let attempts = 0;
+    const pending = startRemoteAgentSession('claude-code', {
+      sessionId: 'restored-task', workingDir: project, model: 'm1', resumeSessionId: 'native-before-restart',
+    } as StartSessionOptions, {
+      ...ready,
+      invoke: async (args) => {
+        if ((args[0] as { op: string }).op === 'caps' && ++attempts <= 2) {
+          throw Object.assign(new Error('not online within 1500ms'), { code: 'NOT_CONNECTED' });
+        }
+        return ready.invoke(args);
+      },
+    });
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      expect(opens).toBe(0);
+      await expect(host.handle('another-controller', { op: 'caps' })).resolves.toMatchObject({ virtualWorkspace: true });
+      await vi.waitFor(() => expect(attempts).toBe(3));
+      vi.useRealTimers();
+      const handle = await pending;
+      opened.push(handle);
+      expect(opens).toBe(1);
+      expect(scenario.started[0].options.resumeSessionId).toBe('native-before-restart');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 同一入口的停止分支：授权拒绝立即结束；open 的结果不明时不重放写入。
+  it.each(['caps', 'open'] as const)('does not replay %s after a permanent denial or uncertain write', async (phase) => {
+    const ready = deps();
+    let attempts = 0;
+    await expect(startRemoteAgentSession('claude-code', {
+      sessionId: 'failed-resume', workingDir: project, model: 'm1',
+    } as StartSessionOptions, {
+      ...ready,
+      invoke: async (args) => {
+        if ((args[0] as { op: string }).op === phase) {
+          attempts += 1;
+          throw Object.assign(new Error(phase === 'caps' ? 'share paused' : 'reply lost'), {
+            code: phase === 'caps' ? 'REMOTE_AGENT_SHARE_PAUSED' : 'NOT_CONNECTED',
+          });
+        }
+        return ready.invoke(args);
+      },
+    })).rejects.toThrow();
+    expect(attempts).toBe(1);
+    expect(scenario.started).toHaveLength(0);
+  });
+
   it('makes room when full, then reconnects the released task to the same conversation', async () => {
     const pool = newPool();
     const a = await start(pool);
@@ -631,6 +769,33 @@ describe('remote connection pool with a real host', () => {
     fs.writeFileSync(path.join(project, 'bg.go'), '');
     await vi.waitFor(async () => expect(await ask(a, events, `read ${id}`)).toContain('bg-finished'), { timeout: 5_000, interval: 20 });
     expect(scenario.started).toHaveLength(3);
+  });
+
+  // provider-sharing.md §3「闲置收回由提供方决定」：对方按闲置收回结束了 Agent 进程(closed 带 idleReclaimed)。新控制端不报错、
+  // 不关句柄，本机后台命令留着；下一次发送带原来的会话 id 连回。改动前会当作任务结束关掉句柄，下一次发送直接失败。
+  it('keeps this computer\'s part when the provider reclaims an idle task, then reconnects to the same conversation', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      limits = { perDevice: 16, total: 64, idleMinutes: TINY_MINUTES };
+      const a = await start(undefined);
+      const events = watch(a);
+      const started = await ask(a, events, 'bg');
+      const id = /with ID: (\S+?)\./.exec(started)?.[1];
+      expect(id).toBeTruthy();
+      const nativeA = a.id;
+      await sleep(5);
+      // 对方巡检：不忙且闲置满设置的时长，收回。
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(host.runCount()).toBe(0));
+      expect(events.seen.filter((event) => event.type === 'error')).toEqual([]);
+      expect(await ask(a, events, `read ${id}`)).toContain('<status>running</status>');
+      expect(scenario.started).toHaveLength(2);
+      expect(scenario.started[1].options.resumeSessionId).toBe(nativeA);
+      fs.writeFileSync(path.join(project, 'bg.go'), '');
+      await vi.waitFor(async () => expect(await ask(a, events, `read ${id}`)).toContain('bg-finished'), { timeout: 5_000, interval: 20 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('records setting changes while released and opens with them, without reconnecting just for them', async () => {

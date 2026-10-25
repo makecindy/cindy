@@ -1,3 +1,4 @@
+import { receiveMobilePluginOauthLoopback } from "./pluginOauthLoopbackNative";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -163,6 +164,18 @@ export default function PluginSetupNativeForm({
           ? { inputConnection: { host, token: secret } }
           : {}),
         clearInput: clear,
+        receiveLoopback: async (request, expiresAt, signal) => {
+          assertCurrent();
+          const accepted = await new Promise<boolean>((resolve) => Alert.alert(
+            t("plugins.connectAccount"), new URL(request.url).hostname,
+            [{ text: t("plugins.cancel"), style: "cancel", onPress: () => resolve(false) }, { text: t("plugins.open"), onPress: () => resolve(true) }],
+            { cancelable: false },
+          ));
+          assertCurrent();
+          if (!accepted || Date.now() >= expiresAt) throw new Error("PLUGIN_OAUTH_CLOSED");
+          return receiveMobilePluginOauthLoopback(request, expiresAt, assertCurrent, signal);
+        },
+        isForeground: () => AppState.currentState === "active",
         pause: async () => {
           await new Promise((resolve) => setTimeout(resolve, 600));
           while (AppState.currentState !== "active") {
@@ -213,7 +226,8 @@ export default function PluginSetupNativeForm({
           e.message === "PLUGIN_AUTHORIZATION_IDENTITY_CHANGED";
         const computerCallback =
           e instanceof Error &&
-          e.message === "PLUGIN_AUTHORIZATION_COMPUTER_CALLBACK";
+          ["PLUGIN_AUTHORIZATION_COMPUTER_CALLBACK", "PLUGIN_OAUTH_CALLBACK_UNSUPPORTED"].includes(e.message);
+        const updateRequired = e instanceof Error && e.message === "PLUGIN_OAUTH_UPDATE_REQUIRED";
         Alert.alert(
           identityChanged
             ? t("plugins.identityChanged")
@@ -224,7 +238,7 @@ export default function PluginSetupNativeForm({
             ? t("plugins.identityChangedHint")
             : computerCallback
               ? t("plugins.computerAuthorizationHint")
-              : t("plugins.authorizationCheckHint"),
+              : updateRequired ? t("plugins.oauthUpdateRequired") : t("plugins.authorizationCheckHint"),
         );
       }
     } finally {

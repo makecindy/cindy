@@ -110,6 +110,12 @@ export class FallbackAsrProvider implements AsrProvider {
     return this.activeKind;
   }
 
+  // Read the winning provider, not the first configured candidate. Optional
+  // capabilities and segment metadata survive connection fallback together.
+  get endpointing(): NonNullable<AsrProvider['endpointing']> {
+    return this.active?.endpointing ?? 'segment-final';
+  }
+
   async start(): Promise<void> {
     if (this.active) return;
     if (this.disposed) throw new Error('Voice input ASR fallback disposed during start.');
@@ -255,6 +261,14 @@ export class FallbackAsrProvider implements AsrProvider {
     await this.active.flushAudio();
   }
 
+  private segmentCallback?: (segment: import('@cindy/voice-input-core').AsrSegment) => void;
+
+  onSegment(callback: (segment: import('@cindy/voice-input-core').AsrSegment) => void): void {
+    this.segmentCallback = callback;
+  }
+
+  commitUtterance(): void { this.active?.commitUtterance?.(); }
+
   onEvent(callback: (event: AsrEvent) => void): void {
     this.eventCallbacks.push(callback);
   }
@@ -327,6 +341,9 @@ export class FallbackAsrProvider implements AsrProvider {
         await this.cleanupAttempt(attempt);
         return { index, status: 'cancelled' };
       }
+      provider.onSegment?.((segment) => {
+        if (this.active === provider) this.segmentCallback?.(segment);
+      });
       provider.onEvent((event) => {
         if (this.active === provider) {
           for (const callback of this.eventCallbacks) callback(event);

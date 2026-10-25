@@ -29,6 +29,8 @@ export interface RemoteOauthContext {
   submitConnection?(offer: PluginConnectionOffer): Promise<PluginConnectionInput>;
   /** 代输入 step values; one signed exchange per step. */
   submitInput?(offer: InputHandoffOffer): Promise<InputHandoffSubmission>;
+  /** Original transaction deadline; may shorten when an offer expires sooner. */
+  readonly expiresAt?: number;
   cancelled?: AbortSignal;
   finish(ok: boolean): void;
 }

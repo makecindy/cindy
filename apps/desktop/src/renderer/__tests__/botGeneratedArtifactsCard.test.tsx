@@ -192,7 +192,7 @@ describe('伙伴成果卡', () => {
     expect(screen.getByTestId('bot-generated-artifacts')).toBeTruthy();
   });
 
-  it.each(['stop', 'error', 'history'])('omits the preamble once a real generated file is visible, keeping only the work fold: %s', async (ending) => {
+  it.each(['stop', 'error', 'history'])('keeps progress when a file arrives without a final reply: %s', async (ending) => {
     let finish!: (value: FileStat) => void;
     const stat = vi.fn(() => new Promise<FileStat>((resolve) => { finish = resolve; }));
     window.electronAPI.fsBrowse.statPath = stat;
@@ -201,23 +201,21 @@ describe('伙伴成果卡', () => {
       clientId: 'error', role: 'error', content: 'Generation interrupted',
     } });
     const view = render(<Conversation items={items} streaming={ending !== 'history'} />);
-    if (ending !== 'history') expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(screen.getByTestId('main-prose').textContent).toBe('Generating the report');
     view.rerender(<Conversation items={items} />);
-    // Until stat confirms a visible delivery, a no-final turn keeps useful text.
+    // A no-final turn keeps useful text before and after file confirmation.
     expect(screen.getByTestId('main-prose').textContent).toBe('Generating the report');
     await act(async () => finish({ kind: 'file', resolvedPath: '/bot/workspace/result.pdf', birthtimeMs: START + 100, mtimeMs: START + 100 }));
     expect(screen.getByText('result.pdf')).toBeTruthy();
-    expect(screen.queryByTestId('main-prose')).toBeNull();
-    // The tool run stays in the normal work fold; the preamble never resurfaces there.
-    expect(screen.getByTestId('public-process').textContent).toBe('');
-    expect(screen.queryByText('Generating the report')).toBeNull();
+    expect(screen.getByTestId('main-prose').textContent).toBe('Generating the report');
+    expect(screen.getByTestId('public-process')).toBeTruthy();
     if (ending === 'error') expect(screen.getByTestId('error').textContent).toBe('Generation interrupted');
     expect(stat).toHaveBeenCalledTimes(1);
-    // Virtualized cards leaving the viewport must not revive the preamble.
+    // Virtualized cards leaving the viewport must not change progress visibility.
     view.rerender(<Conversation items={items} mounted={false} />);
-    expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
     view.rerender(<Conversation items={items} />);
-    expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
     expect(stat).toHaveBeenCalledTimes(2);
     await act(async () => finish({ kind: 'missing', resolvedPath: '/bot/workspace/result.pdf' }));
     expect(screen.getByTestId('main-prose')).toBeTruthy();
@@ -251,7 +249,7 @@ describe('伙伴成果卡', () => {
   it('does not use a previous candidate confirmation for a missing replacement', async () => {
     const view = render(<Conversation items={conversationFiles()} />);
     await screen.findByTestId('bot-generated-artifacts');
-    expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
     window.electronAPI.fsBrowse.statPath = vi.fn(async (): Promise<FileStat> => ({ kind: 'missing', resolvedPath: '/bot/workspace/missing.pdf' }));
     await act(async () => { view.rerender(<Conversation items={conversationFiles('/bot/workspace/missing.pdf')} />); });
     expect(screen.queryByTestId('bot-generated-artifacts')).toBeNull();
@@ -262,7 +260,7 @@ describe('伙伴成果卡', () => {
     const items = conversationFiles();
     const view = render(<Conversation items={items} />);
     await screen.findByTestId('bot-generated-artifacts');
-    expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
     const stat = vi.fn(async (): Promise<FileStat> => ({ kind: 'missing', resolvedPath: '/bot/workspace/missing.pdf' }));
     window.electronAPI.fsBrowse.statPath = stat;
     const scope = { ...fileScope, sessionId: 'different-session', workingDir: '/different' };

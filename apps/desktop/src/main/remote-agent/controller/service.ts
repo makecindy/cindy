@@ -32,12 +32,13 @@ import { RemoteConnectionPool } from './connectionPool';
 import { remoteAgentEventMapper } from './eventMap';
 import {
   collectAncestorInstructionFiles,
+  collectAncestorMarkers,
   collectInstructionImports,
   collectPersonalConfig,
   collectProjectInstructionFiles,
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
-import { RemoteAgentPoller, remoteAgentInvoker } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
 import { startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 
 export interface DeviceAgentServiceDeps {
@@ -80,11 +81,6 @@ export interface DeviceAgentServiceDeps {
   webFetch?: GuardedFetch;
   /** 受邀者任务里凭证类操作确认卡上的说明(按界面语言)。 */
   sharedProviderCredentialNotice?(): string;
-  /**
-   * 名额紧张时，闲置满多少分钟的任务可以让出那台电脑上的 Agent 进程(0 = 不让)。缺省时不让，
-   * 与没有连接池时一样。每次判断时读取，设置改了立即生效。
-   */
-  idleReleaseMinutes?(): number;
   logger: Logger;
 }
 
@@ -159,12 +155,14 @@ export function remoteAgentPollerFor(
 export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const log = deps.logger.child('remote-agent');
   const pollerFor = (deviceId: string): RemoteAgentPoller => remoteAgentPollerFor(deviceId, deps.remoteInvoke, log);
-  // 每台运行 Agent 的电脑一个连接池：对方按这台设备计名额，池里算的是本机在那台上开着的连接。
+  // 每台运行 Agent 的电脑一个连接池：对方按这台设备计名额，池里算的是本机在那台上开着的连接；
+  // 闲置多久可以让出按那台主人设置的闲置收回时长(打开前与主动让出前从 caps 读)。
   const pools = new Map<string, RemoteConnectionPool>();
   const poolFor = (deviceId: string): RemoteConnectionPool => {
     let pool = pools.get(deviceId);
     if (!pool) {
-      pool = new RemoteConnectionPool({ idleMinutes: () => deps.idleReleaseMinutes?.() ?? 0, log });
+      const invoke = remoteAgentInvoker(deviceId, deps.remoteInvoke);
+      pool = new RemoteConnectionPool({ log, readCaps: () => RemoteAgentRunClient.caps(invoke) });
       pools.set(deviceId, pool);
     }
     return pool;
@@ -256,6 +254,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       collectAncestorFiles: input.agentKind === 'codex'
         ? undefined
         : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
+      // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
+      ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
       collectPersonal: (kind, projectFiles) => collectPersonalConfig(kind, projectFiles, collect),
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,

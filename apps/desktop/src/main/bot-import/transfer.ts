@@ -156,7 +156,8 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   const receipt: ImportReceipt = existing ?? { selectionHash, handoverMarkers: true, copied: [], routines: {}, result: {
     requestId: selection.requestId, botId: `import_${fingerprint(selection.requestId).slice(0, 24)}`, status: 'running', checks: [],
   } };
-  receipt.nativePackage ??= snapshot.nativePackage;
+  // A checkpoint resumes its original package; a pre-checkpoint restart adopts the package it will actually save.
+  if (snapshot.nativePackage) receipt.nativePackage = snapshot.nativePackage;
   receipt.selectionHash = selectionHash;
   receipt.deferSetup = selection.deferSetup === true;
   const botId = receipt.result.botId;

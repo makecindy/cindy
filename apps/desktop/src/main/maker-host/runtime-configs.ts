@@ -24,6 +24,7 @@ import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
@@ -39,7 +40,7 @@ import {
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, skillSourcePrecedencePrompt, agentSpecific]
+  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');

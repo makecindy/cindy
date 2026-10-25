@@ -32,7 +32,7 @@
 3. **先读后点(snapshot → ref)**
    - 点击 / 输入前先 `action: "snapshot"`(同一个 `targetId`,`refs: "aria"`)拿到页面结构和元素 `ref`。
    - **永远用 snapshot 返回的 `ref` 去操作,绝不猜 CSS selector。**
-   - 页面长 / 噪声多时用 `interactive: true`、`compact: true` 收窄;只关心某区域时用 `selector` / `frame` 限定。
+   - 页面长 / 噪声多时用 `interactive: true`、`compact: true` 收窄;只关心某区域时用 `selector` / `frame` 限定，此时使用 `refs:"role"`（`aria` 不支持局部快照）。
 
 4. **窄操作,操作后重新观察**
    - 用 `action: "act"` + `request: { kind, ref, ... }` 执行动作:
@@ -41,7 +41,8 @@
      - 按键:`{ kind: "press", key: "Enter" }`
      - 下拉:`{ kind: "select", ref, values: [...] }`
      - 悬停 / 拖拽:`{ kind: "hover", ref }` / `{ kind: "drag", startRef, endRef }`
-   - `ref` 必须取自**最近一次** snapshot。导航 / 弹窗 / 提交后页面变了,**先重新 snapshot 再继续**,别用旧 ref。
+   - 需要操作后观察时，在 `act` / `open` / `navigate` / `upload` 加 `afterSnapshot:{}`，一次调用就返回动作结果和正文默认最多 4000 字符的精简快照（`maxChars` 可调，最高 20000）。已看过页面结构、只需继续表单时可用 `afterSnapshot:{selector:"已确认的区域选择器"}`，避免每次重读整页。后置快照不保证异步页面已加载完；需要的信息还未出现时，等待具体内容再补读。
+   - `ref` 必须取自**最近一次** snapshot（含返回的 `afterSnapshot`）。导航 / 弹窗 / 提交后页面变了，先观察再继续，别用旧 ref。`afterSnapshot.ok:false` 只表示后续读取失败；顶层 `ok:true` 表示动作已经成功，只补读页面，不重做提交或上传。没带后置快照、快照被截断或内容不足时，再按需单独 snapshot。
    - 别盲等。需要等待用 `{ kind: "wait", ... }`(等 `loadState` / `textGone` / `timeoutMs`),不要靠反复重试空转。
 
 5. **遇阻塞停下来报告**
@@ -62,7 +63,7 @@
 7. 任务完成后,可用不带 `proxyServer` 的 `{action:"start"}` 明确恢复普通直连模式。代理 A 切代理 B、代理切直连都会重启浏览器;重复同一代理则保持当前进程。
 
 #### Token 效率(按"最省 → 兜底"的顺序选路)
-1. **先查有没有现成配方**:操作某个站之前,**先 `action: "siteguide"`**——带 `site`(站点 host)看该站内置指南 / 配方;**不确定有哪些站时,`siteguide` 不带 `site` 会列出全部内置站点 + 可用配方目录**(`sites:[{site,recipes,auth}]`)。命中配方就 `action: "recipe"`(`recipeId`+`inputs`)一步跑完(最省最稳),优先于手动 snapshot/extract。注意 `siteguide` 是我们内置的站点指南,**不是去抓网站自己的 `/sitemap.xml`**——不要为此去 navigate / curl `sitemap.xml`。
+1. **先查有没有现成配方**:操作某个站之前,**先 `action: "siteguide"`**——带 `site`(站点 host)看该站内置指南 / 配方;**不确定有哪些站时,`siteguide` 不带 `site` 会列出全部内置站点 + 可用配方目录**(`sites:[{site,recipes,auth}]`)。命中且未 suspended 的配方就 `action: "recipe"`(`recipeId`+`inputs`)组合执行并检查结果,优先于手动 snapshot/extract。注意 `siteguide` 是我们内置的站点指南,**不是去抓网站自己的 `/sitemap.xml`**——不要为此去 navigate / curl `sitemap.xml`。
 2. **数据型页面优先读接口,别扒 DOM**:很多列表 / 详情背后是 JSON API,读接口比扒渲染后的 DOM 又稳又省。
    - ① `action: "requests"`(带**具体** `filter`,如 `/api/quotes`;别用太宽的 `api`,会撞 `fonts.googleapis.com` 之类)看页面发了哪些 XHR/fetch、拿到接口 URL。这是读**已发生**请求的清单。
    - ② 读 body:**GET 接口最稳的姿势是直接 `navigate` 到该 URL**,再用 `extract`(`fields:{ data:"body" }`)或 snapshot 读返回的 JSON。

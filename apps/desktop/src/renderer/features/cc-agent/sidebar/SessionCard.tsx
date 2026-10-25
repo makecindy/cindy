@@ -890,7 +890,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 ? isActive
                   ? 'text-[var(--sidebar-item-active-foreground)] font-medium'
                   : 'text-[var(--card-status-awaiting)] font-medium'
-                : 'text-[var(--text-secondary)]',
+                : isActive
+                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                  : 'text-[var(--text-secondary)]',
             )}
             style={{ height: '1.45em' }}
           >
@@ -1064,7 +1066,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               className={cn(
                 'mt-[4px] text-11 leading-[1.4]',
                 '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-                'text-[var(--text-secondary)]',
+                isActive
+                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                  : 'text-[var(--text-secondary)]',
               )}
               style={{ WebkitLineClamp: cardPreviewLineClamp }}
             >

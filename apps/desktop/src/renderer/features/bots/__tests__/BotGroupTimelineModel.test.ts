@@ -71,6 +71,18 @@ describe('push refresh merge', () => {
     expect(merged.older).toBe(first.older);
   });
 
+  // bot-group-chat.md §10「话题未读与提示」: older pages are not re-read, yet a Thread read meanwhile must lose its badge.
+  it('gives Thread roots on pages opened with 「查看更早」 the unread state of the latest Thread list', () => {
+    const root = msg({ id: 'm2', sequence: 2, replyCount: 2, threadUnread: { count: 2, mentioned: true, latest: 21 } });
+    const first: BotGroupLoadedTimeline = { group: detail(page(10, 12), true), older: [msg({ id: 'm1', sequence: 1 }), root], olderPlans: [], olderHasMore: true };
+    const thread = { rootId: 'm2', rootAuthorName: '咪咪', rootAuthorBotId: 'mimi', rootText: '', replyCount: 2, lastReply: null };
+    const read = mergeBotGroupLatestPage(first, { ...detail(page(10, 12), true), threads: [{ ...thread, unread: { count: 0, mentioned: false } }] });
+    expect(read.older[1]!.threadUnread).toEqual({ count: 0, mentioned: false });
+    expect(read.older[0]).toBe(first.older[0]);
+    // The same list again changes nothing.
+    expect(mergeBotGroupLatestPage(read, { ...detail(page(10, 12), true), threads: [{ ...thread, unread: { count: 0, mentioned: false } }] })).toBe(read);
+  });
+
   it('retains loaded history when exactly one full latest page arrives with no missing sequence', () => {
     const first: BotGroupLoadedTimeline = { group: detail(page(101, 200), true), older: page(1, 100), olderPlans: [], olderHasMore: false };
     const merged = mergeBotGroupLatestPage(first, detail(page(201, 300), true));

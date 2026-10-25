@@ -81,6 +81,7 @@ function register(overrides: Parameters<typeof registerProcessMonitorIpc>[0] = {
     resolveAgentProcessRegistration: (pid) => ({
       kind: 'claude',
       role: 'task-host',
+      sessionId: null,
       instanceId: `start:${pid}`,
     }),
     killProcessTree: vi.fn().mockReturnValue(true),
@@ -243,6 +244,44 @@ describe('process monitor IPC authorization', () => {
     expect(sender.removeListener).toHaveBeenNthCalledWith(1, 'destroyed', expect.any(Function));
     expect(sender.removeListener).toHaveBeenNthCalledWith(2, 'destroyed', expect.any(Function));
   });
+
+  it('生产装配把 resolveSessionLabel 传入采样器,后续帧的 agent 条目带归属标题', async () => {
+    const sender = fakeSender();
+    register({
+      sampler: undefined,
+      platform: 'linux',
+      sampleIntervalMs: 10,
+      scanOsProcesses: vi.fn().mockResolvedValue({
+        rows: [osRow({ pid: 511, ppid: SELF_PID, cmdLineLower: 'pi-marker host' })],
+        childrenByParent: new Map(),
+      }),
+      classify: (cmd) => (cmd.includes('pi-marker') ? 'pi' : null),
+      resolveAgentProcessRegistration: (pid) => ({
+        kind: 'pi',
+        role: 'task-host',
+        sessionId: 'session-9',
+        instanceId: `start:${pid}`,
+      }),
+      resolveSessionLabel: (sessionId) =>
+        sessionId === 'session-9' ? Promise.resolve('写发布说明') : Promise.resolve(null),
+    });
+
+    await handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
+    // 标题查询在后台缓存,首帧可能还没有;轮询后续帧直到标题出现。
+    await vi.waitFor(
+      () => {
+        const withLabel = sender.send.mock.calls
+          .map((call) => call[1] as { entries: Array<{ pid: number; sessionLabel?: string }> })
+          .some((sample) =>
+            sample.entries.some(
+              (entry) => entry.pid === 511 && entry.sessionLabel === '写发布说明',
+            ),
+          );
+        expect(withLabel).toBe(true);
+      },
+      { timeout: 2_000, interval: 20 },
+    );
+  }, 5_000);
 });
 
 describe('terminate ownership validation', () => {
@@ -478,7 +517,7 @@ describe('terminate ownership validation', () => {
       }),
       classify: () => 'codex',
       resolveAgentProcessRegistration: () =>
-        role ? { kind: 'codex', role, instanceId: 'start:970' } : null,
+        role ? { kind: 'codex', role, sessionId: null, instanceId: 'start:970' } : null,
       killProcessTree: kill,
     });
     expect(() =>
@@ -510,6 +549,7 @@ describe('terminate ownership validation', () => {
       resolveAgentProcessRegistration: () => ({
         kind: 'claude',
         role: 'task-host',
+        sessionId: null,
         instanceId: 'spawn:new',
       }),
       killProcessTree: kill,

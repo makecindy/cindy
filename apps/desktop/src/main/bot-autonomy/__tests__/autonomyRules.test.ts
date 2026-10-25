@@ -19,8 +19,8 @@ import {
   DEFAULT_SCHEDULER_BOT_ID,
   type WatchedSession,
 } from '../../../shared/botAutonomy.js';
-import { AutonomyEventLedger, dueEventType } from '../events.js';
-import { deriveFollowerBotId, resolveSchedulerBotId, type FollowerBotState } from '../follower.js';
+import { AutonomyEventLedger, dueEventType, toSweepEvent } from '../events.js';
+import { filterFollowUpEvents, deriveFollowerBotId, resolveSchedulerBotId, type FollowerBotState } from '../follower.js';
 import { projectBotGlance } from '../glance.js';
 import { parseActiveSessionList, summarizeInteraction } from '../phase.js';
 
@@ -68,11 +68,11 @@ describe('who follows a task', () => {
   });
 
   it.each([
-    ['not customized → active Cindy assistant', { customized: false, schedulerBotId: null }, { [DEFAULT_SCHEDULER_BOT_ID]: bot('active') }, DEFAULT_SCHEDULER_BOT_ID],
+    ['not customized → off even with active Cindy assistant', { customized: false, schedulerBotId: null }, { [DEFAULT_SCHEDULER_BOT_ID]: bot('active') }, null],
     ['not customized, assistant paused → none', { customized: false, schedulerBotId: null }, { [DEFAULT_SCHEDULER_BOT_ID]: bot('paused') }, null],
     ['customized off stays off', { customized: true, schedulerBotId: null }, { [DEFAULT_SCHEDULER_BOT_ID]: bot('active') }, null],
     ['customized teammate', { customized: true, schedulerBotId: 'a' }, { a: bot('paused'), [DEFAULT_SCHEDULER_BOT_ID]: bot('active') }, 'a'],
-    ['customized teammate archived → default', { customized: true, schedulerBotId: 'a' }, { a: bot('archived'), [DEFAULT_SCHEDULER_BOT_ID]: bot('active') }, DEFAULT_SCHEDULER_BOT_ID],
+    ['customized teammate archived → off, never transfer consent', { customized: true, schedulerBotId: 'a' }, { a: bot('archived'), [DEFAULT_SCHEDULER_BOT_ID]: bot('active') }, null],
   ] as const)('scheduler: %s', (_name, override, bots, expected) => {
     expect(resolveSchedulerBotId(override, new Map(Object.entries(bots)))).toBe(expected);
   });
@@ -227,4 +227,17 @@ describe('waiting-row summary for a permission request', () => {
     const bash = summarizeInteraction({ kind: 'permission', requestId: 'r2', title: 'bash' });
     expect(bash?.summary).toBe('bash');
   });
+});
+
+// Queued summaries from before opt-out must never reach the model; delegated work still runs.
+it('filters old follow-up batches using current consent rather than the saved follower', () => {
+  const bots = new Map([['sched', bot('active')]]);
+  const rows = [row({ sessionId: 'mine', phase: 'errored' }), row({ sessionId: 'delegated', creatorBotId: 'sched' })];
+  const events = ['mine', 'delegated', 'deleted'].map((subject) => ({
+    sourceId: 'host:sessions', event: { id: subject, subject, type: 'errored', occurredAt: 1, data: {} },
+  }));
+  const sweep = { sourceId: 'host:sessions', event: toSweepEvent('sched', 10) };
+  expect(filterFollowUpEvents('sched', [...events, sweep], rows, null, bots, 10)).toEqual([events[1]]);
+  expect(filterFollowUpEvents('sched', [...events, sweep], rows, 'sched', bots, 10)).toEqual([events[0], events[1], sweep]);
+  expect(filterFollowUpEvents('sched', events, [row({sessionId: 'mine', shared: true})], 'sched', bots, 10)).toEqual([]);
 });

@@ -61,7 +61,7 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     // 重挂仍属于旧父节点的原生 child；listperf 仍可显式做 on/off A/B。
     expect(source).toContain('devRecycleItems = false,');
     expect(source).toContain('const recycleItems = __DEV__ ? devRecycleItems === true : false;');
-    expect(perfHarness).toContain("const recycle = params.recycle !== '0';");
+    expect(perfHarness).toContain("const recycle = params.recycle === '1';");
     expect(listSource).toContain('recycleItems={recycleItems}');
     expect(listSource).toContain('getItemType={mobileMessageListItemType}');
     expect(source).toContain('useRecyclingState');
@@ -299,10 +299,11 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     const markdownBodyEnd = source.indexOf('function renderInline', markdownBodyStart);
     const markdownBodySource = source.slice(markdownBodyStart, markdownBodyEnd);
 
-    // 完成态才可选中;正文与 secondaryBody 都走原生 selectable。
+    // 完成态才可选中；伙伴与普通任务的正文和 secondaryBody 都走原生 selectable。
     expect(source).toContain('const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;');
-    expect(bubbleSource).toContain('selectable={canSelectVisibleText}');
-    expect(bubbleSource).toContain('<MarkdownSelectableText selectable={canSelectVisibleText} style={styles.detailText}>');
+    expect(source).toContain('const bubbleTextSelectable = canSelectVisibleText;');
+    expect(bubbleSource).toContain('selectable={bubbleTextSelectable}');
+    expect(bubbleSource).toContain('<MarkdownSelectableText selectable={bubbleTextSelectable} style={styles.detailText}>');
 
     // iOS 部分选择:RN Text 底层是 UILabel 只能整块拷贝(facebook/react-native#13938),
     // 可选中块在 iOS 换用 react-native-uitextview(真 UITextView,系统选择手柄);
@@ -315,9 +316,10 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
     expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
 
-    // 气泡是纯 View,不挂 Pressable/onLongPress(避免干扰横向 ScrollView 手势)。
+    // 气泡不抢占正文的原生选字或表格、代码块横向滚动手势。
     expect(bubbleSource).not.toContain('<Pressable');
     expect(bubbleSource).not.toContain('onLongPress');
+    expect(bubbleSource).not.toContain('<GestureDetector');
 
     // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');

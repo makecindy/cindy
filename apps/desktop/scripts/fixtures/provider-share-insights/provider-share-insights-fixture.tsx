@@ -6,6 +6,7 @@ import type {
   ProviderShareQuotaAccount,
 } from '../../../src/shared/providerShareInsights';
 import type { ProviderShareReceived } from '@cindy/device-link';
+import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../../src/shared/remoteAgentLimits';
 
 const now = Date.parse('2026-10-19T12:00:00Z');
 const share: ProviderShareReceived = {
@@ -145,6 +146,12 @@ void mountPage({
       favoriteRecovery?: { ownerStamp: unknown };
     }) => {
       switch (cmd.action) {
+        case 'get-model-access':
+          return { version: 1, models: null, providerModels: null, availableModels: [
+            { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+            { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+            { id: 'gpt-5.5', name: 'GPT-5.5' },
+          ] };
         case 'get-visibility':
           return visibility;
         case 'set-visibility':
@@ -198,12 +205,12 @@ void mountPage({
           return { providerId: 'xd', local: null, devices: [], relays: [] };
         case 'get-run-limits':
           return {
-            value: { perDevice: 16, total: 64 },
-            defaults: { perDevice: 16, total: 64 },
+            value: { ...DEFAULT_REMOTE_AGENT_LIMITS },
+            defaults: { ...DEFAULT_REMOTE_AGENT_LIMITS },
             isCustomized: false,
             customizedKeys: [],
             usage: { total: 0, devices: 0, largestDevice: 0 },
-          };
+          } satisfies RemoteAgentLimitsView;
         default:
           return forbid(`providerShare.${cmd.action}`)();
       }

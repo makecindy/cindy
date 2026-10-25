@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/desktopSlashCommands';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
+import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposerDocument, reconcileComposerProjectedText, serializeComposerDocument, textComposerDocument } from '@/session/composerDocument';
+import { captureNewSessionOwner } from '@/session/newSessionForm';
+import { reconcileNewSessionSubmitDraft } from '@/session/newSessionRuntimeReconciliation';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -39,6 +43,7 @@ if (!readRouteParamSource) throw new Error('Missing SessionScreen.readRouteParam
 const compiledExisting = ts.transpileModule(`${readRouteParamSource}\n${sendSource}\nreturn send;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function newHarness(text = '/goal target') {
+  setMobileAuthOwner('test-user');
   const noop = vi.fn();
   const draft = { agentKind: 'pi', model: 'test-model', providerId: 'test-provider', workspaceKind: 'dialogue', workingDir: '', firstMessage: text, agentDeviceId: 'agent-device' };
   const bindings = {
@@ -50,13 +55,13 @@ function newHarness(text = '/goal target') {
     leaveForeignOutboxRecovery: () => false, goalBusy: false, runtimePendingRef: { current: false },
     selectedDeviceId: 'host', selectedDeviceName: 'Host', selectedDeviceRef: { current: 'host' },
     draft, remoteAgentPick: {}, deviceProvidersRef: { current: { ready: false } },
-    captureWorktreeCreateIntent: () => ({ applicable: false, enabled: false }), isWorktreeCreateIntentCurrent: () => true,
+    prepareWorktreeCreateIntent: () => ({ applicable: false, enabled: false }), isWorktreeCreateIntentCurrent: () => true,
     setCreating: noop, setGoalBusy: noop, auth: { user: { id: 'test-user' } },
-    getMobileAuthOwner: () => ({ accountId: 'test-user' }), isMobileAuthOwnerCurrent: () => true,
+    getMobileAuthOwner, isMobileAuthOwnerCurrent, captureNewSessionOwner,
     agentAuthVerdict: 'ready', applyRemoteAgentPick: (value: unknown) => value,
     createNewSessionId: () => 'new-goal-task', saveNewSessionPreferences: noop,
-    getDeviceProvidersGen: () => 1, resolveRecentModelAndProvider: (_rows: unknown, selected: unknown) => selected,
-    assertSubmitModelResolved: noop, withTransientRemoteRetry: (fn: () => Promise<unknown>) => fn(), openLink: noop, subscribe: vi.fn(async () => {}),
+    getDeviceProvidersGen: () => 1, reconcileNewSessionSubmitDraft, targetAgentHasFast: () => false,
+    withTransientRemoteRetry: (fn: () => Promise<unknown>) => fn(), openLink: noop, subscribe: vi.fn(async () => {}),
     buildRemoteCreateSessionOptions: (value: unknown) => value, normalizeCreateSessionResult: (value: unknown) => value,
     maker: { createSession: vi.fn(async () => ({ sessionId: 'new-goal-task' })),
       goal: { set: vi.fn(async () => {}) }, getSession: vi.fn(async () => ({ id: 'new-goal-task', title: 'Goal task' })) },
@@ -91,18 +96,21 @@ function existingHarness(args = 'target') {
     sendInFlightRef: { current: false }, sending: false, setSending: vi.fn((_sending: boolean) => {}), currentSession: session,
     invalidateHistoryRecoveryNavigation: vi.fn(),
     outboxConnectionBlockedNow: () => false, getPendingUploadCount: () => 0,
+    outboxRef: { current: [] }, remoteSessionRunning: false, currentTurnStreaming: false,
+    offerMobileSessionRebalance: vi.fn(async () => {}), askMobileSessionRebalance: vi.fn(), invoke: vi.fn(),
     parseMobileLocalSystemCommand: () => null, parseMobileDesktopCommand, pendingSkillSelectionRef: { current: null },
     resolveSessionAgentKind: () => 'pi', modelNeedsReselection: () => false, getCachedDeviceProviders: () => undefined,
     commandNeedsRemoteSession: () => false, extractMobileSessionReferences: () => [], outboxDispatchBlockedNow: () => false,
     runtimeOptions: { planModeSupported: true }, permissionModeOrAsk: (mode: string) => mode,
     dismissPromptRecommendation: noop, hydrateComposerMessageReferenceBodies: async (doc: unknown) => doc,
-    resolvePastedSessionLinkLabel: noop, requestMessageListFollowLatest: noop, hasPastePlaceholders: () => false,
+    resolvePastedSessionLinkLabel: noop, requestMessageListFollowLatest: noop, noteLocalSend: noop, hasPastePlaceholders: () => false,
     beginOutboxAttachmentHandoff: async () => ({ prepare: async () => [], release: noop }),
-    attachmentPreviews: {}, buildOutboxItem: (input: unknown) => input, createOutboxClientId: () => 'ordinary-message',
+    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem: (input: unknown) => input, createOutboxClientId: () => 'ordinary-message',
     mobileDurableOutbox: { add: vi.fn(async (_record: unknown) => {}) }, rememberSentAttachmentPreviews: noop,
     releaseUploadedSources: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop,
     composerAnnotationsRef: { current: null }, setAttachments: noop, setAttachmentError: noop,
     voiceDictionaryLearningTrackerRef: { current: null }, formatRemoteError: String,
+    getPendingCompanionReplyQuote: () => null, clearSentCompanionReplyQuote: noop,
   };
   bindings.setSending = vi.fn((value: boolean) => { bindings.sending = value; });
   bindings.applyComposerDocument = vi.fn((doc: typeof initial) => { bindings.composerDocumentRef.current = doc; });

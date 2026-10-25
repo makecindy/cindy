@@ -178,9 +178,9 @@ export function useChatServerRoster(enabled: boolean) {
 }
 
 /** Reads and sends use the account's Chat Server identity, never its computer identity. */
-export function useChatServerGroup(groupId: string, enabled: boolean) {
+export function useChatServerGroup(groupId: string, enabled: boolean, threadRootId?: string) {
   const api = useChatClient();
-  const identity = `${api.owner}:${groupId}`;
+  const identity = `${api.owner}:${groupId}:${threadRootId ?? 'main'}`;
   const active = useRef(identity); active.current = identity;
   const [state, setState] = useState<{ identity: string; value: BotGroupChatState; online: boolean; loadingOlder: boolean }>({ identity, value: { kind: 'loading' }, online: true, loadingOlder: false });
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(null);
@@ -201,10 +201,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     try {
       await api.client.syncListState(run.reasons.some(reason => ['focus', 'visible', 'connected'].includes(reason)));
       const previous = page.current?.identity === identity ? page.current.page : null;
-      const oldest = previous?.messages.reduce<string | undefined>((oldest, message) => !oldest || BigInt(message.seq) < BigInt(oldest) ? message.seq : oldest, undefined);
+      const oldest = previous?.messages.filter(message => !threadRootId || message.threadRootId === threadRootId).reduce<string | undefined>((oldest, message) => !oldest || BigInt(message.seq) < BigInt(oldest) ? message.seq : oldest, undefined);
       // The account's actors say which computer runs each owned companion (live task cards);
       // the group still reads when that list is unavailable.
-      const [next, self, actors] = await Promise.all([api.client.load(groupId, oldest), api.client.me(), api.client.actors().catch((): ChatActor[] => [])]);
+      const [next, self, actors] = await Promise.all([api.client.load(groupId, oldest, threadRootId), api.client.me(), api.client.actors().catch((): ChatActor[] => [])]);
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
       if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }
@@ -295,14 +295,18 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
       if (mentions.botIds.some(id => !joined.some(member => member.id === id))) throw new Error('MENTION_UNAVAILABLE');
       const recipients = mentions.all
         ? joined.map(member => member.id)
-        : mentions.botIds;
-      await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text),
+        : [...mentions.botIds];
+      const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
+      if (root && joined.some(member => member.id === root.authorId && member.kind === 'bot')) recipients.push(root.authorId);
+      await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text), threadRootId,
+        ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
+          ? { quote: { messageId: String(input.quote.messageId) } } : {}),
         mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });
       if (valid()) reload();
       return { effects: [] };
     } catch (error) {
       // An unavailable mention is a draft correction, not a connectivity failure.
-      if (error instanceof Error && error.message === 'MENTION_UNAVAILABLE') throw error;
+      if (error instanceof Error && ['MENTION_UNAVAILABLE', 'QUOTE_UNAVAILABLE'].includes(error.message)) throw error;
       if (valid()) {
         freshRead.current = false;
         if (chatAccessLost(error)) loseAccess();
@@ -336,7 +340,13 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     // Only the measured UI's messages are acknowledged, even if a newer read is settling.
     const seen = new Set(messageIds);
     const messages = latest.page.messages.filter(message => seen.has(message.id));
-    await markRemoteResourceRead(api.userId, '', groupId, chatLastReplyAt(messages, latest.self), chatLastReplySequence(messages, latest.self));
+    if (!threadRootId) await markRemoteResourceRead(api.userId, '', groupId, chatLastReplyAt(messages, latest.self), chatLastReplySequence(messages, latest.self));
+    if (!api.current() || active.current !== identity) return;
+    try { await api.client.markRead(groupId, latest.page, messageIds); }
+    catch {
+      // The foreground recovery refresh retries from the measured viewport, never from the head.
+      if (api.current() && active.current === identity) freshRead.current = false;
+    }
   }, [api, groupId, identity]);
   const acceptListState = useCallback(async (value: unknown) => {
     if (!api.current()) throw new Error('OWNER_CHANGED');

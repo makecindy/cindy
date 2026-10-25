@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   assertBrowserNavigationResultAllowed: vi.fn(async () => undefined),
-  assertPageNavigationCompletedSafely: vi.fn(async (_opts?: { page?: unknown }) => undefined),
-  closeBlockedNavigationTarget: vi.fn(async () => undefined),
+  assertPageNavigationCompletedSafely: vi.fn(async (_opts: { page: unknown }): Promise<void> => undefined),
+  closeBlockedNavigationTarget: vi.fn(async (_opts: { page: unknown }): Promise<void> => undefined),
   getPageForTargetId: vi.fn(),
-  quarantineTargetWithoutClosing: vi.fn(async () => undefined),
+  quarantineTargetWithoutClosing: vi.fn(async (_opts: { page: { url(): string } }): Promise<void> => undefined),
   refLocator: vi.fn(),
 }));
 
@@ -50,6 +50,22 @@ import {
 describe('Playwright interaction proxy navigation policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(['() => false', 'false', 'async () => false'])('does not mistake a function/Promise for a satisfied wait: %s', async (fn) => {
+    const waitForFunction = vi.fn(async (predicate: () => unknown, _arg: unknown, options: { timeout: number }) => {
+      expect(options.timeout).toBe(500); // existing minimum wait timeout
+      expect(typeof predicate).toBe('function');
+      const result = predicate();
+      if (!result) throw new Error('Timeout 500ms exceeded');
+    });
+    const page = { url: () => 'https://example.com/', on: vi.fn(), off: vi.fn(), waitForFunction };
+    mocks.getPageForTargetId.mockResolvedValue(page);
+    await expect(executeActViaPlaywright({ cdpUrl: 'http://127.0.0.1:18800', targetId: 'page-1', evaluateEnabled: true,
+      action: { kind: 'wait', fn, timeoutMs: 200 } })).rejects.toThrow(
+      fn.startsWith('async') ? /synchronous predicate/ : /Timeout/,
+    );
+    expect(waitForFunction).toHaveBeenCalledTimes(1);
   });
 
   it('carries explicit proxy mode into main-frame and subframe checks', async () => {

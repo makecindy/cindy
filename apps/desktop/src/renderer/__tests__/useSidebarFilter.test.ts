@@ -26,6 +26,8 @@ import {
   PROJECT_ORDER_KEY,
   TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
+  DEVICE_GROUP_COLLAPSED_KEY,
+  loadDeviceGroupCollapsedKeys,
   DIALOGUE_GROUP_COLLAPSED_KEY,
   DIALOGUE_GROUP_ALL_KEY,
   loadStatus,
@@ -406,6 +408,22 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
     expect(nextTaskInfoAfterToggle(['time', 'cost'], 'time')).toEqual(['cost']);
     expect(nextTaskInfoAfterToggle(['cost'], 'cost')).toEqual([]);
     expect(nextTaskInfoAfterToggle([], 'pr')).toEqual(['pr']);
+  });
+});
+
+// #6615: component remount tests cover valid device preferences; this unit test
+// protects the storage boundary against malformed values before mounting React.
+describe('deviceGroupCollapsedKeys', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it.each([
+    { raw: '{not-json', expected: [] },
+    { raw: '{"local":true}', expected: [] },
+    { raw: '["local",42,null,"device-1"]', expected: ['local', 'device-1'] },
+  ])('safely restores device collapse preferences from $raw', ({ raw, expected }) => {
+    localStorage.setItem(DEVICE_GROUP_COLLAPSED_KEY, raw);
+    expect([...loadDeviceGroupCollapsedKeys()]).toEqual(expected);
   });
 });
 

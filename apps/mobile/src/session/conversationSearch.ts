@@ -1,10 +1,11 @@
 /**
  * 手机任务搜索集成层:按设备 fan-out `local-db:conversations:search`,
- * 老端 / 离线回落到已缓存会话的标题与消息预览，不搜列表元数据。
+ * 老端 / 离线回落到已缓存会话的标题与消息预览；项目别名单独补充缓存命中。
  *
  * 纯函数 + 注入依赖,不直接碰 React / store。
  */
 import {
+  conversationSearchResultKey,
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   mergeConversationSearchFanout,
@@ -20,6 +21,7 @@ import {
   type ConversationSearchStatusFilter,
 } from '@cindy/maker-shared/conversation-search';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
+import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
   remoteSessionDisplayTitle,
   sessionRowMessagePreview,
@@ -82,6 +84,7 @@ export function conversationSearchOriginsFromDeviceModels(
 }
 
 export interface SearchConversationsAcrossDevicesDeps {
+  projectAliases?: ProjectAliasDisplayIndex;
   invoke: ConversationSearchInvoke;
   getCachedSessions: () => readonly RemoteSession[];
   isDeviceUnresponsive?: (deviceId: string) => boolean;
@@ -123,6 +126,20 @@ export async function searchConversationsAcrossDevices(
     origins.map((origin) => searchOneDevice(origin, keywordRequest, deps)),
   );
   const present = pages.filter((page): page is ConversationSearchResponse => page != null);
+  // Updated hosts match aliases before limiting indexed results. Supplement the
+  // cache for older/offline hosts, retaining the same visible device/project scope.
+  if (deps.projectAliases?.size) {
+    // Cache ranks are not comparable to host ranks. Never replace an existing
+    // hit (and its message location/metadata) with an alias-only cache projection.
+    const existingKeys = new Set(present.flatMap((page) => page.results.map(conversationSearchResultKey)));
+    const aliasMatches = deps.getCachedSessions().filter((session) =>
+      !existingKeys.has(conversationSearchSessionCacheKey(session)) &&
+      session.workspaceKind === 'project' && resolveProjectAliasForSessions([session], deps.projectAliases)
+        ?.toLowerCase().includes(query.toLowerCase()));
+    for (const origin of origins) present.push(searchCachedDeviceSessions(
+      origin, requestForOrigin(origin, keywordRequest), aliasMatches, deps.projectAliases,
+    ));
+  }
   if (present.length === 0) return emptyConversationSearchResponse(query);
 
   const merged = mergeConversationSearchFanout(
@@ -177,6 +194,7 @@ export function searchCachedDeviceSessions(
   origin: ConversationSearchDeviceOrigin,
   request: ConversationSearchRequest,
   sessions: readonly RemoteSession[],
+  projectAliases?: ProjectAliasDisplayIndex,
 ): ConversationSearchResponse {
   const query = request.query.trim().toLowerCase();
   if (!query) return emptyConversationSearchResponse('');
@@ -185,7 +203,9 @@ export function searchCachedDeviceSessions(
   sessions.forEach((session, index) => {
     if ((!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) || session.orcaRole === 'worker') return;
     if (!sessionBelongsToDevice(session, origin.deviceId)) return;
-    const match = cachedConversationSearchMatch(session, query, request.unnamedLabel);
+    const alias = session.workspaceKind === 'project'
+      ? resolveProjectAliasForSessions([session], projectAliases, origin.deviceId ?? undefined) : undefined;
+    const match = cachedConversationSearchMatch(session, query, request.unnamedLabel, alias ?? undefined);
     if (!match) return;
     hits.push({
       session: sessionToSearchSummary(session, origin),
@@ -214,8 +234,10 @@ function cachedConversationSearchMatch(
   session: RemoteSession,
   query: string,
   unnamedLabel?: string,
+  projectAlias?: string,
 ): { matchKind: 'title' | 'content' | 'both' } | null {
-  const titleHit = remoteSessionDisplayTitle(session, unnamedLabel).toLowerCase().includes(query);
+  const titleHit = remoteSessionDisplayTitle(session, unnamedLabel).toLowerCase().includes(query)
+    || projectAlias?.toLowerCase().includes(query) === true;
   const contentHit = (sessionRowMessagePreview(session) ?? '').toLowerCase().includes(query);
   if (!titleHit && !contentHit) return null;
   if (titleHit && contentHit) return { matchKind: 'both' };
@@ -247,8 +269,23 @@ function sessionToSearchSummary(
 
 export type ConversationSearchListItem = RemoteSessionListItem & {
   searchFocusClientId?: string;
+  searchCompanion?: ConversationSearchSessionSummary['companion'];
   searchLocallyCached: boolean;
 };
+
+/** Keep the exact transcript selected by search, including an archived personal thread. */
+export function conversationSearchCompanionParams(item: object): Record<string, string> {
+  const companion = (item as Partial<ConversationSearchListItem>).searchCompanion;
+  if (!companion) return {};
+  return {
+    resourceCollectionId: 'teammates',
+    resourceKind: 'bot',
+    resourceId: companion.id,
+    ...(companion.readOnly
+      ? { resourceHistorySessionId: (item as ConversationSearchListItem).session.id }
+      : {}),
+  };
+}
 
 export function conversationSearchSessionCacheKey(
   session: Pick<RemoteSession, 'id'> & {
@@ -321,6 +358,10 @@ export function toSearchListItem(
   const searchFocusClientId = item.contentHit?.messageClientId?.trim();
   return {
     ...listItem,
+    ...(item.session.companion ? {
+      title: `${item.session.companion.name} · ${listItem.title}`,
+      searchCompanion: item.session.companion,
+    } : {}),
     searchLocallyCached: !!cached,
     ...(searchFocusClientId ? { searchFocusClientId } : {}),
   };
@@ -435,10 +476,12 @@ export function scopedConversationSearchOrigins(
 }
 
 export function listConversationSearchProjects(
-  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'workspaceKind'>[],
+  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'workspaceKind' | 'remoteHostId'>[],
   deviceIds?: ReadonlySet<string>,
+  projectAliases?: ProjectAliasDisplayIndex,
 ): ConversationSearchProjectOption[] {
   const byKey = new Map<string, ConversationSearchProjectOption>();
+  const groupedSessions = new Map<string, typeof sessions[number][]>();
   for (const session of sessions) {
     if (session.orcaRole === 'worker') continue;
     if (deviceIds && !sessionBelongsToSelectedDevice(session, deviceIds)) continue;
@@ -449,6 +492,9 @@ export function listConversationSearchProjects(
     if (!workingDir) continue;
     const dirKey = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
     const key = `${deviceId}:${dirKey}`;
+    const group = groupedSessions.get(key) ?? [];
+    group.push(session);
+    groupedSessions.set(key, group);
     const existing = byKey.get(key);
     if (existing) {
       existing.count += 1;
@@ -459,9 +505,14 @@ export function listConversationSearchProjects(
       deviceId,
       deviceName: session.deviceLinkDeviceName ?? null,
       key,
-      title: conversationSearchProjectTitle(workingDir),
+      title: conversationSearchProjectTitle(dirKey),
       workingDir: dirKey,
     });
+  }
+  if (projectAliases) {
+    for (const [key, project] of byKey) {
+      project.title = resolveProjectAliasForSessions(groupedSessions.get(key) ?? [], projectAliases) ?? project.title;
+    }
   }
   return [...byKey.values()].sort((a, b) => (
     a.title.localeCompare(b.title) || a.deviceId.localeCompare(b.deviceId) || a.key.localeCompare(b.key)

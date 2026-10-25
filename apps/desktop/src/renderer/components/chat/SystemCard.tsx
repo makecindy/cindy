@@ -45,6 +45,8 @@ import {
   BotSessionTaskMessageTrace,
 } from '@/features/bots/BotCollaborationCard';
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
+import { VoiceCallCard, VoiceCallTaskEntry } from '@/features/bots/voice/VoiceCallTranscript';
+import { readVoiceCallRecord } from '@/../shared/voiceConversation';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -57,6 +59,8 @@ import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
   cardType:
+    | 'voice-call'
+    | 'voice-call-task'
     | 'mcp-app'
     | 'input-handoff'
     | 'cindy-make-doctor'
@@ -1064,7 +1068,7 @@ function AutoResumeActionRow({
         >
           {info.error && (
             <>
-              <div className="text-12 opacity-70">
+              <div className="text-12 text-[var(--text-secondary)]">
                 {t('chat.systemCard.autoResume.detail.reason')}
               </div>
               <pre className="m-0 mt-[2px] whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">
@@ -1123,8 +1127,19 @@ function isEnglishSourceHandoff(handoff: string): boolean {
 /**
  * 远程 Agent 换电脑的分隔条文案:只有边界行带 toAgentDeviceId 时才是换电脑。null = 任务所在电脑 ——
  * 在本机打开的任务就是「本机」;远程控制另一台电脑上的任务时那台不是本机,用切换时快照的名字。
+ * 用户确认为了先用那台的配额换过去的(switchReason: 'quota-rebalance')在后面写明原因。
  */
 function agentRelocationLabel(
+  data: Record<string, unknown> | undefined,
+  sessionId: string | undefined,
+  t: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  const place = agentRelocationPlace(data, sessionId, t);
+  if (place === null || data?.switchReason !== 'quota-rebalance') return place;
+  return `${place} · ${t('chat.systemCard.agentSwitch.quotaRebalance')}`;
+}
+
+function agentRelocationPlace(
   data: Record<string, unknown> | undefined,
   sessionId: string | undefined,
   t: ReturnType<typeof useTranslation>['t'],
@@ -1150,7 +1165,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
-  const label =
+  const modelOnly = data?.modelOnly === true;
+  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
     agentRelocationLabel(data, sessionId, t) ??
     t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
 
@@ -1172,8 +1188,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
           title={handoff ? t('chat.systemCard.agentSwitch.toggleHint') : undefined}
         >
           <ArrowLeftRight size={12} className="shrink-0" />
-          <span>{label}</span>
-          {toModel && (
+          <span className="min-w-0 truncate" title={label}>{label}</span>
+          {toModel && !modelOnly && (
             <>
               <span className="opacity-50">·</span>
               <span title={toModel} className="min-w-0 truncate font-mono">
@@ -1459,6 +1475,12 @@ export function SystemCard({
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'voice-call': {
+      const record = readVoiceCallRecord(data?.record);
+      return record ? <VoiceCallCard record={record} /> : null;
+    }
+    case 'voice-call-task':
+      return typeof data?.text === 'string' ? <VoiceCallTaskEntry text={data.text} /> : null;
     case 'bot-session-task-message':
       return <BotSessionTaskMessageTrace data={data} />;
     case 'bot-session-task-result':

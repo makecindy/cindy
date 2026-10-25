@@ -359,11 +359,15 @@ export function ErrorBanner({
         ? t(errorReasonI18nKey)
         : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
+  const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteErrorKey = remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
-    agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true;
+    agentKind === 'codex' && usageLimitRecovery?.isAccountUsageLimit === true
+    // Group selection may fail before the new route is saved. A reset card for the
+    // previous local account cannot restore the account chosen by that group.
+    && remoteErrorCode !== 'REMOTE_AGENT_GROUP_USAGE_LIMIT';
   const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(
     isCodexUsageLimitError && isCodexOpenAiSource && !isAnyRemoteSession && !agentDeviceId,
     normalizedProviderId ?? 'openai',
@@ -672,11 +676,13 @@ export function ErrorBanner({
       ref={bannerRef}
       className={cn('mx-auto', className)}
       style={style}
-      message={displayError}
+      message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : displayError}
       description={
-        (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
-          ? t('chat.errorBanner.readableHistoryRecoveryDescription')
-          : undefined
+        isAttachmentAccessDenied
+          ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
+          : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
+            ? t('chat.errorBanner.readableHistoryRecoveryDescription')
+            : undefined
       }
       details={canShowErrorDetails ? error : undefined}
       onDiagnose={

@@ -621,12 +621,12 @@ const actions = {
     const incomingIds = new Set(stamped.map((session) => session.id));
     const preserved =
       existing?.sessions
-        // The ordinary sessions:list excludes companions. Absence from that
-        // snapshot cannot retire a companion loaded through its resource link.
+        // The ordinary sessions:list excludes companions and side chats. Absence
+        // cannot retire a task loaded through its own resource link.
         // Its own authoritative patch/get still controls status and deletion.
         .filter(
           (session) =>
-            (session.status !== status || session.source === 'bot') && !incomingIds.has(session.id),
+            (session.status !== status || session.source === 'bot' || session.source === 'side-chat') && !incomingIds.has(session.id),
         )
         .map((session) =>
           session.deviceLinkDeviceName === deviceName &&

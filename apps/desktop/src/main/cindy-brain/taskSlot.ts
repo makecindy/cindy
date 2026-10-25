@@ -2,6 +2,7 @@ import { ghostDeclaresHiddenTasks, type InstalledGhost } from '../../shared/ghos
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
 import { isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
 import { hasPluginTaskApproval } from './taskCapability.js';
+import { PLUGIN_ATTACHMENT_MAX_BYTES, validPluginMessageAttachments } from '../../shared/pluginAttachments.js';
 
 export const PLUGIN_TASK_OPERATIONS = [
   'capabilities',
@@ -41,7 +42,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     getTeam: ['taskId'],
     setTeamPlan: ['taskId', 'plan'],
     releaseWorker: ['taskId', 'workerId', 'completedAt'],
-    send: ['taskId', 'requestKey', 'expectedRevision', 'text'],
+    send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'attachments'],
     getRun: ['runId'],
     listRuns: ['taskId', 'after', 'limit'],
     readMessages: ['taskId', 'after', 'limit'],
@@ -68,7 +69,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (value.kind === 'create' && !text(value.title, 100)) return false;
   if (
     value.kind === 'send' &&
-    (!text(value.text, 32768) ||
+    (!text(value.text, 32768) || !validPluginMessageAttachments(value.attachments) ||
       !Number.isSafeInteger(value.expectedRevision) ||
       (value.expectedRevision as number) < 0)
   )
@@ -110,7 +111,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
       !text(r.providerId, 128) ||
       !text(r.model, 256) ||
       (typeof r.effort !== 'string' || r.effort.length > 32) ||
-      typeof r.fastMode !== 'boolean'
+      (typeof r.fastMode !== 'boolean' && r.fastMode !== 'ultrafast')
     )
       return false;
   }
@@ -157,6 +158,7 @@ export async function handlePluginTaskRequest(
         exactRoute: true,
         pluginDefaultModel: true,
         sourceCallContext: true,
+        messageAttachments: { kinds: ['image'], maxCount: 4, maxBytes: PLUGIN_ATTACHMENT_MAX_BYTES },
         hiddenTasks: declaresHiddenTasks(),
       },
     };

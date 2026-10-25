@@ -17,8 +17,10 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s }
 vi.mock('@/hooks/useAgentIslandSettings', () => ({
   isAgentIslandSupported: () => mocks.supported,
 }));
+// The private-chat topic host belongs to the chat surface these tests isolate.
+vi.mock('../BotDmThreadHost', () => ({ BotDmThreadHost: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
-  CCAgentSessionView: () => <div data-testid="chat" />,
+  CCAgentSessionView: ({ readOnly }: { readOnly?: boolean }) => <div data-testid="chat" data-readonly={String(!!readOnly)} />,
 }));
 vi.mock('../botReadState', () => ({ getBotLastReadAt: () => null, markBotRead: vi.fn() }));
 
@@ -26,6 +28,7 @@ import { BotSessionView } from '../BotSessionView';
 import { BotHistorySessionView } from '../BotHistorySessionView';
 
 const report = vi.fn();
+const focus = vi.fn();
 const consumeEntryAlert = vi.fn(async () => ({ ok: true as const, consumed: true }));
 const get = vi.fn();
 const history = vi.fn();
@@ -44,6 +47,7 @@ beforeEach(() => {
   history.mockResolvedValue([{ id: 'chat-a' }]);
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
     agentIsland: { setVisibleSession: report, consumeEntryAlert },
+    ghosts: { noteSessionFocused: focus },
     localDb: { bots: { get, history, list: vi.fn(async () => []) } },
   } });
 });
@@ -160,6 +164,33 @@ describe('history ownership gate disposes the clicked island card', () => {
     mocks.location = { state: { islandEntryId: '42' } };
   });
 
+  // 测试价值: 渠道专线不在 history() 中, 旧门禁无法显示; 最小输入是 get() 的 channel 投影。
+  // unit: 复用真实历史页验证只读挂载和归属失败时不处置提醒, 补齐既有历史用例的角色缺口。
+  it.each(['active', 'archived'])('shows an owned %s IM lane in the same read-only view', async (status) => {
+    history.mockResolvedValue([]);
+    get.mockResolvedValue({ ...profile, sessions: [{ id: 'old-a', kind: 'channel', role: 'channel', status }] });
+    const view = render(<BotHistorySessionView />);
+    // Flush the ownership promises and passive disposal effect, not just the DOM
+    // mutation (which can be observed before that effect commits on a busy runner).
+    await act(async () => {});
+    expect(view.getByTestId('chat').dataset.readonly).toBe('true');
+    expect(consumeEntryAlert).toHaveBeenCalledExactlyOnceWith('old-a', '42');
+  });
+
+  it.each([
+    { id: 'other', role: 'channel', status: 'active' },
+    { id: 'old-a', role: 'channel', status: 'deleted' },
+    { id: 'old-a', role: 'group', status: 'active' },
+    { id: 'old-a', role: 'delegation', status: 'active' },
+  ])('does not grant IM transcript access from an unrelated/deleted projection: %j', async (projection) => {
+    history.mockResolvedValue([]);
+    get.mockResolvedValue({ ...profile, sessions: [projection] });
+    const view = render(<BotHistorySessionView />);
+    await act(async () => {});
+    expect(view.queryByTestId('chat')).toBeNull();
+    expect(consumeEntryAlert).not.toHaveBeenCalled();
+  });
+
   it('disposes only once its gate has shown the transcript', async () => {
     let resolveGate!: (rows: unknown[]) => void;
     history.mockReturnValueOnce(new Promise((resolve) => { resolveGate = resolve; }));
@@ -195,5 +226,22 @@ describe('history ownership gate disposes the clicked island card', () => {
     const view = render(<BotHistorySessionView />);
     await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
     expect(consumeEntryAlert).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([BotSessionView, BotHistorySessionView])('validated task in front for plugins', (View) => {
+  // A companion chat is where someone uses the simulator; plugins were told "no task"
+  // there, so "open in the current task" failed. Report it once ownership is proven.
+  it('reports the validated chat, never an unowned route, and clears it on leave', async () => {
+    mocks.supported = false;
+    const view = render(<View />);
+    await waitFor(() => expect(focus).toHaveBeenLastCalledWith('chat-a'));
+    mocks.params = { botId: 'bot-b', sessionId: 'not-owned' };
+    view.rerender(<View />);
+    await act(async () => {});
+    expect(focus).not.toHaveBeenCalledWith('not-owned');
+    expect(focus).toHaveBeenLastCalledWith(null);
+    view.unmount();
+    expect(focus).toHaveBeenLastCalledWith(null);
   });
 });

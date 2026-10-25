@@ -227,6 +227,23 @@ describe('mapServerMessages auto-resume 分隔线', () => {
     expect(row?.content).toBe('');
   });
 
+  // Unit / PR #6611: the first queued input resumes without a hidden clone.
+  // Previously only autoResume=true rows carried an activity, losing this record on reload.
+  it('keeps a quota-resumed first input visible with its activity metadata', async () => {
+    const info = { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 0 };
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({ clientId: 'original', role: 'user', content: 'original task',
+        agentMeta: { autoResumeInfo: info } as Message['agentMeta'] }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+    const row = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'original');
+    expect(row).toMatchObject({ content: 'original task', usageLimitAutoResumeInfo: info });
+    expect(row?.isSyntheticTrigger).not.toBe(true);
+    expect(row?.systemCardType).toBeUndefined();
+  });
+
   it('人工发的合成指令(无 autoResume)不渲染分隔线,只静默占位', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([
       serverMessage({

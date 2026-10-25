@@ -1,16 +1,35 @@
 {
   "id": "zhihu-search",
-  "match": ["zhihu.com"],
-  "description": "在知乎按关键词搜索,返回问题/回答/文章(标题/类型/作者/赞同数/链接)。先落到 zhihu.com 域,再在页面内同源 fetch JSON——带上登录 cookie、不被风控挡(直接 navigate 到 api 会被喂 SPA HTML)。",
-  "inputs": { "query": { "required": true }, "limit": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.zhihu.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "items",
-      "fn": "async () => { const strip = (h) => (h || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim(); const limit = Number('{{limit|js}}') || 10; const r = await fetch('https://www.zhihu.com/api/v4/search_v3?t=general&offset=0&limit=' + limit + '&q=' + encodeURIComponent('{{query|js}}'), { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('知乎返回非 JSON(未登录或被风控),请在持久浏览器登录 zhihu.com 后重试'); } return (d && d.data ? d.data : []).filter(it => it.type === 'search_result').map((it, i) => { const o = it.object || {}; const q = o.question || {}; const url = o.type === 'answer' ? 'https://www.zhihu.com/question/' + q.id + '/answer/' + o.id : o.type === 'article' ? 'https://zhuanlan.zhihu.com/p/' + o.id : 'https://www.zhihu.com/question/' + o.id; return { rank: i + 1, title: strip(o.title || q.name || ''), type: o.type, author: (o.author && o.author.name) || '', votes: o.voteup_count || 0, url }; }); }"
-    }
+  "match": [
+    "zhihu.com"
   ],
-  "output": "{{items}}"
+  "description": "知乎搜索",
+  "access": "read",
+  "adapter": "zhihu/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search query"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 10,
+      "description": "Number of results (max 1000; use normal-sized requests)"
+    },
+    "type": {
+      "required": false,
+      "type": "str",
+      "default": "all",
+      "description": "Result type: all, answer, article, or question",
+      "choices": [
+        "all",
+        "answer",
+        "article",
+        "question"
+      ]
+    }
+  },
+  "steps": []
 }

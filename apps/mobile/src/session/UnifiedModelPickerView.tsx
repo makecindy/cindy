@@ -1,4 +1,6 @@
-import { ErrorNotice } from '@/components/ErrorNotice';
+import { ModelSpeedIcon } from "./ModelSpeedIcon";
+import { ModelQuotaBar } from "./ModelQuotaBar";
+import { ErrorNotice } from "@/components/ErrorNotice";
 /**
  * 统一模型选择器的 Android / 兼容呈现(iOS 见 UnifiedModelPickerView.ios.tsx)。
  *
@@ -176,30 +178,6 @@ function Row({
   );
 }
 
-function QuotaBar({
-  remaining,
-  label,
-  testID,
-}: {
-  remaining: number;
-  label: string;
-  testID?: string;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const now = Math.max(0, Math.min(100, remaining));
-  return (
-    <View
-      accessibilityLabel={label}
-      accessibilityRole="progressbar"
-      accessibilityValue={{ min: 0, max: 100, now }}
-      style={styles.quotaTrack}
-      testID={testID}
-    >
-      <View style={[styles.quotaFill, { width: `${now}%` }]} />
-    </View>
-  );
-}
-
 export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -276,7 +254,10 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     ) : filter.id === "favorites" ? (
       icon(Star, selected || p.filter === "favorites")
     ) : filter.providerMark ? (
-      <MobileProviderMark {...filter.providerMark} remote={filter.remote != null} />
+      <MobileProviderMark
+        {...filter.providerMark}
+        remote={filter.remote != null}
+      />
     ) : (
       icon(LayoutGrid)
     );
@@ -357,7 +338,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             item.id === "favorites" && p.filter === "favorites",
           )}
           {item.quota ? (
-            <QuotaBar
+            <ModelQuotaBar
               label={item.quota.label}
               remaining={item.quota.remaining}
               testID={`${p.testID}.source.${item.id}.quota`}
@@ -534,7 +515,32 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             value={mobileAgentLabel(config.agent)}
           />
           {effortRow}
-          {options.fastCapable ? (
+          {options.fastCapable &&
+          options.row.entry.capabilities[config.agent]
+            ?.supportsUltrafastMode ? (
+            <>
+              {(["standard", "fast", "ultrafast"] as const).map((speed) => {
+                const value =
+                  speed === "ultrafast" ? "ultrafast" : speed === "fast";
+                return (
+                  <Row
+                    key={speed}
+                    disabled={p.busy}
+                    title={t(`models.options.speed.${speed}`)}
+                    onPress={() => options.onChange({ ...config, fast: value })}
+                    trailing={
+                      config.fast === value ? (
+                        <Check
+                          size={iconSize.action}
+                          color={colors.textPrimary}
+                        />
+                      ) : null
+                    }
+                  />
+                );
+              })}
+            </>
+          ) : options.fastCapable ? (
             <View style={styles.row}>
               <View style={styles.leading}>{icon(Zap, true)}</View>
               <Text numberOfLines={1} style={[styles.rowTitle, styles.rowMain]}>
@@ -546,7 +552,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 onValueChange={(fast) => options.onChange({ ...config, fast })}
                 seedColor={colors.cta}
                 testID={`${p.testID}.fast`}
-                value={config.fast}
+                value={!!config.fast}
               />
             </View>
           ) : null}
@@ -691,11 +697,10 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 </Text>
               ) : null}
               {row.config.fast ? (
-                <Zap
+                <ModelSpeedIcon
+                  mode={row.config.fast}
                   color={colors.textSecondary}
-                  fill={colors.textSecondary}
                   size={iconSize.sm}
-                  strokeWidth={iconStroke.regular}
                 />
               ) : null}
             </View>
@@ -811,9 +816,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                     windowSize={3}
                     removeClippedSubviews={false}
                     ListHeaderComponent={
-                      p.error ? (
-                        <ErrorNotice message={p.error} />
-                      ) : null
+                      p.error ? <ErrorNotice message={p.error} /> : null
                     }
                     ListEmptyComponent={
                       <Text style={styles.empty} testID={`${p.testID}.empty`}>
@@ -846,9 +849,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               : undefined
           }
         >
-          {!showSecondary && p.error ? (
-            <ErrorNotice message={p.error} />
-          ) : null}
+          {!showSecondary && p.error ? <ErrorNotice message={p.error} /> : null}
           {listPage}
         </SheetSurface>
       </View>
@@ -1006,17 +1007,6 @@ function makeStyles(colors: ThemeColors) {
     sourceLeading: {
       alignItems: "center",
       gap: spacing.xs,
-    },
-    quotaTrack: {
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      height: 3,
-      overflow: "hidden",
-      width: 24,
-    },
-    quotaFill: {
-      backgroundColor: colors.textSecondary,
-      height: "100%",
     },
     modelRow: {
       alignItems: "center",

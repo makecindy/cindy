@@ -187,7 +187,7 @@ function normalizeRemoteAgentByDevice(value: unknown): NewSessionStoredPreferenc
         model,
         providerId: readString(pick.providerId),
         effort: typeof pick.effort === 'string' ? pick.effort : '',
-        fastMode: pick.fastMode === true,
+        fastMode: (pick.fastMode === 'ultrafast' ? 'ultrafast' : pick.fastMode === true),
       };
     }
     if (Object.keys(picks).length > 0) out[controlledDeviceId.trim()] = picks;

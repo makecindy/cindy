@@ -135,14 +135,22 @@ export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThr
     // composer blocks edge-back. Manual observes touches without a competing pan.
     const tracker = Gesture.Manual()
       .enabled(attach)
-      .onTouchesDown((touches) => {
+      .onTouchesDown((touches, manager) => {
         'worklet';
         phase.value = PHASE_IDLE;
-        if (touches.numberOfTouches !== 1 || !armed.value) return;
+        // A passive Manual recognizer must still leave BEGAN. Keeping it pending
+        // makes AVPlayer's native play/seek controls wait indefinitely on iOS.
+        if (touches.numberOfTouches !== 1 || !armed.value) {
+          manager.fail();
+          return;
+        }
         const frame = measure(grabberRef);
         const y = touches.allTouches[0]?.absoluteY;
         // 只从输入框上方的聊天记录起手；按在输入框上的触摸本就归输入框。
-        if (!frame || y === undefined || y >= frame.pageY) return;
+        if (!frame || y === undefined || y >= frame.pageY) {
+          manager.fail();
+          return;
+        }
         composerTop.value = frame.pageY;
         previousY.value = y;
         phase.value = PHASE_TRACKING;
@@ -167,9 +175,10 @@ export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThr
         const current = event.value;
         event.value = { id: current.id, active: true, startY: current.startY, y, successful: false };
       })
-      .onTouchesUp((touches) => {
+      .onTouchesUp((touches, manager) => {
         'worklet';
         end(touches.changedTouches[0]?.absoluteY ?? NaN, true);
+        manager.fail();
       })
       .onTouchesCancelled(() => {
         'worklet';

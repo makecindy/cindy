@@ -101,6 +101,19 @@ Pi 明确声明的 `reasoningDefaultEffort` 属于 Harness 默认例外，高于
 
 ### 多连接的身份与隔离
 
+Codex 超快是账号发现能力：`service_tiers` / `additional_speed_tiers`（live 清单为
+`serviceTiers` / `additionalSpeedTiers`）明确声明后，按连接保存 `supportsUltrafastMode`，
+不进入可继承的 `ModelMetadata`，不按套餐名、型号或公共目录授予。
+保存、重读和目录投影须保留该值；成功刷新该型号不再声明超快时清除旧资格。
+同一连接重新登录为不同身份或工作区时，接受登录前必须成功清除旧资格；
+CAS 冲突、所属用户切换或写入失败时回滚登录，不把撤权放进可忽略失败的展示刷新。
+原生模型缓存先于凭证提交清除，删除失败保留原身份；取消登录回滚凭证与缓存。
+凭证回滚后，仍属于当前用户的连接重新发布账号切换与就绪通知，废弃替换身份的在途额度读取。
+普通设置保存保留数据库中最新的超快资格，旧窗口快照不能授予或撤回资格；并发撤权时重新合并。
+原生登录进入资格提交阶段前仍可取消；进入后关闭取消入口，资格提交失败仍回滚凭证。
+仅原生 Codex 账号的 Codex 入口可用，API 同名模型及其它引擎不继承。
+回归见 `custom-provider-store.test.ts` 与 `modelDiscoveryChannels.test.ts`。
+
 同一种供应商可以有多个账号或 API 连接。沿用 `providerId` 标识连接实例，
 `model` 标识该连接下的上游模型，`agentKind` 标识执行 Harness；调用目标由三者
 共同确定。供应商与模型的显示名可以重复，也可以改名，不用于路由、凭证查找或持久化关联。
@@ -221,6 +234,12 @@ Server `catalog/providers.json` 是数据正本；客户端 `catalog/model-regis
 
 复用当前目录接口与 Registry V4 协商，不增加请求或数据库表。旧 V1/V2/V3 客户端收到展开后的旧字段；不同资料的多条路由在兼容响应中拆成独立条目，保留上游 ID，额外条目使用派生目录 ID。旧协议不支持的公共引用、覆盖指令与图片字段被移除，空默认以缺省表达。
 
-供应商总容量与客户端工作预算分开：所有来源 OpenAI 聊天模型的至多 272K 工作默认继续保留（含第三方、自定义与组织连接，用户显式设置优先）；这里的 `contextWindowMax` 指客户端 CatalogModel 投影，不是 Server 字段。Registry 资料中的 contextWindow 与合法 perAgent 工作默认分别维护；用户显式窗口覆盖仍优先。协议和实际执行能力门禁继续由运行时负责，元数据不能解锁未实现协议或伪造可售性。
+供应商总容量与客户端工作预算分开：OpenAI 订阅采用 Server Registry 的 `perAgent` 工作默认，
+Pi 跟随 Codex 的订阅预算；GPT-6.1 Sol 为 500K，Astra 仍为 272K。未声明订阅预算及其它来源
+（含第三方、自定义与组织连接）继续采用至多 272K 的工作默认，不扩大较小的已解析窗口。
+不能从 route 或公共型号的总容量推导工作预算。用户显式窗口覆盖仍最高，恢复默认重新读取当前
+订阅预算或 272K 回退。这里的 `contextWindowMax` 指客户端 CatalogModel 投影，不是 Server 字段，
+不随工作默认缩小；Registry 资料中的 contextWindow 与合法 perAgent 工作默认分别维护。
+协议和实际执行能力门禁继续由运行时负责，元数据不能解锁未实现协议或伪造可售性。
 
 验收至少覆盖缺字段继承、供应商优先、force 修正、用户最高、显式 false/null/空数组、未知供应商公共识别、刷新与保存、旧版解析、离线与坏快照回退。模型推荐标准另见 [本地模型筛选](local-model-selection.md)，仍只按能力、速度和实际运行内存筛选。

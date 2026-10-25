@@ -190,6 +190,28 @@ describe('provider share invoke', () => {
     }, 'anthropic') as { providers: unknown[] }).providers).toEqual([]);
   });
 
+  it('returns only each member’s allowed models through the real picker read', async () => {
+    const second = providerShareGuestPeer('share-1', 'member-2', 'laptop');
+    setProviderShareAccess({
+      guestAccess: (src) => ({ ...ACCESS, memberId: src === GUEST ? 'member-1' : 'member-2' }),
+      ensureKnown: async () => undefined, hasShares: () => true,
+      modelAllowed: (src, _provider, model) => model === (src === GUEST ? 'small' : 'large'),
+    });
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    registry.register('maker:provider:list', async () => ({ providers: [{
+      id: 'anthropic', remoteInvocationEnabled: true,
+      models: { 'claude-code': [{ id: 'small' }, { id: 'large' }] },
+    }] }));
+    try {
+      for (const [src, model] of [[GUEST, 'small'], [second, 'large']]) {
+        await expect(runInvoke(src, { channel: 'maker:provider:list', args: [] })).resolves.toMatchObject({
+          ok: true, result: { providers: [{ models: { 'claude-code': [{ id: model }] } }] },
+        });
+      }
+    } finally { registry.reset(); }
+  });
+
   it('never hands the sharer account identity to the guest', () => {
     const projected = __testing.projectProviderListForShare({
       providers: [{

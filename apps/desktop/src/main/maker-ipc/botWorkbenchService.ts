@@ -1,15 +1,12 @@
 /**
- * 伙伴工作台在伙伴 Home 里的旧文件 `<ownerRoot>/bots/<botId>/workbench.json`。
- *
- * 2026-10-17 起放弃「项目」思路:工作台不再记项目目录,也不再写候选任务的判断;伙伴负责的任务
- * 来自 `task-responsibility.v1.json` 与它发起的后台任务(`botWorkbenchTools.ts`),「一眼」投影由
- * 宿主观察层给出。旧文件原样保留、不迁移、不改写,只剩两种只读 / 透传用途:
- * - 旧 PR / issue / 建议判断仍是伙伴 Todo 的兼容来源(`readLegacyWorkbenchJudgments`);
- * - 云端伙伴搬家时整份旧数据随身走(`readCompanionWorkbench` / `mergeCompanionWorkbench`),
- *   另一台还在旧版本上的电脑不会因为本机升级而丢掉它的目录与判断。
+ * The original workbench file keeps linked project references and legacy Todo judgments.
+ * Projects are context only; task responsibility lives in task-responsibility.v1.json.
+ * Cloud handoff retains directory device identity and never opens another computer's paths.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import type { BotLinkedProject } from '../../shared/botWorkbench.js';
+import { isWindowsPathLike, normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
 import { BrowserWindow } from 'electron';
 
@@ -26,12 +23,7 @@ import { createLogger } from '../logger.js';
 const log = createLogger('bot-workbench');
 const WORKBENCH_FILE = 'workbench.json';
 
-interface StoredDirectory {
-  path: string;
-  addedAt: string;
-  /** The computer the folder is on when it is not this one (cloud-companions.md §2). */
-  deviceId?: string;
-}
+type StoredDirectory = BotLinkedProject;
 
 interface StoredWorkbench {
   directories: StoredDirectory[];
@@ -95,16 +87,22 @@ async function readStored(userDataDir: string, botId: string): Promise<StoredWor
   }
 }
 
-async function writeStored(userDataDir: string, botId: string, stored: StoredWorkbench): Promise<void> {
+async function writeStored(userDataDir: string, botId: string, stored: StoredWorkbench, guard?: () => void): Promise<void> {
   const target = workbenchPath(userDataDir, botId);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(
-    temp,
-    `${JSON.stringify({ directories: stored.directories, tasks: stored.tasks }, null, 2)}\n`,
-    'utf8',
-  );
-  await fs.rename(temp, target);
+  try {
+    guard?.();
+    await fs.writeFile(
+      temp,
+      `${JSON.stringify({ directories: stored.directories, tasks: stored.tasks }, null, 2)}\n`,
+      'utf8',
+    );
+    guard?.();
+    await fs.rename(temp, target);
+  } finally {
+    await fs.rm(temp, { force: true });
+  }
 }
 
 /** 同一伙伴的读改写串行,并发的搬家合并互不覆盖。 */
@@ -113,13 +111,17 @@ function mutate<T>(
   userDataDir: string,
   botId: string,
   change: (stored: StoredWorkbench) => { next: StoredWorkbench; result: T },
+  guard?: () => void,
 ): Promise<T> {
   const key = `${userDataDir}\0${botId}`;
   const run = (writeChains.get(key) ?? Promise.resolve())
     .catch(() => undefined)
     .then(async () => {
-      const { next, result } = change(await readStored(userDataDir, botId));
-      await writeStored(userDataDir, botId, next);
+      guard?.();
+      const stored = await readStoredStrict(userDataDir, botId);
+      guard?.();
+      const { next, result } = change(stored);
+      await writeStored(userDataDir, botId, next, guard);
       return result;
     });
   writeChains.set(key, run);
@@ -131,8 +133,38 @@ function mutate<T>(
   return run;
 }
 
-// 工作台的持久形状只剩逐任务责任(由 `readBotResponsibleSessionIds` 现算,不在本文件里)。
-// 旧 workbench.json 的 `directories` / `tasks` 字段只经 `readLegacyWorkbenchJudgments` 读,其余一律忽略。
+/** Existing associations remain in the original file and travel with the companion. */
+export async function readBotLinkedProjects(userDataDir: string, botId: string): Promise<BotLinkedProject[]> {
+  return (await readStoredStrict(userDataDir, botId)).directories;
+}
+
+/** Links refer to individual directories, not the repository's sidebar grouping. */
+export function linkedProjectDirectoryKey(directory: string): string {
+  const normalized = normalizeWorkingDirForStorage(directory) ?? directory;
+  return process.platform === 'win32' && isWindowsPathLike(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+export async function setBotLinkedProject(
+  userDataDir: string, botId: string, project: Pick<BotLinkedProject, 'path' | 'deviceId'>,
+  linked: boolean, guard: () => void,
+): Promise<void> {
+  if (!normalizeDirectories([project]).length) throw new Error('INVALID_PROJECT');
+  await mutate(userDataDir, botId, stored => {
+    const same = (entry: BotLinkedProject) => entry.deviceId === project.deviceId && (project.deviceId
+      ? entry.path === project.path
+      : linkedProjectDirectoryKey(entry.path) === linkedProjectDirectoryKey(project.path));
+    const exists = stored.directories.some(same);
+    if (linked && !exists && stored.directories.length >= LEGACY_MAX_DIRECTORIES) throw new Error('PROJECT_LIMIT');
+    const directories = linked
+      ? exists ? stored.directories : [...stored.directories, { ...project, addedAt: new Date().toISOString() }]
+      : stored.directories.filter(entry => !same(entry));
+    return { next: { ...stored, directories }, result: undefined };
+  }, guard);
+  guard();
+  broadcastBotWorkbenchChanged(botId);
+}
+
+// Project links and legacy judgments do not grant responsibility for any task.
 
 /** 旧判断:伙伴 Todo 的兼容导入来源。只读,不做文件系统探测。 */
 export async function readLegacyWorkbenchJudgments(
@@ -147,7 +179,7 @@ const PORTABLE_JUDGMENT = /^(pr|issue|idea):/;
 
 /**
  * The legacy workbench as it travels with the companion (cloud-companions.md §2): every folder
- * with the computer it is on, and the portable judgments. Carried unchanged for older computers.
+ * with the computer it is on, and the portable judgments. The same references are used by linked-project settings.
  */
 export async function readCompanionWorkbench(userDataDir: string, botId: string, selfDeviceId: string): Promise<{
   directories: Array<{ path: string; addedAt: string; deviceId: string }>;
@@ -164,7 +196,7 @@ export async function readCompanionWorkbench(userDataDir: string, botId: string,
 /**
  * The companion moved here: the legacy folders and portable judgments from the cloud join what is
  * here; the cloud wins. With `replace` (this computer synced them before) they take the place of
- * what is here; judgments that never travel stay. Nothing here reads the folders any more.
+ * what is here; judgments that never travel stay. Project content is read on demand, never during handoff.
  */
 export async function mergeCompanionWorkbench(userDataDir: string, botId: string, selfDeviceId: string, cloud: unknown,
   options: { replace?: boolean } = {}): Promise<void> {

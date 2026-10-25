@@ -106,6 +106,7 @@ describe('automation-generated sessions', () => {
     // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
     // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
+      'side-chat',
       'desktop',
       'feishu',
       'slack',

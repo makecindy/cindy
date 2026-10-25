@@ -1,5 +1,6 @@
 import { ProviderShareVisibilitySection } from './ProviderShareVisibilitySection';
-import { RemoteAgentIdleReleaseSection } from './RemoteAgentIdleReleaseSection';
+import { SubscriptionFastSetting } from './SubscriptionFastSetting';
+import { RemoteModelAccessSection, RemoteModelAccessDialog } from './RemoteModelAccessSection';
 import { RemoteAgentLimitsSection } from './RemoteAgentLimitsSection';
 /**
  * 「{供应商} · 远程与分享」页(供应商分享 §7.2；供应商组 §10)。从设置 → 模型供应商「允许被远程调用」一行的
@@ -85,6 +86,8 @@ export function ProviderShareManagePage({
   const [remoteGroup, setRemoteGroup] = useState<ProviderGroupConfig | null>(initialGroup ?? null);
   const [state, setState] = useState<ProviderShareOwnerState | null>(null);
   const [noteMemberId, setNoteMemberId] = useState<string | null>(null);
+  const [modelMemberId, setModelMemberId] = useState<string | null>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
   const noteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadErrorKey, setLoadErrorKey] = useState<string | null>(null);
@@ -331,9 +334,11 @@ export function ProviderShareManagePage({
     onTogglePause: (member) => void setMember(member, member.status === 'paused' ? 'resume' : 'pause'),
     onRemove: (member) => void removeMember(member),
     onEditNote: (member, trigger) => { noteTriggerRef.current = trigger; setNoteMemberId(member.memberId); },
+    onModelAccess: (member, trigger) => { modelTriggerRef.current = trigger; setModelMemberId(member.memberId); },
     onReshare: (member, reshare, decision) => void decideReshare(reshare, providerShareMemberName(member), decision),
   }), [busy, decideReshare, loadFailed, providerClassificationReady, removeMember, setMember]);
   const noteMember = members.find((member) => member.memberId === noteMemberId);
+  const modelMember = members.find((member) => member.memberId === modelMemberId);
 
   return (
     // 这一页自己滚动(设置页外层在「模型供应商」分区不滚)。始终预留滚动条槽位：展开组内电脑的配额、
@@ -502,8 +507,12 @@ export function ProviderShareManagePage({
         </section>
       )}
 
+      {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}
+      <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
+
       <ProviderGroupSection
         providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}
+        fastPolicySupported={Boolean(providerForApproval?.subscriptionFastPolicy)}
         initialConfig={initialGroup} remoteProvider={remoteProvider} onConfigChange={setRemoteGroup}
       />
 
@@ -523,9 +532,6 @@ export function ProviderShareManagePage({
         groupConfig={deviceId ? remoteGroup : undefined}
         time={time}
       />
-
-      {/* 这台电脑作为使用方的设置(与上面提供方的额度分开)：只对这台生效，管理另一台电脑时不显示，免得以为改的是那台。 */}
-      {!deviceId && <RemoteAgentIdleReleaseSection />}
 
       {linkOpen && (
         <ProviderShareLinkDialog
@@ -551,6 +557,10 @@ export function ProviderShareManagePage({
           }}
         />
       )}
+      {modelMember && <RemoteModelAccessDialog key={`${deviceId ?? 'local'}:${modelMember.memberId}`}
+        providerId={providerId} deviceId={deviceId} memberId={modelMember.memberId}
+        memberName={providerShareMemberName(modelMember)} returnFocusTo={modelTriggerRef.current}
+        onClose={() => setModelMemberId(null)} />}
     </div>
   );
 }
