@@ -6,9 +6,20 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 let identity: string | undefined;
 let pending: Promise<string | null> | undefined;
+let readerOverride: (() => Promise<string | null>) | undefined;
+
+/** Desktop injects its host-side probe so existing test and platform seams remain intact. */
+export function setSchemaMigrationBootIdentityReader(
+  reader: (() => Promise<string | null>) | undefined,
+): void {
+  readerOverride = reader;
+  identity = undefined;
+  pending = undefined;
+}
 
 /** A kernel boot generation, never Date.now() - uptime (wall clocks can jump). */
 export async function readSchemaMigrationBootIdentity(): Promise<string | null> {
+  if (readerOverride) return readerOverride();
   if (identity) return identity;
   if (pending) return pending;
   pending = probe()
