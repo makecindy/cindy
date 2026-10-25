@@ -6628,6 +6628,8 @@ export function AttachmentStrip({
   layout,
   onOpen,
   onOpenFile,
+  onImageError,
+  imageReloadKeys,
   onResolveRemoteMedia,
   usePreviewState = useRecyclingState,
 }: {
@@ -6640,6 +6642,10 @@ export function AttachmentStrip({
   onOpen?: (payload: MessagePayload) => void;
   /** Index within this strip's file chips, for callers that resolve files by ID on tap. */
   onOpenFile?: (index: number) => void;
+  /** Index within this strip's images, for owners that refresh short-lived authorization. */
+  onImageError?: (index: number) => void;
+  /** Reset only the failed image when authorization returns the same URL. */
+  imageReloadKeys?: readonly number[];
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   usePreviewState?: MediaPreviewStateHook;
 }) {
@@ -6660,13 +6666,14 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}`}
+          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
           media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
+          onImageError={onImageError ? () => onImageError(index) : undefined}
           variant="attachment"
           usePreviewState={usePreviewState}
         />
@@ -6855,6 +6862,7 @@ function MediaPreview({
   label,
   onOpen,
   onResolveRemoteMedia,
+  onImageError,
   variant = 'card',
   presentationOnly = false,
   localPreview,
@@ -6865,6 +6873,7 @@ function MediaPreview({
   label: string;
   onOpen?: () => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
+  onImageError?: () => void;
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
   localPreview?: SentMessageImagePreview;
@@ -6932,6 +6941,7 @@ function MediaPreview({
   const handleImageError = useCallback(() => {
     if (media.previewable) {
       setResolveState({ status: 'error' });
+      onImageError?.();
       return;
     }
     if (imageRetryUsedRef.current) {
@@ -6940,7 +6950,7 @@ function MediaPreview({
     }
     imageRetryUsedRef.current = true;
     resolveThumbnail(true);
-  }, [media.previewable, resolveThumbnail]);
+  }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
   // decode SVG. Reuse the decoded dimensions without a second image request.

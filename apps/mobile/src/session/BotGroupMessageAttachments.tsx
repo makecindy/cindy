@@ -3,16 +3,18 @@
  *
  * 复用会话消息的附件条（MessageRenderer 的 AttachmentStrip）：图片按原始比例显示缩略图，
  * 经远程媒体从电脑取件，点开进入与聊天相同的看图器；文件是「类型图标 + 文件名」的小条。
- * 旧电脑文件仍提示在电脑打开；服务器附件点击时独立授权，图片复用看图器，文件使用短期下载地址。
+ * 旧电脑文件仍提示在电脑打开；服务器图片授权后显示预览，点击时重新授权；文件使用短期下载地址。
  */
+import { useAuth } from '@/auth/AuthContext';
 import { openBrowserAsync } from 'expo-web-browser';
 import { Text } from '@/components/AppText';
 import { spacing, textStyles, useTheme } from '@/theme';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import { ImageLightbox } from './ImageLightbox';
+import { MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 import { AttachmentStrip } from './MessageRenderer';
 import { buildMessageContentLayout } from './messageContentLayout';
 import type { MobileMessageGalleryImage } from './messageGallery';
@@ -42,21 +44,28 @@ export function botGroupAttachmentGallery(messageId: string, attachments: readon
   });
 }
 
-export function BotGroupMessageAttachments({ messageId, attachments, align, onResolveRemoteMedia, resolveServerMedia }: {
+export function BotGroupMessageAttachments({ messageId, attachments, align, onResolveRemoteMedia, resolveServerMedia, previewServerImages = true }: {
   messageId: string;
   attachments: readonly BotGroupAttachment[];
   align: 'left' | 'right';
   onResolveRemoteMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
+  /** Cloud transcripts keep the tap-only contract in cloud-companions.md §3.1. */
+  previewServerImages?: boolean;
 }) {
   const { t } = useTranslation();
   const { width } = useWindowDimensions();
+  const { accountGeneration } = useAuth();
+  const visibility = useContext(MessageListVisibilityContext);
+  const rowVisible = useMessageListItemVisible(messageId);
+  const previewVisible = previewServerImages && (!visibility || rowVisible);
   const layout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
   const items = useMemo(() => attachments.filter(attachment => !attachment.state).map(botGroupAttachmentForDisplay), [attachments]);
   const gallery = useMemo(() => botGroupAttachmentGallery(messageId, items), [items, messageId]);
   const runs = useMemo(() => botGroupAttachmentRuns(attachments), [attachments]);
   const [openUrl, setOpenUrl] = useState<string | null>(null);
-  if (resolveServerMedia) return <ServerAttachments runs={runs} align={align} layout={layout} resolve={resolveServerMedia} />;
+  if (resolveServerMedia) return <ServerAttachments key={`${accountGeneration}:${messageId}`} runs={runs} visible={previewVisible}
+    previewServerImages={previewServerImages} align={align} layout={layout} resolve={resolveServerMedia} />;
   const open = (payload: MessagePayload) => {
     if (payload.kind === 'media' && payload.media.kind === 'image') {
       setOpenUrl(payload.media.url);
@@ -117,15 +126,99 @@ function PendingAttachment({ attachment, align, layout }: {
   </View>;
 }
 
-/** Signed download URLs are acquired on tap and kept only in the open viewer. */
-function ServerAttachments({ runs, align, layout, resolve }: {
+// Bound passive authorization across mounted messages; no account data or URLs are cached here.
+type PreviewJob = {
+  run(signal: AbortSignal): Promise<void>;
+  controller: AbortController;
+  active: boolean;
+  finished: boolean;
+};
+const previewJobs: PreviewJob[] = [];
+let activePreviews = 0;
+function finishPreview(job: PreviewJob) {
+  if (job.finished) return;
+  job.finished = true;
+  if (job.active) activePreviews--;
+  else {
+    const index = previewJobs.indexOf(job);
+    if (index >= 0) previewJobs.splice(index, 1);
+  }
+  drainPreviews();
+}
+function authorizePreview(run: PreviewJob['run']): () => void {
+  const job: PreviewJob = { run, controller: new AbortController(), active: false, finished: false };
+  previewJobs.push(job);
+  drainPreviews();
+  return () => {
+    if (job.finished) return;
+    job.controller.abort();
+    finishPreview(job);
+  };
+}
+function drainPreviews() {
+  while (activePreviews < 3 && previewJobs.length) {
+    const job = previewJobs.shift()!;
+    job.active = true;
+    activePreviews++;
+    void job.run(job.controller.signal).then(() => finishPreview(job), () => finishPreview(job));
+  }
+}
+
+/** Image preview URLs live only in this mounted message; opening always re-authorizes. */
+function ServerAttachments({ runs, visible, previewServerImages, align, layout, resolve }: {
+  visible: boolean;
+  previewServerImages: boolean;
   align: 'left' | 'right';
   runs: ReturnType<typeof botGroupAttachmentRuns>;
   layout: ReturnType<typeof buildMessageContentLayout>;
-  resolve(id: string): Promise<BotGroupAttachment>;
+  resolve(id: string, signal?: AbortSignal): Promise<BotGroupAttachment>;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const [previews, setPreviews] = useState<Record<string, BotGroupAttachment>>({});
+  const failedPreviewIds = useRef(new Set<string>());
+  const retriedPreviewIds = useRef(new Set<string>());
+  const retryPreview = useRef<((id: string) => void) | null>(null);
+  const [previewVersions, setPreviewVersions] = useState<Record<string, number>>({});
+  const resolveRef = useRef(resolve); resolveRef.current = resolve;
+  const previewsRef = useRef(previews); previewsRef.current = previews;
+  const previewIds = JSON.stringify(runs.flatMap(run => run.kind === 'ready' ? run.attachments.map(item => item.id) : []));
+  useEffect(() => {
+    let cancelled = false;
+    if (!visible) return;
+    const cancelJobs: Array<() => void> = [];
+    const schedule = (id: string) => {
+      cancelJobs.push(authorizePreview(async signal => {
+        if (cancelled || (previewsRef.current[id] && !failedPreviewIds.current.has(id))) return;
+        const refreshing = failedPreviewIds.current.has(id);
+        const previousPreview = previewsRef.current[id];
+        try {
+          const value = await resolveRef.current(id, signal);
+          const preview = value.category === 'image' ? value : { ...value, url: null };
+          if (!cancelled && !signal.aborted && previewsRef.current[id] === previousPreview) {
+            previewsRef.current = { ...previewsRef.current, [id]: preview };
+            setPreviews(previewsRef.current);
+            failedPreviewIds.current.delete(id);
+            // A renewed authorization can return the same URL after a transient CDN failure.
+            // Remount only the failed image too, resetting its native error state.
+            if (refreshing) setPreviewVersions(versions => ({ ...versions, [id]: (versions[id] ?? 0) + 1 }));
+          }
+        } catch {
+          if (!cancelled && previewsRef.current[id] === previousPreview) failedPreviewIds.current.delete(id);
+          // Keep the chip / fallback available for an explicit retry on tap.
+        }
+      }));
+    };
+    retryPreview.current = schedule;
+    for (const id of JSON.parse(previewIds) as string[]) schedule(id);
+    return () => {
+      cancelled = true;
+      retryPreview.current = null;
+      cancelJobs.forEach(cancel => cancel());
+    };
+  }, [previewIds, visible]);
+  const displayRuns = botGroupAttachmentRuns(runs.flatMap(run => run.kind === 'pending'
+    ? [run.attachment] : run.attachments.map(item => previews[item.id] ?? { ...item, url: null })));
   const [image, setImage] = useState<BotGroupAttachment | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const pending = useRef(false);
@@ -138,19 +231,42 @@ function ServerAttachments({ runs, align, layout, resolve }: {
       const value = await resolve(id);
       if (!mounted.current) return;
       if (!value.url) throw new Error('MEDIA_NOT_FOUND');
-      if (value.category === 'image') setImage(value);
+      if (value.category === 'image') {
+        setImage(value);
+        // Cloud transcripts never populate this cache: their media remains tap-only.
+        if (previewServerImages) {
+          previewsRef.current = { ...previewsRef.current, [id]: value };
+          setPreviews(previewsRef.current);
+          failedPreviewIds.current.delete(id);
+          setPreviewVersions(versions => ({ ...versions, [id]: (versions[id] ?? 0) + 1 }));
+        }
+      }
       else await openBrowserAsync(value.url);
     } catch { if (mounted.current) Alert.alert(t('groupChat.server.attachmentFailed')); }
     finally { pending.current = false; if (mounted.current) setBusy(null); }
   };
   return <>
     {/* Stretch like a session strip, so the chip keeps the same width as in a task message. */}
-    {runs.map(run => run.kind === 'pending'
+    {displayRuns.map(run => run.kind === 'pending'
       ? <PendingAttachment key={run.attachment.id} attachment={run.attachment} align={align} layout={layout} />
       : <View key={run.attachments[0]!.id} style={styles.serverAttachment}>
-        {/* No URL before tapping: every entry is a file chip, addressed by position rather than name. */}
-        <AttachmentStrip attachments={run.attachments.map(attachment => ({ kind: 'file', name: attachment.name, previewable: false }))}
+        <AttachmentStrip attachments={run.attachments.map(botGroupAttachmentForDisplay)}
+          imageReloadKeys={run.attachments.map(item => previewVersions[item.id] ?? 0)}
           messageKey={run.attachments[0]!.id} align={align} layout={layout}
+          onOpen={payload => {
+            if (payload.kind === 'media') {
+              const attachment = run.attachments.find(item => item.url === payload.media.url);
+              if (attachment) void open(attachment.id);
+            }
+          }}
+          onImageError={index => {
+            const attachment = run.attachments[index];
+            if (!attachment || retriedPreviewIds.current.has(attachment.id)
+              || previewsRef.current[attachment.id]?.url !== attachment.url) return;
+            retriedPreviewIds.current.add(attachment.id);
+            failedPreviewIds.current.add(attachment.id);
+            retryPreview.current?.(attachment.id);
+          }}
           onOpenFile={index => { void open(run.attachments[index]!.id); }} usePreviewState={useState} />
         {run.attachments.some(attachment => busy === attachment.id)
           ? <ActivityIndicator color={colors.textSecondary} style={align === 'right' ? styles.busyRight : styles.busyLeft} />

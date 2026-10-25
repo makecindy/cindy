@@ -153,7 +153,7 @@ async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   let startupWriterLease: SchemaMigrationLease | null = null;
   let readerLeaseAcquiredThisCall = false;
 
-  const startupLease = acquireSchemaStartupLease({
+  const startupLease = await acquireSchemaStartupLease({
     dbFilePath: filePath,
     packaged: host.isPackaged(),
     sharedPassive: passiveSharedUserData,
@@ -171,9 +171,9 @@ async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     showFatalDialog(
       waitingForWriter ? '数据库 schema 正在维护' : '数据库 schema 正被其它实例使用',
       message,
-      'MIGRATE_FAILED',
+      'DB_SCHEMA_LOCKED',
     );
-    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+    return { ready: false, error: { code: 'DB_SCHEMA_LOCKED', message } };
   }
   const schemaMaintenanceReadOnly = startupLease.kind === 'reader' && !passiveSharedUserData;
   readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;

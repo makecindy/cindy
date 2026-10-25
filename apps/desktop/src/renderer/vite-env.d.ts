@@ -4791,7 +4791,7 @@ interface ElectronAPI {
       | {
           ready: false;
           error: {
-            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED';
+            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED';
             message: string;
           };
         }

@@ -46,11 +46,11 @@ export function useChatClient() {
         .finally(() => { discovering = undefined; });
       return discovering;
     };
-    const request: ChatRequest = async <T,>(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown, actorId?: string) => {
+    const request: ChatRequest = async <T,>(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown, actorId?: string, signal?: AbortSignal) => {
       check();
       const url = await endpoint(); check();
       const result = await deps.current.apiFetch<T>(`/v1${path}`, { baseUrl: url, method, cache: 'no-store', ...(body !== undefined ? { body } : {}),
-        ...(actorId ? { headers: { 'X-Chat-Actor': actorId } } : {}), assertCurrent: check });
+        ...(actorId ? { headers: { 'X-Chat-Actor': actorId } } : {}), ...(signal ? { signal } : {}), assertCurrent: check });
       check(); return result;
     };
     const client = createChatServerClient(request, listFor(owner));
@@ -315,10 +315,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       throw error;
     }
   };
-  const media = async (mediaId: string): Promise<BotGroupAttachment> => {
+  const media = async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
     const generation = accessGeneration.current;
     try {
-      const attachment = await api.client.media(groupId, mediaId);
+      const attachment = await api.client.media(groupId, mediaId, signal);
       if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
       return attachment;
     } catch (error) {

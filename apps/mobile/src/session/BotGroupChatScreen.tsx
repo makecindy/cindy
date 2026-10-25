@@ -77,6 +77,7 @@ import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering, CompanionFadeIn } from './CompanionEntering';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
+import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
 import { BotGroupQuote } from './BotGroupQuote';
@@ -149,6 +150,12 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   const messagePositions = useRef(new Map<string, number>());
   const group = chat.state.kind === 'ready' ? chat.state.group : null;
   const focused = useIsFocused();
+  const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
+  const previewVisibility = useScrollViewMessageVisibility(
+    `${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? ''}`,
+    useMemo(() => group?.messages.map(message => message.id) ?? [], [group?.messages]),
+    focused && foreground,
+  );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
   const [seen, setSeen] = useState<{ owner: string; sequence: string } | null>(null);
   const latestSequence = group?.messages.reduce((latest, message) => {
@@ -195,7 +202,10 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   }, [focused, group, user?.id, deviceId, groupId, viewportOwner, latestSequence, chat.server, chat.markRead]);
   useEffect(() => {
     const frame = requestAnimationFrame(acknowledge);
-    const subscription = AppState.addEventListener('change', state => { if (state === 'active') acknowledge(); });
+    const subscription = AppState.addEventListener('change', state => {
+      setForeground(state === 'active');
+      if (state === 'active') acknowledge();
+    });
     return () => { cancelAnimationFrame(frame); subscription.remove(); };
   }, [acknowledge]);
   // The list row seeds the header while the first read is in flight (display only).
@@ -352,6 +362,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    previewVisibility.setViewport(contentOffset.y, layoutMeasurement.height);
     if (stickToBottom.current) setSeen(previous => previous?.owner === viewportOwner && previous.sequence === latestSequence
       ? previous : { owner: viewportOwner, sequence: latestSequence });
     Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
@@ -421,12 +432,13 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
       {floatingHeader ? null : offlineNote}
       {group.dissolvedAt ? <Text style={styles.offline}>{t('groupChat.lifecycle.dissolved')}</Text> : null}
       <View style={styles.flex}>
+      <MessageListVisibilityContext.Provider value={previewVisibility}>
       <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, floatingHeader && { paddingTop: headerHeight + spacing.md }]}
         scrollIndicatorInsets={floatingHeader ? { top: headerHeight } : undefined} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
         maintainVisibleContentPosition={chat.server ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
         onScroll={onScroll} scrollEventThrottle={64}
-        onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; acknowledge(); }}
+        onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; previewVisibility.setHeight(event.nativeEvent.layout.height); acknowledge(); }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
@@ -437,7 +449,8 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
         <BotGroupTimeline group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           highlightId={highlightId} onLocateMessage={locateMessage}
           onReply={(chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? message => setReplyTo(botGroupQuoteFromMessage(message)) : undefined}
-          onMessageLayout={(id, y) => {
+          onMessageLayout={(id, y, height) => {
+            previewVisibility.setLayout(id, { y, height });
             messagePositions.current.set(id, y);
             if (jumpTarget === id) positionAtMessage(id, y);
           }}
@@ -449,6 +462,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
           onInteractionError={(message) => { if (message) Alert.alert(message); }} />
       </ScrollView>
+      </MessageListVisibilityContext.Provider>
       {newMessageCount > 0 ? <View style={styles.newMessages} accessibilityLiveRegion="polite">
         <CompanionFadeIn play distance={spacing.xs}>
           <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
@@ -510,7 +524,7 @@ export function BotGroupTimeline({
   identityFor: BotGroupIdentityLookup;
   /** Reads a picture attached to a message from the computer. */
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
   loadOlder?: () => void;
   loadingOlder?: boolean;
   continuing: boolean;
@@ -519,7 +533,7 @@ export function BotGroupTimeline({
   onPlanAction(action: BotGroupPlanAction, planId: string): void;
   onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string): void;
   onInteractionError(message: string | null): void;
-  onMessageLayout?: (id: string, y: number) => void;
+  onMessageLayout?: (id: string, y: number, height: number) => void;
   onLocateMessage?: (id: string) => void;
   highlightId?: string;
   onReply?: (message: BotGroupMessageView) => void;
@@ -551,7 +565,7 @@ export function BotGroupTimeline({
       const continued = groupTime === undefined && message.kind === 'message' && message.authorKind === 'bot'
         && previous?.kind === 'message' && previous.authorKind === 'bot' && previous.authorBotId === message.authorBotId;
       return <View key={message.id} style={[styles.item, highlightId === message.id && styles.locatedMessage]}
-        onLayout={event => onMessageLayout?.(message.id, event.nativeEvent.layout.y)}>
+        onLayout={event => onMessageLayout?.(message.id, event.nativeEvent.layout.y, event.nativeEvent.layout.height)}>
         {groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
         <CompanionEntering id={message.id} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
         <BotGroupTimelineItem message={message} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
@@ -609,7 +623,7 @@ function BotGroupTimelineItem({
   identityFor: BotGroupIdentityLookup;
   mentionLabels: readonly string[];
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
   canContinue: boolean;
   continuing: boolean;
   onContinue(): void;

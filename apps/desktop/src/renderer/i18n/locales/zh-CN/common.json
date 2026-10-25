@@ -1051,6 +1051,15 @@
     "details": "错误详情"
   },
   "localDbFatal": {
+    "schemaLease": {
+      "title": "本地数据暂时无法打开",
+      "retry": "重新打开本地数据",
+      "writer-active": "另一个 Cindy 实例正在维护本地数据。请等待维护结束后重新打开。",
+      "readers-active": "其他 Cindy 实例正在使用这份本地数据。请退出这些实例后重新打开。",
+      "lock-corrupt": "本地数据的维护锁记录损坏，暂时无法确认是否仍有程序在使用它。请重启电脑后重新打开 Cindy；若仍无法打开，请联系支持人员。请勿删除数据库文件。",
+      "lock-unreadable": "无法读取或保存本地数据的维护锁。请检查数据目录的访问权限；恢复访问后重新打开。若仍失败，请联系支持人员。",
+      "recovery-busy": "另一个 Cindy 实例正在检查本地数据的维护锁。请稍后重新打开。"
+    },
     "databaseCleanup": {
       "interruptedTitle": "数据库清理中断",
       "interruptedDescription": "数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。",
@@ -8137,8 +8146,8 @@
       "coverage": "按天统计从 {{date}} 起",
       "col": {
         "task": "任务",
-        "model": "模型",
-        "provider": "供应商",
+        "model": "当前模型",
+        "provider": "当前供应商",
         "tokens": "累计 token",
         "context": "上下文占用",
         "lastActive": "最后活跃"

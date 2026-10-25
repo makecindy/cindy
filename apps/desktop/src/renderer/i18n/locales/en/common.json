@@ -1063,6 +1063,15 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "schemaLease": {
+      "title": "Local data cannot be opened yet",
+      "retry": "Reopen Local Data",
+      "writer-active": "Another Cindy instance is maintaining the local data. Reopen it after maintenance finishes.",
+      "readers-active": "Other Cindy instances are using this local data. Close those instances before reopening it.",
+      "lock-corrupt": "The local data maintenance lock is damaged, so Cindy cannot confirm whether it is still in use. Restart your computer, then reopen Cindy. If this continues, contact support. Do not delete database files.",
+      "lock-unreadable": "The local data maintenance lock could not be read or saved. Check access to the data directory, then reopen it after access is restored. Contact support if this continues.",
+      "recovery-busy": "Another Cindy instance is checking the local data maintenance lock. Reopen the local data shortly."
+    },
     "databaseCleanup": {
       "interruptedTitle": "Database Cleanup Was Interrupted",
       "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
@@ -8169,8 +8178,8 @@
       "coverage": "Daily tracking since {{date}}",
       "col": {
         "task": "Session",
-        "model": "Model",
-        "provider": "Provider",
+        "model": "Current Model",
+        "provider": "Current Provider",
         "tokens": "Total tokens",
         "context": "Context used",
         "lastActive": "Last active"

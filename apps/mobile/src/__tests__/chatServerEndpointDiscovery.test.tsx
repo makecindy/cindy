@@ -37,6 +37,7 @@ function Probe() { roster = hooks.useChatServerRoster(true); group = hooks.useCh
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
+  // reset-modules: each case reconstructs process-owned endpoint/realm startup caches.
   vi.resetModules(); vi.clearAllMocks(); h.storage.clear(); h.sockets = [];
   vi.stubGlobal('__DEV__', false);
   vi.stubEnv('EXPO_PUBLIC_CINDY_AUTH_REGION', 'global');
@@ -84,6 +85,13 @@ it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the 
   await act(async () => { await group.act('send', { text: 'fixture', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
   const sent = h.auth.apiFetch.mock.calls.find(([path, options]) => path.endsWith('/messages') && options.method === 'POST')!;
   expect(sent[1].body).toEqual({ operationId: 'fixture-operation', content: [{ type: 'text', text: 'fixture' }], mentions: [] });
+  // PR #7145: exercise the real group hook/client/HTTP adapter, not only a fake resolver.
+  const controller = new AbortController();
+  h.auth.apiFetch.mockImplementationOnce(async (_path, options) => {
+    expect(options.signal).toBe(controller.signal);
+    return { name: 'image.png', type: 'image/png', size: 1, url: 'https://media.example.invalid/image.png' };
+  });
+  await expect(group.media(self, controller.signal)).resolves.toMatchObject({ category: 'image', url: 'https://media.example.invalid/image.png' });
   const oldSockets = [...h.sockets];
   const other = region === 'cn' ? 'global' : 'cn';
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => texts[other] })));

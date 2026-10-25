@@ -1051,6 +1051,15 @@
     "details": "錯誤詳情"
   },
   "localDbFatal": {
+    "schemaLease": {
+      "title": "暫時無法開啟本機資料",
+      "retry": "重新開啟本機資料",
+      "writer-active": "另一個 Cindy 執行個體正在維護本機資料。請等待維護結束後重新開啟。",
+      "readers-active": "其他 Cindy 執行個體正在使用這份本機資料。請結束這些執行個體後重新開啟。",
+      "lock-corrupt": "本機資料的維護鎖記錄損壞，暫時無法確認是否仍有程式在使用它。請重新啟動電腦後開啟 Cindy；若仍無法開啟，請聯絡支援人員。請勿刪除資料庫檔案。",
+      "lock-unreadable": "無法讀取或儲存本機資料的維護鎖。請檢查資料目錄的存取權限；恢復存取後重新開啟。若仍失敗，請聯絡支援人員。",
+      "recovery-busy": "另一個 Cindy 執行個體正在檢查本機資料的維護鎖。請稍後重新開啟。"
+    },
     "databaseCleanup": {
       "interruptedTitle": "資料庫清理中斷",
       "interruptedDescription": "資料庫清理異常中斷。請重新啟動 Cindy，系統會根據維護記錄安全復原。",
@@ -8137,8 +8146,8 @@
       "coverage": "按天統計從 {{date}} 起",
       "col": {
         "task": "任務",
-        "model": "模型",
-        "provider": "供應商",
+        "model": "目前模型",
+        "provider": "目前供應商",
         "tokens": "累計 token",
         "context": "上下文佔用",
         "lastActive": "最後活躍"
