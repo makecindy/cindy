@@ -6,7 +6,7 @@ export default {
   viewport: { width: 760, height: 360 },
   real: 'ChatInput, Tiptap editor, SendButton, VoiceInputButton, tooltips, send dispatch, themes and translations',
   notCovered:
-    'Microphone/ASR, live companion tasks and speech synthesis; host services, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
+    'Microphone/ASR, live companion tasks and speech synthesis; host services, model catalog and dictation hook use scenario data. Windows runtime is not exercised. App/root keyboard listeners are covered separately by scripts/composer-keyboard-e2e.mjs.',
   stubs: {
     'src/renderer/hooks/useProviders': `const providers = [{ id: 'openai', name: 'OpenAI', source: 'builtin', connected: true, agents: ['codex'], auth: { method: 'oauth' }, routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } }, models: { codex: [{ id: 'fixture-chat', name: 'Fixture', contextWindow: 200000, efforts: [], defaultEffort: null }] } }]; export const useProviders = () => ({ providers, loading: false });`,
     'src/renderer/hooks/useDeviceProviders': {
