@@ -194,9 +194,22 @@ export class TerminalModelConfig {
       changed:()=>{for(const listener of this.visibilityListeners)listener();},log:this.logger});
   }
   private parseProvider(value: unknown): CustomProviderConfig {
-    const result = validateCustomProviderConfig(value);
+    // Keep the terminal's pre-extraction provider file contract readable: older
+    // Pi entries omitted wireProtocol and used the native OpenAI-compatible route.
+    // Normalize that legacy shape before applying the shared strict validator.
+    const input = structuredClone(value) as Record<string, unknown>;
+    const runtimes = input.runtimes;
+    if (runtimes && typeof runtimes === 'object' && !Array.isArray(runtimes)) {
+      for (const [agent, raw] of Object.entries(runtimes as Record<string, unknown>)) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+        const runtime = raw as Record<string, unknown>;
+        if (runtime.wireProtocol !== undefined) continue;
+        runtime.wireProtocol = agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat';
+      }
+    }
+    const result = validateCustomProviderConfig(input);
     if (!result.ok) throw new Error(`INVALID_MODEL_CONFIGURATION: ${result.message}`);
-    const config = structuredClone(value) as CustomProviderConfig;
+    const config = input as unknown as CustomProviderConfig;
     for (const runtime of Object.values(config.runtimes)) if (runtime) delete runtime.headers;
     return config;
   }

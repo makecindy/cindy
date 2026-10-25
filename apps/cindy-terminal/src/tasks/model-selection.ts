@@ -149,6 +149,10 @@ export function createTerminalModelSelection(host: {
   registerSessionRuntimeAxisHandlers({handle: (channel, handler) => {axesHandlers.set(channel, handler);}}, {
     ...selectionHost, ...control, ...preferences,
     maker: host.maker,
+    // Terminal has no Desktop subscription/group policy store. Model
+    // capabilities remain authoritative; this host policy simply permits the
+    // runtime-axis handler to reach that normal capability check.
+    createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
     assertTrustedAppRendererEvent: () => host.guard(),
     readUsableAgentDeviceProviders,
     readSessionRuntimeProfiles: host.readSessionRuntimeProfiles,
