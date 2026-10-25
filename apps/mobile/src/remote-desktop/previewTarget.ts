@@ -66,3 +66,62 @@ export function pickPreviewTab(
   if (own.length === 1) return own[0];
   return own.find((tab) => tab.pluginName === target.pluginName);
 }
+
+/** How long a view that lost its source waits for the plugin's replacement preview. */
+export const PREVIEW_FOLLOW_WINDOW_MS = 8000;
+/** Pause between looks for it (in practice the 3 s reconnect tick paces them). */
+export const PREVIEW_FOLLOW_RETRY_MS = 1000;
+
+/**
+ * Whether a view whose source the computer reported ended is still looking for
+ * the preview that replaced it. `until` is 0 for a view that never lost its
+ * source; `known` are the refs of the task's tabs and `title` the one of the
+ * tab being watched, both as of when the view last started.
+ */
+export interface PreviewFollow {
+  until: number;
+  known: readonly string[];
+  title?: string;
+}
+
+export const newPreviewFollow = (): PreviewFollow => ({ until: 0, known: [] });
+
+/**
+ * The computer said the source ended. Opens the look-for-a-replacement window
+ * when the view had been live, and says whether it is still open. A view that
+ * never showed the preview (stale entry) gets no window.
+ */
+export function previewFollowOpen(
+  follow: PreviewFollow,
+  now: number,
+  wasLive: boolean,
+): boolean {
+  if (follow.until === 0 && wasLive) follow.until = now + PREVIEW_FOLLOW_WINDOW_MS;
+  return now < follow.until;
+}
+
+/**
+ * The preview that replaced the one being watched: a tab of the same task and
+ * plugin with the same title that was not there when the view started. Only a
+ * single such tab is taken; none or several mean there is nothing to say it
+ * replaced ours, and the view reports the end as before. Needs refs, so a
+ * computer that predates them never lands here (see `pickPreviewTab`).
+ */
+export function pickSupersedingTab(
+  tabs: readonly PreviewTabSummary[],
+  target: PreviewTarget,
+  follow: Pick<PreviewFollow, "known" | "title">,
+): PreviewTabSummary | undefined {
+  const title = follow.title ?? target.title;
+  if (target.pluginName === undefined || title === undefined) return undefined;
+  const candidates = tabs.filter(
+    (tab) =>
+      tab.sessionId === target.sessionId &&
+      tab.pluginName === target.pluginName &&
+      tab.title === title &&
+      isPreviewTabRef(tab.ref) &&
+      tab.ref !== target.ref &&
+      !follow.known.includes(tab.ref),
+  );
+  return candidates.length === 1 ? candidates[0] : undefined;
+}

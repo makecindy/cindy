@@ -67,8 +67,12 @@ import {
   previewPictureArea,
 } from "./previewViewport";
 import {
+  newPreviewFollow,
   parsePreviewTarget,
   pickPreviewTab,
+  pickSupersedingTab,
+  PREVIEW_FOLLOW_RETRY_MS,
+  previewFollowOpen,
   type PreviewTarget,
 } from "./previewTarget";
 import { transferClipboardContent } from "./clipboardTransfer";
@@ -321,7 +325,15 @@ export function RemoteDesktopSession({
   const auth = useAuth();
   const previewMode = Boolean(preview);
   const previewRef = useRef(preview);
-  previewRef.current = preview;
+  // The preview this view moved to after the plugin replaced the one it was
+  // opened on; the route's own target is unchanged.
+  const followedPreview = useRef<PreviewTarget | undefined>(undefined);
+  previewRef.current =
+    followedPreview.current &&
+    followedPreview.current.sessionId === preview?.sessionId
+      ? followedPreview.current
+      : preview;
+  const previewFollow = useRef(newPreviewFollow());
   // The host's touch limit and the sequence of previewInput batches. The
   // sequence is numbered here, once, because the host ignores any that repeat or fall back.
   const previewTouchLimit = useRef(1);
@@ -1119,6 +1131,26 @@ export function RemoteDesktopSession({
       const blocked = /DESKTOP_STOPPED/.test(code ?? message)
         ? "hostDisconnected"
         : remoteDesktopFailureKey(code ?? message);
+      // The plugin opens a new preview in place of the old one (every launch of
+      // an app): look for it for a moment instead of ending. A disconnect the
+      // user asked for has already turned recovery off.
+      if (
+        blocked === "previewEnded" &&
+        previewRef.current &&
+        recovery.current.enabled &&
+        previewFollowOpen(
+          previewFollow.current,
+          Date.now(),
+          Boolean(active.current),
+        )
+      ) {
+        stop(true);
+        setScreenLocked(false);
+        setError(null);
+        recovery.current.at = Date.now() + PREVIEW_FOLLOW_RETRY_MS;
+        setStatus("reconnecting");
+        return;
+      }
       // A locked computer is waited out: recovery stays on at a steady pace and the
       // notice replaces the spinner label, instead of an error that stops everything.
       const waitOut = blocked === "previewScreenLocked";
@@ -1371,10 +1403,32 @@ export function RemoteDesktopSession({
             sessionId: previewTarget.sessionId,
           });
           if (current !== generation.current) return;
-          const tab = pickPreviewTab(listed?.tabs ?? [], previewTarget);
+          const listedTabs = listed?.tabs ?? [];
+          let tab = pickPreviewTab(listedTabs, previewTarget);
+          // A view that lost its source may move to the preview that replaced it.
+          if (!tab && previewFollow.current.until > 0) {
+            tab = pickSupersedingTab(
+              listedTabs,
+              previewTarget,
+              previewFollow.current,
+            );
+            if (tab) {
+              const moved = {
+                ...previewTarget,
+                title: tab.title,
+                ref: tab.ref,
+              };
+              followedPreview.current = moved;
+              previewRef.current = moved;
+            }
+          }
           // The tab was closed, replaced or is no longer the plugin's preview.
           if (!tab) throw new Error("PREVIEW_SOURCE_ENDED");
           previewGrant = tab.grant;
+          previewFollow.current.title = tab.title;
+          previewFollow.current.known = listedTabs.flatMap((t) =>
+            t.sessionId === previewTarget.sessionId && t.ref ? [t.ref] : [],
+          );
         }
         // Recovery by ourselves (reconnect, app back in front) marks the start as
         // a resume, so a computer that was Disconnected from its own side refuses
@@ -1452,6 +1506,7 @@ export function RemoteDesktopSession({
           servers: loadIceServers("connect"),
         };
         active.current = next;
+        previewFollow.current.until = 0;
         receiveWindow.current = {
           since: Date.now(),
           bytes: 0,

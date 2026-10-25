@@ -560,6 +560,18 @@ in front) sends `resume: true`, so a computer that was Disconnected from its own
 `DESKTOP_STOPPED`: the phone shows that the computer ended the connection, stops recovering,
 and only the user's Connect starts the view again.
 
+A plugin that opens its preview again (every Baguette `launch_app`) replaces the tab the
+phone is watching, so the old source ends as `PREVIEW_SOURCE_ENDED` a moment before the new
+tab is listed. A view that was showing the picture does not end at once: for 8 s it keeps
+reconnecting and, with a `previewRef` target, takes a listed tab only when exactly one has the
+same task, plugin name and title and a `ref` that was not in the listing the view last started
+from (the old tab, and any preview already open beside it, are excluded). It uses that tab's
+own fresh one-time grant, so grant, peer binding and plugin identity checks are unchanged, and
+it moves the target to the new `ref`. No tab, several, or the 8 s run out: the view ends as
+before. A disconnect the user asked for, `DESKTOP_STOPPED` and a view that never showed the
+picture never follow; pressing Connect afterwards may still move to such a unique new tab.
+No protocol change: older computers (no `ref`) and older phones behave as before.
+
 Unlike a remote desktop, which may run under the floating controls, a preview is an app page
 you press, so its picture is fitted (contain) and centered inside the area the controls leave
 free: in portrait below the status bar and the back button and above the toolbar, in landscape

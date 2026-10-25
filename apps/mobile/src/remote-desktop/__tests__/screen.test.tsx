@@ -6157,6 +6157,159 @@ describe("plugin preview tab view", () => {
     expect(requests().at(-1)).toEqual({ op: "previewStart", grant });
   });
 
+  describe("when the plugin opens a new preview in place of the one being watched", () => {
+    const tabOf = (ref: string, grantChar: string, title = "Sim") => ({
+      grant: grantChar.repeat(43),
+      sessionId: "s1",
+      pluginName: "Baguette",
+      title,
+      ref,
+    });
+    const starts = () => requests().filter((r) => r.op === "previewStart");
+    // The old tab ends under the viewer: the computer answers its next input with it.
+    const open = async (tabs: unknown[]) => {
+      let ended = false;
+      previewHost({
+        tabs,
+        input: (request) => {
+          if (ended) throw new Error("PREVIEW_SOURCE_ENDED");
+          return { sequence: request.sequence };
+        },
+      });
+      await render({ ...target, ref: "ref-a" });
+      await connect();
+      ended = true;
+    };
+    const endSource = async () => {
+      await viewerInput(1);
+      await act(async () => vi.advanceTimersByTimeAsync(1100));
+    };
+
+    it("moves to the new preview with its own fresh grant and without an error", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      tabs.splice(0, 1, tabOf("ref-b", "b"));
+      await endSource();
+      expect(host.textContent).not.toContain("remoteDesktop.previewEnded");
+      await connect();
+      expect(starts().map((r) => r.grant)).toEqual(["a".repeat(43), "b".repeat(43)]);
+      expect(host.textContent).not.toContain("remoteDesktop.previewEnded");
+      // Followed once: the next end looks for the next replacement, from the new ref.
+      expect(requests().some((r) => r.op === "start")).toBe(false);
+    });
+
+    it("keeps looking for a moment when the new preview is not open yet", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      tabs.splice(0, 1);
+      await endSource();
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(host.textContent).not.toContain("remoteDesktop.previewEnded");
+      tabs.push(tabOf("ref-b", "b"));
+      await act(async () => vi.advanceTimersByTimeAsync(2000));
+      await connect();
+      expect(starts().at(-1)).toEqual({ op: "previewStart", grant: "b".repeat(43), resume: true });
+    });
+
+    it("reports the end when no new preview shows up in time", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      tabs.splice(0, 1);
+      await endSource();
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(host.textContent).toContain("remoteDesktop.previewEnded");
+      const count = requests().filter((r) => r.op === "previewTabs").length;
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(requests().filter((r) => r.op === "previewTabs")).toHaveLength(count);
+      expect(starts()).toHaveLength(1);
+    });
+
+    it("does not guess among several new previews", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      tabs.splice(0, 1, tabOf("ref-b", "b"), tabOf("ref-c", "c"));
+      await endSource();
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(host.textContent).toContain("remoteDesktop.previewEnded");
+      expect(starts()).toHaveLength(1);
+    });
+
+    it("does not take a preview that was already open next to it", async () => {
+      const tabs = [tabOf("ref-a", "a"), tabOf("ref-s", "s")];
+      await open(tabs);
+      tabs.splice(0, 1);
+      await endSource();
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(host.textContent).toContain("remoteDesktop.previewEnded");
+      expect(starts()).toHaveLength(1);
+    });
+
+    it("does not take another plugin's, another task's or a differently titled preview", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      tabs.splice(
+        0,
+        1,
+        { ...tabOf("ref-b", "b"), pluginName: "Maker" },
+        { ...tabOf("ref-c", "c"), sessionId: "s2" },
+        tabOf("ref-d", "d", "Other"),
+      );
+      await endSource();
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(host.textContent).toContain("remoteDesktop.previewEnded");
+      expect(starts()).toHaveLength(1);
+    });
+
+    it("does not follow once the user has left the view", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      await act(async () => button("back").click());
+      tabs.splice(0, 1, tabOf("ref-b", "b"));
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(starts()).toHaveLength(1);
+    });
+
+    it("does not follow a view that never showed the preview", async () => {
+      previewHost({ tabs: [tabOf("ref-b", "b")] });
+      await render({ ...target, ref: "ref-a" });
+      await connect();
+      await act(async () => vi.advanceTimersByTimeAsync(5000));
+      expect(host.textContent).toContain("remoteDesktop.previewEnded");
+      expect(starts()).toHaveLength(0);
+    });
+
+    it("lets the user press Connect to move on after the wait is over", async () => {
+      const tabs = [tabOf("ref-a", "a")];
+      await open(tabs);
+      tabs.splice(0, 1);
+      await endSource();
+      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      expect(host.textContent).toContain("remoteDesktop.previewEnded");
+      tabs.push(tabOf("ref-b", "b"));
+      await act(async () => button("connect").click());
+      expect(starts().at(-1)).toMatchObject({ grant: "b".repeat(43) });
+    });
+
+    it("an older computer without refs keeps its name matching", async () => {
+      const tabs: unknown[] = [{ ...tabOf("x", "a"), ref: undefined }];
+      let ended = false;
+      previewHost({
+        tabs,
+        input: (request) => {
+          if (ended) throw new Error("PREVIEW_SOURCE_ENDED");
+          return { sequence: request.sequence };
+        },
+      });
+      await render();
+      await connect();
+      ended = true;
+      tabs.splice(0, 1, { ...tabOf("x", "b"), ref: undefined });
+      await endSource();
+      await connect();
+      expect(starts().at(-1)).toMatchObject({ grant: "b".repeat(43) });
+    });
+  });
+
   describe("after the computer's own Disconnect", () => {
     const previewLease = {
       lease: "lease",
@@ -6663,14 +6816,22 @@ describe("plugin preview tab view", () => {
   });
 
   it("ends without reconnecting when the tab is gone", async () => {
+    const tabs: unknown[] = [
+      { grant, sessionId: "s1", pluginName: "Baguette", title: "Sim" },
+    ];
     previewHost({
+      tabs,
       input: () => {
+        tabs.length = 0;
         throw new Error("PREVIEW_SOURCE_ENDED");
       },
     });
     await render();
     await connect();
     await viewerInput(1);
+    // It first waits briefly for a replacement, then ends for good.
+    expect(host.textContent).not.toContain("remoteDesktop.previewEnded");
+    await act(async () => vi.advanceTimersByTimeAsync(11_000));
     expect(host.textContent).toContain("remoteDesktop.previewEnded");
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "previewStart")).toHaveLength(1);
