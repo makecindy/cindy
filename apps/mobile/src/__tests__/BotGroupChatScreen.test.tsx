@@ -22,27 +22,57 @@ const h = vi.hoisted(() => ({
   teammateQuery: '',
   uuid: 0,
   scroll: null as any,
-  scrollToEnd: vi.fn(),
+  scrollTo: vi.fn(),
+  moveTail: vi.fn(),
+  cancelTail: vi.fn(),
+  nativeViewportAvailable: false,
+  nativeViewport: null as any,
+  nativeChatViewportAvailable: false,
+  nativeChatViewport: null as any,
+  keyboardLift: null as any,
   markRead: vi.fn(),
   // Fake of the shared upload pipeline (useMobileLocalAttachments).
   local: null as any,
   discarded: [] as any[],
   deleted: [] as string[],
   keyboardAvoidingView: null as any,
+  flowHeaderLayout: null as any,
   platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
 }));
 
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
+// Native animation is covered by useSmoothMessageFollow/AnimatedContentHeight.
+// This screen test exercises ownership, visible range, and read receipts.
+vi.mock('react-native-reanimated', async () => ({ default: { ScrollView: (await import('react-native')).ScrollView } }));
+vi.mock('@/session/NativeChatViewport', () => ({
+  get nativeChatViewportAvailable() { return h.nativeChatViewportAvailable; },
+  get nativeAndroidKeyboardViewportAvailable() { return h.nativeChatViewportAvailable && h.platform.OS === 'android'; },
+  NativeChatViewport: ({ children, ...props }: any) => { h.nativeChatViewport = props; return children; },
+  NativeAndroidComposerAnchor: ({ children, followKeyboard }: any) => el('div', { 'data-native-keyboard-follow': String(!!followKeyboard) }, children),
+}));
+vi.mock('@/session/useSmoothMessageFollow', () => ({ useSmoothMessageFollow: () => ({
+  scrollRef: useRef(null), nativeScrollRef: useRef({ scrollTo: h.scrollTo }), move: h.moveTail, cancel: h.cancelTail,
+}) }));
+vi.mock('@/session/AnimatedContentHeight', () => ({ AnimatedContentHeight: ({ open = true, children }: any) => open ? children : null }));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardLift: ({ children, ...props }: any) => {
+  h.keyboardLift = props; return el('div', { 'data-keyboard-lift': String(props.active) }, children);
+} }));
+vi.mock('@/session/NativeKeyboardViewport', () => ({
+  get nativeKeyboardViewportAvailable() { return h.nativeViewportAvailable && h.platform.OS === 'ios'; },
+  NativeKeyboardViewport: ({ children, ...props }: any) => { h.nativeViewport = props; return children; },
+}));
 vi.mock('react-native', () => {
-  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout }: any) =>
-    el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
+  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout }: any) => {
+    if (testID === 'botGroup.flowHeader') h.flowHeaderLayout = onLayout;
+    return el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
       ref: (node: any) => { if (node) node.nativeLayout = onLayout; },
       style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity } }, children);
+  };
   return {
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
-      useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd }));
+      useImperativeHandle(ref, () => ({}));
       return el('div', { 'data-testid': props.testID }, children);
     }, KeyboardAvoidingView: ({ children, ...props }: any) => {
       h.keyboardAvoidingView = props;
@@ -291,6 +321,8 @@ beforeEach(() => {
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
   h.platform.OS = 'ios'; h.focused = true; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = [];
+  h.nativeViewportAvailable = false; h.nativeViewport = null; h.keyboardLift = null;
+  h.nativeChatViewportAvailable = false; h.nativeChatViewport = null;
   h.chat = { reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = []; h.leaveGuard = []; h.leaveDecision = async () => false;
   h.local = {
@@ -391,10 +423,17 @@ describe('group timeline', () => {
     expect(byId('botGroup.task.live')).toBeNull();
   });
 
-  it('uses the shared Android keyboard avoidance behavior for the group composer', async () => {
+  // Actual Android failure: the input ends 104pt below the keyboard because
+  // the nested KAV loses its header/safe-area origin. Unit: measure a wrapping
+  // header through the production screen, then update its size on relayout.
+  it('includes the measured Android header origin in keyboard avoidance', async () => {
     h.platform.OS = 'android';
     await render();
     expect(h.keyboardAvoidingView).toMatchObject({ enabled: true, behavior: 'height' });
+    await act(async () => h.flowHeaderLayout({ nativeEvent: { layout: { height: 52 } } }));
+    expect(h.keyboardAvoidingView.keyboardVerticalOffset).toBe(111);
+    await act(async () => h.flowHeaderLayout({ nativeEvent: { layout: { height: 78 } } }));
+    expect(h.keyboardAvoidingView.keyboardVerticalOffset).toBe(137);
     expect(h.headerBlur).toEqual([]);
   });
 
@@ -415,7 +454,7 @@ describe('group timeline', () => {
       h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
       h.scroll.onContentSizeChange(400, 2000);
     });
-    expect(h.scrollToEnd).toHaveBeenCalled();
+    expect(h.moveTail).toHaveBeenLastCalledWith(1500, false);
     expect(h.markRead).not.toHaveBeenCalled();
     const scroll = (offsetY: number, contentHeight = 2000) => h.scroll.onScroll({ nativeEvent: {
       contentOffset: { y: offsetY }, contentSize: { height: contentHeight }, layoutMeasurement: { height: 500 },
@@ -443,9 +482,9 @@ describe('group timeline', () => {
     // The reader stays in history, sees the arrival, and can explicitly return to it.
     const jump = byId('botGroup.newMessages') as HTMLButtonElement;
     expect(jump.textContent).toContain('count=1');
-    h.scrollToEnd.mockClear();
+    h.moveTail.mockClear();
     await act(async () => jump.click());
-    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(h.moveTail).toHaveBeenCalledWith(2500, true);
     expect(h.markRead).not.toHaveBeenCalled();
     await act(async () => scroll(2500, 3000));
     expect(byId('botGroup.newMessages')).toBeNull();
@@ -460,13 +499,97 @@ describe('group timeline', () => {
       h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
       h.scroll.onContentSizeChange(400, 2000);
     });
-    h.scrollToEnd.mockClear();
+    h.moveTail.mockClear();
     h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
     await act(async () => root.render(el(BotGroupChatScreen, props)));
     await act(async () => h.scroll.onContentSizeChange(400, 2500));
     expect(byId('botGroup.newMessages')?.textContent).toContain('count=1');
     expect(h.markRead).not.toHaveBeenCalled();
-    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.moveTail).not.toHaveBeenCalled();
+  });
+
+  // Unit: the actual unread action must use the same native keyboard movement
+  // as the composer. A history reader must still be able to tap it with IME open.
+  it.each(['ios', 'android'])('keeps the unread action under %s keyboard ownership', async (platform) => {
+    h.platform.OS = platform;
+    h.nativeViewportAvailable = platform === 'ios';
+    h.nativeChatViewportAvailable = platform === 'android';
+    const data = group();
+    const props = { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1', messageId: data.messages[0].id };
+    h.chat = { ...h.chat, state: { kind: 'ready', group: data } };
+    await act(async () => root.render(el(BotGroupChatScreen, props)));
+    h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('keyboard-arrival', 20, {})] } } };
+    await act(async () => root.render(el(BotGroupChatScreen, props)));
+    const jump = byId('botGroup.newMessages') as HTMLButtonElement;
+    expect(jump).toBeTruthy();
+    expect(jump.closest(platform === 'ios' ? '[data-keyboard-lift="true"]' : '[data-native-keyboard-follow="true"]')).toBeTruthy();
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => jump.click());
+    if (platform === 'android') expect(h.nativeChatViewport.followLatest).toBe(true);
+  });
+
+  // Unit: Android native layout compensation must be the only scroll writer.
+  // The observed failure is a 22pt dip/reversal when JS corrects the next frame.
+  it('hands Android layout and content following to native, while a reader drag relinquishes the tail', async () => {
+    h.platform.OS = 'android'; h.nativeChatViewportAvailable = true;
+    await render();
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 480 } } });
+    });
+    expect(h.moveTail).not.toHaveBeenCalled();
+    expect(h.nativeChatViewport).toMatchObject({ active: true, followLatest: true });
+    expect(h.keyboardAvoidingView.enabled).toBe(false);
+    // Android scroll events report zero inset even while the native keyboard
+    // covers the last 300pt. Those hidden replies must not be marked as read.
+    await act(async () => {
+      h.nativeChatViewport.onViewportInsetChange({ nativeEvent: { bottom: 300, viewportHeight: 180, offsetY: 1500 } });
+      h.scroll.onScroll({ nativeEvent: {
+        contentOffset: { y: 1500 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 480 },
+        contentInset: { top: 0, left: 0, right: 0, bottom: 0 },
+      } });
+    });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => h.scroll.onScrollBeginDrag());
+    expect(h.nativeChatViewport.followLatest).toBe(false);
+  });
+
+  // Unit: keyboard inset must not become a second JS scroll writer or acknowledge
+  // unread content. Existing layout/read-receipt cases have no native inset.
+  // Minimal failure: 500pt list, 300pt keyboard, then a history drag mid-transition.
+  it('hands keyboard motion to native and preserves the history reader on completion', async () => {
+    h.nativeViewportAvailable = true;
+    await render();
+    expect(h.keyboardAvoidingView.enabled).toBe(false);
+    expect(h.keyboardLift).toMatchObject({ active: true, restingBottom: 34, keyboardGap: 0 });
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+      h.nativeViewport.onKeyboardTransition({ nativeEvent: { active: true, bottom: 300 } });
+    });
+    h.moveTail.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2100));
+    expect(h.moveTail).not.toHaveBeenCalled();
+    await act(async () => h.nativeViewport.onKeyboardTransition({ nativeEvent: { active: false, bottom: 300 } }));
+    expect(h.moveTail).toHaveBeenLastCalledWith(1900, true);
+    const sample = { nativeEvent: { contentOffset: { y: 1500 }, contentSize: { height: 2100 },
+      layoutMeasurement: { height: 500 }, contentInset: { bottom: 300 } } };
+    h.markRead.mockClear();
+    await act(async () => {
+      h.scroll.onScrollBeginDrag();
+      h.scroll.onScrollEndDrag(sample);
+    });
+    expect(h.nativeViewport.followLatest).toBe(false);
+    expect(h.markRead).not.toHaveBeenCalled();
+    h.moveTail.mockClear();
+    await act(async () => {
+      h.nativeViewport.onKeyboardTransition({ nativeEvent: { active: true, bottom: 0 } });
+      h.nativeViewport.onKeyboardTransition({ nativeEvent: { active: false, bottom: 0 } });
+      h.scroll.onContentSizeChange(400, 2200);
+    });
+    expect(h.moveTail).not.toHaveBeenCalled();
+    expect(h.nativeViewport.followLatest).toBe(false);
   });
 
   it('acknowledges a short conversation only after both native dimensions are measured', async () => {
@@ -1374,8 +1497,10 @@ describe('direct server group presentation', () => {
     await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
     expect(all('botGroup.message.user')).toHaveLength(0);
     expect(node.textContent).toContain('Other member');
-    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
+    // Native anchoring takes over for history, not while the tail follower owns scrolling.
+    expect(h.scroll.maintainVisibleContentPosition).toBeUndefined();
     await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
+    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
     expect(byId('botGroup.settings.replyMode.mentioned')?.disabled).toBe(true);
@@ -1410,6 +1535,37 @@ describe('direct server group presentation', () => {
     await act(async () => { h.appState = 'active'; h.appStateListeners.forEach(listener => listener(h.appState)); });
     expect(media).toHaveBeenCalledTimes(3);
     expect(byId('attachment.image')?.getAttribute('data-uri')).toBe('https://media.example.invalid/image-0');
+  });
+
+  // Merge #7123/#7145: native IME changes occupancy without shrinking ScrollView.
+  // Unit, real screen + preview resolver: an obscured image must stay unloaded
+  // until keyboard dismissal exposes it, even if Android reports zero inset.
+  it.each(['ios', 'android'])('authorizes previews using the native keyboard viewport (%s)', async platform => {
+    h.platform.OS = platform;
+    h.nativeViewportAvailable = platform === 'ios';
+    h.nativeChatViewportAvailable = platform === 'android';
+    const attachment = { id: 'media', name: 'picture.png', mimeType: 'image/png', size: 10,
+      category: 'image' as const, url: 'https://media.example.invalid/one-use', path: null };
+    h.chat = { ...h.chat, server: true, media: vi.fn(async () => attachment) };
+    await render(group({ messages: [message('picture', 1, { authorKind: 'user', isSelf: false,
+      attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }));
+    const keyboard = (bottom: number) => {
+      if (platform === 'ios') h.nativeViewport.onKeyboardTransition({ nativeEvent: { active: false, bottom } });
+      else h.nativeChatViewport.onViewportInsetChange({ nativeEvent: { bottom, viewportHeight: 1000 - bottom, offsetY: 0 } });
+    };
+    let row = byId('attachmentStrip') as HTMLElement & { nativeLayout?: (event: unknown) => void };
+    while (!row.nativeLayout) row = row.parentElement as typeof row;
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 1000 } } });
+      keyboard(300);
+      row.nativeLayout!({ nativeEvent: { layout: { y: 800, height: 100 } } });
+      h.scroll.onScroll({ nativeEvent: { contentOffset: { y: 0 }, contentSize: { height: 1200 },
+        layoutMeasurement: { height: 1000 }, contentInset: { bottom: platform === 'ios' ? 300 : 0 } } });
+    });
+    expect(h.chat.media).not.toHaveBeenCalled();
+    await act(async () => keyboard(0));
+    expect(h.chat.media).toHaveBeenCalledExactlyOnceWith('media', expect.any(AbortSignal));
+    expect(byId('attachment.image')?.getAttribute('data-uri')).toBe(attachment.url);
   });
 
   it.each([undefined, 'thread-root'])('gates server previews by the viewport and reauthorizes on tap (thread=%s)', async (threadRootId) => {

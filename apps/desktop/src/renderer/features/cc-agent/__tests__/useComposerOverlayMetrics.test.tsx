@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useComposerOverlayMetrics } from '../useComposerOverlayMetrics';
@@ -73,5 +73,40 @@ describe('useComposerOverlayMetrics', () => {
     const before = renders;
     for (const callback of resizeCallbacks) callback();
     expect(renders).toBe(before);
+  });
+
+  // Unit: typing/status text mutations forced layout before ResizeObserver,
+  // visible as ~110ms in the live send profile. Existing tests only cover renders,
+  // not synchronous layout reads; absolute flyouts must still update immediately.
+  it('lets resize observation handle text edits while measuring new absolute flyouts', async () => {
+    const overlay = makeOverlay();
+    const readHeight = vi.fn(() => overlayHeight);
+    Object.defineProperty(overlay, 'offsetHeight', { get: readHeight });
+    overlay.getBoundingClientRect = () => ({ bottom: 500 }) as DOMRect;
+    const stack = document.createElement('div');
+    stack.dataset.chatComposerStack = '';
+    stack.getBoundingClientRect = () => ({ top: 300 }) as DOMRect;
+    const center = document.createElement('div');
+    center.dataset.composerCenterGroup = '';
+    center.getBoundingClientRect = () => ({ top: 250, height: 32 }) as DOMRect;
+    overlay.append(stack, center);
+    render(<Probe overlay={overlay} />);
+    readHeight.mockClear();
+    await act(async () => { stack.replaceChildren(document.createTextNode('typing')); });
+    expect(readHeight).not.toHaveBeenCalled();
+
+    // A reserved center row can gain/lose its occupant without resizing.
+    await act(async () => { center.append(document.createElement('button')); });
+    expect(latest?.bottomCenterClearanceOffset).toBe(250);
+    await act(async () => { center.replaceChildren(); });
+    expect(latest?.bottomCenterClearanceOffset).toBe(200);
+
+    const flyout = document.createElement('div');
+    flyout.dataset.planFlyoutPositioner = 'composer';
+    flyout.getBoundingClientRect = () => ({ top: 150, height: 100 }) as DOMRect;
+    await act(async () => { overlay.append(flyout); });
+    expect(latest?.bottomCenterClearanceOffset).toBe(350);
+    await act(async () => { flyout.remove(); });
+    expect(latest?.bottomCenterClearanceOffset).toBe(200);
   });
 });

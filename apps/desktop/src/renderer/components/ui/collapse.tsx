@@ -23,7 +23,7 @@
  * 有明确终点"的瞬态动画(§14.4 红线);禁止用于常驻/循环动效。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -33,15 +33,29 @@ const COLLAPSE_UNMOUNT_FALLBACK_MS = 280;
 
 interface CollapseProps extends React.HTMLAttributes<HTMLDivElement> {
   open: boolean;
+  /** Streaming chat bodies also resize while open, not only when toggled. */
+  animateResize?: boolean;
   /** 追加在内层内容容器上的 class(外层 grid 容器用 className)。 */
   innerClassName?: string;
   children: React.ReactNode;
 }
 
-export function Collapse({ open, className, innerClassName, children, ...rest }: CollapseProps) {
+export function Collapse({ open, animateResize = false, className, innerClassName, children, style, ...rest }: CollapseProps) {
   const reducedMotion = useReducedMotion();
   const [mounted, setMounted] = useState(open);
   const [expanded, setExpanded] = useState(open);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [bodyHeight, setBodyHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!animateResize || !mounted || !body) return;
+    const measure = () => setBodyHeight(body.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, [animateResize, mounted]);
   // transitionend 可能在快速再展开后迟到,用最新 open 拦掉过期的卸载。
   const openRef = useRef(open);
   openRef.current = open;
@@ -99,14 +113,16 @@ export function Collapse({ open, className, innerClassName, children, ...rest }:
     <div
       {...rest}
       className={cn(
-        'grid transition-[grid-template-rows] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
-        expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+        'duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
+        animateResize ? 'overflow-hidden transition-[height]' : 'grid transition-[grid-template-rows]',
+        !animateResize && (expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'),
         className,
       )}
+      style={animateResize ? { ...style, height: expanded ? bodyHeight ?? 'auto' : 0 } : style}
       onTransitionEnd={(e) => {
         if (
           e.target === e.currentTarget &&
-          e.propertyName === 'grid-template-rows' &&
+          e.propertyName === (animateResize ? 'height' : 'grid-template-rows') &&
           !openRef.current
         ) {
           if (fallbackTimerRef.current !== null) {
@@ -118,9 +134,11 @@ export function Collapse({ open, className, innerClassName, children, ...rest }:
       }}
     >
       <div
+        ref={bodyRef}
         aria-hidden={!expanded || undefined}
         className={cn(
           'min-h-0 overflow-hidden',
+          animateResize && 'flow-root',
           'transition-opacity duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
           expanded ? 'opacity-100' : 'opacity-0',
           innerClassName,

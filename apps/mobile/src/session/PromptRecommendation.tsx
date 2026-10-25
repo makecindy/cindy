@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react-native';
@@ -6,11 +6,29 @@ import { GlassView } from 'expo-glass-effect';
 import Animated, { Easing, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { Text } from '@/components/AppText';
+import { AnimatedContentHeight } from './AnimatedContentHeight';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import { useLiquidGlassAvailable } from '@/session/useLiquidGlassAvailable';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, iconStroke, lineHeight, motionDuration, motionEasing, radius, spacing, typeScale } from '@/theme/tokens';
+
+/** Keep the last card in the collapsing slot so its removal has a visible trajectory. */
+export function PromptRecommendationSlot({ prompt, paddingHorizontal, onAccept, onDismiss }: {
+  prompt: string | null;
+  paddingHorizontal: number;
+  onAccept(): void;
+  onDismiss(): void;
+}) {
+  return (
+    <AnimatedContentHeight open={!!prompt} testID="session.promptRecommendationSlot">
+      <View style={{ paddingHorizontal }}>
+        <PromptRecommendation key={prompt} prompt={prompt ?? ''}
+          onAccept={onAccept} onDismiss={onDismiss} />
+      </View>
+    </AnimatedContentHeight>
+  );
+}
 
 /** Floating sibling of the composer, with a single tap target and swipe dismissal. */
 export function PromptRecommendation({ prompt, onAccept, onDismiss }: {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   KeyboardEvent,
@@ -8,6 +8,8 @@ import type {
 } from "react-native";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useComposerDockKeyboardHeight } from "@/session/useComposerDockKeyboardHeight";
+import { NativeKeyboardViewport } from "@/session/NativeKeyboardViewport";
+import { ComposerOverlayHeight, ComposerOverlayLayout, useComposerOverlayLayout } from "@/session/ComposerOverlayLayout";
 
 const native = vi.hoisted(() => ({
   keyboard: { height: { value: 0 }, state: { value: 0 } },
@@ -16,7 +18,13 @@ const native = vi.hoisted(() => ({
   metrics: undefined as KeyboardMetrics | undefined,
   listeners: new Map<KeyboardEventName, Set<(event: KeyboardEvent) => void>>(),
 }));
+vi.mock("expo-modules-core", () => ({
+  requireOptionalNativeModule: () => ({ keyboardViewportAvailable: true }),
+  requireNativeViewManager: () => ({ children }: any) => <div>{children}</div>,
+}));
 vi.mock("react-native", () => ({
+  Platform: { OS: "ios" },
+  View: ({ children }: any) => <section>{children}</section>,
   useWindowDimensions: () => native.viewport,
   Keyboard: {
     metrics: () => native.metrics,
@@ -85,6 +93,82 @@ afterEach(() => {
 function mount() {
   act(() => root.render(<Harness />));
 }
+
+// Unit regression: recommendation/working-row height samples previously updated
+// SessionScreen, rebuilding the composer and message projection each animation
+// frame. Keyboard-height tests only cover the native keyboard source. Two layout
+// samples must update the consumers without re-rendering the page or losing focus.
+it("updates composer clearance without rebuilding the task page or its focused input", () => {
+  let layout!: ReturnType<typeof useComposerOverlayLayout>;
+  let pageRenders = 0;
+  let historyRenders = 0;
+  function Page() {
+    pageRenders++;
+    layout = useComposerOverlayLayout();
+    return <>
+      <input defaultValue="draft" />
+      <ComposerOverlayLayout source={layout}>{({ height, inputTop }) =>
+        <output>{height - inputTop}</output>}
+      </ComposerOverlayLayout>
+      <ComposerOverlayHeight source={layout}>{height => {
+        historyRenders++;
+        return <span>{height}</span>;
+      }}</ComposerOverlayHeight>
+    </>;
+  }
+  document.body.append(container);
+  act(() => root.render(<Page />));
+  const input = container.querySelector('input')!;
+  input.focus();
+  input.value = 'unfinished draft';
+  act(() => layout.update({ height: 150, inputTop: 50 }));
+  expect(container.querySelector('output')?.textContent).toBe('100');
+  act(() => layout.update({ height: 120, inputTop: 30 }));
+  expect(container.querySelector('output')?.textContent).toBe('90');
+  const renders = historyRenders;
+  act(() => layout.update({ inputTop: 20 }));
+  expect(container.querySelector('output')?.textContent).toBe('100');
+  expect(container.querySelector('span')?.textContent).toBe('120');
+  expect(historyRenders).toBe(renders);
+  expect(pageRenders).toBe(1);
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe('unfinished draft');
+  // Once UIKit owns clearance, per-frame samples must not republish all retained
+  // histories. Secondary React geometry catches up after the animation settles.
+  vi.useFakeTimers();
+  act(() => layout.update({ height: 130 }, true));
+  act(() => layout.update({ height: 140 }, true));
+  expect(historyRenders).toBe(renders);
+  expect(container.querySelector('output')?.textContent).toBe('120');
+  act(() => vi.advanceTimersByTime(50));
+  expect(historyRenders).toBe(renders + 1);
+  expect(container.querySelector('span')?.textContent).toBe('140');
+  vi.useRealTimers();
+});
+
+// Unit: switching keyboard ownership cannot remount history or lose its local
+// state. Height-only tests do not cover the wrapper's component identity.
+it("keeps history mounted when native keyboard ownership changes", () => {
+  let mounts = 0;
+  let unmounts = 0;
+  function History() {
+    useEffect(() => { mounts++; return () => { unmounts++; }; }, []);
+    return <input defaultValue="reading position" />;
+  }
+  const render = (enabled: boolean) => act(() => root.render(
+    <NativeKeyboardViewport enabled={enabled} followLatest={enabled} onKeyboardTransition={() => {}}>
+      <History />
+    </NativeKeyboardViewport>,
+  ));
+  render(true);
+  const input = container.querySelector("input")!;
+  input.value = "preserved history state";
+  render(false);
+  render(true);
+  expect(container.querySelector("input")).toBe(input);
+  expect(input.value).toBe("preserved history state");
+  expect({ mounts, unmounts }).toEqual({ mounts: 1, unmounts: 0 });
+});
 
 it("corrects a third-party keyboard height after show, then follows frame-only growth and shrinkage", () => {
   mount();

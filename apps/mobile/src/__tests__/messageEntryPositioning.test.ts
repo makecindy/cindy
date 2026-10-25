@@ -41,6 +41,7 @@ function fixture(focused: string | null = null, saved?: object) {
     mobileMessageHistoryRowKeyByIdentity: vi.fn(),
     lastAppliedFocusKeyRef: ref(null), userScrollForOlderRef: ref(false), lastAutoLoadEarlierKeyRef: ref(null),
     focusRunKey: focused ? `request:${focused}` : null, focusedItemKey: focused,
+    cancelTailMotion: vi.fn(), syncingWhileEmpty: false, historyPositioning: true,
   };
   bindings.revealPositionedHistory = callback('if (!initialAnchorDoneRef.current || !animation)', bindings);
   bindings.scrollToIndexProgrammatically = callback('return listRef.current?.scrollToIndex', bindings);
@@ -106,12 +107,16 @@ describe('message entry lifecycle', () => {
     finish(); await Promise.resolve();
     expect(h.state.revealed).toBe(false);
   });
-  it('opens normal histories at the latest row once, including a previously empty cache', () => {
+  it('keeps an already-visible empty history positioned when its first live row arrives', () => {
     const h = fixture();
     h.bindings.listData = []; h.layout();
     expect(h.state.revealed).toBe(true);
     h.bindings.listData = [{ key: 'latest' }]; h.layout(); h.layout();
-    expect(h.bindings.scrollToEndProgrammatically).toHaveBeenCalledExactlyOnceWith(false);
+    // A first live row uses the existing content-follow path; do not replay
+    // the initial full-history conceal/reveal or force a separate layout jump.
+    expect(h.bindings.scrollToEndProgrammatically).not.toHaveBeenCalled();
+    expect(h.bindings.initialRevealProgress.setValue).not.toHaveBeenCalledWith(0);
+    expect(h.state.revealed).toBe(true);
     expect(h.bindings.nearBottomRef.current).toBe(true);
   });
   it('restores deliberate history reading and lets an explicit link override the bookmark', () => {
@@ -141,6 +146,7 @@ it('reconciles late attachment, composer and keyboard measurements through the p
     });
     const bindings = {
       scrollMetricsRef: metrics, nearBottomRef: nearBottom, readingOlderRef: readingOlder,
+      nativeKeyboardInset: ref(0),
       historyPrependTransactionRef: ref(null),
       // Companion receipt behavior is covered by the mounted MessageRenderer tests.
       acknowledgeCompanionReadRef: ref(vi.fn()),

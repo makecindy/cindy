@@ -28,6 +28,7 @@ import {
   MOBILE_MESSAGE_LIST_BOTTOM_PADDING,
   MOBILE_NEAR_BOTTOM_THRESHOLD,
   mobileMessageListEndOffset,
+  mobileNativeScrollMetrics,
   mobileMessageListBottomPadding,
   mobileMessageListNearBottomThreshold,
   shouldAutoFollowMessages,
@@ -43,6 +44,20 @@ import {
   resolveMobileNearBottomOnScroll,
   shouldUnpinMobileFollowOnDrag,
 } from '@/session/messageScroll';
+
+// Unit regression: a keyboard inset changes the visible range, not the Fabric
+// frame. Treating all 800pt as visible made the tail controller undo native
+// keyboard following by 300pt; existing tests only supplied normalized metrics.
+it.each([0, 300])('uses the native visible range for a %spt keyboard inset', bottom => {
+  const metrics = mobileNativeScrollMetrics({
+    contentSize: { height: 2000 }, contentOffset: { y: 1200 + bottom },
+    layoutMeasurement: { height: 800 }, contentInset: { bottom },
+  });
+  expect(mobileMessageListEndOffset(metrics)).toBe(metrics.offsetY);
+  expect(evaluateMobileAnchorVerify({ attempts: 0, waitRounds: 0, listVisible: true,
+    metrics, stickToLatest: true, userControllingScroll: false,
+    preserveVisibleContentPosition: false })).toBe('settled');
+});
 
 function remoteMessage(
   patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'role' | 'content'>,

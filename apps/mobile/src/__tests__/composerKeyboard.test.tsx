@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act, useRef, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type {
   KeyboardEvent,
@@ -83,8 +83,10 @@ vi.mock('@/hooks/useReduceMotion', () => ({
   useReduceMotionEnabled: () => native.reducedMotion,
 }));
 
-function Harness({ active = false, inset = 0, enabled = true }) {
-  const keyboard = useMobileKeyboardState(enabled);
+function Harness({ active = false, inset = 0, enabled = true, animateLayout = true }) {
+  const layoutAnimation = useRef(animateLayout);
+  layoutAnimation.current = animateLayout;
+  const keyboard = useMobileKeyboardState(enabled, layoutAnimation);
   useComposerCardTransition(active, keyboard);
   return (
     <ComposerKeyboardAvoidingView
@@ -206,6 +208,21 @@ afterEach(() => {
 });
 
 describe('composer keyboard geometry and motion', () => {
+  // Device trace: the UI-thread dock was also receiving global layout animations.
+  // Unit: a dock-owned transition publishes geometry without a second animator;
+  // switching back restores the normal keyboard animation without resubscribing.
+  it('lets the dock own animation while preserving keyboard geometry', () => {
+    render({ animateLayout: false });
+    emit('keyboardWillShow');
+    expect(height()).toBe(300);
+    expect(native.schedule).not.toHaveBeenCalled();
+    expect(native.configure).not.toHaveBeenCalled();
+    render({ animateLayout: true });
+    emit('keyboardWillHide', keyboardEvent(844, 0));
+    expect(height()).toBe(0);
+    expect(native.schedule).toHaveBeenCalledOnce();
+  });
+
   it('does no keyboard work while disabled and refreshes native geometry when enabled again', () => {
     render({ enabled: false });
     expect(native.listeners.size).toBe(0);

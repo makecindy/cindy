@@ -250,7 +250,7 @@ describe('mobile native boundary contracts', () => {
     const viewport = elements.get('session.bottomViewport')!;
     const layer = elements.get('session.bottomLayer')!;
     expect(layer.parent).toBe(viewport);
-    expect(layer.openingElement.getText(source)).toContain('ref={bottomOverlayRef}');
+    expect(layer.openingElement.getText(source)).toContain('onLayout={handleBottomOverlayLayout}');
     expect(viewport.openingElement.getText(source)).toContain('pointerEvents="box-none"');
     for (const component of ['SessionComposerPalette', 'ComposerActivityStatus', 'SessionComposerInput']) {
       expect(viewport.getText(source)).toContain('<' + component);

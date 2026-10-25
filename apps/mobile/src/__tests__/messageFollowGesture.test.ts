@@ -62,6 +62,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     programmaticScrollInFlightRef: ref(false), programmaticAnimatedScrollInFlightRef: ref(false),
     programmaticScrollSettleAtRef: ref(0), mvcpSettleAtRef: ref(0),
     tailFollowerRef: ref(null),
+    nativeKeyboardTransition: ref(false), nativeKeyboardInset: ref(0), nativeAndroidComposerRef: ref(false),
     initialAnchorDoneRef: ref(true),
     reopeningAnchorRef: ref<{ anchor: { key: string; viewportOffset: number }; expires: number; corrections: number } | null>(null),
     reopeningFrameRef: ref<number | null>(null),
@@ -88,6 +89,10 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     ...scrollModel, ...state, createMobileTailFollower, mobileDebugEnabled, mobileDebugLog,
     sampleScrollDebug: createScrollDebugSampler(),
     initialRevealProgress: { setValue: vi.fn() }, setListRevealed: vi.fn(),
+    cancelTailMotion: vi.fn(),
+    moveTail: (_offset: number, animated: boolean) => {
+      tailScroll({ animated });
+    },
     listRef: ref({
       getState: () => ({ scrollLength: 800, scroll: state.scrollMetricsRef.current.offsetY,
         data: [{ key: 'saved' }], sizeAtIndex: () => 1000 }),
@@ -135,6 +140,18 @@ beforeEach(() => {
 afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  // Unit: Android scroll events report zero insets even when the dock reserves
+  // native padding. A subsequent event must not lose that measured clearance.
+  it('keeps native Android composer clearance when raw scroll events have zero insets', () => {
+    const h = harness();
+    h.state.nativeAndroidComposerRef.current = true;
+    h.state.nativeKeyboardInset.current = 120;
+    h.handleScroll(h.scrollEvent(1320));
+    expect(h.state.nativeKeyboardInset.current).toBe(120);
+    expect(h.state.scrollMetricsRef.current.viewportHeight).toBe(680);
+    expect(h.state.nearBottomRef.current).toBe(true);
+  });
+
   it('defers rich content during a drag without preventing reader ownership', () => {
     const richContent = new RichContentRuntime();
     const h = harness(richContent);
@@ -331,6 +348,7 @@ describe('streaming follow yields to the reader', () => {
 
   it.each(['end', 'index'])('discards the cancelled drag sample when explicit %s takes over', (target) => {
     const h = harness();
+    h.revealPositionedHistory();
     h.handleScrollBeginDrag(h.scrollEvent(1200));
     h.handleScroll(h.scrollEvent(1196));
     h.handleHistoryTouchCancel();
@@ -412,6 +430,7 @@ describe('streaming follow yields to the reader', () => {
 
   it.each([false, true])('preserves an explicit animated jump when touchEnd precedes onPress: %s', (releaseFirst) => {
     const h = harness();
+    h.revealPositionedHistory();
     h.state.nearBottomRef.current = false;
     h.state.scrollMetricsRef.current.offsetY = 300;
     // Native animation has not landed yet; command dispatch does not acknowledge its offset.
@@ -424,15 +443,18 @@ describe('streaming follow yields to the reader', () => {
     h.handleContentSize(400, 2200);
     const remaining = h.state.programmaticScrollSettleAtRef.current - Date.now();
     vi.advanceTimersByTime(remaining - 1);
-    // Releasing the button and receiving new content must not truncate the animation.
-    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    // New content retargets the same smooth trajectory. It must never insert an
+    // immediate offset command; duplicate targets are coalesced by the UI hook.
+    expect(h.tailScroll.mock.calls.every(([options]) => options.animated)).toBe(true);
+    const retargets = h.tailScroll.mock.calls.length;
     h.handleScroll(h.scrollEvent(1400));
     settle();
-    expect(h.tailScroll).toHaveBeenCalledExactlyOnceWith({ animated: true });
+    expect(h.tailScroll).toHaveBeenCalledTimes(retargets);
   });
 
   it('lets a new upward drag interrupt verification after an explicit animated jump', () => {
     const h = harness();
+    h.revealPositionedHistory();
     h.scrollToBottom();
     h.handleHistoryTouchStart(touch());
     h.handleScrollBeginDrag(h.scrollEvent(1200));
@@ -447,6 +469,7 @@ describe('streaming follow yields to the reader', () => {
 
   it('allows an upward drag to unpin while content grows before the first scroll event', () => {
     const h = harness();
+    h.revealPositionedHistory();
     h.handleHistoryTouchStart(touch());
     h.handleContentSize(400, 2040);
     h.handleScrollBeginDrag(h.scrollEvent(1200));

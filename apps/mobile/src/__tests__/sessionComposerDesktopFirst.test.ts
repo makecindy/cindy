@@ -398,7 +398,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain("position: 'absolute'");
     expect(source).toContain('bottom: 0');
     expect(source).toContain('safeAreaBottomInset: insets.bottom');
-    expect(source).toContain('const bottomOverlayHeight = useMemo(');
+    expect(source).toContain('<ComposerOverlayHeight source={composerOverlayLayout}>');
     expect(source).toContain('nativeShellLayout.keyboardBottomInset');
     expect(source).toContain('onLayout={handleBottomOverlayLayout}');
     expect(source).toContain('bottomOverlayHeight={bottomOverlayHeight}');

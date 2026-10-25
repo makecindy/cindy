@@ -473,7 +473,7 @@ describe('pending_send 渲染接线', () => {
     readNames(callback);
     const pendingSend = { onSelect: vi.fn(), onRemove: vi.fn(), onSendNow: vi.fn() };
     const bindings: Record<string, unknown> = Object.fromEntries([...identifiers].map((name) => [name, undefined]));
-    Object.assign(bindings, { pendingSend, viewportLayout: { contentWidth: 390 } });
+    Object.assign(bindings, { pendingSend, viewportLayout: { contentWidth: 390 }, retainedRows: { exiting: new Set(), onExited: vi.fn() } });
     const compiled = ts.transpileModule('const project = ' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
     const actions = new Function(...Object.keys(bindings), compiled + '\nreturn project();')(...Object.values(bindings));
     expect(actions.pendingSend).toBe(pendingSend);
