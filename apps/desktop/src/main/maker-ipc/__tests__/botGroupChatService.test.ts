@@ -495,6 +495,23 @@ describe('botGroupChatService', () => {
     expect(JSON.stringify(group.messages)).not.toContain('private preparation details');
   });
 
+  it.each([
+    ['LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private host', 'REMOTE_DEVICE_LIMIT'],
+    ['LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private host', 'REMOTE_TOTAL_LIMIT'],
+  ] as const)('surfaces the remote task quota (%#) from the lane preparation message without leaking it', async (message, failureCode) => {
+    const harness = createHarness(() => null, {
+      ensureLane: async () => ({ ok: false, errorCode: 'LAZY_CREATE_FAILED', message }),
+    });
+    const groupId = await createGroup(harness, ['mimi', 'abu']);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'remote-limit' });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toEqual([]);
+    expect(group.messages.filter(item => item.kind === 'notice')).toEqual([
+      expect.objectContaining({ noticeCode: 'member-unavailable', runtimeFailureCode: failureCode }),
+    ]);
+    expect(JSON.stringify(group.messages)).not.toContain('private host');
+  });
+
   it('a round superseded while a member prepares never dispatches and never steals the new waiter', async () => {
     let releaseSync!: () => void;
     const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
@@ -845,6 +862,20 @@ describe('botGroupChatService 分工', () => {
     expect(group.messages.find(message => message.kind === 'notice' && message.planId === plan.id))
       .toMatchObject({ noticeCode: 'member-unavailable', runtimeFailureCode: failureCode, content: '' });
     expect(JSON.stringify(group.messages)).not.toContain('private preparation details');
+  });
+
+  it('surfaces the remote task quota on a failed plan step without leaking the host message', async () => {
+    const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(),
+      ensureLane: async () => ({ ok: false, errorCode: 'LAZY_CREATE_FAILED', message: 'LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private host' }),
+    });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toEqual([]);
+    expect(group.messages.find(message => message.kind === 'notice' && message.planId === plan.id))
+      .toMatchObject({ noticeCode: 'member-unavailable', runtimeFailureCode: 'REMOTE_DEVICE_LIMIT', content: '' });
+    expect(JSON.stringify(group.messages)).not.toContain('private host');
   });
 
   it('runs the steps one at a time in the plan work directory and stops after each', async () => {

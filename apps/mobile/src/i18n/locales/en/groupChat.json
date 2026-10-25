@@ -105,7 +105,9 @@
       "QUOTA_EXCEEDED": "{{name}} could not reply: the model usage limit was reached.\nCheck the provider quota, or choose another available model.",
       "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
       "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
-      "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+      "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue.",
+      "REMOTE_DEVICE_LIMIT": "{{name}} could not reply: this device has reached its remote session limit.\nArchive unused sessions, or ask the provider owner to raise the limit in Remote & sharing, then send your message again.",
+      "REMOTE_TOTAL_LIMIT": "{{name}} could not reply: the provider computer has reached its total remote session limit.\nAsk the owner to release unused sessions or raise the limit in Remote & sharing, then send your message again."
     },
     "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
   },

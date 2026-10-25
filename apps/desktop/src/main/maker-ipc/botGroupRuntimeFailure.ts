@@ -2,6 +2,7 @@ import { isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '.
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import type { BotGroupChatService } from './botGroupChatService.js';
+import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits.js';
 import { parseOverloadError, UPSTREAM_OVERLOAD_REASON } from '@cindy/maker-core';
 
 export { BOT_GROUP_RUNTIME_FAILURE_PREFIX, botGroupRuntimeFailureDetail, readBotGroupRuntimeFailureDetail } from '../../shared/botGroupChat.js';
@@ -17,6 +18,12 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   for (const value of values) {
     if (typeof value === 'string' && isPiImageInputUnsupportedError(value)) return 'IMAGE_INPUT_UNSUPPORTED';
     if (isBotGroupRuntimeFailureCode(value)) return value;
+  }
+  // Remote provider task quota: the reason marker survives IPC / LAZY_CREATE_FAILED wrapping.
+  for (const value of values) {
+    const limitKey = remoteAgentLimitErrorKey(value);
+    if (limitKey === 'chat.remoteError.REMOTE_AGENT_DEVICE_LIMIT') return 'REMOTE_DEVICE_LIMIT';
+    if (limitKey === 'chat.remoteError.REMOTE_AGENT_TOTAL_LIMIT') return 'REMOTE_TOTAL_LIMIT';
   }
   // Codex translators publish the stable tag even when message text is redacted.
   if (data?.codexErrorInfo === 'usageLimitExceeded' || data?.codexErrorInfo === 'sessionBudgetExceeded') return 'QUOTA_EXCEEDED';

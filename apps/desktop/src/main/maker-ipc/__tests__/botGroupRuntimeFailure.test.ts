@@ -20,6 +20,9 @@ describe('group runtime failure diagnostics', () => {
     ['budget_exceeded private account', 'QUOTA_EXCEEDED'],
     ['quota exceeded private account', 'QUOTA_EXCEEDED'],
     ['unknown private prompt, path and credentials', 'RUNTIME_ERROR'],
+    ['LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private host details', 'REMOTE_DEVICE_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT]', 'REMOTE_TOTAL_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] private host without a reason', 'RUNTIME_ERROR'],
   ])('classifies %s without returning the diagnostic text', (error, code) => {
     expect(botGroupRuntimeFailureCode(new Error(error))).toBe(code);
   });
