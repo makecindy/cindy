@@ -35,19 +35,8 @@ import type { ImChannelAdapter, ImChannelName } from './types';
 
 const log = createLogger('im:orchestrator');
 
-export interface ImOrchestrator {
-  readonly channel: ImChannelName;
-  readonly adapter: ImChannelAdapter;
-  readonly repo: ImSessionRepo;
-  readonly cards: ImCardBuilders;
-  readonly turnRunner: ImTurnRunner;
-  /** 接管 detach 清理 — binding cleanup hook 调用。 */
-  detachFromSession(sessionId: string): void;
-  /** Stop IM-owned turns and release all account-scoped session hooks. */
-  disposeAllSessions(): Promise<void>;
-  /** 从注册表摘掉并注销跨模块挂钩(伙伴自有连接移除 / 停止时)。 */
-  unregister(): void;
-}
+import type { ImOrchestrator } from '@cindy/im-runtime/orchestratorTypes';
+export type { ImOrchestrator } from '@cindy/im-runtime/orchestratorTypes';
 
 export interface CreateImOrchestratorOptions {
   /**

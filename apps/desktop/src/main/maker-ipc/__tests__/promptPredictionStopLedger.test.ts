@@ -11,7 +11,7 @@ import {
 
 const REGISTER_SOURCE = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 const PREPARATION_SOURCE = readFileSync(
-  new URL('../sessionEventPreparation.ts', import.meta.url),
+  new URL('../../../../../../packages/app-runtime/src/sessionEventPreparation.ts', import.meta.url),
   'utf8',
 );
 

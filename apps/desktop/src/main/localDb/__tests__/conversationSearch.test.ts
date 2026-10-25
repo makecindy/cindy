@@ -20,7 +20,7 @@ vi.mock('../chatHistorySearch.js', () => ({
 import { searchConversations } from '../conversationSearch.js';
 
 const conversationSearchSource = readFileSync(
-  resolve(__dirname, '..', 'conversationSearch.ts'),
+  resolve(__dirname, '../../../../../../packages/app-runtime/src/conversationSearch.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 

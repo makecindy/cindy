@@ -1,0 +1,30 @@
+{
+  "name": "@cindy/remote-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cindy/device-link": "workspace:*",
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/maker-scheduler": "workspace:*",
+    "@cindy/model-providers": "workspace:*",
+    "@cindy/browser-control-runtime": "workspace:*",
+    "diff": "^8.0.4",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "@types/ws": "*",
+    "typescript": "^5.7.0"
+  }
+}

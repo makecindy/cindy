@@ -1,3 +1,5 @@
+import {readRemoteMessageItems} from '@cindy/app-runtime/remoteWorkbenchMessages';
+export {createRemoteWorkbenchMessageReader} from '@cindy/app-runtime/remoteWorkbenchMessages';
 /**
  * get_task_digest 的 Desktop 数据源:把 `taskDigest.ts` 的纯组装接到本机数据库、会话控制、
  * 观察层与跨电脑只读通路上。跨电脑只走已有、已在被控端白名单里的读通道
@@ -116,49 +118,6 @@ async function unwrap(invoke: Invoke, deviceId: string, channel: string, args: u
   const response = await invoke(deviceId, channel, args);
   if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
   return response.result;
-}
-
-async function readRemoteMessageItems(invoke: Invoke, deviceId: string, sessionId: string, limit: number) {
-  const result = await readChatHistoryMessages(
-    {
-      sessionIds: [`${deviceId}::${sessionId}`],
-      workdir: null,
-      fromMs: null,
-      toMs: null,
-      agentKind: null,
-      roles: ['user', 'assistant'],
-      includeRewound: false,
-      limit,
-      cursor: null,
-      order: 'desc',
-    },
-    {
-      readLocal: async () => {
-        throw new Error('local read not expected');
-      },
-      invokeRemote: invoke,
-    },
-  );
-  if (!result.ok) return result;
-  return {
-    ok: true as const,
-    items: result.page.items
-      .slice()
-      .reverse()
-      .map((message) => ({
-        role: (message.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        text: historyContentText(message.content),
-        at: message.createdAt,
-      })),
-  };
-}
-
-/** 工作台跨电脑读取用:那台电脑上一件任务最近的用户 / 助手文字(时间正序)。 */
-export function createRemoteWorkbenchMessageReader(invoke: Invoke) {
-  return async (deviceId: string, sessionId: string) => {
-    const result = await readRemoteMessageItems(invoke, deviceId, sessionId, 60);
-    return result.ok ? result : { ok: false as const, errorCode: result.errorCode, message: result.message };
-  };
 }
 
 export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDigestDeps {

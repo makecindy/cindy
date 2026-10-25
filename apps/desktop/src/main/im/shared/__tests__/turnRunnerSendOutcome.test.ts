@@ -172,7 +172,7 @@ vi.mock('../../../turn-change-set/store', () => ({
   clearPendingTurnChangeSets: mocks.clearPendingTurnChangeSets,
 }));
 
-vi.mock('../pendingInteractions', () => ({
+vi.mock('@cindy/im-runtime/pendingInteractions', () => ({
   // route 释放会走它收口卡片 — 缺了这条 mock，release 路径会炸在 undefined 上。
   cancelPending: mocks.cancelPending,
   registerPending: mocks.registerPending,

@@ -100,7 +100,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   stopSessionTurnExplicitly: mocks.stopSessionTurnExplicitly,
   onSilentStopSettled: mocks.onSilentStopSettled,
 }));
-vi.mock('../pendingInteractions', () => ({
+vi.mock('@cindy/im-runtime/pendingInteractions', () => ({
   registerPending: mocks.registerPending,
   registerPendingExternal: mocks.registerPendingExternal,
   rejectAllPending: mocks.rejectAllPending,

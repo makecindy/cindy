@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { readdir, rm, access } from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,29 @@ import { OLLAMA_GITHUB_API_LATEST } from '../ollamaRelease.js';
 import { findOllamaBinary } from '../ollamaSidecar.js';
 
 describe('installOfficialSidecar', () => {
+  // Integration: a failed repair of the current version must retain both the
+  // previous manifest and its runnable binary; extraction uses a new directory.
+  it('preserves the running installation when a same-version repair fails', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ollama-repair-'));
+    try {
+      const root = path.join(dir, 'ollama-runtime');
+      const old = path.join(root, 'v0.32.14', 'ollama');
+      await mkdir(path.dirname(old), {recursive: true}); await writeFile(old, 'original');
+      const manifest = {version: '0.32.14', binary: old, sha256: 'ab'.repeat(32)};
+      await writeFile(path.join(root, 'current.json'), JSON.stringify(manifest));
+      await expect(installOfficialSidecar(dir, {platform: 'darwin',
+        resolve: async () => ({...manifest, url: 'https://github.com/ollama/ollama/releases/download/v0.32.14/ollama-darwin.tgz', assetName: 'ollama-darwin.tgz', sizeBytes: 12}),
+        download: async () => {}, extract: async (_file, destination) => {
+          await mkdir(destination, {recursive: true}); await writeFile(path.join(destination, 'partial'), 'unfinished');
+          throw new Error('SYNTHETIC_EXTRACT_FAILURE');
+        },
+      })).rejects.toThrow('SYNTHETIC_EXTRACT_FAILURE');
+      expect(await readSidecarManifest(dir)).toEqual(manifest);
+      expect(await readFile(old, 'utf8')).toBe('original');
+      expect((await readdir(root)).filter(name => name.startsWith('v0.32.14'))).toEqual(['v0.32.14']);
+    } finally { await rm(dir, {recursive: true, force: true}); }
+  });
+
   it('writes a sidecar manifest after extract', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ollama-install-'));
     const binary = path.join(dir, 'ollama');
@@ -125,7 +148,7 @@ describe('installOfficialSidecar', () => {
     });
     await expect(pending).rejects.toThrow('aborted');
     await expect(readSidecarManifest(dir)).resolves.toBeNull();
-    await expect(access(path.join(dir, 'ollama-runtime', 'v0.32.14'))).rejects.toThrow();
+    expect((await readdir(path.join(dir, 'ollama-runtime'))).filter(name => name.startsWith('v0.32.14'))).toEqual([]);
   });
 
   it('aborts a hanging GitHub release lookup when cancelled', async () => {

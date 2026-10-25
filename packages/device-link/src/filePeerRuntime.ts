@@ -68,7 +68,11 @@ function rpcTimeoutMs(value: unknown): number {
     : 15000;
 }
 
-export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
+export function createFilePeerRuntime(
+  bridge: FilePeerRuntimeBridge,
+  createPeerConnection: (configuration: RTCConfiguration) => RTCPeerConnection =
+    (configuration) => new RTCPeerConnection(configuration),
+) {
   const peers = new Map<string, PeerState>();
   const chunkBytes = 16384;
   const maxBytes = 2147483648;
@@ -279,7 +283,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
   }
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
-    const pc = new RTCPeerConnection({ iceServers: servers });
+    const pc = createPeerConnection({ iceServers: servers });
     const p: PeerState = { pc, dc: null, busy: false };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {

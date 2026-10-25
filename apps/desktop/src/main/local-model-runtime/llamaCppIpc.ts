@@ -21,7 +21,7 @@ export function registerLlamaCppHandlers(
   deps: Pick<
     LocalModelHandlerDeps,
     'assertTrustedSender' | 'refreshCatalog' | 'broadcastChanged' | 'currentOwnerSession'
-  > & { userDataDir: string; service?: LlamaCppService; getLocalCatalog?: () => unknown },
+  > & { userDataDir: string; service?: Pick<LlamaCppService, 'snapshot' | 'dispose' | 'install' | 'download' | 'start' | 'stop' | 'pause' | 'resume' | 'cancel'>; getLocalCatalog?: () => unknown },
 ) {
   const service = deps.service ?? getManagedLlamaCppService(deps.userDataDir);
   onQuit('llamacpp-sidecar', () => service.dispose(), 'async');

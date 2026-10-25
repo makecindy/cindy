@@ -80,6 +80,27 @@ const validParams = {
   providerId: null,
 };
 
+// Host isolation: terminal profiles can have the same task ID. Waiting on one
+// owner's model switch must never consume another owner's switch as completed.
+it('applies identical task IDs independently for distinct host registries', async () => {
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const first = makeDeps({ pendingSwitches: createPendingAgentSwitchRegistry(), getSessionRow: async () => { entered(); await blocked; return makeRow(); } });
+  const second = makeDeps({ pendingSwitches: createPendingAgentSwitchRegistry() });
+  for (const { deps } of [first, second]) deps.pendingSwitches!.set('s1', { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: null });
+  const applyingFirst = applyPendingAgentSwitchIfIdle(first.deps, 's1');
+  await started;
+  try {
+    await applyPendingAgentSwitchIfIdle(second.deps, 's1');
+    expect(second.calls).toContain('db');
+    expect(second.deps.pendingSwitches!.get('s1')).toBeUndefined();
+    expect(first.calls).not.toContain('db');
+    expect(first.deps.pendingSwitches!.get('s1')).toBeDefined();
+  } finally { release(); await applyingFirst; }
+  expect(first.calls).toContain('db');
+});
+
 const orcaAgents = [
   { kind: 'claude-code', dbKind: 'cc', model: 'claude-fable-5', providerId: 'anthropic' },
   { kind: 'codex', dbKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },

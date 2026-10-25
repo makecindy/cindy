@@ -77,6 +77,14 @@ function provider(
 }
 
 describe('checkImRouteAuth', () => {
+  // Terminal credentials come from an async vault. A pending Promise is not
+  // proof of credentials; Desktop's synchronous adapters remain valid too.
+  it.each(['gateway-key', 'api-key-header'] as const)('waits for the vault before admitting %s', async strategy => {
+    const source = provider({ id: 'async-vault', strategy });
+    const route = row({ providerId: source.id });
+    expect(await checkImRouteAuth(route, [source], deps({ readXdGatewayApiKey: async () => null, hasCustomProviderKey: async () => false }))).toEqual({ ok: false, missing: strategy === 'gateway-key' ? 'gateway-key' : 'provider-key' });
+    expect(await checkImRouteAuth(route, [source], deps({ readXdGatewayApiKey: async () => 'test-credential', hasCustomProviderKey: async () => true }))).toEqual({ ok: true, missing: null });
+  });
   it('checks the shared provider without requiring this computer to have its credentials', async () => {
     const remote = provider({ id: 'openai', strategy: 'oauth-passthrough' });
     const d = deps({ checkRemoteRoute: vi.fn(async () => ({ provider: remote })) });

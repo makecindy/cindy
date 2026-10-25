@@ -47,47 +47,8 @@ const HELPER_RESTART_HEALTHY_RESET_MS = 30_000;
 
 type NativeProcess = ChildProcessByStdio<Writable, Readable, Readable>;
 
-export interface AgentIslandNativeFrame extends Rectangle {
-  displayId: number;
-  displayBounds: Rectangle;
-  contentWidth?: number | null;
-}
-
-export interface AgentIslandNativeScreenMetrics {
-  displayId: number;
-  frame: Rectangle;
-  hasNotch: boolean;
-  notchWidth: number;
-  topBarHeight: number;
-  menuBarHeight: number;
-  safeAreaTop: number;
-  isMain: boolean;
-  signature: string;
-}
-
-interface MacAgentIslandNativeHostOptions {
-  onPointerZones: (zones: { menuBar: boolean; panel: boolean; displayId?: number | null }) => void;
-  onExpand: (displayId?: number | null) => void;
-  onCollapse: (displayId?: number | null) => void;
-  onFocusSession: (sessionId: string) => void;
-  onCompletionAction?: (sessionId: string, action: 'mark-read' | 'archive', completionToken: string) => Promise<boolean>;
-  onOpenSettings: () => void;
-  onNewMessage: () => void;
-  onToggleSound: () => void;
-  onPermissionAction: (action: {
-    requestId: string;
-    action: 'allow' | 'allowForSession' | 'deny';
-  }) => void;
-  onOutsideClick: () => void;
-  onLayoutDragActive: (active: boolean) => void;
-  onLayoutPreference: (preference: AgentIslandLayoutPreference) => void;
-  onContentHeight: (height: number) => void;
-  onScreenMetrics: (metrics: {
-    screens: AgentIslandNativeScreenMetrics[];
-    preferredDisplayId: number | null;
-    forceRefresh: boolean;
-  }) => void;
-}
+export type { AgentIslandNativeFrame, AgentIslandNativeScreenMetrics } from '@cindy/app-runtime/session-activity/nativeTypes';
+import type { AgentIslandNativeFrame, AgentIslandNativeScreenMetrics, MacAgentIslandNativeHostOptions } from '@cindy/app-runtime/session-activity/nativeTypes';
 
 type NativePayload = {
   type?: unknown;

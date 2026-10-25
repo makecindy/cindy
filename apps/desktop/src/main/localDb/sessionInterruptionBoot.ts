@@ -1,11 +1,4 @@
-/** One host boot boundary for the pending-alert query and session serialization. */
-let bootAtMs = Date.now();
+import {createSessionInterruptionBoot} from '@cindy/app-runtime/sessionInterruptionBoot';
+export type * from '@cindy/app-runtime/sessionInterruptionBoot';
 
-export function getSessionInterruptionBootAt(): number {
-  return bootAtMs;
-}
-
-/** Test-only: keep query and serialized interruption evidence on the same clock. */
-export function setSessionInterruptionBootAtForTests(value: number): void {
-  bootAtMs = value;
-}
+export const {getSessionInterruptionBootAt, setSessionInterruptionBootAtForTests}=createSessionInterruptionBoot();

@@ -1,5 +1,1 @@
-import type Database from 'better-sqlite3';
-
-export function closeDb(db: Database.Database): void {
-  db.close();
-}
+export * from '@cindy/runtime-db/worker/opHandlers/closeDb';

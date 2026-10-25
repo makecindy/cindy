@@ -67,7 +67,7 @@ vi.mock('../../../localDb/client/current', () => ({
     },
   }),
 }));
-vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
+vi.mock('@cindy/runtime-db/schema', () => ({ sessions: {} }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   setSessionProvider: vi.fn(),
 }));

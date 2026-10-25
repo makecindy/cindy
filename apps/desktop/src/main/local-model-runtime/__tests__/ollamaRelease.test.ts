@@ -122,11 +122,19 @@ describe('ollamaRelease', () => {
     ).toBeNull();
   });
 
-  it('is offered on macOS and Windows, not Linux or 32-bit Windows', () => {
+  it.each([['x64', 'amd64'], ['arm64', 'arm64']] as const)('selects a verified Linux %s zstd distribution', (arch, suffix) => {
+    const assetName = `ollama-linux-${suffix}.tar.zst`;
+    const url = `https://github.com/ollama/ollama/releases/download/v0.40.10/${assetName}`;
+    expect(pickOfficialSidecarAsset({tag_name: 'v0.40.10', assets: [{name: assetName, browser_download_url: url, digest: GOOD_SHA, size: 1500}]}, 'linux', arch)).toMatchObject({assetName, url, sha256: 'ab'.repeat(32)});
+  });
+
+  it('supports official macOS, Windows and Linux architectures', () => {
     expect(supportsManagedOllamaInstall('darwin')).toBe(true);
     expect(supportsManagedOllamaInstall('win32', 'x64')).toBe(true);
     expect(supportsManagedOllamaInstall('win32', 'arm64')).toBe(true);
     expect(supportsManagedOllamaInstall('win32', 'ia32')).toBe(false);
-    expect(supportsManagedOllamaInstall('linux')).toBe(false);
+    expect(supportsManagedOllamaInstall('linux', 'x64')).toBe(true);
+    expect(supportsManagedOllamaInstall('linux', 'arm64')).toBe(true);
+    expect(supportsManagedOllamaInstall('linux', 'ia32')).toBe(false);
   });
 });

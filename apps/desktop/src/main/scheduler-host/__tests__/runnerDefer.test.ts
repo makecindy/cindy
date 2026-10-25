@@ -36,7 +36,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   onSilentStopSettled: vi.fn(() => () => {}),
 }));
 vi.mock('../workdir-resolver', () => ({ resolveWorkingDir: mocks.resolveWorkingDir }));
-vi.mock('../runners/_shared', () => ({ backfillSessionMeta: mocks.backfillSessionMeta }));
+vi.mock('@cindy/app-runtime/scheduleRunnerShared', () => ({ backfillSessionMeta: mocks.backfillSessionMeta }));
 
 import { MakerScheduleRunner } from '../runner';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';

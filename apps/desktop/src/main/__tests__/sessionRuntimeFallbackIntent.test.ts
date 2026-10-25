@@ -1,18 +1,18 @@
+import { readMakerRegisterSource } from './makerRuntimeSource';
 import { readFileSync } from 'node:fs';
 import { transpileModule, ScriptTarget } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { shouldPreserveRuntimeFallbackAutoResume } from '../maker-ipc/interruptedTurnAutoResume';
 import { createPendingAgentSwitchRegistry } from '../maker-ipc/sessionAgentSwitchHandler';
 
-const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
+const source = readMakerRegisterSource();
 const guard = source.slice(
   source.indexOf('  const canApplyAutomaticRuntimeSelection ='),
   source.indexOf('  cancelPendingAgentSwitchHolder ='),
 );
-const fallback = source.slice(
-  source.indexOf('  const maybeApplySessionRuntimeFallback = async ('),
-  source.indexOf('  const sessionControlService = createSessionControlService({'),
-);
+const fallbackSource = readFileSync(new URL('../../../../../packages/app-runtime/src/sessionRuntimeFallback.ts', import.meta.url), 'utf8');
+const fallback = fallbackSource.slice(fallbackSource.indexOf('const maybeApplySessionRuntimeFallback = async ('), fallbackSource.lastIndexOf('return maybeApplySessionRuntimeFallback;'));
+const leasesSource = readFileSync(new URL('../../../../../packages/app-runtime/src/sessionRecoveryLeases.ts', import.meta.url), 'utf8');
 
 function harness() {
   const pending = createPendingAgentSwitchRegistry();
@@ -234,10 +234,7 @@ it.each(['device-b', 'share:one'])('applies a same-engine fallback at %s without
 
 // Execute the production close predicate: the old Session is a lease for one
 // scheduled recovery attempt, even when the replacement uses another harness.
-const preserveFallback = source.slice(
-  source.indexOf('function shouldPreserveSessionRuntimeFallbackAutoResume('),
-  source.indexOf('export function stopActiveGoalTurnForClear('),
-);
+const preserveFallback = leasesSource.slice(leasesSource.indexOf('function shouldPreserveSessionRuntimeFallbackAutoResume('), leasesSource.indexOf('return { bindContinuationOnlyAutoResumeLease'));
 const preserveFallbackJs = transpileModule(`${preserveFallback}\nreturn shouldPreserveSessionRuntimeFallbackAutoResume;`, {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
@@ -255,7 +252,7 @@ function closeHarness() {
     pendingSessionRuntimeFallbackRebuilds: leases,
     interruptedTurnAutoResumeGuard: { isCurrentAttempt: guard },
     autoResumeBookkeeping: { isCurrentAttempt: bookkeeping, hasLiveSchedule: scheduled },
-    agentInputCoordinatorHolder: { isAutoResumePending: pending, getAutoResumeAttemptToken: token },
+    host: { coordinator: () => ({ isAutoResumePending: pending, getAutoResumeAttemptToken: token }) },
   };
   const preserve = new Function(...Object.keys(deps), preserveFallbackJs)(...Object.values(deps));
   return { session, leases, guard, bookkeeping, pending, token, scheduled, preserve };

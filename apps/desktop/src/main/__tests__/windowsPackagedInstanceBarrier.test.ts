@@ -83,6 +83,7 @@ describe('windowsPackagedInstanceBarrier', () => {
       const userDataDir = path.join(os.tmpdir(), programName);
       const first = await acquireWindowsPackagedInstanceBarrier({
         userDataDir,
+        additionalUserDataDirs: [path.join(os.tmpdir(), programName + '-second-profile')],
         programName,
         timeoutMs: 1_000,
       });

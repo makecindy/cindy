@@ -66,13 +66,13 @@ describe('sessionUsesOtherMachineAccount', () => {
 
   it('普通任务与目标模式都按它判定,且任务行快照带上 agentDeviceId', () => {
     const read = (relative: string) => readFileSync(resolve(__dirname, relative), 'utf8');
-    expect(read('../../maker-ipc/register.ts')).toContain('sessionUsesOtherMachineAccount(row)');
-    expect(read('../../goal-host/index.ts')).toContain('sessionUsesOtherMachineAccount(row)');
+    expect(read('../../../../../../packages/app-runtime/src/usageLimitWaitHost.ts')).toContain('sessionUsesOtherMachineAccount(row)');
+    expect(read('../../../../../../packages/app-runtime/src/goal/composition.ts')).toContain('sessionUsesOtherMachineAccount(row)');
     // 目标模式对远程 Agent 也不回落本机网关预算(那台的独立账号本机目录认不出时同样如此)。
-    expect(read('../../goal-host/index.ts')).toContain(
+    expect(read('../../../../../../packages/app-runtime/src/goal/composition.ts')).toContain(
       'if (row?.agentDeviceId && !row.remoteHostId) return null;',
     );
-    expect(read('../../localDb/ipc/sessions.ts')).toContain(
+    expect(read('../../../../../../packages/runtime-db/src/sessionSnapshot.ts')).toContain(
       'agentDeviceId: sessions.agentDeviceId,',
     );
   });

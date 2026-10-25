@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   lsTreeStdout: undefined as string | undefined,
 }));
 
-vi.mock('../gitExec', () => ({
+vi.mock('../gitExec', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gitExec')>()),
   gitExec: async (args: readonly string[]) => {
     if (args[0] === 'ls-files') {
       if (mocks.lsFilesStdout === undefined) throw new Error('ls-files failed');

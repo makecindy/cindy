@@ -1,0 +1,236 @@
+import {readForwardedRequestSource} from '@cindy/maker-shared/forwarded-request-types';
+import {createHash} from 'node:crypto';
+import {queryTodoItems,type TodoListQuery,type TodoPatch} from '@cindy/maker-shared/teammate-todo';
+import {and,desc,inArray,isNull} from 'drizzle-orm';
+import {botSessionLinks} from '@cindy/runtime-db/schema';
+import type {DbClient} from '@cindy/runtime-db';
+import {RemoteResourceRegistryError,type RemoteResourceRegistry} from '@cindy/device-link';
+import {WORKING_PHASES} from '@cindy/maker-shared/workingStatus';
+import {resolveSystemLocale} from '@cindy/plugin-runtime/shared/locale';
+import {botTodoRemoteProjection} from './botTodoRemoteProjection.js';
+import type {BotRemoteResourceSource,createBotProfileService} from './botProfileService.js';
+import type {AgentIslandService} from './session-activity/service.js';
+import type {OwnerBroadcastTap} from './ownerBroadcast.js';
+import type {BotDirectMessageService} from './botDirectMessageService.js';
+import type {createBotTodoAccess} from './botTodoAccess.js';
+import type {createBotRemoteManagement} from './botRemoteManagement.js';
+import {editorCopy} from './botRemoteEditors.js';
+import {BOT_REMOTE_RESOURCE_KIND,TEAMMATES_REMOTE_COLLECTION_ID,TEAMMATES_TITLE,botRemoteCollectionItemFromSource,botRemoteResourceFromSource,visibleBotRemoteResourceSources} from './botRemoteResourceProjection.js';
+export interface BotRemoteResourceHost extends Pick<OwnerBroadcastTap,'captureDataOwnerBroadcastScope'|'isDataOwnerBroadcastScopeCurrent'>, Pick<ReturnType<typeof createBotProfileService>,'getBotRemoteResourceSource'|'listBotRemoteResourceSources'> {
+ getDbClient():DbClient;
+ getAgentIslandService():Pick<AgentIslandService,'getSessionActivitySnapshots'|'subscribeSessionActivity'>|null;
+ scheduleBotRemoteResourceChangedForSession(sessionId:string):void;
+ broadcastBotRemoteResourceChanged(botId:string):void;
+ getWorkingStatusCopy(raw:unknown):Promise<{text:string|null}>;
+ remoteResourceRegistry:RemoteResourceRegistry;
+ todoAccess:ReturnType<typeof createBotTodoAccess>['todoAccess'];
+ routineTools:{todoCheckEnabled(botId:string):Promise<boolean>;setTodoCheck(botId:string,enabled:boolean):Promise<boolean>};
+ getBotRemoteMessageService():Pick<BotDirectMessageService,'receiveRemote'|'verifyRemoteMessage'|'readRemoteReceipt'>|null;
+}
+export function createBotRemoteResourceProvider(host:BotRemoteResourceHost) {
+ const {getDbClient,getAgentIslandService,scheduleBotRemoteResourceChangedForSession,getWorkingStatusCopy,captureDataOwnerBroadcastScope,isDataOwnerBroadcastScopeCurrent,getBotRemoteResourceSource,listBotRemoteResourceSources,remoteResourceRegistry,routineTools,broadcastBotRemoteResourceChanged,getBotRemoteMessageService,todoAccess}=host;
+/** Canonical activity wins, then the newest running delegation, like the local roster. */
+async function runningBotActivities(sources: readonly BotRemoteResourceSource[]) {
+  const running = getAgentIslandService()?.getSessionActivitySnapshots().filter(activity => activity.phase === 'running') ?? [];
+  const bySession = new Map(running.map(activity => [activity.sessionId, activity]));
+  const delegated = sources.length && running.length ? await getDbClient().drizzle
+    .select({ botId: botSessionLinks.botId, sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks).where(and(
+      inArray(botSessionLinks.botId, sources.map(source => source.id)),
+      inArray(botSessionLinks.sessionId, running.map(activity => activity.sessionId)),
+      inArray(botSessionLinks.role, ['canonical', 'delegation']),
+      isNull(botSessionLinks.archivedAt),
+    )).orderBy(desc(botSessionLinks.createdAt)) : [];
+  return new Map(sources.map(source => [source.id,
+    (source.canonicalSessionId ? bySession.get(source.canonicalSessionId) : undefined)
+      ?? bySession.get(delegated.find(link => link.botId === source.id)?.sessionId ?? ''),
+  ]));
+}
+
+let registered = false;
+
+/** Register the Bot module through the same API future host modules use. */
+function registerBotRemoteResourceProvider(management?: ReturnType<typeof createBotRemoteManagement>): void {
+  if (registered) return;
+  remoteResourceRegistry.register({
+    collection: {
+      id: TEAMMATES_REMOTE_COLLECTION_ID,
+      resourceKind: BOT_REMOTE_RESOURCE_KIND,
+      title: TEAMMATES_TITLE,
+      placement: 'home-scope',
+      icon: { name: 'users', fallbackText: '••' },
+      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }] } : {}),
+    },
+    async list(_context, request) {
+      const scope = captureDataOwnerBroadcastScope();
+      const rawQuery = request.query?.trim().toLocaleLowerCase() ?? '';
+      const sources = visibleBotRemoteResourceSources(await listBotRemoteResourceSources());
+      const filtered = rawQuery
+        ? sources.filter((source) =>
+            [source.name, source.description]
+              .some((value) => value.toLocaleLowerCase().includes(rawQuery)))
+        : sources;
+      const page = filtered.slice(0, request.limit ?? 200);
+      const activities = await runningBotActivities(page);
+      if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+      const items = page
+        .map(source => {
+          const item = botRemoteCollectionItemFromSource(source);
+          const activity = activities.get(source.id);
+          if (activity?.phase === 'running' && activity.workingPhase) {
+            item.display.generation = { phase: activity.workingPhase ?? 'processing', startedAt: activity.startedAtMs };
+            item.revision += `:${activity.startedAtMs}:${item.display.generation.phase}`;
+          }
+          return item;
+        });
+      return {
+        collectionId: TEAMMATES_REMOTE_COLLECTION_ID,
+        revision: items.map((item) => item.revision).join('|'),
+        items,
+      };
+    },
+    async get(context, request) {
+      if (request.ref.id.startsWith('todos:')) {
+        const scope = captureDataOwnerBroadcastScope();
+        const botId = request.ref.id.slice(6);
+        const candidate = await getBotRemoteResourceSource(botId);
+        const [source] = candidate ? visibleBotRemoteResourceSources([candidate]) : [];
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        const all = await (await todoAccess(botId)).list();
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        const page = queryTodoItems(all.items, request.query ? JSON.parse(request.query) as TodoListQuery : {});
+        page.items = page.items.map(botTodoRemoteProjection);
+        // 近况「每天帮我查一次」的当前状态；旧客户端忽略，新客户端缺这个字段（旧宿主）时不显示开关。
+        // 例行任务读不到（引擎未就绪、伙伴暂停）时不带这个字段，待办照常返回。
+        const dailyCheck = await routineTools.todoCheckEnabled(botId).catch(() => undefined);
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        return {ref:request.ref,revision:createHash('sha256').update(JSON.stringify(all.items)).digest('hex'),display:{title:source.name},links:[],
+          blocks:[{id:'todos',primitive:'teammate-todos',fallbackMarkdown:page.items.map(t=>t.title+' — '+t.progress).join('\n').slice(0,8000),data:{...page,...(dailyCheck === undefined ? {} : {dailyCheck})}}]};
+      }
+
+      if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
+        const resource = await management.getEditor(context, request.ref.id, request.client.locale, { query: request.query, primitives: request.client.primitives });
+        if (request.ref.id === 'create') resource.actions = [...(resource.actions ?? []), { id: 'open-agent-import', label: { fallback: 'Import an Agent', translations: { 'zh-CN': '从其他 Agent 导入', 'zh-TW': '從其他 Agent 匯入', ja: 'Agent からインポート', ko: 'Agent에서 가져오기' } } }];
+        return resource;
+      }
+      if (request.ref.id.startsWith('working:')) {
+        const [botId, phase, extra] = request.ref.id.slice('working:'.length).split('/');
+        if (extra !== undefined || !botId || !WORKING_PHASES.includes(phase as typeof WORKING_PHASES[number]))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Unknown working status');
+        const scope = captureDataOwnerBroadcastScope();
+        const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(botId)]);
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        const activity = (await runningBotActivities([source])).get(source.id);
+        if (!activity || !isDataOwnerBroadcastScopeCurrent(scope))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate is not running');
+        const result = await getWorkingStatusCopy({ sessionId: activity.sessionId, phase, locale: resolveSystemLocale(request.client.locale) });
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        return { ref: request.ref, revision: String(source.currentVersion), display: { title: source.name }, links: [],
+          blocks: [{ id: 'working', primitive: 'status', fallbackMarkdown: result.text ?? '' }] };
+      }
+      const [source] = visibleBotRemoteResourceSources([
+        await getBotRemoteResourceSource(request.ref.id),
+      ]);
+      if (!source) {
+        throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
+      }
+      const resource = management && request.client.primitives.includes('form') ? await management.get(context, source.id) : management && source.invitation ? await management.getInvitation(context, source.id) : botRemoteResourceFromSource(source);
+      if (management && request.client.primitives.includes('form')) {
+        for (const page of ['avatar', 'skills', 'connections', 'projects', 'followUp'] as const) {
+          const block = resource.blocks?.find(block => block.id === page);
+          const data = { entries: [{ id: page, title: editorCopy[page], resourceId: `settings:${source.id}/${page === 'followUp' ? 'follow-up' : page}` }] };
+          if (block) block.data = data;
+          else resource.blocks?.push({ id: page, primitive: 'list', fallbackMarkdown: '', data });
+        }
+        // The `memory` block stays the toggle/USER.md form; saved entries are a separate list page.
+        resource.blocks?.push({ id: 'memories', primitive: 'list', fallbackMarkdown: '', data: {
+          entries: [{ id: 'memories', title: editorCopy.memories, resourceId: `settings:${source.id}/memory` }],
+        } });
+      }
+      resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일'}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
+      return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
+    },
+    async invoke(context, request) {
+      if (request.actionId === 'todo-update' || request.actionId === 'todo-act') {
+        const scope = captureDataOwnerBroadcastScope();
+        if (!request.resourceRef?.id.startsWith('todos:')) throw new RemoteResourceRegistryError('NOT_FOUND', 'Todo resource required');
+        const botId = request.resourceRef.id.slice(6);
+        const candidate = await getBotRemoteResourceSource(botId);
+        const [source] = candidate ? visibleBotRemoteResourceSources([candidate]) : [];
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        const access = await todoAccess(botId);
+        const input = request.input ?? {};
+        const result = request.actionId === 'todo-update' ? await access.patch(input as TodoPatch) : await access.act(input.id as string,input.revision as number,input.requestId as string,request.client.locale);
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        return {effects:[],todo:result ? botTodoRemoteProjection(result) : null};
+      }
+      if (request.actionId === 'todo-daily-check') {
+        const scope = captureDataOwnerBroadcastScope();
+        if (!request.resourceRef?.id.startsWith('todos:')) throw new RemoteResourceRegistryError('NOT_FOUND', 'Todo resource required');
+        const botId = request.resourceRef.id.slice(6);
+        const candidate = await getBotRemoteResourceSource(botId);
+        const [source] = candidate ? visibleBotRemoteResourceSources([candidate]) : [];
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        if (typeof request.input?.enabled !== 'boolean') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'enabled must be boolean');
+        const dailyCheck = await routineTools.setTodoCheck(botId, request.input.enabled);
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        broadcastBotRemoteResourceChanged(botId);
+        return { effects: [], dailyCheck };
+      }
+
+      if (management && request.actionId === 'open-agent-import' && request.resourceRef?.id === 'create') return {
+        effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],
+      };
+      const scope = captureDataOwnerBroadcastScope();
+      if (request.actionId !== 'send-message' && request.actionId !== 'verify-message' && request.actionId !== 'message-receipt') {
+        if (management) return management.invoke(context, request);
+        throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown teammate action');
+      }
+      const input = request.input;
+      const requestSource = readForwardedRequestSource(input?.requestSource);
+      if (input?.requestSource !== undefined && !requestSource) {
+        throw new RemoteResourceRegistryError('NOT_FOUND', 'Invalid teammate request source');
+      }
+      const validBotId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+      const validMessageId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value);
+      if (!validBotId(request.resourceRef?.id) || !validBotId(request.actionId === 'verify-message' ? input?.targetBotId : input?.senderBotId) || !validMessageId(input?.messageId)
+        || (request.actionId !== 'message-receipt' && (typeof input?.message !== 'string' || !input.message.trim() || input.message.length > (input.requestSource ? 200_000 : 12_000)))) {
+        throw new RemoteResourceRegistryError('NOT_FOUND', 'Invalid teammate message');
+      }
+      const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(request.resourceRef.id)]);
+      if (!source) throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
+      if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+      const service = getBotRemoteMessageService();
+      if (!service) throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Teammate messaging is unavailable');
+      if (request.actionId === 'message-receipt') {
+        const receipt = await service.readRemoteReceipt({ controllerDeviceId: context.controllerDeviceId,
+          senderBotId: input.senderBotId as string, targetBotId: request.resourceRef.id,
+          messageId: input.messageId });
+        return { effects: [], ...receipt };
+      }
+      if (request.actionId === 'verify-message') {
+        const verified = await service.verifyRemoteMessage({ controllerDeviceId: context.controllerDeviceId,
+          senderBotId: request.resourceRef.id, targetBotId: input.targetBotId as string,
+          ...(requestSource ? { requestSource } : {}),
+          messageId: input.messageId, message: input.message as string });
+        return { effects: [], verified };
+      }
+      const teammateMessage = await service.receiveRemote({
+        controllerDeviceId: context.controllerDeviceId,
+        senderBotId: input.senderBotId as string, targetBotId: request.resourceRef.id,
+        ...(requestSource ? { requestSource } : {}),
+        messageId: input.messageId, message: input.message as string,
+      });
+      return { effects: [], teammateMessage };
+    },
+  });
+  getAgentIslandService()?.subscribeSessionActivity(({ sessionId, previous, current }) => {
+    if (previous?.phase !== current?.phase || previous?.workingPhase !== current?.workingPhase
+      || previous?.startedAtMs !== current?.startedAtMs) scheduleBotRemoteResourceChangedForSession(sessionId);
+  });
+  registered = true;
+}
+
+return {registerBotRemoteResourceProvider};
+}

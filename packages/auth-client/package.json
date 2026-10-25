@@ -9,14 +9,17 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./fixtures": "./fixtures/loginScenarios.ts"
+    "./fixtures": "./fixtures/loginScenarios.ts",
+    "./oauthResultPage": "./src/oauthResultPage.ts",
+    "./loginCallbackAssets": "./src/loginCallbackAssets.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "@cindy/maker-shared": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

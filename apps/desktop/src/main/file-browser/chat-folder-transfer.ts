@@ -96,19 +96,4 @@ export async function uploadChatFolder(
 }
 
 /** The extracted tree belongs to the same task attachment as its archive. */
-export async function extractChatFolder(archive: string): Promise<string> {
-  const destination = `${archive}.contents`;
-  await fs.mkdir(destination);
-  try {
-    if (
-      await extractDirectoryArchive(createReadStream(archive), destination, {
-        confineSymlinks: true,
-      })
-    )
-      throw new Error('INCOMPLETE_FOLDER');
-    return destination;
-  } catch (error) {
-    await fs.rm(destination, { recursive: true, force: true });
-    throw error;
-  }
-}
+export { extractChatFolder } from '@cindy/app-runtime/chatFolderExtraction';

@@ -1,3 +1,5 @@
+import {safeSegment,processArtifactRoot,artifactSessionRoot} from '@cindy/app-runtime/browserArtifactPaths';
+export {artifactSessionRoot} from '@cindy/app-runtime/browserArtifactPaths';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -70,19 +72,6 @@ const MAX_RETAINED_ARTIFACT_BYTES = 256 * 1024 * 1024;
 
 let captureSequence = 0;
 let artifactSequence = 0;
-
-function safeSegment(value: string): string {
-  const cleaned = value.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
-  return (cleaned || 'session').slice(0, 64);
-}
-
-function processArtifactRoot(rootDir: string): string {
-  return path.join(rootDir, `process-${process.pid}`);
-}
-
-export function artifactSessionRoot(rootDir: string, sessionId: string): string {
-  return path.join(processArtifactRoot(rootDir), safeSegment(sessionId));
-}
 
 async function reclaimStaleProcessRoots(rootDir: string): Promise<void> {
   let entries: fs.Dirent[];

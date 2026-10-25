@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import syncFs from 'node:fs';
-import * as locks from '../../device-link/crossProcessLock';
+import * as locks from '@cindy/remote-agent/crossProcessLock';
 import os from 'node:os';
 import path from 'node:path';
 

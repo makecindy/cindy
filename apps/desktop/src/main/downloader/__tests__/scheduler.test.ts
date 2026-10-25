@@ -9,14 +9,15 @@ const mocks = vi.hoisted(() => ({
   withRetry: vi.fn(),
 }));
 
-vi.mock('../integrity', () => ({ computeHash: mocks.computeHash }));
-vi.mock('../transport', () => ({ executeOnce: mocks.executeOnce, assertDownloadUrl: vi.fn() }));
-vi.mock('../retry', () => ({ withRetry: mocks.withRetry }));
-vi.mock('../resume', () => ({ deletePart: vi.fn(), deleteMeta: vi.fn() }));
+vi.mock('@cindy/plugin-runtime/download/integrity', () => ({ computeHash: mocks.computeHash }));
+vi.mock('@cindy/plugin-runtime/download/transport', () => ({ executeOnce: mocks.executeOnce, assertDownloadUrl: vi.fn() }));
+vi.mock('@cindy/plugin-runtime/download/retry', () => ({ withRetry: mocks.withRetry }));
+vi.mock('@cindy/plugin-runtime/download/resume', () => ({ deletePart: vi.fn(), deleteMeta: vi.fn() }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
+vi.mock('../http', () => ({ requestResponse: vi.fn() }));
 import { Scheduler } from '../scheduler';
 import { createDownloader, download } from '../index';
 

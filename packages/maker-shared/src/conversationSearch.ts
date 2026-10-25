@@ -61,11 +61,11 @@ export interface ConversationSearchSessionSummary {
   source?: string | null;
   orcaRole?: ConversationSearchOrcaRole | null;
   parentSessionId?: string | null;
-  /** Host-verified personal companion chat; absent for ordinary/background tasks. */
+  /** Host-verified companion transcript; channel results are local-only and read-only. */
   companion?: {
     id: string;
     name: string;
-    role: 'canonical' | 'history';
+    role: 'canonical' | 'history' | 'channel';
     readOnly: boolean;
   };
   userSendAt: string | null;

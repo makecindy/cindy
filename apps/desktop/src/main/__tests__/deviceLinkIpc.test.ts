@@ -16,6 +16,7 @@ vi.mock('../device-link/filePeer', () => ({
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   app: { getPath: () => '/tmp' },
+  shell: { openExternal: vi.fn() },
 }));
 vi.mock('../serverApiClient', () => {
   class ServerApiError extends Error {

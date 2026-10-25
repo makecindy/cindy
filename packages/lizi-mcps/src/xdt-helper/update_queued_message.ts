@@ -21,6 +21,7 @@ export type QueuedMessageControlErrorCode =
   | 'NOT_LEAD_MESSAGE'
   | 'NOT_ORCA_MESSAGE'
   | 'MESSAGE_CONSUMING'
+  | 'QUEUE_CHANGED'
   | 'INVALID_ARGS';
 
 export interface UpdateQueuedMessageDeps {

@@ -38,6 +38,10 @@ import {
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
 const CINDY_SOURCE_METADATA_PATH = path.join(__dirname, 'resources', 'cindy-source.json');
+// A package variant of the existing signed platform, with the same native
+// helper trust, sandbox and fuses. Ordinary Desktop packaging is unchanged.
+const TERMINAL_PLATFORM = process.env.CINDY_TERMINAL_PLATFORM === '1';
+const TERMINAL_RUNTIME = path.join(__dirname, 'resources', 'terminal');
 
 function resolveSourceCommit(): string {
   try {
@@ -1763,6 +1767,7 @@ if (isWin) {
 }
 
 const config: ForgeConfig = {
+  ...(TERMINAL_PLATFORM ? { outDir: process.env.CINDY_TERMINAL_OUTPUT || 'out-terminal-platform' } : {}),
   packagerConfig: {
     // sharp 的底层 libvips 共享库 (libvips-cpp.dylib / libvips-42.dll /
     // libvips-cpp.so) 在不同平台上的位置不同:
@@ -1914,7 +1919,7 @@ const config: ForgeConfig = {
     // 不入仓 — 详见 build-remote-bundles.mjs 与 .gitignore 注释。两个目录里各放一个
     // self-contained ESM bundle (cc-mgr.mjs / proxy.mjs), 通过 SSH stdin pipe 部署
     // 到远端机器, desktop main 通过 process.resourcesPath 解析路径。
-    extraResource: extraResourcesForTarget(requestedTargetPlatform()),
+    extraResource: TERMINAL_PLATFORM ? [TERMINAL_RUNTIME, path.join(__dirname, 'resources', 'tools')] : extraResourcesForTarget(requestedTargetPlatform()),
     // 注意：不要在这里手动设 `ignore`。@electron-forge/plugin-vite 会自动把
     // `ignore` 设成「除了 .vite/ 之外全部排除」——因为 Vite 打包产物都在
     // .vite/build 下。手动覆盖会让大量源码 / node_modules 误打进 release。
@@ -1925,7 +1930,7 @@ const config: ForgeConfig = {
     afterCopyExtraResources: [
       (buildPath, _electronVersion, platform, _arch, callback) => {
         try {
-          prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
+          if(!TERMINAL_PLATFORM)prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
           callback();
         } catch (err) {
           callback(err as Error);
@@ -1936,6 +1941,15 @@ const config: ForgeConfig = {
       (buildPath, electronVersion, platform, arch, callback) => {
         (async () => {
           try {
+            if (TERMINAL_PLATFORM) {
+              // Keep the standalone Node dependencies under Resources/terminal
+              // untouched. Only this separate Main copy is rebuilt for Electron.
+              fs.cpSync(path.join(TERMINAL_RUNTIME, 'app', 'node_modules'), path.join(buildPath, 'node_modules'), { recursive: true });
+              const metadataFile = path.join(buildPath, 'package.json');
+              const metadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
+              metadata.main = '.vite/build/terminal-platform-main.mjs';
+              fs.writeFileSync(metadataFile, JSON.stringify(metadata));
+            }
             bundleNativeDeps(buildPath, platform, arch);
             await rebuildNativeDepsInPackage(buildPath, electronVersion, platform, arch);
             copySqliteVecBinary(buildPath, platform, arch);
@@ -1954,6 +1968,13 @@ const config: ForgeConfig = {
     prePackage: async (_forgeConfig, platform, arch) => {
       const targetPlatform = requestedTargetPlatform();
       const targetArch = requestedTargetArch();
+      if (TERMINAL_PLATFORM) {
+        const runtime = JSON.parse(fs.readFileSync(path.join(TERMINAL_RUNTIME, 'runtime-manifest.json'), 'utf8'));
+        if (runtime.target !== `${platform}-${arch}` || runtime.version !== process.env.APP_VERSION)
+          throw new Error('Terminal platform requires the matching standalone runtime');
+        buildRemoteDesktopInput(platform, arch);
+        return;
+      }
       stageCindySourceMetadata();
       if (targetPlatform === 'win32') {
         if (targetArch !== 'x64') {
@@ -2016,8 +2037,11 @@ const config: ForgeConfig = {
       // Dev keeps all watcher targets in one process. Build them serially at
       // startup so the initial graph does not multiply the same high baseline;
       // packaged builds retain Forge's normal concurrency.
-      concurrent: isDev ? false : true,
-      build: [
+      concurrent: isDev || TERMINAL_PLATFORM ? false : true,
+      build: TERMINAL_PLATFORM ? [
+        { entry: 'src/main/terminal-platform-entry.ts', config: 'vite.terminal-platform.config.ts', target: 'main' },
+        { entry: 'src/preload/desktopCapturePreload.ts', config: 'vite.preload.config.ts', target: 'preload' },
+      ] : [
         {
           entry: 'src/main/index.ts',
           config: 'vite.main.config.ts',
@@ -2193,7 +2217,7 @@ const config: ForgeConfig = {
           target: 'preload',
         },
       ],
-      renderer: [
+      renderer: TERMINAL_PLATFORM ? [{ name: 'desktop_capture', config: 'vite.capture.config.ts' }] : [
         { name: 'desktop_capture', config: 'vite.capture.config.ts' },
         {
           name: 'main_window',

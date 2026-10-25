@@ -16,7 +16,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-vi.mock('../pre-run-hook', () => ({
+vi.mock('@cindy/app-runtime/schedulePreRunHook', () => ({
   executePreRunHook: executePreRunHookMock,
   buildSkipResultText: (hook: { exitCode?: number | null }) => `exit ${hook.exitCode ?? '?'}`,
   formatPreRunHookFailure: (hook: { error?: string; exitCode?: number | null }) =>
@@ -25,7 +25,7 @@ vi.mock('../pre-run-hook', () => ({
       : `pre-run hook failed with exit code ${hook.exitCode ?? 'unknown'}`,
 }));
 
-vi.mock('../../localDb/schema', () => ({
+vi.mock('@cindy/runtime-db/schema', () => ({
   sessions: { id: 'id' },
 }));
 
@@ -48,8 +48,8 @@ const killProcessTreeMock = vi.hoisted(() =>
     },
   ),
 );
-vi.mock('../proc-util', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../proc-util')>();
+vi.mock('@cindy/maker-scheduler/proc-util', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/maker-scheduler/proc-util')>();
   return { ...actual, killProcessTree: killProcessTreeMock };
 });
 

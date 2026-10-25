@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   backfillSessionMeta: vi.fn(),
 }));
 
-vi.mock('../pre-run-hook', () => ({
+vi.mock('@cindy/app-runtime/schedulePreRunHook', () => ({
   executePreRunHook: mocks.executePreRunHook,
   formatPreRunHookFailure: mocks.formatPreRunHookFailure,
   buildSkipResultText: mocks.buildSkipResultText,
@@ -53,7 +53,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
 vi.mock('../workdir-resolver', () => ({
   resolveWorkingDir: mocks.resolveWorkingDir,
 }));
-vi.mock('../runners/_shared', () => ({
+vi.mock('@cindy/app-runtime/scheduleRunnerShared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 

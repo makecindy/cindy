@@ -517,8 +517,8 @@ describe('outboundFetch', () => {
 
   it('allows only the explicitly approved network target and keeps manual redirects', async () => {
     const requests: Array<{ path?: string; method?: string; authorization?: string }> = [];
-    // The shared runtime resolves its own undici version; use a server owned by
-    // this test instead of relying on the Desktop-only fetch mock above.
+    // Use a real owned server and restore native fetch for this case, including
+    // when workspace dependency deduplication shares the mocked undici instance.
     const server = createServer((request, response) => {
       requests.push({ path: request.url, method: request.method, authorization: request.headers.authorization });
       response.writeHead(302, { location: '/unapproved' });
@@ -526,6 +526,8 @@ describe('outboundFetch', () => {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/video`;
+    const actual = await vi.importActual<typeof import('undici')>('undici');
+    undiciState.fetch.mockImplementationOnce((...args: unknown[]) => Reflect.apply(actual.fetch, undefined, args));
     try {
       const result = await guardedOutboundFetch(url, { method: 'GET' }, vi.fn(), {
         targetUrl: url, allowHttp: true, allowPrivateNetwork: true,

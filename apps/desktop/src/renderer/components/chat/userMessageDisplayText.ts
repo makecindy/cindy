@@ -1,3 +1,5 @@
+import { parseOrcaCommunicationContent, type OrcaCommunicationContent } from '@cindy/maker-shared/message-source';
+export { parseOrcaCommunicationContent, type OrcaCommunicationContent } from '@cindy/maker-shared/message-source';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { captureImContext, type ImMessageSource } from '../../../shared/imMessageSource';
 /**
@@ -15,29 +17,8 @@ import { captureImContext, type ImMessageSource } from '../../../shared/imMessag
  * (PR #830 review)。无 DOM 依赖,node 环境直接单测。
  */
 
-export interface OrcaCommunicationContent {
-  orcaSource: 'lead' | 'worker';
-  content: string;
-}
-
 export function hasEmbeddedImPrompt(source?: ImMessageSource): boolean {
   return Boolean(source && source.contentFormat !== 'user-text');
-}
-
-export function parseOrcaCommunicationContent(content: string): OrcaCommunicationContent | null {
-  try {
-    const parsed = JSON.parse(content) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const record = parsed as Record<string, unknown>;
-    if (record.orcaSource !== 'lead' && record.orcaSource !== 'worker') return null;
-    if (typeof record.content !== 'string') return null;
-    return {
-      orcaSource: record.orcaSource,
-      content: record.content,
-    };
-  } catch {
-    return null;
-  }
 }
 
 /**

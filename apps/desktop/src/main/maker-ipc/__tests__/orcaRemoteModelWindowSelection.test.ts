@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
+import { createSameAgentModelSelection } from '@cindy/app-runtime/sessionModelSelectionAdapters';
+import { createAgentDeviceRuntimeSelection, type AgentDeviceRuntimeSelectionHost } from '@cindy/app-runtime/agentDeviceRuntimeSelection';
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow';
@@ -9,24 +9,6 @@ import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, projec
 
 // Run the production remote-selection adapter, send boundary and window rollover
 // together. Only device I/O, native processes and persistent writes are replaced.
-const source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
-  ts.ScriptTarget.Latest, true);
-let remoteSelection = '';
-let selectionAdapter = '';
-function visit(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'applyAgentDeviceRuntimeSelection') {
-    remoteSelection = node.initializer!.getText(source);
-  }
-  if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'selectSameAgentModel') {
-    selectionAdapter = node.initializer.getText(source);
-  }
-  ts.forEachChild(node, visit);
-}
-visit(source);
-const compile = (expression: string, bindings: Record<string, unknown>) => {
-  const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(bindings), js)(...Object.values(bindings));
-};
 
 function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'worker', cold = false) {
   const agentKind = agent === 'cc' ? 'claude-code' : agent;
@@ -72,16 +54,13 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     recordUserSessionRuntimeMutation: () => 1, broadcastSessionRuntimeProjection: async () => {},
     withRehydrateCloseSuppressed: async (_id: string, run: () => unknown) => run(), throwIpcError, log,
   };
-  const applyRemote = compile(remoteSelection, bindings);
+  const applyRemote = createAgentDeviceRuntimeSelection(bindings as unknown as AgentDeviceRuntimeSelectionHost);
   const assertRuntimeOwnerCurrent = vi.fn();
-  const selectSameAgentModel = compile(selectionAdapter, { throwIpcError,
-    applySessionRuntimeSelection: (sessionId: string, model: string, providerId: unknown,
-      selection: { effort: string; fastMode: boolean; confirmedContextWindow?: number }, internalOptions: unknown) => applyRemote({
+  const selectSameAgentModel = createSameAgentModelSelection((sessionId, model, providerId, selection, internalOptions) => applyRemote({
       sessionId, model, providerId, atomicSelection: selection, internalOptions, runtimeStatus: row,
       confirmedContextWindow: selection.confirmedContextWindow, assertRuntimeOwnerCurrent,
       assertSharedTaskCurrent: { admit: vi.fn() }, supersededByOwnerBoundary: () => false,
-    }),
-  });
+    }));
   const deps = { pendingSwitches: pending, getLiveSession: () => live, selectSameAgentModel, log } as unknown as MakerSessionAgentSwitchHandlerDeps;
   const stage = (confirmedContextWindow?: number) => selectSameAgentModel('s1', {
     sameAgentSelection: true, targetAgentKind: agentKind, model: 'new', providerId: 'provider', effort: 'high', fastMode: false,

@@ -1,6 +1,6 @@
+import {createMakerSteerTransaction,type MakerSteerHost} from '@cindy/app-runtime/makerSteerTransaction';
+import {createWireNoteMemory} from '@cindy/app-runtime/wireNoteMemory';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { ScriptTarget, transpileModule } from 'typescript';
 
 import { TurnDispatchUnconfirmedError } from '@cindy/maker-core';
 import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
@@ -30,59 +30,27 @@ import type {
   SessionLike,
 } from '../types';
 
-// Execute the shared production steer closure with in-memory host dependencies.
-// This covers INPUT_STEER and the legacy STEER path without booting Electron.
-const registerSource = readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
-const steerSource = registerSource.slice(
-  registerSource.indexOf('  const steerToAgentAccepted = async ('),
-  registerSource.indexOf('  const trustedDesktopSteerText ='),
-);
-const compiledSteer = transpileModule(`${steerSource}\nreturn steerToAgentAccepted;`, {
-  compilerOptions: { target: ScriptTarget.ES2022 },
-}).outputText;
-
-function productionSteer(session: FakeSession, deliver: () => Promise<void>, rejectBeforeDelivery = false) {
+// Exercise the original production steer transaction with fixture transports.
+function productionSteer(session: FakeSession, deliver: () => Promise<void>, rejectBeforeDelivery: boolean) {
   const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
-  const deps = {
-    maker: {
-      getSession: () => ({
-        ...session,
-        capabilities: { sameTurnSteer: { supported: true } },
-        isTurnRunning: () => session.running,
-        getTurnGeneration: () => session.generation,
-        steer: deliver,
-      }),
-      getSessionMeta: async () => null,
-    },
-    getDbClient: () => ({ drizzle: { select: () => query } }),
-    sessions: {}, botSessionLinks: {}, botProfiles: {}, eq: () => undefined,
+  const live = { ...session, capabilities: { sameTurnSteer: { supported: true } },
+    isTurnRunning: () => session.running, getTurnGeneration: () => session.generation, steer: deliver };
+  return createMakerSteerTransaction({
+    maker: {getSession: () => live, getSessionMeta: async () => null},
+    getDbClient: () => ({drizzle:{select:()=>query}}),
     assertReviewExternalInputAllowed: async () => {},
-    botSessionInputBlockReason: () => null,
-    prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
-    restoreAutoReviewSteerIntent: async () => undefined,
-    shouldPrependMobileClientPromptNote: () => false,
-    readWireSourceDevice: () => null,
-    isDeviceLinkInvoke: () => false,
+    prepareUserMessageForAgent: async (_id: string,message: unknown) => message,
+    readReplyQuoteNote: async () => null, readAutoReviewHistory: async () => [],
+    getHostSourceDevice: () => ({id:'fixture',name:'Fixture',platform:'linux'}),
+    isMobileControllerInvoke: () => false, isDeviceLinkInvoke: () => false,
+    getResolvedMainLocale: () => 'en', wireNoteMemory:createWireNoteMemory(),
+    readSessionSource: async () => null, mcpAppModelContext: async () => undefined,
     assertRemoteInputClearNotInFlight: () => {},
-    readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
-    readExpectedInputGeneration: () => undefined,
-    assertCurrentInputGeneration: () => {
-      if (rejectBeforeDelivery) throw new Error('stale input generation');
-    },
-    MAIN_OWNED_SEND_CONTEXT: Symbol(), AUTO_REVIEW_SOURCE_CONTENT: Symbol(),
-    AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
-    MCP_APP_MESSAGE_GUARD,
-    publishUiSessionIntervention,
-    noteInteractionRouteSteer: () => {},
-    summarizeIpcUserMessage: () => ({}),
-    log: { info: () => {}, warn: () => {}, debug: () => {} },
-    throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
-  };
-  // Keep Session identity stable across the production preflight checks.
-  const live = deps.maker.getSession();
-  deps.maker.getSession = () => live;
-  return new Function(...Object.keys(deps), compiledSteer)(...Object.values(deps)) as
-    (sessionId: string, message: string) => Promise<void>;
+    readRemoteInputClearBoundaryPrecondition: () => ({present:false}),
+    assertCurrentInputClearBoundary: () => {}, readExpectedInputGeneration: () => undefined,
+    assertCurrentInputGeneration: () => {if(rejectBeforeDelivery)throw new Error('stale input generation');},
+    publishUiSessionIntervention, log:{info(){},warn(){},debug(){},error(){}},
+  } as unknown as MakerSteerHost).steerToAgentAccepted;
 }
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────

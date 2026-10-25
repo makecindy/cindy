@@ -7,7 +7,7 @@ import { test } from "vitest";
 import { JSDOM } from 'jsdom';
 import { isSyntheticTriggerText, syntheticTriggerKind } from "@cindy/maker-shared/synthetic-trigger";
 
-const source = fs.readFileSync(new URL("../src/main/cindy-brain/runtime/mailComposeRuntime.js", import.meta.url), "utf8");
+const source = fs.readFileSync(new URL("../../../packages/plugin-runtime/src/mailComposeRuntime.js", import.meta.url), "utf8");
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const { DOMParser } = new JSDOM('').window;
 

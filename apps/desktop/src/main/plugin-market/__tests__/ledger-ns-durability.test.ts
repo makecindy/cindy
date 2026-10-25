@@ -9,8 +9,8 @@ const crash = vi.hoisted(() => ({
   writes: [] as string[],
 }));
 
-vi.mock('../../utils/atomicWriteFile.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../utils/atomicWriteFile.js')>();
+vi.mock('@cindy/remote-agent/atomicWriteFile', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/remote-agent/atomicWriteFile')>();
   return {
     ...actual,
     atomicWriteFileSync(filePath: string, contents: string) {

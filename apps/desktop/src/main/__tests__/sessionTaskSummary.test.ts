@@ -241,10 +241,11 @@ describe('sessionListPreviewPatch', () => {
 describe('turn-done list preview refresh', () => {
   it('回合结束后先刷新列表预览,再按需生成置顶摘要', () => {
     const registerSource = readFileSync(
-      resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
+      resolve(__dirname, '../../../../../packages/app-runtime/src/sessionEventTerminal.ts'),
       'utf8',
     );
-    const summarySource = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');
+    const summarySource = readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src/sessionTaskSummary.ts'), 'utf8');
+    const summaryAdapter = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');
     expect(registerSource).toContain('await refreshSessionListPreview(session.id);');
     expect(registerSource).toContain(
       'await maybeGenerateSessionTaskSummary(session.id, { force: true });',
@@ -252,11 +253,11 @@ describe('turn-done list preview refresh', () => {
     expect(registerSource.indexOf('await refreshSessionListPreview(session.id);')).toBeLessThan(
       registerSource.indexOf('await maybeGenerateSessionTaskSummary(session.id, { force: true });'),
     );
-    expect(summarySource).toContain('export async function refreshSessionListPreview');
+    expect(summarySource).toContain('async function refreshSessionListPreview');
     expect(summarySource).toContain('const ownerScope = captureOwnerScope();');
     expect(summarySource).toContain('if (!isOwnerScopeCurrent(ownerScope)) return;');
     expect(summarySource).toContain('broadcastSessionListPreview(sessionId, preview, ownerScope);');
-    expect(summarySource).toContain(
+    expect(summaryAdapter).toContain(
       "import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';",
     );
   });

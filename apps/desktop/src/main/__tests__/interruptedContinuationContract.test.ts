@@ -3,6 +3,11 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+const runtimeRoot = resolve(__dirname, '../../../../../packages/app-runtime/src');
+const sharedSource = (name: string) => readFileSync(resolve(runtimeRoot, name + '.ts'), 'utf8').replace(/\r\n?/g, '\n');
+const submissionSource = sharedSource('makerInputSubmission');
+const retryLifecycleSource = sharedSource('autoResumeInputLifecycle');
+const activityBridgeSource = sharedSource('session-activity/bridge');
 const registerSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
   'utf8',
@@ -15,14 +20,11 @@ const eventSource = [
   'sessionEventDelivery',
   'sessionEventTerminal',
 ]
-  .map((name) => readFileSync(resolve(__dirname, '..', 'maker-ipc', name + '.ts'), 'utf8'))
+  .map(sharedSource)
   .join('\n')
   .replace(/\r\n?/g, '\n')
   .replaceAll('deps.', '');
-const coordinatorSource = readFileSync(
-  resolve(__dirname, '..', 'maker-ipc', 'agent-input-coordinator.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
+const coordinatorSource = sharedSource('agent-input-coordinator');
 const sessionViewSource = readFileSync(
   resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
   'utf8',
@@ -42,14 +44,14 @@ function matchIndexes(haystack: string, pattern: RegExp): number[] {
 
 describe('interrupted continuation enqueue contract', () => {
   it('does not durable-ack continue prompts at INPUT_ENQUEUE or onAccepted time', () => {
-    const enqueueStart = registerSource.search(/ipcMain\.handle\(\s*MAKER_INVOKE\.INPUT_ENQUEUE/);
-    const enqueueEndMatch = /ipcMain\.handle\(\s*MAKER_INVOKE\.INPUT_COMPACT/.exec(
-      registerSource.slice(enqueueStart + 1),
+    const enqueueStart = submissionSource.search(/ipcMain\.handle\(\s*["']maker:input:enqueue["']/);
+    const enqueueEndMatch = /ipcMain\.handle\(\s*["']maker:input:steer["']/.exec(
+      submissionSource.slice(enqueueStart + 1),
     );
     const enqueueEnd = enqueueEndMatch ? enqueueStart + 1 + enqueueEndMatch.index : -1;
     expect(enqueueStart).toBeGreaterThan(-1);
     expect(enqueueEnd).toBeGreaterThan(enqueueStart);
-    const enqueueHandler = registerSource.slice(enqueueStart, enqueueEnd);
+    const enqueueHandler = submissionSource.slice(enqueueStart, enqueueEnd);
     expect(enqueueHandler).toMatch(/inputCoordinator\.enqueue\(\s*sid\s*,\s*queued\b/);
     expect(matchIndexes(enqueueHandler, /ackSessionTurnEndedDurable\s*\(/)).toHaveLength(0);
 
@@ -97,11 +99,13 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
-    const scheduleStart = registerSource.indexOf('autoResumeBookkeeping.schedule(');
-    const scheduleEnd = registerSource.indexOf('steerToAgent:', scheduleStart);
+    const recoverySource = sharedSource('interruptedTurnRecovery');
+    expect(registerSource).toContain('onResumableTurnError: createInterruptedTurnRecovery({');
+    const scheduleStart = recoverySource.indexOf('autoResumeBookkeeping.schedule(');
+    const scheduleEnd = recoverySource.indexOf('// 回传展示信息', scheduleStart);
     expect(scheduleStart).toBeGreaterThan(-1);
     expect(scheduleEnd).toBeGreaterThan(scheduleStart);
-    const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
+    const scheduleHook = recoverySource.slice(scheduleStart, scheduleEnd);
     expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
     expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
     expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
@@ -118,9 +122,11 @@ describe('interrupted continuation enqueue contract', () => {
     expect(dispatchedStart).toBeGreaterThan(-1);
     expect(dispatchedEnd).toBeGreaterThan(dispatchedStart);
     const dispatchedHook = registerSource.slice(dispatchedStart, dispatchedEnd);
-    expect(dispatchedHook).toMatch(/attemptToken !== null/);
-    expect(dispatchedHook).toMatch(
-      /clearSchedulerAutoResumePending\(sessionId, item\.origin\.runId, attemptToken\)/,
+    expect(dispatchedHook).toContain('autoResumeInputLifecycle.dispatched(sessionId, item)');
+    const dispatchedLifecycle = retryLifecycleSource.slice(retryLifecycleSource.indexOf('function dispatched('), retryLifecycleSource.indexOf('function retry('));
+    expect(dispatchedLifecycle).toMatch(/token !== null/);
+    expect(dispatchedLifecycle).toMatch(
+      /clearSchedulerAutoResumePending\(\s*sessionId,\s*item\.origin\.runId,\s*token,?\s*\)/,
     );
 
     const discardedStart = registerSource.indexOf('onDiscardedQueuedMessage:');
@@ -142,30 +148,17 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedSettleIndex).toBeGreaterThan(-1);
     expect(discardedFinalizeIndex).toBeGreaterThan(discardedSettleIndex);
 
-    const settleStart = registerSource.indexOf('function settleUndispatchedAutoResumeOutcome(');
-    const settleEnd = registerSource.indexOf('\n}\n', settleStart);
-    expect(settleStart).toBeGreaterThan(-1);
-    expect(settleEnd).toBeGreaterThan(settleStart);
-    const settleHelper = registerSource.slice(settleStart, settleEnd);
-    expect(settleHelper).toMatch(/autoResumeBookkeeping\.settleOutcomeForClient\(/);
-    expect(settleHelper).toMatch(/item\.clientId/);
-
-    const interruptedSettleStart = registerSource.indexOf(
-      'function settleUndispatchedInterruptedAutoResume(',
+    const settleHelper = retryLifecycleSource.slice(
+      retryLifecycleSource.indexOf('function settleUndispatchedAutoResumeOutcome('),
+      retryLifecycleSource.indexOf('function settleUndispatchedInterruptedAutoResume('),
     );
-    const interruptedSettleEnd = registerSource.indexOf('\n}\n', interruptedSettleStart);
-    expect(interruptedSettleStart).toBeGreaterThan(-1);
-    expect(interruptedSettleEnd).toBeGreaterThan(interruptedSettleStart);
-    const interruptedSettleHelper = registerSource.slice(
-      interruptedSettleStart,
-      interruptedSettleEnd,
+    expect(settleHelper).toMatch(/settleOutcomeForClient\(sessionId, attemptToken, item\.clientId/);
+    const interruptedSettleHelper = retryLifecycleSource.slice(
+      retryLifecycleSource.indexOf('function settleUndispatchedInterruptedAutoResume('),
+      retryLifecycleSource.indexOf('function beforePersist('),
     );
-    expect(interruptedSettleHelper).toMatch(
-      /autoResumeBookkeeping\.hasPendingLifecycleForClient\(/,
-    );
-    expect(interruptedSettleHelper).toMatch(
-      /interruptedTurnAutoResumeGuard\.noteResumeSendFailed\(sessionId, attemptToken\)/,
-    );
+    expect(interruptedSettleHelper).toMatch(/hasPendingLifecycleForClient\(/);
+    expect(interruptedSettleHelper).toMatch(/host\.interrupted\(\)\.noteResumeSendFailed\(sessionId, attemptToken\)/);
 
     const undispatchedStart = registerSource.indexOf('onUndispatchedUserTurn:');
     const undispatchedEnd = registerSource.indexOf('onQueueEmptied:', undispatchedStart);
@@ -230,7 +223,7 @@ describe('interrupted continuation enqueue contract', () => {
     // 预览给人看的落库可见正文,不是可能带来源 / 回执前缀的 agent text。
     expect(registerSource).toContain('item.persistedContent || item.text');
     expect(registerSource).toContain('item.origin.displayText ?? item.text');
-    expect(registerSource).toContain('extractAgentIslandPromptText(content)');
+    expect(activityBridgeSource).toContain('extractAgentIslandPromptText(content)');
     const drainableHead = coordinatorSource.indexOf(
       'if (this.getDrainableHead(sessionId, state) === item)',
     );

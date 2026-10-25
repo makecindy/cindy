@@ -1,3 +1,4 @@
+import { createInterruptedTurnRecovery } from '@cindy/app-runtime/interruptedTurnRecovery';
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
@@ -19,7 +20,7 @@ function harness(bot = true) {
   const guard = vi.fn(() => ({ action: 'resume', attempt: 1, maxAttempts: 5,
     episodeAttempt: 1, maxEpisodeAttempts: 10, sessionTotal: 1, attemptToken: 1, delayMs: 1000 }));
   const deps = {
-    isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
+    createInterruptedTurnRecovery, isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
     isAcceptedTurnContinuationOnlyReason,
     inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
     interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
@@ -32,6 +33,8 @@ function harness(bot = true) {
     },
     saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
     pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
+    pendingContinuationOnlyAutoResumeRebuilds: new WeakMap(),
+    getStableSessionForTurnBoundary: () => null,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
   };
   const js = transpileModule(`${hints}\nreturn { callbacks: { ${callbacks} }, botFallbackInputs };`, {

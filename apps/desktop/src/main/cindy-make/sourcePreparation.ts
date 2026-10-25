@@ -198,41 +198,8 @@ function toSourceStatus(progress: SourcePreparationProgress): MakeSourceStatus {
   };
 }
 
-export type CindyBuildChannel = 'dev' | 'beta' | 'release';
-export interface CindyBuildIdentity {
-  channel: CindyBuildChannel;
-  version: string;
-}
-
-export interface CindySourceTarget {
-  channel: CindyBuildChannel;
-  version: string;
-  ref: string;
-  candidates: string[];
-}
-
-export interface SourcePreparationResult extends SourceRevisions {
-  status: 'ready' | 'failed' | 'cancelled';
-  path: string;
-  target: CindySourceTarget;
-  /** HEAD of the checkout: the personal baseline branch. */
-  commit?: string;
-  branch?: string;
-  error?: MakeSourceStatus['error'];
-  cleared?: boolean;
-}
-
-export interface SourcePreparationProgress extends SourceRevisions {
-  status: 'preparing' | 'ready' | 'failed' | 'cancelled';
-  path: string;
-  target: CindySourceTarget;
-  commit?: string;
-  branch?: string;
-  error?: SourcePreparationResult['error'];
-  phase?: MakeSourceStatus['phase'];
-  progress?: MakeSourceGitProgress;
-  dependencies?: MakeSourceStatus['dependencies'];
-}
+export type { CindyBuildChannel, CindyBuildIdentity, CindySourceTarget, SourcePreparationResult, SourcePreparationProgress } from '@cindy/app-runtime/cindyMakePreparationTypes';
+import type { CindyBuildChannel, CindyBuildIdentity, CindySourceTarget, SourcePreparationResult, SourcePreparationProgress } from '@cindy/app-runtime/cindyMakePreparationTypes';
 
 /** Resolve the two allowed release refs. A dev build always follows main. */
 export function sourceTarget(identity: CindyBuildIdentity): CindySourceTarget {

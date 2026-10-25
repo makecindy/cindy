@@ -25,7 +25,7 @@ import {
   type SilentStopContinuationBindingDeps,
 } from '../silentStopContinuationBinding.js';
 
-const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
+const registerSource = readFileSync(resolve(__dirname, '../../../../../../packages/app-runtime/src/silentStopRuntime.ts'), 'utf8').replace(
   /\r\n?/g,
   '\n',
 );
@@ -44,7 +44,7 @@ describe('silent-stop continuation generation binding (wiring contract)', () => 
     const resumeBlock = extractBetween(
       registerSource,
       'async function handleSilentStopTurnEnd(',
-      'function isFencedStaleProductTerminal(',
+      'return {surfaceSilentStopExhaustedBanner,handleSilentStopTurnEnd};',
     );
     // 预约/回滚接线集中到 helper；sendOpts 必须真的并入续跑调用。
     expect(resumeBlock).toContain('bindSilentStopContinuationGeneration(session.id');

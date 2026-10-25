@@ -1,0 +1,57 @@
+import {inArray,sql} from 'drizzle-orm';
+import {botProfiles,sessions} from '@cindy/runtime-db/schema';
+import {isBotVisibleRemotely,remoteVisibleSessionSql} from './botRemoteVisibility.js';
+import type {OwnerBroadcastTap} from './ownerBroadcast.js';
+export type RemoteBotSessionAccess='ordinary'|'visible'|'hidden'|'background'|'missing';
+export function createBotRemoteSessionAccess(host:Pick<OwnerBroadcastTap,'captureDataOwnerBroadcastScope'|'isDataOwnerBroadcastScopeCurrent'>&{getDbClient():import('@cindy/runtime-db/client/DbClient').DbClient}){
+const {getDbClient,captureDataOwnerBroadcastScope,isDataOwnerBroadcastScopeCurrent}=host;
+/** Keep bind counts bounded and issue only one query at a time, even for huge rosters. */
+const ACCESS_BATCH_SIZE = 200;
+
+/** Fresh checks only: cached replies and replay must observe newly hidden companions. */
+async function readRemoteBotSessionAccessBatch(
+  ids: readonly string[], kind: 'session' | 'bot' = 'session',
+): Promise<Map<string, RemoteBotSessionAccess>> {
+  const uniqueIds = [...new Set(ids)];
+  const access = new Map<string, RemoteBotSessionAccess>();
+  if (!uniqueIds.length) return access;
+  const owner = captureDataOwnerBroadcastScope();
+  const db = getDbClient().drizzle;
+  const denyAll = () => new Map(uniqueIds.map((id) => [id, 'hidden' as const]));
+  for (let offset = 0; offset < uniqueIds.length; offset += ACCESS_BATCH_SIZE) {
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
+    const chunk = uniqueIds.slice(offset, offset + ACCESS_BATCH_SIZE);
+    for (const id of chunk) access.set(id, 'missing');
+    if (kind === 'bot') {
+      const profiles = await db.select({ id: botProfiles.id, hiddenAt: botProfiles.hiddenAt, status: botProfiles.status })
+        .from(botProfiles).where(inArray(botProfiles.id, chunk));
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
+      for (const profile of profiles) {
+        access.set(profile.id, isBotVisibleRemotely(profile) ? 'visible' : 'hidden');
+      }
+    } else {
+      const rows = await db.select({
+        id: sessions.id,
+        source: sessions.source,
+        hiddenAt: sessions.hiddenAt,
+        visible: sql<number>`${sql.raw(remoteVisibleSessionSql('sessions'))}`,
+      }).from(sessions)
+        .where(inArray(sessions.id, chunk));
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
+      for (const row of rows) {
+        // 插件后台隐藏任务:列表类结果不返回,单任务读取/操作仍允许(插件页深链打开)。
+        access.set(row.id, row.source !== 'bot' ? (row.hiddenAt != null ? 'background' : 'ordinary')
+          : row.visible ? 'visible' : 'hidden');
+      }
+    }
+  }
+  return access;
+}
+
+/** Never infer companion authority from a controller's cached Session or resource link. */
+async function readRemoteBotSessionAccess(sessionId: string, kind: 'session' | 'bot' = 'session'): Promise<RemoteBotSessionAccess> {
+  return (await readRemoteBotSessionAccessBatch([sessionId], kind)).get(sessionId) ?? 'hidden';
+}
+
+return {readRemoteBotSessionAccessBatch,readRemoteBotSessionAccess};
+}

@@ -34,7 +34,7 @@ describe('PROTOCOL_VERSION', () => {
 
 describe('PI_MANAGER_BUNDLE_VERSION', () => {
   it('should be a semver string', () => {
-    expect(PI_MANAGER_BUNDLE_VERSION).toBe('0.1.5');
+    expect(PI_MANAGER_BUNDLE_VERSION).toBe('0.1.6');
   });
 });
 

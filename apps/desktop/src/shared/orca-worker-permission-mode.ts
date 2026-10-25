@@ -1,16 +1,1 @@
-export const ORCA_WORKER_PERMISSION_MODES = ['auto', 'bypassPermissions'] as const;
-
-export type OrcaWorkerPermissionMode = (typeof ORCA_WORKER_PERMISSION_MODES)[number];
-
-export const DEFAULT_ORCA_WORKER_PERMISSION_MODE: OrcaWorkerPermissionMode =
-  'bypassPermissions';
-
-export function isOrcaWorkerPermissionMode(value: unknown): value is OrcaWorkerPermissionMode {
-  return ORCA_WORKER_PERMISSION_MODES.some((mode) => mode === value);
-}
-
-export function resolveOrcaWorkerPermissionMode(
-  value: unknown,
-): OrcaWorkerPermissionMode {
-  return isOrcaWorkerPermissionMode(value) ? value : DEFAULT_ORCA_WORKER_PERMISSION_MODE;
-}
+export * from '@cindy/maker-shared/orca-worker-permission-mode';

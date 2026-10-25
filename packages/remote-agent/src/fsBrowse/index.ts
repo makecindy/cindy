@@ -1,0 +1,143 @@
+import { promises as fs, type Dirent } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { throwIpcError } from '../ipcValidate.js';
+import { buildDriveOptions, listWindowsDriveRoots, type FsBrowseDrive } from './windowsDrives.js';
+
+export type { FsBrowseDrive } from './windowsDrives.js';
+
+export interface FsBrowseEntry {
+  name: string;
+  kind: 'dir' | 'symlink';
+  /** host-native 绝对路径(renderer 导航直接用,免跨平台拼接)。 */
+  path: string;
+}
+export interface FsListDirResult {
+  resolvedPath: string;
+  entries: FsBrowseEntry[];
+  /** host-native 上级目录;已在根则 null。 */
+  parent: string | null;
+  /** 仅 Windows:本机盘符(含当前盘标记)。盘符枚举失败或超出等待预算时省略。 */
+  drives?: FsBrowseDrive[];
+  /** 仅 Windows:盘符枚举超出等待预算、后台仍在进行。控制端可据此刷新;旧端忽略。 */
+  drivesPending?: boolean;
+}
+export interface FsListDirDeps {
+  platform?: NodeJS.Platform;
+  listDriveRoots?: () => Promise<string[]>;
+}
+export interface FsStatResult {
+  kind: 'dir' | 'file' | 'missing';
+  resolvedPath: string;
+  /** 文件最后修改时间(unix ms);仅 kind==='file' 时有值。「本轮产出文件」卡用它做时间窗校验。 */
+  mtimeMs?: number;
+  /** 文件创建时间(unix ms);仅 kind==='file'。部分 Linux FS 不支持时为 0,调用方需判 >0。 */
+  birthtimeMs?: number;
+}
+export interface FsMkdirResult {
+  resolvedPath: string;
+}
+
+/**
+ * 把以 `~` 开头的路径展开到本机 home,并归一为绝对路径(去 `..` 等)。
+ * 空串 / `~` → home;`~/x` → home/x;绝对路径 → resolve;相对路径 → 相对 home 兜底。
+ */
+export function expandHome(input: string): string {
+  const home = os.homedir();
+  const raw = (input ?? '').trim();
+  if (raw === '' || raw === '~' || raw === '~/' || raw === '~\\') return home;
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) {
+    return path.resolve(home, raw.slice(2));
+  }
+  if (path.isAbsolute(raw)) return path.resolve(raw);
+  // 项目选择器里不该出现相对路径,兜底归到 home 下(而非 process.cwd,后者在被控端无意义)。
+  return path.resolve(home, raw);
+}
+
+/**
+ * 盘符列表最多等这么久:首次枚举要起 PowerShell,不能拖慢目录打开;超时就先不带盘符返回,
+ * 并标 drivesPending,让控制端在当前目录再拉一次。枚举在后台继续写入缓存。
+ */
+const DRIVE_LIST_WAIT_MS = 1_500;
+const DRIVE_WAIT_TIMEOUT = Symbol('drive-wait-timeout');
+
+async function waitForDriveRoots(
+  listDriveRoots: () => Promise<string[]>,
+): Promise<{ roots: string[]; pending: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof DRIVE_WAIT_TIMEOUT>((resolve) => {
+    timer = setTimeout(() => resolve(DRIVE_WAIT_TIMEOUT), DRIVE_LIST_WAIT_MS);
+  });
+  try {
+    const result = await Promise.race([listDriveRoots().catch(() => [] as string[]), expired]);
+    if (result === DRIVE_WAIT_TIMEOUT) return { roots: [], pending: true };
+    return { roots: result, pending: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 列出目录下的**子目录**(含 hidden,对齐 SSH `ls -A`;文件不列)。每项带 host-native 绝对路径。 */
+export async function listDir(rawPath: string, deps: FsListDirDeps = {}): Promise<FsListDirResult> {
+  const resolvedPath = expandHome(rawPath);
+  // 与 readdir 并行;该 promise 永不 reject,readdir 失败提前抛出也不会留下未处理的拒绝。
+  const driveRoots = (deps.platform ?? process.platform) === 'win32'
+    ? waitForDriveRoots(deps.listDriveRoots ?? listWindowsDriveRoots)
+    : null;
+  let dirents: Dirent[];
+  try {
+    // encoding:'utf8' 固定到 name:string 的重载(否则 readdir 返回 string|Buffer 名联合)。
+    dirents = await fs.readdir(resolvedPath, { withFileTypes: true, encoding: 'utf8' });
+  } catch (err) {
+    throwIpcError('FS_BROWSE_FAILED', `list dir failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const entries: FsBrowseEntry[] = [];
+  for (const d of dirents) {
+    const childPath = path.join(resolvedPath, d.name);
+    if (d.isDirectory()) {
+      entries.push({ name: d.name, kind: 'dir', path: childPath });
+    } else if (d.isSymbolicLink()) {
+      // 仅收指向目录的 symlink(跟随链接 stat);dangling / 指向文件的跳过。
+      try {
+        const st = await fs.stat(childPath);
+        if (st.isDirectory()) entries.push({ name: d.name, kind: 'symlink', path: childPath });
+      } catch {
+        /* dangling symlink → 跳过 */
+      }
+    }
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  const parent = path.dirname(resolvedPath);
+  const result: FsListDirResult = { resolvedPath, entries, parent: parent === resolvedPath ? null : parent };
+  const driveWait = driveRoots ? await driveRoots : null;
+  if (driveWait?.roots.length) result.drives = buildDriveOptions(driveWait.roots, resolvedPath);
+  else if (driveWait?.pending) result.drivesPending = true;
+  return result;
+}
+
+/** 判断路径状态:dir / file / missing(missing 用于「输入了不存在的新项目目录」分支)。 */
+export async function statPath(rawPath: string): Promise<FsStatResult> {
+  const resolvedPath = expandHome(rawPath);
+  try {
+    const st = await fs.stat(resolvedPath);
+    return st.isDirectory()
+      ? { kind: 'dir', resolvedPath }
+      : { kind: 'file', resolvedPath, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return { kind: 'missing', resolvedPath };
+    }
+    throwIpcError('FS_BROWSE_FAILED', `stat failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** 幂等创建目录(已存在直接成功)。 */
+export async function mkdirP(rawPath: string): Promise<FsMkdirResult> {
+  const resolvedPath = expandHome(rawPath);
+  try {
+    await fs.mkdir(resolvedPath, { recursive: true });
+    return { resolvedPath };
+  } catch (err) {
+    throwIpcError('FS_BROWSE_FAILED', `mkdir failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}

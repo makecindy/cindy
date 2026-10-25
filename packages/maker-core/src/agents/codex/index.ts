@@ -1926,6 +1926,9 @@ function composeTurnDiffBlocks(
 // ── Agent 实现 ────────────────────────────────────────────────────────────────
 
 export class CodexAgent extends BaseAgent {
+  /** Capability discovery is available before the host installs a binary. */
+  static getDeclaredCapabilities(): Capabilities { return structuredClone(CAPABILITIES); }
+
   readonly kind = 'codex' as const;
   readonly capabilities: Capabilities;
 
@@ -5680,6 +5683,25 @@ assertRouteCurrent();
       }
       return config;
     };
+    // Disabling an absent server creates a transport-less TOML table, which
+    // native Codex rejects before it can start the thread. Inspect the effective
+    // config, including host-injected per-session transports, before overriding.
+    let localMemoryMcpConfigured = false;
+    if (!reviewMode && !hosted && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !opts.botRuntimeProfile) {
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { includeLayers: false }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        assertCurrentHost('Memory MCP configuration');
+        const scoped = readSessionMcpConfig();
+        localMemoryMcpConfigured = hasCodexMcpTransport(asRecord(asRecord(response.config).mcp_servers).cindy_memory)
+          || typeof scoped['mcp_servers.cindy_memory.url'] === 'string'
+          || typeof scoped['mcp_servers.cindy_memory.command'] === 'string';
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw error;
+      }
+    }
     let botMcpConfig: Record<string, unknown> = opts[LOCAL_AGENT_CLIENT] ? { 'features.apps': false } : {};
     if (opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly) {
       botMcpConfig.model_catalog_json = localToolCatalog;
@@ -6718,7 +6740,7 @@ assertRouteCurrent();
         // create an invalid transport even though the entry is disabled.
         // 设备托管：只停用本机确实配置了的 cindy_memory(没有传输配置的空条目会让 Codex 拒绝配置)。
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !opts.botRuntimeProfile
-          && (!hosted || hostedLocalMcpNames.includes('cindy_memory'))
+          && (hosted ? hostedLocalMcpNames.includes('cindy_memory') : localMemoryMcpConfigured)
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
         // Local custom-context hosts carry per-model budgets in their catalog.

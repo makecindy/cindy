@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
-const lifecycleSource = readFileSync(resolve(__dirname, '..', 'orcaLifecycleService.ts'), 'utf8');
+const lifecycleSource = readFileSync(
+  resolve(__dirname, '../../../../../../packages/orca-workflow/src/host/orcaLifecycleService.ts'),
+  'utf8',
+);
 const sessionViewSource = readFileSync(
   resolve(
     __dirname,

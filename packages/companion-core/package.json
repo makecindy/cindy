@@ -1,0 +1,29 @@
+{
+  "name": "@cindy/companion-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/runtime.ts",
+  "types": "./src/runtime.ts",
+  "exports": {
+    ".": "./src/runtime.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cindy/maker-shared": "workspace:*",
+    "zod": "^4.1.5",
+    "@cindy/remote-agent": "workspace:*",
+    "@cindy/maker-scheduler": "workspace:*",
+    "@cindy/device-link": "workspace:*",
+    "@cindy/plugin-runtime": "workspace:*",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "^5.7.0",
+    "@types/js-yaml": "^4.0.9"
+  }
+}

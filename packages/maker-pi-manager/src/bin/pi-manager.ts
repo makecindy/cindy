@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 import { ManagerServer } from '../server.js';
 import { PiSessionRegistry, scrubCredentialText } from '../session-registry.js';
@@ -501,6 +502,10 @@ async function main(): Promise<void> {
 
 // 仅作为 CLI 入口执行时运行 main()(轮 17 H-1:导出纯函数供单测后, import
 // 不应触发 main —— 用 ESM 入口检测而非裸调用)。
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+// Node resolves symlinks before evaluating ESM. The remote HOME may itself
+// contain one (for example /tmp on macOS), so compare canonical URLs.
+let entryUrl: string | undefined;
+try { if(process.argv[1])entryUrl=pathToFileURL(fs.realpathSync(process.argv[1])).href; } catch { /* Imported by a host without a filesystem entry. */ }
+if (import.meta.url === entryUrl) {
   void main();
 }

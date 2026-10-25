@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const sourcePath = resolve(__dirname, '..', 'usage', 'claudeAccountUsage.ts');
+const sourcePath = resolve(__dirname, '../../../../../packages/app-runtime/src/claudeAccountUsage.ts');
 const source = readFileSync(sourcePath, 'utf8');
 
 describe('claudeAccountUsage today accounting', () => {

@@ -1,4 +1,4 @@
-import { bindTaskActionInput } from '../taskActionAuthorization.js';
+import { createSessionControlInputBuilder } from '@cindy/app-runtime/sessionControlInput';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -224,15 +224,9 @@ describe('botDirectMessageService', () => {
       const origin = sessionQueueOriginForDispatcher(sent);
       const row = { sessionId: sent.targetSessionId, content: sent.persistedContent,
         agentMeta: { origin, agentFacingWireContent: { type: 'user', content: sent.message } } };
-      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
-      const begin = source.indexOf('  async function buildSessionControlInputItem(');
-      const end = source.indexOf('  const orcaInterAgentDispatcher:', begin);
-      const js = ts.transpileModule(`${source.slice(begin, end)}\nreturn buildSessionControlInputItem;`, {
-        compilerOptions: { target: ts.ScriptTarget.ES2022 },
-      }).outputText;
-      const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', 'bindTaskActionInput', js)(
-        async () => ({ model: 'fixture', workingDir: '/fixture', permissionMode: 'ask' }), (mode: string) => mode,
-        UI_ACTION_TRIGGER_PREFIX, HOST_ONLY_AGENT_PREFIX, bindTaskActionInput);
+      const build = createSessionControlInputBuilder({
+        buildCreateOptsForQueuedSession: async () => ({ agentKind: 'claude-code', model: 'fixture', workingDir: '/fixture', permissionMode: 'ask' }),
+      });
       const queued = await build({ ...sent, meta: {}, origin });
       expect(queued.text).toBe(sent.persistedContent);
       expect(getAgentFacingText(queued)).not.toContain('Group source');

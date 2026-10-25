@@ -72,7 +72,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   onSilentStopSettled: mocks.onSilentStopSettled,
   beginTurnChangeSetAtDispatch: vi.fn(async () => undefined),
 }));
-vi.mock('../pendingInteractions', () => ({
+vi.mock('@cindy/im-runtime/pendingInteractions', () => ({
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
   rejectAllPending: mocks.rejectAllPending,

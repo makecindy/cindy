@@ -14,43 +14,10 @@ const FORWARDED_REQUEST_COPY = {
   ko: ko.forwardedRequest,
 } satisfies Record<SupportedLocale, typeof en.forwardedRequest>;
 
-/** Host-owned source evidence. It describes authorship, never execution permission. */
-export interface ForwardedRequestSource {
-  userText: string | null;
-  sessionId?: string;
-  clientId?: string;
-  /**
-   * The sending host admitted this relay in a turn it verified as the owner's own request
-   * (teammate principal `owner`). Only then does the receiver treat userText as the owner's
-   * request for this task. Optional on the wire; older hosts drop or never send it.
-   */
-  ownerVerified?: true;
-}
+import type { ForwardedRequestSource, AgentRequestReceipt } from '@cindy/maker-shared/forwarded-request-types';
+export type { ForwardedRequestSource, AgentRequestReceipt } from '@cindy/maker-shared/forwarded-request-types';
 
-/** Kept under the existing protected, non-human input receipt. */
-export interface AgentRequestReceipt {
-  kind: 'agent-request' | 'delegated-continuation';
-  request?: ForwardedRequestSource;
-}
-
-export function readForwardedRequestSource(value: unknown): ForwardedRequestSource | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const source = value as Record<string, unknown>;
-  if (source.userText === null) return { userText: null };
-  if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
-    || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
-  return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
-    ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}) };
-}
-
-/** The owner's words of a verified relay, for the receiver's auto-review intent. Never other text. */
-export function verifiedOwnerRequestText(receipt: unknown): string | undefined {
-  if (!receipt || typeof receipt !== 'object' || (receipt as { kind?: unknown }).kind !== 'agent-request') return undefined;
-  const source = readForwardedRequestSource((receipt as { request?: unknown }).request);
-  return source?.ownerVerified && typeof source.userText === 'string' && source.userText.trim()
-    ? source.userText : undefined;
-}
-
+export {readForwardedRequestSource} from '@cindy/maker-shared/forwarded-request-types';
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string, locale: SupportedLocale = DEFAULT_LOCALE): string {
   const copy = FORWARDED_REQUEST_COPY[locale];
@@ -89,4 +56,4 @@ export function matchesForwardedRequest(source: ForwardedRequestSource, body: st
 }
 
 /** Main-process persistence capability: JSON / IPC cannot mint this key. */
-export const FORWARDED_REQUEST_RECEIPT = Symbol('forwarded-request-receipt');
+export { FORWARDED_REQUEST_RECEIPT } from '@cindy/maker-shared/forwarded-request-types';

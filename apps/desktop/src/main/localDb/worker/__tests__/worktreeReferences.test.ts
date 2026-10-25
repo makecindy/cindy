@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import Database from 'better-sqlite3';
 
+import { terminalWorktreeProfileId, terminalWorktreeProfileLocations } from '@cindy/worktree-core/terminalReferences';
 import { readLocalWorktreeReferences } from '../worktreeReferences';
 import type { DatabaseConstructor } from '../runtime';
 
@@ -55,6 +56,21 @@ describe('machine-local task reference reader', () => {
       expect(sql).toContain('remote_host_id IS NULL');
       expect(sql).not.toContain('messages');
     }
+  });
+  // Safety: relocating GUI userData must not hide terminal tasks registered in
+  // appData. Real catalog files reproduce a false orphan; corrupt files preserve.
+  it('reads terminal references from appData even when the GUI database is relocated', () => {
+    const appData = path.join(root, 'app-data'), profile = path.join(root, 'terminal-profile');
+    const catalog = terminalWorktreeProfileLocations(appData);
+    const task = path.join(profile, 'owners', 'b'.repeat(32), 'tasks', 'terminal-task');
+    fs.mkdirSync(catalog, { recursive: true }); fs.mkdirSync(task, { recursive: true });
+    fs.writeFileSync(path.join(catalog, terminalWorktreeProfileId(profile) + '.json'), JSON.stringify({ version: 1, root: profile }));
+    const file = path.join(task, 'task.json');
+    fs.writeFileSync(file, JSON.stringify({ id: 'terminal-task', workDir: root, worktreePath: root }));
+    const read = () => readLocalWorktreeReferences(current, ReadOnlyDatabase as unknown as DatabaseConstructor, undefined, appData);
+    expect(read()).toContainEqual(expect.objectContaining({ id: 'terminal-task', status: 'active', worktreePath: root, currentDatabase: false }));
+    fs.writeFileSync(file, '{bad');
+    expect(read).toThrow();
   });
   it('does not return a partial view when another database cannot be queried', () => {
     fs.writeFileSync(path.join(root, 'cindy-other.db'), '');

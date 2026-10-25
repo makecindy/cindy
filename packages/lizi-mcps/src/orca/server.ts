@@ -117,7 +117,7 @@ export interface OrcaMcpDeps {
   }) => Promise<
     ControlResult<
       { workerId: string; workerSessionId: string; workingDir?: string; worktree?: { path: string; branch: string }; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
-      'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
+      'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'BUSY' | 'REMOTE_WORKDIR_NOT_FOUND' | 'REMOTE_WORKDIR_NOT_DIRECTORY' | 'REMOTE_WORKDIR_INVALID' | 'REMOTE_WORKDIR_UNAVAILABLE'
     >
   >;
   /** 列出当前 workflow 所有 worker。 */
@@ -170,7 +170,7 @@ export interface OrcaMcpDeps {
         | 'unconfirmed'
         | 'unsupported';
       queuePaused: boolean;
-    }>
+    }, 'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'>
   >;
   /** 列出 worker 输入队列中排队的消息;省略 workerRef 时列出调用方自身输入队列。 */
   listWorkerQueuedMessages: (params: {

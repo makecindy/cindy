@@ -269,6 +269,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:set-session-model-pref',
   // —— 能力查询 ——
   'maker:get-capabilities',
+  // Same-account controllers can inspect and reclaim IM takeover on their host.
+  // These existing Desktop channels also work on terminal hosts; guest task
+  // allowlists intentionally exclude account-wide channel identities.
+  'binding:resolve-session',
+  'binding:list-attached',
+  'binding:revoke',
   'maker:list-available-agents',
   // device-link 远程草稿镜像(只读):控制端为被控设备新建项目草稿时,读被控端**当前 New Maker
   // 草稿**在该 vendor 的完整选择(model/effort/fast/permission/source),1:1 seed 控制端草稿。
@@ -731,6 +737,8 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Bounded PTY cursor API. Same-account only; never allowed to task/share guests.
+  'terminal:remote-op',
   // Same-account owner controls only; guest task dispatch has its own deny-by-default gate.
   'maker:shared-task',
   // Dedicated Host-only OAuth transaction. Args/replies are never forwarded to Renderer.
@@ -745,6 +753,7 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
  * 命中这些 channel 的事件才会经 link 转发给控制端。
  */
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
+  'binding:changed',
   'maker:bot-delegation:changed',
   // 伙伴自主跟进状态变化（payload 只有 { botIds? }，节流 ≤1 次/秒），控制端据此重读「一眼」。
   'maker:bot-autonomy:changed',
@@ -762,6 +771,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:input:projection',
   'maker:interaction-request',
   'maker:interaction-dismissed',
+  // Optional terminal controller navigation, scoped to the requesting task.
+  'terminal:plugin-settings',
   // Claude Auto classifier 故障后降级到 ask;payload 带 sessionId,控制端显示同款提示。
   'maker:auto-permission:fallback',
   // Deferred model-provider outcome. Both payloads contain only task identity

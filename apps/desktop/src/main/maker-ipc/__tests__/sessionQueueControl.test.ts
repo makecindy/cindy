@@ -35,6 +35,25 @@ const noReorder = {
 };
 
 describe('session queue control service', () => {
+  // Behavior tier: terminal storage commits asynchronously. A Promise must
+  // never be treated as a successful mutation before its CAS result arrives.
+  it.each(['update', 'cancel'] as const)('waits for an asynchronous %s commit and preserves its lost-race result', async action => {
+    const item = queued(); let entered!: () => void, release!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let consuming = false, settled = false;
+    const mutate = async () => { entered(); await pending; consuming = true; return false; };
+    const service = createSessionQueueControlService({
+      getSnapshot: async () => ({ pendingQueue: [item], consumingClientIds: consuming ? [item.clientId] : [] }),
+      replaceQueuedMessage: mutate, removeQueuedMessage: mutate, ...noReorder,
+    });
+    const params = { sessionId: 'session', queuedMessageId: item.clientId, authorize: () => ({ ok: true as const }) };
+    const result = action === 'cancel' ? service.cancel(params)
+      : service.update({ ...params, message: 'changed', rebuild: entry => ({ ...entry, text: 'changed' }) });
+    void result.then(() => { settled = true; });
+    await reached; expect(settled).toBe(false); release();
+    expect(await result).toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+  });
   it('shares authorization, content rebuild and atomic replace for update', async () => {
     const item = queued();
     const replaceQueuedMessage = vi.fn(() => true);

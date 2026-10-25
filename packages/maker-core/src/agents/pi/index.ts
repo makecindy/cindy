@@ -1767,6 +1767,9 @@ export function buildPiSettingsJsonContent(
 }
 
 export class PiAgent extends BaseAgent {
+  /** Capability discovery is available before the host installs a binary. */
+  static getDeclaredCapabilities(): Capabilities { return structuredClone(PiAgent.baseCapabilities()); }
+
   readonly kind: AgentKind = 'pi';
   readonly capabilities: Capabilities;
   private readonly failedStartupCleanups = new Map<string, FailedPiStartupCleanup>();

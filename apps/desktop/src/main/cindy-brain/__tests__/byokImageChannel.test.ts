@@ -322,12 +322,15 @@ describe('dynamic image channel lifecycle', () => {
 });
 
 describe('Art BYOK image channel host wiring', () => {
-  const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+  const hostSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../../../../../packages/app-runtime/src/media/providerMediaChannels.ts', import.meta.url), 'utf8');
   const start = source.indexOf('function getImageChannelRegistry()');
   const end = source.indexOf('\nfunction resolveImageChannelForModel', start);
   const body = source.slice(start, end);
 
   it('registers a live BYOK channel without reusing xd/openai/gemini/xai', () => {
+    expect(hostSource).toContain('createProviderMediaChannels({');
+    expect(hostSource).toContain('getProviderMediaChannels().getImageChannelRegistry');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(body).toContain('registerByokImageChannels');

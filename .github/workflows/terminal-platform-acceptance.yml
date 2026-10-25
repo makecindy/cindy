@@ -1,0 +1,182 @@
+name: Terminal native platform acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'terminal-platform-acceptance/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    # Explicit acceptance branches can validate native runtimes before a PR.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux-x64
+          - runner: windows-latest
+            target: win32-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      XDT_SKIP_AGENT_BIN_INSTALL: '1'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      ELECTRON_OVERRIDE_DIST_PATH: '${{ github.workspace }}/.electron-stub-dist'
+      CINDY_ACCEPTANCE_OUTPUT: '${{ github.workspace }}/terminal-native-${{ matrix.target }}'
+      CINDY_ACCEPTANCE_REPORT: '${{ github.workspace }}/terminal-report-${{ matrix.target }}'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install target-native dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile || pnpm install --frozen-lockfile
+      - name: Official headless Ollama and llama.cpp lifecycle
+        env:
+          CINDY_GITHUB_API_TOKEN: ${{ github.token }}
+        run: pnpm --filter cindy-terminal exec tsx scripts/local-runtime-acceptance.ts
+      - name: Prepare real headless plugin browser
+        run: pnpm --filter cindy-terminal exec playwright-core install --with-deps chromium
+      - name: Select the pinned headless browser for integration tests
+        run: pnpm --filter cindy-terminal exec node -e "require('fs').appendFileSync(process.env.GITHUB_ENV, 'CINDY_TEST_CHROMIUM='+require('playwright-core').chromium.executablePath()+'\n')"
+      - name: Allow only the test browser to create its Linux sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          node -e 'const fs=require("fs"),path=require("path"); const binary=fs.realpathSync(process.env.CINDY_TEST_CHROMIUM); if (!/^\/[a-zA-Z0-9_./-]+$/.test(binary)) throw Error("Invalid browser path"); fs.writeFileSync(path.join(process.env.RUNNER_TEMP,"cindy-terminal-chromium.apparmor"), "abi <abi/4.0>,\ninclude <tunables/global>\nprofile cindy-terminal-chromium "+binary+" flags=(unconfined) {\n  userns,\n}\n");'
+          sudo install -m 644 "$RUNNER_TEMP/cindy-terminal-chromium.apparmor" /etc/apparmor.d/cindy-terminal-chromium
+          sudo apparmor_parser -r /etc/apparmor.d/cindy-terminal-chromium
+      - name: Build terminal bundle
+        run: pnpm --filter cindy-terminal build
+      - name: Native worktree recovery and cross-host occupancy
+        run: pnpm --filter cindy-terminal exec vitest run src/worktrees/host.test.ts src/worktrees/registry.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Targeted authentication, vault, transport and engine tests
+        run: pnpm --filter cindy-terminal exec vitest run src/host.integration.test.ts src/windows-acl.test.ts src/remote/service.test.ts src/tasks/host.test.ts src/tasks/orca-store.test.ts src/models/gateway.test.ts src/models/utility.test.ts src/models/login.test.ts src/local-models/service.test.ts src/engines/engines.test.ts src/ui/authentication.test.tsx src/maintenance.test.ts src/plugins/account.test.ts src/plugins/market.test.ts src/service-manager.test.ts --maxWorkers=1 --minWorkers=1
+      # Cold Chromium + multiple real worker/vault restarts are integration
+      # work, and exceed the unit-test limit on hosted Intel Macs. Production
+      # deadlines and every assertion remain unchanged.
+      - name: Real plugin browser, vault and worker lifecycle
+        run: pnpm --filter cindy-terminal exec vitest run src/plugins/host.integration.test.ts --testTimeout=30000 --maxWorkers=1 --minWorkers=1
+      - name: Existing verified downloads and plugin download policy
+        run: pnpm --filter desktop exec vitest run src/main/downloader/__tests__/download.test.ts src/main/downloader/__tests__/scheduler.test.ts src/main/downloader/__tests__/requestInjection.test.ts src/main/cindy-brain/__tests__/downloadSlot.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing plugin quick answers and model preferences
+        run: pnpm --filter desktop exec vitest run src/main/cindy-brain/__tests__/cindySlot.test.ts src/main/cindy-brain/__tests__/pluginModelPrefsIpc.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Independent companion model defaults and routes
+        run: pnpm --filter cindy-terminal exec vitest run src/remote/companions/host.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing default model recommendation policy
+        run: pnpm --filter desktop exec vitest run src/renderer/lib/__tests__/newMakerDefaultTuple.test.ts src/shared/__tests__/botDefaultModelChain.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing plugin task ownership, storage, attachments and model selection
+        run: pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/pluginTaskService.test.ts src/main/maker-ipc/__tests__/sessionExecutionOwnership.test.ts src/main/maker-ipc/__tests__/pluginTaskReviewContext.test.ts src/main/cindy-brain/__tests__/taskCapability.test.ts src/main/cindy-brain/__tests__/taskSlot.test.ts src/main/cindy-media/__tests__/pluginMessageAttachments.test.ts src/main/maker-ipc/__tests__/pluginTaskStoreBudget.test.ts src/main/maker-ipc/__tests__/pluginTaskStorePagination.test.ts src/main/maker-ipc/__tests__/appDefaultModelControl.test.ts src/main/maker-ipc/__tests__/pluginWriteAccess.test.ts src/main/maker-ipc/__tests__/pluginWriteAccessHost.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing automatic permission review and model fallback
+        run: pnpm --filter desktop exec vitest run src/main/maker-host/__tests__/autoPermissionReviewer.test.ts src/main/maker-host/__tests__/autoReviewModelRouter.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing collaboration lifecycle, dispatch and recovery contracts
+        run: pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/orcaProviderRoutingSnapshotWiring.test.ts src/main/maker-ipc/__tests__/orcaSessionStartOptions.test.ts src/main/maker-ipc/__tests__/orcaRemoteWorkers.test.ts src/main/maker-ipc/__tests__/orcaRemoteWorkerBridge.test.ts src/main/maker-ipc/__tests__/orcaRemoteWorkerRuntime.test.ts src/main/maker-ipc/__tests__/orcaRemoteWorkerHost.test.ts src/main/maker-ipc/__tests__/orcaLifecycleService.test.ts src/main/maker-ipc/__tests__/orcaDiagnostics.test.ts src/main/maker-ipc/__tests__/orcaIdleReleaseWatcher.test.ts src/main/maker-ipc/__tests__/orcaUiAssignmentHistoryGate.test.ts src/main/maker-ipc/__tests__/pluginWorkerCompletion.test.ts src/main/maker-ipc/__tests__/orcaWorkerCreationService.test.ts src/main/maker-ipc/__tests__/orcaTeamService.test.ts src/main/maker-ipc/__tests__/orcaInterAgentDispatcher.test.ts src/main/maker-ipc/__tests__/acceptedCallbackRunner.test.ts src/main/maker-ipc/__tests__/sessionQueueControl.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing input authorship and plugin target delivery
+        run: pnpm --filter desktop exec vitest run src/main/__tests__/agentInputQueue.test.ts src/main/maker-ipc/__tests__/autoReviewUserIntent.test.ts src/main/maker-ipc/__tests__/forwardedRequest.test.ts src/main/maker-ipc/__tests__/botTaskCoordination.test.ts src/main/cindy-brain/__tests__/pluginTargetSlot.test.ts src/main/maker-ipc/__tests__/pluginWorkerDirectory.test.ts src/main/mcp-integrations/__tests__/collabSendOutcome.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing MCP caller identity and worker tools
+        run: pnpm --filter desktop exec vitest run src/main/mcp-integrations/__tests__/codexHttpBridge.test.ts src/main/mcp-integrations/__tests__/codexMcpThreadContextStore.test.ts src/main/maker-host/__tests__/mcpToolApprovalPolicy.test.ts src/main/maker-ipc/__tests__/taskActionAuthorization.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Shared collaboration message display
+        run: pnpm --filter desktop exec vitest run src/renderer/__tests__/messageNavRailModel.test.ts src/renderer/__tests__/prevMessageJumpChip.test.ts src/renderer/components/chat/__tests__/shareSelectionStore.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Shared worker MCP schemas and dispatch
+        run: pnpm --filter @cindy/orca-workflow exec vitest run src/__tests__/orca-bridge-mcp.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Typecheck shared collaboration runtime
+        run: pnpm --filter @cindy/orca-workflow typecheck
+      - name: Existing remote plugin pages and encrypted settings
+        run: pnpm --filter desktop exec vitest run src/main/cindy-brain/__tests__/mobilePageService.test.ts src/main/cindy-brain/__tests__/mobileTaskSettings.test.ts src/main/cindy-brain/__tests__/remotePluginManagement.test.ts src/main/cindy-brain/__tests__/remotePluginPreferences.test.ts src/main/cindy-brain/__tests__/remotePluginSettings.test.ts src/main/cindy-brain/__tests__/mobilePageRelay.test.ts src/main/cindy-brain/__tests__/mobilePageAssets.test.ts src/main/cindy-brain/__tests__/mobilePluginConfiguration.test.ts src/main/cindy-brain/__tests__/mobilePluginUsage.test.ts src/main/cindy-brain/__tests__/mobilePreview.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing message ingress, permissions and reply lifecycle
+        run: pnpm --filter desktop exec vitest run src/main/im/__tests__/accountBoundary.test.ts src/main/im/__tests__/connectionLifecycle.test.ts src/main/im/shared/__tests__/stopCommandRouting.test.ts src/main/im/shared/__tests__/earlyUserMessagePersist.test.ts src/main/im/shared/__tests__/channelNote.test.ts src/main/im/shared/__tests__/turnPresenter.test.ts src/main/im/shared/__tests__/turnRetryNotice.test.ts src/main/im/shared/__tests__/pendingInteractions.test.ts src/main/im/shared/__tests__/permissionPresentation.test.ts src/main/maker-ipc/__tests__/sharedPermissionRoute.test.ts src/main/hook-control/__tests__/sharedPermission.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing personal channel context, notifications and tool routing
+        run: pnpm --filter desktop exec vitest run src/main/im/feishu/__tests__/feishuAdapter.test.ts src/main/im/feishu/__tests__/groupContext.test.ts src/main/im/feishu/__tests__/groupContextInjection.test.ts src/main/im/feishu/__tests__/notificationOrigin.test.ts src/main/im/feishu/__tests__/permissionPolicy.test.ts src/main/im/telegram/__tests__/adapter.test.ts src/main/im/telegram/__tests__/groupWindow.test.ts src/main/im/telegram/__tests__/contactsAutoRegister.test.ts src/main/mcp-integrations/__tests__/telegramBotMcpServer.test.ts src/main/mcp-integrations/__tests__/groupHistoryMcpServer.test.ts src/main/im/shared/__tests__/groupHistorySearch.test.ts src/main/__tests__/wecomGroupNotification.test.ts src/main/scheduler-host/__tests__/notifier.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Typecheck shared message runtime
+        run: pnpm --filter @cindy/im-runtime typecheck
+      - name: Existing account catalog and auxiliary model authority
+        run: pnpm --filter desktop exec vitest run src/main/maker-host/__tests__/activeCatalogDiscovery.test.ts src/main/maker-host/__tests__/activeCatalogRevision.test.ts src/main/maker-host/__tests__/activeCatalogXdAvailability.test.ts src/main/maker-host/__tests__/piGatewayModelCatalog.test.ts src/main/maker-host/__tests__/genericOAuth.test.ts src/main/maker-host/__tests__/custom-provider-store.test.ts src/main/model-access/__tests__/credentialsSync.test.ts src/main/model-access/__tests__/modelsSyncRefresh.test.ts src/main/model-access/__tests__/gatewayKeyRejection.test.ts src/main/utility-model/__tests__/oneShotCandidates.test.ts src/main/maker-host/__tests__/opencode-go-session.test.ts src/main/maker-ipc/__tests__/auxiliaryModelSettings.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing native subscription discovery and CLI login boundaries
+        run: pnpm --filter desktop exec vitest run src/main/maker-host/__tests__/codexModelDiscovery.test.ts src/main/maker-host/__tests__/chatgptBridgeHeaders.test.ts src/main/maker-host/__tests__/claudeNativeCli.test.ts src/main/maker-host/__tests__/claudeNativeConnection.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Typecheck shared model runtime
+        run: pnpm exec tsc -p packages/model-providers/tsconfig.json --noEmit
+      - name: Shared model switching and context recovery
+        run: pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/contextOverflowRollover.test.ts src/main/maker-ipc/__tests__/cindyContextCompression.test.ts src/main/maker-ipc/__tests__/sessionAgentSwitchHandler.test.ts src/main/maker-ipc/__tests__/messageSourceNote.test.ts src/shared/__tests__/modelSwitchAssessment.test.ts src/shared/__tests__/runtimeModelSwitchGate.test.ts src/shared/__tests__/sessionContextWindow.test.ts src/main/__tests__/sessionRuntimeControlWiring.test.ts src/main/__tests__/mobileClientPromptNote.contract.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing channel defaults and model admission
+        run: pnpm --filter desktop exec vitest run src/main/im/__tests__/defaultSettingsStore.test.ts src/main/im/__tests__/defaultSessionSettings.test.ts src/main/maker-host/__tests__/model-route-guard.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing channel routing, takeover, commands and cancellation
+        run: pnpm --filter desktop exec vitest run src/main/im/__tests__/binding.test.ts src/main/im/shared/__tests__/inboundFileStaging.test.ts src/main/im/shared/__tests__/cardActionAskMulti.test.ts src/main/im/shared/__tests__/cardActionTakeoverReplace.test.ts src/main/im/shared/__tests__/cardActionGroupLaneGuard.test.ts src/main/im/shared/__tests__/turnRunnerSendOutcome.test.ts src/main/im/shared/__tests__/turnRunnerThreadRouting.test.ts src/main/im/shared/__tests__/turnRunnerCompanionRouting.test.ts src/main/im/shared/__tests__/authCheck.test.ts src/main/im/shared/__tests__/channelDefaultRoute.test.ts src/main/im/shared/__tests__/channelDefaultRouteSync.test.ts src/main/im/shared/__tests__/slashCommands.test.ts src/main/im/shared/__tests__/permissionModeControl.test.ts src/main/im/shared/__tests__/botCommands.test.ts src/main/im/shared/__tests__/controlState.test.ts src/main/im/shared/__tests__/interactionCardModel.test.ts src/main/maker-host/__tests__/send-outcome.test.ts src/main/maker-ipc/__tests__/agentHandoff.test.ts src/main/maker-ipc/__tests__/planReconcile.test.ts src/main/maker-ipc/__tests__/interactionRouter.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Native plugin worker and existing broker ABI
+        run: pnpm --filter @cindy/plugin-runtime exec vitest run src/nativeProcess.integration.test.ts --testTimeout=30000 --maxWorkers=1 --minWorkers=1
+      - name: Existing local model lifecycle and headless runtimes
+        run: pnpm --filter desktop exec vitest run src/main/local-model-runtime/__tests__/ollamaRuntime.test.ts src/main/local-model-runtime/__tests__/ollamaInstall.test.ts src/main/local-model-runtime/__tests__/ollamaDownload.test.ts src/main/local-model-runtime/__tests__/ollamaSidecar.test.ts src/main/local-model-runtime/__tests__/managedOllamaProvider.test.ts src/main/local-model-runtime/__tests__/managedOllamaMigrate.test.ts src/main/local-model-runtime/__tests__/service.list.test.ts src/main/local-model-runtime/__tests__/service.pull.test.ts src/main/local-model-runtime/__tests__/service.owner.test.ts src/main/local-model-runtime/__tests__/service.delete.test.ts src/main/local-model-runtime/__tests__/ollamaClient.test.ts src/main/local-model-runtime/__tests__/ollamaPurge.test.ts src/main/local-model-runtime/__tests__/ollamaRelease.test.ts src/main/local-model-runtime/__tests__/pausedPullStore.test.ts src/main/local-model-runtime/__tests__/pullProgress.test.ts src/main/local-model-runtime/__tests__/localConnectDetect.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Typecheck terminal
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+        run: pnpm --filter cindy-terminal typecheck
+      - name: Shared worktree host contracts
+        run: pnpm --filter @cindy/worktree-core typecheck
+      - name: Desktop adapters and shared package compatibility
+        if: matrix.target == 'linux-x64'
+        env:
+          NODE_OPTIONS: '--max-old-space-size=12288'
+        run: pnpm --filter desktop exec tsc --noEmit -p tsconfig.json
+      - name: Preserve Desktop worktree lifecycle and Git behavior
+        run: pnpm --filter desktop exec vitest run src/main/__tests__/worktreeManagerCreate.test.ts src/main/__tests__/worktreeManagerRemove.test.ts src/main/__tests__/worktreeStore.test.ts src/main/worktree/__tests__/copyClaudeSiviDirs.test.ts src/main/worktree/__tests__/cwdProbeScheduler.test.ts src/main/worktree/__tests__/gitExec.test.ts src/main/__tests__/worktreeNameGenerator.test.ts src/main/__tests__/worktreeErrorClassifier.test.ts src/main/maker-ipc/__tests__/orcaWorkerProject.test.ts src/main/scheduler-host/__tests__/workdir-resolver.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Preserve encrypted recovery and local runtime references
+        run: pnpm --filter desktop exec vitest run src/main/__tests__/worktreeRecovery.git-integration.test.ts src/main/__tests__/worktreeRestore.test.ts src/main/__tests__/worktreeRuntimeSafety.test.ts src/main/__tests__/worktreeRecycleMaintenance.test.ts src/main/__tests__/worktreePoolSafety.test.ts src/main/worktree/__tests__/freshBase.test.ts src/main/__tests__/worktreePiSubagentReferences.test.ts src/main/__tests__/worktreeRecycleJournalFilesystem.test.ts src/main/__tests__/worktreeRecycleJournalWatch.test.ts src/main/worktree/__tests__/precreatedCancellation.test.ts src/main/__tests__/windowsPackagedInstanceBarrier.test.ts src/main/localDb/worker/__tests__/worktreeReferences.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Legacy database worker preserves unknown terminal worktrees
+        run: pnpm --filter desktop exec vitest run src/main/localDb/client/__tests__/WorkerThreadTransport.test.ts --maxWorkers=1 --minWorkers=1 -t worktree
+      - name: Existing llama.cpp model and process lifecycle
+        run: pnpm --filter desktop exec vitest run src/main/local-model-runtime/__tests__/llamaCppService.test.ts src/main/local-model-runtime/__tests__/llamaCppDownloads.test.ts src/main/local-model-runtime/__tests__/llamaCppProcess.test.ts src/main/local-model-runtime/__tests__/managedLlamaCppProvider.test.ts src/main/local-model-runtime/__tests__/llamaCppIpc.test.ts src/main/reviewer/__tests__/reviewOwnerLiveness.test.ts src/main/scheduler-host/__tests__/procUtilRetry.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Existing SuperGrok device login, discovery and recovery
+        run: pnpm exec vitest run apps/desktop/src/main/maker-host/__tests__/grokDeviceLogin.test.ts apps/desktop/src/main/maker-host/__tests__/grokDeviceLoginOwnerSwitch.test.ts apps/desktop/src/main/maker-host/__tests__/grokAuthRejectionRecovery.test.ts apps/desktop/src/main/maker-host/__tests__/grokOauthCallbackListener.test.ts apps/desktop/src/main/maker-host/__tests__/xaiModelDiscovery.test.ts apps/desktop/src/main/maker-host/__tests__/xaiBridgeAuthInvalidation.test.ts apps/desktop/src/main/maker-host/__tests__/xaiSyncImport.test.ts --maxWorkers=1 --minWorkers=1
+      - name: Real bundled engines preserve provider and subscription boundaries
+        env:
+          CINDY_TEST_MANAGED_PI: '1'
+          CINDY_TEST_NATIVE_SUBSCRIPTIONS: '1'
+        run: pnpm --filter cindy-terminal exec vitest run src/models/runtime.integration.test.ts -t 'real Pi|routes ChatGPT|routes SuperGrok' --maxWorkers=1 --minWorkers=1
+      - name: Package official Node and native dependencies
+        shell: bash
+        run: node apps/cindy-terminal/scripts/package-runtime.mjs --target '${{ matrix.target }}' --out "$CINDY_ACCEPTANCE_OUTPUT"
+      - name: Check isolated native host and service registration
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: node apps/cindy-terminal/scripts/diagnose-platform-start.mjs
+      - name: Run real installed CLI, daemon, engines, PTY and WebRTC
+        if: runner.os != 'Linux'
+        env:
+          CINDY_GITHUB_API_TOKEN: ${{ github.token }}
+        timeout-minutes: 12
+        shell: bash
+        run: node apps/cindy-terminal/scripts/platform-acceptance.mjs "$CINDY_ACCEPTANCE_OUTPUT" "$CINDY_ACCEPTANCE_REPORT"
+      - name: Run installed Linux runtime with a real systemd user manager
+        if: runner.os == 'Linux'
+        env:
+          CINDY_GITHUB_API_TOKEN: ${{ github.token }}
+        timeout-minutes: 15
+        shell: bash
+        run: bash apps/cindy-terminal/scripts/linux-platform-acceptance.sh
+      - name: Upload platform evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: terminal-evidence-${{ matrix.target }}
+          path: ${{ env.CINDY_ACCEPTANCE_REPORT }}
+          if-no-files-found: warn

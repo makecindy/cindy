@@ -1,3 +1,5 @@
+import { assertSharedTaskReferences } from '@cindy/app-runtime/sharedTaskInputReferences';
+export { assertSharedTaskReferences } from '@cindy/app-runtime/sharedTaskInputReferences';
 import { FILE_BROWSER_EVENT_CHANNEL, FILE_BROWSER_REMOTE_OP_CHANNEL, fsWatchTopic, isSharedTaskPeer, parseFsWatchTopic, parseSharedTaskPeer, isSharedTaskAttachment, type InvokePayload, type InvokeResultPayload, type SharedTaskQueueItem } from '@cindy/device-link';
 import type { SharedTaskHost } from './sharedTaskHost.js';
 import * as subscriptions from './subscriptions.js';
@@ -206,29 +208,7 @@ export function sharedTaskOwnedQueueReferences(capture: SharedTaskPeerCapture, c
 }
 
 /** Input reference metadata is consumed before Agent execution, under host authority. */
-export function assertSharedTaskReferences(value: unknown, sessionId: string, depth = 0, sharedTaskId?: string, existing: ReadonlySet<string> = new Set()): void {
-  if (depth > 32) deny();
-  if (Array.isArray(value)) {
-    for (const child of value) assertSharedTaskReferences(child, sessionId, depth + 1, sharedTaskId, existing);
-    return;
-  }
-  const row = record(value);
-  if (!row) return;
-  for (const [key, child] of Object.entries(row)) {
-    if (['sessionId', 'parentSessionId', 'sourceSessionId', 'targetSessionId'].includes(key) && child !== sessionId) deny();
-    if (key === 'botId' || key === 'hostSnapshot') deny();
-    // Native Agent tools retain normal task permissions; client references are
-    // direct host reads and must come from this task's authorized upload area.
-    if ((key === 'path' || key === 'url') && child !== undefined && child !== null && child !== '' &&
-        !(typeof child === 'string' && (existing.has(child) || sharedTaskId && isSharedTaskAttachment(child, sharedTaskId)))) deny();
-    // Persisted reference chips are another input to host-side hydration.
-    if (key === 'persistedContent' && typeof child === 'string') {
-      let parsed: unknown;
-      try { parsed = JSON.parse(child); } catch { continue; }
-      assertSharedTaskReferences(parsed, sessionId, depth + 1, sharedTaskId, existing);
-    } else if (child && typeof child === 'object') assertSharedTaskReferences(child, sessionId, depth + 1, sharedTaskId, existing);
-  }
-}
+
 
 /**
  * Validate the actual channel shape; unknown channels fail closed.

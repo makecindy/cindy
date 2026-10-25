@@ -206,6 +206,34 @@ describe('managed llama.cpp model lifecycle', () => {
       expect((await readdir(runtime)).some((name) => name.startsWith('install-'))).toBe(false);
     },
   );
+  // Integration: explicit repair may replace a healthy manifest, while an I/O
+  // failure must preserve the previous executable and clean only staging.
+  it('preserves a healthy installation when replacement publication fails', async () => {
+    const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const runtime = path.join(root, 'llamacpp-runtime'), source = path.join(root, 'archive');
+    await mkdir(runtime); await mkdir(source);
+    const name = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+    await writeFile(path.join(source, name), 'new binary');
+    await writeFile(path.join(runtime, name), 'old binary');
+    const old = JSON.stringify({ binary: name, version: 'old' });
+    await writeFile(path.join(runtime, 'current.json'), old);
+    mocks.release.mockResolvedValue({ name: 'runtime.tar', version: 'new', size: 10 });
+    mocks.download.mockImplementation(async (_asset, dest) => execFileSync(process.platform === 'win32' ? 'tar.exe' : '/usr/bin/tar', ['-cf', dest, '-C', source, '.']));
+    const failure = Object.assign(new Error('publication failed'), { code: 'EACCES' });
+    mocks.rename.mockImplementation(async (from, to) => {
+      if (String(to).endsWith('current.json')) throw failure;
+      return fs.rename(from, to);
+    });
+    const service = createLlamaCppService(root);
+    await expect(service.install(true)).rejects.toBe(failure);
+    expect(await readFile(path.join(runtime, 'current.json'), 'utf8')).toBe(old);
+    expect(await readFile(path.join(runtime, name), 'utf8')).toBe('old binary');
+    expect((await readdir(runtime)).sort()).toEqual(['current.json', name].sort());
+    mocks.rename.mockImplementation(fs.rename);
+    await service.install(true);
+    expect((await service.snapshot()).version).toBe('new');
+    await service.dispose();
+  });
   it.each(['missing', 'ended', 'unknown', 'corrupt'])(
     'checks configuration ownership before any mutation: %s',
     async (state) => {

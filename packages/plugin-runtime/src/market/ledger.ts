@@ -1,0 +1,900 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { isValidPluginNamespace, type PluginScope } from '@cindy/plugin-protocol';
+import { ghostManifestToLegacyV2DigestFormat } from '../shared/ghost.js';
+import {
+  hasDeliveryNamespace,
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+  pluginLedgerRecordKey,
+  PLUGIN_NS_INSTALL_ROOT,
+  PLUGIN_ROOT_INSTALL_DIR,
+  type PluginLogicalIdentity,
+} from '../shared/pluginIdentity.js';
+import {
+  atomicWriteFileSync,
+  readAtomicFileSync,
+} from '@cindy/remote-agent/atomicWriteFile';
+
+const LEDGER_SCHEMA_VERSION = 1;
+export const LEDGER_PENDING_FILE = 'ledger.v1.pending.json';
+
+/** 自定义市场溯源的独立账本文件名（与 ledger.v1.json 同目录）。 */
+const CUSTOM_LEDGER_FILE = 'custom-ledger.v1.json';
+/** 同 ghostId 跨 namespace 共存时，企业记录进这个旧客户端不会碰的文件。 */
+export const NS_LEDGER_FILE = 'ns-ledger.v1.json';
+
+/** 服务端市场安装的溯源来源（旧版本也认识的封闭集合）。 */
+const SERVER_SOURCES = new Set(['market', 'legacy-adopted']);
+
+export interface PluginMarketInstallationRecord {
+  pluginId: string;
+  ghostId: string;
+  releaseId: string;
+  version: string;
+  sha256: string;
+  scope: PluginScope;
+  organizationId: string | null;
+  /** Missing is a pre-namespace record. null is root; a string is an organization. */
+  namespace?: string | null;
+  source: 'market' | 'legacy-adopted' | 'git-market' | 'local-market';
+  installed: boolean;
+  updatedAt: string;
+  /**
+   * 自定义来源的规范化指纹（marketSourceKey）。市场名可复用——移除来源后添加
+   * 同名异源的市场会得到相同 pluginId,所有权校验必须同时对上这个指纹。
+   * 仅自定义安装记录携带;服务端记录没有此字段。
+   */
+  sourceKey?: string;
+  /**
+   * 安装落位那一刻的 manifest 规范化摘要（ghostManifestDigest）。账本记录只是
+   * "我装过"的声明,运行时的包在降级窗口可以被旧版换成任何东西(旧版不认识
+   * custom 账本,卸载/本地重装都不会更新它)——认领运行时安装必须同时对上这个
+   * 摘要,只凭 ghostId 存在就恢复所有权会把别人的包错误归属给本来源并放行其
+   * 更新覆盖。新写入的市场、自定义市场和 legacy adoption 记录均应携带。
+   */
+  manifestDigest?: string;
+  /**
+   * SHA-256 of the exact installed ghost.json bytes. New clients use this
+   * serialization-exact identity; manifestDigest remains unchanged for released
+   * clients that still interpret it as a normalized digest.
+   */
+  rawManifestSha256?: string;
+  /** Verified delivery endpoint; absent legacy records require catalog verification before reporting. */
+  serverRoot?: string;
+}
+
+export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };
+
+export type PluginMarketAuthorizationLookup =
+  | { kind: 'absent' }
+  | { kind: 'found'; record: PluginMarketInstallationRecord }
+  | { kind: 'invalid' };
+
+export type PluginMarketNamespaceMigrationLookup =
+  | { kind: 'absent' }
+  | { kind: 'found'; records: PluginMarketInstallationRecord[] }
+  | { kind: 'invalid' };
+
+/** 递归按键排序的规范化 JSON(摘要必须与对象键序无关,两侧独立算也一致)。 */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** manifest 的稳定摘要:语义相同的 manifest 无论键序/来源如何,摘要一致。 */
+export function ghostManifestDigest(manifest: unknown): string {
+  return crypto
+    .createHash('sha256')
+    .update(canonicalJson(ghostManifestToLegacyV2DigestFormat(manifest)))
+    .digest('hex');
+}
+
+/**
+ * Exact digest emitted by the released capability-decoupling build before v2
+ * rollback projection was restored. Migration-only: normal writers must keep
+ * using ghostManifestDigest so released clients can read the ledger.
+ */
+export function legacyNoSlotsGhostManifestDigest(manifest: unknown): string {
+  return crypto.createHash('sha256').update(canonicalJson(manifest)).digest('hex');
+}
+
+interface PluginMarketLedgerData {
+  schemaVersion: typeof LEDGER_SCHEMA_VERSION;
+  installations: Record<string, PluginMarketInstallationRecord>;
+  defaultInstallOptOuts: Record<string, string[]>;
+}
+
+interface LedgerWriteJournal {
+  schemaVersion: typeof LEDGER_SCHEMA_VERSION;
+  targets: {
+    namespaced: string;
+    custom: string;
+    main: string;
+  };
+}
+
+function isLedgerSnapshotText(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return parsed !== null && typeof parsed === 'object' &&
+      parsed.schemaVersion === LEDGER_SCHEMA_VERSION &&
+      parsed.installations !== null &&
+      typeof parsed.installations === 'object' &&
+      !Array.isArray(parsed.installations);
+  } catch {
+    return false;
+  }
+}
+
+function emptyLedger(): PluginMarketLedgerData {
+  return {
+    schemaVersion: LEDGER_SCHEMA_VERSION,
+    installations: {},
+    defaultInstallOptOuts: {},
+  };
+}
+
+function isOrgNamespaceRecord(record: PluginMarketInstallationRecord): boolean {
+  return hasDeliveryNamespace(record) && record.namespace !== null;
+}
+
+function indexInstallation(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  record: PluginMarketInstallationRecord,
+): void {
+  installations[pluginLedgerRecordKey(record)] = record;
+}
+
+function recordsForGhostId(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  ghostId: string,
+): PluginMarketInstallationRecord[] {
+  return Object.values(installations).filter((record) => record.ghostId === ghostId);
+}
+
+function uniqueRecordForGhostId(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  ghostId: string,
+): PluginMarketInstallationRecord | null {
+  const matches = recordsForGhostId(installations, ghostId);
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function uniqueInstalledRecordForGhostId(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  ghostId: string,
+): PluginMarketInstallationRecord | null {
+  const matches = recordsForGhostId(installations, ghostId).filter((record) => record.installed);
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function isCustomRecord(record: PluginMarketInstallationRecord): boolean {
+  return record.source === 'git-market' || record.source === 'local-market';
+}
+
+/**
+ * 同一 ghostId 在两个账本文件里都有记录时的消解规则(只在降级窗口出现):
+ * 仍在安装中的记录优先于已卸载的;同为安装中(或同为已卸载)按 updatedAt 新者
+ * 胜(ISO 字符串可直接比较);完全平手保第一个参数(调用方传主账本记录——冲突
+ * 本身即意味着旧版本操作过主账本,它是最后被真实写入过的一侧)。
+ */
+function preferRecord(
+  main: PluginMarketInstallationRecord,
+  custom: PluginMarketInstallationRecord,
+): PluginMarketInstallationRecord {
+  if (main.installed !== custom.installed) return main.installed ? main : custom;
+  return custom.updatedAt > main.updatedAt ? custom : main;
+}
+
+function validRecord(value: unknown): value is PluginMarketInstallationRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.pluginId === 'string' &&
+    typeof record.ghostId === 'string' &&
+    typeof record.releaseId === 'string' &&
+    typeof record.version === 'string' &&
+    typeof record.sha256 === 'string' &&
+    (record.scope === 'public' ||
+      record.scope === 'organization' ||
+      record.scope === 'personal') &&
+    (record.organizationId === null || typeof record.organizationId === 'string') &&
+    (record.namespace === undefined ||
+      record.namespace === null ||
+      isValidPluginNamespace(record.namespace)) &&
+    (record.source === 'market' ||
+      record.source === 'legacy-adopted' ||
+      record.source === 'git-market' ||
+      record.source === 'local-market') &&
+    typeof record.installed === 'boolean' &&
+    typeof record.updatedAt === 'string' &&
+    (record.sourceKey === undefined || typeof record.sourceKey === 'string') &&
+    (record.manifestDigest === undefined || typeof record.manifestDigest === 'string') &&
+    (record.rawManifestSha256 === undefined ||
+      (typeof record.rawManifestSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(record.rawManifestSha256)))
+  );
+}
+
+type InstallationsFileRead = {
+  kind: 'absent' | 'ok' | 'invalid';
+  installations: Record<string, PluginMarketInstallationRecord>;
+  raw: Record<string, unknown> | null;
+};
+
+/** 读取并解析一个账本 JSON 文件的 installations 段;文件不存在返回空。 */
+function readInstallationsFile(filePath: string): InstallationsFileRead {
+  // 读失败与解析失败分开处理:文件不存在(ENOENT)才是空;文件在但读不到(文件锁/
+  // 权限/瞬时 I/O)或备份救不回来时由 readAtomicFileSync **上抛**——降级成空会让
+  // 紧接着的写入把真实记录覆盖掉；损坏的文件也必须留给上层处理。
+  const text = readAtomicFileSync(filePath);
+  if (text === null) return { kind: 'absent', installations: {}, raw: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { kind: 'invalid', installations: {}, raw: null };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { kind: 'invalid', installations: {}, raw: null };
+  }
+  const value = parsed as Record<string, unknown>;
+  if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) {
+    return { kind: 'invalid', installations: {}, raw: null };
+  }
+  const rawInstallations = value.installations;
+  if (
+    rawInstallations === undefined ||
+    rawInstallations === null ||
+    typeof rawInstallations !== 'object' ||
+    Array.isArray(rawInstallations)
+  ) {
+    return { kind: 'invalid', installations: {}, raw: value };
+  }
+  const installations: Record<string, PluginMarketInstallationRecord> = {};
+  for (const [key, record] of Object.entries(rawInstallations)) {
+    if (!validRecord(record)) continue;
+    const logicalKey = pluginLedgerRecordKey(record);
+    if (key !== record.ghostId && key !== logicalKey) continue;
+    installations[logicalKey] = record;
+  }
+  return { kind: 'ok', installations, raw: value };
+}
+
+function rawEntryMentionsGhost(key: string, record: unknown, ghostId: string): boolean {
+  return key === ghostId || parsePluginStoragePart(key)?.ghostId === ghostId || Boolean(
+    record && typeof record === 'object' && !Array.isArray(record) &&
+    (record as { ghostId?: unknown }).ghostId === ghostId,
+  );
+}
+
+function rawMentionsGhost(file: InstallationsFileRead, ghostId: string): boolean {
+  const installations = file.raw?.installations;
+  if (!installations || typeof installations !== 'object' || Array.isArray(installations)) {
+    return false;
+  }
+  return Object.entries(installations).some(
+    ([key, record]) => rawEntryMentionsGhost(key, record, ghostId),
+  );
+}
+
+/**
+ * Plugin 市场来源账本。包目录仍是 runtime 安装事实；本账本只记录 server
+ * Plugin ID、Release 溯源和 defaultInstall 退订，不复制 manifest/凭证。
+ *
+ * **存储分两个文件（存量兼容红线）**：
+ * - `ledger.v1.json`:服务端安装（market / legacy-adopted）与 defaultInstall 退订。
+ *   schema 与旧版本完全一致——旧版 `validRecord()` 是封闭枚举,任何它不认识的
+ *   source 都会在下一次写入时被过滤并重写落盘。
+ * - `custom-ledger.v1.json`:自定义市场安装（git-market / local-market）。旧版本
+ *   不认识也不会触碰这个文件,用户降级再升级,自定义安装的溯源原样还在。
+ * 若把自定义记录混进主账本,降级后旧版的任意一次写入都会把它们永久丢掉,该插件
+ * 再升级后会被投影成"占用 ghostId 的本地冲突项"、无法从原市场更新。
+ *
+ * 早期开发版把自定义记录写进了主账本:读取时兼容合并,任意一次写入即按 source
+ * 归位迁移（写路径本来就整份重写两个文件）。
+ */
+export class PluginMarketLedger {
+  constructor(private readonly filePathSource: string | (() => string)) {}
+
+  /**
+   * Binds a dynamic owner-scoped ledger to the path captured at operation start.
+   * Static test/isolated ledgers keep their instance so callers can inspect them.
+   */
+  bind(filePath: string): PluginMarketLedger {
+    return typeof this.filePathSource === 'function'
+      ? new PluginMarketLedger(filePath)
+      : this;
+  }
+
+  private filePath(): string {
+    return typeof this.filePathSource === 'function'
+      ? this.filePathSource()
+      : this.filePathSource;
+  }
+
+  /** 自定义溯源账本与主账本同目录（同一 owner 作用域）。 */
+  private customFilePath(): string {
+    return path.join(path.dirname(this.filePath()), CUSTOM_LEDGER_FILE);
+  }
+
+  private nsFilePath(): string {
+    return path.join(path.dirname(this.filePath()), NS_LEDGER_FILE);
+  }
+
+  private pendingFilePath(): string {
+    return path.join(path.dirname(this.filePath()), LEDGER_PENDING_FILE);
+  }
+
+  private recoverPendingWrite(): void {
+    const text = readAtomicFileSync(this.pendingFilePath());
+    if (text === null) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error('Plugin market ledger pending write is unreadable');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        (parsed as Record<string, unknown>).schemaVersion !== LEDGER_SCHEMA_VERSION) {
+      throw new Error('Plugin market ledger pending write is unreadable');
+    }
+    const targets = (parsed as Record<string, unknown>).targets;
+    if (!targets || typeof targets !== 'object' || Array.isArray(targets)) {
+      throw new Error('Plugin market ledger pending write is unreadable');
+    }
+    const snapshot = targets as Record<string, unknown>;
+    if (!isLedgerSnapshotText(snapshot.namespaced) ||
+        !isLedgerSnapshotText(snapshot.custom) ||
+        !isLedgerSnapshotText(snapshot.main)) {
+      throw new Error('Plugin market ledger pending write is unreadable');
+    }
+    atomicWriteFileSync(this.nsFilePath(), snapshot.namespaced);
+    atomicWriteFileSync(this.customFilePath(), snapshot.custom);
+    atomicWriteFileSync(this.filePath(), snapshot.main);
+    try {
+      fs.unlinkSync(this.pendingFilePath());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+
+  private readFiles(): {
+    main: InstallationsFileRead;
+    custom: InstallationsFileRead;
+    namespaced: InstallationsFileRead;
+  } {
+    this.recoverPendingWrite();
+    return {
+      main: readInstallationsFile(this.filePath()),
+      custom: readInstallationsFile(this.customFilePath()),
+      namespaced: readInstallationsFile(this.nsFilePath()),
+    };
+  }
+
+  private mergeInstallations(
+    main: InstallationsFileRead,
+    custom: InstallationsFileRead,
+    namespaced: InstallationsFileRead,
+  ): PluginMarketLedgerData {
+    const installations: Record<string, PluginMarketInstallationRecord> = {};
+    for (const [key, record] of Object.entries(main.installations)) {
+      // 主账本里的自定义记录是早期开发版写入的存量,一并纳入(下次写入时归位)。
+      installations[key] = record;
+    }
+    for (const [key, record] of Object.entries(custom.installations)) {
+      if (!isCustomRecord(record)) continue; // 自定义账本只承载自定义溯源
+      // 两个文件出现同一 ghostId 只发生在降级窗口:旧版本只写主账本(比如降级后
+      // 卸载了自定义安装、又从服务端装了同 ghostId),custom 账本里留着它不认识、
+      // 也不会清理的陈旧记录。无条件让 custom 覆盖会把服务端安装错误归属给自定义
+      // 来源,并允许该来源提供更新 —— 必须按"实际安装状态 + 时间"消解,平手保
+      // 主账本(冲突本身即意味着旧版操作过主账本)。胜出后由任意一次写入按 source
+      // 归位,败方记录随整份重写被清掉。
+      const existing = installations[key];
+      installations[key] = existing ? preferRecord(existing, record) : record;
+    }
+    for (const [key, record] of Object.entries(namespaced.installations)) {
+      if (!isOrgNamespaceRecord(record)) continue;
+      const existing = installations[key];
+      installations[key] = existing ? preferRecord(existing, record) : record;
+    }
+
+    const defaultInstallOptOuts: Record<string, string[]> = {};
+    const rawOptOuts = main.raw?.defaultInstallOptOuts;
+    if (rawOptOuts && typeof rawOptOuts === 'object') {
+      for (const [userId, pluginIds] of Object.entries(rawOptOuts)) {
+        if (!Array.isArray(pluginIds)) continue;
+        defaultInstallOptOuts[userId] = [
+          ...new Set(pluginIds.filter((id): id is string => typeof id === 'string')),
+        ];
+      }
+    }
+    return { schemaVersion: LEDGER_SCHEMA_VERSION, installations, defaultInstallOptOuts };
+  }
+
+  read(): PluginMarketLedgerData {
+    const { main, custom, namespaced } = this.readFiles();
+    if (main.kind === 'invalid' || custom.kind === 'invalid' || namespaced.kind === 'invalid') {
+      throw new Error('Plugin market ledger is unreadable');
+    }
+    return this.mergeInstallations(main, custom, namespaced);
+  }
+
+  installationForGhost(ghostId: string): PluginMarketInstallationRecord | null {
+    return uniqueRecordForGhostId(this.read().installations, ghostId);
+  }
+
+  installationsForGhost(ghostId: string): PluginMarketInstallationRecord[] {
+    return recordsForGhostId(this.read().installations, ghostId);
+  }
+
+  lookupInstallationsForNamespaceMigration(ghostId: string): PluginMarketNamespaceMigrationLookup {
+    return this.createNamespaceMigrationLookup()(ghostId);
+  }
+
+  /** Facts for one synchronous scan; never retain this across an await or use it for authorization. */
+  createNamespaceMigrationLookup(): (ghostId: string) => PluginMarketNamespaceMigrationLookup {
+    const { main, custom, namespaced } = this.readFiles();
+    const files = [main, custom, namespaced];
+    const invalidFile = files.some((file) => file.kind === 'invalid');
+    const invalidGhostIds = new Set<string>();
+    for (const file of files) {
+      const raw = file.raw?.installations;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      for (const [key, record] of Object.entries(raw)) {
+        if (validRecord(record) && (key === record.ghostId || key === pluginLedgerRecordKey(record))) continue;
+        invalidGhostIds.add(key);
+        const keyedGhost = parsePluginStoragePart(key)?.ghostId;
+        if (keyedGhost) invalidGhostIds.add(keyedGhost);
+        if (record && typeof record === 'object' && !Array.isArray(record) &&
+            typeof (record as { ghostId?: unknown }).ghostId === 'string') {
+          invalidGhostIds.add((record as { ghostId: string }).ghostId);
+        }
+      }
+    }
+    const byGhost = new Map<string, PluginMarketInstallationRecord[]>();
+    for (const record of Object.values(this.mergeInstallations(main, custom, namespaced).installations)) {
+      const records = byGhost.get(record.ghostId) ?? [];
+      records.push(record);
+      byGhost.set(record.ghostId, records);
+    }
+    return (ghostId) => {
+      if (invalidFile || invalidGhostIds.has(ghostId)) return { kind: 'invalid' };
+      const records = byGhost.get(ghostId) ?? [];
+      return records.length > 0 ? { kind: 'found', records } : { kind: 'absent' };
+    };
+  }
+
+  installationForPlugin(plugin: {
+    ghostId: string;
+    namespace?: string | null;
+  }): PluginMarketInstallationRecord | null {
+    return this.read().installations[pluginLedgerRecordKey(plugin)] ?? null;
+  }
+
+  installationForLocalUninstall(plugin: {
+    ghostId: string;
+    namespace?: string | null;
+  }): PluginMarketInstallationRecord | null {
+    const record = this.installationForPlugin(plugin);
+    if (!record?.installed || record.ghostId !== plugin.ghostId) return null;
+    if (hasDeliveryNamespace(plugin) && hasDeliveryNamespace(record) &&
+        plugin.namespace !== record.namespace) return null;
+    if (hasDeliveryNamespace(plugin) && plugin.namespace === null && record.scope === 'organization') {
+      return null;
+    }
+    return record;
+  }
+
+  markRemovedRecordIfUnchanged(record: PluginMarketInstallationRecord, userId: string | null): boolean {
+    const current = this.installationForPlugin(record);
+    if (!current) return false;
+    // A verified reporting-root backfill does not replace the captured installation.
+    // Every other provenance field (and an already pinned root) still participates in CAS.
+    const expected = record.serverRoot === undefined && current.serverRoot
+      ? { ...record, serverRoot: current.serverRoot } : record;
+    if (canonicalJson(current) !== canonicalJson(expected)) return false;
+    this.markRemovedRecord(current, userId);
+    return true;
+  }
+
+  installationForAuthorization(target: PluginMarketAuthorizationTarget): PluginMarketInstallationRecord | null {
+    const lookup = this.lookupInstallationForAuthorization(target);
+    if (lookup.kind === 'invalid') throw new Error('Plugin market ledger is unreadable');
+    return lookup.kind === 'found' ? lookup.record : null;
+  }
+
+  lookupInstallationForAuthorization(target: PluginMarketAuthorizationTarget): PluginMarketAuthorizationLookup {
+    const { main, custom, namespaced } = this.readFiles();
+    if (main.kind === 'invalid' || custom.kind === 'invalid' || namespaced.kind === 'invalid') {
+      return { kind: 'invalid' };
+    }
+    const merged = this.mergeInstallations(main, custom, namespaced).installations;
+    const precise = hasDeliveryNamespace(target);
+    const record = precise
+      ? merged[pluginLedgerRecordKey(target)] ?? null
+      : this.recordForLookup(merged, target.ghostId);
+    if (record) {
+      if (precise && (record.ghostId !== target.ghostId ||
+          (hasDeliveryNamespace(record) && record.namespace !== target.namespace) ||
+          (target.namespace === null && record.scope === 'organization'))) {
+        return { kind: 'absent' };
+      }
+      return { kind: 'found', record };
+    }
+    const mentionsUnparsedTarget = (file: InstallationsFileRead): boolean => {
+      if (!precise) return rawMentionsGhost(file, target.ghostId);
+      const raw = file.raw?.installations;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+      return Object.entries(raw).some(([key, value]) => {
+        if (validRecord(value) && hasDeliveryNamespace(value) && value.namespace !== target.namespace) return false;
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          return key === pluginLedgerRecordKey(target);
+        }
+        const candidate = value as { ghostId?: unknown; namespace?: unknown };
+        return key === pluginLedgerRecordKey(target) ||
+          (candidate.ghostId === target.ghostId &&
+            (!hasDeliveryNamespace(candidate) || candidate.namespace === target.namespace));
+      });
+    };
+    return [main, custom, namespaced].some(mentionsUnparsedTarget)
+      ? { kind: 'invalid' } : { kind: 'absent' };
+  }
+
+  /**
+   * Connection OIDC lookup. Missing files are absent; a present but unreadable
+   * or schema-invalid ledger is a hard failure so callers cannot treat
+   * corruption as "no market record".
+   */
+  lookupInstallationForOidc(
+    target: string | PluginMarketAuthorizationTarget,
+    namespace?: string | null,
+  ): PluginMarketAuthorizationLookup {
+    return this.lookupInstallationForAuthorization(typeof target === 'string'
+      ? { ghostId: target, ...(namespace !== undefined ? { namespace } : {}) }
+      : target);
+  }
+
+  upsertInstallation(record: PluginMarketInstallationRecord): void {
+    const data = this.read();
+    this.putRecord(data, record);
+    this.write(data);
+  }
+
+  backfillServerRoot(expected: PluginMarketInstallationRecord, serverRoot: string): boolean {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    if (!current || current.serverRoot || canonicalJson(current) !== canonicalJson(expected)) return false;
+    data.installations[pluginLedgerRecordKey(current)] = { ...current, serverRoot };
+    this.write(data);
+    return true;
+  }
+
+  /**
+   * Stamp namespace onto a pre-namespace market row. Known namespace is never
+   * replaced; a mismatch leaves the existing value in place.
+   */
+  stampNamespaceIfAbsent(ghostId: string, namespace: string | null): boolean {
+    if (namespace !== null && !isValidPluginNamespace(namespace)) return false;
+    const data = this.read();
+    const current = uniqueInstalledRecordForGhostId(data.installations, ghostId);
+    if (!current) return false;
+    if (hasDeliveryNamespace(current)) {
+      return current.namespace === namespace;
+    }
+    this.replaceRecord(data, current, { ...current, namespace });
+    this.write(data);
+    return true;
+  }
+
+  /**
+   * An old client rewrites an installed market row without namespace.
+   * Fill that field from the server catalog only when pluginId, ghostId,
+   * scope, and organizationId already match, and only when the field is absent.
+   */
+  backfillMissingNamespacesFromCatalog(plugins: readonly {
+    id: string;
+    ghostId: string;
+    scope: PluginMarketInstallationRecord['scope'];
+    organizationId: string | null;
+    namespace?: string | null;
+  }[]): number {
+    const data = this.read();
+    let changed = 0;
+    for (const plugin of plugins) {
+      if (!hasDeliveryNamespace(plugin)) continue;
+      const namespace = plugin.namespace ?? null;
+      // An organization row with an explicit null is not root. Invalid slugs
+      // must not be written: the next read would treat the ledger as corrupt.
+      if (namespace === null) {
+        if (plugin.scope === 'organization') continue;
+      } else if (!isValidPluginNamespace(namespace)) continue;
+      const matches = Object.values(data.installations).filter((record) =>
+        record.installed &&
+        record.pluginId === plugin.id &&
+        record.ghostId === plugin.ghostId &&
+        record.scope === plugin.scope &&
+        record.organizationId === plugin.organizationId &&
+        !hasDeliveryNamespace(record));
+      if (matches.length !== 1) continue;
+      this.replaceRecord(data, matches[0]!, { ...matches[0]!, namespace });
+      changed += 1;
+    }
+    if (changed > 0) this.write(data);
+    return changed;
+  }
+
+  hasInstalledRecordForGhostId(ghostId: string): boolean {
+    return recordsForGhostId(this.read().installations, ghostId).some((record) => record.installed);
+  }
+
+  /**
+   * Add the serialization-exact manifest identity without changing
+   * routing order or any legacy field. Full-record comparison makes this a CAS:
+   * an install/update/source change that won the race is never overwritten.
+   */
+  backfillRawManifestSha256(
+    expected: PluginMarketInstallationRecord,
+    rawManifestSha256: string,
+  ): boolean {
+    if (!/^[a-f0-9]{64}$/.test(rawManifestSha256)) return false;
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (current.rawManifestSha256 !== undefined) {
+      return current.rawManifestSha256 === rawManifestSha256;
+    }
+    this.replaceRecord(data, current, { ...current, rawManifestSha256 });
+    this.write(data);
+    return true;
+  }
+
+  /**
+   * Replace both Manifest identities after an authorized package commit. Unlike
+   * migration backfill, this may replace an existing raw hash because the
+   * package itself was just atomically replaced. Full-record CAS prevents a
+   * concurrent route change from being overwritten.
+   */
+  replaceManifestIdentityAfterPackageCommit(
+    expected: PluginMarketInstallationRecord,
+    manifestDigest: string,
+    rawManifestSha256: string,
+  ): boolean {
+    if (!/^[a-f0-9]{64}$/.test(manifestDigest) || !/^[a-f0-9]{64}$/.test(rawManifestSha256)) {
+      return false;
+    }
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    this.replaceRecord(data, current, {
+      ...current,
+      manifestDigest,
+      rawManifestSha256,
+    });
+    this.write(data);
+    return true;
+  }
+
+  /** 换源落位前失败时，将旧路由和原有默认安装退订状态一起原子恢复。 */
+  restoreInstallation(
+    record: PluginMarketInstallationRecord,
+    optOut?: { userId: string; suppressed: boolean },
+  ): void {
+    const data = this.read();
+    this.putRecord(data, record);
+    if (optOut) {
+      const suppressedPluginIds = data.defaultInstallOptOuts[optOut.userId] ?? [];
+      if (optOut.suppressed) {
+        data.defaultInstallOptOuts[optOut.userId] = [
+          ...new Set([...suppressedPluginIds, record.pluginId]),
+        ];
+      } else {
+        const restored = suppressedPluginIds.filter((pluginId) => pluginId !== record.pluginId);
+        if (restored.length > 0) data.defaultInstallOptOuts[optOut.userId] = restored;
+        else delete data.defaultInstallOptOuts[optOut.userId];
+      }
+    }
+    this.write(data);
+  }
+
+  /**
+   * Reconnect a historical server update route after the approved receipt proves
+   * its original package identity. That receipt does not attest the current
+   * directory bytes, so an organization-scoped market record is demoted to
+   * legacy-adopted until a verified market update installs fresh bytes. This
+   * keeps automatic updates available without restoring Connection JWT trust
+   * from historical source evidence. The compare-and-write prevents a concurrent
+   * uninstall or source replacement from being overwritten by a stale snapshot.
+   */
+  restoreDisconnectedInstallation(
+    expected: PluginMarketInstallationRecord,
+    userId: string,
+    rawManifestSha256?: string,
+  ): boolean {
+    if (rawManifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(rawManifestSha256)) {
+      return false;
+    }
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    if (
+      !current
+      || current.installed
+      || (current.source !== 'market' && current.source !== 'legacy-adopted')
+      || canonicalJson(current) !== canonicalJson(expected)
+    ) {
+      return false;
+    }
+    this.replaceRecord(data, current, {
+      ...current,
+      source:
+        current.scope === 'organization' && current.source === 'market'
+          ? 'legacy-adopted'
+          : current.source,
+      installed: true,
+      updatedAt: new Date().toISOString(),
+      ...(rawManifestSha256 !== undefined ? { rawManifestSha256 } : {}),
+    });
+    const remainingOptOuts = (data.defaultInstallOptOuts[userId] ?? []).filter(
+      (pluginId) => pluginId !== current.pluginId,
+    );
+    if (remainingOptOuts.length > 0) data.defaultInstallOptOuts[userId] = remainingOptOuts;
+    else delete data.defaultInstallOptOuts[userId];
+    this.write(data);
+    return true;
+  }
+
+
+  markRemovedRecord(record: PluginMarketInstallationRecord, userId: string | null): void {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(record)];
+    if (!current) return;
+    this.replaceRecord(data, current, {
+      ...current,
+      installed: false,
+      updatedAt: new Date().toISOString(),
+    });
+    if (userId) {
+      data.defaultInstallOptOuts[userId] = [
+        ...new Set([...(data.defaultInstallOptOuts[userId] ?? []), current.pluginId]),
+      ];
+    }
+    this.write(data);
+  }
+
+  isDefaultInstallSuppressed(userId: string, pluginId: string): boolean {
+    return this.read().defaultInstallOptOuts[userId]?.includes(pluginId) ?? false;
+  }
+
+  private recordForLookup(
+    installations: Record<string, PluginMarketInstallationRecord>,
+    id: string,
+  ): PluginMarketInstallationRecord | null {
+    if (
+      id.startsWith(`${PLUGIN_NS_INSTALL_ROOT}/`) ||
+      id.startsWith(`${PLUGIN_NS_INSTALL_ROOT}__`) ||
+      id.startsWith(`${PLUGIN_ROOT_INSTALL_DIR}__`)
+    ) {
+      const parsed = parsePluginInstallRelId(id) ?? parsePluginStoragePart(id);
+      return parsed ? installations[pluginLedgerRecordKey(parsed)] ?? null : null;
+    }
+    const root = installations[id];
+    if (root && root.ghostId === id && !isOrgNamespaceRecord(root)) {
+      if (root.installed) return root;
+      return uniqueInstalledRecordForGhostId(installations, id) ?? root;
+    }
+    return uniqueRecordForGhostId(installations, id);
+  }
+
+  private putRecord(
+    data: PluginMarketLedgerData,
+    record: PluginMarketInstallationRecord,
+  ): void {
+    data.installations[pluginLedgerRecordKey(record)] = record;
+  }
+
+  private replaceRecord(
+    data: PluginMarketLedgerData,
+    previous: PluginMarketInstallationRecord,
+    next: PluginMarketInstallationRecord,
+  ): void {
+    const previousKey = pluginLedgerRecordKey(previous);
+    const nextKey = pluginLedgerRecordKey(next);
+    if (previousKey !== nextKey) delete data.installations[previousKey];
+    data.installations[nextKey] = next;
+  }
+
+  private write(data: PluginMarketLedgerData): void {
+    for (const file of Object.values(this.readFiles())) {
+      const raw = file.raw?.installations as Record<string, unknown> | undefined;
+      if (file.kind === 'invalid' || Object.entries(raw ?? {}).some(([key, record]) =>
+        !validRecord(record) || (key !== record.ghostId && key !== pluginLedgerRecordKey(record)),
+      )) {
+        throw new Error('Plugin market ledger is unreadable');
+      }
+    }
+    // 按 source 分仓落盘:主账本只出现旧版本认识的 source,自定义溯源全部进
+    // 独立文件。混写过的存量(早期开发版)由此在任意一次写入时自动归位。
+    // 同 ghostId 的企业记录在会与 root 或其他 namespace 撞车时写入 ns 账本,
+    // 避免旧客户端按 ghostId 键覆盖掉另一份身份。
+    // 撞车时企业行从 v1 搬到 sidecar:先把三份目标快照写进 durable journal,
+    // 再写 sidecar(只加不减)和 v1;任一中断都由下一次读取重放整组快照。
+    const server: Record<string, PluginMarketInstallationRecord> = {};
+    const custom: Record<string, PluginMarketInstallationRecord> = {};
+    const namespaced: Record<string, PluginMarketInstallationRecord> = {};
+    const byGhostId = new Map<string, PluginMarketInstallationRecord[]>();
+    for (const record of Object.values(data.installations)) {
+      const group = byGhostId.get(record.ghostId) ?? [];
+      group.push(record);
+      byGhostId.set(record.ghostId, group);
+    }
+    const place = (
+      record: PluginMarketInstallationRecord,
+      dest: Record<string, PluginMarketInstallationRecord>,
+      key: string,
+    ): void => {
+      dest[key] = record;
+    };
+    for (const group of byGhostId.values()) {
+      const orgRecords = group.filter(isOrgNamespaceRecord);
+      const rootRecords = group.filter((record) => !isOrgNamespaceRecord(record));
+      const collision = orgRecords.length > 0 && (rootRecords.length > 0 || orgRecords.length > 1);
+      if (!collision) {
+        for (const record of group) {
+          const dest = isCustomRecord(record) ? custom : SERVER_SOURCES.has(record.source) ? server : null;
+          if (dest) place(record, dest, record.ghostId);
+        }
+        continue;
+      }
+      for (const record of rootRecords) {
+        const dest = isCustomRecord(record) ? custom : SERVER_SOURCES.has(record.source) ? server : null;
+        if (dest) place(record, dest, record.ghostId);
+      }
+      for (const record of orgRecords) {
+        namespaced[pluginLedgerRecordKey(record)] = record;
+      }
+    }
+    const targets: LedgerWriteJournal['targets'] = {
+      namespaced: JSON.stringify(
+        { schemaVersion: LEDGER_SCHEMA_VERSION, installations: namespaced },
+        null,
+        2,
+      ) + '\n',
+      custom: JSON.stringify(
+        { schemaVersion: LEDGER_SCHEMA_VERSION, installations: custom },
+        null,
+        2,
+      ) + '\n',
+      main: JSON.stringify(
+        {
+          schemaVersion: LEDGER_SCHEMA_VERSION,
+          installations: server,
+          defaultInstallOptOuts: data.defaultInstallOptOuts,
+        },
+        null,
+        2,
+      ) + '\n',
+    };
+    atomicWriteFileSync(
+      this.pendingFilePath(),
+      JSON.stringify({ schemaVersion: LEDGER_SCHEMA_VERSION, targets }, null, 2) + '\n',
+    );
+    atomicWriteFileSync(this.nsFilePath(), targets.namespaced);
+    atomicWriteFileSync(this.customFilePath(), targets.custom);
+    atomicWriteFileSync(this.filePath(), targets.main);
+    try {
+      fs.unlinkSync(this.pendingFilePath());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+}

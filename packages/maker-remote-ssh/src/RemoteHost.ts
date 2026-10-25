@@ -18,7 +18,7 @@
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
 import { StringDecoder } from 'node:string_decoder';
-import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetails } from 'ssh2';
+import ssh2, { type Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetails } from 'ssh2';
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
 import { resolveAuth } from './credentials.js';
@@ -1230,7 +1230,7 @@ export class RemoteHost {
     // Unsupported configuration fails in resolveAuth above. Only a usable,
     // fully-resolved endpoint may participate in TOFU identity calculation.
     const attemptHostKeyId = hostKeyId(attemptConfig.hostname, attemptConfig.port);
-    const client = new Client();
+    const client = new ssh2.Client();
     this.client = client;
 
     const connectConfig: ConnectConfig = {

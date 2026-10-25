@@ -41,21 +41,8 @@ import {
 import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 /** 交给桥去弹的一单(身份三件套由主机按已装清单填,不信插件自报)。 */
-export interface GhostConfirmShowParams {
-  ghostId: string;
-  /** 插件展示名(主机拼标题用)。 */
-  ghostName: string;
-  /** 插件图标 data URL(身份头;未声明图标时缺省)。 */
-  iconDataUrl?: string;
-  /** 净化后的问句正文。 */
-  body: string;
-  /** 净化后的主按钮文案;null = 用主机缺省文案。 */
-  confirmText: string | null;
-  /** 净化后的次按钮文案;null = 用主机缺省文案。 */
-  cancelText: string | null;
-  danger: boolean;
-  mobilePageId?: string;
-}
+export type { GhostConfirmShowParams } from '@cindy/plugin-runtime/shared/ghostConfirmation';
+import type { GhostConfirmShowParams } from '@cindy/plugin-runtime/shared/ghostConfirmation';
 
 export interface ConfirmSlotDeps {
   getGhost(id: string): InstalledGhost | null;

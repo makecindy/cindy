@@ -74,7 +74,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/__tests__/interruptedContinuationContract.test.ts": {
-      "sourceReads": 4
+      "sourceReads": 3
     },
     "apps/desktop/src/main/__tests__/lifecycle.test.ts": {
       "resetModules": 2,
@@ -82,9 +82,6 @@
     },
     "apps/desktop/src/main/__tests__/mainWindowBackgroundThrottling.test.ts": {
       "sourceReads": 3
-    },
-    "apps/desktop/src/main/__tests__/makerEventHotPathOrdering.test.ts": {
-      "sourceReads": 6
     },
     "apps/desktop/src/main/__tests__/makerOrcaRoleMarking.test.ts": {
       "sourceReads": 2
@@ -112,12 +109,6 @@
     },
     "apps/desktop/src/main/__tests__/sessionDragReleaseNativeHost.test.ts": {
       "resetModules": 1
-    },
-    "apps/desktop/src/main/__tests__/sessionRuntimeFallbackIntent.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
-      "sourceReads": 2
     },
     "apps/desktop/src/main/__tests__/setSessionsStatusInDb.test.ts": {
       "sourceReads": 2
@@ -180,9 +171,6 @@
     "apps/desktop/src/main/cindy-brain/__tests__/builtinGhostProvisioner.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/cindy-brain/__tests__/byokImageChannel.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/cindy-brain/__tests__/downloadLifecycle.test.ts": {
       "sourceReads": 1
     },
@@ -228,9 +216,6 @@
     },
     "apps/desktop/src/main/device-link/__tests__/sharedTaskAccountBoundary.test.ts": {
       "sourceReads": 1
-    },
-    "apps/desktop/src/main/doc-tools/__tests__/docsOutputWriterPackaging.test.ts": {
-      "sourceReads": 2
     },
     "apps/desktop/src/main/doc-tools/__tests__/readSheetProcessPackaging.test.ts": {
       "sourceReads": 1
@@ -293,9 +278,6 @@
       "realWaits": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/piSystemPrompt.test.ts": {
-      "sourceReads": 2
-    },
-    "apps/desktop/src/main/maker-host/__tests__/remoteCcQueryFactory.test.ts": {
       "sourceReads": 2
     },
     "apps/desktop/src/main/maker-host/__tests__/runtimeConfigs.test.ts": {
@@ -411,9 +393,6 @@
     },
     "apps/desktop/src/main/reviewer/__tests__/reviewExternalInputWiring.test.ts": {
       "sourceReads": 2
-    },
-    "apps/desktop/src/main/reviewer/__tests__/reviewPdfProcessPackaging.test.ts": {
-      "sourceReads": 6
     },
     "apps/desktop/src/main/scheduler-host/__tests__/preRunHook.test.ts": {
       "realWaits": 1

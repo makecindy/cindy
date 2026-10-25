@@ -13,16 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const gitExecMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../worktree/gitExec', () => {
-  class GitExecError extends Error {
-    stderr = '';
-    stdout = '';
-    exitCode: number | null = null;
-    cause: unknown;
-    constructor(_input: unknown) {
-      super('mock git exec error');
-    }
-  }
+vi.mock('../worktree/gitExec', async () => {
+  const {GitExecError}=await import('@cindy/worktree-core/gitTypes');
   return {
     GitExecError,
     gitExec: (...args: unknown[]) => gitExecMock(...args),

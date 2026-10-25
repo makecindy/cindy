@@ -41,7 +41,8 @@ export const PROTOCOL_VERSION = 1 as const;
 // 轮 25:0.1.3 → 0.1.4 —— spawn debug 日志(排查 Unknown provider)。
 // 轮 25 CRITICAL:0.1.4 → 0.1.5 —— childEnv 用展开后值(LAZY_CREATE_FAILED
 // 真正根因: spawn env 里 PI_CODING_AGENT_DIR 是字面 $HOME, pi 找不到 models.json)。
-export const PI_MANAGER_BUNDLE_VERSION = '0.1.5' as const;
+// 0.1.6: canonical CLI entry detection also starts through symlinked HOME paths.
+export const PI_MANAGER_BUNDLE_VERSION = '0.1.6' as const;
 
 export type RpcId = number;
 

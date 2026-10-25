@@ -1,31 +1,10 @@
-import { lstat } from 'node:fs/promises';
-import path from 'node:path';
+import {createCindyMakeWorkspace} from '@cindy/app-runtime/cindyMakeWorkspace';
 import { t } from '../i18n.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { cindyMakeManager } from './manager.js';
-import { isCindyMakeManagedWorktreePath, makeSourceCheckoutPath, makeSourceRoot } from './sourcePaths.js';
+import { isCindyMakeManagedWorktreePath, makeSourceRoot } from './sourcePaths.js';
 
-export async function assertCindyMakeWorkspace(
-  userData: string,
-  workingDir: string,
-): Promise<void> {
-  if (!isCindyMakeManagedWorktreePath(userData, workingDir)) return;
-  try {
-    const [directory, worktreeGit, sourceGit] = await Promise.all([
-      lstat(workingDir),
-      lstat(path.join(workingDir, '.git')),
-      lstat(path.join(makeSourceCheckoutPath(userData), '.git')),
-    ]);
-    if (
-      directory.isDirectory() &&
-      !directory.isSymbolicLink() &&
-      worktreeGit.isFile() &&
-      sourceGit.isDirectory()
-    )
-      return;
-  } catch {}
-  throwIpcError('PRECONDITION_FAILED', t('cindyMake.code.workspaceUnavailable'));
-}
+export const {assertCindyMakeWorkspace}=createCindyMakeWorkspace((...args)=>t(...args));
 
 export async function withCindyMakeProjectUse<T>(
   userData: string,

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
-import nativeFallbackPrompt from '../codex-native-fallback-prompt.md?raw';
+import nativeFallbackPrompt from '../../../../../../packages/app-runtime/src/codex-native-fallback-prompt.md?raw';
 
 import {
   extractBundledCodexModelCatalog,

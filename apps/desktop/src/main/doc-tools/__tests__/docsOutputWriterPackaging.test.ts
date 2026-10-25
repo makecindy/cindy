@@ -11,7 +11,7 @@ describe('docs output writer packaging', () => {
     const controller = readFileSync(
       path.join(desktopRoot, 'src/main/doc-tools/docsOutputWriter.ts'),
       'utf8',
-    );
+    ) + '\n' + readFileSync(path.join(desktopRoot, '../../packages/app-runtime/src/docsOutputWriter.ts'), 'utf8');
     expect(forge).toContain("entry: 'src/main/doc-tools/docsOutputWriterUtilityProcess.ts'");
     expect(controller).toContain("path.join(__dirname, 'docsOutputWriterUtilityProcess.js')");
     expect(controller).toContain('cwd: rootDir');

@@ -14,6 +14,8 @@ export * from "./directPath.js";
 export * from "./directNegotiation.js";
 export * from "./directRuntimeBridge.js";
 export * from "./directRtcRuntime.js";
+export * from "./nodeDirectRtcRuntime.js";
+export * from "./nodeFilePeerRuntime.js";
 export { DIRECT_LINK_RUNTIME_SOURCE } from "./directRuntimeSource.js";
 export * from "./transport.js";
 export * from "./invokeTransfer.js";
@@ -76,3 +78,5 @@ export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./pluginPages.js";
+
+export * from './remoteResourceRegistry.js';

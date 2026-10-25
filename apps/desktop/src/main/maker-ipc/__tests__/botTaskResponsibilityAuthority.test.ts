@@ -1,31 +1,19 @@
-import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { and, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
-import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { botDelegations, botProfiles, botSessionLinks, sessions } from '../../localDb/schema.js';
 
-// Exercise the real authority queries against SQLite, without Electron startup.
-// PR #6813 inserted another exported function between the queried functions, breaking
-// the old substring boundary before any authority assertions ran. Extract exactly the
-// named production declaration so the existing identity/ownership checks still execute.
-// Minimum fixture: canonical, human, group and remote callers; two bots' delegation rows.
-// Tier: existing unit authority regression; real SQLite, no new cases or app startup.
-// Single-file run: 989ms; all original caller and delegation assertions retained.
-const source = readFileSync(new URL('../botWorkbenchTools.ts', import.meta.url), 'utf8');
-const parsed = ts.createSourceFile('botWorkbenchTools.ts', source, ts.ScriptTarget.Latest, true);
-function bind(name: string, db: ReturnType<typeof drizzle>) {
-  const declaration = parsed.statements.find((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && node.name?.text === name);
-  if (!declaration) throw new Error(`Missing production function: ${name}`);
-  const chunk = declaration.getText(parsed).replace(/^export\s+/, '');
-  const js = ts.transpileModule(`${chunk}; return ${name};`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const deps = { getDbClient: () => ({ drizzle: db }), and, desc, eq, isNotNull, botDelegations, botProfiles, botSessionLinks, sessions };
-  return new Function(...Object.keys(deps), js)(...Object.values(deps));
-}
+import {createWorkbenchCaller} from '@cindy/app-runtime/workbenchCaller';
+import {createWorkbenchAuthority} from '@cindy/app-runtime/workbenchAuthority';
+import {createBotTaskResponsibility} from '@cindy/app-runtime/botTaskResponsibility';
+import type {DbClient} from '@cindy/runtime-db';
+// Original authority assertions now call the shared production entry directly.
+const authority=(db:ReturnType<typeof drizzle>,save=vi.fn(),broadcast=vi.fn())=>createWorkbenchAuthority({
+ ...createBotTaskResponsibility(()=>{}),getDbClient:()=>({drizzle:db}) as DbClient,
+ activeOwnerScopeKey:()=> 'synthetic-owner',isAppSessionBoundaryPending:()=>false,
+ ownerScopedUserDataPath:()=>'/synthetic-owner-home',setTaskResponsibility:save,broadcastBotWorkbenchChanged:broadcast,
+});
 
 it('derives caller identity from the active local canonical link and creation only from its own delegation rows', async () => {
   const sqlite = new Database(':memory:');
@@ -39,8 +27,8 @@ it('derives caller identity from the active local canonical link and creation on
       INSERT INTO bot_session_links VALUES ('canonical','one','canonical',NULL),('group','one','group',NULL),('remote','one','canonical',NULL);
       INSERT INTO bot_delegations VALUES ('one','own-across-directory','completed',NULL,1),('two','their-task','running',NULL,2),('one',NULL,'pending',NULL,3);`);
     const db = drizzle(sqlite);
-    const resolve = bind('resolveWorkbenchCaller', db);
-    const creations = bind('listBotDelegationChildren', db);
+    const {resolveWorkbenchCaller:resolve}=createWorkbenchCaller(()=>({drizzle:db}) as DbClient);
+    const {listBotDelegationChildren:creations}=authority(db);
     expect(await resolve('canonical')).toEqual({ ok: true, botId: 'one' });
     expect(await resolve('human')).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
     expect(await resolve('group')).toMatchObject({ ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED' });
@@ -57,11 +45,6 @@ it('derives caller identity from the active local canonical link and creation on
 // Bug: 飞书 channel / group 调用方被工作台权限检查误排除,任务标题旁缺伙伴头像。
 // 现有覆盖只测 canonical 身份查询或 mock 掉整个调用方解析,没有覆盖专线创建链路。
 // 最小失败输入: active Bot + active channel link + 新 desktop 任务。tier: unit,内存 SQLite。
-const chunk = source.slice(source.indexOf('export async function resolveWorkbenchCaller'), source.indexOf('type Failure = {'));
-const js = ts.transpileModule(
-  `${chunk.replaceAll('export ', '')}; return { captureBotCreatedTaskResponsibility, resolveWorkbenchCaller };`,
-  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
-).outputText;
 
 function fixture(role: string) {
   const sqlite = new Database(':memory:');
@@ -76,22 +59,8 @@ function fixture(role: string) {
   sqlite.prepare("INSERT INTO bot_session_links VALUES ('link', ?, ?, ?, NULL)").run('caller', 'hihi', role);
   const save = vi.fn(async () => {});
   const broadcast = vi.fn();
-  const remoteBroadcast = vi.fn();
-  const deps = {
-    getDbClient: () => ({ drizzle: drizzle(sqlite) }),
-    and, desc, eq, inArray, isNotNull, isNull, botDelegations, botProfiles, botSessionLinks, sessions,
-    isAppSessionBoundaryPending: () => false,
-    activeOwnerScopeKey: () => 'synthetic-owner',
-    ownerScopedUserDataPath: () => '/synthetic-owner-home',
-    setTaskResponsibility: save,
-    broadcastBotWorkbenchChanged: broadcast,
-    broadcastBotRemoteResourceChanged: remoteBroadcast,
-  };
-  const api = new Function(...Object.keys(deps), js)(...Object.values(deps)) as {
-    captureBotCreatedTaskResponsibility(id: string): Promise<null | ((id: string) => Promise<void>)>;
-    resolveWorkbenchCaller(id: string): Promise<{ ok: boolean; errorCode?: string }>;
-  };
-  return { sqlite, save, broadcast, remoteBroadcast, ...api };
+  const api={...authority(drizzle(sqlite),save,broadcast),...createWorkbenchCaller(()=>({drizzle:drizzle(sqlite)}) as DbClient)};
+  return { sqlite, save, broadcast, ...api };
 }
 
 it.each(['canonical', 'thread', 'channel', 'group'])(
@@ -103,8 +72,6 @@ it.each(['canonical', 'thread', 'channel', 'group'])(
       await record!('created');
       expect(f.save).toHaveBeenCalledWith('/synthetic-owner-home', 'hihi', 'created', true, expect.any(Function));
       expect(f.broadcast).toHaveBeenCalledWith('hihi');
-      // Phones re-read the roster's follow links, so the new task shows the teammate's mark there too.
-      expect(f.remoteBroadcast).toHaveBeenCalledWith('hihi');
       // Recognizing a creator must not grant a channel/group conversation workbench access.
       if (role === 'channel' || role === 'group') {
         expect(await f.resolveWorkbenchCaller('caller')).toMatchObject({ ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED' });

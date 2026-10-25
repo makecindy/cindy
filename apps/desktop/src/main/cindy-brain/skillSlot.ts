@@ -14,7 +14,6 @@ import { promises as fsp } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
 
-import matter from 'gray-matter';
 
 import {
   GHOST_SKILL_NAME_RE,
@@ -26,7 +25,7 @@ import {
   parsePluginInstallRelId,
   parsePluginStoragePart,
 } from '../../shared/pluginIdentity.js';
-import { parseAndValidateFrontmatter } from '../skillhub/frontmatterValidation.js';
+import { checkSkillMdConsistency } from '@cindy/plugin-runtime/skills/skillValidation';
 import { sharedGlobalSkillsPaths } from '../maker-host/shared-global-skills.js';
 
 /** Owner-scoped plugin root; never installed into the user's shared skill directories. */
@@ -44,27 +43,7 @@ export function ghostSkillLinkName(ghostId: string, skillName: string): string {
  * SKILL.md 与 manifest 声明的一致性裁判(纯函数)。
  * 返回错误原因(中文,给作者自纠),一致返回 null。
  */
-export function checkSkillMdConsistency(content: string, item: GhostSkillItem): string | null {
-  let data: Record<string, unknown>;
-  try {
-    data = (matter(content).data as Record<string, unknown>) ?? {};
-  } catch {
-    return 'SKILL.md frontmatter 无法解析(YAML 语法错误)';
-  }
-  const { issues } = parseAndValidateFrontmatter(content, 'skill');
-  if (issues.length > 0) {
-    return `SKILL.md frontmatter 不合格:${issues.map((i) => `${i.field}:${i.message}`).join('; ')}`;
-  }
-  const fmName = typeof data.name === 'string' ? data.name.trim() : '';
-  const fmDescription = typeof data.description === 'string' ? data.description.trim() : '';
-  if (fmName !== item.name) {
-    return `SKILL.md frontmatter name ${JSON.stringify(fmName)} 与清单声明 ${JSON.stringify(item.name)} 不一致(插件详情展示的必须就是 Agent 读到的)`;
-  }
-  if (fmDescription !== item.description) {
-    return 'SKILL.md frontmatter description 与清单声明不一致(插件详情展示的必须就是 Agent 读到的)';
-  }
-  return null;
-}
+export { checkSkillMdConsistency } from '@cindy/plugin-runtime/skills/skillValidation';
 
 export interface GhostSkillLinkAction {
   linkName: string;

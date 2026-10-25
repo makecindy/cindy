@@ -8,7 +8,7 @@ import { botSkillRootDir, parseBotSkillFile, saveBotSkill, seedBotSkillIfMissing
 import { buildBotSkillIndex } from '../botSystemPrompt';
 import { applyPiBotSkillPolicy } from '../../../../../../packages/maker-core/src/agents/pi/bot-skill-policy';
 import { buildCodexBotSkillConfigOverrides } from '../../../../../../packages/maker-core/src/agents/codex/capability-routing';
-import * as runtimeSource from '../botSkillRuntimeSource';
+import * as runtimeSource from '@cindy/companion-core/botSkillRuntimeSource';
 
 const observation = vi.hoisted(() => ({ native: true }));
 vi.mock('node:fs', async importOriginal => {

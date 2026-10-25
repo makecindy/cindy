@@ -120,19 +120,26 @@ export interface OrcaWorkerVendorOptions extends Record<string, unknown> {
 }
 
 export interface OrcaBridgeMcpDeps {
+  /** HTTP transports shared by harnesses keep definitions stable; handlers
+   * still resolve and attest the owning Worker on every invocation. */
+  sharedBridge?: boolean;
+  /** Durable hosts settle the captured assignment at their acceptance boundary. */
+  manageWorkerStatus?: boolean;
   /** Host-owned routing for execution-device Workers; null means a local caller. */
   forwardRemoteWorkerTool?: (
     ctx: McpProviderContext,
     tool: string,
     args: Record<string, unknown>,
   ) => Promise<OrcaToolResult | null>;
-  getMaker: () => Maker;
+  getMaker?: () => Maker;
+  /** Hosts with one Maker per task restore through their normal runtime owner. */
+  ensureSession?: (meta: OrcaPersistedSession, vendorOptions?: Record<string, unknown>) => Promise<Session>;
   logger: Logger;
   persistUserMessage: (
     sessionId: string,
     message: { clientId: string; content: string },
   ) => Promise<void>;
-  wireSession: (session: Session) => void;
+  wireSession?: (session: Session) => void;
   hydrateSessionRoute?: (sessionId: string, providerId: string | null) => void | Promise<void>;
   /**
    * 远端 session 重建前的 preflight (SSH 重连 / agent install / 远端 MCP
@@ -548,7 +555,9 @@ async function ensureSessionFromMeta(
   meta: OrcaPersistedSession,
   vendorOptions?: Record<string, unknown>,
 ): Promise<Session> {
-  const maker = deps.getMaker();
+  if (deps.ensureSession) return deps.ensureSession(meta, vendorOptions);
+  const maker = deps.getMaker?.();
+  if (!maker) throw new Error('Orca session host is unavailable');
   await deps.hydrateSessionRoute?.(meta.sessionId, meta.providerId ?? null);
   const active = maker.getSession(meta.sessionId);
   if (active) return active;
@@ -589,7 +598,7 @@ async function ensureSessionFromMeta(
       ? { remoteHostId: meta.remoteHostId, makerMemoryEnabled: remoteMakerMemoryEnabled }
       : {}),
   });
-  deps.wireSession(session);
+  deps.wireSession?.(session);
   return session;
 }
 
@@ -732,13 +741,24 @@ async function ensureCapturedSession(
 // 对共享桥接可见。真正的执行边界在工具调用时 fail-closed：resolveWorkerLink 会读
 // 本次调用绑定的 session ctx，并校验它确实拥有解析出的 worker link。
 export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
-  const log = deps.logger.child('mcp/orca_worker_bridge');
+  return createWorkerBridgeProvider(deps, deps.forwardRemoteWorkerTool, deps.logger);
+}
+
+/** Execution-only hosts use the exact same tool schemas and caller checks.
+ * Missing remote attribution never falls back to a local Lead. */
+export function createOrcaRemoteWorkerMcpProvider(forward: NonNullable<OrcaBridgeMcpDeps['forwardRemoteWorkerTool']>, logger: Logger) {
+  return createWorkerBridgeProvider(undefined, forward, logger);
+}
+
+function createWorkerBridgeProvider(deps: OrcaBridgeMcpDeps | undefined, forwardRemoteWorkerTool: OrcaBridgeMcpDeps['forwardRemoteWorkerTool'], logger: Logger) {
+  const log = logger.child('mcp/orca_worker_bridge');
   const leadCaptures = new CapturedSessionRegistry();
   function defineTools(
     ctx: McpProviderContext, register: RegisterWorkerTool,
     options: { manageWorkerStatus?: boolean } = {},
   ): void {
       async function resolveLead(workerId?: string) {
+        if (!deps) return { ok: false as const, error: { error: 'remote worker link unavailable' } };
         const resolved = await resolveWorkerLink(deps, ctx, workerId);
         if (!resolved.ok) return resolved;
         const link = resolved.link;
@@ -767,6 +787,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .describe('queue (default) = deliver now or queue behind the Lead\'s current turn; steer = try to enter the Lead\'s current turn.'),
         },
         async ({ message, worker_id, delivery }) => {
+          if (!deps) return text({ error: 'remote worker link unavailable' }, true);
           const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
           if (!authorization.ok) return text(authorization.error, true);
           const resolved = await resolveLead(worker_id);
@@ -911,6 +932,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .describe('next_cursor from the previous page.'),
         },
         async ({ worker_id, from_ms, limit, cursor }) => {
+          if (!deps) return text({ error: 'remote worker link unavailable' }, true);
           const resolved = await resolveWorkerLink(deps, ctx, worker_id);
           if (!resolved.ok) return text(resolved.error, true);
           if (!deps.readLeadHistory) {
@@ -1016,13 +1038,13 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
           const authorization = authorizeSendToLeadCaller(runtime);
           if (!authorization.ok) return text(authorization.error, true);
         }
-        const forwarded = await deps.forwardRemoteWorkerTool?.(runtime, name, args);
+        const forwarded = await forwardRemoteWorkerTool?.(runtime, name, args);
         return forwarded ?? handler(args);
       });
-    }, options);
+    }, { manageWorkerStatus: deps?.manageWorkerStatus, ...options });
   };
   const enabled = (ctx: McpProviderContext) =>
-    ctx.vendorOptions?.orcaRole === 'worker'
+    !deps || deps.sharedBridge === true || ctx.vendorOptions?.orcaRole === 'worker'
     || ctx.vendorOptions?.orcaRemoteWorker === true
     || ctx.agentKind === 'codex'
     // Claude also has this accessor on ordinary per-session contexts; it is not a role.

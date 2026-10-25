@@ -3,7 +3,7 @@
  * Product rules: docs/product-rules/bot-group-chat.md.
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
-import type { BotGroupTaskCardView } from './botGroupTask';
+import type { BotGroupTaskCard, BotGroupTaskCardView } from './botGroupTask';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
@@ -853,3 +853,20 @@ export interface ChatServerApi {
   previewInvite(input: { link: string }): Promise<ChatServerResult<ChatInvitePreview>>;
   acceptInvite(input: { link: string; clientId: string }): Promise<ChatServerResult<{ groupId: string }>>;
 }
+
+/** One message a teammate posts into its group about an independent task (bot-group-chat.md §10). */
+export interface BotGroupTaskPostInput {
+  groupId: string;
+  botId: string;
+  /** Idempotent per event: retries return the message the server already stored. */
+  clientId: string;
+  text: string;
+  card: BotGroupTaskCard;
+  /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
+  files?: Array<{ absolutePath: string }>;
+  /** A task started in a Thread reports back into that Thread. */
+  threadRootId?: string;
+}
+export type BotGroupTaskPostResult =
+  | { ok: true; messageId: string }
+  | { ok: false; errorCode: string; retryable: boolean };

@@ -658,6 +658,7 @@ import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainVi
 import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
+import { registerRemoteTerminal } from './terminal/remote.js';
 import { registerLocalThemesIpc } from './local-themes/register';
 import {
   registerRemoteSshIpc,
@@ -1643,7 +1644,7 @@ let rendererBootGuard: RendererBootGuard | null = null;
 const lifecycleDbClientManager = createLifecycleDbClientManager({
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,
-  createInprocClient: () => createInprocDbClient(),
+  createInprocClient: () => createInprocDbClient({ appDataRoot: app.getPath('appData') }),
   setCurrentDbClient,
   clearCurrentDbClient,
   log: dbClientLog,
@@ -1652,6 +1653,7 @@ const lifecycleDbClientManager = createLifecycleDbClientManager({
 async function ensureLifecycleDbClient(userId: string) {
   return lifecycleDbClientManager.ensure(userId, {
     drizzleDir: getDrizzleDir(),
+    appDataRoot: app.getPath('appData'),
     sqliteVecExtPath: resolveSqliteVecExtPath(),
     nativeBinding: resolveBetterSqliteNativeBinding() ?? undefined,
     // file worker / inline 回滚口都使用主进程解析好的入口，避免 packaged 下
@@ -9833,6 +9835,7 @@ app.on('ready', async () => {
     getFallbackOwner: () =>
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });
+  registerRemoteTerminal();
   registerLocalThemesIpc();
   registerVoiceInputIpc();
   registerGlobalVoiceInputIpc({

@@ -1,0 +1,21 @@
+{
+  "name": "@cindy/worktree-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/maker-scheduler": "workspace:*",
+    "tar": "^7.5.22"
+  }
+}

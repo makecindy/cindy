@@ -100,7 +100,7 @@ vi.mock('../../../localDb/client/current', () => ({
     },
   }),
 }));
-vi.mock('../../../localDb/schema', () => ({
+vi.mock('@cindy/runtime-db/schema', () => ({
   sessions: {
     id: 'sessions.id',
     workingDir: 'sessions.working_dir',

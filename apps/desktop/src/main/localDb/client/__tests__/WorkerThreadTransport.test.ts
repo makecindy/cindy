@@ -32,6 +32,7 @@ describe('WorkerThreadTransport', () => {
       transport = new WorkerThreadTransport({
         useInlineWorker: true,
         dbPath,
+        appDataRoot: path.join(dir, 'app-data'),
         drizzleDir,
         betterSqliteModulePath: require.resolve('better-sqlite3'),
       });
@@ -39,6 +40,9 @@ describe('WorkerThreadTransport', () => {
         id: 'session-one', status: 'archived', source: 'desktop',
         workingDir: 'C:/repo/.cindy-worktrees/one', worktreePath: 'C:/repo/.cindy-worktrees/one', currentDatabase: true,
       }]);
+      const catalog = path.join(dir, 'app-data', 'Cindy', 'shared-worktree-terminal-profiles');
+      fs.mkdirSync(catalog, { recursive: true }); fs.writeFileSync(path.join(catalog, 'profile.json'), '{}');
+      await expect(transport.send('worktreeReferences')).rejects.toThrow('terminal task catalog requires the file worker');
     } finally {
       if (transport) await transport.close();
       fs.rmSync(dir, { recursive: true, force: true });

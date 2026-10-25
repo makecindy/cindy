@@ -1,3 +1,5 @@
+import { redactEventForRenderer } from '@cindy/app-runtime/sessionEventRedaction';
+import { createClaudeUsageEventRecorder } from '@cindy/app-runtime/claudeUsageEvents';
 /**
  * makerEventHotPathOrdering.test.ts
  * ---------------------------------------------------------------------------
@@ -13,7 +15,16 @@ import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent } from '@cindy/maker-core';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
-const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const activitySource = readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src/session-activity/bridge.ts'), 'utf8').replace(/\r\n?/g, '\n');
+const recoverySource = [
+  'sessionRecoveryLeases',
+  'interruptedTurnRecovery',
+  'interruptedTurnAutoResume',
+  'autoResumeInputLifecycle',
+  'agent-input-coordinator',
+].map((name) => readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src', `${name}.ts`), 'utf8'))
+  .join('\n').replace(/\r\n?/g, '\n');
+const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n') + '\n' + activitySource + '\n' + recoverySource;
 const registerSource = source;
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -21,7 +32,7 @@ const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts')
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const bootstrapSourcePath = resolve(__dirname, '..', 'bootstrap-electron.ts');
 const bootstrapSource = readFileSync(bootstrapSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
+const goalStorageSourcePath = resolve(__dirname, '../../../../../packages/app-runtime/src/goal/storage.ts');
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 /**
@@ -30,7 +41,7 @@ const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\
  */
 function loadBudgetReconciler() {
   const start = source.indexOf('  const reconcileSessionContextWindowBudgetUnderLock = async (');
-  const end = source.indexOf('  setModelContextRuntimeRefreshListener(', start);
+  const end = source.indexOf('  // session-agent-switch:lazy-create', start);
   if (start < 0 || end < 0) throw new Error('budget reconciler source changed');
   const code = source.slice(start, end);
   const js = transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
@@ -88,19 +99,11 @@ describe('maker:event hot path ordering', () => {
   it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
     'strips Host recovery metadata from the boundary copy with data %j',
     (data) => {
-      // Execute the actual boundary function without booting Desktop/register side effects.
-      const start = source.indexOf('function redactEventForRenderer');
-      const code = source.slice(start, source.indexOf('\nfunction ', start + 1));
-      const js = transpileModule(code, {
-        compilerOptions: { target: ScriptTarget.ES2022 },
-      }).outputText;
-      const redact = new Function(`${js}; return redactEventForRenderer;`)() as
-        (event: AgentEvent) => AgentEvent;
       const original: AgentEvent = {
         type: 'text', source: 'pi', data, runtimeRecovery: true,
         sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
       };
-      const boundary = redact(original);
+      const boundary = redactEventForRenderer(original);
       expect(boundary).toEqual({ type: 'text', source: 'pi', data });
       expect(original.runtimeRecovery).toBe(true);
       expect(original.sessionInstanceId).toBe('runtime');
@@ -110,10 +113,7 @@ describe('maker:event hot path ordering', () => {
   );
 
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
-    const redactor = source.slice(
-      source.indexOf('function redactEventForRenderer'),
-      source.indexOf('\nfunction ', source.indexOf('function redactEventForRenderer') + 1),
-    );
+    const redactor = readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src/sessionEventRedaction.ts'), 'utf8');
     expect(redactor).toContain('delete rendererEvent.sessionTurnGeneration;');
     expect(redactor).toContain('delete rendererEvent.sessionInstanceId;');
     for (const key of [
@@ -199,8 +199,7 @@ describe('maker:event hot path ordering', () => {
 
   // tracks Claude wall clock across continuation segments and only consumes it at product completion: covered by the executable sessionEventPipeline tests.
   it('preserves the product clock before a silent-stop continuation can emit running', () => {
-    const start = source.indexOf('async function handleSilentStopTurnEnd(');
-    const continuation = source.slice(start, source.indexOf('\nfunction ', start + 1));
+    const continuation = readEventModule('silentStopRuntime');
     expectOrder(
       continuation,
       'productTurnWallClockTracker.preserveForContinuation(session.id);',
@@ -302,7 +301,7 @@ describe('maker:event hot path ordering', () => {
     )?.[0];
 
     expect(source).toContain('function isRemoteAuthRetryErrorEvent(');
-    expect(source).toContain("if (session.agentKind === 'codex') return false;");
+    expect(readEventModule('sessionEventGuards')).toContain("if (session.agentKind === 'codex') return false;");
     expect(source).toContain('service.deferRemoteAuthRetryError(meta, event);');
     expect(wireSessionSource).toContain(
       'isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);',
@@ -338,14 +337,14 @@ describe('maker:event hot path ordering', () => {
       'const terminalError =',
     );
     expect(handler).toContain(
-      'agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true',
+      'host.getCoordinator()?.isAutoResumePending(session.id) === true',
     );
     expect(handler).toContain(
-      'agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true',
+      'host.getCoordinator()?.isAutoResumeDeferred(session.id) === true',
     );
-    expect(handler).toContain('autoResumeBookkeeping.shouldSuppressAgentIslandError(session.id)');
+    expect(handler).toContain('host.getBookkeeping().shouldSuppressAgentIslandError(session.id)');
     expect(handler).toContain(
-      'autoResumeBookkeeping.shouldSuppressAgentIslandCompletionTail(session.id)',
+      'host.getBookkeeping().shouldSuppressAgentIslandCompletionTail(session.id)',
     );
     expect(handler).toContain('(terminalError && autoResumeOwnsError)');
     expect(handler).toContain(
@@ -357,7 +356,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail)');
     expect(source).toContain('data: { ...detail, isTerminal: true }');
     expect(source).toContain(
-      'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
+      'claimSuppressedErrorForRetry(sessionId, clientId, source);',
     );
     expect(source).toContain('if (!attempt.isCurrent()) {');
     expect(source).toContain(
@@ -587,7 +586,7 @@ describe('maker:event hot path ordering', () => {
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
     expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
     expect(source).toContain('onUnconfirmedAutoResumeTurn:');
-    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+    expect(source).toContain('abandonUnconfirmedPersistedResume(sessionId, token, item.clientId);');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {
@@ -696,7 +695,7 @@ describe('maker:event hot path ordering', () => {
   it('tears down every automatic recovery path before an explicit Stop aborts the session', () => {
     const resetStart = source.indexOf('function resetAutomaticRecoveryForExplicitStop(');
     const resetEnd =
-      source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
+      source.indexOf('\n}\n\nconst autoResumeInputLifecycle', resetStart) + 2;
     const resetSource = source.slice(resetStart, resetEnd);
     const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
     const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
@@ -798,13 +797,13 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('commits a Goal state update before its post-write readback', () => {
-    const updateStart = goalStorageSource.indexOf('async update(sessionId: string');
+    const updateStart = goalStorageSource.search(/async update\(\s*sessionId: string/);
     const updateEnd = goalStorageSource.indexOf('\n  async clear(', updateStart);
     const updateSource = goalStorageSource.slice(updateStart, updateEnd);
 
     expect(updateStart).toBeGreaterThanOrEqual(0);
     expect(updateSource).not.toContain('const existing = await this.get(sessionId);');
-    const writeIndex = updateSource.indexOf('await this.getDb().update(sessionGoals)');
+    const writeIndex = updateSource.search(/await this\.getDb\(\)\s*\.update\(sessionGoals\)/);
     const postWriteReadIndex = updateSource.lastIndexOf('return this.get(sessionId);');
     expect(writeIndex).toBeGreaterThanOrEqual(0);
     expect(postWriteReadIndex).toBeGreaterThan(writeIndex);
@@ -1158,19 +1157,21 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('records Claude subscription quota events only while the native login is connected', () => {
-    const listenerSource = usageSource.match(
-      /setClaudeRateLimitInfoListener\(\(info\) => \{[\s\S]*?\n {2}\}\);/,
-    )?.[0];
-    expect(listenerSource).toBeTruthy();
-    if (!listenerSource) return;
-
-    // 登出 / 断开后晚到的事件必须丢弃,不能复活刚清掉的快照。
-    expectOrder(
-      listenerSource,
-      'if (!hasClaudeNativeLogin()) return;',
-      'void recordClaudeSubscriptionUsageSnapshot(',
-    );
+  it('records Claude subscription quota events only while the native login is connected', async () => {
+    expect(usageSource).toContain('setClaudeRateLimitInfoListener(createClaudeUsageEventRecorder({');
+    expect(usageSource).toContain('readConnectedAccount: () => hasClaudeNativeLogin() ?');
+    let connected = true;
+    const recordSnapshot = vi.fn(async () => {});
+    const listener = createClaudeUsageEventRecorder({
+      readConnectedAccount: () => connected ? { fingerprint: 'owner-account', subscriptionType: 'max' } : null,
+      recordSnapshot,
+    });
+    const info = { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.4 };
+    await listener(info);
+    expect(recordSnapshot).toHaveBeenCalledWith(expect.objectContaining({ accountFingerprint: 'owner-account', subscriptionType: 'max', fiveHour: expect.objectContaining({ utilization: 40 }) }));
+    connected = false;
+    await listener(info);
+    expect(recordSnapshot).toHaveBeenCalledOnce();
     expect(usageSource).not.toContain('setClaudeRateLimitHeadersListener');
   });
 });
@@ -1216,7 +1217,7 @@ function expectOrder(sourceBlock: string, firstNeedle: string, secondNeedle: str
 
 /** Existing domain guards ignore only the injected service qualifier. */
 function readEventModule(name: string): string {
-  return readFileSync(resolve(__dirname, '..', 'maker-ipc', name + '.ts'), 'utf8')
+  return readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src', name + '.ts'), 'utf8')
     .replace(/\r\n?/g, '\n')
     .replaceAll('deps.', '');
 }

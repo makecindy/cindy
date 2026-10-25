@@ -16,39 +16,19 @@ const h = vi.hoisted(() => ({
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
 }));
 
-vi.mock('electron', () => ({
-  ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] },
-}));
-vi.mock('../../../logger', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
-vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
-  getCurrentDbClientUserId: () => 'test-user',
-}));
-vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
-vi.mock('../../../git-context/prRefsStore', () => ({
-  recomputePrRefsForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
-vi.mock('../../../device-link/broadcast-tap.js', () => ({
-  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
-  tapWindowBroadcast: vi.fn(),
-}));
-vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
-vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
-vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
-  relocateClaudeTranscriptsForSessionMove: vi.fn(async () => ({ persistedSdkSessionId: null })),
-}));
+import { createSessionTitlePersistence } from '@cindy/app-runtime/sessionTitlePersistence';
+import { createSessionQueries } from '@cindy/app-runtime/sessionQueries';
+import { createRowMapper } from '@cindy/app-runtime/rowMapper';
+import { createRegionalMoney } from '@cindy/maker-shared/regional-money';
+import type { DbClient } from '@cindy/runtime-db/client/DbClient';
 
-import {
-  getOverwritableAutoTitle,
-  isUntitledSessionAwaitingAutoTitle,
-  persistSessionTitleIfStillDraft,
-} from '../sessions';
+const mapper = createRowMapper({getSessionInterruptionBootAt: () => 0, money: createRegionalMoney('global')});
+const {getOverwritableAutoTitle, isUntitledSessionAwaitingAutoTitle, persistSessionTitleIfStillDraft} = createSessionTitlePersistence({
+  ...mapper, ...createSessionQueries(mapper.sessionToCamel),
+  getDbClient: () => ({drizzle:h.db}) as unknown as DbClient,
+  captureOwnerScope: () => null, isOwnerScopeCurrent: () => true,
+  notifyAgentIslandSessionPatch: vi.fn(), broadcastSessionPatched: vi.fn(),
+});
 
 const SESSION_ID = 's1';
 

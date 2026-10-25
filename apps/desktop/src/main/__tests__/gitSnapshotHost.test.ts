@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 vi.mock('electron', () => ({ app: { getPath: () => path.resolve('snapshot-profile') } }));
+vi.mock('../maker-host/model-route-guard-live', () => ({ isAgentOneShotRouteDisabled: async () => false }));
+vi.mock('../worktree/WorktreeManager', () => ({detectCwd:async()=>{throw new Error('Directory detection must be supplied by the host fixture');}}));
 
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host';
 import type {

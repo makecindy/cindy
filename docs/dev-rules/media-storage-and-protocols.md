@@ -24,6 +24,13 @@
 
 文档与实现冲突时先停下核对，不另建媒体存储或协议绕过现有契约。
 
+纯 Node 宿主复用 `packages/media-core` 的字节仓、账本、Markdown 图片解析与任务
+文件校验。`task-image-source` 按工作目录和原生任务身份验证来源；
+`local-markdown-images` 只把受管副本交给消息渠道，并移除无法交付的本机路径。
+Desktop 原入口保留宿主接线。历史 `xdt-image` 缓存实现位于
+`legacy-image-cache`，由宿主注入账号目录；终端的新图片同样只写 `cindy-media`。
+历史目录守门同时扫描 Desktop、终端和共享媒体模块，移动实现不能退出检查范围。
+
 ## 哪些内容进入媒体总仓
 
 - Cindy 需要拥有、缓存或持久化副本的图片、视频、音频和 3D 模型，统一进入

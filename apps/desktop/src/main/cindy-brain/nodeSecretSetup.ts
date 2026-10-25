@@ -5,16 +5,8 @@ import type { GhostSetupInteractionBridge } from './ghostSetupInteractionBridge.
 import { executeGhostSetupInlineSubmission } from './ghostSetupInlineExecutor.js';
 import { evaluateGhostSetupAssessment } from './ghostSetupStatus.js';
 
-export interface NodeSecretSetupInput {
-  ghostId: string;
-  entry: string;
-  method: string;
-  sessionId: string;
-  signal: AbortSignal;
-  force: boolean;
-  /** Captures the exact live call, owner, package and runtime generation. */
-  assertCurrent(): void;
-}
+import type { NodeSecretSetupInput } from '@cindy/plugin-runtime/hostTypes';
+export type { NodeSecretSetupInput } from '@cindy/plugin-runtime/hostTypes';
 
 export interface NodeSecretSetupDeps {
   bridge: GhostSetupInteractionBridge;

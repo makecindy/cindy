@@ -1,0 +1,163 @@
+import { randomUUID } from 'node:crypto';
+import { isModelVisible } from '@cindy/model-providers';
+import type { BotModelRoute } from '@cindy/companion-core/botModelChain';
+import { sameModelRoute, type AppDefaultModelSelection } from '@cindy/companion-core/appDefaultModelSelection';
+
+
+
+
+
+
+import { availableAppDefaultModels, resolveAvailableLocalRoute } from '@cindy/model-providers/availableTaskModels';
+export { availableAppDefaultModels } from '@cindy/model-providers/availableTaskModels';
+export interface TaskModelSelection {
+  id: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+import type {Maker} from '@cindy/maker-core';
+import type {ProviderView} from '@cindy/model-providers';
+import type {DataOwnerPushStamp} from '@cindy/maker-shared/dataOwnerPush';
+import type {createNewMakerDefaultsCache} from './newMakerDefaultsCache.js';
+import type {createModelVisibilityMirror} from './modelVisibilityMirror.js';
+import type {readRemoteProviderRoute} from '@cindy/remote-agent/controller/deviceCatalog';
+export interface AppDefaultModelControlHost extends Pick<ReturnType<typeof createNewMakerDefaultsCache>, 'getNewMakerModelTuning'|'getSelectedNewMakerRoute'|'subscribeNewMakerDefaults'>, Pick<ReturnType<typeof createModelVisibilityMirror>, 'getModelVisibilityOverride'|'waitForModelVisibilityMirror'> {
+  activeOwnerScopeKey(): string;
+  isAppSessionBoundaryPending(): boolean;
+  getActiveDataOwnerPushStamp(): DataOwnerPushStamp;
+  getDesktopProviderService(): {listProviders(options:{allowSideEffects:boolean}):Promise<ProviderView[]>};
+  getMakerIfReady(): Pick<Maker,'listAvailableAgents'> | null;
+  readRemoteProviderRoute(route:Parameters<typeof readRemoteProviderRoute>[0]): ReturnType<typeof readRemoteProviderRoute>;
+}
+export function createAppDefaultModelControl(host: AppDefaultModelControlHost) {
+const {activeOwnerScopeKey,isAppSessionBoundaryPending,getActiveDataOwnerPushStamp,getDesktopProviderService,getMakerIfReady,getModelVisibilityOverride,waitForModelVisibilityMirror,getNewMakerModelTuning,getSelectedNewMakerRoute,subscribeNewMakerDefaults,readRemoteProviderRoute} = host;
+/** A narrow bridge to the existing renderer-owned default, never a second settings file. */
+let dispatchSelection: ((selection: AppDefaultModelSelection) => void) | null = null;
+function configureAppDefaultModelSelection(dispatch: typeof dispatchSelection): void {
+  dispatchSelection = dispatch;
+}
+
+
+
+async function readSelection() {
+  const owner = activeOwnerScopeKey();
+  const assertOwner = () => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('账号已变化，请重新查询');
+  };
+  assertOwner();
+  await waitForModelVisibilityMirror();
+  const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+  assertOwner();
+  const current = getSelectedNewMakerRoute(owner) ?? null;
+  const inputs = { providers, currentRoute: current,
+    tuning: (agent, providerId, model) => getNewMakerModelTuning(owner, agent, providerId, model),
+    availableAgents: new Set((getMakerIfReady()?.listAvailableAgents() ?? []).map(agent => agent === 'claude-code' ? 'cc' : agent)),
+    enabled: (agent, providerId, model) => isModelVisible(getModelVisibilityOverride(agent, providerId, model.id), model.defaultEnabled),
+  } satisfies Parameters<typeof availableAppDefaultModels>[0];
+  const available = availableAppDefaultModels(inputs);
+  return { owner, assertOwner, current, available, inputs };
+}
+
+async function inspectAppDefaultModel() {
+  const { current, available } = await readSelection();
+  return { current, available };
+}
+
+
+
+/** Resolve one per-task selection from the live catalog; never mutate picker/default preferences. */
+async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<BotModelRoute> {
+  const { available } = await inspectAppDefaultModel();
+  const option = available.find(entry => entry.id === selection.id);
+  if (!option) throw new Error('任务模型已不可用，请重新查询可用模型');
+  if (selection.effort !== undefined && !option.efforts.some(effort => effort === selection.effort)) {
+    throw new Error('任务模型不支持所选思考深度，请重新选择');
+  }
+  if (selection.fastMode && (!option.supportsFastMode || (selection.fastMode === 'ultrafast' && !option.supportsUltrafastMode))) {
+    throw new Error('任务模型不支持 Fast，请重新选择');
+  }
+  return { ...option.route,
+    ...(selection.effort !== undefined ? { effort: selection.effort } : {}),
+    ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
+  };
+}
+
+/** Resolve legacy implicit sources using the ordinary default policy, without persisting changes. */
+async function resolveAvailableTaskModels(routes: readonly BotModelRoute[]): Promise<Array<BotModelRoute | null>> {
+  const owner = activeOwnerScopeKey();
+  const local = routes.some(route => !route.agentDeviceId) ? await readSelection() : null;
+  return Promise.all(routes.map(async route => {
+    if (route.agentDeviceId) {
+
+      // An unavailable saved source must leave the form open for reselection.
+      // Owner changes still invalidate the whole read, including failed requests.
+      const assertOwner = () => {
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('账号已变化，请重新选择');
+      };
+      assertOwner();
+      const resolved = await readRemoteProviderRoute({
+        agentDeviceId: route.agentDeviceId, agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+        providerId: route.providerId, model: route.model,
+      }).catch(() => { assertOwner(); return null; });
+      assertOwner();
+      if (!resolved) return null;
+      const { provider, model } = resolved;
+      if ((route.effort && !model.efforts.some(effort => effort === route.effort)) || (route.fastMode && !model.supportsFastMode)) return null;
+      return { ...route, providerId: provider.id };
+    }
+    if (!local) return null;
+    const { available, inputs } = local;
+    const resolved = resolveAvailableLocalRoute({ providers: inputs.providers, providersLoading: false,
+      availableAgents: inputs.availableAgents, availableAgentsLoaded: true,
+      preferredRoute: route, isModelEnabled: inputs.enabled });
+    if (!resolved) return null;
+    const entry = available.find(item => item.route.harness === resolved.harness
+      && item.route.model === resolved.model && item.route.providerId === resolved.providerId);
+    return entry && (!resolved.effort || entry.efforts.some(effort => effort === resolved.effort))
+      && (!resolved.fastMode || entry.supportsFastMode) ? resolved : null;
+  }));
+}
+
+/** Check a saved full route without changing the application or teammate's primary model. */
+async function validateTaskModel(route: BotModelRoute): Promise<boolean> {
+  return !!(await resolveAvailableTaskModels([route]))[0];
+}
+
+/** Wait for a fresh owner-fenced mirror after the real setter persisted the selected route. */
+async function changeAppDefaultModel(id: string, effort?: string, assertCaller: () => void = () => {}) {
+  assertCaller();
+  const state = await readSelection();
+  assertCaller();
+  const choice = state.available.find(item => item.id === id);
+  if (!choice || (effort !== undefined && effort !== '' && !choice.efforts.some(value => value === effort)))
+    throw new Error('该模型或思考档不可用，请重新查询已启用模型');
+  const route = { ...choice.route, ...(effort !== undefined ? { effort } : {}) };
+  if (!dispatchSelection) throw new Error('客户端默认模型设置入口尚未就绪');
+  state.assertOwner();
+  assertCaller();
+  const dispatch = dispatchSelection;
+  await new Promise<void>((resolve, reject) => {
+    const requestId = randomUUID();
+    const expiresAt = Date.now() + 5000;
+    const timer = setTimeout(() => { off(); reject(new Error('未确认默认模型已保存，请查询当前设置后重试')); }, 5000);
+    const off = subscribeNewMakerDefaults((confirmedRequestId) => {
+      try {
+        state.assertOwner();
+        if (confirmedRequestId !== requestId) return;
+        if (!sameModelRoute(getSelectedNewMakerRoute(state.owner), route)) return;
+        clearTimeout(timer); off(); resolve();
+      } catch (error) { clearTimeout(timer); off(); reject(error); }
+    });
+    try {
+      dispatch({ requestId, route, expectedRoute: state.current, ownerStamp: getActiveDataOwnerPushStamp(), expiresAt });
+    } catch (error) { clearTimeout(timer); off(); reject(error); }
+  });
+  state.assertOwner();
+  assertCaller();
+  const current = getSelectedNewMakerRoute(state.owner);
+  if (!sameModelRoute(current, route)) throw new Error('默认模型已被其他操作改变，请重新查询');
+  return { current: route };
+}
+
+return { configureAppDefaultModelSelection, inspectAppDefaultModel, resolveTaskModelSelection, resolveAvailableTaskModels, validateTaskModel, changeAppDefaultModel };
+}

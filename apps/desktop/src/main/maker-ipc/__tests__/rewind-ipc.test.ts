@@ -45,6 +45,13 @@ vi.mock('../register.js', () => ({
   withSessionInputStoppedForRewind: mocks.withSessionInputStoppedForRewind,
 }));
 
+// The IPC test owns its handoff cache; loading the real database host is not
+// needed to exercise the rewind barrier and observation fence below.
+vi.mock('../agentHandoffPendingSingleton.js', async () => {
+  const {createAgentHandoffPendingRegistry} = await import('@cindy/im-runtime/agentHandoff');
+  return {agentHandoffPending:createAgentHandoffPendingRegistry(async()=>null)};
+});
+
 vi.mock('../../goal-host/index.js', () => ({
   getGoalController: () => null,
 }));

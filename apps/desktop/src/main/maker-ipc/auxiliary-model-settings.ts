@@ -1,21 +1,16 @@
+import { createAuxiliaryModelOptions } from '@cindy/model-providers/utility-model/auxiliaryModelOptions';
 /** Settings IPC for the shared auxiliary-model chain. */
 
 import { ipcMain } from 'electron';
-import type { Catalog, ModelDisableOverrides } from '@cindy/model-providers';
 
 import {
   isValidAuxiliaryModelListInput,
-  type AuxiliaryModelOption,
-  type AuxiliaryModelSettings,
   type AuxiliaryModelSettingsPatch,
   type AuxiliaryModelSettingsState,
 } from '../../shared/auxiliaryModelSettings.js';
-import { decodeCatalogModelPin } from '../../shared/catalogModelPin.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import {
-  getUtilityModelProfile,
   isUtilityModelProviderKind,
-  utilityTransportLabel,
 } from '../../shared/utilityModelProfiles.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -29,8 +24,6 @@ import {
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import {
   buildTextOneshotPinOptions,
-  type OneshotCredentialProbe,
-  type TextOneshotPinOption,
 } from '../utility-model/textOneshotPinOptions.js';
 import {
   isUtilityRouteDisabled,
@@ -42,103 +35,10 @@ import { MAKER_INVOKE } from './channels.js';
 
 const log = createLogger('maker-ipc/auxiliary-model-settings');
 
-function toWireOption(option: TextOneshotPinOption, available: boolean): AuxiliaryModelOption {
-  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code' && option.agentKind !== 'pi') {
-    throw new Error(`unsupported auxiliary model agent: ${option.agentKind}`);
-  }
-  return {
-    ...option,
-    agentKind: option.agentKind,
-    available,
-  };
-}
-
-function syntheticProfileOption(
-  id: string,
-  args: {
-    catalog: Catalog;
-    hasCredential?: OneshotCredentialProbe;
-  },
-): AuxiliaryModelOption {
-  const profile = getUtilityModelProfile(id as Parameters<typeof getUtilityModelProfile>[0]);
-  const providerId = profile.transport === 'codex-responses' ? 'openai' : 'xd';
-  const provider = args.catalog.providers.find((item) => item.id === providerId);
-  const available = Boolean(
-    provider
-      && args.hasCredential?.(provider, 'codex')
-      && !isUtilityRouteDisabled(profile)
-      && !isUtilityRoutePaymentRequired(profile),
-  );
-  return {
-    id,
-    label: `${profile.model} · ${utilityTransportLabel(profile.transport)}`,
-    group: providerId,
-    providerId,
-    agentKind: 'codex',
-    modelId: profile.model,
-    modelName: profile.model,
-    budget: false,
-    subscription: profile.transport === 'codex-responses',
-    agentSuffix: 'Codex',
-    available,
-  };
-}
-
-/**
- * Return currently usable choices plus any persisted-but-unavailable selections.
- * The latter remain visible and removable without becoming selectable elsewhere.
- */
-export function buildAuxiliaryModelOptions(args: {
-  settings: AuxiliaryModelSettings;
-  catalog: Catalog;
-  overrides: ModelDisableOverrides | undefined;
-  providerOrder?: readonly string[];
-  hasCredential?: OneshotCredentialProbe;
-}): AuxiliaryModelOption[] {
-  const available = buildTextOneshotPinOptions(
-    args.catalog,
-    args.overrides,
-    args.providerOrder,
-    args.hasCredential,
-    'auxiliary',
-  );
-  const availableIds = new Set(available.map((option) => option.id));
-  const result = available.map((option) => toWireOption(option, true));
-
-  const allRoutable = buildTextOneshotPinOptions(args.catalog, args.overrides, args.providerOrder, undefined, 'auxiliary');
-  const allById = new Map(allRoutable.map((option) => [option.id, option]));
-  for (const pin of args.settings.models) {
-    if (availableIds.has(pin)) continue;
-    const known = allById.get(pin);
-    if (known) {
-      result.push(toWireOption(known, false));
-      continue;
-    }
-    if (isUtilityModelProviderKind(pin)) {
-      result.push(syntheticProfileOption(pin, {
-        catalog: args.catalog,
-        hasCredential: args.hasCredential,
-      }));
-      continue;
-    }
-    const decoded = decodeCatalogModelPin(pin);
-    if (!decoded) continue;
-    result.push({
-      id: pin,
-      label: `${decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
-      group: decoded.providerId,
-      providerId: decoded.providerId,
-      agentKind: decoded.agentKind,
-      modelId: decoded.model,
-      modelName: decoded.model,
-      budget: false,
-      subscription: false,
-      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code',
-      available: false,
-    });
-  }
-  return result;
-}
+export const buildAuxiliaryModelOptions = createAuxiliaryModelOptions({
+  isUtilityRouteDisabled,
+  isUtilityRoutePaymentRequired,
+});
 
 function settingsWire(): AuxiliaryModelSettingsState {
   const state = readAuxiliaryModelSettingsState();
@@ -205,8 +105,6 @@ export function registerAuxiliaryModelSettingsIpc(): void {
           getActiveCatalog(),
           readModelDisableOverrides(),
           readProviderOrder(),
-          undefined,
-          'auxiliary',
         ).map((option) => option.id),
       );
       const patch = parseAuxiliaryModelSettingsPatch(

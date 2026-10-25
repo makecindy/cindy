@@ -1114,7 +1114,8 @@ describe('packGhostDir', () => {
     // 打包管道触及的都是用户可写目录,所有读取必须走 readBoundedFileNoFollow
     // 系列;任何一处退回按路径 readFile 都会重开"检查与读取两次打开"的窗口。
     const here = path.dirname(fileURLToPath(import.meta.url));
-    for (const rel of ['../forge.ts', '../ghostLocaleFiles.ts']) {
+    // The bounded-read guard follows the shared production implementation.
+    for (const rel of ['../../../../../../packages/plugin-runtime/src/forge.ts', '../../../../../../packages/plugin-runtime/src/ghostLocaleFiles.ts']) {
       const source = await fs.promises.readFile(path.join(here, rel), 'utf8');
       expect(source, rel).not.toMatch(/fs\.promises\.readFile\(/);
       expect(source, rel).not.toMatch(/readFileSync\(/);

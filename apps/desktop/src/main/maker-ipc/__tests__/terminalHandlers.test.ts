@@ -6,11 +6,23 @@ const mocks = vi.hoisted(() => ({
   ipcHandle: vi.fn(),
   managerCreate: vi.fn(() => ({ shellId: 'bash', shellDisplayName: 'Bash', pid: 123 })),
   getDefaultShellPref: vi.fn(() => 'bash' as const),
+  context: null as null|{controllerDeviceId:string;sharedTask?:object},
+  settings:{remoteControlEnabled:true,revokedControllers:[] as string[]},
+  remoteInvoke:vi.fn(async (_request:unknown,authority:{assertCurrent():void})=>{authority.assertCurrent();return {version:1};}),
+  remoteClose:vi.fn(),
+  authChanged:()=>{},
+  owner:'first-owner',
 }));
 
 vi.mock('electron', () => ({
   ipcMain: { handle: mocks.ipcHandle },
+  app:{once:vi.fn()},
 }));
+vi.mock('@cindy/terminal-core',()=>({REMOTE_TERMINAL_CHANNEL:'terminal:remote-op',RemoteTerminalHost:class{invoke=mocks.remoteInvoke;close=mocks.remoteClose;}}));
+vi.mock('../../authManager.js',()=>({getActiveAuthRealm:()=> 'global',getCurrentUserId:()=> 'membership',getCurrentDataOwnerId:()=>mocks.owner,onAuthStateChange:(callback:()=>void)=>{mocks.authChanged=callback;return ()=>{};}}));
+vi.mock('../../device-link/invoke-context.js',()=>({getDeviceLinkInvokeContext:()=>mocks.context}));
+vi.mock('../../device-link/settings-store.js',()=>({readDeviceLinkSettings:()=>mocks.settings}));
+vi.mock('../../logger.js',()=>({createLogger:()=>({info(){},warn(){}})}));
 
 vi.mock('../../terminal/ptyManager.js', () => ({
   PtyManager: class {
@@ -29,6 +41,7 @@ vi.mock('../../terminal/terminalPrefsStore.js', () => ({
 
 import { TERMINAL_INVOKE } from '../channels';
 import { registerTerminalHandlers } from '../terminal-handlers';
+import { registerRemoteTerminal } from '../../terminal/remote.js';
 
 type InvokeHandler = (event: IpcMainInvokeEvent, params: unknown) => unknown;
 
@@ -76,5 +89,28 @@ describe('terminal CREATE shell preference', () => {
     ).toThrow(/invalid shellPref/);
     expect(mocks.getDefaultShellPref).not.toHaveBeenCalled();
     expect(mocks.managerCreate).not.toHaveBeenCalled();
+  });
+});
+
+// Existing window terminal checks do not exercise the new remote boundary.
+// Minimal failure: a guest or revoked controller reaches the PTY. Unit tier,
+// production IPC handler and permission/error mapping, with the OS host mocked.
+describe('remote terminal admission',()=>{
+  it('requires a current same-account controller and closes on owner replacement',async()=>{
+    mocks.ipcHandle.mockClear();mocks.remoteInvoke.mockClear();mocks.remoteClose.mockClear();
+    mocks.context=null;mocks.settings={remoteControlEnabled:true,revokedControllers:[]};mocks.owner='first-owner';
+    registerRemoteTerminal();
+    const handler=mocks.ipcHandle.mock.calls.find(([channel])=>channel==='terminal:remote-op')![1] as InvokeHandler;
+    const call=()=>handler({} as IpcMainInvokeEvent,{version:1,op:'capabilities'});
+    await expect(call()).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    mocks.context={controllerDeviceId:'guest',sharedTask:{}};
+    await expect(call()).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    expect(mocks.remoteInvoke).not.toHaveBeenCalled();
+    mocks.context={controllerDeviceId:'controller'};
+    await expect(call()).resolves.toEqual({version:1});
+    mocks.settings.revokedControllers=['controller'];
+    await expect(call()).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    mocks.owner='second-owner';mocks.authChanged();
+    expect(mocks.remoteClose).toHaveBeenCalledOnce();
   });
 });

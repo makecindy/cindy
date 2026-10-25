@@ -1,0 +1,31 @@
+diff --git a/src/windowsPtyAgent.ts b/src/windowsPtyAgent.ts
+--- a/src/windowsPtyAgent.ts
++++ b/src/windowsPtyAgent.ts
+@@ -114,6 +114,12 @@
+       writable: true
+     });
+     this._inSocket.setEncoding('utf8');
++    // A naturally exited ConPTY closes its output socket without calling kill.
++    // Release the drain worker and input pipe for that path as well.
++    this._outSocket.once('close', () => {
++      this._inSocket.destroy();
++      this._conoutSocketWorker.dispose();
++    });
+ 
+     if (this._useConpty) {
+       const connect = (this._ptyNative as IConptyNative).connect(this._pty, commandLine, cwd, env, this._useConptyDll, c => this._$onProcessExit(c));
+diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
+--- a/lib/windowsPtyAgent.js
++++ b/lib/windowsPtyAgent.js
+@@ -85,6 +85,11 @@
+             writable: true
+         });
+         this._inSocket.setEncoding('utf8');
++        // Natural ConPTY exit must release its drain worker and input pipe.
++        this._outSocket.once('close', function () {
++            _this._inSocket.destroy();
++            _this._conoutSocketWorker.dispose();
++        });
+         if (this._useConpty) {
+             var connect = this._ptyNative.connect(this._pty, commandLine, cwd, env, this._useConptyDll, function (c) { return _this._$onProcessExit(c); });
+             this._innerPid = connect.pid;

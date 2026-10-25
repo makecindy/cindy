@@ -254,6 +254,7 @@ vi.mock('../../utils/ipcValidate', () => ({
   },
 }));
 import { registerRemoteDesktopIpc } from '../index';
+import { createTerminalDesktopPlatform } from '../terminalPlatform';
 import { PrivacyScreen } from '../privacyScreen';
 const event = (owner = h.owner) => ({ sender: owner, senderFrame: owner.mainFrame });
 const flush = async () => {
@@ -1324,4 +1325,32 @@ it('streams only the 代输入 window: native window capture, no screen source, 
   expect(h.nativeFrame).toHaveBeenLastCalledWith('1', true, undefined);
   h.deps.stopVideo();
   expect(h.setWindow).toHaveBeenLastCalledWith(null);
+});
+
+// The optional terminal host uses the original platform. Reset while its
+// account token is refreshing must prevent that old request allocating a lease.
+it('mounts original desktop control in the terminal host and fences late account refresh', async () => {
+  let authenticated = true;
+  let release!: (value: {realm:'global';membership:string;authDevice:string;token:string}) => void;
+  const pending = new Promise<{realm:'global';membership:string;authDevice:string;token:string}>(resolve => {release=resolve;});
+  const credentials={realm:'global' as const,membership:'fixture',authDevice:'host',token:'fixture-token'};
+  const readCredentials=vi.fn().mockResolvedValueOnce(credentials).mockReturnValueOnce(pending);
+  const guide=vi.fn();
+  const platform=createTerminalDesktopPlatform({
+    settings:{deviceLink:{readDeviceLinkSettings:()=>({remoteControlEnabled:true,remoteDesktopEnabled:true,revokedControllers:[]}),writeDeviceLinkSetting:vi.fn()}} as any,
+    handoff:()=>undefined,authenticated:()=>authenticated,credentials:readCredentials,
+    iceServers:async()=>[],controllerName:()=>undefined,revoke:async()=>{},permissionGuideRequested:guide,
+  });
+  try {
+    h.controllerRequest.mockReset().mockResolvedValue({version:1});
+    await expect(platform.request('peer',{op:'capabilities'})).resolves.toEqual({version:1});
+    expect(h.controllerRequest).toHaveBeenCalledWith('peer',{op:'capabilities'});
+    h.permissionDeps.showGuide();expect(guide).toHaveBeenCalledOnce();
+    const late=platform.request('peer',{op:'start',displayId:'1'});
+    const rejected=expect(late).rejects.toThrow('DESKTOP_UNAVAILABLE');
+    await platform.reset();release(credentials);await rejected;
+    expect(h.controllerRequest).toHaveBeenCalledTimes(1);
+    authenticated=false;
+    await expect(platform.request('peer',{op:'capabilities'})).rejects.toThrow('DESKTOP_UNAVAILABLE');
+  } finally {await platform.close();}
 });

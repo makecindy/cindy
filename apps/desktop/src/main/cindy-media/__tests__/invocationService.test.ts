@@ -82,8 +82,8 @@ vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => mocks.db,
   getCurrentDbClientUserId: () => mocks.dbOwnerId,
 }));
-vi.mock('../mediaRequestLog.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../mediaRequestLog.js')>();
+vi.mock('@cindy/app-runtime/media/mediaRequestLog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/app-runtime/media/mediaRequestLog')>();
   return {
     ...actual,
     mediaRequestParamsForLog: (value: unknown) => {

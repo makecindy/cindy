@@ -17,7 +17,10 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
+vi.mock('electron', async () => {
+  const platform = await import('../../../test/vitest/electron-stub');
+  return { ...platform, app: { ...platform.app, getPath: () => '/tmp/cindy-scheduler-test' } };
+});
 vi.mock('electron-store', () => ({ default: class {
   get(): unknown { return undefined; }
   set(): void {}
@@ -85,7 +88,7 @@ vi.mock('../workdir-resolver', () => ({
   resolveWorkingDir: mocks.resolveWorkingDir,
 }));
 
-vi.mock('../runners/_shared', () => ({
+vi.mock('@cindy/app-runtime/scheduleRunnerShared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 

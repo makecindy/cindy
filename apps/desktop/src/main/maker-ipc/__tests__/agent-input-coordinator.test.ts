@@ -14706,6 +14706,7 @@ describe('usage-limit wait (ordinary tasks)', () => {
       closeSession: async () => {}, preflightBotRuntimeResources: async () => {},
       getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
       checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
+      statDirectory: async () => ({ isDirectory: () => true }),
       buildCreateOptsWithStderr: x => x, synthesizeOrcaVendorOptionsFromDb: async () => rehydrate,
       statDirectory: async () => ({ isDirectory: () => true }),
       readSessionExtraDirsFromDb: async () => [], readSessionWorkingDirFromDb: async () => '/repo',

@@ -1,0 +1,32 @@
+{
+  "name": "@cindy/im-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Cindy IM ingress, turn contracts, and account-scoped orchestration; no Electron runtime.",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cindy/im": "workspace:*",
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/companion-core": "workspace:*",
+    "@cindy/remote-agent": "workspace:*",
+    "@cindy/model-providers": "workspace:*",
+    "@cindy/maker-scheduler": "workspace:*",
+    "@cindy/slack-hook-protocol": "workspace:*",
+    "@cindy/plugin-runtime": "workspace:*",
+    "@cindy/browser-control-runtime": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "^5.7.0"
+  }
+}

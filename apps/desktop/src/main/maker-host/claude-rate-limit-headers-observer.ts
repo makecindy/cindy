@@ -154,31 +154,4 @@ export function createClaudeRateLimitHeadersObserver(): ResponseObserver {
  * 把多个 responseObserver 组合成一个:按序调用,每个 observer 的 sink 各自收 tee 事件。
  * proxy 的 ProxyOptions.responseObserver 只有一个挂点,fast-mode 核验与本模块共存靠它。
  */
-export function composeResponseObservers(
-  ...observers: ResponseObserver[]
-): ResponseObserver {
-  return (ctx) => {
-    const sinks = observers
-      .map((observer) => {
-        try {
-          return observer(ctx) ?? null;
-        } catch {
-          return null;
-        }
-      })
-      .filter((sink): sink is NonNullable<typeof sink> => Boolean(sink));
-    if (sinks.length === 0) return undefined;
-    if (sinks.length === 1) return sinks[0];
-    return {
-      onData: (chunk) => {
-        for (const sink of sinks) sink.onData?.(chunk);
-      },
-      onEnd: () => {
-        for (const sink of sinks) sink.onEnd?.();
-      },
-      onError: (err) => {
-        for (const sink of sinks) sink.onError?.(err);
-      },
-    };
-  };
-}
+export {composeResponseObservers} from '@cindy/app-runtime/composeResponseObservers';

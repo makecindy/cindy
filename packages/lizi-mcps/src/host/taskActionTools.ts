@@ -1,0 +1,41 @@
+/** These names describe effects, not tool visibility or an Agent permission mode. */
+export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
+  'send_to_agent',
+  'continue_workbench_task',
+  'set_workbench_task_responsibility',
+  'set_teammate_project',
+  'send_to_session',
+  'steer_session',
+  'stop_session_turn',
+  'set_session_runtime',
+  'update_session_queued_message',
+  'cancel_session_queued_message',
+  'steer_session_queued_message',
+  'move_session_queued_message',
+  'start_session_task',
+  'message_session_task',
+  'stop_session_task',
+  'advance_session_task_route',
+  'archive_sessions',
+  'unarchive_sessions',
+  'rename_sessions',
+  'move_session',
+]);
+
+export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
+  'start_team',
+  'create_worker',
+  'create_workers',
+  'switch_focus',
+  'send_to_worker',
+  'interrupt_worker',
+  'update_queued_message',
+  'cancel_queued_message',
+  'merge_queued_messages',
+  'steer_queued_message',
+  'move_queued_message',
+  'idle_worker',
+  'end_team',
+  'archive_worker',
+]);
+

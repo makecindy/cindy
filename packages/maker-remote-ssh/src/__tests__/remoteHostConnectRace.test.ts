@@ -48,6 +48,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('ssh2', () => ({
+  // Production imports the CommonJS ssh2 module through its default namespace.
+  default: { Client: h.createClient },
   Client: h.createClient.mockImplementation(() => {
     h.client = new FakeClient();
     return h.client;

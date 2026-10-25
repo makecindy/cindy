@@ -1,5 +1,6 @@
 export {
   createOrcaWorkerBridgeMcpProvider,
+  createOrcaRemoteWorkerMcpProvider,
   formatAgentMessage,
   formatOrcaCommunicationMessage,
   type OrcaBridgeMcpDeps,

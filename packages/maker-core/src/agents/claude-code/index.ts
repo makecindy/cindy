@@ -974,6 +974,9 @@ const CAPABILITIES: Capabilities = {
 // ── Agent 实现 ────────────────────────────────────────────────────────────────
 
 export class ClaudeCodeAgent extends BaseAgent {
+  /** Capability discovery is available before the host installs a binary. */
+  static getDeclaredCapabilities(): Capabilities { return structuredClone(CAPABILITIES); }
+
   readonly kind = 'claude-code' as const;
   readonly capabilities: Capabilities;
 

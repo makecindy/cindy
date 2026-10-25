@@ -9,6 +9,38 @@ const WIN_LOCAL = 'C:\\Users\\dash\\AppData\\Local';
 const WIN_OFFICIAL = path.join(WIN_LOCAL, 'Programs', 'Ollama', 'ollama.exe');
 
 describe('ollamaRuntime', () => {
+  // Native Mac ARM acceptance: Ollama binds its socket before its first GPU
+  // discovery completes. Its own bootstrap budget exceeds our old 15s limit.
+  it('keeps a headless first start pending through native GPU discovery', async () => {
+    let now = 0;
+    const spawnSidecar = vi.fn();
+    const status = await startOfficialOllamaApp({ platform: 'darwin', arch: 'arm64', headless: true,
+      installedBinary: () => '/fixture/ollama', spawnSidecar,
+      now: () => now, sleep: async ms => { now += ms; },
+      fetchImpl: async () => {
+        if (now < 35_000) throw new OllamaHttpError('timeout', 'GPU discovery pending');
+        return new Response(JSON.stringify({ version: '0.40.10' }));
+      },
+    });
+    expect(status.kind).toBe('ready');
+    expect(spawnSidecar).toHaveBeenCalledTimes(1);
+  });
+  // Behavior: terminal hosts must never launch a desktop app, including macOS
+  // where an official application is installed. All supported OSes use serve.
+  it.each(['darwin', 'linux', 'win32'] as const)('starts only the server binary on a headless %s host', async platform => {
+    const openApp = vi.fn(); let ready = false;
+    const spawnSidecar = vi.fn(() => { ready = true; });
+    const status = await startOfficialOllamaApp({ platform, arch: 'arm64', headless: true,
+      installedBinary: () => '/fixture/ollama', appExists: () => true, openApp, spawnSidecar,
+      sleep: async () => {}, fetchImpl: async () => {
+        if (!ready) throw new OllamaHttpError('refused', 'down');
+        return new Response(JSON.stringify({version: '0.40.10'}));
+      },
+    });
+    expect(status.kind).toBe('ready'); expect(spawnSidecar).toHaveBeenCalledWith('/fixture/ollama');
+    expect(openApp).not.toHaveBeenCalled();
+  });
+
   it('maps connection refused + missing app to absent', async () => {
     const status = await probeOllamaStatus({
       platform: 'darwin',

@@ -10,6 +10,7 @@ export interface BotCapabilityCallbacks {
   }, string>>;
   setDefaultModel?(params: { callerSessionId: string; id: string; effort?: string }): Promise<ControlResult<{
     current: AppDefaultModelRoute;
+    effective?: 'new-tasks' | 'new-tasks-and-following-bots';
   }, string>>;
   /** Host resolves the caller; tools never accept another Bot's id or raw config. */
   inspect?(params: { callerSessionId: string }): Promise<ControlResult<{ state: BotControlState }, string>>;
@@ -134,13 +135,13 @@ export function registerBotCapabilityTools(
   });
   if (deps.callbacks.setDefaultModel) registry.register({
     name: 'set_app_default_model', category: 'bots',
-    description: '用户明确要求更换应用默认模型时，使用 get_app_default_model 返回的可用型号 id 保存并读回确认。作用于以后新建任务及跟随应用默认的伙伴；不覆盖已有任务、伙伴单独配置的模型或全局伙伴模型链。仅换当前伙伴时不要改这个全局默认值。失败后重新查询，不得声称已修改。',
+    description: '用户明确要求更换应用默认模型时，使用 get_app_default_model 返回的可用型号 id 保存并读回确认。作用于以后新建任务；伙伴是否跟随取决于宿主设置，以返回的 effective 为准。不覆盖已有任务、伙伴单独配置的模型或全局伙伴模型链。仅换当前伙伴时不要改这个全局默认值。失败后重新查询，不得声称已修改。',
     inputShape: { id: z.string().min(1).max(2048), effort: z.string().max(64).optional() },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
       const result = await deps.callbacks.setDefaultModel!({ ...input, callerSessionId });
-      return result.ok ? okPayload({ current: result.current, effective: 'new-tasks-and-following-bots', overridesPreserved: true }) : errorPayload(result.errorCode, result.message);
+      return result.ok ? okPayload({ current: result.current, effective: result.effective ?? 'new-tasks-and-following-bots', overridesPreserved: true }) : errorPayload(result.errorCode, result.message);
     },
   });
   if (deps.callbacks.inspect) registry.register({

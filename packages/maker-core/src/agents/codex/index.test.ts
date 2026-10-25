@@ -2086,6 +2086,23 @@ describe('CodexAgent permissions', () => {
   });
 
   it.each([
+    { transport: 'absent', entry: undefined },
+    { transport: 'stdio', entry: { command: 'memory-server' } },
+    { transport: 'http', entry: { url: 'http://127.0.0.1:45831/memory' } },
+  ])('only disables a configured memory MCP for ordinary local tasks ($transport)', async ({ entry }) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.ConfigRead
+      ? { config: { mcp_servers: entry ? { cindy_memory: entry } : {} } } : undefined);
+    try {
+      const handle = await agent.startSession({ sessionId: 'local-no-memory', workingDir: '/repo', model: 'gpt-5.4' });
+      const start = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)![1] as { config: Record<string, unknown> };
+      if (entry) expect(start.config['mcp_servers.cindy_memory.enabled']).toBe(false);
+      else expect(start.config).not.toHaveProperty(['mcp_servers.cindy_memory.enabled']);
+      await handle.close();
+    } finally { await agent.dispose(); }
+  });
+
+  it.each([
     { transport: 'absent', memoryConfig: undefined },
     { transport: 'stdio', memoryConfig: { command: 'memory-server', enabled: true } },
     { transport: 'http', memoryConfig: { url: 'http://127.0.0.1:45831/mcp', enabled: true } },

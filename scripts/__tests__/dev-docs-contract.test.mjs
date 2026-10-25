@@ -219,7 +219,7 @@ test("login QA preview countdowns match Desktop and Mobile product constants", (
 });
 
 test("current locale-aware QA artifacts cover every supported locale", () => {
-	const supportedLocales = readSupportedLocales("apps/desktop/src/shared/locale.ts");
+	const supportedLocales = readSupportedLocales("packages/plugin-runtime/src/shared/locale.ts");
 	assert.deepEqual(
 		readSupportedLocales("apps/mobile/src/i18n/locale.ts"),
 		supportedLocales,

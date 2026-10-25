@@ -1,3 +1,4 @@
+import { readMakerRegisterSource, readSharedRuntimeSource } from './makerRuntimeSource';
 /**
  * makerSendToSessionOrdering.test.ts
  * ---------------------------------------------------------------------------
@@ -16,24 +17,24 @@ import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(__dirname, '..', '..', '..', '..', '..');
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
-const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const acceptedCallbackSourcePath = resolve(__dirname, '..', 'maker-ipc', 'acceptedCallbackRunner.ts');
+const source = readMakerRegisterSource();
+const acceptedCallbackSourcePath = resolve(repoRoot, 'packages/im-runtime/src/acceptedCallbackRunner.ts');
 const acceptedCallbackSource = readFileSync(acceptedCallbackSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const orcaInterAgentDispatcherSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaInterAgentDispatcher.ts');
+const orcaInterAgentDispatcherSourcePath = resolve(repoRoot, 'packages/orca-workflow/src/host/orcaInterAgentDispatcher.ts');
 const orcaInterAgentDispatcherSource = readFileSync(orcaInterAgentDispatcherSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const schedulerRunnerSourcePath = resolve(__dirname, '..', 'scheduler-host', 'runner.ts');
+const schedulerRunnerSourcePath = resolve(repoRoot, 'packages/app-runtime/src/schedulePromptRunner.ts');
 const schedulerRunnerSource = readFileSync(schedulerRunnerSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const goalControllerSourcePath = resolve(__dirname, '..', 'goal-host', 'controller.ts');
+const goalControllerSourcePath = resolve(repoRoot, 'packages/app-runtime/src/goal/controller.ts');
 const goalControllerSource = readFileSync(goalControllerSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const imTurnRunnerSourcePath = resolve(__dirname, '..', 'im', 'shared', 'turnRunner.ts');
+const imTurnRunnerSourcePath = resolve(repoRoot, 'packages/im-runtime/src/turnRunner.ts');
 const imTurnRunnerSource = readFileSync(imTurnRunnerSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const orcaWorkflowSourcePath = resolve(repoRoot, 'packages', 'orca-workflow', 'src', 'orca-bridge-mcp.ts');
 const orcaWorkflowSource = readFileSync(orcaWorkflowSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const orcaTeamServiceSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaTeamService.ts');
+const orcaTeamServiceSourcePath = resolve(repoRoot, 'packages/orca-workflow/src/host/orcaTeamService.ts');
 const orcaTeamServiceSource = readFileSync(orcaTeamServiceSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const orcaWorkerCreationServiceSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaWorkerCreationService.ts');
+const orcaWorkerCreationServiceSourcePath = resolve(repoRoot, 'packages/orca-workflow/src/host/orcaWorkerCreationService.ts');
 const orcaWorkerCreationServiceSource = readFileSync(orcaWorkerCreationServiceSourcePath, 'utf8').replace(/\r\n?/g, '\n');
-const orcaLifecycleServiceSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaLifecycleService.ts');
+const orcaLifecycleServiceSourcePath = resolve(repoRoot, 'packages/orca-workflow/src/host/orcaLifecycleService.ts');
 const orcaLifecycleServiceSource = readFileSync(orcaLifecycleServiceSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useWorkersSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useWorkers.ts');
 const useWorkersSource = readFileSync(useWorkersSourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -227,7 +228,7 @@ describe('sendToSession ordering', () => {
     expect(schedulerRunnerSource).toContain(
       'planMode: routinePermissions?.planMode ?? heartbeatPermissions?.planMode ?? false,',
     );
-    expect(goalControllerSource).toContain("origin: { kind: 'goal', goalSessionId: sessionId },");
+    expect(goalControllerSource).toMatch(/origin:\s*\{\s*kind: ['"]goal['"], goalSessionId: sessionId \},/);
     expect(goalControllerSource).toContain('planMode: false,');
     expect(imTurnRunnerSource).toContain('planMode: false,');
     expect(orcaWorkflowSource).toContain('planMode: false,');
@@ -253,7 +254,7 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
     expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
-    expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, {');
+    expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, defaultLog, {');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
     expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
     expectOrder(
@@ -351,8 +352,7 @@ describe('sendToSession ordering', () => {
   it('does not let persisted sends ignore typed dispatch outcomes', () => {
     // #6895: the final demotion fence now wraps the same dispatch notification.
     // Keep the existing accepted/dispatch contract, including the callback body.
-    const dispatchCallback = extractBetween(source, 'const onInternalDispatching = () => {', '\n    if (targetSessionId) {');
-    expect(dispatchCallback).toContain('dispatchAgentIslandUserPrompt(targetSessionId!);');
+    expect(source).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     const helperBlock = extractBetween(
       orcaInterAgentDispatcherSource,
       'async function sendPersistedUserMessageToSession',
@@ -398,13 +398,13 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('live,');
     expectOrder(liveBranch, 'message,', 'clientId,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: onInternalDispatching,');
+    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(liveBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session live');");
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expectOrder(resumedBranch, 'message,', 'clientId,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: onInternalDispatching,');
+    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
   });
 
@@ -589,7 +589,7 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain('restoreControlStores,');
     expect(setModelBlock).toContain('withRehydrateCloseSuppressed(sessionId');
     expect(setModelBlock).toMatch(
-      /internalOptions\.source === 'user'\s*&&\s*\(isDeviceLinkInvoke\(\) \|\| atomicSelection\)/,
+      /internalOptions\.source === 'user'\s*&&\s*\(isDeviceLinkInvoke\(\) \|\| host\.persistsLocalModelSelection === true \|\| atomicSelection\)/,
     );
     expect(setModelBlock).toContain('patch.effort = atomicSelection.effort;');
     expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
@@ -711,7 +711,7 @@ describe('sendToSession ordering', () => {
 
   it('keeps Agent Island prompt preview failures out of send delivery', () => {
     const promptPreviewBlock = extractBetween(
-      source,
+      readSharedRuntimeSource('session-activity/bridge'),
       'function notifyAgentIslandUserPrompt',
       'function dispatchAgentIslandUserPrompt',
     );
@@ -741,7 +741,7 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: onInternalDispatching,');
+    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(liveBranch).not.toContain('await persistUserMessage();');
     expect(liveBranch).toContain('if (isSessionRunningError(err))');
     expect(liveBranch).toContain('await enqueueSendToSessionMessage({');
@@ -759,7 +759,7 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: onInternalDispatching,');
+    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(resumedBranch).not.toContain('await persistUserMessage();');
     expect(resumedBranch).toContain('if (isSessionRunningError(err))');
     expect(resumedBranch).toContain('await enqueueSendToSessionMessage({');
@@ -876,7 +876,7 @@ expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(targ
     expect(ipcCreateBlock).toContain('const label = normalizeOrcaWorkerLabel(b.label);');
     expect(ipcCreateBlock).toContain("if (!label.ok) throwIpcError('INVALID_PARAMS', label.message);");
     expect(ipcCreateBlock).toContain('label: label.value,');
-    expect(orcaWorkerCreationServiceSource).toContain('budgetModelRequiresApiKey(params.agent, resolved.model, deps.readClaudeApiKey() != null)');
+    expect(orcaWorkerCreationServiceSource).toContain('budgetModelRequiresApiKey(params.agent, resolved.model, await deps.readClaudeApiKey() != null)');
     expect(orcaWorkerCreationServiceSource).toContain(
       'agentConsumesExplicitFast(input.agent) && input.fast !== undefined',
     );
@@ -1016,11 +1016,11 @@ expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(targ
     expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await sess.abort();');
     expect(source).toContain('archiveWorker: (params) => orcaTeamService.archiveWorker(params),');
     expect(serviceArchiveBlock).toContain('clearRuntimeState(worker.sessionId);');
-    expect(serviceArchiveBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive);");
+    expect(serviceArchiveBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive, params.onlyIfIdle);");
     expect(serviceArchiveBlock).toContain('await deps.archiveWorkerSession(worker.sessionId, params.beforeArchive);');
     expect(serviceArchiveBlock).toContain("await deps.updateWorkerStatus(worker.id, 'done');");
-    expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive);");
-    expectOrder(serviceArchiveBlock, "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive);", 'await deps.archiveWorkerSession(worker.sessionId, params.beforeArchive);');
+    expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive, params.onlyIfIdle);");
+    expectOrder(serviceArchiveBlock, "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive, params.onlyIfIdle);", 'await deps.archiveWorkerSession(worker.sessionId, params.beforeArchive);');
     expectOrder(serviceArchiveBlock, 'await deps.archiveWorkerSession(worker.sessionId, params.beforeArchive);', "await deps.updateWorkerStatus(worker.id, 'done');");
   });
 
@@ -1211,7 +1211,7 @@ function extractDispatchOrEnqueueOrcaInterAgentMessageSource(): string {
 
 function extractWorkerTerminalHandlerSource(): string {
   return readFileSync(
-    resolve(__dirname, '..', 'maker-ipc', 'sessionEventTerminal.ts'),
+    resolve(repoRoot, 'packages/app-runtime/src/sessionEventTerminal.ts'),
     'utf8',
   ).replaceAll('deps.', '');
 }

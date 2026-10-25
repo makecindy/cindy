@@ -1,3 +1,4 @@
+import { listBotTeammates as readBotTeammates } from '@cindy/app-runtime/botRuntimeCatalog';
 import { getDbClient } from './client/current.js';
 import { createLogger } from '../logger.js';
 
@@ -127,21 +128,5 @@ export async function listBotRecallSessionIds(callerSessionId: string, limit: nu
 export async function listBotTeammates(input: {
   excludeBotId: string;
 }): Promise<{ id: string; name: string; description?: string | null }[]> {
-  const rows = await getDbClient().query<{
-    id: string;
-    name: string;
-    description: string | null;
-  }>(
-    `SELECT id, display_name AS name, description
-       FROM bot_profiles
-      WHERE id <> ?
-        AND status = 'active'
-      ORDER BY display_name ASC`,
-    [input.excludeBotId],
-  );
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    description: row.description,
-  }));
+  return readBotTeammates(getDbClient(), input);
 }

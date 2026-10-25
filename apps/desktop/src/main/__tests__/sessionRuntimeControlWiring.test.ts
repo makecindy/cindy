@@ -1,3 +1,4 @@
+import { readMakerRegisterSource, readSharedRuntimeSource } from './makerRuntimeSource';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
@@ -12,28 +13,25 @@ const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'),
   /\r\n?/g,
   '\n',
 );
-const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 'utf8').replace(
-  /\r\n?/g,
-  '\n',
-);
-const coldPiRehydrationSource = readFileSync(
-  resolve(mainRoot, 'maker-ipc/coldPiRehydration.ts'),
-  'utf8',
-);
-const coldPiRehydrationFailureSource = readFileSync(
-  resolve(mainRoot, 'maker-ipc/coldPiRehydrationFailure.ts'),
-  'utf8',
-);
-const runtimeControlSource = readFileSync(
-  resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
+const registerSource = [
+  readMakerRegisterSource(),
+  readSharedRuntimeSource('interruptedTurnRecovery'),
+  readSharedRuntimeSource('sessionRecoveryLeases'),
+  readSharedRuntimeSource('sessionRuntimeManagement'),
+  readSharedRuntimeSource('sessionRuntimeAxisHandlers'),
+  readSharedRuntimeSource('sessionModelSelection'),
+].join('\n');
+const coldPiRehydrationSource = readSharedRuntimeSource('coldPiRehydration');
+const coldPiRehydrationFailureSource = readSharedRuntimeSource('coldPiRehydrationFailure');
+const runtimeControlSource = readSharedRuntimeSource('sessionRuntimeControl');
+const runtimeManagementSource = readSharedRuntimeSource('sessionRuntimeManagement');
+const sessionModelSelectionSource = readSharedRuntimeSource('sessionModelSelection');
 const deviceLinkHostSource = readFileSync(
   resolve(mainRoot, 'device-link/index.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 const makerSendSource = readFileSync(
-  resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
+  resolve(__dirname, '../../../../../packages/app-runtime/src/makerSendTransaction.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
@@ -54,7 +52,7 @@ const registerAst = ts.createSourceFile('register.ts', registerSource, ts.Script
 // Compile only the production predicate; importing its runtime module here
 // would load the entire harness dependency chain into this fast guard suite.
 const switchAst = ts.createSourceFile('sessionAgentSwitchHandler.ts', readFileSync(
-  resolve(mainRoot, 'maker-ipc/sessionAgentSwitchHandler.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+  resolve(mainRoot, '../../../../packages/im-runtime/src/sessionAgentSwitch.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
 const userIntentPredicate = switchAst.statements.find((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'isUserPendingAgentSwitchIntent')!;
 const isUserPendingAgentSwitchIntent = new Function(ts.transpileModule(
@@ -239,7 +237,7 @@ describe('active Claude subscription Fast setting', () => {
       sessionId: 'active-claude-task', enabled: true, sessions: {}, eq: vi.fn(),
       getDbClient: () => ({ drizzle: { select: () => query } }),
       agentSwitchPending: new Map(), readSessionRuntimeProfiles: async () => ({ effective: profile }),
-      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed }), supportsSubscriptionFastPolicy,
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed, onFastModeChanged }), supportsSubscriptionFastPolicy,
       getSessionProvider: () => provider.id,
       getActiveCatalog: () => ({ providers: [provider as ProviderView] }),
       assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
@@ -307,26 +305,26 @@ describe('session runtime control wiring', () => {
     );
     expect(legacySend).toContain('assertTrustedAppRendererEvent(');
     expect(legacySend).toContain('attachTrustedDesktopSendContext(message, sendOpts)');
-    expect(registerSource).toContain('containsManagedAttachment(persisted?.content)');
-    expect(registerSource).toContain('persisted?.autoResume === true');
-    expect(registerSource).toContain('persisted?.origin !== undefined');
+    expect(makerSendSource).toContain('containsManagedAttachment(persisted?.content)');
+    expect(makerSendSource).toContain('persisted?.autoResume === true');
+    expect(makerSendSource).toContain('persisted?.origin !== undefined');
 
     const steerDispatch = handlerBody(
-      registerSource,
+      readSharedRuntimeSource('makerSteerTransaction'),
       'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
+      'return { steerToAgentAccepted };',
     );
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
-    expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
+    expect(readSharedRuntimeSource('makerInputSubmission')).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
       'attachTrustedDesktopSendContext(message, sendOpts, expectedText)',
     );
 
     for (const [channel, nextChannel] of [
-      ['MAKER_INVOKE.INPUT_ENQUEUE,', 'MAKER_INVOKE.INPUT_COMPACT,'],
-      ['MAKER_INVOKE.INPUT_STEER,', 'MAKER_INVOKE.INPUT_STOP,'],
+      ['"maker:input:enqueue"', '"maker:input:steer"'],
+      ['"maker:input:steer"', '"maker:input:update-content"'],
     ] as const) {
-      const body = handlerBody(registerSource, channel, nextChannel);
+      const body = handlerBody(readSharedRuntimeSource('makerInputSubmission'), channel, nextChannel);
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
@@ -340,9 +338,9 @@ describe('session runtime control wiring', () => {
       'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
     );
     const updateText = handlerBody(
-      registerSource,
-      'MAKER_INVOKE.INPUT_UPDATE_TEXT,',
-      'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
+      readSharedRuntimeSource('makerInputControls'),
+      '"maker:input:update-text"',
+      '"maker:input:move"',
     );
     expect(registerSource).toContain(
       'stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true)',
@@ -350,16 +348,16 @@ describe('session runtime control wiring', () => {
     expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
     expect(updateText).toContain('stampQueuedEditProvenance(sid, updated, remote, editor)');
     const updateContent = handlerBody(
-      registerSource,
-      'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
-      'MAKER_INVOKE.INPUT_MOVE,',
+      readSharedRuntimeSource('makerInputSubmission'),
+      '"maker:input:update-content"',
+      '\n}',
     );
     expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
     expect(updateContent).toContain('stampQueuedEditProvenance(sid, updated, remote, editor)');
     const enqueue = handlerBody(
-      registerSource,
-      'MAKER_INVOKE.INPUT_ENQUEUE,',
-      'MAKER_INVOKE.INPUT_COMPACT,',
+      readSharedRuntimeSource('makerInputSubmission'),
+      '"maker:input:enqueue"',
+      '"maker:input:steer"',
     );
     expect(enqueue).toContain('stampTrustedDesktopQueuedOrigin(');
   });
@@ -677,11 +675,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {
-    const persistRoute = handlerBody(
-      registerSource,
-      'persistRoute: async (sessionId, route) => {',
-      'logger: log,',
-    );
+    expect(registerSource).toContain('persistRoute: createPendingCredentialSwitchPersistence({');
+    const persistRoute = readSharedRuntimeSource('pendingCredentialSwitchHost');
     const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
     const persist = persistRoute.indexOf(
       'await pendingDb.drizzle.update(sessions).set(patch)',
@@ -852,15 +847,12 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const commitRebuild = handlerBody(
-      registerSource,
-      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
-      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
-    );
+    expect(registerSource).toContain('commitRebuild: createContextRebuildCommit({');
+    const commitRebuild = readSharedRuntimeSource('contextRebuildCommit');
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
     const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');
-    const broadcast = commitRebuild.indexOf('broadcastSessionPatched(\n        sessionId,');
+    const broadcast = commitRebuild.indexOf('broadcastSessionPatched(\n      sessionId,');
 
     expect(query).toBeGreaterThan(-1);
     expect(commit).toBeGreaterThan(query);
@@ -871,9 +863,9 @@ describe('session runtime control wiring', () => {
     expect(commitRebuild).toContain('{ contextWindow: projectionContextWindow }');
     expect(commitRebuild).toContain('const ownerScope = captureDataOwnerBroadcastScope();');
     expect(commitRebuild).toContain('getCurrentDbClientSnapshot()?.clientEpoch');
-    expect(commitRebuild).toContain('ownerScope,\n      );');
-    expect(commitRebuild).toContain("log.warn('context rebuild card creation failed after commit'");
-    expect(commitRebuild).toContain('try {\n        await createDbMessage(\n          sessionId,');
+    expect(commitRebuild).toMatch(/ownerScope,\s*\);/);
+    expect(commitRebuild).toMatch(/log\.warn\(\s*['"]context rebuild card creation failed after commit['"]/);
+    expect(commitRebuild).toMatch(/try \{\s*await createDbMessage\(\s*sessionId,/);
 
     const setModel = handlerBody(
       registerSource,
@@ -1061,7 +1053,8 @@ describe('session runtime control wiring', () => {
     // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
     expect(early).toContain('{ thinking: atomicSelection.thinking }');
     // 发送回放 / deferred 结算另两条重建链也不能丢。
-    expect(registerSource).toContain('{ thinking: intent.thinking }');
+    expect(registerSource).toContain('selectSameAgentModel: createSameAgentModelSelection(');
+    expect(readSharedRuntimeSource('sessionModelSelectionAdapters')).toContain('{ thinking: intent.thinking }');
     expect(registerSource).toContain('{ thinking: pending.thinking }');
     expect(
       registerSource.split('{ thinking: atomicSelection.thinking }').length,
@@ -1104,11 +1097,11 @@ describe('session runtime control wiring', () => {
     expect(body).toMatch(/if \(result\.persistedRoute === true && isDeviceLinkInvoke\(\)\) \{\s*markRemoteSettingPersistedInsideHandler\(response\);/);
     expect(body).toContain('getCurrentDbClientSnapshot()?.clientEpoch !== transferDb.clientEpoch');
     expect(body).not.toContain('prepareNativeSessionRecovery(');
-    expect(body).toContain('codexAuthInjection: getCodexProxyAuthInjectionState()');
+    expect(body).toContain('codexAuthInjection: getCodexProxyAuthInjectionState(sessionId)');
     expect(body).toContain('confirmedTargetPressure:');
     expect(body).toContain('internalOptions.applyingUserSelectionOnSend === true');
     expect(body).toContain('if (atomicSelection.effort !== null)');
-    expect(registerSource).toContain(
+    expect(readSharedRuntimeSource('sessionModelSelectionAdapters')).toContain(
       'sessionLockHeld: true, applyingUserSelectionOnSend: applyNow',
     );
   });
@@ -1196,11 +1189,10 @@ describe('session runtime control wiring', () => {
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
-    const setRuntime = handlerBody(
-      registerSource,
+    const setRuntimeStart = runtimeManagementSource.indexOf(
       'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {',
-      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
     );
+    const setRuntime = runtimeManagementSource.slice(setRuntimeStart);
     const setRuntimeGuard = setRuntime.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
     );
@@ -1408,10 +1400,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('keeps the model switch alive when cold Pi rehydration fails (dead stored route)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
+    const setModel = sessionModelSelectionSource.slice(
+      sessionModelSelectionSource.indexOf('const handleSetModel = async ('),
     );
     // 存量 BYOM 路由已死（provider 被删/不再提供该模型）时冷启动 bootstrap 必然
     // fail-closed 失败；恢复失败若拒绝切模，发送与切模互相锁死（会话永久卡死）。
@@ -1433,10 +1423,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
+    const setModel = sessionModelSelectionSource.slice(
+      sessionModelSelectionSource.indexOf('const handleSetModel = async ('),
     );
     // 冷启动核实(2~3s)必须经预检：目标窗口对**已知占用**有余量时不再拉起运行时，
     // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。

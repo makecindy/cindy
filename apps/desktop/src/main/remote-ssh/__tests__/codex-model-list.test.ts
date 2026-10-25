@@ -3,6 +3,7 @@ import type { CodexModelListItem } from '@cindy/maker-core';
 vi.mock('electron', () => ({ app: {} }));
 import { remoteCodexProvider } from '../../maker-host/ssh-codex-models.js';
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../codex-model-list.js';
+import { listSshCodexProviders, type SshCodexModelReader } from '@cindy/app-runtime/sshCodexModelReader';
 
 describe('SSH Codex model projection and admission', () => {
   it('allows the persisted remote route to resume without requiring current catalog membership', () => {
@@ -42,5 +43,28 @@ describe('SSH Codex model projection and admission', () => {
   it('treats an empty remote snapshot as a retryable failure rather than a local connection prompt', async () => {
     await expect(readSshCodexModelList({ id: 'builder' }, async () => [remoteCodexProvider([])]))
       .rejects.toThrow('[SSH_EXEC_FAILED]');
+  });
+  // Both host entry points now use this reader. A completed RPC must not publish
+  // a prior owner/connection's catalog, even if that connection is ready again.
+  it.each(['unchanged', 'owner', 'reconnect', 'runtime'] as const)('fences the remote catalog after %s', async change => {
+    let generation = 1;
+    let status: (snapshot: { status: string }) => void = () => {};
+    const stop = vi.fn();
+    const remote = { getStatus: () => 'ready', onStatus: (cb: typeof status) => { status = cb; return stop; } };
+    let resolve!: (models: CodexModelListItem[]) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(done => { entered = done; });
+    let agent = { listRemoteModels: vi.fn(() => { entered(); return new Promise<CodexModelListItem[]>(done => { resolve = done; }); }) };
+    const deps = { getActiveAppSession: () => ({ generation }), getRemoteSshPool: () => ({ get: () => remote }),
+      ensureRemoteAgentInstalledOrInstall: vi.fn(async () => {}), getAgent: () => agent } as unknown as SshCodexModelReader;
+    const pending = listSshCodexProviders('builder', deps);
+    await started;
+    if (change === 'owner') generation++;
+    if (change === 'reconnect') { status({ status: 'disconnected' }); status({ status: 'ready' }); }
+    if (change === 'runtime') agent = { ...agent };
+    resolve([native('remote-model')]);
+    if (change === 'unchanged') expect((await pending)[0].models.codex?.map(model => model.id)).toEqual(['remote-model']);
+    else await expect(pending).rejects.toThrow(change === 'runtime' ? 'Codex runtime changed' : 'SSH model request is stale');
+    expect(stop).toHaveBeenCalledOnce();
   });
 });

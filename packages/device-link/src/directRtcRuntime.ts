@@ -5,9 +5,12 @@ import type { DirectRuntime, DirectRuntimeEvents, DirectRuntimeSession } from '.
 /** Data-only WebRTC, shared by Electron and the isolated Mobile WebView. No STUN/TURN:
  * host candidates try the LAN, and the existing authenticated relay is the fallback.
  * Binary fragments preserve UTF-8 (including surrogate pairs) across 16 KiB SCTP limits. */
-export function createDirectRtcRuntime(): DirectRuntime {
+export function createDirectRtcRuntime(
+  createPeerConnection: (configuration: RTCConfiguration) => RTCPeerConnection =
+    (configuration) => new RTCPeerConnection(configuration),
+): DirectRuntime {
   return { create(_id: string, events: DirectRuntimeEvents): DirectRuntimeSession {
-    const pc = new RTCPeerConnection({ iceServers: [] });
+    const pc = createPeerConnection({ iceServers: [] });
     let dc: RTCDataChannel | undefined;
     let closed = false;
     let receiveBytes = 0;

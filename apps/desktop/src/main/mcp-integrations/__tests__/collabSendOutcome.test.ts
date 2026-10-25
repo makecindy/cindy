@@ -35,6 +35,7 @@ const mockState = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  shell: { openExternal: vi.fn(async () => undefined) },
   app: {
     getPath: () => mockState.userDataDir,
   },

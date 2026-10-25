@@ -17,9 +17,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const sourcePath = resolve(__dirname, '..', 'index.ts');
-const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const source = (readFileSync(sourcePath, 'utf8') + '\n' + readFileSync(
+  resolve(__dirname, '../../../../../../packages/app-runtime/src/sshClaudeHost.ts'), 'utf8',
+)).replace(/\r\n?/g, '\n');
 const ccManagerClientSource = readFileSync(
-  resolve(__dirname, '..', 'cc-manager-client.ts'),
+  resolve(__dirname, '../../../../../../packages/app-runtime/src/ccManagerClient.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 

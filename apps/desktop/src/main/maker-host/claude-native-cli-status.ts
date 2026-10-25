@@ -5,19 +5,8 @@
  * 模块读这里即可,不必连带加载 CLI 拉起 / 代理解析等依赖。
  */
 
-export interface ClaudeCliLoginStatus {
-  /** CLI 用 Claude.ai 订阅账号登录(只有这种才算「Claude 订阅」)。 */
-  loggedIn: boolean;
-  /**
-   * CLI 已登录,但不是 Claude.ai 订阅(Console 账号、API Key、apiKeyHelper、中转 token 等)。
-   * 这类登录按 API 计费或指向别的上游,Cindy 不把它当订阅使用。仅 loggedIn=false 时出现。
-   */
-  notSubscription?: true;
-  /** CLI 报告的登录方式;仅作展示。 */
-  authMethod?: string;
-  subscriptionType?: string;
-  email?: string;
-}
+import type { ClaudeCliLoginStatus } from '@cindy/model-providers/provider-auth/claude-cli-status';
+export type { ClaudeCliLoginStatus };
 
 let cachedStatus: ClaudeCliLoginStatus | null = null;
 let cachedAt = 0;

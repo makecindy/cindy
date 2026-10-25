@@ -13,13 +13,20 @@ import { describe, expect, it } from 'vitest';
 const registerSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
   'utf8',
-).replace(/\r\n?/g, '\n');
+).replace(/\r\n?/g, '\n')
+  + '\n'
+  + readFileSync(
+    resolve(__dirname, '../../../../../packages/app-runtime/src/makerInputSubmission.ts'),
+    'utf8',
+  ).replace(/\r\n?/g, '\n');
 
 function inputSteerHandlerBody(): string {
-  const start = registerSource.search(/ipcMain\.handle\(\s*MAKER_INVOKE\.INPUT_STEER/);
+  const start = registerSource.search(
+    /ipcMain\.handle\(\s*(?:MAKER_INVOKE\.INPUT_STEER|["']maker:input:steer["'])/,
+  );
   const next = registerSource
     .slice(start + 1)
-    .search(/ipcMain\.handle\(\s*MAKER_INVOKE\.INPUT_STOP/);
+    .search(/ipcMain\.handle\(\s*(?:MAKER_INVOKE\.INPUT_STOP|["']maker:input:update-content["'])/);
   expect(start).toBeGreaterThan(-1);
   expect(next).toBeGreaterThan(-1);
   return registerSource.slice(start, start + 1 + next);

@@ -23,11 +23,11 @@ describe('Review PDF utility process packaging contract', () => {
     const worker = fs.readFileSync(
       path.join(desktopRoot, 'src/main/reviewer/reviewPdfUtilityProcess.ts'),
       'utf8',
-    );
+    ) + '\n' + fs.readFileSync(path.join(desktopRoot, '../../packages/app-runtime/src/reviewPdfUtilityProcess.ts'), 'utf8');
     const polyfills = fs.readFileSync(
       path.join(desktopRoot, 'src/main/reviewer/pdfNodeDomPolyfills.ts'),
       'utf8',
-    );
+    ) + '\n' + fs.readFileSync(path.join(desktopRoot, '../../packages/app-runtime/src/pdfNodeDomPolyfills.ts'), 'utf8');
     const viteConfig = fs.readFileSync(
       path.join(desktopRoot, 'vite.review-pdf-process.config.ts'),
       'utf8',

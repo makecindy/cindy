@@ -1,3 +1,4 @@
+import { readMakerRegisterSource, readSharedRuntimeSource } from './makerRuntimeSource';
 /**
  * Agent 在另一台电脑运行的任务:换模型时不拿本机模型目录去校验那台的模型(那台的 Agent 裁决),
  * 点选仍只记意图、在发送边界落地;建任务与恢复时同样跳过本机路由检查。
@@ -7,7 +8,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const source = fs.readFileSync(path.join(__dirname, '../maker-ipc/register.ts'), 'utf8');
+const source = readMakerRegisterSource();
 
 function handlerBody(): string {
   const start = source.indexOf('const handleSetModel = async (');
@@ -33,11 +34,8 @@ describe('agent-device model selection wiring', () => {
 
   it('keeps picker clicks as intents and applies them through the live session at send time', () => {
     const body = handlerBody();
-    const start = source.indexOf('const applyAgentDeviceRuntimeSelection = async');
-    const end = source.indexOf('const handleSetModel = async (', start);
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    const branch = source.slice(start, end);
+    expect(source).toContain('const applyAgentDeviceRuntimeSelection = createAgentDeviceRuntimeSelection({');
+    const branch = readSharedRuntimeSource('agentDeviceRuntimeSelection');
     expect(body).toContain('return applyAgentDeviceRuntimeSelection({');
     expect(branch).toMatch(/internalOptions\.source === 'user' && !internalOptions\.applyingUserSelectionOnSend/);
     expect(branch).toContain('agentSwitchPending.set(sessionId, intent);');

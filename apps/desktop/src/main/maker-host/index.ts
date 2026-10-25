@@ -1,6 +1,11 @@
-import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
+import { createBotRuntimeCatalog } from '@cindy/app-runtime/botRuntimeCatalog';
+import { applyBotRuntimeToolPolicy } from '@cindy/app-runtime/botRuntimeToolPolicy';
+import {createSshClaudeHost} from '@cindy/app-runtime/sshClaudeHost';
+import {listSshCodexProviders as readSshCodexProviders} from '@cindy/app-runtime/sshCodexModelReader';
+import {createSshCodexHost} from '@cindy/app-runtime/sshCodexHost';
+import {createSshPiHost} from '@cindy/app-runtime/sshPiHost';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
-import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
+import { createRuntimeCapabilityReader, RUNTIME_MCP_NAMES_KEY } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
@@ -130,7 +135,6 @@ import {
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { readProviderGroupBinding } from '../provider-group/bindings.js';
-import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
@@ -205,7 +209,7 @@ import {
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
   prepareCodexGuestModelCatalog,
@@ -302,7 +306,6 @@ import {
   resetCustomMcpRegistry,
 } from '../mcp-integrations/custom-mcp-registry.js';
 import {
-  ESSENTIAL_PLUGIN_IDS,
   resolveBotAllowedBuiltinPluginIds,
 } from './plugins/types.js';
 import { cleanupComputerDriverSession } from '../mcp-integrations/computer.js';
@@ -670,15 +673,6 @@ export async function refreshCodexGatewayHost(
 // clears owner-scoped bookkeeping by epoch. Keep it across resetMaker; IPC is not
 // registered again after an account switch. MCP factories bind before it is ready.
 let _resolveBotCapabilityAgentKind: BotCapabilityServiceDeps['resolveBotAgentKind'] | null = null;
-// Bootstrap owns IM/hook modules that depend back on this host. Bind their reader
-// once, but read the current owner's stores on each call (including after resetMaker).
-let _readBotConversationConnections: BotCapabilityServiceDeps['readConversationConnections'];
-export function setBotConversationConnectionsReader(
-  reader: NonNullable<BotCapabilityServiceDeps['readConversationConnections']>,
-): void {
-  _readBotConversationConnections = reader;
-}
-
 export function setBotCapabilityAgentKindResolver(
   resolver: BotCapabilityServiceDeps['resolveBotAgentKind'] | null,
 ): void {
@@ -907,10 +901,6 @@ function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
     listMcpServers: listBotRuntimeMcpServers,
-    readConversationConnections: async (botId) => {
-      if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
-      return _readBotConversationConnections(botId);
-    },
     resolveBotAgentKind: async (sessionId, chain) => _resolveBotCapabilityAgentKind?.(sessionId, chain) ?? null,
   });
 }
@@ -1044,38 +1034,27 @@ export function getMaker(): Maker {
     const pluginRegistry = createPluginRegistry();
 
     const makerMemoryProviderDeps = {
-      runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
-        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
-        if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))
-          return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
-        const agentKind = context.agentKind;
-        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
-          return { ok: false, errorCode: 'UNKNOWN_AGENT' };
-        const catalog = await listBotRuntimeMcpServers({ agentKind, remoteHostId: context.remoteHostId });
-        const providers = (_mcpProviders[agentKind] ?? []).map((provider) => ({
-          ...provider,
-          capability: provider.capability ?? {
-            title: provider.name, description: '',
-            source: catalog.find((entry) => entry.name === provider.name)?.source ?? 'custom',
-          },
-        }));
-        const result = await readAgentCapabilityCatalog(providers,
-          { ...context, agentKind, getSessionContext: undefined }, query,
-          (provider) => {
+      runtimeCapabilities: createRuntimeCapabilityReader({
+        getSession: id => _maker?.getSession(id),
+        catalog: async context => {
+          const { agentKind } = context;
+          const catalog = await listBotRuntimeMcpServers({ agentKind, remoteHostId: context.remoteHostId });
+          const providers = (_mcpProviders[agentKind] ?? []).map((provider) => ({
+            ...provider,
+            capability: provider.capability ?? {
+              title: provider.name, description: '',
+              source: catalog.find((entry) => entry.name === provider.name)?.source ?? 'custom',
+            },
+          }));
+          return { providers, unavailableReason: provider => {
             const entry = catalog.find((item) => item.name === provider.name);
             const remoteBridgeMissing = context.remoteHostId && agentKind !== 'pi'
               && entry?.source === 'builtin' && !REMOTE_ALLOWED_SERVER_NAMES.has(provider.name);
             return entry?.available === false || remoteBridgeMissing
               ? 'transport-unavailable-for-current-runtime' : null;
-          },
-          // The caller's own engine is the only evidence of what this task can call.
-          (server) => session.readMcpServerTools(server));
-        if (_maker?.getSession(session.id) !== session) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
-        return { ...result, permission: session.stablePermissionModeState,
-          hostCapabilities: Object.fromEntries(Object.entries(session.capabilities)
-            .filter(([, value]) => value && typeof value === 'object' && 'supported' in value)),
-          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。安装 Cindy 更新须调用 install_app_update，由宿主向用户确认后经内置更新器完成；check_app_update 仅检查更新。' };
-      },
+          } };
+        },
+      }),
       botCapabilities: createDesktopBotCapabilityService(),
       createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
         const session = _maker?.getSession(sessionId);
@@ -1404,8 +1383,7 @@ export function getMaker(): Maker {
         beforeKnownFileWrite: captureKnownFileBefore,
         noteOpaqueWrite: noteOpaqueTurnChange,
       },
-      registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
-        registerAgentProcess(pid, kind, role, sessionId),
+      registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
       toolLoopReviewer: reviewToolLoop,
       // 每个 session 的 cc 子进程 debug 写到 sessions/<id>/cc-debug.raw.log (logger 拼路径
@@ -1495,206 +1473,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({
-        remoteHostId,
-        sessionId,
-        sessionInstanceId,
-        startParams,
-        vendorOptions,
-        onApprovalRequest,
-        onSubagentModelAccessRequest,
-        onOAuthRefresh,
-        makerMemoryEnabled,
-        makerMemoryScopeKey,
-        botSession,
-      }) => {
-        const host = getRemoteSshPool().get(remoteHostId);
-        if (host?.getStatus() !== 'ready') {
-          throw new Error(`remote ssh host not ready: ${remoteHostId}`);
-        }
-        // 「Agent 流量走本地 Proxy」: pref 开启时确保 SSH 反向隧道就绪, 把代理
-        // env 合入 startParams.env — cc-mgr daemon 按 session spawn SDK, 每次
-        // 会话都吃到当前配置, 无需像 codex daemon 那样重启。隧道 arm 失败
-        // (sshd 拒 remote forwarding 等) 直接抛错, 不静默回落直连。
-        const proxyEnv = await getRemoteAgentProxyEnv(host);
-        // SDK can't self-locate its native CLI binary on remote (bundled-into-cc-mgr
-        // optional-dep resolver is frozen to desktop build platform). Probe + cache
-        // the path here and pass it down; cc-manager-client merges it into the SDK
-        // options via `pathToClaudeCodeExecutable`. First call ~200ms, cache hit instant.
-        const claudeBinaryPath = await getRemoteClaudeBinaryPath(host);
-
-        // 远端 cc 的协同 MCP 恢复通道:bridge + remote-forward + per-session
-        // token,把 cindy_orca / orca_worker_bridge 以 http 形态追加进
-        // startParams.mcpServers (cc remote 过滤器本来就放行 http transport)。
-        // 普通任务保留可选 MCP 降级;伙伴缺少 helper 时必须在 query 建立前失败。
-        const injected = await prepareCcRemoteQueryMcp(
-          {
-            host,
-            sessionId,
-            sessionInstanceId,
-            workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
-            vendorOptions,
-            // per-session Maker Memory 开关 (maker-core 归一后透传)。
-            makerMemoryEnabled,
-            botSession,
-            // 同源的 scope key: Bot 会话恒为 `bot:<botId>`, 缺失时远端工具
-            // 会回落 workdir 键, 与本地 prompt 注入的伙伴记忆分家。
-            ...(makerMemoryScopeKey ? { makerMemoryScopeKey } : {}),
-          },
-          {
-            ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
-            ensureForward: ensureRemoteMcpForward,
-            // collab 全局禁用 (Tier 4) 时整个不注入 — bridge 名单不反映
-            // 开关 (codex-connector R20 P2, 与 codex daemon 侧同闸门)。
-            isCollabEnabled: () => pluginRegistry.isEnabled('collab'),
-            onOptionalInjectionError: (err) => {
-              desktopMakerLogger.warn('cc remote MCP injection skipped', {
-                remoteHostId,
-                sessionId,
-                message: err instanceof Error ? err.message : String(err),
-              });
-            },
-          },
-        );
-        const mcpCleanup = injected.cleanup;
-        const mcpNeedsFreshStart = injected.needsFreshStart === true;
-        const mcpInjectFingerprint = injected.fingerprint;
-        const injectedServerCount = Object.keys(injected.servers).length;
-        if (injectedServerCount > 0) {
-          const mutableParams = startParams as { mcpServers?: Record<string, unknown> };
-          mutableParams.mcpServers = { ...(mutableParams.mcpServers ?? {}), ...injected.servers };
-        }
-
-        // maker-core computes the initial permission mode before this factory
-        // injects collaboration MCP servers. Native OAuth Auto bypasses the
-        // approval RPC entirely, so finalize the mode after injection but
-        // before openCcManagerSession consumes startParams.
-        routeInjectedRemoteMcpApprovalsThroughCindy(startParams, injectedServerCount);
-
-        // app 重启后首轮 bridge MCP 注入:daemon 侧旧 query 若还 alive, 其
-        // SDK 持有的 mcp-session-id 在新 bridge 已不存在, attach 会让协同
-        // MCP 每次调用 404 且 SDK 不自动重新 initialize。本进程首次注入该
-        // session 时强制 fresh start (startParams 带 resumeSdkSessionId,
-        // 上下文经远端 cc CLI session 文件恢复)。SSH 断线重连 (app 未重启,
-        // bridge 内存表还在) 不触发 — 本 Set 随进程生命周期。
-        // 状态只在 open 成功后提交:open 失败 (daemon 未起等) 时下次重试
-        // 仍要 forceFresh, 否则 attach 到旧 query 上协同 MCP 永久 404。
-        // token 失效 (mcpNeedsFreshStart) 同样强制 fresh:attach 回带旧
-        // token header 的 alive query 会持续 401 (codex-connector R21 P2)。
-        // 被 invalidate 过 (staleInvalidatedCcSessions) 也一样:collab 禁用
-        // 等场景重建时无 server 可注, 不 forceFresh 会 attach 回带旧 collab
-        // URL 的 query (codex-connector R22 P2)。
-        // 持久代际指纹 drift (codex-connector R23 P2):collab 开→关 /
-        // token 轮换 / bridge 代际 / 端口重绑后跨 app 重启, 进程内集合
-        // 清空也能判出存活 query 的 MCP 配置属旧代际。
-        const ccAppliedFingerprint = readCcAppliedFingerprint(sessionId);
-        const ccGenerationDrift =
-          mcpInjectFingerprint !== undefined &&
-          ccAppliedFingerprint !== null &&
-          mcpInjectFingerprint !== ccAppliedFingerprint;
-        // 注入失败 / bridge 不可用时没有 desired 指纹,但旧 alive query 可能
-        // 仍带着上一代 MCP 配置 (老版本/首次注入尚无 applied 记录时也成立),
-        // attach 会复用失效 Authorization / URL / mcp-session-id。此时
-        // forceFresh 成无 MCP 的干净 query,并在 open 成功后把 applied 收敛
-        // 为 disabled,避免故障期间每次 open 都重复 kill + fresh
-        // (Greptile R29 P1)。
-        const ccMissingDesiredStale =
-          mcpInjectFingerprint === undefined &&
-          ccAppliedFingerprint !== CC_MCP_DISABLED_FINGERPRINT;
-        // 持久代际 drift (ccGenerationDrift) 不受 fresh 集合豁免:
-        // token/bridge/端口变化后 applied 指纹 ≠ desired 时, 已 fresh 过的
-        // session 也必须重新 forceFresh — 否则豁免让 drift 判定只在「从未
-        // fresh 过」时生效, attach 回持旧 Authorization/URL 的 query
-        // (codex-connector R27 P1)。fresh 集合只豁免「同代际的重复注入」。
-        const forceFreshQuery =
-          ((injectedServerCount > 0 ||
-            mcpNeedsFreshStart ||
-            staleInvalidatedCcSessions.has(sessionId)) &&
-            !forcedFreshCcBridgeSessions.has(sessionId)) ||
-          ccGenerationDrift ||
-          ccMissingDesiredStale;
-
-        // 协同 MCP 已 mutate 进 startParams.mcpServers;这里再把 proxy env 合入
-        // 得到最终 startParams (mcpServers 与 env 都带上)。
-        const startParamsWithProxy = proxyEnv
-          ? {
-              ...(startParams as Record<string, unknown>),
-              env: {
-                ...((startParams as { env?: Record<string, string> }).env ?? {}),
-                ...proxyEnv,
-              },
-            }
-          : startParams;
-
-        const { remoteQuery, dispose, detach } = await (async () => {
-          try {
-            return await openCcManagerSession({
-              host,
-              sessionId,
-              startParams: startParamsWithProxy as unknown as Parameters<
-                typeof openCcManagerSession
-              >[0]['startParams'],
-              claudeBinaryPath,
-              onApprovalRequest: onApprovalRequest as Parameters<
-                typeof openCcManagerSession
-              >[0]['onApprovalRequest'],
-              onSubagentModelAccessRequest: onSubagentModelAccessRequest as Parameters<
-                typeof openCcManagerSession
-              >[0]['onSubagentModelAccessRequest'],
-              onOAuthRefresh: onOAuthRefresh as Parameters<
-                typeof openCcManagerSession
-              >[0]['onOAuthRefresh'],
-              forceFreshQuery,
-            });
-          } catch (err) {
-            // openCcManagerSession 失败时上面注册的 per-session ctx / forward
-            // intent 必须清掉,否则残留到同 session 下一次重建或应用退出。
-            try {
-              mcpCleanup();
-            } catch {
-              /* cleanup 失败不掩盖原始错误 */
-            }
-            throw err;
-          }
-        })();
-        if (forceFreshQuery) {
-          forcedFreshCcBridgeSessions.add(sessionId);
-          staleInvalidatedCcSessions.delete(sessionId);
-        }
-        // 注入/禁用代际随 open 成功落盘 (attach 也算 — 它确认了该 query
-        // 的 MCP 代际);下次 open 前据此判 drift。
-        const appliedFingerprintToWrite =
-          mcpInjectFingerprint ?? (ccMissingDesiredStale ? CC_MCP_DISABLED_FINGERPRINT : undefined);
-        if (appliedFingerprintToWrite) {
-          writeCcAppliedFingerprint(sessionId, appliedFingerprintToWrite);
-        }
-
-        // 把 ssh transport disposer 串进 remoteQuery.close — maker-core 不知道
-        // ssh / RpcClient / nc 这层 transport, 只会调它认得的 Query.close()。
-        // openCcManagerSession 的 dispose 已经内部先 await remoteQuery.close()
-        // (查询 close RPC + unsubscribe + end queue), 再 client.dispose() 关
-        // RpcClient, 再 handle.kill() 关 ssh exec。所以 close 直接重定向到
-        // dispose 即可, 不需要分两步。漏接这个 hook 会让 ClaudeCodeAgent close
-        // 时 ssh exec 一直挂着, 远端 nc 子进程也不退, 文件描述符泄漏。
-        // close 同时注销 per-session MCP token (detach 不清:detach 是断传输
-        // 保 session, 重连时 factory 会重新注册)。
-        const disposeWithMcpCleanup = async (): Promise<void> => {
-          try {
-            mcpCleanup();
-          } catch (err) {
-            desktopMakerLogger.warn('cc remote MCP token cleanup failed', {
-              sessionId,
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-          await dispose();
-        };
-        const remoteQueryWithDispose = Object.assign(remoteQuery, {
-          close: disposeWithMcpCleanup,
-          detach,
-        });
-        return remoteQueryWithDispose as unknown as RemoteCcQuery;
-      },
+      ...createSshClaudeHost({getRemoteSshPool,desktopMakerLogger,getRemoteAgentProxyEnv,getRemoteClaudeBinaryPath,prepareCcRemoteQueryMcp,ensureCodexMcpBridgeStartedForRemote,ensureRemoteMcpForward,pluginRegistry,readCcAppliedFingerprint,writeCcAppliedFingerprint,CC_MCP_DISABLED_FINGERPRINT,forcedFreshCcBridgeSessions,staleInvalidatedCcSessions,openCcManagerSession}),
     });
     const codexMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
@@ -2327,41 +2106,7 @@ export function getMaker(): Maker {
         if (!remoteHost) throw new Error(`remote SSH host "${remoteHostId}" is not connected`);
         return createRemotePiFileOps(remoteHost);
       },
-      getRemoteCodexTransport: (remoteHostId) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(
-            `remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`,
-          );
-        }
-        if (remoteHost.getStatus() !== 'ready') {
-          throw new Error(
-            `remote SSH host "${remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`,
-          );
-        }
-        return createSshDaemonTransport({
-          remoteHost,
-          logger: desktopMakerLogger,
-          // 「Agent 流量走本地 Proxy」: pref 开启时先建 SSH 反向隧道 + 对账
-          // codex daemon 的 env marker (漂移 → 重写 + 重启 daemon), 然后才让
-          // transport 探活/拉起 daemon。pref 关闭时 reconcile 是幂等 no-op。
-          beforeDaemonProbe: async () => {
-            // markerChanged && !daemonRestarted = 旧 daemon 活着跑旧 env —
-            // 继续 probe 会 attach 到 stale daemon, UI 报 tunnel active 而
-            // codex 流量走旧路由 (codex R10 P1): 按 bootstrap 失败抛出, 让
-            // session start 显式报错, 而不是静默复用。
-            // deferredForLiveTurn (host 上有别的 turn 在跑) 则放行 attach:
-            // 这正是「不 mid-turn 杀 daemon」的代价 — 新 session 暂用旧
-            // env, turn-done 挂钩补刀后自愈。
-            const reconciled = await reconcileCodexAgentProxyEnv(remoteHost);
-            if (reconciled.markerChanged && !reconciled.daemonRestarted) {
-              throw new Error(
-                'codex daemon survived pkill after agent-proxy env change; refusing to attach the stale daemon (retry or restart the host)',
-              );
-            }
-          },
-        });
-      },
+      ...createSshCodexHost({getRemoteSshPool,desktopMakerLogger,reconcileCodexAgentProxyEnv}),
     });
 
     // 模块级回填 codexAgent 引用 —— restartCodexAfterAuthModeChange() 需要它在
@@ -2540,8 +2285,7 @@ export function getMaker(): Maker {
         beforeKnownFileWrite: captureKnownFileBefore,
         noteOpaqueWrite: noteOpaqueTurnChange,
       },
-      registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
-        registerAgentProcess(pid, kind, role, sessionId),
+      registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
@@ -2610,181 +2354,7 @@ export function getMaker(): Maker {
           model,
           sessionId,
         ),
-      // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
-      // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
-      // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
-      // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
-      getRemotePiTransport: async (
-        remoteHostId,
-        {
-          binaryPath: _localBinaryPath,
-          remoteBinaryPath: providedRemoteBinaryPath,
-          args,
-          cwd,
-          env,
-          logger,
-          sessionId,
-          hostProxyForwards,
-        },
-      ) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-        }
-        if (remoteHost.getStatus() !== 'ready') {
-          throw new Error(`remote SSH host "${remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`);
-        }
-        // 远端必须用远端安装的 pi 二进制(probe 出 $INSTALL_DIR/pi/pi),不能用本地
-        // binaryPath —— 那是本机 userData 下的路径,远端不存在(连带 plan-mode 扩展
-        // 路径与 subagent 二进制 env 都指向远端才能工作)。
-        // 轮 29 MEDIUM:优先用 PiAgent startSession 已 resolve 并传入的
-        // remoteBinaryPath(接口契约「host 已 probe」)—— 只在缺失时自己 probe
-        // 兜底, 避免两次 resolve 语义分叉(cache 失效窗口)。
-        const remoteBinaryPath = providedRemoteBinaryPath ?? await resolveRemotePiBinaryPath(remoteHost);
-        // daemon 持久模式:远端 pi-manager(TS 单例 daemon)持有 pi 进程,ssh 断链后
-        // 会话继续跑,重连 attach(对齐 codex app-server daemon / cc-mgr)。
-        // 首次 ensure 前确保 pi-manager bundle 装好 + daemon 在跑。
-        // daemon session key = maker sessionId(同一会话重连 attach 到同一 daemon 进程)。
-        // onEvent(轮 15 缺口 3/6):install 进度转发 silent install toast —— 首次
-        // 使用 pi remote 时 1-3s 的 bundle 上传/daemon spawn 不再静默。
-        await ensurePiManagerInstalled(remoteHost, desktopMakerLogger, (event) => {
-          const hostId = remoteHost.id;
-          if (event.kind === 'error') {
-            broadcastSilentInstallStatus({ hostId, agentKind: 'pi', phase: 'failed', message: event.message });
-          } else if (event.kind === 'ready') {
-            broadcastSilentInstallStatus({ hostId, agentKind: 'pi', phase: 'done' });
-          } else {
-            // install-upload 是 pi-manager 专属 kind, SILENT_INSTALL_STATUS 的
-            // eventKind union 不含它(轮 32 MEDIUM 类型对齐) —— 归入 install-log
-            // (renderer phaseText 对未知 kind 保持上次文案, 映射后走通用阶段)。
-            broadcastSilentInstallStatus({
-              hostId,
-              agentKind: 'pi',
-              phase: 'progress',
-              eventKind: event.kind === 'install-upload' ? 'install-log' : event.kind,
-            });
-          }
-        });
-        const providerForwardLease = createPiRemoteProviderForwardLease(
-          (spec) => remoteHost.ensureRemoteForward(spec),
-        );
-        try {
-          for (const spec of hostProxyForwards ?? []) {
-            await providerForwardLease.ensure(spec);
-          }
-        } catch (error) {
-          await Promise.allSettled([providerForwardLease.releaseAll()]);
-          throw error;
-        }
-        let transport;
-        try {
-          transport = createSshPiDaemonTransport({
-            remoteHost,
-            binaryPath: remoteBinaryPath,
-            args,
-            cwd,
-            env,
-            logger,
-            daemonSessionId: sessionId ?? undefined,
-          });
-        } catch (error) {
-          await providerForwardLease.releaseAll();
-          throw error;
-        }
-        transport.ensureHostProxyForward = providerForwardLease.ensure;
-        if (transport.killRemoteSession) {
-          const killRemoteSession = transport.killRemoteSession.bind(transport);
-          transport.killRemoteSession = async () => {
-            try {
-              await killRemoteSession();
-            } finally {
-              await providerForwardLease.releaseAll();
-            }
-          };
-        } else {
-          const close = transport.close.bind(transport);
-          transport.close = async (reason?: string) => {
-            try {
-              await close(reason);
-            } finally {
-              await providerForwardLease.releaseAll();
-            }
-          };
-        }
-        return transport;
-      },
-      // 远端 Pi 的 agentHome 文件操作:models.json / extensions / perm / subagent 快照 /
-      // resume stat 都落到远端机器(pi 进程在远端读)。经 SSH stdin 管道写文件(cat > 原子
-      // 写 + chmod),stat 走 statRemotePath 同款脚本,mkdir 走 mkdir -p —— 与 cc-manager
-      // bundle 上传同模式,路径绝对不拼进命令行(防 ps / 日志泄漏)。
-      getRemotePiFileOps: (remoteHostId) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-        }
-        return createRemotePiFileOps(remoteHost);
-      },
-      getRemoteAgentFileOps: (remoteHostId) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-        }
-        return createRemotePiFileOps(remoteHost);
-      },
-      // 远端 pi 二进制路径:probe(远端 `pi --version`)+ cache。
-      resolveRemotePiBinaryPath: async (remoteHostId) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-        }
-        return resolveRemotePiBinaryPath(remoteHost);
-      },
-      // 远端会话:MCP bridge 经 SSH remote-forward 隧道化,远端 pi 够到本地
-      // in-process MCP(cindy_orca / orca_worker_bridge / cindy_memory / ghost)。
-      // 改 URL 前缀为 remote-forward 地址,identity/token 不变。
-      // collab 全局禁用由 piEnvironment 按 server 名精确剥除 orca 类工具
-      // (CC/Codex 同闸门, R5 配置审计 H-7);此处不整体 skip —— 整体 skip 会
-      // 连 cindy_memory / ghost / 外部 HTTP MCP 一起误杀。
-      remotePiSkipMcpBridge: () => false,
-      // 把本地 bridge 的 loopback URL(http://127.0.0.1:<localPort>/mcp/<name>)
-      // 改写为远端 remote-forward 地址(http://127.0.0.1:<remotePort>/mcp/<name>)。
-      //
-      // **不复用 ensureRemoteMcpForward**:它写 remote-mcp-forwards.json 的
-      // per-host 单槽位(bridgeLocalPort/remotePort),Pi 与 Codex 各自独立 bridge
-      // (不同 localPort),后调用方会关掉前调用方的 forward —— 同 host 上两 agent
-      // 的 MCP 隧道互相踩踏(R2 MCP BUG-1)。Pi 用 host.ensureRemoteForward 直接建
-      // 独立 forward,远端端口从独立基数(PI_MCP_FORWARD_PORT_START)顺延。
-      rewriteRemotePiMcpBridgeUrl: async (remoteHostId, localUrl) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-        }
-        // 用 URL 解析改端口再序列化, 避免字符串 replace 误伤 query 参数
-        // (R2 MCP BUG-3) 与 Number('')=0 传非法端口 (R2 MCP BUG-7)。
-        const u = new URL(localUrl);
-        const localPort = u.port;
-        if (!localPort || Number.isNaN(Number(localPort)) || Number(localPort) <= 0) {
-          throw new Error(`pi bridge URL has no usable port: ${localUrl}`);
-        }
-        const fwd = await remoteHost.ensureRemoteForward({
-          localHost: '127.0.0.1',
-          localPort: Number(localPort),
-          preferredRemotePort: PI_MCP_FORWARD_PORT_START,
-        });
-        u.port = String(fwd.remotePort);
-        // 轮 24 HIGH-2:close 由 pi-host 在会话 dispose 时调用 —— 防 forward
-        // 随会话累积耗尽远端端口(fwd.close 幂等, RemoteHost 内部有 dedup)。
-        return { url: u.toString(), close: () => void fwd.close() };
-      },
-      // 「Agent 流量走本地 Proxy」:远端 pi 的 LLM 流量经 SSH remote-forward 走本地代理
-      // (与 CC 远端同机制;pref 关闭时 getRemoteAgentProxyEnv 返回 null → 直连)。
-      getRemotePiAgentProxyEnv: async (remoteHostId) => {
-        const remoteHost = getRemoteSshPool().get(remoteHostId);
-        if (!remoteHost) {
-          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
-        }
-        return getRemoteAgentProxyEnv(remoteHost);
-      },
+...createSshPiHost({getRemoteSshPool,resolveRemotePiBinaryPath,createSshPiDaemonTransport,createRemotePiFileOps,ensurePiManagerInstalled,desktopMakerLogger,broadcastSilentInstallStatus,getRemoteAgentProxyEnv}),
     });
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = piAgent;
@@ -2818,43 +2388,16 @@ export function getMaker(): Maker {
       },
     });
 
-    const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
-      listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
+    const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => createBotRuntimeCatalog({
+      getMaker: () => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
-        const result = await _maker.listAgentSkills(agentKind, {
-          workingDir,
-          remoteHostId,
-          forceReload: agentKind === 'codex' && skillLinksChanged,
-        });
-        return result.skills;
+        return _maker;
       },
+      getPluginRegistry, isBotToolsetAvailable, skillLinksChanged,
       listMcpServers: listBotRuntimeMcpServers,
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
       listBotImChannels: ({ botId }) =>
         [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
-      listToolsets: async ({ botId, agentKind, workingDir, remoteHostId }) => {
-        const registry = getPluginRegistry();
-        return Promise.all(
-          registry.getPlugins().map(async (plugin) => {
-            const state = await registry.getEnableState(plugin.id, workingDir);
-            return {
-              id: plugin.id,
-              name: plugin.name,
-              essential: ESSENTIAL_PLUGIN_IDS.has(plugin.id),
-              available:
-                state.effectiveEnabled &&
-                isBotToolsetAvailable({
-                  botId,
-                  workingDir,
-                  agentKind,
-                  remoteHostId,
-                  toolsetId: plugin.id,
-                }),
-              version: plugin.version,
-            };
-          }),
-        );
-      },
       // 伙伴自己沉淀的技能(本机 userData);remote 会话由 hydrate 侧跳过。
       listOwnSkills: async ({ botId }) => collectBotOwnSkillMounts(botId),
       // 伙伴的家在哪(本机 userData),外加用户维护的 prompt overlay。身份与用户画像不走
@@ -2969,23 +2512,6 @@ export function getMaker(): Maker {
           }
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
-          const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
-          const interfaceModel = interfaceProvider?.models[opts.agentKind]?.find(m => m.id === opts.model);
-          if (interfaceProvider && interfaceModel) sessionModelInterface(sessionId, interfaceProvider.id, opts.agentKind,
-            interfaceModel, getActiveCatalog().modelRegistry,
-            opts.resumeSessionId ? interfaceProvider.routing[opts.agentKind]?.wireProtocol : undefined);
-
-          if (!opts.remoteHostId && !opts.agentDeviceId) {
-            opts.fastModePolicy = createSubscriptionFastPolicy(sessionId, () => getSessionProvider(sessionId)
-              ?? resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), opts.agentKind, null, opts.model));
-          }
-          // 任务级工作上下文预算：调用方显式带值时同样按目录上限与模型级上限重新收敛；
-          // 未带则读本任务已保存的档位。口径见 applySessionContextWindowBudgetToCreateOpts
-          // （worker 唤醒等其它启动入口也走它，避免只在钩子这条路上生效）。
-          await applySessionContextWindowBudgetToCreateOpts(
-            sessionId, opts as Parameters<typeof applySessionContextWindowBudgetToCreateOpts>[1],
-            getActiveCatalog(),
-          );
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
             const thinkingEnabled = getThinkingEnabledFromMemory(
@@ -3043,29 +2569,11 @@ export function getMaker(): Maker {
               skills: botRuntimeSnapshot.unavailableSkills,
             });
           }
-          const disabledPluginIds = [
-            ...new Set([
-              ...getPluginRegistry().getDisabledRuntimePluginIds(opts.workingDir),
-              ...(botRuntimeSnapshot?.disabledToolsets ?? []),
-            ]),
-          ];
-          opts.vendorOptions = {
-            ...(opts.vendorOptions ?? {}),
-            [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
-            ...(botRuntimeSnapshot
-              ? {
-                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
-                    .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
-                    .map((provider) => provider.name),
-                  [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [
-                    ...resolveBotAllowedBuiltinPluginIds(
-                      createOpts.botRuntimeProfile?.toolsetPolicy.catalog ?? [],
-                      createOpts.botRuntimeProfile?.toolsetPolicy.configured ?? [],
-                    ),
-                  ],
-                }
-              : {}),
-          };
+          applyBotRuntimeToolPolicy({
+            options: createOpts, snapshot: botRuntimeSnapshot,
+            disabledPluginIds: getPluginRegistry().getDisabledRuntimePluginIds(opts.workingDir),
+            providers: _mcpProviders[createOpts.agentKind] ?? [],
+          });
         },
         onBeforeStart: async ({ agentKind, workingDir, remoteHostId }) => {
           // 延迟记忆重启 pending 时,本地 Codex 新会话加入 shared host 前先尝试
@@ -3283,34 +2791,7 @@ export function getMakerIfReady(): Maker | null {
   return _maker;
 }
 
-export async function listSshCodexProviders(hostId: string) {
-  const owner = getActiveAppSession().generation;
-  const remote = getRemoteSshPool().get(hostId);
-  if (!remote || remote.getStatus() !== 'ready') throw new Error('SSH host is not connected');
-  let changed = false;
-  const stop = remote.onStatus((snapshot) => {
-    if (snapshot.status !== 'ready') changed = true;
-  });
-  const assertCurrent = () => {
-    if (changed || getActiveAppSession().generation !== owner ||
-        getRemoteSshPool().get(hostId) !== remote || remote.getStatus() !== 'ready') {
-      throw new Error('SSH model request is stale');
-    }
-  };
-  try {
-    await ensureRemoteAgentInstalledOrInstall(hostId, 'codex');
-    assertCurrent();
-    getMaker();
-    const agent = _codexAgent;
-    if (!agent) throw new Error('Codex is not ready');
-    const models = await agent.listRemoteModels(hostId);
-    assertCurrent();
-    if (_codexAgent !== agent) throw new Error('Codex runtime changed');
-    return [remoteCodexProvider(models)];
-  } finally {
-    stop();
-  }
-}
+export function listSshCodexProviders(hostId:string){return readSshCodexProviders(hostId,{getActiveAppSession,getRemoteSshPool,ensureRemoteAgentInstalledOrInstall,getAgent:()=>{getMaker();return _codexAgent;}});}
 
 export async function disposeRemoteCodexHostAfterRestart(hostId: string, ownerGeneration: number): Promise<void> {
   if (getActiveAppSession().generation !== ownerGeneration) return;
@@ -3706,6 +3187,3 @@ export async function shutdownLspServerPool(): Promise<void> {
 
 // re-exports for IPC layer
 export { desktopClaudeAuthAdapter, desktopCodexAuthAdapter };
-
-// Lazy path lookup follows owner changes; installing the reader performs no IO.
-configureSessionModelInterfaceStorage(() => ownerScopedUserDataPath('model-interface-snapshots'));

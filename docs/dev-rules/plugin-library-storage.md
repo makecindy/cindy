@@ -29,6 +29,10 @@
 | 装配 / 生命周期挂点 / 设置面 IPC | `cindy-brain/index.ts`（`getGhostLibrarySlot`、`relocateGhostLibraryTo`、`getGhostLibraryOverview`） |
 | 作者手册章节 | 内置 `cindy-plugin-creator/references/plugin-files-and-library.md` §4.10.1（兼容导出为 `FORGE_GUIDE`） |
 
+## 无 GUI 宿主共用入口
+
+Library 的纯 Node 核心位于 `packages/plugin-runtime/src/library/`；上表中的 Desktop 文件保留兼容导出，SQLite worker 仍由各宿主注入对应构建产物与原生 ABI。终端版通过同一 `library-request` 执行文件、分块上传和 SQL 操作；TUI 的插件作品库入口与 `cindy libraries` 共用远程资源接口。迁移、回收与换源归档串行于插件安装变更队列，动作绑定当时的安装与目录身份，旧页面不能操作后来的根目录。
+
 ## 落盘布局（owner-scoped，全部经 `ownerScopedUserDataPath`）
 
 ```

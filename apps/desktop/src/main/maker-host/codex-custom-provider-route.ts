@@ -1,3 +1,6 @@
+import { createCodexProviderIdentity } from '@cindy/app-runtime/codexProviderIdentity';
+export type { CodexAppliedCustomProviderIdentityInput } from '@cindy/app-runtime/codexProviderIdentity';
+import { stableCodexProviderRouteId as stableRouteId } from '@cindy/app-runtime/codexProviderIdentity';
 import { createHash } from 'node:crypto';
 
 import {
@@ -95,9 +98,6 @@ export function hasCodexAppliedCustomProviderCapability(
   );
 }
 
-function stableRouteId(providerId: string): string {
-  return createHash('sha256').update(providerId, 'utf8').digest('hex').slice(0, 20);
-}
 
 function effectiveModelWireProtocol(
   model: { route?: { wireProtocol: string } },
@@ -263,52 +263,6 @@ export function resolveCodexCustomProviderModelProviderId(
   return route?.responseModels.includes(model) ? route.modelProviderId : null;
 }
 
-export interface CodexAppliedCustomProviderIdentityInput {
-  agentKind: string;
-  remoteHostId?: string | null;
-  currentCodexProxyActive?: boolean | null;
-  currentThreadModelProviderId?: string | null;
-  targetProviderId?: string | null;
-  targetModel?: string | null;
-}
-
-/**
- * Whether a local Codex thread would cross the custom Provider identity frozen into its Host.
- * Membership in the applied snapshot is the authority: do not infer private identities from ids.
- */
-export function crossesCodexAppliedCustomProviderIdentity(
-  input: CodexAppliedCustomProviderIdentityInput,
-): boolean {
-  if (input.agentKind !== 'codex' || input.remoteHostId || input.currentCodexProxyActive !== true) {
-    return false;
-  }
-
-  const actual = input.currentThreadModelProviderId?.trim() || null;
-  const appliedRoutes = [...appliedCustomProviderRoutes, ...Array.from(scopedAppliedCustomProviderRoutes.values()).flat()];
-  const target = resolveCodexCustomProviderModelProviderId(
-    appliedRoutes,
-    input.targetProviderId?.trim() || null,
-    input.targetModel?.trim() || null,
-  );
-  const actualIsAppliedCustomProviderIdentity = appliedRoutes.some(
-    (route) => route.modelProviderId === actual,
-  );
-  const actualIsRetiredPrototypeIdentity =
-    actual?.startsWith(RETIRED_IMAGE_GENERATION_PROVIDER_PREFIX) === true;
-
-  return target !== null
-    ? actual !== target
-    : actualIsAppliedCustomProviderIdentity || actualIsRetiredPrototypeIdentity;
-}
-
-/** Whether a thread provider id belongs to the currently applied dynamic route set. */
-export function isAppliedCodexCustomProviderIdentity(providerId: string | null | undefined): boolean {
-  const actual = providerId?.trim() || null;
-  return actual !== null && appliedCustomProviderRoutes.some(
-    (route) => route.modelProviderId === actual,
-  );
-}
-
 export function buildCodexCustomProviderArgs(
   proxyEndpoint: string,
   authMode: CodexProxySpawnAuthMode,
@@ -462,3 +416,5 @@ export function relativeProviderRequestPath(upstream: string, requestPath: strin
   }
   return requestPath;
 }
+
+export const { crossesCodexAppliedCustomProviderIdentity, isAppliedCodexCustomProviderIdentity } = createCodexProviderIdentity({ appliedRoutes: () => appliedCustomProviderRoutes, allAppliedRoutes: () => [...appliedCustomProviderRoutes, ...Array.from(scopedAppliedCustomProviderRoutes.values()).flat()] });

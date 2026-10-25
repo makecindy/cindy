@@ -28,21 +28,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const MAIN_ROOT = path.resolve(__dirname, '../..');
+const SHARED_MEDIA_ROOT = path.resolve(MAIN_ROOT, '../../../../packages/media-core/src');
+const TERMINAL_ROOT = path.resolve(MAIN_ROOT, '../../../../apps/cindy-terminal/src');
 
 /** 允许出现 'cc-agent' 字面量的 main 源码文件(相对 src/main,POSIX 分隔)。 */
 const ALLOWED_FILES = new Set([
   'cindy-media/legacyDeadDirs.ts',
   'im/host.ts',
-  'imageCacheStore.ts',
+  '../../../cindy-terminal/src/im/transport-host.ts',
+  '../../../../packages/media-core/src/legacy-image-cache.ts',
   'modelCacheStore.ts',
   'session-share/sessionShareExport.ts',
   'session-share/sessionShareImport.ts',
-  'videoCacheStore.ts',
 ]);
 
 function* walkTsFiles(dir: string): Generator<string> {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
+    if (entry.name === '__tests__' || entry.name === 'node_modules' || /\.test\.[cm]?tsx?$/.test(entry.name)) continue;
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walkTsFiles(abs);
@@ -63,9 +65,9 @@ function* walkTsFiles(dir: string): Generator<string> {
 const CC_AGENT_IN_STRING_RE = /['"`]cc-agent['"`]/;
 
 describe('cc-agent 写入防回潮守门(规则 25)', () => {
-  it("main 源码里引用 'cc-agent' 目录的文件必须在冻结白名单内", () => {
+  it("Desktop、终端和共享媒体源码引用 'cc-agent' 目录的文件必须在冻结白名单内", () => {
     const offenders: string[] = [];
-    for (const file of walkTsFiles(MAIN_ROOT)) {
+    for (const file of [MAIN_ROOT, SHARED_MEDIA_ROOT, TERMINAL_ROOT].flatMap(root => [...walkTsFiles(root)])) {
       const content = fs.readFileSync(file, 'utf-8');
       if (!CC_AGENT_IN_STRING_RE.test(content)) continue;
       const rel = path.relative(MAIN_ROOT, file).split(path.sep).join('/');

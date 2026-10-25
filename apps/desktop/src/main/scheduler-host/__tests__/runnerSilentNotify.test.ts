@@ -21,7 +21,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: 'original-owner' }),
   isDataOwnerBroadcastScopeCurrent: mocks.ownerCurrent,
 }));
-vi.mock('../pre-run-hook', () => ({ executePreRunHook: mocks.executePreRunHook }));
+vi.mock('@cindy/app-runtime/schedulePreRunHook', () => ({ executePreRunHook: mocks.executePreRunHook }));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
@@ -49,7 +49,7 @@ vi.mock('../workdir-resolver', () => ({
   resolveWorkingDir: mocks.resolveWorkingDir,
 }));
 
-vi.mock('../runners/_shared', () => ({
+vi.mock('@cindy/app-runtime/scheduleRunnerShared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 

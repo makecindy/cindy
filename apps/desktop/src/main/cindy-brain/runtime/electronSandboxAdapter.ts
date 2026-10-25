@@ -21,7 +21,7 @@ import { getActiveAppSession, type ActiveAppSession } from '../../appSessionStat
 import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
-import mailComposeRuntimeSource from './mailComposeRuntime.js?raw';
+import mailComposeRuntimeSource from '@cindy/plugin-runtime/mailComposeRuntime.js?raw';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
 import { buildRangedMediaResponse } from '../../cindy-media/rangeResponse.js';

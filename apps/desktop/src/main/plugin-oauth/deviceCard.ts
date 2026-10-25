@@ -17,30 +17,9 @@ import type {
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { getRemoteOauthContext, type RemoteOauthContext } from './context.js';
 
-export interface DeviceAuthorizationHandle {
-  opened: Promise<void>;
-  finish(ok: boolean): void;
-  dispose(): void;
-}
-export interface DeviceAuthorizationInput {
-  ghost: { id: string; name: string };
-  sessionId: string;
-  url: string;
-  userCode?: string;
-  signal: AbortSignal;
-  assertCurrent(): void;
-  cancel(): void;
-}
+import type { DeviceAuthorizationHandle, DeviceAuthorizationInput, PluginAuthorizationHandle, PluginAuthorizationInput } from '@cindy/plugin-runtime/hostTypes';
+export type { DeviceAuthorizationHandle, DeviceAuthorizationInput, PluginAuthorizationHandle, PluginAuthorizationInput } from '@cindy/plugin-runtime/hostTypes';
 
-export interface PluginAuthorizationHandle extends DeviceAuthorizationHandle {
-  result: Promise<PluginAuthorizationResult>;
-}
-export interface PluginAuthorizationInput extends Omit<
-  DeviceAuthorizationInput,
-  'url' | 'userCode'
-> {
-  request: PluginAuthorizationRequest;
-}
 export interface AuthorizationCardDeps {
   bridge: GhostSetupInteractionBridge;
   openExternal(url: string): Promise<void>;

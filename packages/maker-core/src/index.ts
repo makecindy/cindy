@@ -133,3 +133,6 @@ export {
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
 export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+
+export { MCP_TRANSPORTS, CUSTOM_MCP_ID_RE, isUnsafeMcpServerId, validateCustomMcpConfig, type CustomMcpConfig, type McpTransport, type ValidationResult } from './mcp/custom-config.js';
+export { prepareCodexGlobalSkillsLinks } from './agents/shared/codex-global-skills.js';

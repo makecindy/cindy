@@ -6,6 +6,7 @@
 // CONFIG_DIR const (see browser-runtime-env.ts). No import-order autofix is
 // configured, so this position is stable.
 import './browser-runtime-env.js';
+import {createBrowserMcpHostDeps} from '@cindy/app-runtime/browserMcpHost';
 import fs from 'node:fs';
 import nodePath from 'node:path';
 import { app, ipcMain } from 'electron';
@@ -473,57 +474,9 @@ export function getBrowserMcpDeps(): {
   recipeSecrets: { read(key: string): string | null; write(key: string, value: string): boolean };
   recipeFiles: NonNullable<BrowserMcpDeps['recipeFiles']>;
   pageReadsRestricted(target: { profile?: string; targetId?: string }): Promise<boolean>;
-} {
-  return {
-    recipeFiles: async (sessionId) => {
-      const sessionRoots = sessionId ? await resolveSessionUploadRoots(sessionId) : [];
-      const roots = sessionId ? [
-        artifactSessionRoot(nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'), sessionId),
-        ...sessionRoots,
-      ] : [];
-      // Both backends keep invocation copies under their existing upload root.
-      // A checked path grants metadata inspection, never subsequent writes.
-      return createRecipeFileBroker(roots, sessionRoots, sessionId ? (backendController.kind === 'external'
-        ? artifactSessionRoot(browserUploadDirectory, sessionId) : roots[0]) : undefined);
-    },
-    recipeSecrets: {
-      read: (key) => genericOAuthSecretIo.readStrict(browserRecipeSecretId(key)),
-      write: (key, value) => genericOAuthSecretIo.write(browserRecipeSecretId(key), value),
-    },
-    setBackend: async (kind) => {
-      await setActiveBrowserBackendKind(kind);
-      return backendController.getCurrentBackendKind();
-    },
-    // L2 user-recipe layer (userData/browser-recipes); merged over the bundled
-    // L1 catalog inside the MCP. Empty/missing dir → bundled-only (== before).
-    getUserRecipes: () => loadUserBrowserRecipes(),
-    // Self-grow: persist an agent/user-authored recipe into L2 (validated by the MCP).
-    saveUserRecipe: (input) => writeUserRecipe(input),
-    // Controller implements `BrowserControlRuntime` — the MCP tool layer never sees
-    // the backend split. Swapping the active backend (Phase 5) is invisible from
-    // @cindy/mcps' perspective.
-    getRuntime: () => backendController,
-    resolveScreenshot: (result) =>
-      resolveBrowserScreenshot(result, {
-        runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,
-      }),
-    compressInlineImage,
-    supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
-    supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
-    // 代输入: pause page-state reads on a tab still showing a page where the owner typed a secret.
-    pageReadsRestricted: async ({ profile, targetId }) => {
-      if (!hasSecretPages()) return false;
-      const listed = await backendController.call({ action: 'tabs', ...(profile ? { profile } : {}) });
-      if (!listed.ok) return true;
-      const tabs = (listed.data as { tabs?: Array<{ targetId?: unknown; url?: unknown }> } | undefined)?.tabs ?? [];
-      // Without a target the runtime acts on its last tab; check every tab conservatively.
-      return tabs
-        .filter((tab) => !targetId || tab.targetId === targetId)
-        .some((tab) => typeof tab.url === 'string' && isSecretPage(tab.url));
-    },
-    logger,
-  };
-}
+}{return createBrowserMcpHostDeps({runtime:backendController,runtimeDir:()=>process.env.XDT_BROWSER_RUNTIME_DIR,temporaryDir:()=>app.getPath('temp'),backend:()=>backendController.kind,
+ setBackend:async kind=>{await setActiveBrowserBackendKind(kind);return backendController.getCurrentBackendKind();},resolveSessionUploadRoots:id=>resolveSessionUploadRoots(id),
+ loadRecipes:()=>loadUserBrowserRecipes(),saveRecipe:input=>writeUserRecipe(input),readSecret:id=>genericOAuthSecretIo.readStrict(id),writeSecret:(id,value)=>genericOAuthSecretIo.write(id,value),compressInlineImage,logger});}
 
 /**
  * Probe whether a local browser is available (drives the Settings UI's

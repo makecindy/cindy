@@ -7,6 +7,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
+    "./modelFastMode": "./src/modelFastMode.ts",
     ".": "./src/index.ts",
     "./catalog": "./catalog/providers.json",
     "./provider-model-catalog": "./catalog/provider-models.json",
@@ -19,7 +20,33 @@
     "./effort-resolution": "./src/effortResolution.ts",
     "./model-list": "./src/modelList.ts",
     "./classification": "./src/classification.ts",
-    "./invocation": "./src/invocation.ts"
+    "./invocation": "./src/invocation.ts",
+    "./model-route-guard": "./src/modelRouteGuard.ts",
+    "./modelSwitchAssessment": "./src/modelSwitchAssessment.ts",
+    "./runtimeModelSwitchGate": "./src/runtimeModelSwitchGate.ts",
+    "./verifiedContextWindow": "./src/verifiedContextWindow.ts",
+    "./utilityModelProfiles": "./src/utilityModelProfiles.ts",
+    "./utilityTextResult": "./src/utilityTextResult.ts",
+    "./utilityTextRequest": "./src/utilityTextRequest.ts",
+    "./auxiliaryModelChain": "./src/auxiliaryModelChain.ts",
+    "./catalogModelPin": "./src/catalogModelPin.ts",
+    "./utility-model/*": "./src/utility-model/*.ts",
+    "./model-plane/*": "./src/model-plane/*.ts",
+    "./localModelRuntime": "./src/localModelRuntime.ts",
+    "./llamaCpp": "./src/llamaCpp.ts",
+    "./subscriptionModels": "./src/subscriptionModels.ts",
+    "./model-access/*": "./src/model-access/*.ts",
+    "./modelAccess": "./src/modelAccess.ts",
+    "./auxiliaryModelSettings": "./src/auxiliaryModelSettings.ts",
+    "./providerOrder": "./src/providerOrder.ts",
+    "./provider-auth/*": "./src/provider-auth/*.ts",
+    "./local-runtime/*": "./src/local-runtime/*.ts",
+    "./llamaCppCatalog": "./src/llamaCppCatalog.ts",
+    "./availableTaskModels": "./src/availableTaskModels.ts",
+    "./modelPriceQuote": "./src/modelPriceQuote.ts",
+    "./modelMismatch": "./src/modelMismatch.ts",
+    "./modelContext": "./src/modelContext.ts",
+    "./media-invocation": "./src/mediaInvocation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
@@ -36,6 +63,8 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@cindy/model-compat": "workspace:*"
+    "@cindy/model-compat": "workspace:*",
+    "@cindy/auth-client": "workspace:*",
+    "@cindy/maker-shared": "workspace:*"
   }
 }

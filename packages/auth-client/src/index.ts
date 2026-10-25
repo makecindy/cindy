@@ -1,4 +1,6 @@
 export { AuthApiError, CindyAuthClient, retryAfterDeadline } from "./client.js";
+export { TerminalAuthController, TerminalAuthError } from "./terminalAuth.js";
+export type { AuthSecretStore, TerminalAuthAccount, TerminalAuthOptions, TerminalAuthSnapshot, TerminalAuthVault, TerminalCaptchaChallenge } from "./terminalAuth.js";
 export {
   accountVaultKey,
   isStoredAccountMetadata,

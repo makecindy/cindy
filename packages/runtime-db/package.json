@@ -1,0 +1,34 @@
+{
+  "name": "@cindy/runtime-db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/client/DbClient.ts",
+  "types": "./src/client/DbClient.ts",
+  "exports": {
+    ".": "./src/client/DbClient.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/media-core": "workspace:*",
+    "@cindy/plugin-runtime": "workspace:*",
+    "@cindy/im-runtime": "workspace:*",
+    "@cindy/worktree-core": "workspace:*",
+    "better-sqlite3": "^12.9.0",
+    "drizzle-orm": "^0.45.2",
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/remote-agent": "workspace:*",
+    "@cindy/device-link": "workspace:*",
+    "@paralleldrive/cuid2": "^2.3.1",
+    "@cindy/embedding-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "typescript": "^5.7.0"
+  }
+}

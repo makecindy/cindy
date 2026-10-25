@@ -1,0 +1,429 @@
+import { isCredentialModeSwitchBusyError } from '@cindy/im-runtime/credentialModeSwitchError';
+
+/**
+ * DeferredCodexRestartService —— 全局 Codex 软重启的「延迟兑现」登记。
+ *
+ * 背景:Memory 设置是 Codex shared app-server 的 spawn-time 状态,改动后要靠一次
+ * 软重启让**存活**的本地 Codex 会话换到新状态。旧行为在任何本地 Codex 会话跑
+ * turn 时直接拒绝整个设置变更(CREDENTIAL_SWITCH_BUSY 裸 toast),与
+ * PendingCredentialSwitchService 已确立的「切换永远成功,只是生效时机不同」语义
+ * 相悖(2026-07-04 拍板)。新语义:设置立即落盘、manager 状态立即翻转(新会话
+ * 立刻按新值注入),存活会话的 native 热推 + 软重启登记到这里,在所有本地 Codex
+ * 会话空闲后自动补做。
+ *
+ * 兑现路径(与 PendingCredentialSwitchService 同款结构):
+ *   turn done/error / 会话关闭(register.ts 接线)→ onSessionSettled:
+ *     仍有本地 Codex 会话在 turn 内 → 静默保留 pending,等下一个边界;
+ *     全部空闲 → restart 先持有全部本地 host 的启动守卫并软关闭会话，再在
+ *     守卫内执行 applyRuntime、替换 bridge，最后释放队列门并唤醒输入队列。
+ *   排队门只覆盖实际重启中的会话，包括刚软关闭的会话。等待其它任务空闲
+ *   期间不挡消息，否则一个长任务会冻结所有已打开任务的后续输入。
+ *   持续有任务运行时设置可以延后生效；不以冻结任务来强迫出现全局空闲。
+ *   重启失败也释放队列门，保留 pending 交给既有空闲边界与定时器重试。
+ *   自愈兜底:stop/interrupt 可能只发 status idle 不发 done/error,事件路径
+ *   不触发 —— 周期定时器重试,杜绝「事件丢失 → 永不生效」。
+ *
+ * 全局单件(不 per-session):重启动作本身就是全 host 级的,多次 schedule 合并
+ * 为一次兑现(applyRuntime 取最后一次登记,last-write-wins 与设置语义一致)。
+ * 数据 owner 边界(登出 / 切账号)时 bootstrap 调 clear() 丢弃 pending —— 旧
+ * owner 的设置变更不得触发新 owner 的会话重启(review P1 2026-07-23)。
+ */
+
+/** 自愈兜底重试间隔(事件路径正常时用户感知不到它)。 */
+const DEFERRED_RESTART_RETRY_DELAY_MS = 10_000;
+
+export interface DeferredCodexRestartDeps {
+  /** 实际执行软重启(maker-host restartCodexAfterAuthModeChange)。busy 时抛 CredentialModeSwitchBusyError。 */
+  /** Run applyRuntime under the all-local startup guard; false cancels a stale owner generation. */
+  restart: (applyRuntime: () => Promise<boolean>) => Promise<void>;
+  /**
+   * 兑现前置探测:仍有本地 Codex 会话在 turn 内时跳过本轮,避免注定失败的
+   * close 尝试刷 warn 日志。探测与真正兑现之间存在竞态窗口 —— restart 内部的
+   * busy fail-closed 是正确性兜底,这里只是降噪。
+   */
+  hasBusyLocalCodexSession: () => boolean;
+  /**
+   * 兑现前采集当前本地 Codex live 会话 id —— restart 会把它们全部关闭,收口后
+   * 通过 onQueueGateReleased 逐个唤醒，包括重启失败前已关闭的会话。
+   */
+  listLocalCodexSessionIds: () => string[];
+  /** 兑现成功后回调。 */
+  onApplied?: (sessionIds: string[]) => void;
+  /** 实际重启尝试结束后释放输入，不把失败后的等待重试变成全局输入锁。 */
+  onQueueGateReleased?: (sessionIds: string[]) => void;
+  /** 自愈兜底重试间隔覆写(测试用)。 */
+  retryDelayMs?: number;
+  logger?: {
+    info: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  };
+}
+
+export class DeferredCodexRestartService {
+  private pending = false;
+  /** Sessions closed by any attempt still need a wake when this pending restart settles. */
+  private readonly pendingSessionIds = new Set<string>();
+  /** 兑现时机才执行的 runtime 变更(native setMemory 热推);最后一次登记生效。 */
+  private pendingApplyRuntime: (() => Promise<void>) | null = null;
+  /** 兑现串行化:turn done/error 双事件可能背靠背触发。 */
+  private applying = false;
+  /**
+   * 失效代:clear()(owner 边界 / 立即路径收口)时自增。已进入 tryApply 的
+   * in-flight 兑现在每个 await 之后、副作用之前核对 —— clear 前捕获的闭包不得
+   * 在 clear 后继续 restart/唤醒(否则旧 owner 的登记会关掉新 owner 的会话,
+   * review P1 2026-07-23)。
+   */
+  private generation = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly deps: DeferredCodexRestartDeps) {}
+
+  isPending(): boolean {
+    return this.pending;
+  }
+
+  isSessionRestarting(sessionId: string): boolean {
+    return this.pending && this.applying && this.pendingSessionIds.has(sessionId);
+  }
+
+  /**
+   * 登记一次延迟重启;已有 pending 时合并(重启是全局动作,一次兑现覆盖所有
+   * 登记),applyRuntime 覆盖为最新(设置本身 last-write-wins)。
+   */
+  schedule(reason: string, applyRuntime?: () => Promise<void>): void {
+    const alreadyPending = this.pending;
+    this.pending = true;
+    // applyRuntime === undefined 表示「本域没有 runtime 工作」:**保留**已登记的
+    // 回调而非清空 —— 跨设置域的调用方(子代理 spawn 配置)据此原子接续 Memory 域
+    // 排队中的 native 同步/bridge 收敛工作;调用方侧 peek-then-schedule 会被自身
+    // prepare 的 await 窗口打断,快照可能盖掉窗口内新登记的回调(codex/greptile
+    // review 第 2 轮)。同域覆盖(memory-over-memory 传入新回调)仍是 last-write-wins。
+    if (applyRuntime !== undefined) {
+      this.pendingApplyRuntime = applyRuntime;
+    } else if (this.applying && !this.pendingApplyRuntime) {
+      // Even a persist-only edit must leave work for the active attempt to
+      // consume: its bridge may already have snapshotted the previous config.
+      // Reuse the existing work slot without replacing a queued Memory update.
+      this.pendingApplyRuntime = async () => {};
+    }
+    if (!alreadyPending) {
+      this.scheduleRetry();
+    }
+    this.deps.logger?.info('deferred codex restart scheduled', { reason, merged: alreadyPending });
+  }
+
+  /**
+   * 原子取走当前登记的 runtime 回调(读 + 清,单次同步调用内完成;pending 标志
+   * 不动)。供立即路径在「即将 finalize 重启并 clear 登记」前把别的设置域排队中
+   * 的 runtime 工作原地补执行 —— 该窗口内凭证守卫已被持有,其它设置变更过不了
+   * prepare,不存在再登记的竞争。
+   */
+  takePendingApplyRuntime(): (() => Promise<void>) | null {
+    if (!this.pending) return null;
+    const callback = this.pendingApplyRuntime;
+    this.pendingApplyRuntime = null;
+    return callback;
+  }
+
+  /**
+   * turn 结束边界 / 会话关闭回调(register.ts 接线 + 自愈定时器共用)。
+   * 任何路径都不允许向外抛错(register 侧 fire-and-forget)。
+   */
+  onSessionSettled(): void {
+    if (!this.pending) return;
+    void this.tryApply();
+  }
+
+  /**
+   * 新本地 Codex 会话加入 shared host **之前**的兑现尝试(maker-host
+   * lifecycleHooks.onBeforeStart 接线)。此刻其它会话若已全部空闲,先兑现再放行,
+   * 新会话直接在新状态的 fresh host 上起跑;仍有会话 busy 则立即放行不阻塞
+   * (残余窗口:该新会话在旧 native 状态的 host 上运行,直至兑现后被关闭重建,
+   * 见模块注释)。串行化冲突(别的边界正在兑现)同样放行,不让会话创建卡等。
+   */
+  async flushBeforeLocalCodexSessionStart(): Promise<void> {
+    if (!this.pending) return;
+    await this.tryApply();
+  }
+
+  /**
+   * 丢弃 pending 并失效 in-flight 兑现(数据 owner 边界 / 立即路径已覆盖登记 /
+   * 测试收尾)。不执行任何登记中的变更。
+   */
+  clear(): void {
+    this.generation += 1;
+    this.clearRetry();
+    this.pending = false;
+    this.pendingApplyRuntime = null;
+    this.pendingSessionIds.clear();
+  }
+
+  /**
+   * 本次重启涉及及此前重试已关闭的本地 Codex 会话名单。立即路径覆盖 pending
+   * 登记时,调用方在 prepare 关会话**前**采集,clear 后逐个补唤醒 —— 门谓词变
+   * false 不会自己触发 drain,漏唤 = 队列停到下一次无关唤醒(review P1
+   * 2026-07-23)。无 pending 时为空;facade 暂不可读时保留已采集名单，owner clear 会清空。
+   */
+  listGatedSessionIds(): string[] {
+    if (!this.pending) return [];
+    try {
+      // Immediate takeover can itself fail after closing sessions. Its pre-close
+      // snapshot belongs to this pending work until success or owner clear too.
+      for (const id of this.deps.listLocalCodexSessionIds()) this.pendingSessionIds.add(id);
+    } catch {
+      // Keep the previously captured IDs while the facade is unavailable.
+    }
+    return [...this.pendingSessionIds];
+  }
+
+  private async tryApply(): Promise<void> {
+    if (!this.pending || this.applying) return;
+    const gen = this.generation;
+    let wakeSessionIds: string[] = [];
+    this.applying = true;
+    try {
+      // deps 走 dynamic Maker facade,owner 边界期间会抛 —— 整段兜住,
+      // 靠兜底定时器(或边界时的 clear())收口,不产生 unhandled rejection。
+      if (this.deps.hasBusyLocalCodexSession()) return;
+      for (const id of this.deps.listLocalCodexSessionIds()) this.pendingSessionIds.add(id);
+      wakeSessionIds = [...this.pendingSessionIds];
+      await this.deps.restart(async () => {
+        if (gen !== this.generation) return false;
+        // Claim inside the startup guard: a runtime callback can close the
+        // shared bridge. Claim-before-await preserves last-write-wins updates.
+        for (;;) {
+          const applyRuntime = this.pendingApplyRuntime;
+          if (!applyRuntime) break;
+          this.pendingApplyRuntime = null;
+          try {
+            await applyRuntime();
+          } catch (err) {
+            // The in-memory override is set before native push; new hosts
+            // apply it after restart even if the old native push failed.
+            this.deps.logger?.warn('deferred memory runtime apply failed; proceeding with restart', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          if (gen !== this.generation) return false;
+        }
+        return true;
+      });
+      if (gen !== this.generation) {
+        // clear 与 restart 的 await 竞态:restart 副作用已发生(TOCTOU 无法避免,
+        // owner 边界窗口内 facade 会抛、真正跨 owner 的 restart 到不了这里),
+        // 但状态收口与唤醒都属于旧代,不再执行。
+        return;
+      }
+      if (this.pendingApplyRuntime) {
+        // Work arrived after the guarded apply loop. The bridge may have frozen
+        // an older persisted config too; keep pending until the next restart.
+        return;
+      }
+      const sessionIds = [...this.pendingSessionIds];
+      this.pendingSessionIds.clear();
+      this.pending = false;
+      this.clearRetry();
+      this.deps.logger?.info('deferred codex restart applied', {
+        wokenSessions: sessionIds.length,
+      });
+      try {
+        this.deps.onApplied?.(sessionIds);
+      } catch (err) {
+        this.deps.logger?.warn('deferred codex restart: onApplied hook failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } catch (err) {
+      // busy:settle 与新 turn start 的竞态,静默保留 pending 等下一个边界。
+      // 其它失败(close/dispose 异常 / owner 边界窗口):同样保留 pending 交给
+      // 兜底重试 —— 设置已落盘,存活会话不能因一次重启失败而永远停在旧状态。
+      if (!isCredentialModeSwitchBusyError(err)) {
+        this.deps.logger?.warn('deferred codex restart failed; will retry', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } finally {
+      this.applying = false;
+      // Close cleanup may cancel an already scheduled drain. Wake only after
+      // the complete attempt settles, even when it failed or a newer setting
+      // remains pending. Never wake queues belonging to a previous owner.
+      if (gen === this.generation && wakeSessionIds.length > 0) {
+        try {
+          this.deps.onQueueGateReleased?.(wakeSessionIds);
+        } catch (err) {
+          this.deps.logger?.warn('deferred codex restart: queue wake failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+  }
+
+  private scheduleRetry(): void {
+    this.clearRetry();
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      if (!this.pending) return;
+      void this.tryApply().finally(() => {
+        // 仍未收口(还在跑 / busy 竞态)→ 继续兜底。成功路径已 clearRetry。
+        if (this.pending && !this.retryTimer) {
+          this.scheduleRetry();
+        }
+      });
+    }, this.deps.retryDelayMs ?? DEFERRED_RESTART_RETRY_DELAY_MS);
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+}
+
+export interface MemoryChangeParts<T extends object> {
+  /**
+   * 立即执行的部分:settings 落盘 + manager 状态翻转(不含 native 热推)。
+   * 无论重启是否延迟,新会话 / 新 spawn 都要立刻读到新值。
+   */
+  persist: () => Promise<T>;
+  /**
+   * 会打到 live Codex host 的 runtime 变更(native setMemory RPC 热推)。
+   * 立即路径在 persist 后原地执行;延迟路径挪到所有会话空闲、重启前执行 ——
+   * 不能 mid-turn 热更正在跑的任务(review P1 2026-07-23)。
+   *
+   * 缺省(undefined)= 本域没有 runtime 工作(如子代理 spawn 配置):延迟路径
+   * 登记时**保留**别的设置域排队中的回调(service.schedule 的 preserve 语义),
+   * 立即路径经 deps.takePendingApplyRuntime 把排队回调原地补执行后再重启。
+   */
+  applyRuntime?: () => Promise<void>;
+  /** 延迟重启诊断日志里的触发源标签;缺省 'memory-change'(历史默认)。 */
+  reason?: string;
+  /**
+   * 变更跨 await 边界后是否仍有效(如 owner scope 未变)。busy 路径在 persist
+   * 之后、登记延迟重启之前复核:persist 期间发生 owner boundary 时,旧 owner 的
+   * 变更不得在(可能已被 boundary 清理过的)全局 service 上再登记 —— 其定时器
+   * 最终会重启新 owner 的 Codex runtime(codex review P1 第 3 轮)。写入本身由
+   * persist 内部的 scope 校验守卫;这里只跳过登记:owner 切换会 teardown 旧
+   * host,新 owner 的 host 重建时天然现读各 owner 自己的 store,不需要这次重启。
+   */
+  stillValid?: () => boolean;
+}
+
+export interface MemoryChangeWithCodexRestartDeps {
+  /**
+   * maker-host prepareCodexForAuthModeChange:busy fail-closed + 持 credential
+   * guard。register.ts 侧负责把非 busy 失败包装成结构化 IPC error 再抛
+   * (busy 异常必须原样透传,本执行体靠它分流延迟路径)。
+   */
+  prepare: () => Promise<void>;
+  /** maker-host finalizeCodexAfterAuthModeChange:dispose host + 释放 guard。 */
+  finalize: () => Promise<void>;
+  /** maker-host cancelCodexAuthModeChange:change 失败时释放 guard。 */
+  cancel: () => void;
+  /** prepare 抛明确 busy 时登记延迟重启(applyRuntime 在兑现时执行)。 */
+  scheduleDeferredRestart: (reason: string, applyRuntime?: () => Promise<void>) => void;
+  /**
+   * 立即路径成功后丢弃仍然挂着的旧延迟登记:本次变更已带最新设置完成重启,
+   * 旧登记完全被覆盖 —— 不清的话兜底重试会拿旧 MemorySettings 的 applyRuntime
+   * 把 memoryOverride 打回旧值(review P1 2026-07-23)。
+   */
+  clearDeferredRestart: () => void;
+  /**
+   * 原子取走延迟登记里排队中的 runtime 回调(service.takePendingApplyRuntime)。
+   * 立即路径在 parts.applyRuntime 缺省时用它把别的设置域的排队工作原地补执行,
+   * 避免随后的 clearDeferredRestart 把该工作静默丢弃(review 第 2 轮)。
+   */
+  takePendingApplyRuntime?: () => (() => Promise<void>) | null;
+  logger?: {
+    info: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  };
+}
+
+/**
+ * Memory 设置变更的统一执行体:能立即软重启就重启,Codex busy 就把重启延迟兑现。
+ *
+ * 收口矩阵:
+ *  - prepare 成功 → persist → applyRuntime → finalize(finalize 失败仅 warn:
+ *    设置已提交,下一次 Codex spawn 仍读新值,不能让 main/renderer 各持一个值);
+ *  - prepare 抛**明确的 busy**(本地 Codex 会话在 turn 内)→ persist 照常提交 +
+ *    scheduleDeferredRestart(applyRuntime 延迟到兑现时),返回
+ *    codexRestartDeferred: true 供 UI 提示「任务结束后对运行中会话生效」;
+ *  - prepare 其它失败(并发凭证切换在飞 / 空闲会话 close 异常)→ 原样上抛,
+ *    设置不提交 —— 延迟降级只适用于「确定会自然解除」的 busy,把真实故障也
+ *    包装成延迟成功会让用户误以为已生效(review P1 2026-07-23);
+ *  - persist / applyRuntime 自身失败 → 原样上抛(cancel 释放 guard)。
+ */
+export async function runMemoryChangeWithCodexRestart<T extends object>(
+  deps: MemoryChangeWithCodexRestartDeps,
+  parts: MemoryChangeParts<T>,
+): Promise<T & { codexRestartDeferred: boolean }> {
+  let prepared = false;
+  try {
+    await deps.prepare();
+    prepared = true;
+  } catch (err) {
+    if (!isCredentialModeSwitchBusyError(err)) {
+      throw err;
+    }
+    deps.logger?.info('codex busy during memory change; deferring live-session restart', {
+      error: err.message,
+    });
+  }
+  if (!prepared) {
+    const result = await parts.persist();
+    if (parts.stillValid && !parts.stillValid()) {
+      deps.logger?.info('deferred codex restart not scheduled: change stale after persist', {
+        reason: parts.reason ?? 'memory-change',
+      });
+      return { ...result, codexRestartDeferred: false };
+    }
+    deps.scheduleDeferredRestart(parts.reason ?? 'memory-change', parts.applyRuntime);
+    return { ...result, codexRestartDeferred: true };
+  }
+  let changed = false;
+  try {
+    const result = await parts.persist();
+    // 立即路径的 owner/boundary 复核:persist 与 inherited-runtime 的 await 期间
+    // teardown 可能已完成 —— holder 与 maker facade 都是全局动态解析,继续
+    // clear/finalize 会清掉**新 owner** 的登记并关闭其 Codex runtime(review 第
+    // 5 轮)。过期路径只走 finally 的 cancel 释放原 guard,不做任何全局副作用;
+    // 旧登记由 owner boundary 自己的清理收口。
+    const stale = () => (parts.stillValid ? !parts.stillValid() : false);
+    if (stale()) {
+      deps.logger?.info('immediate codex restart skipped: change stale before runtime apply', {
+        reason: parts.reason ?? 'memory-change',
+      });
+      return { ...result, codexRestartDeferred: false };
+    }
+    // 本域无 runtime 工作时,把别的设置域排队中的回调原子取走并原地补执行 ——
+    // 下方 clearDeferredRestart 会丢弃登记,不补执行就是静默丢工作(review 第 2 轮)。
+    // 此刻凭证守卫已被持有,其它设置变更过不了 prepare,无再登记竞争。
+    const runtime = parts.applyRuntime ?? deps.takePendingApplyRuntime?.() ?? null;
+    if (runtime) await runtime();
+    if (stale()) {
+      deps.logger?.info('immediate codex restart skipped: change stale after runtime apply', {
+        reason: parts.reason ?? 'memory-change',
+      });
+      return { ...result, codexRestartDeferred: false };
+    }
+    changed = true;
+    // 本次立即变更已带最新设置走完 persist + runtime,任何仍挂着的旧延迟登记
+    // 都被覆盖 —— 即使下方 finalize 失败也要清(设置已提交,旧 applyRuntime
+    // 不能再回放)。
+    deps.clearDeferredRestart();
+    try {
+      await deps.finalize();
+    } catch (err) {
+      deps.logger?.warn('codex restart failed after memory setting change', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return { ...result, codexRestartDeferred: false };
+  } finally {
+    if (!changed) {
+      deps.cancel();
+    }
+  }
+}

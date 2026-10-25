@@ -22,7 +22,7 @@ vi.mock('drizzle-orm', () => ({
   eq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
 }));
 vi.mock('../../logger', () => ({ createLogger: () => mocks.logger }));
-vi.mock('../../localDb/schema', () => ({
+vi.mock('@cindy/runtime-db/schema', () => ({
   imBindings: {
     channel: 'channel',
     botContextId: 'botContextId',

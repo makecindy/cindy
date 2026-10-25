@@ -376,7 +376,7 @@ test('glossary.json: exempt 路径带来源前缀,不是裸 key', () => {
 });
 
 test('glossary.json: locales 与 desktop SUPPORTED_LOCALES 一致', () => {
-  const localeTs = fs.readFileSync(path.join(ROOT, 'apps/desktop/src/shared/locale.ts'), 'utf8');
+  const localeTs = fs.readFileSync(path.join(ROOT, 'packages/plugin-runtime/src/shared/locale.ts'), 'utf8');
   const match = localeTs.match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/);
   assert.ok(match, '无法从 locale.ts 解析 SUPPORTED_LOCALES');
   const supported = [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);

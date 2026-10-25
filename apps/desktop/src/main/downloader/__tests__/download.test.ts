@@ -9,8 +9,8 @@ vi.mock('../http', () => ({ requestResponse: fetchMock }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }) }));
 import { download, getActive } from '../index';
 import { writeMeta } from '../resume';
-import * as resume from '../resume';
-import * as integrity from '../integrity';
+import * as resume from '@cindy/plugin-runtime/download/resume';
+import * as integrity from '@cindy/plugin-runtime/download/integrity';
 
 const roots: string[] = [];
 const hash = (body: string) => createHash('sha256').update(body).digest('hex');

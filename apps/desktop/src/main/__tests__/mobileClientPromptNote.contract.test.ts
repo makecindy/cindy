@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('注入接线(源码级守卫)', () => {
   const source = readFileSync(
-    resolve(process.cwd(), 'src/main/maker-ipc/makerSendTransaction.ts'),
+    resolve(process.cwd(), '../../packages/app-runtime/src/makerSendTransaction.ts'),
     'utf8',
   );
 
@@ -39,8 +39,8 @@ describe('注入接线(源码级守卫)', () => {
   it('注释不得把平台值说成安全边界(平台由对端 hello 自报,无服务端校验)', () => {
     const files = [
       'src/main/device-link/invoke-context.ts',
-      'src/main/device-link/controllerPlatform.ts',
-      'src/main/maker-ipc/makerSendTransaction.ts',
+      '../../packages/app-runtime/src/controllerPlatform.ts',
+      '../../packages/app-runtime/src/makerSendTransaction.ts',
     ].map((rel) => readFileSync(resolve(process.cwd(), rel), 'utf8'));
     for (const text of files) {
       expect(text).not.toContain('不可伪造');
@@ -62,13 +62,18 @@ describe('注入接线(源码级守卫)', () => {
 
 
 describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
-  const register = readFileSync(resolve(process.cwd(), 'src/main/maker-ipc/register.ts'), 'utf8');
+  const register = [
+    readFileSync(resolve(process.cwd(), 'src/main/maker-ipc/register.ts'), 'utf8'),
+    readFileSync(resolve(process.cwd(), '../../packages/app-runtime/src/makerInputSubmission.ts'), 'utf8'),
+    readFileSync(resolve(process.cwd(), '../../packages/app-runtime/src/makerInputControls.ts'), 'utf8'),
+    readFileSync(resolve(process.cwd(), '../../packages/app-runtime/src/makerSteerTransaction.ts'), 'utf8'),
+  ].join('\n');
   const coordinator = readFileSync(
-    resolve(process.cwd(), 'src/main/maker-ipc/agent-input-coordinator.ts'),
+    resolve(process.cwd(), '../../packages/app-runtime/src/agent-input-coordinator.ts'),
     'utf8',
   );
   const transaction = readFileSync(
-    resolve(process.cwd(), 'src/main/maker-ipc/makerSendTransaction.ts'),
+    resolve(process.cwd(), '../../packages/app-runtime/src/makerSendTransaction.ts'),
     'utf8',
   );
   const sendHandler = readFileSync(

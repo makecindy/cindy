@@ -23,11 +23,8 @@ interface LatestUserInvocation {
 }
 
 /** Main-owned snapshot of the Skill winner captured for one accepted user turn. */
-export interface CindyLearnInvocationGrant {
-  version: 1;
-  sessionInstanceId: string;
-  resolvedSkillPath: string;
-}
+import type { CindyLearnInvocationGrant } from '@cindy/app-runtime/learnInvocationTypes';
+export type { CindyLearnInvocationGrant } from '@cindy/app-runtime/learnInvocationTypes';
 
 type ReadLatestUserInvocation = (
   sessionId: string,

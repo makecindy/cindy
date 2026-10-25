@@ -1,3 +1,4 @@
+import { createScheduledTargetValidator } from '@cindy/app-runtime/scheduledTargetRestore';
 /**
  * Phase 3: scheduler-host 单例 + 启停。
  *
@@ -25,9 +26,6 @@ import type { FeishuIM } from '@cindy/im';
 import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
-import { isReviewSessionSource } from '../../shared/sessionSource.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
@@ -213,21 +211,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // Review sessions are host-owned read-only tasks, not normal unattended
     // automation targets. Re-read their durable source for CRUD and every fire
     // so renderer filtering or a restored schedule row cannot bypass isolation.
-    validateTargetSession: async (targetSessionId, _operation, selection) => {
-      const [row] = await deps
-        .getDb()
-        .select({ source: sessions.source, agentKind: sessions.agentKind,
-          status: sessions.status, remoteHostId: sessions.remoteHostId, orcaRole: sessions.orcaRole })
-        .from(sessions)
-        .where(eq(sessions.id, targetSessionId))
-        .limit(1);
-      if (isReviewSessionSource(row?.source)) {
-        throw new Error('Review tasks cannot be targets of scheduled automations');
-      }
-      assertScheduledHarnessSupported(row ? {
-        ...row, agentKind: dbToMakerAgentKind(row.agentKind),
-      } : null, selection.modelAgentKind);
-    },
+    validateTargetSession: createScheduledTargetValidator(deps.getDb),
     // 卡死收口的通知出口。通知投递平时住在两个 runner 里(它们各自持 notifier),而
     // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。
     // 没有这条线,用户配了桌面/飞书通知也只会看到一个未读红点(PR #944 review P1)。

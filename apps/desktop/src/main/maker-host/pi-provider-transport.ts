@@ -13,7 +13,7 @@ import * as googleVertex from '@earendil-works/pi-ai/api/google-vertex';
 import * as azureOpenaiResponses from '@earendil-works/pi-ai/api/azure-openai-responses';
 import * as bedrockConverseStream from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import * as mistralConversations from '@earendil-works/pi-ai/api/mistral-conversations';
-import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
+import { PI_REASONING_EFFORTS, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
 
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
@@ -146,14 +146,8 @@ export function requiresNativeProviderAuth(row: ProviderModelRecord | undefined)
   return identity === 'github-copilot' || identity === 'cloudflare-ai-gateway';
 }
 
-const HOST_CREDENTIAL_APIS = new Set<string>(['google-vertex', 'bedrock-converse-stream']);
-
-/** Vertex ADC / Bedrock IAM may only target Main-approved cloud endpoints. */
-export function hostCredentialEndpointAllowed(api: string, destination: string): boolean {
-  if (!HOST_CREDENTIAL_APIS.has(api)) return true;
-  return Object.values(PROVIDER_MODEL_CATALOG.providers).some((rows) =>
-    rows.some((row) => row.execution.pi.api === api && providerEndpointBindings(row.upstream, destination) !== null));
-}
+import { HOST_CREDENTIAL_APIS, hostCredentialEndpointAllowed } from '@cindy/app-runtime/piHostCredentialEndpoint';
+export { hostCredentialEndpointAllowed } from '@cindy/app-runtime/piHostCredentialEndpoint';
 
 function assertHostCredentialEndpoint(api: string, destination: string, apiKey?: string): void {
   if (!HOST_CREDENTIAL_APIS.has(api)) return;

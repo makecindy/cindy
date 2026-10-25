@@ -33,6 +33,7 @@ out/
 .vite/
 apps/desktop/release/
 apps/desktop/resources/tools/
+apps/desktop/resources/terminal/
 # Generated at package time and embedded in the installed app's Resources.
 apps/desktop/resources/cindy-source.json
 # build-remote-bundles.mjs 会在 dev/package/build 前重新生成这些目录。
@@ -199,3 +200,4 @@ apps/desktop/resources/builtin-ghosts/
 
 # 本地验收截图与设计稿等任务产物(只在本地保存,不入仓)。
 artifacts/
+apps/desktop/.cindy-terminal-platform.mjs

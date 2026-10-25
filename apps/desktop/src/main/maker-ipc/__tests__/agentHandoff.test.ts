@@ -514,7 +514,7 @@ describe('createAgentHandoffPendingRegistry', () => {
     reg.consume('s1');
     expect(await reg.peek('s1')).toBeNull();
     expect(query).not.toHaveBeenCalled();
-    expect(consumed).toHaveBeenCalledWith('s1');
+    expect(consumed).toHaveBeenCalledWith('s1', 'H1');
   });
 
   it('内存命中也过 decorate:agent-switch 直接 set 的交接仍能并上 fork 来源标记', async () => {

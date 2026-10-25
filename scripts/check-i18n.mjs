@@ -13,7 +13,7 @@
  *    即 DEFAULT_LOCALE)完全相同——疑似未翻译,专有名词 / "OK" 等合法重复较多,
  *    故仅提示。
  *
- * locale 列表与默认语言从 apps/desktop/src/shared/locale.ts 的 SUPPORTED_LOCALES /
+ * locale 列表与默认语言从 packages/plugin-runtime/src/shared/locale.ts 的 SUPPORTED_LOCALES /
  * DEFAULT_LOCALE 解析,新增语言或改默认语言无需改本脚本。
  *
  * 用法:node scripts/check-i18n.mjs(root: pnpm check:i18n)
@@ -23,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const localeTsPath = path.join(repoRoot, 'apps', 'desktop', 'src', 'shared', 'locale.ts');
+const localeTsPath = path.join(repoRoot, 'packages', 'plugin-runtime', 'src', 'shared', 'locale.ts');
 const localesDir = path.join(repoRoot, 'apps', 'desktop', 'src', 'renderer', 'i18n', 'locales');
 
 /** 从 locale.ts 源码解析 SUPPORTED_LOCALES 数组字面量与 DEFAULT_LOCALE。 */

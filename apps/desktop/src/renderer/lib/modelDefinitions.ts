@@ -1,3 +1,5 @@
+import {coldStartModelIdForVendor,coldStartLabelForVendor} from '@cindy/app-runtime/modelDefinitionDefaults';
+export {coldStartModelIdForVendor} from '@cindy/app-runtime/modelDefinitionDefaults';
 /**
  * 兼容层 —— 历史代码用 `getModelById` / `getDefaultModelForVendor` 同步查模型,
  * 数据现在的 SSoT 在 maker-core (通过 useAgentCapabilities hook 异步拉取并缓存)。
@@ -205,20 +207,3 @@ export function getDefaultModelForVendor(
  * 折扣组），否则冷启动首帧会闪一个随后被换掉的模型名。pi 复用其历史中档默认(XD 网关 Sonnet)。
  * 由 modelDefinitionsDefaults 测试锁住。
  */
-const COLD_START_CC_MODEL_ID = 'claude-opus-5';
-const COLD_START_CODEX_MODEL_ID = 'gpt-5.6-sol';
-const COLD_START_PI_MODEL_ID = 'claude-sonnet-5';
-
-/** 冷启动占位 id 的只读导出（newMakerDraft 的种子默认复用，避免另一处写死）。 */
-export function coldStartModelIdForVendor(vendorKey: 'cc' | 'codex' | 'pi'): string {
-  return vendorKey === 'codex'
-    ? COLD_START_CODEX_MODEL_ID
-    : vendorKey === 'pi'
-      ? COLD_START_PI_MODEL_ID
-      : COLD_START_CC_MODEL_ID;
-}
-
-/** 冷启动占位的展示名(与占位 id 同源,仅首帧短暂可见)。 */
-function coldStartLabelForVendor(vendorKey: 'cc' | 'codex' | 'pi'): string {
-  return vendorKey === 'codex' ? 'GPT-5.6-Sol' : vendorKey === 'pi' ? 'Sonnet 5' : 'Opus 5';
-}

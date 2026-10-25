@@ -1,0 +1,9 @@
+export const RSB_WINDOW_RENDERER_READY_CHANNEL = 'rsb-window:renderer-ready';
+export const RSB_WINDOW_PRESENTATION_READY_CHANNEL = 'rsb-window:presentation-ready';
+export const RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL = 'rsb-window:visibility-changed';
+export const RSB_WINDOW_REFRESH_CONTEXT_CHANNEL = 'rsb-window:refresh-context';
+export const RSB_WINDOW_LOCALE_CHANGED_CHANNEL = 'rsb-window:locale-changed';
+export const RSB_WINDOW_TAB_HANDOFF_CHANNEL = 'maker:rsb-window:tab-handoff';
+export const RSB_WINDOW_STATE_CHANGED_CHANNEL = 'maker:rsb-window:state-changed';
+export const RSB_WINDOW_CONTEXT_CHANGED_CHANNEL = 'maker:rsb-window:context-changed';
+export const RSB_WINDOW_COMMAND_CHANNEL = 'maker:rsb-window:command';

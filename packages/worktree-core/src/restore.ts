@@ -1,0 +1,872 @@
+import path from "node:path";
+import fs from "node:fs/promises";
+import { pathKey } from "./liveSessionRefs.js";
+import type * as restoreLock from "./restoreLock.js";
+import {
+  getManagedWorktreeBranchCandidates,
+  isManagedWorktreeBranchForName,
+} from "@cindy/maker-shared/worktree-branches";
+import { isManagedWorktreeDirectoryName } from "@cindy/maker-shared/worktree-paths";
+import type { WorktreeMeta } from "./types.js";
+import type { WorktreeManagerPorts } from "./managerPorts.js";
+import type { createWorktreeDirtyChecks } from "./dirty.js";
+import type { createRecordedWorktreeRecovery } from "./restoreRecovery.js";
+import type { createWorktreeRecycleJournal } from "./recycleJournal.js";
+import type { createWorktreeManager } from "./manager.js";
+
+export type WorktreeRestoreStatus =
+  /** worktree 目录还在，无需恢复。 */
+  | { state: "present"; worktreePath: string; hasSnapshot?: boolean }
+  /** 会话从没有托管 worktree（或路径无法安全解析），无恢复语义。 */
+  | { state: "no-worktree" }
+  /** 目录没了但本地或 origin tracking 分支还在，可重建；hasSnapshot = 是否留了脏内容快照。 */
+  | { state: "restorable"; worktreePath: string; hasSnapshot: boolean }
+  /** 本地与 origin tracking 分支都没了（或 baseRepo 不存在），产品内无法恢复。 */
+  | { state: "gone"; worktreePath: string };
+
+export interface WorktreeRestoreResult {
+  ok: boolean;
+  /** ok=true 时：脏内容快照是否成功 apply（无快照时为 true）。 */
+  snapshotApplied?: boolean;
+  /** ok=false 时的稳定原因；renderer 侧负责 i18n 映射。 */
+  reason?: "gone" | "no-worktree" | "git-error";
+  /** 诊断细节，不直接展示为用户文案。 */
+  detail?: string;
+}
+
+interface ParsedManagedPath {
+  baseRepo: string;
+  name: string;
+}
+
+interface WorktreeRestorePlan {
+  status: WorktreeRestoreStatus;
+  parsed?: ParsedManagedPath;
+  branch?: string;
+}
+
+interface SessionWorktreeBinding {
+  workingDir: string | null;
+  worktreePath: string | null;
+}
+
+export type ManagedWorktreeReadiness = "ready" | "gone" | "retry";
+export type WorktreeRestorePorts = Pick<
+  WorktreeManagerPorts,
+  | "readAttachedWorktreeBranch"
+  | "gitExec"
+  | "GitExecError"
+  | "applyWorktreeIncludeFile"
+  | "withWorktreeResourceLock"
+  | "store"
+  | "log"
+> &
+  Pick<
+    ReturnType<typeof createWorktreeDirtyChecks>,
+    | "clearSnapshotRef"
+    | "getRestorableAutoStashSha"
+    | "getRestorableSnapshotSha"
+    | "markSnapshotConsumed"
+  > &
+  ReturnType<typeof createRecordedWorktreeRecovery> &
+  Pick<
+    ReturnType<typeof createWorktreeRecycleJournal>,
+    "readRecycleRecord" | "worktreeGeneration"
+  > &
+  Pick<ReturnType<typeof createWorktreeManager>, "copyClaudeSiviDirs"> &
+  Pick<
+    typeof restoreLock,
+    | "getWorktreeRestoreMutation"
+    | "getWorktreeRestoreMutationVersion"
+    | "withWorktreeRestoreMutation"
+  > & {
+    readSessionWorktreeBinding(
+      id: string,
+    ): Promise<{
+      workingDir: string | null;
+      worktreePath: string | null;
+    } | null>;
+    readWorktreeOwnerRows(): Promise<
+      Array<{ id: string; worktreePath: string | null; status: string | null }>
+    >;
+  };
+
+export function createWorktreeRestore(ports: WorktreeRestorePorts) {
+  const {
+    getWorktreeRestoreMutation,
+    getWorktreeRestoreMutationVersion,
+    withWorktreeRestoreMutation,
+    clearSnapshotRef,
+    getRestorableAutoStashSha,
+    getRestorableSnapshotSha,
+    markSnapshotConsumed,
+    readAttachedWorktreeBranch,
+    gitExec,
+    GitExecError,
+    applyWorktreeIncludeFile,
+    copyClaudeSiviDirs,
+    restoreRecordedWorktree,
+    readRecycleRecord,
+    worktreeGeneration,
+    withWorktreeResourceLock,
+    store,
+    log,
+    readSessionWorktreeBinding,
+    readWorktreeOwnerRows,
+  } = ports;
+  const restoreInFlight = new Map<string, Promise<WorktreeRestoreResult>>();
+  const restoreInFlightVersions = new Map<string, number>();
+  const sendReadyWorktrees = new Map<string, number>();
+  /** 只认 Cindy 当前或历史托管 worktree 形态；解析失败返回 null。 */
+  function parseManagedWorktreePath(
+    worktreePath: string,
+  ): ParsedManagedPath | null {
+    try {
+      const resolved = path.resolve(worktreePath);
+      const parent = path.dirname(resolved);
+      if (!isManagedWorktreeDirectoryName(path.basename(parent))) return null;
+      const name = path.basename(resolved);
+      if (!name) return null;
+      return { baseRepo: path.dirname(parent), name };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Resolves the managed worktree root for either the root itself or one of its descendants. */
+  function findManagedWorktreeRoot(candidatePath: string): string | null {
+    try {
+      let current = path.resolve(candidatePath);
+      for (;;) {
+        if (parseManagedWorktreePath(current)) return current;
+        const parent = path.dirname(current);
+        if (parent === current) return null;
+        current = parent;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  async function pathExists(p: string): Promise<boolean> {
+    try {
+      await fs.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function pathIsDirectory(p: string): Promise<boolean> {
+    try {
+      return (await fs.stat(p)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  async function readWorktreeOwnerSessionId(
+    worktreePath: string,
+  ): Promise<string | null> {
+    const worktreeKey = pathKey(worktreePath);
+    if (!worktreeKey) return null;
+
+    const registeredOwner = store
+      .getAll()
+      .find((meta) => pathKey(meta.path) === worktreeKey);
+    const rows = await readWorktreeOwnerRows();
+    if (
+      registeredOwner &&
+      rows.some(
+        (row) =>
+          row.id === registeredOwner.sessionId && row.status !== "deleted",
+      )
+    ) {
+      return registeredOwner.sessionId;
+    }
+    const matchingRows = rows.filter(
+      (row) =>
+        row.status !== "deleted" && pathKey(row.worktreePath) === worktreeKey,
+    );
+    return (
+      matchingRows.find((row) => row.status === "active")?.id ??
+      matchingRows[0]?.id ??
+      null
+    );
+  }
+
+  async function refExists(baseRepo: string, ref: string): Promise<boolean> {
+    try {
+      const { stdout } = await gitExec(
+        ["rev-parse", "--verify", "--quiet", ref],
+        baseRepo,
+      );
+      return stdout.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  function localBranchRef(branch: string): string {
+    return `refs/heads/${branch}`;
+  }
+
+  function originBranchRef(branch: string): string {
+    return `refs/remotes/origin/${branch}`;
+  }
+
+  async function hasRestorableBranch(
+    baseRepo: string,
+    branch: string,
+  ): Promise<boolean> {
+    return (
+      (await refExists(baseRepo, localBranchRef(branch))) ||
+      (await refExists(baseRepo, originBranchRef(branch)))
+    );
+  }
+
+  type RestorableBranchResolution =
+    | { state: "found"; branch: string }
+    | { state: "missing" }
+    | { state: "ambiguous"; branches: string[] };
+
+  /**
+   * 目录已经回收时只允许恢复到确定的分支：Store 里的精确分支优先；否则新旧
+   * 托管前缀只能唯一命中。两个候选同时存在时 fail closed，避免把快照套到错误基底。
+   */
+  async function resolveRestorableBranch(
+    baseRepo: string,
+    name: string,
+    storedBranch?: string,
+  ): Promise<RestorableBranchResolution> {
+    if (
+      storedBranch &&
+      isManagedWorktreeBranchForName(storedBranch, name) &&
+      (await hasRestorableBranch(baseRepo, storedBranch))
+    ) {
+      return { state: "found", branch: storedBranch };
+    }
+
+    const candidates = getManagedWorktreeBranchCandidates(name);
+    const matches: string[] = [];
+    for (const branch of candidates) {
+      if (await hasRestorableBranch(baseRepo, branch)) matches.push(branch);
+    }
+    if (matches.length === 1) return { state: "found", branch: matches[0] };
+    if (matches.length === 0) return { state: "missing" };
+    return { state: "ambiguous", branches: matches };
+  }
+
+  /**
+   * PR cleanup may have removed the local managed branch while leaving its origin tracking ref.
+   * Recreate only that exact local branch from the already-fetched tracking ref; restore never
+   * performs network I/O, changes the primary checkout, or guesses a different commit.
+   */
+  async function ensureLocalBranchForRestore(
+    baseRepo: string,
+    branch: string,
+  ): Promise<void> {
+    if (await refExists(baseRepo, localBranchRef(branch))) return;
+    const remoteRef = originBranchRef(branch);
+    if (!(await refExists(baseRepo, remoteRef))) {
+      throw new Error(`restorable branch not found: ${branch}`);
+    }
+    try {
+      await gitExec(["branch", branch, remoteRef], baseRepo);
+    } catch (err) {
+      // Another Cindy instance or manual recovery may have created it after our first probe.
+      if (await refExists(baseRepo, localBranchRef(branch))) return;
+      throw err;
+    }
+  }
+
+  async function addRestoredWorktree(
+    baseRepo: string,
+    worktreePath: string,
+    branch: string,
+  ): Promise<void> {
+    const addArgs = [
+      "-c",
+      "core.longpaths=true",
+      "worktree",
+      "add",
+      worktreePath,
+      branch,
+    ];
+    try {
+      await gitExec(addArgs, baseRepo);
+    } catch (err) {
+      if (
+        !(err instanceof GitExecError) ||
+        !/filename too long|core\.longpaths/i.test(err.stderr)
+      ) {
+        throw err;
+      }
+      await gitExec(["config", "--global", "core.longpaths", "true"]);
+      await gitExec(addArgs, baseRepo);
+    }
+  }
+
+  async function findPendingSnapshot(
+    baseRepo: string,
+    sessionId: string,
+    worktreeName: string,
+  ): Promise<{ sha: string; source: "snapshot" | "stash" } | null> {
+    const snapshotSha = await getRestorableSnapshotSha(baseRepo, sessionId);
+    if (snapshotSha) return { sha: snapshotSha, source: "snapshot" };
+    const fallbackStashSha = await getRestorableAutoStashSha(
+      baseRepo,
+      sessionId,
+      worktreeName,
+    );
+    if (fallbackStashSha) return { sha: fallbackStashSha, source: "stash" };
+    return null;
+  }
+
+  async function applyPendingSnapshot(
+    baseRepo: string,
+    worktreePath: string,
+    sessionId: string,
+    worktreeName: string,
+  ): Promise<boolean> {
+    const pending = await findPendingSnapshot(
+      baseRepo,
+      sessionId,
+      worktreeName,
+    );
+    if (!pending) return true;
+    try {
+      // stash-form commit 可直接 apply，不依赖 stash 栈。ref 在成功 apply 后清理：
+      // 内容已回到 worktree，后续再次回收如果仍 dirty 会生成新的 snapshot。
+      await gitExec(["stash", "apply", pending.sha], worktreePath);
+      if (pending.source === "snapshot") {
+        await clearSnapshotRef(baseRepo, sessionId);
+      }
+      await markSnapshotConsumed(baseRepo, sessionId, pending.sha);
+      return true;
+    } catch (err) {
+      log.warn(
+        `[restore] snapshot apply failed for ${worktreePath} (${pending.sha.slice(0, 12)}):`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  }
+
+  function restoredWorktreeMeta(
+    sessionId: string,
+    parsed: ParsedManagedPath,
+    worktreePath: string,
+    branch: string,
+  ): WorktreeMeta {
+    return {
+      sessionId,
+      name: parsed.name,
+      path: worktreePath,
+      baseRepo: parsed.baseRepo,
+      branch,
+      // 原始 sourceBranch 在回收时随 store 条目丢失,恢复后以自身分支占位
+      // (仅影响 UI 显示,不参与任何 git 操作)。
+      sourceBranch: branch,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  async function finishRestoredWorktree(
+    sessionId: string,
+    parsed: ParsedManagedPath,
+    worktreePath: string,
+    branch: string,
+  ): Promise<void> {
+    await copyClaudeSiviDirs(parsed.baseRepo, worktreePath, {
+      overwriteExisting: false,
+    }).catch((err) => {
+      log.warn(
+        `[restore] copy .claude/.sivi failed for ${worktreePath}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+    await applyWorktreeIncludeFile(parsed.baseRepo, worktreePath, {
+      overwriteExisting: false,
+    }).catch((err) => {
+      log.warn(
+        `[restore] apply worktree include files failed for ${worktreePath}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+    await store.set(
+      sessionId,
+      restoredWorktreeMeta(sessionId, parsed, worktreePath, branch),
+    );
+  }
+
+  async function getWorktreeRestorePlan(
+    sessionId: string,
+  ): Promise<WorktreeRestorePlan> {
+    let worktreePath: string | null = null;
+    let registeredMeta: WorktreeMeta | null = null;
+    try {
+      registeredMeta = store.get(sessionId);
+      worktreePath =
+        registeredMeta?.path ??
+        (await readSessionWorktreeBinding(sessionId))?.worktreePath ??
+        null;
+    } catch (err) {
+      log.warn(
+        `[restore] session lookup failed for ${sessionId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return { status: { state: "no-worktree" } };
+    }
+    if (!worktreePath) return { status: { state: "no-worktree" } };
+    const parsed = parseManagedWorktreePath(worktreePath);
+    if (!parsed) return { status: { state: "no-worktree" } };
+    const recovery = await readRecycleRecord(worktreePath, sessionId);
+    if (
+      recovery?.phase === "restored" &&
+      registeredMeta &&
+      [recovery.generation, recovery.restoredGeneration].includes(
+        worktreeGeneration(registeredMeta),
+      ) &&
+      (await pathExists(worktreePath))
+    ) {
+      return {
+        status: { state: "present", worktreePath, hasSnapshot: false },
+        parsed,
+      };
+    }
+    if (
+      recovery?.snapshot &&
+      recovery.archive &&
+      ["removed", "removing", "restoring"].includes(recovery.phase)
+    ) {
+      return {
+        status: { state: "restorable", worktreePath, hasSnapshot: true },
+        parsed,
+      };
+    }
+
+    const registeredForPath =
+      registeredMeta && pathKey(registeredMeta.path) === pathKey(worktreePath)
+        ? registeredMeta
+        : null;
+    const restoreName = registeredForPath?.name || parsed.name;
+    const restoreParsed =
+      restoreName === parsed.name ? parsed : { ...parsed, name: restoreName };
+
+    if (await pathExists(worktreePath)) {
+      const pending = await findPendingSnapshot(
+        restoreParsed.baseRepo,
+        sessionId,
+        restoreParsed.name,
+      );
+      const attachedBranch = await readAttachedWorktreeBranch(worktreePath);
+      const branch =
+        attachedBranch &&
+        isManagedWorktreeBranchForName(attachedBranch, restoreParsed.name)
+          ? attachedBranch
+          : undefined;
+      if (attachedBranch && !branch) {
+        log.warn(
+          `[restore] preserved existing worktree registration gap at ${worktreePath}: ` +
+            `HEAD branch ${attachedBranch} is not managed for ${restoreParsed.name}`,
+        );
+      }
+      return {
+        status: {
+          state: "present",
+          worktreePath,
+          hasSnapshot: pending !== null,
+        },
+        parsed: restoreParsed,
+        ...(branch ? { branch } : {}),
+      };
+    }
+    if (!(await pathExists(restoreParsed.baseRepo))) {
+      return { status: { state: "gone", worktreePath }, parsed: restoreParsed };
+    }
+    const branchResolution = await resolveRestorableBranch(
+      restoreParsed.baseRepo,
+      restoreParsed.name,
+      registeredForPath?.branch,
+    );
+    if (branchResolution.state === "ambiguous") {
+      log.warn(
+        `[restore] ambiguous managed branches for ${worktreePath}; refusing to guess:`,
+        branchResolution.branches,
+      );
+      return { status: { state: "gone", worktreePath }, parsed: restoreParsed };
+    }
+    if (branchResolution.state === "missing") {
+      return { status: { state: "gone", worktreePath }, parsed: restoreParsed };
+    }
+    const hasSnapshot =
+      (await findPendingSnapshot(
+        restoreParsed.baseRepo,
+        sessionId,
+        restoreParsed.name,
+      )) !== null;
+    return {
+      status: { state: "restorable", worktreePath, hasSnapshot },
+      parsed: restoreParsed,
+      branch: branchResolution.branch,
+    };
+  }
+
+  /** 查询会话 worktree 的可恢复状态（restore 横幅数据源）。任何异常都归入 no-worktree/gone 保守分支。 */
+  async function getWorktreeRestoreStatus(
+    sessionId: string,
+  ): Promise<WorktreeRestoreStatus> {
+    return (await getWorktreeRestorePlan(sessionId)).status;
+  }
+
+  /**
+   * 一键恢复：用 Store 保存的精确分支，或唯一命中的 cindy/* / xdt/* 分支重建，
+   * 然后 apply 内容快照并重新登记 store。
+   * 快照 apply 失败时保留目录与快照，但移除 store 登记，避免后续回收把新编辑
+   * 覆盖到同一个 snapshot ref；重试成功后才恢复本地配置并重新登记。
+   */
+  async function restoreWorktreeForSessionOnce(
+    sessionId: string,
+  ): Promise<WorktreeRestoreResult> {
+    const plan = await getWorktreeRestorePlan(sessionId);
+    const { status } = plan;
+    if ("worktreePath" in status) {
+      try {
+        const restored = await restoreRecordedWorktree(
+          sessionId,
+          status.worktreePath,
+        );
+        if (restored !== null)
+          return {
+            ok: restored,
+            snapshotApplied: restored,
+            ...(restored ? {} : { reason: "git-error" as const }),
+          };
+      } catch (error) {
+        return {
+          ok: false,
+          reason: "git-error",
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    if (status.state === "present") {
+      const parsed =
+        plan.parsed ?? parseManagedWorktreePath(status.worktreePath);
+      if (!parsed) return { ok: true, snapshotApplied: true };
+      if (!status.hasSnapshot) {
+        if (!store.get(sessionId) && plan.branch) {
+          await finishRestoredWorktree(
+            sessionId,
+            parsed,
+            status.worktreePath,
+            plan.branch,
+          );
+        }
+        return { ok: true, snapshotApplied: true };
+      }
+      if (!plan.branch) {
+        log.warn(
+          `[restore] preserved pending snapshot for ${status.worktreePath}: ` +
+            "cannot confirm the expected managed HEAD branch",
+        );
+        return { ok: true, snapshotApplied: false };
+      }
+      const snapshotApplied = await applyPendingSnapshot(
+        parsed.baseRepo,
+        status.worktreePath,
+        sessionId,
+        parsed.name,
+      );
+      if (!snapshotApplied) {
+        await store.del(sessionId);
+        return { ok: true, snapshotApplied: false };
+      }
+      if (!store.get(sessionId) && plan.branch) {
+        await finishRestoredWorktree(
+          sessionId,
+          parsed,
+          status.worktreePath,
+          plan.branch,
+        );
+      }
+      return { ok: true, snapshotApplied };
+    }
+    if (status.state !== "restorable") {
+      return {
+        ok: false,
+        reason: status.state === "gone" ? "gone" : "no-worktree",
+      };
+    }
+    const parsed = plan.parsed!;
+    const branch = plan.branch!;
+    let snapshotApplied: boolean;
+
+    try {
+      // 目录被手动删过时 git 元数据可能残留，先 prune 对账再 add。
+      await gitExec(["worktree", "prune"], parsed.baseRepo).catch(
+        () => undefined,
+      );
+      await ensureLocalBranchForRestore(parsed.baseRepo, branch);
+      await addRestoredWorktree(parsed.baseRepo, status.worktreePath, branch);
+      // 快照必须先于本地配置恢复：未跟踪文件可能同时命中 .claude/.sivi 或
+      // .xdtworktreeinclude / .worktreeinclude，提前拷贝会让 git stash apply 因目标已存在而失败。
+      snapshotApplied = await applyPendingSnapshot(
+        parsed.baseRepo,
+        status.worktreePath,
+        sessionId,
+        parsed.name,
+      );
+      if (!snapshotApplied) {
+        await store.del(sessionId);
+        return { ok: true, snapshotApplied: false };
+      }
+      await finishRestoredWorktree(
+        sessionId,
+        parsed,
+        status.worktreePath,
+        branch,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `[restore] worktree add failed for ${status.worktreePath}:`,
+        msg,
+      );
+      return { ok: false, reason: "git-error", detail: msg };
+    }
+
+    log.info(
+      `[restore] worktree restored at ${status.worktreePath} (session ${sessionId}, snapshotApplied=${snapshotApplied})`,
+    );
+    return { ok: true, snapshotApplied };
+  }
+
+  /** 同一 session 的 UI 恢复与发送期自愈共享一次 git mutation，避免并发 worktree add。 */
+  function restoreWorktreeForSession(
+    sessionId: string,
+  ): Promise<WorktreeRestoreResult> {
+    const existing = restoreInFlight.get(sessionId);
+    if (existing) return existing;
+    const tracked = withWorktreeRestoreMutation(sessionId, async () => {
+      const worktreePath =
+        store.get(sessionId)?.path ??
+        (await readSessionWorktreeBinding(sessionId))?.worktreePath;
+      return worktreePath
+        ? withWorktreeResourceLock(worktreePath, () =>
+            restoreWorktreeForSessionOnce(sessionId),
+          )
+        : restoreWorktreeForSessionOnce(sessionId);
+    }).finally(() => {
+      if (restoreInFlight.get(sessionId) === tracked) {
+        restoreInFlight.delete(sessionId);
+        restoreInFlightVersions.delete(sessionId);
+      }
+    });
+    restoreInFlight.set(sessionId, tracked);
+    restoreInFlightVersions.set(
+      sessionId,
+      getWorktreeRestoreMutationVersion(sessionId),
+    );
+    return tracked;
+  }
+
+  async function markSendReadyIfMutationStable(
+    ownerSessionId: string,
+    worktreePath: string,
+    readinessKey: string,
+    restoreVersion: number,
+  ): Promise<boolean | null> {
+    const ready = await pathIsDirectory(worktreePath);
+    if (getWorktreeRestoreMutationVersion(ownerSessionId) !== restoreVersion) {
+      const laterMutation = getWorktreeRestoreMutation(ownerSessionId);
+      if (laterMutation) await laterMutation;
+      return null;
+    }
+    if (ready) sendReadyWorktrees.set(readinessKey, restoreVersion);
+    return ready;
+  }
+
+  // Legacy restore status folds probe errors into `gone`. Require successful probes
+  // before letting a send permanently select a conversation fallback.
+  async function confirmedMissingWorktree(
+    worktreePath: string,
+  ): Promise<boolean> {
+    try {
+      await fs.stat(worktreePath);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    }
+    const parsed = parseManagedWorktreePath(worktreePath);
+    if (!parsed) return false;
+    try {
+      const { stdout } = await gitExec(
+        [
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/heads",
+          "refs/remotes/origin",
+        ],
+        parsed.baseRepo,
+      );
+      const refs = new Set(stdout.trim().split(/\r?\n/));
+      return getManagedWorktreeBranchCandidates(parsed.name).every(
+        (branch) =>
+          !refs.has(localBranchRef(branch)) &&
+          !refs.has(originBranchRef(branch)),
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async function ensureOwnedWorktreeReady(
+    ownerSessionId: string,
+    worktreePath: string,
+  ): Promise<ManagedWorktreeReadiness> {
+    const worktreeKey = pathKey(worktreePath);
+    if (!worktreeKey) return "retry";
+    const readinessKey = `${ownerSessionId}\0${worktreeKey}`;
+
+    // `git worktree add` creates the directory before a pending snapshot is applied. A second
+    // send in that window must join the same restore instead of treating the directory as ready.
+    const restoring = restoreInFlight.get(ownerSessionId);
+    if (restoring) {
+      const restoreVersion =
+        restoreInFlightVersions.get(ownerSessionId) ??
+        getWorktreeRestoreMutationVersion(ownerSessionId);
+      const result = await restoring;
+      if (!result.ok || result.snapshotApplied === false)
+        return result.reason === "gone" &&
+          (await confirmedMissingWorktree(worktreePath))
+          ? "gone"
+          : "retry";
+      const ready = await markSendReadyIfMutationStable(
+        ownerSessionId,
+        worktreePath,
+        readinessKey,
+        restoreVersion,
+      );
+      return ready === null
+        ? ensureOwnedWorktreeReady(ownerSessionId, worktreePath)
+        : ready
+          ? "ready"
+          : "retry";
+    }
+
+    // Recycle cancellation/removal also owns this lock while the snapshot is detached from the
+    // clean worktree. Wait for it, then re-check the store/snapshot state below.
+    const mutating = getWorktreeRestoreMutation(ownerSessionId);
+    if (mutating) await mutating;
+
+    const currentMutationVersion =
+      getWorktreeRestoreMutationVersion(ownerSessionId);
+
+    // The first send in this process reconciles legacy states where a pending snapshot and store
+    // registration both survived an interrupted cleanup. WorktreeManager now unregisters as soon
+    // as it snapshots, so later sends use this zero-Git fast path until a later restore mutation
+    // invalidates the versioned readiness entry.
+    if (
+      (await pathIsDirectory(worktreePath)) &&
+      store.get(ownerSessionId) &&
+      sendReadyWorktrees.get(readinessKey) === currentMutationVersion &&
+      getWorktreeRestoreMutationVersion(ownerSessionId) ===
+        currentMutationVersion
+    ) {
+      return "ready";
+    }
+
+    const restore = restoreWorktreeForSession(ownerSessionId);
+    const restoreVersion =
+      restoreInFlightVersions.get(ownerSessionId) ??
+      getWorktreeRestoreMutationVersion(ownerSessionId);
+    const result = await restore;
+    if (!result.ok || result.snapshotApplied === false)
+      return result.reason === "gone" &&
+        (await confirmedMissingWorktree(worktreePath))
+        ? "gone"
+        : "retry";
+    const ready = await markSendReadyIfMutationStable(
+      ownerSessionId,
+      worktreePath,
+      readinessKey,
+      restoreVersion,
+    );
+    return ready === null
+      ? ensureOwnedWorktreeReady(ownerSessionId, worktreePath)
+      : ready
+        ? "ready"
+        : "retry";
+  }
+
+  /**
+   * 发送期自愈入口。DB working_dir 必须与 caller cwd 精确相同；cwd 可以是托管
+   * worktree 根目录或其子目录。恢复与 snapshot readiness 始终按 owning session 的
+   * worktree 根目录串行；其它 session 借用该目录时也必须等待 owner 的 pending
+   * snapshot。快照 apply 冲突时返回 retry，绝不带着缺失的 WIP 静默继续。
+   */
+  async function getManagedWorktreeReadinessForSession(
+    sessionId: string,
+    expectedWorkingDir: string,
+  ): Promise<ManagedWorktreeReadiness> {
+    const expectedKey = pathKey(expectedWorkingDir);
+    if (!expectedKey) return "retry";
+
+    let binding: SessionWorktreeBinding | null;
+    try {
+      binding = await readSessionWorktreeBinding(sessionId);
+    } catch {
+      return "retry";
+    }
+    if (pathKey(binding?.workingDir) !== expectedKey) return "retry";
+
+    const worktreePath = findManagedWorktreeRoot(expectedWorkingDir);
+    if (!worktreePath) return "retry";
+    const worktreeKey = pathKey(worktreePath);
+    if (!worktreeKey) return "retry";
+
+    let ownerSessionId: string | null;
+    if (pathKey(binding?.worktreePath) === worktreeKey) {
+      ownerSessionId = sessionId;
+    } else {
+      try {
+        ownerSessionId = await readWorktreeOwnerSessionId(worktreePath);
+      } catch {
+        return "retry";
+      }
+    }
+
+    // An unowned managed directory remains usable as an ordinary cwd, but cannot be recreated.
+    if (!ownerSessionId)
+      return (await pathIsDirectory(expectedWorkingDir)) ? "ready" : "retry";
+
+    const ready = await ensureOwnedWorktreeReady(ownerSessionId, worktreePath);
+    return ready === "ready"
+      ? (await pathIsDirectory(expectedWorkingDir))
+        ? "ready"
+        : "retry"
+      : ready;
+  }
+
+  /** Compatibility wrapper for callers that only need readiness. */
+  async function restoreMissingManagedWorktreeForSession(
+    sessionId: string,
+    expectedWorkingDir: string,
+  ): Promise<boolean> {
+    return (
+      (await getManagedWorktreeReadinessForSession(
+        sessionId,
+        expectedWorkingDir,
+      )) === "ready"
+    );
+  }
+
+  return {
+    getWorktreeRestoreStatus,
+    restoreWorktreeForSession,
+    getManagedWorktreeReadinessForSession,
+    restoreMissingManagedWorktreeForSession,
+  };
+}

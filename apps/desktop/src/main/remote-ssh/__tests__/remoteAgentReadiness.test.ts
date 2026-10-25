@@ -2,25 +2,19 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import {createSshAgentInstaller} from '@cindy/app-runtime/sshAgentInstaller';
 
-const source = readFileSync(resolve(__dirname, '..', 'index.ts'), 'utf8');
-const start = source.indexOf('export async function ensureRemoteAgentInstalled(');
-const end = source.indexOf('\n/**', start);
-const js = transpileModule(source.slice(start, end).replace('export async', 'async'), {
-  compilerOptions: { target: ScriptTarget.ES2022 },
-}).outputText;
+const {probe}=vi.hoisted(()=>({probe:vi.fn()}));
+vi.mock('@cindy/maker-remote-ssh',async importOriginal=>({...await importOriginal<typeof import('@cindy/maker-remote-ssh')>(),probeRemoteAgent:probe}));
 
 describe('SSH Codex managed installation admission', () => {
   it.each([false, true])('uses full-package probe (installed=%s) before caching', async (installed) => {
     const host = { getStatus: () => 'ready', exec: vi.fn() };
-    const cache = new Map();
-    const probe = vi.fn().mockResolvedValue({ installed, installedVersion: 'managed-version' });
-    const ensure = new Function('remoteAgentInstalledCache', 'isAgentCacheHit', 'getPool',
-      'probeRemoteAgent', 'throwIpcError', js + '; return ensureRemoteAgentInstalled;')(
-      cache, (cached: Map<string, unknown> | undefined, kind: string) => cached?.has(kind),
-      () => new Map([['builder', host]]), probe,
-      (code: string) => { throw new Error(code); },
-    );
+    probe.mockReset().mockResolvedValue({ installed, installedVersion: 'managed-version' });
+    const logger={trace:vi.fn(),debug:vi.fn(),info:vi.fn(),warn:vi.fn(),error:vi.fn(),fatal:vi.fn(),child:()=>logger};
+    const runtime=createSshAgentInstaller({getPool:()=>new Map([['builder',host as unknown as import('@cindy/maker-remote-ssh').RemoteHost]]),log:logger,
+      installRemoteAgent:vi.fn(),broadcastInstallProgress:vi.fn(),broadcastSilentInstallStatus:vi.fn()});
+    const ensure=runtime.ensureRemoteAgentInstalled,cache=runtime.remoteAgentInstalledCache;
     if (installed) {
       await ensure('builder', 'codex');
       await ensure('builder', 'codex');

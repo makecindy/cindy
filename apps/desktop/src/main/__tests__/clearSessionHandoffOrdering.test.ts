@@ -10,8 +10,7 @@
  * 而窗口内**写回**的那批(纪元还是 clear 前的值、校验会通过)由 sealClearBoundary 的
  * 重立墓碑兜住——它不只是推进纪元,顺序细节见该方法注释。
  *
- * register.ts 是超大 handler 注册文件、没有可注入的测试入口,repo 里既有的做法就是对
- * 源码断言(见 deviceLinkAutoTitleWiring.test.ts / interruptedContinuationContract.test.ts)。
+ * Desktop 与 Node 复用同一 clear transaction；这里继续守住原有跨模块顺序契约。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -19,13 +18,13 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const registerSource = readFileSync(
-  resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
+  resolve(__dirname, '../../../../../packages/app-runtime/src/sessionClear.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
 describe('/clear:墓碑 → cleared_at 落库 → 封 clear 边界', () => {
-  const handlerStart = registerSource.indexOf('MAKER_INVOKE.INPUT_CLEAR_SESSION');
-  const handlerEnd = registerSource.indexOf('MAKER_INVOKE.ABORT_SESSION', handlerStart);
+  const handlerStart = registerSource.indexOf('export function createSessionClear');
+  const handlerEnd = registerSource.length;
   const handler = registerSource.slice(handlerStart, handlerEnd);
 
   it('三步都在同一个 handler 内', () => {

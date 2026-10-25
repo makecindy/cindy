@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, Session } from '@cindy/maker-core';
-import { backfillSessionMeta, runOneTurn } from '../runners/_shared';
+import { backfillSessionMeta, runOneTurn } from '@cindy/app-runtime/scheduleRunnerShared';
 
 type DbArg = Parameters<typeof backfillSessionMeta>[0];
 type LoggerArg = Parameters<typeof backfillSessionMeta>[3];

@@ -10,8 +10,11 @@
     ".": "./src/index.ts",
     "./cron": "./src/engine/cron.ts",
     "./types": "./src/types.ts",
+    "./routine-store": "./src/routine-store.ts",
     "./templates": "./src/builtin-templates.ts",
-    "./template-engine": "./src/engine/template.ts"
+    "./template-engine": "./src/engine/template.ts",
+    "./proc-util": "./src/proc-util.ts",
+    "./owner-liveness": "./src/owner-liveness.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

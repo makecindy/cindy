@@ -23,7 +23,7 @@
  */
 
 import crypto from 'node:crypto';
-import { BaseAgent, createAgent, type ParsedKey, type PublicKeyEntry, type SignCallback, type SigningRequestOptions } from 'ssh2';
+import ssh2, { type BaseAgent, type ParsedKey, type PublicKeyEntry, type SignCallback, type SigningRequestOptions } from 'ssh2';
 
 /** SHA256 base64 (without trailing `=` and without the `SHA256:` prefix). */
 export function rawFingerprintOfPublicKey(blob: Buffer): string {
@@ -75,7 +75,7 @@ function asParsedKey(item: ParsedKey | PublicKeyEntry): ParsedKey | null {
  * back to enumerating every agent key. Callers map this to a "load the key
  * into ssh-agent first" hint.
  */
-export class FilteredAgent extends BaseAgent<ParsedKey> {
+export class FilteredAgent extends ssh2.BaseAgent<ParsedKey> {
   private readonly upstream: BaseAgent<ParsedKey>;
   /** Full `SHA256:...` forms, de-duplicated in OpenSSH configuration order. */
   private readonly allowedFingerprints: string[];
@@ -130,6 +130,6 @@ export function createFilteredAgentFromFingerprints(
   fingerprints: readonly string[],
   agentEndpoint: string,
 ): FilteredAgent {
-  const upstream = createAgent(agentEndpoint) as BaseAgent<ParsedKey>;
+  const upstream = ssh2.createAgent(agentEndpoint) as BaseAgent<ParsedKey>;
   return new FilteredAgent(upstream, fingerprints);
 }

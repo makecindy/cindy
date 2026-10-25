@@ -1,3 +1,8 @@
+import {createVideoProviderChannels} from '@cindy/app-runtime/media/videoProviderChannels';
+import {createCindyMediaPreferences,type LegacyCindyMediaAction,type CindyMediaPreferenceModel,type CindyMediaPreferenceConfig} from '@cindy/app-runtime/media/mediaPreferences';
+import {createProviderMediaChannels} from '@cindy/app-runtime/media/providerMediaChannels';
+import { createGhostSessionEvents } from '@cindy/app-runtime/ghostSessionEvents';
+import { createGhostAssistantReply } from '@cindy/app-runtime/ghostAssistantReply';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
 import { PluginDeviceSync } from './deviceSyncSlot.js';
 import { contactsSyncKeyStore } from '../contacts-sync/keyStore.js';
@@ -2499,55 +2504,7 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
  * 2026-07-12 实测:启动期会话接线早于 DbClient 就绪,一次性判定会把
  * 所有重连会话终身误杀)。
  */
-async function isGhostEligibleSession(
-  sessionId: string,
-  scope: 'default' | 'session-switch' = 'default',
-): Promise<
-  | { outcome: 'eligible'; agentKind?: string; workdir?: string }
-  | { outcome: 'ineligible' }
-  | { outcome: 'retry' }
-> {
-  try {
-    // 查询必须 await(DB 走 worker-thread 异步代理,全仓惯用法),不能用
-    // 同步 .all()——代理下拿不到真实行(2026-07-12 实测踩坑)。
-    const rows = await getDbClient()
-      .drizzle.select({
-        source: localDbSchema.sessions.source,
-        orcaRole: localDbSchema.sessions.orcaRole,
-        agentKind: localDbSchema.sessions.agentKind,
-        workingDir: localDbSchema.sessions.workingDir,
-      })
-      .from(localDbSchema.sessions)
-      .where(eq(localDbSchema.sessions.id, sessionId))
-      .limit(1);
-    const row = rows[0];
-    if (!row) return { outcome: 'retry' }; // 行未落库(极早期)→ 暂时态
-    const isEligible =
-      scope === 'session-switch'
-        ? isGhostSessionSwitchEligibleRow(row)
-        : isGhostEligibleSessionRow(row);
-    if (isEligible) {
-      return {
-        outcome: 'eligible',
-        agentKind: row.agentKind ?? undefined,
-        workdir: row.workingDir ?? undefined,
-      };
-    }
-    log.debug('ghost eligibility: rejected', {
-      sessionId,
-      source: String(row.source),
-      orcaRole: String(row.orcaRole),
-    });
-    return { outcome: 'ineligible' };
-  } catch (err) {
-    // DB 未就绪等基建失败:暂时态,绝不终身定性(也绝不影响会话)。
-    log.debug('ghost eligibility: transient failure, will retry', {
-      sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return { outcome: 'retry' };
-  }
-}
+
 
 type PendingActivityRequest = {
   kind: GhostInteractionActivityKind;
@@ -2565,177 +2522,7 @@ type PendingActivityRequest = {
  * 拆线必须调 `dispose()`:register.ts 的 disposer 一跑,事件源就没了,turn 在场时
  * 只有这里能给插件补上缺失的 did-turn-end(见 GhostTurnTranslator.dispose)。
  */
-export function createGhostSessionTap(sessionId: string): {
-  handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
-  interactionObserver: {
-    onStart(request: PendingActivityRequest, route?: { origin?: { kind?: string } }): void;
-    onEnd(request: PendingActivityRequest, route?: { origin?: { kind?: string } }): void;
-  };
-  dispose(): void;
-} {
-  let translator: GhostTurnTranslator | null = null;
-  let activity: GhostActivityTracker | null = null;
-  /** 拆线不可逆:资格判定是异步的,回调必须知道自己已经没有归属会话了。 */
-  let disposed = false;
-  // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
-  // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
-  // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
-  let state: 'unknown' | 'resolving' | 'eligible' | 'ineligible' = 'unknown';
-  // 轮次来源:interaction 侧只靠 route 判断不住 goal / scheduler(它们没 route),
-  // 得从事件流上记。语义与理由见 GhostTurnOriginTracker。资格无关,恒记。
-  const origin = new GhostTurnOriginTracker();
-  let attempts = 0;
-  const MAX_ATTEMPTS = 5;
-  const MAX_PENDING = 32;
-  // 有界缓冲,溢出丢最旧(留下的是到达序后缀,不留孤儿 start),语义见 GhostTapPendingQueue。
-  const pending = new GhostTapPendingQueue(MAX_PENDING, () => {
-    log.warn('ghost session tap pending overflow while resolving eligibility', {
-      sessionId,
-      cap: MAX_PENDING,
-    });
-  });
 
-  const applyActivity = (phase: 'start' | 'end', request: PendingActivityRequest): void => {
-    if (!activity) {
-      pending.push({ type: 'activity', phase, request });
-      return;
-    }
-    if (phase === 'start') activity.startInteraction(request.kind, request.requestId);
-    else activity.endInteraction(request.kind, request.requestId);
-  };
-
-  const kickResolve = (): void => {
-    if (state !== 'unknown') return;
-    if (attempts >= MAX_ATTEMPTS) {
-      state = 'ineligible';
-      pending.clear();
-      return;
-    }
-    state = 'resolving';
-    attempts += 1;
-    void isGhostEligibleSession(sessionId).then((info) => {
-      // 判定期间会话已拆线:不建 translator、不回放,否则会向已经没人配对的
-      // topic 发出一条永远等不到 end 的 did-turn-start。
-      if (disposed) return;
-      if (info.outcome === 'retry') {
-        state = 'unknown'; // 暂时态:留着 pending,下个事件再试
-        return;
-      }
-      if (info.outcome === 'ineligible') {
-        state = 'ineligible';
-        pending.clear();
-        return;
-      }
-      const gw = getGhostSubscriptionGateway();
-      activity = new GhostActivityTracker({
-        sessionId,
-        sink: { activity: (name, data) => gw.publish('activity', name, data) },
-      });
-      translator = new GhostTurnTranslator({
-        sessionId,
-        agent: info.agentKind ?? 'unknown',
-        now: () => Date.now(),
-        sink: {
-          turnStart: (d) => {
-            gw.publish('turn', 'did-turn-start', d);
-            activity?.beginTurn();
-          },
-          turnEnd: (d) => {
-            activity?.finishTurn();
-            gw.publish('turn', 'did-turn-end', d);
-          },
-        },
-      });
-      state = 'eligible';
-      // 先取快照再回放:applyActivity 在 activity 已就绪后直投,不会再回队。
-      const replay = pending.drain();
-      log.debug('ghost session tap eligible', {
-        sessionId,
-        replay: replay.length,
-        ...(pending.dropped > 0 ? { droppedPending: pending.dropped } : {}),
-      });
-      for (const item of replay) {
-        if (item.type === 'event') {
-          activity.handleEvent(item.event);
-          translator.handleEvent(item.event);
-        } else {
-          applyActivity(item.phase, item.request);
-        }
-      }
-    });
-  };
-
-  return {
-    handleEvent(ev) {
-      if (disposed) return;
-      // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
-      origin.noteEvent(ev);
-      if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
-      if (state === 'eligible') {
-        activity?.handleEvent(ev);
-        translator?.handleEvent(ev);
-        return;
-      }
-      if (state === 'ineligible') return;
-      pending.push({
-        type: 'event',
-        event: {
-          type: ev.type,
-          data: ev.data,
-          source: ev.source,
-          ...(ev.turnContinuationId !== undefined
-            ? { turnContinuationId: ev.turnContinuationId }
-            : {}),
-        },
-      });
-      kickResolve();
-    },
-    interactionObserver: {
-      onStart(request, route) {
-        if (state === 'ineligible') return;
-        if (!origin.acceptsInteraction(route)) return;
-        applyActivity('start', request);
-        if (state !== 'eligible') kickResolve();
-      },
-      onEnd(request, route) {
-        if (state === 'ineligible') return;
-        void route; // 见 acceptsInteraction 注释:end 只按 requestId 配对,不过滤来源
-        applyActivity('end', request);
-        if (state !== 'eligible') kickResolve();
-      },
-    },
-    dispose() {
-      if (disposed) return; // 两条 disposer 路径都可能跑到,补发只做一次
-      disposed = true;
-      // 补发都会走插件分发链路,它们的异常不能打断 register.ts 的 disposer 队列
-      // (实例替换路径是裸调用,后面还排着 onEvent 退订),也不能让 activity 侧的
-      // 失败吃掉 turn 侧的补发,所以两段各自兜住。
-      const guard = (stage: string, fn: () => void): void => {
-        try {
-          fn();
-        } catch (err) {
-          log.warn('ghost session tap dispose failed', {
-            sessionId,
-            stage,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      };
-      // 先收口 activity 再收口 turn:会话关闭 / Session 实例替换时,router 里可能还有
-      // interaction 等在 finally 前,而 observer 马上就会被摘掉——不补发 end 插件就会
-      // 永久停在"等待审批 / 等待用户输入"。顺序也是契约:未收口的 thinking end 必须
-      // 排在 did-turn-end 之前(回合边界只收口 thinking——审批可以跨回合终态,
-      // 见 GhostActivityTracker)。
-      guard('activity', () => activity?.finishAll());
-      guard('turn', () => translator?.dispose());
-      activity?.reset();
-      translator = null;
-      activity = null;
-      pending.clear();
-      state = 'ineligible';
-    },
-  };
-}
 
 /**
  * 用户消息拦截筛查(input coordinator 的 screenUserMessage 依赖真身)。
@@ -2749,42 +2536,9 @@ export function createGhostSessionTap(sessionId: string): {
  * 而拦截钩的全部意义就是不让某些内容到达 AI。这里只问"有没有人在管",不重复询问
  * 钩子本身 —— 重复询问会让 Ghost 对同一条消息被问两次,产生它没预期的副作用。
  */
-export function hasEnabledUserMessageHookGhost(): boolean {
-  try {
-    return availableGhosts().some(
-      (g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-user-message'),
-    );
-  } catch {
-    // 判定不了就按"有人在管"处理:宁可少一个智能标题,也不把内容送出去。
-    return true;
-  }
-}
 
-export async function screenGhostUserMessage(
-  sessionId: string,
-  text: string,
-): Promise<GhostScreenResult> {
-  const ownerStamp = getGhostOwnerPushStamp();
-  try {
-    const hasHookGhost = availableGhosts().some(
-      (g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-user-message'),
-    );
-    if (!hasHookGhost) return { action: 'allow' };
-    // retry(DB 未就绪)也放行:拦截是尽力而为的旁路,fail-open 不挡发送。
-    if ((await isGhostEligibleSession(sessionId)).outcome !== 'eligible')
-      return { action: 'allow' };
-    const result = await getGhostSubscriptionGateway().screenUserMessage(
-      { sessionId, text },
-      ownerStamp,
-    );
-    return isGhostOwnerStampCurrent(ownerStamp) ? result : { action: 'allow' };
-  } catch (err) {
-    log.warn('ghost screen failed (fail-open)', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return { action: 'allow' };
-  }
-}
+
+
 
 /** 被拦通知广播(register.ts 的 onUserMessageBlocked 依赖真身)。
  *  text = 被拦原文:会话忙时消息只以队列灰字存在、没有乐观气泡,renderer
@@ -2817,100 +2571,20 @@ export function broadcastGhostMessageRewritten(payload: {
 }
 
 /** 是否有启用的意识声明了 will-assistant-message(出口钩子快路径同步守卫)。 */
-export function hasEnabledGhostAssistantHook(): boolean {
-  return availableGhosts().some(
-    (g) => g.enabled && g.manifest.subscribe?.hooks?.includes('will-assistant-message'),
-  );
-}
+
 
 /** 广播:AI 回复被出口钩子改写(renderer 气泡静默换文本)。 */
-function broadcastGhostAssistantRewritten(
-  payload: {
-    sessionId: string;
-    clientId: string;
-    ghostId: string;
-    ghostName: string;
-    text: string;
-  },
-  ownerStamp?: DataOwnerPushStamp,
-): void {
-  broadcastGhostWindowPush(GHOST_ASSISTANT_REWRITTEN_CHANNEL, payload, ownerStamp);
-}
+
 
 /** 广播:出口钩子后台处理中/完成的轻指示。 */
-function broadcastGhostAssistantPending(
-  sessionId: string,
-  clientId: string,
-  pending: boolean,
-  ownerStamp?: DataOwnerPushStamp,
-): void {
-  broadcastGhostWindowPush(
-    GHOST_ASSISTANT_PENDING_CHANNEL,
-    { sessionId, clientId, pending },
-    ownerStamp,
-  );
-}
+
 
 /**
  * render 裁决落地:净化(同 card 槽海报规则)+ height clamp + 持久化(按 assistant
  * 消息 clientId 当 callId 存,复用 ghost_cards 与 renderer 的 byCallId 寻址)+ 广播
  * 卡片推送。原文已在库里,不动;renderer 据 GHOST_ASSISTANT_RENDERED_CHANNEL 切卡。
  */
-async function applyGhostAssistantRenderCard(
-  sessionId: string,
-  clientId: string,
-  card: { ghostId: string; ghostName: string; html: string; height?: number },
-  ownerStamp?: DataOwnerPushStamp,
-): Promise<void> {
-  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
-  const sanitized = sanitizeGhostCardHtml(card.html);
-  if (!sanitized.ok) {
-    log.warn('ghost assistant render card rejected by sanitizer', {
-      sessionId,
-      reason: sanitized.reason,
-    });
-    return;
-  }
-  const heightRaw =
-    typeof card.height === 'number' && Number.isFinite(card.height)
-      ? Math.round(card.height)
-      : GHOST_CARD_HEIGHT_DEFAULT;
-  const height = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(GHOST_CARD_HEIGHT_MIN, heightRaw));
-  const now = Date.now();
-  // 落库失败不阻断广播(活卡先见;历史回放缺卡 renderer missing 降级)。
-  await upsertGhostCard({
-    callId: clientId,
-    ghostId: card.ghostId,
-    sessionId,
-    html: sanitized.html,
-    height,
-    v: 1,
-    updatedAt: now,
-  }).catch((err) => {
-    log.warn('ghost assistant render card persist failed', {
-      sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
-  if (ownerStamp !== undefined && !isGhostOwnerStampCurrent(ownerStamp)) return;
-  broadcastGhostWindowPush(
-    GHOST_CARD_UPDATED_CHANNEL,
-    {
-      callId: clientId,
-      ghostId: card.ghostId,
-      toolUseId: null,
-      html: sanitized.html,
-      // 出口钩子自绘卡不含 running 动画版语义(turn 已结束),静态版即最终。
-      animatedHtml: null,
-      height,
-      // turn 级自绘卡标记:renderer 只入卡库(byCallId,AssistantMessage 按消息
-      // clientId 直取),**不进 liveCards 锚定池**——否则 toolUseId:null 的条目会
-      // 被同意识进行中 ghost_call 的启发式锚定抢走(review P1,2026-07-13)。
-      turnCard: true,
-    },
-    ownerStamp,
-  );
-}
+
 
 /**
  * will-assistant-message 出口钩子入口(register.ts done 边界 fire-and-forget 调)。
@@ -2918,93 +2592,15 @@ async function applyGhostAssistantRenderCard(
  * 阻塞 turn 结束记账;真实 deps 装配在此,核心编排在 assistantReplyHook.ts。
  * clientId = 本轮 assistant 消息持久化 id(consumeLastAssistantPersistId 取得)。
  */
-export function runGhostAssistantReplyHook(
-  sessionId: string,
-  clientId: string,
-  text: string,
-): void {
-  const ownerStamp = getGhostOwnerPushStamp();
-  const isCurrent = () => isGhostOwnerStampCurrent(ownerStamp);
-  void runAssistantReplyHook(
-    {
-      isCurrent,
-      hasHook: hasEnabledGhostAssistantHook,
-      isEligible: async (sid) =>
-        isCurrent() && (await isGhostEligibleSession(sid)).outcome === 'eligible',
-      screen: async (sid, t) => {
-        if (!isCurrent()) return { action: 'allow' as const };
-        const result = await getGhostSubscriptionGateway().screenAssistantMessage(
-          { sessionId: sid, text: t },
-          ownerStamp,
-        );
-        return isCurrent() ? result : { action: 'allow' as const };
-      },
-      persistRewrite: async (sid, cid, t) => {
-        if (!isCurrent()) return;
-        await updateMessageContent(sid, cid, t);
-      },
-      applyRenderCard: (sid, cid, cardArg) =>
-        applyGhostAssistantRenderCard(sid, cid, cardArg, ownerStamp),
-      broadcastRewritten: (payload) => broadcastGhostAssistantRewritten(payload, ownerStamp),
-      setPending: (sid, cid, pending) =>
-        broadcastGhostAssistantPending(sid, cid, pending, ownerStamp),
-      log,
-    },
-    sessionId,
-    clientId,
-    text,
-  );
-}
+
 
 /**
  * 会话生命周期事件入口(created/archived 由 localDb sessions handler 处
  * fire-and-forget 调;switched 由下方 noteGhostSessionFocused 去重后调):
  * → did-session-*。任何异常吞掉,绝不影响会话主流程。
  */
-export function notifyGhostSessionEvent(
-  kind: 'created' | 'archived' | 'switched',
-  data: { sessionId: string; workdir?: string },
-  shouldPublish: () => boolean | Promise<boolean> = () => true,
-  onRetry: () => void = () => {},
-): void {
-  void (async () => {
-    try {
-      // 快路径:没人订 session topic 就不查 DB(纯内存判断,调用方零负担)。
-      const hasSubscriber = availableGhosts().some(
-        (g) => g.enabled && g.manifest.subscribe?.topics?.includes('session'),
-      );
-      if (!hasSubscriber) return;
-      // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
-      // retry 视为不投，生命周期事件不值得引入重试机制。
-      const info = await isGhostEligibleSession(
-        data.sessionId,
-        kind === 'switched' ? 'session-switch' : 'default',
-      );
-      if (info.outcome !== 'eligible') {
-        if (info.outcome === 'retry') onRetry();
-        return;
-      }
-      // switched 的调用方(renderer 路由上报)只有 sessionId,workdir 从资格
-      // 查询顺手补上,与 created/archived 的载荷形状对齐。
-      const payload =
-        data.workdir === undefined && info.workdir !== undefined
-          ? { ...data, workdir: info.workdir }
-          : data;
-      // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
-      if (!(await shouldPublish())) return;
-      getGhostSubscriptionGateway().publish(
-        'session',
-        kind === 'created'
-          ? 'did-session-created'
-          : kind === 'archived'
-            ? 'did-session-archived'
-            : 'did-session-switched',
-        payload,
-      );
-    } catch {
-      /* 订阅事件是旁路,静默 */
-    }
-  })();
+export function notifyGhostSessionEvent(...args: Parameters<typeof originalGhostSessionEvents.notifyGhostSessionEvent>) {
+  return originalGhostSessionEvents.notifyGhostSessionEvent(...args);
 }
 
 /**
@@ -4011,318 +3607,24 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
  * 生成走主机统一图片通道(art 底层客户端,与聊天画图同一条付费链路);
  * 产物落媒体总仓(blob + 账本,出生=该意识),意识只拿到指纹字符串。
  */
-function getVideoProviderRegistry() {
-  const registry = getCindyVideoProviderRegistry();
-  if (!registry) return null;
-  const xaiCatalogProvider = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-  const xaiCatalogProviderId = xaiCatalogProvider?.id;
-  const xaiAliases = xaiCatalogProvider?.videoModels?.map((model) => model.id) ?? [];
-  const routableXaiAliases = xaiCatalogProviderId
-    ? xaiAliases.filter(
-        (alias) => !registry.hasAlias(alias) || registry.hasAlias(alias, xaiCatalogProviderId),
-      )
-    : [];
-  if (xaiCatalogProviderId && routableXaiAliases.some((alias) => !registry.hasAlias(alias))) {
-    registry.registerOrExtend(
-      createXaiVideoProvider({
-        modelAliases: routableXaiAliases,
-        hasOAuthLogin: () => hasGrokOAuthLogin(),
-        getAccessToken: () => getGrokAccessToken(),
-        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
-        getOwnerScopeKey: () => activeOwnerScopeKey(),
-        isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
-        onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
-      }),
-      xaiCatalogProviderId,
-    );
-  }
-  return registry;
-}
+let videoProviderChannels:ReturnType<typeof createVideoProviderChannels>|undefined;
+function getVideoProviderChannels(){return videoProviderChannels ??= createVideoProviderChannels({getCindyVideoProviderRegistry,getActiveCatalog,hasGrokOAuthLogin,getGrokAccessToken,getGrokOAuthCredentialGeneration,activeOwnerScopeKey,isAppSessionBoundaryPending,outboundFetch,assertMediaModelStillEnabled,invalidateXaiBridgeAuth,isXdGatewayProviderReady});}
+function getVideoProviderRegistry(){return getVideoProviderChannels().getVideoProviderRegistry();}
+function isVideoCatalogProviderReady(providerId:string){return getVideoProviderChannels().isVideoCatalogProviderReady(providerId);}
 
-/** 视频目录的 provider 级就绪判据；未知来源绝不投影成可选型号。 */
-function isVideoCatalogProviderReady(providerId: string): boolean {
-  if (providerId === 'xd') return isXdGatewayProviderReady(providerId);
-  if (providerId === 'xai') {
-    return !isAppSessionBoundaryPending() && hasGrokOAuthLogin();
-  }
-  return false;
-}
-
-const LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID = 'openai-images-v1';
-type LegacyCindyMediaAction = 'generate' | 'edit';
-
-/** 旧 cindy-request 类目清单只保留其固定通道对当前动作真正可执行的 XD 模型。 */
-function isXdMediaModelExecutableForCatalog(
-  kind: CindyCapabilityKind,
-  modelId: string,
-  action?: LegacyCindyMediaAction,
-): boolean {
-  if (kind === 'image') {
-    if (action) {
-      return isMediaModelExecutableForGuide(
-        modelId,
-        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
-        action === 'edit' ? 'image.edit' : 'image.generate',
-      );
-    }
-    return (
-      isMediaModelExecutableForGuide(
-        modelId,
-        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
-        'image.generate',
-      ) ||
-      isMediaModelExecutableForGuide(modelId, LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID, 'image.edit')
-    );
-  }
-  if (kind === 'video') {
-    if (action) {
-      return isMediaModelExecutable(
-        modelId,
-        action === 'edit' ? 'video.image_to_video' : 'video.generate',
-      );
-    }
-    return (
-      isMediaModelExecutable(modelId, 'video.generate') ||
-      isMediaModelExecutable(modelId, 'video.image_to_video')
-    );
-  }
-  return true;
-}
-
-/**
- * 当前媒体能力配置(图像/视频同一套推导)——与会话模型列表**同一获取
- * 来源**:active catalog。XD 媒体由 Gateway `/models` 动态投影，第三方媒体
- * 保留各 Provider 的 imageModels/imageDefaults 或 videoModels/videoDefaults。
- * 清单与默认/档位选型全部来自目录,主机代码零
- * 模型字面量;派生规则见 cindyMediaCatalog.ts。
- *
- * 目录里没有该类目的任何模型(极端:远端目录带了 xd 段却不带媒体清单)→
- * `{ models: [], defaults: null }` = 该能力**暂不可用**,不拿打包常量冒充
- * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
- * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
- */
-function getCatalogMediaConfig(
-  kind: CindyCapabilityKind,
-  action?: LegacyCindyMediaAction,
-  selectedProviderId?: string,
-): CindyMediaCatalogConfig {
-  try {
-    const imageRegistry = kind === 'image' ? getImageChannelRegistry() : null;
-    // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
-    // (与对话模型的准入口径同源,见 model-disable-store)。
-    const access = readModelDisableOverrides();
-    const catalog = getActiveCatalog();
-    const xdMediaModelIds = getXdGatewayModels()
-      .filter((model) => model.mode === 'image_generation' || model.mode === 'video_generation')
-      .map((model) => model.id);
-    // 旧 cindy-request 偏好不携带 providerId；同一完整 modelId 同时来自 XD 与
-    // 第三方时必须让托管默认来源先参与 first-wins，避免静默改用第三方凭证计费。
-    const orderedProviders =
-      kind === 'embed'
-        ? catalog.providers
-        : [
-            ...catalog.providers.filter((provider) => provider.id === 'xd'),
-            ...catalog.providers.filter((provider) => provider.id !== 'xd'),
-          ];
-    const providers = selectedProviderId
-      ? orderedProviders.filter((provider) => provider.id === selectedProviderId)
-      : orderedProviders;
-    const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
-    return deriveCindyMediaConfig(
-      providers,
-      kind,
-      (providerId, modelId) =>
-        isProviderDisabled(access, providerId) ||
-        (providerId === 'xd' && kind !== 'embed'
-          ? isModelDisabledWithUniqueLegacyBasename(access, providerId, modelId, xdMediaModelIds)
-          : isModelDisabled(access, providerId, modelId)) ||
-        // active catalog 保留 Gateway 原始媒体事实源；旧 cindy-request 的同步目录
-        // 必须在消费边界复用已缓存的 Guide 预检结果，不能暴露这版客户端不可执行的型号。
-        (providerId === 'xd' && !isXdMediaModelExecutableForCatalog(kind, modelId, action)) ||
-        // 向量:目录是热更的,可能给出客户端还不认识的型号 id(比 EmbeddingModelId
-        // 这个静态联合更新)。不在这里滤掉的话,它会照常展示、可被钉选、甚至成为
-        // 目录默认 —— 而执行侧 isKnownEmbeddingModel 那道纵深防御会把每一次请求
-        // 变成 INTERNAL。UI 先宣称可用、下单才失败是最难排查的一种坏体验
-        // (PR #1707 review)。滤掉后按既有语义降级:被滤条目不占 first-wins,
-        // 目录默认指向它时回落清单首项;整份清单都不认识才是空清单 → NO_CANDIDATE。
-        // 执行侧那道防御保留 —— 它管的是这里与执行层之间的窗口。
-        (kind === 'embed' && !isKnownEmbeddingModel(modelId)) ||
-        // A ready provider may contain image models owned by an unready runtime.
-        (kind === 'image' && !imageRegistry?.isProviderReady(providerId, modelId)) ||
-        // 视频目录可能比当前客户端通道先热更。执行 registry 不认识的型号
-        // 必须先过滤，不能把“目录有”冒充成“这版客户端能下单”。
-        (kind === 'video' && !(videoRegistry?.hasAlias(modelId, providerId) ?? false)),
-      // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
-      // 头注)。视频按目录 provider 归属分别检查：xd 要求账号网关能力与 endpoint
-      // 同时在场，xai 要求 SuperGrok OAuth 已连接；未知来源 fail closed。
-      // 向量仍只有 xd 一家执行通道。Standalone custom Images use Core media's
-      // managed URL/base64 handling; keep new sources out of the frozen legacy API.
-      kind === 'image'
-        ? (providerId) =>
-            imageRegistry?.isProviderLegacyReady(providerId) ?? false
-        : kind === 'video'
-          ? isVideoCatalogProviderReady
-          : isXdGatewayProviderReady,
-      // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
-      // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
-      kind === 'image'
-        ? (providerId) => imageRegistry?.isProviderEditReady(providerId) ?? false
-        : undefined,
-      kind === 'image' || kind === 'video' ? isCatalogMediaModelVisible : undefined,
-    );
-  } catch (err) {
-    // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
-    log.warn(`read catalog ${kind} config failed, treating capability as unavailable`, {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return { models: [], defaults: null };
-  }
-}
-
-const getCatalogImageConfig = (
-  action?: LegacyCindyMediaAction,
-): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image', action);
-const getCatalogVideoConfig = (
-  action?: LegacyCindyMediaAction,
-): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video', action);
-const getCatalogEmbedConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
-  getCatalogMediaConfig('embed');
-
-const MEDIA_PREFERENCE_PREFIX = 'media:';
-
-function encodeMediaPreference(providerId: string, modelId: string): string {
-  return `${MEDIA_PREFERENCE_PREFIX}${encodeURIComponent(providerId)}:${encodeURIComponent(modelId)}`;
-}
-
-function decodeMediaPreference(value: string): { providerId: string; modelId: string } | null {
-  if (!value.startsWith(MEDIA_PREFERENCE_PREFIX)) return null;
-  const encoded = value.slice(MEDIA_PREFERENCE_PREFIX.length);
-  const separator = encoded.indexOf(':');
-  if (separator <= 0 || separator === encoded.length - 1) return null;
-  try {
-    const providerId = decodeURIComponent(encoded.slice(0, separator));
-    const modelId = decodeURIComponent(encoded.slice(separator + 1));
-    return providerId && modelId ? { providerId, modelId } : null;
-  } catch {
-    return null;
-  }
-}
-
-type CindyMediaPreferenceModel = CindyMediaCatalogConfig['models'][number] & {
-  modelId: string;
-  modelName: string;
-  providerName: string;
-  group: string;
-  routing?: import('@cindy/model-providers').Provider['routing'];
-};
-
-interface CindyMediaPreferenceConfig {
-  models: CindyMediaPreferenceModel[];
-  defaults: { standard: string; draft: string; best: string } | null;
-}
-
-/** Art 等插件的媒体偏好统一合并已就绪 Provider 与 Gateway 可执行模型。 */
-function getMediaPreferenceConfig(capability: GhostMediaCapability): CindyMediaPreferenceConfig {
-  const kind = capability.startsWith('image.') ? 'image' : 'video';
-  const coreCapability: MediaCapability =
-    capability === 'video.edit' ? 'video.image_to_video' : capability;
-  const providers = new Map(
-    getActiveCatalog().providers.map((provider) => [provider.id, provider] as const),
-  );
-  const providerModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
-    kind === 'video' ? listLocalProviderVideoModels(true) : listProviderMediaModels(),
-    kind,
-    (model) => supportsMediaCapability(model.modalities, coreCapability),
-  ).map((model) => {
-    const provider = providers.get(model.providerId);
-    const providerName = provider?.name ?? model.providerId;
-    return {
-      id: encodeMediaPreference(model.providerId, model.id),
-      modelId: model.id,
-      label: model.name,
-      modelName: model.name,
-      providerId: model.providerId,
-      providerName,
-      group: providerName,
-      ...(provider?.routing ? { routing: provider.routing } : {}),
-      supportsEdit: supportsMediaCapability(model.modalities, kind === 'image' ? 'image.edit' : 'video.image_to_video'),
-    };
-  });
-  const gatewayModels: CindyMediaPreferenceModel[] = selectExecutableCoreMediaModels(
-    filterEnabledGatewayMediaModels(
-      getXdGatewayModels(),
-      coreCapability,
-      readModelDisableOverrides(),
-    ).filter((model) =>
-      isCatalogMediaModelVisible(
-        'xd',
-        model.id,
-        'defaultEnabled' in model ? model.defaultEnabled : undefined,
-      ),
-    ),
-    kind,
-    (model) => isMediaModelExecutable(model.id, coreCapability),
-  ).map((model) => {
-    const provider = providers.get('xd');
-    const providerName = provider?.name ?? 'Cindy AI';
-    const modelName = model.name ?? model.id;
-    return {
-      id: encodeMediaPreference('xd', model.id),
-      modelId: model.id,
-      label: modelName,
-      modelName,
-      providerId: 'xd',
-      providerName,
-      group: providerName,
-      ...(provider?.routing ? { routing: provider.routing } : {}),
-      supportsEdit: isMediaModelExecutable(
-        model.id,
-        kind === 'image' ? 'image.edit' : 'video.image_to_video',
-      ),
-    };
-  });
-  const models = [...gatewayModels, ...providerModels];
-  const standard = gatewayModels[0]?.id ?? providerModels[0]?.id;
-  return {
-    models,
-    defaults: standard ? { standard, draft: standard, best: standard } : null,
-  };
-}
-
-function resolveMediaPreferenceModel(
-  config: CindyMediaPreferenceConfig,
-  preference: string | undefined,
-): CindyMediaPreferenceModel | null {
-  if (!preference) return null;
-  const exact = config.models.find((model) => model.id === preference);
-  if (exact) return exact;
-  if (decodeMediaPreference(preference)) return null;
-  if (!preference.includes('/')) {
-    const legacyXdMatches = config.models.filter(
-      (model) =>
-        model.providerId === 'xd' &&
-        model.modelId.slice(model.modelId.lastIndexOf('/') + 1) === preference,
-    );
-    if (legacyXdMatches.length === 1) return legacyXdMatches[0]!;
-  }
-  return (
-    config.models.find((model) => model.providerId === 'xd' && model.modelId === preference) ??
-    config.models.find((model) => model.modelId === preference) ??
-    null
-  );
-}
-
-function resolveMediaPreferenceOrDefault(
-  config: CindyMediaPreferenceConfig,
-  preference: string | undefined,
-): CindyMediaPreferenceModel | null {
-  return (
-    resolveMediaPreferenceModel(config, preference) ??
-    resolveMediaPreferenceModel(config, config.defaults?.standard)
-  );
-}
+let mediaPreferences:ReturnType<typeof createCindyMediaPreferences>|undefined;
+function getMediaPreferences(){return mediaPreferences ??= createCindyMediaPreferences({getActiveCatalog,getXdGatewayModels,getImageChannelRegistry,getVideoProviderRegistry,readModelDisableOverrides,isKnownEmbeddingModel,isVideoCatalogProviderReady,isXdGatewayProviderReady,isCatalogMediaModelVisible,listLocalProviderVideoModels,listProviderMediaModels,isMediaModelExecutableForGuide,isMediaModelExecutable,filterEnabledGatewayMediaModels,logger:log});}
+function isXdMediaModelExecutableForCatalog(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['isXdMediaModelExecutableForCatalog']>) {return getMediaPreferences().isXdMediaModelExecutableForCatalog(...args);}
+function getCatalogMediaConfig(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['getCatalogMediaConfig']>) {return getMediaPreferences().getCatalogMediaConfig(...args);}
+function getCatalogImageConfig(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['getCatalogImageConfig']>) {return getMediaPreferences().getCatalogImageConfig(...args);}
+function getCatalogVideoConfig(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['getCatalogVideoConfig']>) {return getMediaPreferences().getCatalogVideoConfig(...args);}
+function getCatalogEmbedConfig(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['getCatalogEmbedConfig']>) {return getMediaPreferences().getCatalogEmbedConfig(...args);}
+function getMediaPreferenceConfig(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['getMediaPreferenceConfig']>) {return getMediaPreferences().getMediaPreferenceConfig(...args);}
+function encodeMediaPreference(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['encodeMediaPreference']>) {return getMediaPreferences().encodeMediaPreference(...args);}
+function decodeMediaPreference(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['decodeMediaPreference']>) {return getMediaPreferences().decodeMediaPreference(...args);}
+function resolveMediaPreferenceModel(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['resolveMediaPreferenceModel']>) {return getMediaPreferences().resolveMediaPreferenceModel(...args);}
+function resolveMediaPreferenceOrDefault(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['resolveMediaPreferenceOrDefault']>) {return getMediaPreferences().resolveMediaPreferenceOrDefault(...args);}
+function assertMediaModelStillEnabled(...args:Parameters<ReturnType<typeof createCindyMediaPreferences>['assertMediaModelStillEnabled']>) {return getMediaPreferences().assertMediaModelStillEnabled(...args);}
 
 /**
  * Art 1.12.5–1.13.2 已经走 Core media，但还不会在 prepare 时传
@@ -4523,30 +3825,6 @@ function getGhostConfiguredMediaModel(
  * generateImage / editImage / 视频提交边界按**当前** override 重算启用候选再验一次,
  * 不在册即拒,这次付费请求不发出(与 scheduler 派发前重裁决同语义)。
  */
-function assertMediaModelStillEnabled(
-  kind: 'image' | 'video',
-  model: string,
-  providerId?: string,
-  action: LegacyCindyMediaAction = 'generate',
-): void {
-  const capability: GhostMediaCapability = `${kind}.${action}`;
-  const available =
-    providerId && kind === 'image' && providerId !== 'xd'
-      ? getMediaPreferenceConfig(capability).models.some(
-          (candidate) => candidate.providerId === providerId && candidate.modelId === model,
-        )
-      : getCatalogMediaConfig(kind, action, providerId).models.some(
-          (candidate) =>
-            candidate.id === model && (!providerId || candidate.providerId === providerId),
-        );
-  if (!available) {
-    throw new Error(
-      kind === 'image'
-        ? '图像模型不可用(可能已停用或来源凭证未就绪),本次生成已取消'
-        : '视频模型不可用(可能已停用或来源凭证未就绪),本次生成已取消',
-    );
-  }
-}
 
 /**
  * 把图片通道的底层报错翻译成用户可行动的话术(意识交卷失败时 AI 会原样
@@ -4677,414 +3955,16 @@ function getGhostImageCapabilities(
  * size 枚举的翻译在适配层完成(通道各家 wire 不同,意图翻译是通道自己的知识)。
  * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
  */
-const registeredCodexImageAccounts = new Set<string>();
-const registeredByokImageAccounts = new Set<string>();
-const registeredCustomImageAccounts = new Set<string>();
-let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
-function getImageChannelRegistry(): ImageChannelRegistry {
-  if (!imageChannelRegistrySingleton) {
-    const registry = new ImageChannelRegistry();
-    registry.register('xd', {
-      imageProtocol: 'openai',
-      ready: () => getAppCapabilities().canUseCindyGateway,
-      generateImage: (params) =>
-        getCindyProxyMediaService().backend.generateImage({
-          model: params.model,
-          prompt: params.prompt,
-          ...normalizeImageParameters('openai', params.model, params),
-        }),
-      editImage: (params) =>
-        getCindyProxyMediaService().backend.editImage({
-          model: params.model,
-          prompt: params.prompt,
-          imagePaths: params.imagePaths,
-          ...normalizeImageParameters('openai', params.model, params),
-        }),
-    });
-    const readXaiApiImageKey = (): string | null => {
-      // 图片凭证只取路由命中官方 api.x.ai 端点的 runtime:代理 runtime 的密钥
-      // 不得发往官方图片端点(避免 401/403 与凭证披露,见 PR #3875 review)。
-      const provider = getActiveCatalog().providers.find(
-        (candidate) => candidate.id === XAI_API_CUSTOM_PROVIDER_ID,
-      );
-      for (const agent of xaiApiOfficialRuntimeAgents(provider)) {
-        const value = readCustomProviderKey(XAI_API_CUSTOM_PROVIDER_ID, agent)?.trim();
-        if (value) return value;
-      }
-      return null;
-    };
-    const hasXaiApiImageKey = (): boolean =>
-      getActiveCatalog().providers.some((provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID) &&
-      readXaiApiImageKey() !== null;
-    registry.register(
-      'xai-api',
-      createXaiImageChannel({
-        hasApiKey: hasXaiApiImageKey,
-        getApiKey: readXaiApiImageKey,
-        hasOAuthLogin: () => false,
-        getCredentialGeneration: () => 0,
-        getOwnerScopeKey: () => activeOwnerScopeKey(),
-        isOwnerBoundaryPending: () => isGhostBoundaryPending(),
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, 'xai-api'),
-      }),
-    );
-    registry.register(
-      'xai',
-      createXaiImageChannel({
-        hasOAuthLogin: () => hasGrokOAuthLogin(),
-        getAccessToken: () => getGrokAccessToken(),
-        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
-        getOwnerScopeKey: () => activeOwnerScopeKey(),
-        isOwnerBoundaryPending: () => isGhostBoundaryPending(),
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
-        onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
-      }),
-    );
-    // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
-    // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
-    // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
-    registry.register(
-      'gemini',
-      createGeminiImageChannel({
-        getApiKey: () => getProviderSecretStore().get('gemini'),
-        // googleapis 境外端点经 outboundFetch 吃系统代理:main 的裸 fetch 不读系统
-        // 代理设置,代理软件非 TUN 模式下会直连失败(xd 网关域名境内直连,不注)。
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
-      }),
-    );
-    // OpenAI public Images API(BYO 平台 key):与 xd 网关同 wire,整个客户端复用,
-    // 只换 baseUrl/品牌话术/凭证读取。ChatGPT/Codex 订阅走下方独立的 hosted-tool
-    // 通道;目录 id 带 openai/ 前缀,public API 适配层剥前缀。
-    const openaiImagesClient = createGatewayImageClient({
-      getApiKey: () => getProviderSecretStore().get('openai-images'),
-      logger: log,
-      // 境外端点吃系统代理(outboundFetch):main 的裸 fetch 不读系统代理设置,
-      // 代理软件非 TUN 模式下会直连失败(2026-07 review;xd 网关通道不注 ——
-      // 网关域名境内直连,与现状一致)。
-      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-      proxy: {
-        baseUrl: 'https://api.openai.com',
-        generatePath: '/v1/images/generations',
-        editPath: '/v1/images/edits',
-      },
-      brandLabel: 'OpenAI',
-      missingKeyMessage: 'OpenAI 图像 API key 未配置,请到「设置 → 模型供应商 → OpenAI」填入后重试',
-      beforeDispatch: (model) => assertMediaModelStillEnabled('image', `openai/${model}`, 'openai'),
-    });
-    const stripOpenaiPrefix = (id: string) =>
-      id.startsWith('openai/') ? id.slice('openai/'.length) : id;
-    const hasOpenaiPlatformKey = () =>
-      (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '';
-    const codexImagesClient = createCodexImageChannel({
-      hasOAuthLogin: hasCodexOAuthLoginReadOnly,
-      getAuth: () => getCodexImageAuthBinding().getAuth(),
-      onAuthFailure: async (failure) => {
-        await getCodexImageAuthBinding().onAuthFailure(failure);
-      },
-      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, 'openai'),
-    });
-    registry.register('openai', {
-      imageProtocol: 'openai',
-      // 用户明确配置 Platform key 时优先走确定性的 public Images API；否则复用
-      // 已连接的 ChatGPT/Codex 订阅 OAuth hosted tool，不要求再付一份 API 费。
-      ready: () => hasOpenaiPlatformKey() || codexImagesClient.ready(),
-      generateImage: (params) =>
-        hasOpenaiPlatformKey()
-          ? openaiImagesClient.generateImage(
-              {
-                model: stripOpenaiPrefix(params.model),
-                prompt: params.prompt,
-                ...normalizeImageParameters('openai', params.model, params),
-              },
-              params.signal,
-            )
-          : codexImagesClient.generateImage(params),
-      editImage: (params) =>
-        hasOpenaiPlatformKey()
-          ? openaiImagesClient.editImage(
-              {
-                model: stripOpenaiPrefix(params.model),
-                prompt: params.prompt,
-                imagePaths: params.imagePaths,
-                ...normalizeImageParameters('openai', params.model, params),
-              },
-              params.signal,
-            )
-          : codexImagesClient.editImage(params),
-    });
-    imageChannelRegistrySingleton = registry;
-  }
-  const imageProviders = getActiveCatalog().providers;
-  pruneDynamicImageChannels(
-    imageChannelRegistrySingleton,
-    imageProviders,
-    registeredCodexImageAccounts,
-    registeredByokImageAccounts,
-    registeredCustomImageAccounts,
-  );
-  for (const provider of imageProviders) {
-    if (
-      isOrganizationManagedProvider(provider) ||
-      provider.auth.native !== 'codex' ||
-      registeredCodexImageAccounts.has(provider.id)
-    )
-      continue;
-    const providerId = provider.id;
-    imageChannelRegistrySingleton.register(
-      providerId,
-      createCodexImageChannel({
-        providerId,
-        hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-        getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-        onAuthFailure: async (failure) => {
-          await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
-        },
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
-      }),
-    );
-    registeredCodexImageAccounts.add(providerId);
-  }
-  // Organization BYOK image models get their own channel. Do not reuse xd /
-  // openai / gemini / xai: those stay personal or gateway routes. Chat-only
-  // BYOK is skipped until the catalog grows imageModels. Closures read the
-  // live member key and inference origin so rotate/logout flip ready().
-  registerByokImageChannels(
-    imageChannelRegistrySingleton,
-    imageProviders,
-    registeredByokImageAccounts,
-    (provider) => {
-      const providerId = provider.id;
-      return createByokImageChannel({
-        brandLabel: provider.name,
-        getApiKey: () => readByokCredential(providerId, 'image'),
-        getBaseUrl: () => readByokInferenceBase(providerId),
-        getSupportsEdit: () => {
-          const current = getActiveCatalog().providers.find(
-            (candidate) => candidate.id === providerId,
-          );
-          return (current?.imageModels ?? []).some(
-            (model) => model.modalities?.input.includes('image') === true,
-          );
-        },
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
-        logger: log,
-      });
-    },
-  );
-  registerCustomImageChannels(
-    imageChannelRegistrySingleton,
-    imageProviders,
-    registeredCustomImageAccounts,
-    (providerId) => createCustomImageChannel({
-      getProvider: () => getActiveCatalog().providers.find(provider => provider.id === providerId),
-      readApiKey: agent => readCustomProviderKey(providerId, agent),
-      getOwnerScopeKey: activeOwnerScopeKey,
-      isOwnerBoundaryPending: isGhostBoundaryPending,
-      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-      beforeDispatch: model => assertMediaModelStillEnabled('image', model, providerId),
-      logger: log,
-    }),
-  );
-  return imageChannelRegistrySingleton;
+let providerMediaChannels: ReturnType<typeof createProviderMediaChannels> | undefined;
+function getProviderMediaChannels() {
+ return providerMediaChannels ??= createProviderMediaChannels({getActiveCatalog,getAppCapabilities,getCindyProxyMediaService,getProviderSecretStore,readCustomProviderKey,readByokCredential,readByokInferenceBase,activeOwnerScopeKey,isGhostBoundaryPending,hasGrokOAuthLogin,getGrokAccessToken,getGrokOAuthCredentialGeneration,invalidateXaiBridgeAuth,hasCodexOAuthLoginReadOnly,getCodexImageAuthBinding,outboundFetch,assertMediaModelStillEnabled,getCatalogMediaConfig,getMediaPreferenceConfig,readModelDisableOverrides,isCatalogMediaModelVisible,getVideoProviderRegistry,isVideoCatalogProviderReady,configureProviderMediaRuntime,logger:log,codexLogger:createLogger('codex-image')});
 }
-
-/**
- * 按解析出的模型定位归属来源并取执行通道。归属 = 白名单条目的 providerId
- * (cindyMediaCatalog first-wins 定格);白名单查无该模型时视同已停用
- * (assertMediaModelStillEnabled 同窗口语义)。
- */
-function resolveImageChannelForModel(
-  model: string,
-  operation: 'generate' | 'edit' = 'generate',
-  providerId?: string,
-) {
-  if (providerId) {
-    const capability: MediaCapability = operation === 'edit' ? 'image.edit' : 'image.generate';
-    const exact = getMediaPreferenceConfig(capability).models.find(
-      (candidate) => candidate.providerId === providerId && candidate.modelId === model,
-    );
-    if (!exact) throw new Error('图像模型或来源不可用,本次生成已取消');
-    if (operation === 'edit' && !exact.supportsEdit) {
-      throw new Error(`图像来源 ${providerId} 不支持图像编辑,请在设置中选择支持编辑的来源`);
-    }
-    return getImageChannelRegistry().resolve(providerId, model);
-  }
-  const entry = getCatalogMediaConfig('image').models.find((m) => m.id === model);
-  if (!entry) {
-    const slash = model.indexOf('/');
-    if (slash > 0) getImageChannelRegistry().resolve(model.slice(0, slash));
-    throw new Error('图像模型不可用,本次生成已取消');
-  }
-  if (operation === 'edit' && !entry.supportsEdit) {
-    throw new Error(`图像来源 ${entry.providerId} 不支持图像编辑,请在设置中选择支持编辑的来源`);
-  }
-  return getImageChannelRegistry().resolve(entry.providerId, model);
-}
-
-function listLocalProviderMediaModels(respectDisplaySwitch = false) {
-  const access = readModelDisableOverrides();
-  return getActiveCatalog().providers.flatMap((provider) => {
-    if (
-      provider.id === 'xd' ||
-      isProviderDisabled(access, provider.id) ||
-      !getImageChannelRegistry().isProviderReady(provider.id)
-    ) {
-      return [];
-    }
-    return (provider.imageModels ?? []).flatMap((model) => {
-      if (
-        !getImageChannelRegistry().isProviderReady(provider.id, model.id) ||
-        isModelDisabled(access, provider.id, model.id) ||
-        (respectDisplaySwitch &&
-          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
-      ) {
-        return [];
-      }
-      const supportsEdit = getImageChannelRegistry().isProviderEditReady(provider.id, model.id);
-      // Legacy/provider catalogs may only carry id/name. The channel registry is
-      // the executable capability source in that case: every registered image
-      // channel accepts text generation, and editable channels additionally
-      // accept an image input. Without this normalization, xAI's valid image
-      // models are visible in Settings but disappear from Art's media catalog.
-      const modalities = model.modalities ?? {
-        input: supportsEdit ? ['text', 'image'] : ['text'],
-        output: ['image'],
-      };
-      if (!modalities.output.includes('image')) return [];
-      const input = supportsEdit
-        ? [...modalities.input]
-        : modalities.input.filter((modality) => modality !== 'image');
-      return [
-        {
-          id: model.id,
-          name: model.name,
-          providerId: provider.id,
-          mode: 'image_generation' as const,
-          imageProtocol: getImageChannelRegistry().resolve(provider.id).imageProtocol,
-          modalities: { input, output: [...modalities.output] },
-          ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
-        },
-      ];
-    });
-  });
-}
-
-/**
- * Video models are executed by the host video registry rather than the image
- * provider runtime. Keep their catalog projection beside the image projection
- * so Art can read the same provider-owned models that Settings displays.
- */
-function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMediaRuntimeModel[] {
-  const access = readModelDisableOverrides();
-  const registry = getVideoProviderRegistry();
-  return getActiveCatalog().providers.flatMap((provider) => {
-    if (
-      provider.id === 'xd' ||
-      isProviderDisabled(access, provider.id) ||
-      (!isVideoCatalogProviderReady(provider.id) && !isCustomVideoProvider(provider))
-    ) {
-      return [];
-    }
-    return (provider.videoModels ?? []).flatMap((model) => {
-      if (
-        isModelDisabled(access, provider.id, model.id) ||
-        (isCustomVideoProvider(provider)
-          ? !resolveCustomVideoConnection(provider.id, model.id)
-          : !registry?.hasAlias(model.id, provider.id)) ||
-        (respectDisplaySwitch &&
-          !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled))
-      ) {
-        return [];
-      }
-      const modalities = model.modalities ?? {
-        input: ['text', 'image'],
-        output: ['video'],
-      };
-      if (!modalities.output.includes('video')) return [];
-      return [
-        {
-          id: model.id,
-          name: model.name,
-          providerId: provider.id,
-          mode: 'video_generation' as const,
-          ...(isCustomVideoProvider(provider) ? { videoProtocol: 'xai-videos' as const } : {}),
-          modalities: { input: [...modalities.input], output: [...modalities.output] },
-          ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
-        },
-      ];
-    });
-  });
-}
-
-function resolveCustomVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null {
-  const options = {
-    getProvider: () => getActiveCatalog().providers.find(provider => provider.id === providerId),
-    readApiKey: (agent: AgentKind) => readCustomProviderKey(providerId, agent),
-    isOwnerBoundaryPending: () => isGhostBoundaryPending(),
-  };
-  const binding = resolveCustomMediaConnection(options, modelId, 'video');
-  if (!binding) return null;
-  const owner = activeOwnerScopeKey();
-  const revision = videoConnectionRevision(providerId, modelId, binding);
-  return {
-    baseUrl: binding.baseUrl,
-    headers: binding.headers,
-    revision,
-    assertCurrent: () => {
-      const current = resolveCustomMediaConnection(options, modelId, 'video');
-      if (isGhostBoundaryPending() || owner !== activeOwnerScopeKey() || !current ||
-          revision !== videoConnectionRevision(providerId, modelId, current)) {
-        throw new Error('视频连接或账号已改变，本次操作已停止；请恢复原连接后查询原任务');
-      }
-    },
-  };
-}
-
-configureProviderMediaRuntime({
-  resolveVideoConnection: resolveCustomVideoConnection,
-  listModels: () => listLocalProviderMediaModels(true),
-  listVideoModels: () => listLocalProviderVideoModels(true),
-  listExecutableModels: () => listLocalProviderMediaModels(false),
-  listExecutableVideoModels: () => listLocalProviderVideoModels(false),
-  invoke: async (request) => {
-    if (request.capability !== 'image.generate' && request.capability !== 'image.edit') {
-      throw new Error('当前第三方 Provider 执行通道不支持该媒体能力');
-    }
-    const operation = request.capability === 'image.edit' ? 'edit' : 'generate';
-    const channel = resolveImageChannelForModel(request.modelId, operation, request.providerId);
-    if (
-      operation === 'edit' &&
-      channel.maxEditImages !== undefined &&
-      request.imagePaths.length > channel.maxEditImages
-    ) {
-      throw new Error(`当前图像来源最多支持 ${channel.maxEditImages} 张参考图`);
-    }
-    const response =
-      operation === 'edit'
-        ? await channel.editImage({
-            model: request.modelId,
-            prompt: request.prompt,
-            imagePaths: request.imagePaths,
-            ...normalizeImageParameters(channel.imageProtocol, request.modelId, request),
-            signal: request.signal,
-          })
-        : await channel.generateImage({
-            model: request.modelId,
-            prompt: request.prompt,
-            ...normalizeImageParameters(channel.imageProtocol, request.modelId, request),
-            signal: request.signal,
-          });
-    const first = response.data[0];
-    if (!first?.b64_json && first?.url) return { url: first.url };
-    return decodeImageResponse(response);
-  },
-});
+function getImageChannelRegistry(...args:Parameters<ReturnType<typeof createProviderMediaChannels>['getImageChannelRegistry']>) { return getProviderMediaChannels().getImageChannelRegistry(...args); }
+function resolveImageChannelForModel(...args:Parameters<ReturnType<typeof createProviderMediaChannels>['resolveImageChannelForModel']>) { return getProviderMediaChannels().resolveImageChannelForModel(...args); }
+function listLocalProviderMediaModels(...args:Parameters<ReturnType<typeof createProviderMediaChannels>['listLocalProviderMediaModels']>) { return getProviderMediaChannels().listLocalProviderMediaModels(...args); }
+function listLocalProviderVideoModels(...args:Parameters<ReturnType<typeof createProviderMediaChannels>['listLocalProviderVideoModels']>) { return getProviderMediaChannels().listLocalProviderVideoModels(...args); }
+function resolveCustomVideoConnection(...args:Parameters<ReturnType<typeof createProviderMediaChannels>['resolveCustomVideoConnection']>) { return getProviderMediaChannels().resolveCustomVideoConnection(...args); }
+getProviderMediaChannels();
 
 /**
  * 插件详情「模型」字段(与插件新建任务共用 pluginTaskPrefsStore)→ 快问快答的
@@ -10352,3 +9232,20 @@ function broadcastGhostRuntimeStates(): void {
   const states = runtimeSingleton?.listStates() ?? {};
   broadcastGhostWindowPush('ghosts:runtime-changed', { states });
 }
+
+const originalAssistantReply = createGhostAssistantReply<DataOwnerPushStamp | undefined>({
+ availableGhosts: () => availableGhosts(), getGhostOwnerPushStamp: () => getGhostOwnerPushStamp(),
+ isGhostOwnerStampCurrent: stamp => isGhostOwnerStampCurrent(stamp),
+ isGhostEligibleSession: id => isGhostEligibleSession(id), getGhostSubscriptionGateway: () => getGhostSubscriptionGateway(),
+ updateMessageContent: (...args) => updateMessageContent(...args), upsertGhostCard: row => upsertGhostCard(row),
+ broadcastGhostWindowPush: (channel,payload,stamp) => broadcastGhostWindowPush(channel,payload,stamp), log,
+});
+export const {hasEnabledGhostAssistantHook,runGhostAssistantReplyHook}=originalAssistantReply;
+
+const originalGhostSessionEvents=createGhostSessionEvents({
+ availableGhosts: () => availableGhosts(), getDbClient: () => getDbClient(),
+ getGhostOwnerPushStamp: () => getGhostOwnerPushStamp(), isGhostOwnerStampCurrent: stamp => isGhostOwnerStampCurrent(stamp),
+ getGhostSubscriptionGateway: () => getGhostSubscriptionGateway(), log,
+});
+const isGhostEligibleSession = originalGhostSessionEvents.isGhostEligibleSession;
+export const {createGhostSessionTap,hasEnabledUserMessageHookGhost,screenGhostUserMessage}=originalGhostSessionEvents;

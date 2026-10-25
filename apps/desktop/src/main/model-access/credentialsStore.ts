@@ -31,17 +31,8 @@ interface PersistedState {
   endpoint?: string;
 }
 
-export interface ModelAccessCredentialsStore {
-  getSource(): ModelAccessCredentialSource | null;
-  /** source='server' 时返回下发的 endpoint;否则 null。 */
-  getServerEndpoint(): string | null;
-  /** 服务端下发成功后记录(覆盖旧标记)。 */
-  setServerCredentials(endpoint: string): void;
-  /** 用户手填保存成功后记录(manual 无配套 endpoint,effectiveEndpoint 视为网关不可用)。 */
-  setManualSource(): void;
-  /** 清除标记(手填 key 被删除等)。 */
-  clear(): void;
-}
+export type { ModelAccessCredentialsStore } from '@cindy/model-providers/model-access/credentialsStore';
+import type { ModelAccessCredentialsStore } from '@cindy/model-providers/model-access/credentialsStore';
 
 /** 低层文件 IO,抽出以便注入测试(规则 14)。 */
 export interface CredentialsStoreIo {
@@ -79,7 +70,8 @@ export function createModelAccessCredentialsStore(
   ownerIdProvider?: () => string | null,
 ): ModelAccessCredentialsStore {
   const resolvedIo = io ?? defaultIo();
-  const resolveOwnerId = ownerIdProvider ?? (io ? () => null : () => getActiveAppSession().dataOwnerId);
+  const resolveOwnerId =
+    ownerIdProvider ?? (io ? () => null : () => getActiveAppSession().dataOwnerId);
   // 内存缓存:读路径(每次会话 spawn / 路由决策都会读 endpoint)零磁盘 IO(规则 10)。
   let cached: PersistedState | null | undefined; // undefined = 尚未加载
 

@@ -1,36 +1,17 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { ScriptTarget, transpileModule } from 'typescript';
+import {createSshAgentInstaller} from '@cindy/app-runtime/sshAgentInstaller';
 import { describe, expect, it, vi } from 'vitest';
-import { isIpcErrorCode } from '../../../shared/ipc-errors.js';
-import { throwIpcError } from '../../utils/ipcValidate.js';
 import { prepareRemoteAgentInstall } from '../codex-install-lifecycle.js';
 
-// Execute the real orchestration without loading Electron or opening an SSH connection.
-const source = readFileSync(resolve(__dirname, '..', 'index.ts'), 'utf8');
-const start = source.indexOf('export async function ensureRemoteAgentInstalledOrInstall(');
-const end = source.indexOf('\nfunction remoteConnectionFieldsChanged', start);
-const js = transpileModule(source.slice(start, end).replace('export async', 'async'), {
-  compilerOptions: { target: ScriptTarget.ES2022 },
-}).outputText;
+const {probe}=vi.hoisted(()=>({probe:vi.fn()}));
+vi.mock('@cindy/maker-remote-ssh',async importOriginal=>({...await importOriginal<typeof import('@cindy/maker-remote-ssh')>(),probeRemoteAgent:probe}));
 
 function harness(install: (...args: any[]) => Promise<unknown>) {
-  const status = vi.fn();
-  const cache = new Map();
-  const inFlight = new Map();
-  const ensure = new Function('remoteAgentInstalledCache', 'isAgentCacheHit',
-    'ensureRemoteAgentInstalled', 'inFlightKey', 'inFlightInstall', 'getPool',
-    'log', 'installRemoteAgent', 'broadcastSilentInstallStatus', 'broadcastInstallProgress',
-    'redactCredentialText', 'throwIpcError', 'isIpcErrorCode',
-    js + '; return ensureRemoteAgentInstalledOrInstall;')(
-    cache, (cached: Map<string, unknown> | undefined, kind: string) => cached?.has(kind),
-    async () => throwIpcError('SSH_AGENT_NOT_INSTALLED', 'needs upgrade'),
-    (hostId: string, kind: string) => hostId + ':' + kind, inFlight,
-    () => new Map([['builder', { getStatus: () => 'ready' }]]),
-    { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, install, status, vi.fn(),
-    (line: string) => line, throwIpcError, isIpcErrorCode,
-  );
-  return { run: () => ensure('builder', 'codex'), status, cache, inFlight };
+  const status=vi.fn();
+  probe.mockResolvedValue({installed:false,installedVersion:null});
+  const log={trace:vi.fn(),debug:vi.fn(),info:vi.fn(),warn:vi.fn(),error:vi.fn(),fatal:vi.fn(),child:()=>log};
+  const runtime=createSshAgentInstaller({getPool:()=>new Map([['builder',{getStatus:()=> 'ready'} as unknown as import('@cindy/maker-remote-ssh').RemoteHost]]),log,
+    installRemoteAgent:install as import('@cindy/app-runtime/sshAgentInstaller').SshAgentInstallerHost['installRemoteAgent'],broadcastSilentInstallStatus:status,broadcastInstallProgress:vi.fn()});
+  return {run:()=>runtime.ensureRemoteAgentInstalledOrInstall('builder','codex'),status,cache:runtime.remoteAgentInstalledCache,inFlight:runtime.inFlightInstall};
 }
 
 describe('silent installation terminal status', () => {

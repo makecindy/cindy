@@ -1,0 +1,153 @@
+/**
+ * unified-downloader — Public TypeScript types.
+ * ---------------------------------------------------------------------------
+ * Public contract: this module owns the downloader option, progress and error types.
+ *
+ * The downloader exposes ONLY a TS API (no IPC, no events emitter). All
+ * progress / retry / resume signals flow through callbacks on `DownloadOptions`.
+ */
+
+export interface DownloadOptions {
+  /** Absolute HTTP(S) URL to fetch. */
+  url: string;
+  /** Absolute target file path on disk. The downloader writes `${targetPath}.part`
+   * during the transfer and renames to `targetPath` after SHA256 passes. */
+  targetPath: string;
+  /** 64-char lowercase hex SHA256 (uppercase accepted, lowercased internally). */
+  sha256: string;
+  /** Optional. When provided, Content-Length must match for fresh downloads. */
+  expectedSize?: number;
+  /** Reject before writing beyond this limit (also enforced for cache/resume). */
+  maxBytes?: number;
+  /** Defaults to follow. A predicate is checked before every redirect request. */
+  redirect?: 'follow' | 'error';
+  isUrlAllowed?: (url: string) => boolean;
+  /**
+   * Optional single-hop request implementation. The host supplies its network stack.
+   * Callers fetching untrusted URLs inject a guarded fetch (SSRF / DNS pinning). It must
+   * not follow redirects: the transport validates every hop with `isUrlAllowed` first.
+   */
+  request?: DownloadRequest;
+  /** Defaults to true. False discards partial data after failure/cancellation. */
+  resume?: boolean;
+  /** Defaults to replace. Exclusive publication never overwrites an existing file. */
+  existingTarget?: 'replace' | 'error';
+  /** Raw progress events (no clamping / no smoothing — caller-side concern). */
+  onProgress?: (e: ProgressEvent) => void;
+  /** Fired before each backoff sleep. Use for logging/telemetry. */
+  onRetry?: (e: RetryEvent) => void;
+  /** Fired once per attempt that resumes from a non-zero offset. */
+  onResume?: (e: ResumeEvent) => void;
+  /** Fired once all bytes of an attempt have arrived, before SHA-256 verification. */
+  onVerifying?: () => void;
+  /** Caller can abort the in-flight download (queued, executing, or backing off). */
+  signal?: AbortSignal;
+  /** Logger; the host supplies its default. */
+  logger?: Logger;
+  /** Override retry strategy. */
+  retry?: Partial<RetryConfig>;
+  /** Override timeout strategy. */
+  timeout?: Partial<TimeoutConfig>;
+}
+
+/** One request without redirect following; `release` frees per-request resources. */
+export type DownloadRequest = (
+  url: string,
+  init: RequestInit,
+) => Promise<{ response: Response; release?: () => Promise<void> }>;
+
+export interface DownloadResult {
+  /** Final file path (== targetPath when resolve fires). */
+  path: string;
+  /** File size in bytes (== Content-Length / verified body). */
+  size: number;
+  /** Lowercase hex SHA256 of the file (matches expected sha256). */
+  sha256: string;
+  /** True when the file already existed at targetPath and matched sha256 — no network I/O. */
+  fromCache: boolean;
+  /** Wall-clock duration from enqueue to resolve, in ms. */
+  durationMs: number;
+  /** Bytes restored from `.part` before the network request started (0 = full download). */
+  resumedFromBytes: number;
+}
+
+export interface ProgressEvent {
+  /** Total bytes written to `.part` so far (cumulative across resume). */
+  loaded: number;
+  /** Total bytes expected; null when Content-Length / expectedSize are unknown. */
+  total: number | null;
+  /** Raw percent. Null when total is null. May exceed 100 if server lies — caller clamps. */
+  percent: number | null;
+  /** 5-second sliding window throughput in bytes/sec; 0 until ~1s of samples accumulated. */
+  speedBps: number;
+}
+
+export interface RetryEvent {
+  /** 1-based: the attempt that is ABOUT to start. */
+  attempt: number;
+  /** Backoff sleep before the next attempt, in ms. */
+  delayMs: number;
+  /** Underlying error (typically a DownloadError). */
+  cause: Error;
+}
+
+export interface ResumeEvent {
+  /** Bytes restored from `.part`. */
+  fromBytes: number;
+  /** Total bytes expected (may be null). */
+  totalBytes: number | null;
+}
+
+export type DownloadErrorCode =
+  | 'NETWORK'
+  | 'HTTP_4XX'
+  | 'HTTP_5XX'
+  | 'CHECKSUM'
+  | 'SIZE'
+  | 'TIMEOUT'
+  | 'URL_POLICY'
+  | 'EXISTS'
+  | 'DISK'
+  | 'ABORTED'
+  | 'INVALID_ARG';
+
+export class DownloadError extends Error {
+  public readonly code: DownloadErrorCode;
+  public readonly cause?: Error;
+  public readonly httpStatus?: number;
+
+  constructor(code: DownloadErrorCode, message: string, cause?: Error, httpStatus?: number) {
+    super(message);
+    this.name = 'DownloadError';
+    this.code = code;
+    this.cause = cause;
+    this.httpStatus = httpStatus;
+  }
+}
+
+export interface RetryConfig {
+  /** Default 6. */
+  maxAttempts: number;
+  /** Default 1000. */
+  baseDelayMs: number;
+  /** Default 30000. */
+  maxDelayMs: number;
+  /** Default 0.25 (±25%). */
+  jitterRatio: number;
+}
+
+export interface TimeoutConfig {
+  /** Default 10000 — time from request.end to first response event. */
+  connectMs: number;
+  /** Default 30000 — max gap between data chunks before treating as dead. */
+  idleMs: number;
+  /** Optional active budget, including retry waits but excluding queue time. */
+  totalMs?: number;
+}
+
+export interface Logger {
+  debug?(msg: string, meta?: unknown): void;
+  info?(msg: string, meta?: unknown): void;
+  warn?(msg: string, meta?: unknown): void;
+  error?(msg: string, meta?: unknown): void;
+}

@@ -9,10 +9,10 @@ describe("performMessageDeletion", () => {
 
 
   it('keeps the deleted-session preview on the visible message projection', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/main/localDb/ipc/messages.ts'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), '../../packages/app-runtime/src/messageService.ts'), 'utf8');
     const deletionBlock = source.slice(
-      source.indexOf('export async function commitMessageDeletion'),
-      source.indexOf('export function broadcastMessageDeleted'),
+      source.indexOf('async function commitMessageDeletion'),
+      source.indexOf('async function commitContextRebuild'),
     );
 
     expect(deletionBlock).toContain('const latest = await latestVisiblePreviewRow(sessionId);');
@@ -33,13 +33,13 @@ describe("performMessageDeletion", () => {
    */
   it('never patches _count.messages from the delete path', () => {
     const messagesSource = readFileSync(
-      resolve(process.cwd(), 'src/main/localDb/ipc/messages.ts'),
+      resolve(process.cwd(), '../../packages/app-runtime/src/messageService.ts'),
       'utf8',
     );
-    const deletionStart = messagesSource.indexOf('export async function commitMessageDeletion');
+    const deletionStart = messagesSource.indexOf('async function commitMessageDeletion');
     const deletionBlock = messagesSource.slice(
       deletionStart,
-      messagesSource.indexOf('export function broadcastMessageDeleted'),
+      messagesSource.indexOf('async function commitContextRebuild'),
     );
     // 返回契约里不得再出现 messageCount——它就是 _count 广播的唯一来源。只看函数签名段,
     // 因为下方注释本身要提这个名字解释原因。(切点找不到时先失败在这里,否则 slice(-1) 会把

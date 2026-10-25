@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
-import { registerCreateWorkerTool, type CreateWorkerDeps } from '../xdt-helper/create_worker.js';
+import { registerCreateWorkerTool } from '../xdt-helper/create_worker.js';
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;
@@ -18,7 +18,7 @@ function parse(result: XdtHelperToolResult) {
 }
 
 function setup() {
-  const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
+  const createWorker = vi.fn<NonNullable<Parameters<typeof registerCreateWorkerTool>[1]['createWorker']>>(async () => ({
     ok: true as const,
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',
@@ -32,7 +32,7 @@ function setup() {
 }
 
 function setupWorkerSession() {
-  const createWorker = vi.fn(async () => ({
+  const createWorker = vi.fn<NonNullable<Parameters<typeof registerCreateWorkerTool>[1]['createWorker']>>(async () => ({
     ok: true as const,
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',
@@ -54,7 +54,7 @@ describe('create_worker tool', () => {
   // Existing directory tests only cover an explicit existing path. Unit, real registry schema.
   it.each([{}, { source_branch: 'release' }])('passes new_worktree %j and returns the actual directory and owned checkout', async (request) => {
     const registry = new XdtHelperToolRegistry();
-    const createWorker = vi.fn(async () => ({ ok: true as const, workerId: 'worker', workerSessionId: 'session',
+    const createWorker = vi.fn<NonNullable<Parameters<typeof registerCreateWorkerTool>[1]['createWorker']>>(async () => ({ ok: true as const, workerId: 'worker', workerSessionId: 'session',
       workingDir: '/repo/.cindy-worktrees/new/apps/web', worktree: { path: '/repo/.cindy-worktrees/new', branch: 'cindy/new' } }));
     registerCreateWorkerTool(registry, { sessionId: 'lead', createWorker });
     const result = parse(await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'worker', new_worktree: request }));
@@ -186,7 +186,7 @@ describe('create_worker tool', () => {
   });
 
   it('surfaces structured hard-limit details to the lead', async () => {
-    const createWorker = vi.fn(async () => ({
+    const createWorker = vi.fn<NonNullable<Parameters<typeof registerCreateWorkerTool>[1]['createWorker']>>(async () => ({
       ok: false as const,
       errorCode: 'WORKER_LIMIT_HARD_EXCEEDED' as const,
       message: 'hard limit 3 reached',

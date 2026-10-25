@@ -303,3 +303,25 @@ export function buildClientDeviceNote(
   const hostRef = formatSourceRef(host.name, 'device_id', host.deviceId);
   return `${CLIENT_NOTE_PREAMBLE}本轮用户在${where}${deviceRef} 上远程操作本机${hostRef}。`;
 }
+
+/** Display projection of the persisted collaboration envelope, shared by GUI and TUI. */
+export interface OrcaCommunicationContent {
+  orcaSource: 'lead' | 'worker';
+  content: string;
+}
+
+export function parseOrcaCommunicationContent(content: string): OrcaCommunicationContent | null {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    if (record.orcaSource !== 'lead' && record.orcaSource !== 'worker') return null;
+    if (typeof record.content !== 'string') return null;
+    return {
+      orcaSource: record.orcaSource,
+      content: record.content,
+    };
+  } catch {
+    return null;
+  }
+}

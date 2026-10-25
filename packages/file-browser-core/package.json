@@ -2,14 +2,14 @@
   "name": "@cindy/file-browser-core",
   "version": "0.0.0",
   "private": true,
-  "description": "xdt-maker file-browser core: workdir scanner, ignore matcher, ripgrep list/search — shared by desktop main (local backend) and the remote file-service daemon",
+  "description": "xdt-maker file-browser core: workdir scanner, ignore matcher, ripgrep list/search \u2014 shared by desktop main (local backend) and the remote file-service daemon",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./textFileExts": "./src/textFileExts.ts",
-    "./ignoreNames": "./src/ignoreNames.ts"
+    "./filePathPolicy": "./src/filePathPolicy.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

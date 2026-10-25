@@ -2,17 +2,8 @@ import type { MakeSourceStatus } from '../../shared/cindyMakeDoctor.js';
 import type { MakeToolchainEnvironment } from './toolchainEnvironment.js';
 import { runSourceGit } from './sourceGit.js';
 
-export type SourceRevisions = Pick<
-  MakeSourceStatus,
-  | 'baseCommit'
-  | 'currentBranch'
-  | 'mainCommit'
-  | 'mainRemoteCommit'
-  | 'mainBehind'
-  | 'mainAhead'
-  | 'personalBehind'
-  | 'personalAhead'
->;
+export type { SourceRevisions } from '@cindy/app-runtime/cindyMakePreparationTypes';
+import type { SourceRevisions } from '@cindy/app-runtime/cindyMakePreparationTypes';
 
 export function isSourceBranchName(value: unknown): value is string {
   return (

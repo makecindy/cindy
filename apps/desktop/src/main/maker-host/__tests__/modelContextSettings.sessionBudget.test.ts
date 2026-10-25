@@ -23,6 +23,7 @@ vi.mock('../../appSessionState.js', async () => {
     // 预算 store 的 owner 隔离读它；测试里固定成同一个 key 即可。
     activeOwnerScopeKey: (): string => 'test-owner',
     getActiveAppSession: () => ({ dataOwnerId: 'test-owner', generation: 1 }),
+    isAppSessionBoundaryPending: (): boolean => false,
     dataOwnerStorageKey: (ownerId: string): string => ownerId,
   };
 });
@@ -32,6 +33,7 @@ vi.mock('../catalog-to-descriptors.js', async () => {
   return {
     resolveModelContextProviderId: () => 'xd',
     resolveVerifiedContextWindow: shared.resolveVerifiedContextWindow,
+    resolveRouteContextWindowBounds: shared.resolveRouteContextWindowBounds,
   };
 });
 

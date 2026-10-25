@@ -1,0 +1,34 @@
+import type { DbClient } from '@cindy/runtime-db';
+import { markDefaultBotOffered, withDefaultBotProvisioningLock } from './botDefaultProvisioning.js';
+export function createBotProfileDeletionStore(host: {
+ getDbClient(): DbClient; activeOwnerScopeKey(): string;
+ isAppSessionBoundaryPending(): boolean; ownerScopedUserDataPath(): string;
+}) {
+ const { getDbClient, activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } = host;
+async function commitBotProfileDeletion(input: {
+  botId: string;
+  sessionIds: string[];
+  keepTaskHistory: boolean;
+}): Promise<{ sessionIds: string[]; status: 'archived' | 'deleted' }> {
+  const client = getDbClient();
+  const owner = activeOwnerScopeKey();
+  if (isAppSessionBoundaryPending()) throw new Error('Account is changing');
+  const ownerRoot = ownerScopedUserDataPath();
+  const assertOwner = () => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || getDbClient() !== client)
+      throw new Error('Account changed');
+  };
+  return withDefaultBotProvisioningLock(ownerRoot, assertOwner, async () => {
+    await markDefaultBotOffered(ownerRoot);
+    assertOwner();
+    return client.tx('bots.deleteProfile', {
+      botId: input.botId,
+      sessionIds: [...new Set(input.sessionIds)],
+      keepTaskHistory: input.keepTaskHistory,
+      at: Date.now(),
+    });
+  });
+}
+
+return { commitBotProfileDeletion };
+}

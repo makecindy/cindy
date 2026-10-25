@@ -1,0 +1,1 @@
+export const TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT = 'trustedDesktopPiCommandAuthorization';

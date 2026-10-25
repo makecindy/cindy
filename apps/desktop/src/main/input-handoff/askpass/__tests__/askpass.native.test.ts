@@ -1,7 +1,4 @@
 import { execFile } from 'node:child_process';
-import { constants } from 'node:fs';
-import { access, realpath } from 'node:fs/promises';
-import path from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,27 +27,11 @@ function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ co
   });
 }
 
-// Apple Git resolves its transport helpers relative to argv[0]. A PATH symlink
-// outside the install tree otherwise fails before contacting the synthetic server.
-// Keep the same POSIX PATH selection, resolving only that executable's symlinks.
-async function nativeGitPath(): Promise<string> {
-  for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
-    const candidate = path.resolve(directory || '.', 'git');
-    try {
-      await access(candidate, constants.X_OK);
-      return await realpath(candidate);
-    } catch {
-      // Match executable lookup: an absent or inaccessible PATH entry is skipped.
-    }
-  }
-  throw new Error('git executable was not found on PATH');
-}
-
-async function setup(answers: Record<string, string>) {
+async function setup(answers: Record<string, string>, baseEnv: NodeJS.ProcessEnv = {}) {
   const prompts: TerminalPromptRequest[] = [];
   const host = new AskpassHost({
     isDisabledForSession: async () => false,
-    baseEnv: {},
+    baseEnv,
     startTerminalPrompt: (request) => {
       prompts.push(request);
       const key = Object.keys(answers).find((k) => request.prompt.startsWith(k));
@@ -65,7 +46,9 @@ async function setup(answers: Record<string, string>) {
 }
 
 describe.runIf(runnable)('代输入 askpass with real programs', () => {
-  it('answers git over HTTP and the value reaches only git', async () => {
+  // Regression: launching a second host from a Cindy task must route git's
+  // password to that host, without replacing a user-configured helper.
+  it.each([false, true])('answers git over HTTP only in the owning host (nested=%s)', async (nested) => {
     const seen: string[] = [];
     const server = http.createServer((req, res) => {
       seen.push(req.headers.authorization ?? '');
@@ -75,9 +58,10 @@ describe.runIf(runnable)('代输入 askpass with real programs', () => {
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
-    const { prompts, env } = await setup({ Username: 'someone', Password: 'synthetic-pass' });
+    const parent = nested ? await setup({}) : undefined;
+    const { prompts, env } = await setup({ Username: 'someone', Password: 'synthetic-pass' }, parent?.env);
 
-    const result = await run(await nativeGitPath(), ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
+    const result = await run('git', ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       GIT_CONFIG_NOSYSTEM: '1',
@@ -91,6 +75,16 @@ describe.runIf(runnable)('代输入 askpass with real programs', () => {
     expect(prompts.map((p) => p.program)).toEqual(['git', 'git']);
     expect(prompts[0].command).toContain('ls-remote');
     expect(prompts[0].sessionId).toBe('task-1');
+    expect(parent?.prompts ?? []).toHaveLength(0);
+    if (parent) {
+      const custom = await setup({}, { ...parent.env, GIT_ASKPASS: '/usr/bin/false' });
+      const declined = await run('git', ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
+        PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0', ...parent.env, GIT_ASKPASS: '/usr/bin/false', ...custom.env,
+      });
+      expect(declined.code).not.toBe(0);
+      expect(custom.prompts).toHaveLength(0);
+    }
   });
 
   it('refuses the helper when the agent calls it directly', async () => {

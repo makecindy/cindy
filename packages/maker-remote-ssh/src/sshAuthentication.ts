@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { utils } from 'ssh2';
+import ssh2 from 'ssh2';
 
 import { sshFingerprint } from './filteredAgent.js';
 import type { HostConfig } from './types.js';
@@ -55,7 +55,7 @@ async function fingerprintPublicKeyFile(filePath: string): Promise<{
     if (!/^(?:ssh-|ecdsa-|sk-)[^\s]+\s+[A-Za-z0-9+/=]+(?:\s|$)/.test(text)) {
       return { missing: false, invalid: true };
     }
-    const parsed = utils.parseKey(text);
+    const parsed = ssh2.utils.parseKey(text);
     if (parsed instanceof Error) return { missing: false, invalid: true };
     const key = Array.isArray(parsed) ? parsed[0] : parsed;
     if (!key) return { missing: false, invalid: true };

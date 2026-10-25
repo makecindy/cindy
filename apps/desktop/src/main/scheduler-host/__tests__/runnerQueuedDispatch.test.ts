@@ -18,7 +18,10 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
+vi.mock('electron', async () => {
+  const platform = await import('../../../test/vitest/electron-stub');
+  return { ...platform, app: { ...platform.app, getPath: () => '/tmp/cindy-scheduler-test' } };
+});
 vi.mock('electron-store', () => ({ default: class {
   get(): unknown { return undefined; }
   set(): void {}
@@ -60,12 +63,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const sharedProduction = vi.hoisted(() => ({
-  backfill: undefined as typeof import('../runners/_shared').backfillSessionMeta | undefined,
+  backfill: undefined as typeof import('@cindy/app-runtime/scheduleRunnerShared').backfillSessionMeta | undefined,
 }));
 
 // 只有声明了 preRunHook 的用例会走到这里；其它用例不调用。
-vi.mock('../pre-run-hook', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../pre-run-hook')>()),
+vi.mock('@cindy/app-runtime/schedulePreRunHook', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@cindy/app-runtime/schedulePreRunHook')>()),
   executePreRunHook: mocks.executePreRunHook,
 }));
 
@@ -105,8 +108,8 @@ vi.mock('../workdir-resolver', () => ({
   resolveWorkingDir: mocks.resolveWorkingDir,
 }));
 
-vi.mock('../runners/_shared', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../runners/_shared')>();
+vi.mock('@cindy/app-runtime/scheduleRunnerShared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/app-runtime/scheduleRunnerShared')>();
   sharedProduction.backfill = actual.backfillSessionMeta;
   return { backfillSessionMeta: mocks.backfillSessionMeta };
 });

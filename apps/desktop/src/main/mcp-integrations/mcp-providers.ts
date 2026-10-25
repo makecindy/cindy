@@ -1,3 +1,6 @@
+import {createSessionBatchHelper} from '@cindy/app-runtime/sessionBatchHelper';
+import {createCompanionHelperCallbacks} from '@cindy/app-runtime/companionHelperCallbacks';
+import {gateBuiltinMcpProviders} from '@cindy/app-runtime/builtinMcpProviderGate';
 import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
@@ -811,46 +814,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
-      renameSessions: async ({ changes, dryRun }) => {
-        if (!tryGetDbClient()) {
-          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
-        }
-        try {
-          const renamed = await renameSessionTitlesInDb(changes, dryRun, assertTaskActionCurrent);
-          return { ok: true, changes: renamed };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (isIpcError(err)) {
-            if (err.code === 'NOT_FOUND' || err.code === 'PRECONDITION_FAILED') {
-              return { ok: false, errorCode: err.code, message };
-            }
-            if (err.code === 'INVALID_PARAMS') {
-              return { ok: false, errorCode: 'INVALID_ARGS', message };
-            }
-          }
-          return { ok: false, errorCode: 'INTERNAL', message };
-        }
-      },
-      setRemoteSessionsStatus: deps.historyRemote
-        ? createRemoteSessionsStatusSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
-        : undefined,
-      setSessionsStatus: async ({ sessionIds, status }) => {
-        if (!tryGetDbClient()) {
-          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
-        }
-        try {
-          const changed = await setSessionsStatusInDb(sessionIds, status, assertTaskActionCurrent);
-          return { ok: true, changed };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (isIpcError(err)) {
-            if (err.code === 'NOT_FOUND' || err.code === 'PRECONDITION_FAILED') {
-              return { ok: false, errorCode: err.code, message };
-            }
-          }
-          return { ok: false, errorCode: 'INTERNAL', message };
-        }
-      },
+      ...createSessionBatchHelper({tryGetDbClient,renameSessionTitlesInDb,setSessionsStatusInDb}),
+      setRemoteSessionsStatus: deps.historyRemote ? createRemoteSessionsStatusSetter({captureAccess:deps.historyRemote.captureAccess,invoke:deps.invokeRemote}) : undefined,
       // 目标在另一台电脑(deviceId::sessionId):交给那台电脑按它本机的同一条通路投递。
       ...(remoteSessionHandoff
         ? {
@@ -1022,93 +987,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
         },
       },
-      botRoutines: {
-        service: routineTools,
-        resolveBotId: async (callerSessionId) => {
-          const scope = activeOwnerScopeKey();
-          if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
-            throw new Error('Routine account is no longer active');
-          }
-          const dbClient = tryGetDbClient();
-          if (!dbClient) throw new Error('localDb not ready');
-          const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
-            .from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(and(
-              eq(botSessionLinks.sessionId, callerSessionId),
-              eq(sessions.source, 'bot'),
-              // The owner's Bot Chat: the main Chat or one of its private-chat topics.
-              inArray(botSessionLinks.role, ['canonical', 'thread']),
-            ))
-            .limit(1);
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
-            throw new Error('Routine account is no longer active');
-          }
-          if (!owned) throw new Error('当前调用未绑定伙伴主任务');
-          return owned.botId;
-        },
-      },
-      // 伙伴的主力电脑:与界面同一条路径(本机交出 / 请主力电脑交出 / 在这台电脑继续)。
-      teammateHome: {
-        get: async ({ teammateId }) => {
-          const runtime = activeCompanionCloud();
-          if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
-          const choices = await runtime.homeChoices(teammateId);
-          if (choices.reason === 'NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: 'No such teammate in this account' };
-          return { ok: true, teammateId, mode: choices.mode, ...(choices.reason ? { reason: choices.reason } : {}),
-            home: choices.homeDeviceId ? { deviceId: choices.homeDeviceId, name: choices.homeName ?? '', isSelf: choices.mode === 'local' } : null,
-            choices: choices.targets.map(target => ({ deviceId: target.deviceId, name: target.name, isSelf: target.isSelf === true })) };
-        },
-        move: async ({ teammateId, targetDeviceId, whenBusy }) => {
-          const runtime = activeCompanionCloud();
-          if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
-          const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
-          return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The teammate did not move (${result.code})` };
-        },
-      },
-      botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource }) => {
-          const dbClient = tryGetDbClient();
-          if (!dbClient) {
-            return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
-          }
-          const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
-            .from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(
-              and(
-                eq(botSessionLinks.sessionId, callerSessionId),
-                eq(sessions.source, 'bot'),
-                inArray(botSessionLinks.role, ['canonical', 'thread']),
-              ),
-            )
-            .limit(1);
-          if (!owned) {
-            return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前调用未绑定伙伴主任务' };
-          }
-          try {
-            const profile = await createBotProfile({
-              name,
-              description,
-              identitySource,
-              prepareInvitation: true,
-            });
-            return {
-              ok: true,
-              bot: { id: profile.id, name: profile.name, description: profile.description },
-            };
-          } catch (err) {
-            return {
-              ok: false,
-              errorCode: isIpcError(err) && err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : 'INTERNAL',
-              message: err instanceof Error ? err.message : String(err),
-            };
-          }
-        },
-      },
+      ...createCompanionHelperCallbacks({activeOwnerScopeKey,isAppSessionBoundaryPending,getActiveAppSession,tryGetDbClient,routineTools,createBotProfile,getTaskActionInputState,workbenchHost,runBotProjectsTool,runBotWorkbenchTool,todoForCaller}),
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       botCapabilities: deps.botCapabilities,
       botSkills: {
@@ -1124,30 +1003,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 工作台观察范围与行动授权分开：角色只影响可见性，写入还需 Host 的具体授权。
       // 授权在 botWorkbenchAccess 里逐次确定性校验;投递复用 send_to_session 的同一条宿主路径。
       // 停止走通用的 stop_session_turn。
-      botWorkbench: {
-        projects: runBotProjectsTool,
-        todos: async (caller, operation, input) => {
-          try {
-            const access = await todoForCaller(caller, () => getTaskActionInputState(caller).ownerInput);
-            if (operation === 'list') {
-              const all = await access.list();
-              const q = (input ?? {}) as TodoListQuery & {id?:string;key?:string};
-              if (q.id || q.key) {
-                const items = all.items.filter(t => q.id ? t.id === q.id : t.key === q.key);
-                return {ok:true,items,total:items.length};
-              }
-              return {ok:true,...queryTodoItems(all.items,q)};
-            }
-            if (operation === 'update') return {ok:true,todo:await access.patch(input as TodoPatch)};
-            if (operation === 'preflight') return {ok:true,events:await access.preflight(input as Parameters<typeof preflightTodoEvents>[1])};
-            return {ok:true,...await access.ingest(input as Parameters<typeof access.ingest>[0])};
-          } catch(error) { return {ok:false,errorCode:error instanceof TodoError ? error.code : 'INTERNAL',message:error instanceof Error?error.message:'INTERNAL'}; }
-        },
-        setResponsibility: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.setResponsibility(params)),
-        get: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.get(params)),
-        read: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.read(params)),
-        continueTask: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.continueTask(params)),
-      },
       skillhub: createSkillhubAgentTools({
         isCurrentSession: (context) => !!context.sessionId
           && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,
@@ -1244,49 +1099,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   // 用 plugin registry gate 包装每个 provider 的 isEnabled。
   // essential plugin 始终放行；非 essential plugin 按 project → user → default 判定。
   // provider name(如 'lizi_jira') 会先映射成用户可见的 plugin id(如 'jira')。
-  const gated: LiziMcpProvider[] = providers.map((p) => {
-    const originalIsEnabled = p.isEnabled;
-    const pluginId = pluginIdForProviderName(p.name);
-    const declaration = pluginRegistry.getPlugins().find((entry) => entry.id === pluginId);
-    return {
-      ...p,
-      capability: {
-        title: declaration?.name ?? p.name,
-        description: declaration?.description ?? '',
-        source: 'builtin' as const,
-      },
-      isEnabled: (ctx: LiziMcpSessionContext) => {
-        // Codex 与 Pi 的共享 app-server / bridge 在还没有 thread/workdir 的阶段构建
-        // MCP 工具清单。普通工具必须先全部注册，真正调用时由 HTTP bridge 按新会话
-        // 冻结的策略阻断；否则某个用户默认会错误地影响所有项目（空 workdir 快照被缓存后，
-        // 全局启用但项目停用的工具仍暴露、反向配置则永久缺席，codex review）。机器级工具
-        // 仍沿用现有 spawn-time gate + 环境重建语义。
-        const deferOrdinaryGate =
-          (ctx.agentKind === 'codex' || ctx.agentKind === 'pi')
-          && !ctx.workingDir
-          && !GLOBAL_PLUGIN_IDS.has(pluginId);
-        // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
-        // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
-        const keepOrcaProviderStable = pluginId === 'collab';
-        // Stable providers may ignore a live global/project toggle so an
-        // already-running ordinary task can recover, but a Bot Profile is an
-        // immutable per-runtime capability boundary and must always win.
-        if (!isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)) {
-          return false;
-        }
-        // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
-        if (
-          !keepOrcaProviderStable &&
-          !deferOrdinaryGate &&
-          !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
-        ) {
-          return false;
-        }
-        // 继续走原 provider gate，例如 memory manager check、feishu bot source check。
-        return originalIsEnabled?.(ctx) ?? true;
-      },
-    };
-  });
+  const gated: LiziMcpProvider[] = gateBuiltinMcpProviders(providers,pluginRegistry);
 
   // cindy:意识总机(cindy-tools;网关模式,
   // docs/dev-rules/plugin-security-and-authoring.md;2026-07-12 由 cindy_ghosts 更名——server 名进

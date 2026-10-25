@@ -161,6 +161,25 @@ describe('sessionActiveTurn', () => {
     await drainSessionActiveTurnWrites('s-1');
   });
 
+  // Runtime-close regression: releasing an already completed plugin Worker must
+  // retain the completion revision returned by getTeam (standard tier, real DB).
+  it('runtime close preserves completed turns and settles only unfinished turns', async () => {
+    const { markSessionTurnEndedOnClose, drainSessionActiveTurnWrites } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const now = Date.now();
+    await seedSession(client, 'completed', { startedAt: now - 200, endedAt: now - 100 });
+    await seedSession(client, 'unfinished', { startedAt: now - 100, endedAt: now - 200 });
+    markSessionTurnEndedOnClose('completed');
+    markSessionTurnEndedOnClose('unfinished');
+    await Promise.all(['completed', 'unfinished'].map(drainSessionActiveTurnWrites));
+    expect((await readMarks(client, 'completed'))?.last_turn_ended_at).toBe(now - 100);
+    const ended = (await readMarks(client, 'unfinished'))?.last_turn_ended_at;
+    expect(ended).toBeGreaterThanOrEqual(now);
+    markSessionTurnEndedOnClose('unfinished');
+    await drainSessionActiveTurnWrites('unfinished');
+    expect((await readMarks(client, 'unfinished'))?.last_turn_ended_at).toBe(ended);
+  });
+
   it('per-session write chain keeps started/ended landing order for very short turns', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();

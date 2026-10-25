@@ -267,6 +267,14 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
 		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
 	]);
+	const terminal = manifest.workspaces.find(workspace => workspace.cwd === 'apps/cindy-terminal');
+	const plugins = manifest.workspaces.find(workspace => workspace.cwd === 'packages/plugin-runtime');
+	const terminalFiles = ['apps/cindy-terminal/src/plugins/host.integration.test.ts', 'apps/cindy-terminal/src/tasks/host.test.ts'];
+	assert.deepEqual(selectFilesForTier(terminal, terminal.tiers.unit, terminalFiles), [terminalFiles[1]]);
+	assert.deepEqual(selectFilesForTier(terminal, terminal.tiers.integration, terminalFiles), [terminalFiles[0]]);
+	assert.equal(terminal.tiers.integration.execution, 'exclusive');
+	assert.equal(plugins.tiers.integration.execution, 'exclusive');
+	assert.equal(plugins.tiers.unit, undefined);
 });
 
 test("Pi RPC lifecycle stays in unit while binary resource discovery stays in integration", () => {

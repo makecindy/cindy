@@ -22,7 +22,11 @@ describe('workdir probe packaging contract', () => {
       path.join(desktopRoot, 'src/main/workdir-probe-host/index.ts'),
       'utf8',
     );
-    expect(wiring).toContain('5_000');
+    const operations = fs.readFileSync(
+      path.resolve(desktopRoot, '../../packages/worktree-core/src/workdirOperations.ts'),
+      'utf8',
+    );
+    expect(operations).toContain('5_000');
     expect(wiring).toContain("app.once('before-quit'");
   });
 });

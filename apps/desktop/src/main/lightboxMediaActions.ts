@@ -1,3 +1,5 @@
+import { sniffImageMime } from '@cindy/app-runtime/sniffImageMime';
+export { sniffImageMime } from '@cindy/app-runtime/sniffImageMime';
 /**
  * lightboxMediaActions.ts
  * ---------------------------------------------------------------------------
@@ -190,28 +192,6 @@ const CACHEABLE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', '
  * Content-Type 时的兜底——不能默认 image/png:字节是 JPEG 却写成 .png 缓存
  * 文件会造成扩展名 / MIME 与内容不符(review P2)。识别不出返回 null。
  */
-export function sniffImageMime(buffer: Buffer): string | null {
-  if (
-    buffer.length >= 8 &&
-    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47
-  ) {
-    return 'image/png';
-  }
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return 'image/jpeg';
-  }
-  if (buffer.length >= 6 && buffer.toString('ascii', 0, 4) === 'GIF8') {
-    return 'image/gif';
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.toString('ascii', 0, 4) === 'RIFF' &&
-    buffer.toString('ascii', 8, 12) === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-  return null;
-}
 
 /**
  * 流式读取 response body 并累计限流:一旦累计字节超过 maxBytes 立即抛错,

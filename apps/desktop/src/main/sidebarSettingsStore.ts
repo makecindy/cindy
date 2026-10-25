@@ -1,3 +1,4 @@
+import {createSidebarSettingsDocument,normalizeSettings,normalizeHiddenProjectKeys,normalizeHiddenMainViewGhostIds,MAX_HIDDEN_PROJECT_ENTRIES,MAX_SETTINGS_BYTES,SETTINGS_FILE_NAME,MAX_PROJECT_KEY_LENGTH,type SidebarSettingsShape} from '@cindy/app-runtime/sidebarSettingsDocument';
 /**
  * Owner-scoped sidebar identity state.
  *
@@ -52,21 +53,7 @@ import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
 
-interface SidebarSettingsShape {
-  pinnedOrder: string[];
-  hiddenProjectKeys: string[];
-  hiddenMainViewGhostIds: string[];
-}
-
-const DEFAULTS: SidebarSettingsShape = {
-  pinnedOrder: [],
-  hiddenProjectKeys: [],
-  hiddenMainViewGhostIds: [],
-};
-const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
-const MAX_PROJECT_KEY_LENGTH = 4_096;
-const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
-const SETTINGS_FILE_NAME = 'sidebar-settings.json';
+const DEFAULTS:SidebarSettingsShape={pinnedOrder:[],hiddenProjectKeys:[],hiddenMainViewGhostIds:[]};
 const LEGACY_RENDERER_OWNER_MARKER_FILE = 'sidebar-renderer-legacy-owner.v1.json';
 const MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES = 1_024;
 // An explicit empty scoped snapshot must remain durable, otherwise a preserved
@@ -79,50 +66,6 @@ const stores = new Map<
   ReturnType<typeof createOverrideSettingsFile<SidebarSettingsShape>>
 >();
 const writeChains = new Map<string, Promise<unknown>>();
-
-function normalizeHiddenProjectKeys(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of raw) {
-    const projectKey = normalizeProjectKey(entry);
-    const comparisonKey = projectKeyComparisonKey(projectKey, process.platform);
-    if (
-      projectKey == null ||
-      projectKey.length > MAX_PROJECT_KEY_LENGTH ||
-      comparisonKey == null ||
-      seen.has(comparisonKey)
-    ) {
-      continue;
-    }
-    seen.add(comparisonKey);
-    normalized.push(projectKey);
-    if (normalized.length >= MAX_HIDDEN_PROJECT_ENTRIES) break;
-  }
-  return normalized;
-}
-
-function normalizeHiddenMainViewGhostIds(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of raw) {
-    if (!isSidebarGhostId(entry) || seen.has(entry)) continue;
-    seen.add(entry);
-    normalized.push(entry);
-    if (normalized.length >= SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES) break;
-  }
-  return normalized;
-}
-
-function normalizeSettings(raw: unknown): SidebarSettingsShape {
-  const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return {
-    pinnedOrder: normalizeSidebarPinnedOrder(value.pinnedOrder),
-    hiddenProjectKeys: normalizeHiddenProjectKeys(value.hiddenProjectKeys),
-    hiddenMainViewGhostIds: normalizeHiddenMainViewGhostIds(value.hiddenMainViewGhostIds),
-  };
-}
 
 function sidebarSettingsErrorCode(error: unknown): string {
   const code =
@@ -144,18 +87,7 @@ function currentStore() {
   const ownerRoot = ownerScopedUserDataPath();
   let store = stores.get(ownerRoot);
   if (!store) {
-    store = createOverrideSettingsFile<SidebarSettingsShape>({
-      filePath: () => path.join(ownerRoot, SETTINGS_FILE_NAME),
-      defaults: DEFAULTS,
-      normalize: normalizeSettings,
-      log,
-      label: 'sidebar',
-      scopeKey: activeOwnerScopeKey,
-      maxBytes: MAX_SETTINGS_BYTES,
-      preserveUnreadableFile: true,
-      logLoadedValue: false,
-      logReadErrorDetails: false,
-    });
+    store = createSidebarSettingsDocument({ownerRoot,activeOwnerScopeKey,log});
     stores.set(ownerRoot, store);
   }
   return store;

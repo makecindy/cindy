@@ -1,3 +1,4 @@
+import { createCodexCredentialRefresh, isCodexAccessTokenExpired, type CodexAuthFile } from '@cindy/model-providers/provider-auth/codex-credentials';
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
@@ -50,7 +51,7 @@ import {
 } from './chatgpt-bridge-auth-invalidation.js';
 import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
-import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
+import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
@@ -65,29 +66,10 @@ const zstdDecompressAsync = promisify(zstdDecompress);
 
 const log = createMakerLogger('cc-bridge');
 
-/** Codex CLI 的 OAuth client_id(codex 登录用的同一个;refresh 走它)。取自 codex CLI prod 配置。 */
-const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-const OPENAI_TOKEN_URL = 'https://auth.openai.com/oauth/token';
-/** access_token 剩余寿命低于此阈值就提前刷新(秒)。 */
-const REFRESH_MARGIN_SEC = 120;
-// token 刷新 fetch 超时 —— 刷新在 _refreshChain mutex 内串行,不设超时会拖住所有排队请求。
-const REFRESH_FETCH_TIMEOUT_MS = 15_000;
-const XAI_LIVE_SEARCH_TOOL_TYPE = 'live_search';
+import { withNativeXaiServerSideTools } from '@cindy/model-providers/provider-auth/xai-native-tools';
 
 let _handler: ResponsesBridgeHandler | null = null;
 let _initialized = false;
-
-interface CodexAuthFile {
-  auth_mode?: string;
-  last_refresh?: string;
-  tokens?: {
-    access_token?: string;
-    refresh_token?: string;
-    id_token?: string;
-    account_id?: string;
-  };
-  [k: string]: unknown;
-}
 
 function codexHomeAuthPath(): string {
   return path.join(app.getPath('userData'), 'codex-home', 'auth.json');
@@ -101,119 +83,16 @@ async function readAuthFile(authPath: string): Promise<CodexAuthFile | null> {
   }
 }
 
-/** 解 JWT 的 exp 声明(秒)。解不出返回 null(视为不主动刷新,交给 401 兜底)。 */
-function jwtExpSec(token: string | undefined): number | null {
-  if (!token) return null;
-  const part = token.split('.')[1];
-  if (!part) return null;
-  try {
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
-    const claims = JSON.parse(Buffer.from(b64, 'base64').toString('utf-8')) as { exp?: unknown };
-    return typeof claims.exp === 'number' ? claims.exp : null;
-  } catch {
-    return null;
-  }
-}
-
-function isExpired(accessToken: string | undefined): boolean {
-  const exp = jwtExpSec(accessToken);
-  if (exp == null) return false; // 解不出 exp → 不主动刷,靠上游 401 暴露
-  return Date.now() / 1000 >= exp - REFRESH_MARGIN_SEC;
-}
-
-// 刷新串行 mutex —— 防同一进程内并发请求同时打 refresh(会各自旋转 refresh_token 互相作废)。
-const refreshChains = new Map<string, Promise<void>>();
-
-/**
- * 兜底刷新:用 refresh_token + codex client_id 打 auth.openai.com/oauth/token,原地写回 auth.json。
- * mutex 串行 + 刷新前重读(app-server 刚刷过就直接用其结果,不重复消耗 refresh_token 旋转)。
- */
-async function refreshIfNeeded(authPath: string, current: CodexAuthFile): Promise<CodexAuthFile> {
-  if (!isExpired(current.tokens?.access_token)) return current;
-
-  let result = current;
-  const run = (refreshChains.get(authPath) ?? Promise.resolve()).then(async () => {
-    // 重读:可能有别的进程(codex app-server)刚刷过。
-    const fresh = await readAuthFile(authPath);
-    if (fresh === null) {
-      // 刷新期间 auth 文件被删除(用户已登出)——不重建,让本次请求用旧 token 自然失败。
-      result = current;
-      return;
-    }
-    if (!isExpired(fresh.tokens?.access_token)) {
-      result = fresh;
-      return;
-    }
-    const refreshToken = fresh.tokens?.refresh_token;
-    if (!refreshToken) {
-      log.warn('access_token 过期但无 refresh_token,无法刷新(请在设置里重新登录 OpenAI)');
-      result = fresh;
-      return;
-    }
-    log.info('bridge 兜底刷新 codex access_token', { last_refresh: fresh.last_refresh });
-    // 必须带超时:本 fetch 在 _refreshChain mutex 内,undici 默认 headersTimeout 5 分钟,
-    // auth.openai.com 挂起会让所有排队的 chatgpt/ 请求一起卡住。超时走 catch → 本次用旧 token。
-    const res = await outboundFetch(OPENAI_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: CODEX_CLIENT_ID,
-      }).toString(),
-      signal: AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      log.warn('codex token 刷新失败', { status: res.status, body: (await res.text().catch(() => '')).slice(0, 300) });
-      result = fresh;
-      return;
-    }
-    const tok = (await res.json()) as { access_token?: string; refresh_token?: string; id_token?: string };
-    if (!tok.access_token) {
-      log.warn('codex token 刷新响应缺 access_token');
-      result = fresh;
-      return;
-    }
-    const next: CodexAuthFile = {
-      ...fresh,
-      last_refresh: new Date().toISOString(),
-      tokens: {
-        ...fresh.tokens,
-        access_token: tok.access_token,
-        refresh_token: tok.refresh_token ?? fresh.tokens?.refresh_token,
-        id_token: tok.id_token ?? fresh.tokens?.id_token,
-      },
-    };
-    // 落盘前复核:刷新 fetch / res.json() 期间用户可能已登出(文件被删)或已重登 / 他方进程
-    // 已刷(文件被改写)。删了 → 不得用旧账号的刷新结果重建文件(否则等于撤销登出),本次用
-    // 旧 token 自然失败(同上方 null 重读语义);改了 → 以磁盘新状态为准,丢弃本次刷新结果。
-    const beforeWrite = await readAuthFile(authPath);
-    if (beforeWrite === null) {
-      result = fresh;
-      return;
-    }
-    if (beforeWrite.tokens?.refresh_token !== refreshToken) {
-      result = beforeWrite;
-      return;
-    }
-    try {
-      // 原地写(不 rename)—— 保留 inode,codex adapter 建的 ~/.codex 硬链继续与本文件同步。
-      await fsp.writeFile(authPath, JSON.stringify(next, null, 2), { encoding: 'utf-8', mode: 0o600 });
-      try { await fsp.chmod(authPath, 0o600); } catch { /* Windows 无 chmod,忽略 */ }
-    } catch (err) {
-      log.warn('刷新后写回 auth.json 失败(本次仍用新 token,内存生效)', { err: err instanceof Error ? err.message : String(err) });
-    }
-    result = next;
-  });
-  // 把本次刷新接到链上(无论成败都释放锁给下一个)。
-  const settled = run.catch(() => undefined);
-  refreshChains.set(authPath, settled);
-  void settled.then(() => { if (refreshChains.get(authPath) === settled) refreshChains.delete(authPath); });
-  await run.catch((err) => {
-    log.warn('token 刷新异常', { err: err instanceof Error ? err.message : String(err) });
-  });
-  return result;
-}
+const refreshIfNeeded = createCodexCredentialRefresh({
+  read: readAuthFile,
+  // Keep the shared native CLI inode, including existing auth hard links.
+  write: async (authPath, value) => {
+    await fsp.writeFile(authPath, JSON.stringify(value, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    try { await fsp.chmod(authPath, 0o600); } catch { /* Windows */ }
+  },
+  fetch: outboundFetch,
+  log,
+});
 
 // auth 结果短缓存 —— 一个 Claude turn 会发多个 API 请求,每请求都走「2×existsSync + readFile +
 // JSON.parse + 2×JWT 解码」是 main event loop 上重复的同步/IO 浪费(规则 10)。token 未临期时
@@ -275,7 +154,7 @@ export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ acc
     return { accessToken: refreshed.tokens.access_token, accountId: chatgptAccountIdFromTokens(refreshed.tokens) };
   }
   const now = Date.now();
-  if (_authCache && now - _authCache.readAt < AUTH_CACHE_TTL_MS && !isExpired(_authCache.accessToken)) {
+  if (_authCache && now - _authCache.readAt < AUTH_CACHE_TTL_MS && !isCodexAccessTokenExpired(_authCache.accessToken)) {
     throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
     return _authCache;
   }
@@ -572,149 +451,6 @@ function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function isXaiSearchToolType(value: unknown): boolean {
-  return value === XAI_X_SEARCH_TOOL_TYPE || value === XAI_LIVE_SEARCH_TOOL_TYPE;
-}
-
-function chatFunctionToolName(tool: unknown): string | null {
-  if (!isPlainRecord(tool) || tool.type !== 'function' || !isPlainRecord(tool.function)) {
-    return null;
-  }
-  return typeof tool.function.name === 'string' ? tool.function.name : null;
-}
-
-function selectsRemovedXaiSearchTool(toolChoice: unknown): boolean {
-  if (isXaiSearchToolType(toolChoice)) return true;
-  return isPlainRecord(toolChoice) && isXaiSearchToolType(toolChoice.type);
-}
-
-function withoutNativeXaiChatSearchTools(
-  body: Record<string, unknown>,
-  existing: unknown[],
-): Record<string, unknown> | null {
-  const tools = existing.filter((tool) => (
-    !isPlainRecord(tool) || !isXaiSearchToolType(tool.type)
-  ));
-  if (tools.length === existing.length) return null;
-
-  const next = { ...body };
-  if (tools.length === 0) {
-    delete next.tools;
-    delete next.tool_choice;
-    delete next.parallel_tool_calls;
-    return next;
-  }
-
-  next.tools = tools;
-  if (selectsRemovedXaiSearchTool(next.tool_choice)) {
-    const functionToolNames = tools.flatMap((tool) => {
-      const name = chatFunctionToolName(tool);
-      return name === null ? [] : [name];
-    });
-    if (functionToolNames.length === 1) {
-      next.tool_choice = {
-        type: 'function',
-        function: { name: functionToolNames[0] },
-      };
-    } else {
-      next.tool_choice = functionToolNames.length > 1 ? 'required' : 'auto';
-    }
-  }
-  return next;
-}
-
-/**
- * PI already emits xAI-native payloads, so this path bypasses the Messages →
- * Responses bridge that normally supplies xAI's model-gated server tools.
- * Restore the same stable contract here while respecting the native endpoint.
- * Current xAI server-side search tools belong to Responses; Chat Completions'
- * legacy live_search path is deprecated. Strip either search spelling from Chat
- * requests while preserving PI function tools and tool_choice. For Responses,
- * normalize stale spellings, append one missing x_search declaration, and keep
- * forced-function narrowing from being satisfied by x_search instead.
- */
-function withNativeXaiServerSideTools(
-  body: unknown,
-  wireProtocol: PiNativeWireProtocol,
-): Record<string, unknown> | null {
-  if (!isPlainRecord(body) || typeof body.model !== 'string') return null;
-  const existing = Array.isArray(body.tools) ? body.tools : [];
-  if (wireProtocol === 'openai-chat') {
-    return withoutNativeXaiChatSearchTools(body, existing);
-  }
-
-  const model = body.model.startsWith(XAI_MODEL_PREFIX)
-    ? body.model.slice(XAI_MODEL_PREFIX.length)
-    : body.model;
-  const serverTools = xaiServerSideTools(model);
-  if (serverTools.length === 0) return null;
-
-  const preferredXSearchTool = existing.find((tool) => (
-    isPlainRecord(tool) && tool.type === XAI_X_SEARCH_TOOL_TYPE
-  ));
-  let searchToolDeclared = false;
-  let toolsChanged = false;
-  const tools = existing.flatMap((tool) => {
-    if (
-      !isPlainRecord(tool) ||
-      (tool.type !== XAI_X_SEARCH_TOOL_TYPE && tool.type !== XAI_LIVE_SEARCH_TOOL_TYPE)
-    ) {
-      return [tool];
-    }
-    if (searchToolDeclared) {
-      toolsChanged = true;
-      return [];
-    }
-    searchToolDeclared = true;
-    if (preferredXSearchTool !== undefined) {
-      if (tool === preferredXSearchTool) return [tool];
-      toolsChanged = true;
-      return [preferredXSearchTool];
-    }
-    toolsChanged = true;
-    // live_search options belong to the deprecated Chat Completions shape and
-    // are not interchangeable with Responses x_search options.
-    return [{ type: XAI_X_SEARCH_TOOL_TYPE }];
-  });
-  const declaredTypes = new Set(
-    tools.map((tool) => (
-      isPlainRecord(tool) && typeof tool.type === 'string' ? tool.type : ''
-    )),
-  );
-  const missing = serverTools.filter((tool) => !declaredTypes.has(tool.type));
-  if (missing.length > 0) {
-    tools.push(...missing);
-    toolsChanged = true;
-  }
-  let next = toolsChanged ? { ...body, tools } : body;
-
-  if (
-    isPlainRecord(body.tool_choice) &&
-    body.tool_choice.type === XAI_LIVE_SEARCH_TOOL_TYPE
-  ) {
-    return {
-      ...next,
-      tool_choice: { type: XAI_X_SEARCH_TOOL_TYPE },
-    };
-  }
-
-  if (body.tool_choice === 'required') {
-    const functionToolNames = tools.flatMap((tool) => {
-      if (!isPlainRecord(tool) || tool.type !== 'function') return [];
-      return typeof tool.name === 'string' ? [tool.name] : [];
-    });
-    if (functionToolNames.length === 1) {
-      const name = functionToolNames[0]!;
-      next = {
-        ...next,
-        tool_choice: { type: 'function', name },
-      };
-      return next;
-    }
-  }
-  return toolsChanged ? next : null;
 }
 
 async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res'], observer?: ResponseObserverSink): Promise<void> {

@@ -1,0 +1,174 @@
+import type {RoutineEngine,RoutineRun} from '@cindy/maker-scheduler';
+import type {BotAutonomySettingsView,BotGlance,BotAutonomyExecution} from '@cindy/companion-core/botAutonomy';
+import {throwIpcError} from '@cindy/remote-agent/ipcValidate';
+import {filterFollowUpEvents,resolveSchedulerBotId,type FollowUpSubject} from '@cindy/companion-core/autonomy/follower';
+import type {BotAutonomyRuntime,GlanceOptions} from '@cindy/companion-core/autonomy/runtime';
+import {errorCode,type BotAutonomyInputProjection} from '@cindy/companion-core/autonomy/taskWatch';
+import type {Logger} from '@cindy/maker-core';
+import type {createBotAutonomySettings} from './botAutonomySettings.js';
+import type {createBotAutonomyHostData} from './botAutonomyHostData.js';
+export interface BotAutonomyHostDeps<Window = unknown> {
+  readSessionExecution(sessionId: string): BotAutonomyExecution | null;
+  /** A durable terminal receipt owns this event's execution, including pending delivery. */
+  isCompletionHandledByTeammate(sessionId: string, botId: string, execution: BotAutonomyExecution): Promise<boolean | null>;
+  /** 某个本机任务当前挂起的交互请求（只读）。 */
+  getPendingInteractions(sessionId: string): readonly unknown[];
+  getMainWindow(): Window | null;
+}
+
+
+export interface BotAutonomyHubHost extends ReturnType<typeof createBotAutonomySettings>,Pick<ReturnType<typeof createBotAutonomyHostData>,'readBotDirectory'|'readLocalSessionMetas'|'readTaskOwnership'> {
+ activeOwnerScopeKey():string;isAppSessionBoundaryPending():boolean;ownerScopedUserDataPath():string;log:Pick<Logger,'info'|'warn'>;
+}
+export function createBotAutonomyHub<Window=unknown>(host:BotAutonomyHubHost) {
+ const {activeOwnerScopeKey,isAppSessionBoundaryPending,ownerScopedUserDataPath,readBotAutonomySettingsOverride,resetBotAutonomySettings,writeBotAutonomySchedulerBotId,readBotDirectory,readLocalSessionMetas,readTaskOwnership,log}=host;
+let hostDeps: Partial<BotAutonomyHostDeps<Window>> = {};
+let current: { scope: string; engine: RoutineEngine; runtime: BotAutonomyRuntime } | null = null;
+
+/** 各宿主模块分别补自己持有的入口（register 给挂起交互，bootstrap 给主窗口）。 */
+function configureBotAutonomyHost(deps: Partial<BotAutonomyHostDeps<Window>>): void {
+  hostDeps = { ...hostDeps, ...deps };
+}
+
+function getBotAutonomyHostDeps(): Partial<BotAutonomyHostDeps<Window>> {
+  return hostDeps;
+}
+
+function getActiveBotAutonomy(): typeof current {
+  return current;
+}
+
+function setActiveBotAutonomy(next: typeof current): void {
+  current = next;
+}
+
+function scopeIsCurrent(scope: string): boolean {
+  return !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope;
+}
+
+/** 输入协调器投影（出错 / 用量上限等待）旁路进状态表。 */
+function noteBotAutonomyInputProjection(projection: unknown): void {
+  const runtime = current?.runtime;
+  if (!runtime || !projection || typeof projection !== 'object') return;
+  runtime.watch.applyInputProjection(projection as BotAutonomyInputProjection);
+}
+
+function getBotAutonomyGlance(
+  botId: string, options?: GlanceOptions, refreshRemote = true,
+): BotGlance {
+  if (isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'App session is switching; retry later.');
+  const active = current && scopeIsCurrent(current.scope) ? current.runtime : null;
+  // 与伙伴工具读取保持一致：运行体或归属未就绪不是「没有任务」。
+  // 沿用已有错误协议，旧查看端也能进入读取失败分支；就绪后的变化推送会触发重读。
+  if (!active?.watch.isReady()) throwIpcError('PRECONDITION_FAILED', 'Bot autonomy is not ready; retry later.');
+  const scope = activeOwnerScopeKey();
+  // The hidden auto-open probe and Agent reads use cached projections only.
+  // Return cached/local rows immediately; the watch pushes changes when remote IO settles.
+  if (refreshRemote && active.watch.getSchedulerBotId() === botId) {
+    void active.watch.refreshRemote().catch((error) => log.warn('autonomy remote refresh failed', { error: errorCode(error) }));
+  }
+  assertOwner(scope);
+  if (current?.runtime !== active) throwIpcError('PRECONDITION_FAILED', 'Task observation changed; retry later.');
+  return active.glance(botId, options);
+}
+
+async function getBotAutonomySettingsView(): Promise<BotAutonomySettingsView> {
+  const scope = activeOwnerScopeKey();
+  const bots = await readBotDirectory();
+  assertOwner(scope);
+  const override = readBotAutonomySettingsOverride();
+  return {
+    schedulerBotId: resolveSchedulerBotId(override, bots),
+    isCustomized: override.customized,
+    defaults: { schedulerBotId: null },
+  };
+}
+
+function assertOwner(scope: string): void {
+  if (!scopeIsCurrent(scope)) throwIpcError('PRECONDITION_FAILED', 'App session changed; retry in the current account.');
+}
+
+/** 设置「自动跟进所有任务」归谁；null = 关闭。目标伙伴必须存在且没被归档。 */
+async function setBotAutonomySchedulerBotId(schedulerBotId: string | null): Promise<BotAutonomySettingsView> {
+  const scope = activeOwnerScopeKey();
+  assertOwner(scope);
+  if (schedulerBotId !== null) {
+    const bots = await readBotDirectory();
+    assertOwner(scope);
+    const bot = bots.get(schedulerBotId);
+    if (!bot || bot.status === 'archived' || bot.status === 'deleting') throwIpcError('NOT_FOUND', 'Teammate not found');
+  }
+  await writeBotAutonomySchedulerBotId(schedulerBotId);
+  return afterSettingsChange(scope);
+}
+
+/** 删除 override，跟随当前版本默认。 */
+async function resetBotAutonomySchedulerSettings(): Promise<BotAutonomySettingsView> {
+  const scope = activeOwnerScopeKey();
+  assertOwner(scope);
+  await resetBotAutonomySettings();
+  return afterSettingsChange(scope);
+}
+
+async function afterSettingsChange(scope: string): Promise<BotAutonomySettingsView> {
+  assertOwner(scope);
+  const runtime = current && current.scope === scope ? current.runtime : null;
+  if (runtime) await runtime.refreshFollowers().catch((error) => log.warn('autonomy refresh failed', { error: errorCode(error) }));
+  log.info('autonomy scheduler setting changed');
+  return getBotAutonomySettingsView();
+}
+
+/** null means startup is not ready; an empty batch has lost its authorization. */
+async function currentFollowUpEvents(botId: string, events: RoutineRun['events']): Promise<{
+  events: RoutineRun['events']; canDispatch(): boolean;
+} | null> {
+  const active = current;
+  if (!active || !scopeIsCurrent(active.scope) || !active.runtime.watch.isReady()) return null;
+  const watch = active.runtime.watch;
+  const botsAtRead = watch.getBots();
+  // The queue outlives watched rows (including across restarts). Read current durable
+  // ownership for event subjects; only sweep needs the transient pending-state table.
+  const [metas, ownership] = await Promise.all([
+    readLocalSessionMetas(events.flatMap(({ event }) => event.type !== 'sweep' && typeof event.subject === 'string' ? [event.subject] : [])),
+    readTaskOwnership(ownerScopedUserDataPath()),
+  ]);
+  if (current !== active || !scopeIsCurrent(active.scope) || watch.getBots() !== botsAtRead) return null;
+  const subjects: FollowUpSubject[] = metas.filter(meta => meta.status === 'active' && meta.hiddenAt === null
+    && meta.orcaRole !== 'worker' && meta.source !== 'review'
+    && !['history', 'group', 'channel', 'thread'].includes(meta.laneRole ?? '')).map(meta => {
+      const canonical = [...ownership.bots].find(([, bot]) => bot.canonicalSessionId === meta.id)?.[0]
+        ?? (meta.laneRole === 'canonical' ? meta.laneBotId : null);
+      const creator = ownership.creatorBySession.get(meta.id) ?? null;
+      return { sessionId: meta.id, deviceId: null, shared: meta.source === 'shared',
+        canonicalOfBotId: canonical, creatorBotId: creator === canonical ? null : creator };
+    });
+  const allowedNow = () => filterFollowUpEvents(botId, events, watch.list(),
+    resolveSchedulerBotId(readBotAutonomySettingsOverride(), ownership.bots), ownership.bots, Date.now(), subjects);
+  const eligible = allowedNow();
+  // Only the built-in follow-up consumes this gate. Keep publishing host events
+  // for user-authored routines, and recheck persisted batches before model work.
+  let handled: (boolean | null)[];
+  try {
+    handled = await Promise.all(eligible.map(({ event }) => {
+      const { executionInstanceId, executionGeneration } = event.data;
+      // Legacy batches have no execution proof. Preserve their follow-up rather
+      // than attributing them to whichever native turn happens to be live now.
+      if (event.type !== 'finished' || typeof event.subject !== 'string'
+        || typeof executionInstanceId !== 'string' || !executionInstanceId
+        || typeof executionGeneration !== 'number' || !Number.isSafeInteger(executionGeneration)) return false;
+      return hostDeps.isCompletionHandledByTeammate?.(event.subject, botId,
+        { instanceId: executionInstanceId, generation: executionGeneration }) ?? null;
+    }));
+  } catch (error) {
+    log.warn('autonomy completion ownership deferred', { error: errorCode(error) });
+    return null;
+  }
+  if (current !== active || !scopeIsCurrent(active.scope) || watch.getBots() !== botsAtRead
+    || handled.includes(null)) return null;
+  const allowed = eligible.filter((_event, index) => !handled[index]);
+  return { events: allowed, canDispatch: () => current === active && scopeIsCurrent(active.scope) && watch.isReady()
+    && watch.getBots() === botsAtRead && allowedNow().length === eligible.length };
+}
+
+return {configureBotAutonomyHost,getBotAutonomyHostDeps,getActiveBotAutonomy,setActiveBotAutonomy,scopeIsCurrent,noteBotAutonomyInputProjection,getBotAutonomyGlance,getBotAutonomySettingsView,setBotAutonomySchedulerBotId,resetBotAutonomySchedulerSettings,currentFollowUpEvents};
+}

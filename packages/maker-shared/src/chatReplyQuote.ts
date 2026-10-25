@@ -31,3 +31,5 @@ export function readChatReplyQuote(value: unknown): ChatReplyQuote | null {
   if (typeof raw.excerpt !== 'string') return null;
   return { clientId: raw.clientId, role: raw.role, excerpt: chatReplyQuoteExcerpt(raw.excerpt) };
 }
+
+export const REPLY_QUOTE_SOURCE_CONTENT: unique symbol = Symbol('cindy.replyQuoteSourceContent');
