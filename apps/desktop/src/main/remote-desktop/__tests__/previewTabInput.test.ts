@@ -114,30 +114,121 @@ describe('TabInputInjector', () => {
     expect(h.injector.pressed).toEqual({ touches: 0, keys: 0 });
   });
 
-  it('sends two-finger sequences with the whole snapshot, and releases one finger via a move', async () => {
-    const h = setup();
-    await h.injector.inject([
-      touch('start', [[1, 0.1, 0.1]]),
-      touch('start', [
-        [1, 0.1, 0.1],
-        [2, 0.9, 0.9],
-      ]),
-      touch('move', [
-        [1, 0.2, 0.1],
-        [2, 0.8, 0.9],
-      ]),
-      touch('end', [[1, 0.2, 0.1]]),
-    ]);
-    const sent = touches(h.commands);
-    expect(sent.map((c) => [c?.type, (c?.touchPoints as unknown[]).length])).toEqual([
-      ['touchStart', 1],
-      ['touchStart', 2],
-      ['touchMove', 2],
-      ['touchMove', 1],
-    ]);
-    expect(h.injector.pressed.touches).toBe(1);
-    await h.injector.inject([touch('end', [])]);
-    expect(touches(h.commands).at(-1)).toEqual({ type: 'touchEnd', touchPoints: [] });
+  // Measured on Electron 42: a touch missing from a `touchMove` stays down in the page; only a
+  // `touchEnd` carrying it lifts it. So a finger that left the snapshot is ended on its own.
+  describe('when one of several fingers lifts first', () => {
+    const point = (id: number, x: number, y: number) => ({
+      id,
+      x,
+      y,
+      radiusX: 3,
+      radiusY: 3,
+      force: 1,
+    });
+    const typesOf = (h: ReturnType<typeof setup>) =>
+      touches(h.commands).map((c) => [
+        c?.type,
+        (c?.touchPoints as Array<{ id: number }>).map((p) => p.id),
+      ]);
+
+    it('ends only the lifted finger and goes on moving the other', async () => {
+      const h = setup();
+      await h.injector.inject([
+        touch('start', [[1, 0.1, 0.1]]),
+        touch('start', [
+          [1, 0.1, 0.1],
+          [2, 0.9, 0.9],
+        ]),
+        touch('move', [
+          [1, 0.2, 0.1],
+          [2, 0.8, 0.9],
+        ]),
+        touch('end', [[1, 0.2, 0.1]]),
+        touch('move', [[1, 0.3, 0.2]]),
+      ]);
+      expect(typesOf(h)).toEqual([
+        ['touchStart', [1]],
+        ['touchStart', [1, 2]],
+        ['touchMove', [1, 2]],
+        ['touchEnd', [2]],
+        ['touchMove', [1]],
+      ]);
+      // The ended finger goes out where it last was.
+      expect(touches(h.commands)[3]?.touchPoints).toEqual([point(2, 640, 450)]);
+      expect(h.injector.pressed.touches).toBe(1);
+      await h.injector.inject([touch('end', [])]);
+      expect(touches(h.commands).at(-1)).toEqual({ type: 'touchEnd', touchPoints: [] });
+      expect(h.injector.pressed.touches).toBe(0);
+    });
+
+    it('moves the rest when it moved with the lift, and ends a finger a move left out', async () => {
+      const h = setup();
+      await h.injector.inject([
+        touch('start', [[1, 0.1, 0.1]]),
+        touch('start', [
+          [1, 0.1, 0.1],
+          [2, 0.9, 0.9],
+        ]),
+        touch('end', [[1, 0.2, 0.1]]),
+        touch('start', [
+          [1, 0.2, 0.1],
+          [3, 0.5, 0.5],
+        ]),
+        touch('move', [[3, 0.6, 0.5]]),
+      ]);
+      expect(typesOf(h)).toEqual([
+        ['touchStart', [1]],
+        ['touchStart', [1, 2]],
+        ['touchEnd', [2]],
+        ['touchMove', [1]],
+        ['touchStart', [1, 3]],
+        ['touchEnd', [1]],
+        ['touchMove', [3]],
+      ]);
+    });
+
+    it('lifts three fingers one after another, and takes a new finger afterwards', async () => {
+      const h = setup();
+      await h.injector.inject([
+        touch('start', [[1, 0.1, 0.1]]),
+        touch('start', [
+          [1, 0.1, 0.1],
+          [2, 0.5, 0.5],
+        ]),
+        touch('start', [
+          [1, 0.1, 0.1],
+          [2, 0.5, 0.5],
+          [3, 0.9, 0.9],
+        ]),
+        touch('end', [
+          [1, 0.1, 0.1],
+          [3, 0.9, 0.9],
+        ]),
+        touch('end', [[3, 0.9, 0.9]]),
+        touch('start', [
+          [3, 0.9, 0.9],
+          [4, 0.3, 0.3],
+        ]),
+        touch('move', [
+          [3, 0.8, 0.9],
+          [4, 0.3, 0.4],
+        ]),
+        touch('end', [[4, 0.3, 0.4]]),
+        touch('end', []),
+      ]);
+      expect(typesOf(h)).toEqual([
+        ['touchStart', [1]],
+        ['touchStart', [1, 2]],
+        ['touchStart', [1, 2, 3]],
+        ['touchEnd', [2]],
+        ['touchEnd', [1]],
+        ['touchStart', [3, 4]],
+        ['touchMove', [3, 4]],
+        ['touchEnd', [3]],
+        ['touchEnd', []],
+      ]);
+      expect(h.injector.pressed.touches).toBe(0);
+    });
   });
 
   it('cancels what is still down on release, once, and not at all when nothing is', async () => {
@@ -1087,6 +1178,35 @@ describe('TabInputInjector touches into cross-process frames', () => {
         },
         { session: 'session-F1', type: 'touchEnd', at: [] },
       ]);
+    });
+
+    it('ends one lifted finger on its own in the frame, and keeps moving the other', async () => {
+      const h = withFrame(near, flat);
+      await h.injector.inject([
+        touch('start', [[1, 0.125, 0.4]]), // page (100, 200) -> local (50, 100)
+        touch('start', [
+          [1, 0.125, 0.4],
+          [2, 0.25, 0.5], // page (200, 250) -> local (150, 150)
+        ]),
+        touch('end', [[1, 0.125, 0.4]]),
+        touch('move', [[1, 0.25, 0.4]]),
+        touch('end', []),
+      ]);
+      expect(touchesOf(h)).toEqual([
+        { session: 'session-F1', type: 'touchStart', at: [[50, 100]] },
+        {
+          session: 'session-F1',
+          type: 'touchStart',
+          at: [
+            [50, 100],
+            [150, 150],
+          ],
+        },
+        { session: 'session-F1', type: 'touchEnd', at: [[150, 150]] },
+        { session: 'session-F1', type: 'touchMove', at: [[150, 100]] },
+        { session: 'session-F1', type: 'touchEnd', at: [] },
+      ]);
+      expect(detaches(h)).toEqual(['session-F1']);
     });
 
     it('sends nothing when it is cancelled, released or the lease ends before the finger lifts', async () => {

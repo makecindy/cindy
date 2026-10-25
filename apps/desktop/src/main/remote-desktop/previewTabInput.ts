@@ -564,7 +564,12 @@ export class TabInputInjector {
     const unchanged =
       points.length === this.touches.size && points.every((point) => this.touches.has(point.id));
     if (points.length === 0 && this.touches.size === 0) return;
-    // CDP releases the touches that are missing from a move; only a full release is an end.
+    // CDP does not release a touch that is missing from a move (measured on Electron 42): the
+    // page keeps it down where it was. Only a `touchEnd` that carries it lifts it, so a finger
+    // that is gone from the snapshot is ended on its own and the rest carry on.
+    const lifted = [...this.touches.values()].filter(
+      (held) => !points.some((point) => point.id === held.id),
+    );
     let type: 'touchStart' | 'touchMove' | 'touchEnd';
     if (event.phase === 'start') {
       if (unchanged) return; // the only new finger was on a bar
@@ -577,6 +582,13 @@ export class TabInputInjector {
       if (unchanged) return; // the finger that lifted was an ignored one
       type = 'touchMove';
     }
+    // After a partial lift the fingers still down are only moved when they really did.
+    const settled =
+      event.phase === 'end' &&
+      points.every((p) => {
+        const held = this.touches.get(p.id);
+        return held?.x === p.x && held.y === p.y;
+      });
     try {
       if (type === 'touchStart' && this.touches.size === 0 && this.frameRouting && !this.route) {
         this.route = await this.routeTo(points[0]);
@@ -628,7 +640,8 @@ export class TabInputInjector {
           this.route.sessionId,
         );
       } else {
-        await this.dispatchTouch(type, points);
+        if (type !== 'touchEnd' && lifted.length > 0) await this.dispatchTouch('touchEnd', lifted);
+        if (!settled || type === 'touchEnd') await this.dispatchTouch(type, points);
       }
       if (type === 'touchEnd') await this.endRoute();
     } catch (error) {
