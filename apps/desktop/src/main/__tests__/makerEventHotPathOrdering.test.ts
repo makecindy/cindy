@@ -16,7 +16,15 @@ import type { AgentEvent } from '@cindy/maker-core';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const activitySource = readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src/session-activity/bridge.ts'), 'utf8').replace(/\r\n?/g, '\n');
-const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n') + '\n' + activitySource;
+const recoverySource = [
+  'sessionRecoveryLeases',
+  'interruptedTurnRecovery',
+  'interruptedTurnAutoResume',
+  'autoResumeInputLifecycle',
+  'agent-input-coordinator',
+].map((name) => readFileSync(resolve(__dirname, '../../../../../packages/app-runtime/src', `${name}.ts`), 'utf8'))
+  .join('\n').replace(/\r\n?/g, '\n');
+const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n') + '\n' + activitySource + '\n' + recoverySource;
 const registerSource = source;
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -33,7 +41,7 @@ const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\
  */
 function loadBudgetReconciler() {
   const start = source.indexOf('  const reconcileSessionContextWindowBudgetUnderLock = async (');
-  const end = source.indexOf('  setModelContextRuntimeRefreshListener(', start);
+  const end = source.indexOf('  // session-agent-switch:lazy-create', start);
   if (start < 0 || end < 0) throw new Error('budget reconciler source changed');
   const code = source.slice(start, end);
   const js = transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
@@ -348,7 +356,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail)');
     expect(source).toContain('data: { ...detail, isTerminal: true }');
     expect(source).toContain(
-      'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
+      'claimSuppressedErrorForRetry(sessionId, clientId, source);',
     );
     expect(source).toContain('if (!attempt.isCurrent()) {');
     expect(source).toContain(
@@ -578,7 +586,7 @@ describe('maker:event hot path ordering', () => {
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
     expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
     expect(source).toContain('onUnconfirmedAutoResumeTurn:');
-    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
+    expect(source).toContain('abandonUnconfirmedPersistedResume(sessionId, token, item.clientId);');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {
@@ -687,7 +695,7 @@ describe('maker:event hot path ordering', () => {
   it('tears down every automatic recovery path before an explicit Stop aborts the session', () => {
     const resetStart = source.indexOf('function resetAutomaticRecoveryForExplicitStop(');
     const resetEnd =
-      source.indexOf('\n}\n\nfunction settleUndispatchedAutoResumeOutcome', resetStart) + 2;
+      source.indexOf('\n}\n\nconst autoResumeInputLifecycle', resetStart) + 2;
     const resetSource = source.slice(resetStart, resetEnd);
     const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
     const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);

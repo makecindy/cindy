@@ -1,4 +1,13 @@
-import { captureWorktreeContent, worktreeContentBaselineMatches } from './contentSnapshot';
+import {
+  captureWorktreeContent,
+  worktreeContentBaselineMatches,
+  worktreeContentMatches,
+  worktreeStagedContentMatches,
+  presentFilesMatchSnapshotTree,
+  releaseSnapshotRef,
+  snapshotTreePaths,
+  discardableWorktreePaths,
+} from './contentSnapshot';
 import { gitExec } from './gitExec';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import {
@@ -21,6 +30,12 @@ export const { checkpointWorktreeForReuse, requestWorktreeRecycle, recycleManage
   createManagedWorktreeRecycle({
     captureWorktreeContent,
     worktreeContentBaselineMatches,
+    worktreeContentMatches,
+    worktreeStagedContentMatches,
+    presentFilesMatchSnapshotTree,
+    releaseSnapshotRef,
+    snapshotTreePaths,
+    discardableWorktreePaths,
     gitExec,
     hasLiveSessionReference,
     loadLiveSessionPathKeys,

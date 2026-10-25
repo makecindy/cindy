@@ -208,6 +208,13 @@ const desktopGuardInclude = [
   'src/main/__tests__/deviceLinkInputSteerDedupeWiring.test.ts',
   'src/main/__tests__/endpointEnvUsageGuard.test.ts',
   'src/main/__tests__/gitContextIpcSecurity.test.ts',
+  // Cross-file packaging and extraction contracts that read the shared runtime sources.
+  'src/main/__tests__/makerEventHotPathOrdering.test.ts',
+  'src/main/__tests__/sessionTaskSummary.test.ts',
+  'src/main/cindy-brain/__tests__/byokImageChannel.test.ts',
+  'src/main/doc-tools/__tests__/docsOutputWriterPackaging.test.ts',
+  'src/main/maker-host/__tests__/remoteCcQueryFactory.test.ts',
+  'src/main/reviewer/__tests__/reviewPdfProcessPackaging.test.ts',
   'src/main/__tests__/isolatedOnProductionProfileStartup.test.ts',
   'src/main/__tests__/invokeCaptureHealthOrdering.test.ts',
   'src/main/__tests__/modelVisibilityOwnerClaimOrdering.test.ts',

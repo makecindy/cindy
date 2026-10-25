@@ -191,6 +191,114 @@ export function createWorktreeContentSnapshots(
     );
   }
 
+  /** Existing files in a partially removed checkout must be covered by the snapshot tree. */
+  async function presentFilesMatchSnapshotTree(
+    worktreePath: string,
+    tree: string,
+  ): Promise<boolean> {
+    return withTemporaryIndex(async (extraEnv) => {
+      await gitExec(["read-tree", tree], worktreePath, { extraEnv });
+      await gitExec(["update-index", "-q", "--refresh"], worktreePath, {
+        extraEnv,
+      }).catch(() => undefined);
+      const { stdout: changed } = await gitExec(
+        ["diff-files", "--name-status", "-z"],
+        worktreePath,
+        { extraEnv },
+      );
+      const fields = changed.split("\0").filter(Boolean);
+      for (let index = 0; index < fields.length; index += 2) {
+        if (fields[index] !== "D") return false;
+      }
+      const { stdout: extra } = await gitExec(
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        worktreePath,
+        { extraEnv },
+      );
+      return extra
+        .split("\0")
+        .every((entry) => entry === "" || entry.endsWith("/"));
+    });
+  }
+
+  /** Restore missing snapshot files without overwriting files written by a user. */
+  async function checkoutMissingSnapshotFiles(
+    worktreePath: string,
+    tree: string,
+  ): Promise<void> {
+    await withTemporaryIndex(async (extraEnv) => {
+      await gitExec(["read-tree", tree], worktreePath, { extraEnv });
+      await gitExec(["checkout-index", "--all", "--quiet"], worktreePath, {
+        extraEnv,
+      }).catch(() => undefined);
+      await gitExec(["update-index", "-q", "--refresh"], worktreePath, {
+        extraEnv,
+      }).catch(() => undefined);
+      const { stdout } = await gitExec(
+        ["diff-files", "--name-status", "-z", "--diff-filter=D"],
+        worktreePath,
+        { extraEnv },
+      );
+      if (stdout.length > 0)
+        throw new Error("snapshot files could not be restored");
+    });
+  }
+
+  async function releaseSnapshotRef(
+    baseRepo: string,
+    snapshot: Pick<
+      NonNullable<WorktreeRecycleRecord["snapshot"]>,
+      "ref" | "commit"
+    >,
+  ): Promise<boolean> {
+    if (!snapshot.ref.startsWith("refs/cindy/worktree-recovery/")) return false;
+    try {
+      await gitExec(
+        ["update-ref", "-d", snapshot.ref, snapshot.commit],
+        baseRepo,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function snapshotTreePaths(
+    baseRepo: string,
+    tree: string,
+  ): Promise<Set<string>> {
+    const { stdout } = await gitExec(
+      ["ls-tree", "-r", "-z", "--name-only", tree],
+      baseRepo,
+    );
+    return new Set(stdout.split("\0").filter(Boolean));
+  }
+
+  const MAX_DISCARDABLE_ENTRIES = 2_000;
+  async function discardableWorktreePaths(
+    worktreePath: string,
+  ): Promise<string[] | null> {
+    const listed = async (args: string[]) =>
+      (
+        await gitExec(["ls-files", ...args, "-z"], worktreePath, {
+          extraEnv: { GIT_OPTIONAL_LOCKS: "0" },
+        })
+      ).stdout
+        .split("\0")
+        .filter(Boolean);
+    const ignored = await listed([
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+    ]);
+    const nested = (await listed(["--others", "--exclude-standard"])).filter(
+      (entry) => entry.endsWith("/"),
+    );
+    const entries = [...new Set([...ignored, ...nested])];
+    return entries.length > MAX_DISCARDABLE_ENTRIES ? null : entries;
+  }
+
   /** Staged content of the live index, read from a copy so the live index is never locked or rewritten. */
   async function stagedTree(worktreePath: string): Promise<string | null> {
     const temp = await fs.mkdtemp(
@@ -348,6 +456,11 @@ export function createWorktreeContentSnapshots(
     worktreeContentBaselineMatches,
     worktreeStagedContentMatches,
     worktreeContentMatches,
+    presentFilesMatchSnapshotTree,
+    checkoutMissingSnapshotFiles,
+    releaseSnapshotRef,
+    snapshotTreePaths,
+    discardableWorktreePaths,
     captureWorktreeContent,
   };
 }

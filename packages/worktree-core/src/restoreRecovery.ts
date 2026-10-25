@@ -22,7 +22,10 @@ export type WorktreeRecoveryPorts = Pick<
 > &
   Pick<
     ReturnType<typeof createWorktreeContentSnapshots>,
-    "readWorktreeHeadRef"
+    | "readWorktreeHeadRef"
+    | "presentFilesMatchSnapshotTree"
+    | "checkoutMissingSnapshotFiles"
+    | "releaseSnapshotRef"
   > &
   Pick<
     ReturnType<typeof createWorktreeRecoveryArchives>,
@@ -58,6 +61,9 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
     store,
     withLegacyWorktreeRuntimeGuard,
     readWorktreeHeadRef,
+    presentFilesMatchSnapshotTree,
+    checkoutMissingSnapshotFiles,
+    releaseSnapshotRef,
   } = ports;
   function restoreCheckoutPathIsSafe(value: string): boolean {
     if (!path.isAbsolute(value)) return false;
@@ -72,6 +78,16 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
       ) &&
       parts[1] === "checkout"
     );
+  }
+
+  async function gitMetadataUsable(worktreePath: string): Promise<boolean> {
+    try {
+      await fs.lstat(path.join(worktreePath, ".git"));
+      await gitExec(["rev-parse", "--show-toplevel"], worktreePath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function indexIsRestorable(
@@ -108,8 +124,7 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
     // Keep ordinary present/legacy lookups free of Windows helper processes.
     const pending = await readRecycleRecord(worktreePath, sessionId);
     if (
-      !pending?.archive ||
-      !pending.snapshot ||
+      !pending?.snapshot ||
       pending.phase === "restored" ||
       pending.phase === "pending"
     )
@@ -119,7 +134,6 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
         const record = await readRecycleRecord(worktreePath, sessionId);
         if (
           !record?.snapshot ||
-          !record.archive ||
           record.phase === "restored" ||
           record.phase === "pending"
         )
@@ -156,6 +170,7 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
           // Registration was the final mutation; finish a journal write interrupted by a crash.
           record.phase = "restored";
           await writeRecycleRecord(record);
+          await releaseSnapshotRef(record.meta.baseRepo, record.snapshot);
           return true;
         }
         if (registered && worktreeGeneration(registered) !== record.generation)
@@ -197,17 +212,28 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
             // Snapshotting never mutates the live checkout. Cancelling recycling needs no apply.
             record.phase = "restored";
             await writeRecycleRecord(record);
+            await releaseSnapshotRef(record.meta.baseRepo, record.snapshot);
             return true;
           }
           await assertManagedResourcePath(record.meta, [worktreePath]);
-          if (
-            !sameWorktreeFiles(
-              await inventoryWorktree(worktreePath),
-              record.archive.files,
-              true,
+          if (record.archive) {
+            if (
+              !sameWorktreeFiles(
+                await inventoryWorktree(worktreePath),
+                record.archive.files,
+                true,
+              )
             )
-          )
+              return false;
+          } else if (
+            (await gitMetadataUsable(worktreePath)) &&
+            !(await presentFilesMatchSnapshotTree(
+              worktreePath,
+              record.snapshot.tree,
+            ))
+          ) {
             return false;
+          }
         }
         if (
           hasLiveSessionReference(
@@ -216,7 +242,7 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
           )
         )
           return false;
-        await verifyRecoveryArchive(record.archive);
+        if (record.archive) await verifyRecoveryArchive(record.archive);
         if (!legacyGuardHeld()) return false;
         if (headRef) {
           try {
@@ -261,14 +287,10 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
         record.restoredGeneration ??= randomUUID();
         await writeRecycleRecord(record);
         const gitLink = path.join(worktreePath, ".git");
-        let gitLinkExists = true;
-        try {
-          await fs.lstat(gitLink);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          gitLinkExists = false;
-        }
-        if (!gitLinkExists || record.restoreCheckoutPath) {
+        if (
+          !(await gitMetadataUsable(worktreePath)) ||
+          record.restoreCheckoutPath
+        ) {
           // Repair a partially deleted worktree without deleting any remaining user file.
           // Persist the temporary checkout before creating it so a crash after `worktree add`
           // can resume the same checkout instead of leaving its branch permanently occupied.
@@ -315,6 +337,8 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
             // Never delete or adopt an unexpected non-empty temporary directory.
             return false;
           }
+          if (!(await gitMetadataUsable(worktreePath)))
+            await fs.rm(gitLink, { force: true });
           try {
             await fs.copyFile(
               path.join(checkout, ".git"),
@@ -347,7 +371,21 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
           return false;
         if (!(await indexIsRestorable(worktreePath, record.snapshot.indexTree)))
           return false;
-        await extractRecoveryArchive(record.archive, worktreePath, true);
+        if (record.archive) {
+          await extractRecoveryArchive(record.archive, worktreePath, true);
+        } else {
+          if (
+            !(await presentFilesMatchSnapshotTree(
+              worktreePath,
+              record.snapshot.tree,
+            ))
+          )
+            return false;
+          await checkoutMissingSnapshotFiles(
+            worktreePath,
+            record.snapshot.tree,
+          );
+        }
         if (
           hasLiveSessionReference(
             record.meta,
@@ -380,6 +418,7 @@ export function createRecordedWorktreeRecovery(ports: WorktreeRecoveryPorts) {
         });
         record.phase = "restored";
         await writeRecycleRecord(record);
+        await releaseSnapshotRef(record.meta.baseRepo, record.snapshot);
         return true;
       }),
     );

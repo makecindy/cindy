@@ -150,7 +150,7 @@ export function createWorktreeRecycleJournal(
     await fs.mkdir(root, { recursive: true });
     // Must be discoverable before committing an intent that permits destructive I/O.
     await publishJournalLocation(root);
-    if (record.archive && record.snapshot && record.phase === "removed") {
+    if (record.snapshot && record.phase === "removed") {
       const history = path.join(root, "history");
       await fs.mkdir(history, { recursive: true });
       const key = createHash("sha256")
@@ -228,19 +228,35 @@ export function createWorktreeRecycleJournal(
       throw error;
     }
     const records: WorktreeRecycleRecord[] = [];
-    for (const name of names.filter((value) =>
-      /^[a-f0-9]{64}\.json$/.test(value),
-    )) {
+    const candidates = names
+      .filter((value) => /^[a-f0-9]{64}\.json$/.test(value))
+      .map((value) => ({ file: value, id: value.slice(0, -5) }));
+    try {
+      const history = await fs.readdir(
+        path.join(recycleJournalRoot(), "history"),
+      );
+      for (const name of history.filter((value) => value.endsWith(".json"))) {
+        const id = name.slice(0, 65).replace(/-.*/, "");
+        if (/^[a-f0-9]{64}$/.test(id))
+          candidates.push({ file: path.join("history", name), id });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    for (const candidate of candidates) {
       try {
         records.push(
           parseRecord(
-            await fs.readFile(path.join(recycleJournalRoot(), name), "utf8"),
-            name.slice(0, -5),
+            await fs.readFile(
+              path.join(recycleJournalRoot(), candidate.file),
+              "utf8",
+            ),
+            candidate.id,
           ),
         );
       } catch {
         log.warn("invalid worktree recycle request preserved", {
-          resourceId: name.slice(0, -5),
+          resourceId: candidate.id,
         });
       }
     }

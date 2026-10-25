@@ -14,7 +14,12 @@ import {
 } from './resourceSafety';
 import * as store from './worktreeStore';
 import { withLegacyWorktreeRuntimeGuard } from './legacyRuntimeGuard';
-import { readWorktreeHeadRef } from './contentSnapshot';
+import {
+  readWorktreeHeadRef,
+  presentFilesMatchSnapshotTree,
+  checkoutMissingSnapshotFiles,
+  releaseSnapshotRef,
+} from './contentSnapshot';
 
 import { createRecordedWorktreeRecovery } from '@cindy/worktree-core/restoreRecovery';
 export const { restoreRecordedWorktree } = createRecordedWorktreeRecovery({
@@ -36,4 +41,7 @@ export const { restoreRecordedWorktree } = createRecordedWorktreeRecovery({
   store,
   withLegacyWorktreeRuntimeGuard,
   readWorktreeHeadRef,
+  presentFilesMatchSnapshotTree,
+  checkoutMissingSnapshotFiles,
+  releaseSnapshotRef,
 });

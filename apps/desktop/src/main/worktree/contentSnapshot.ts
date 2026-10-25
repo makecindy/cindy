@@ -7,6 +7,11 @@ export const {
   worktreeContentBaselineMatches,
   worktreeStagedContentMatches,
   worktreeContentMatches,
+  presentFilesMatchSnapshotTree,
+  checkoutMissingSnapshotFiles,
+  releaseSnapshotRef,
+  snapshotTreePaths,
+  discardableWorktreePaths,
   captureWorktreeContent,
 } = service;
 export { WorktreeChangedDuringSnapshotError } from '@cindy/worktree-core/contentSnapshot';

@@ -34,6 +34,10 @@ export interface WorktreeRecycleRecord {
     untracked?: true;
   };
   restoredGeneration?: string;
+  /** Removal boundary used to distinguish pre-existing ignored bytes from late writes. */
+  removingSince?: number;
+  /** Paths intentionally omitted from the snapshot (ignored files and nested repositories). */
+  removalDiscardable?: string[];
   /** Temporary checkout used to repair a partially removed worktree. */
   restoreCheckoutPath?: string;
   archive?: WorktreeRecoveryArchive;

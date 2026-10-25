@@ -1,4 +1,4 @@
-import { createWorktreeRecycleRequests } from './recycleRequests.js';
+import { createWorktreeRecycleRequests } from "./recycleRequests.js";
 import {
   deferRecycle,
   recycleFailureReason,
@@ -11,6 +11,7 @@ import { sameWorktreeFiles } from "./recoveryArchiveIO.js";
 import { isManagedWorktreePath } from "./safety.js";
 import { withWorktreeRecycleSlot } from "./recycleQueue.js";
 import type { WorktreeMeta } from "./types.js";
+import type { WorktreeRecycleRecord } from "./recycleTypes.js";
 import type { WorktreeManagerPorts } from "./managerPorts.js";
 import type { createWorktreeContentSnapshots } from "./contentSnapshot.js";
 import type { createWorktreeRecoveryArchives } from "./recoveryArchive.js";
@@ -34,7 +35,14 @@ export type ManagedRecyclePorts = Pick<
 > &
   Pick<
     ReturnType<typeof createWorktreeContentSnapshots>,
-    "captureWorktreeContent" | "worktreeContentBaselineMatches"
+    | "captureWorktreeContent"
+    | "worktreeContentBaselineMatches"
+    | "worktreeContentMatches"
+    | "worktreeStagedContentMatches"
+    | "presentFilesMatchSnapshotTree"
+    | "releaseSnapshotRef"
+    | "snapshotTreePaths"
+    | "discardableWorktreePaths"
   > &
   Pick<
     ReturnType<typeof createWorktreeRecoveryArchives>,
@@ -60,6 +68,12 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
   const {
     captureWorktreeContent,
     worktreeContentBaselineMatches,
+    worktreeContentMatches,
+    worktreeStagedContentMatches,
+    presentFilesMatchSnapshotTree,
+    releaseSnapshotRef,
+    snapshotTreePaths,
+    discardableWorktreePaths,
     gitExec,
     hasLiveSessionReference,
     loadLiveSessionPathKeys,
@@ -77,7 +91,97 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
     store,
     withLegacyWorktreeRuntimeGuard,
   } = ports;
-  const { directoryIdentity, requestWorktreeRecycle, hasOtherGeneration } = createWorktreeRecycleRequests(ports);
+  const { directoryIdentity, requestWorktreeRecycle, hasOtherGeneration } =
+    createWorktreeRecycleRequests(ports);
+
+  async function hasGitLink(worktreePath: string): Promise<boolean> {
+    try {
+      await fs.lstat(path.join(worktreePath, ".git"));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  async function residualFilesAllowed(
+    root: string,
+    sinceMs: number,
+    saved: ReadonlySet<string> | null,
+    discardable: readonly string[] | null,
+  ): Promise<boolean> {
+    const discarded = (relative: string): boolean =>
+      discardable!.some((entry) =>
+        entry.endsWith("/")
+          ? `${relative}/` === entry || relative.startsWith(entry)
+          : relative === entry,
+      );
+    const walk = async (
+      directory: string,
+      prefix: string,
+    ): Promise<boolean> => {
+      let entries;
+      try {
+        entries = await fs.readdir(directory, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+        throw error;
+      }
+      for (const entry of entries) {
+        const relative = `${prefix}${entry.name}`;
+        const entryPath = path.join(directory, entry.name);
+        if (relative === ".git") continue;
+        if (entry.isDirectory()) {
+          if (saved && discarded(relative)) continue;
+          if (!(await walk(entryPath, `${relative}/`))) return false;
+          continue;
+        }
+        let stat;
+        try {
+          stat = await fs.lstat(entryPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        if (Math.max(stat.mtimeMs, stat.birthtimeMs) > sinceMs) return false;
+        if (saved && !saved.has(relative) && !discarded(relative)) return false;
+      }
+      return true;
+    };
+    return walk(root, "");
+  }
+
+  async function residualFilesCovered(
+    meta: WorktreeMeta,
+    record: WorktreeRecycleRecord,
+    snapshot: NonNullable<WorktreeRecycleRecord["snapshot"]>,
+  ): Promise<boolean> {
+    if (record.archive) {
+      await verifyRecoveryArchive(record.archive);
+      if (
+        !sameWorktreeFiles(
+          await inventoryWorktree(meta.path),
+          record.archive.files,
+          true,
+        )
+      )
+        return false;
+    } else {
+      const since = record.removingSince;
+      if (typeof since !== "number" || !Number.isFinite(since)) return false;
+      const discardable = Array.isArray(record.removalDiscardable)
+        ? record.removalDiscardable
+        : null;
+      const saved = discardable
+        ? await snapshotTreePaths(meta.baseRepo, snapshot.tree)
+        : null;
+      if (!(await residualFilesAllowed(meta.path, since, saved, discardable)))
+        return false;
+    }
+    if (!(await hasGitLink(meta.path))) return true;
+    await assertWorktreeGitIdentity(meta);
+    return worktreeStagedContentMatches(meta.path, snapshot);
+  }
 
   /** Pool reset is destructive too: preserve the old generation before clean/reset. */
   async function checkpointWorktreeForReuse(meta: WorktreeMeta): Promise<void> {
@@ -118,23 +222,25 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
     const gitLink = await fs.lstat(path.join(meta.path, ".git"));
     if (!gitLink.isFile() || gitLink.isSymbolicLink())
       throw new Error("pooled worktree Git link is missing");
-    record.archive = await createRecoveryArchive(meta.path, record.id);
-    record.snapshot = await captureWorktreeContent(
+    const snapshot = await captureWorktreeContent(
       meta.path,
       `refs/cindy/worktree-recovery/${record.id}/${randomUUID()}`,
+      { includeUntracked: true },
     );
-    if (
-      hasLiveSessionReference(
-        meta,
-        await loadLiveSessionPathKeys({ contextPath: meta.path }),
-      ) ||
-      !(await worktreeContentBaselineMatches(meta.path, record.snapshot)) ||
-      !sameWorktreeFiles(
-        await inventoryWorktree(meta.path),
-        record.archive.files,
-      )
-    ) {
-      throw new Error("pooled worktree changed before reuse");
+    record.snapshot = snapshot;
+    try {
+      if (
+        hasLiveSessionReference(
+          meta,
+          await loadLiveSessionPathKeys({ contextPath: meta.path }),
+        ) ||
+        !(await worktreeContentMatches(meta.path, snapshot))
+      ) {
+        throw new Error("pooled worktree changed before reuse");
+      }
+    } catch (error) {
+      await releaseSnapshotRef(meta.baseRepo, snapshot);
+      throw error;
     }
     await assertManagedResourcePath(meta, store.getAllPaths());
     await assertWorktreeGitIdentity(meta);
@@ -143,7 +249,6 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
     record.phase = "removed";
     await writeRecycleRecord(record);
   }
-
 
   /** Written before the terminal status mutation, so a crash cannot lose the cleanup intent. */
 
@@ -241,110 +346,63 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
           record.directoryIdentity = identity;
           await assertManagedResourcePath(meta, store.getAllPaths());
           const partialRemoval =
-            record.phase === "removing" && record.snapshot && record.archive;
+            record.phase === "removing" && Boolean(record.snapshot);
           if (!partialRemoval) {
             // A missing .git must never fall through to the parent repository.
             await assertWorktreeGitIdentity(meta);
-            // Save all bytes, including ignored files, before touching the live directory.
-            if (
-              !record.archive ||
-              !sameWorktreeFiles(
-                await inventoryWorktree(meta.path),
-                record.archive.files,
-              )
-            ) {
-              record.archive = await createRecoveryArchive(
-                meta.path,
-                record.id,
-              );
-              record.snapshot = undefined;
-              await writeRecycleRecord(record);
-            }
+            let superseded: WorktreeRecycleRecord["snapshot"];
             if (
               !record.snapshot ||
-              !(await worktreeContentBaselineMatches(
-                meta.path,
-                record.snapshot,
-              ))
+              !(await worktreeContentMatches(meta.path, record.snapshot))
             ) {
+              superseded = record.snapshot;
               record.snapshot = await captureWorktreeContent(
                 meta.path,
                 `refs/cindy/worktree-recovery/${record.id}/${randomUUID()}`,
+                { includeUntracked: true },
               );
+              // New snapshots contain every non-ignored file. Legacy archives
+              // remain attached only to records created by older clients.
+              record.archive = undefined;
             }
             record.phase = "snapshotted";
             await writeRecycleRecord(record);
+            if (superseded && superseded.ref !== record.snapshot.ref)
+              await releaseSnapshotRef(meta.baseRepo, superseded);
           }
-          if (!record.archive || !record.snapshot)
-            return defer("recovery-evidence-missing");
-          await verifyRecoveryArchive(record.archive);
-          if (
-            !sameWorktreeFiles(
-              await inventoryWorktree(meta.path),
-              record.archive.files,
-              Boolean(partialRemoval),
-            )
-          ) {
-            return defer("files-changed");
-          }
+          const snapshot = record.snapshot;
+          if (!snapshot) return defer("recovery-evidence-missing");
+          const contentUnchanged = async (): Promise<boolean> => {
+            if (record.phase === "removing")
+              return residualFilesCovered(meta, record, snapshot);
+            if (!(await hasGitLink(meta.path))) return false;
+            await assertWorktreeGitIdentity(meta);
+            return worktreeContentMatches(meta.path, snapshot);
+          };
           if (!(await canRemove())) return defer("referenced-before-removal");
           if ((await directoryIdentity(meta.path)) !== identity)
             return defer("directory-replaced");
           await assertManagedResourcePath(meta, store.getAllPaths());
-          let gitLinkPresent = true;
-          try {
-            await fs.lstat(path.join(meta.path, ".git"));
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            gitLinkPresent = false;
-          }
-          if (!partialRemoval || gitLinkPresent) {
+          if (!(await contentUnchanged()))
+            return defer(
+              partialRemoval
+                ? "residual-files-changed"
+                : "git-baseline-changed",
+            );
+          if (!partialRemoval) {
+            const since = Date.now();
+            if (!(await canRemove())) return defer("referenced-before-removal");
+            if ((await directoryIdentity(meta.path)) !== identity)
+              return defer("directory-replaced");
+            await assertManagedResourcePath(meta, store.getAllPaths());
             await assertWorktreeGitIdentity(meta);
-            if (
-              !(await worktreeContentBaselineMatches(
-                meta.path,
-                record.snapshot,
-              ))
-            )
-              return defer("git-baseline-changed");
-          }
-          record.phase = "removing";
-          await writeRecycleRecord(record);
-          // Revalidate immediately before the destructive Git operation. The
-          // earlier inventory is only a snapshot; a late editor/IDE write or a
-          // newly live reference must keep this generation protected.
-          if (!record.archive || !record.snapshot)
-            return defer("recovery-evidence-missing");
-          await verifyRecoveryArchive(record.archive);
-          if (
-            !sameWorktreeFiles(
-              await inventoryWorktree(meta.path),
-              record.archive.files,
-              Boolean(partialRemoval),
-            )
-          ) {
-            return defer("files-changed-before-removal");
-          }
-          if (!(await canRemove())) return defer("referenced-before-removal");
-          if ((await directoryIdentity(meta.path)) !== identity)
-            return defer("directory-replaced");
-          await assertManagedResourcePath(meta, store.getAllPaths());
-          let finalGitLinkPresent = true;
-          try {
-            await fs.lstat(path.join(meta.path, ".git"));
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            finalGitLinkPresent = false;
-          }
-          if (!partialRemoval || finalGitLinkPresent) {
-            await assertWorktreeGitIdentity(meta);
-            if (
-              !(await worktreeContentBaselineMatches(
-                meta.path,
-                record.snapshot,
-              ))
-            )
+            if (!(await worktreeContentMatches(meta.path, snapshot)))
               return defer("git-baseline-changed-before-removal");
+            record.removalDiscardable =
+              (await discardableWorktreePaths(meta.path)) ?? undefined;
+            record.removingSince = since;
+            record.phase = "removing";
+            await writeRecycleRecord(record);
           }
           try {
             await gitExec(
@@ -365,31 +423,12 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
               return defer("remove-unconfirmed");
             if (!(await canRemove()))
               return defer("referenced-before-fallback");
-            if (
-              !sameWorktreeFiles(
-                await inventoryWorktree(meta.path),
-                record.archive.files,
-                true,
-              )
-            )
+            if (!(await residualFilesCovered(meta, record, snapshot)))
               return defer("residual-files-changed");
             await assertManagedResourcePath(meta, store.getAllPaths());
-            let hasGit = true;
-            try {
-              await fs.lstat(path.join(meta.path, ".git"));
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                throw error;
-              hasGit = false;
-            }
-            if (hasGit) {
+            if (await hasGitLink(meta.path)) {
               await assertWorktreeGitIdentity(meta);
-              if (
-                !(await worktreeContentBaselineMatches(
-                  meta.path,
-                  record.snapshot,
-                ))
-              )
+              if (!(await worktreeStagedContentMatches(meta.path, snapshot)))
                 return defer("git-baseline-changed");
             }
             if ((await directoryIdentity(meta.path)) !== identity)
@@ -419,7 +458,6 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
         await store.del(entry.sessionId);
     }
   }
-
 
   return {
     checkpointWorktreeForReuse,
