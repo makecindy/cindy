@@ -17,4 +17,27 @@ import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleSer
 import { listBotSettingsCapabilities, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
 
-export const botRemoteManagement=createBotRemoteManagement({getBotAutonomySettingsView,setBotAutonomySchedulerBotId,readEffectiveBotModelChain,resolveAvailableTaskModels,createBotProfile,createBotCanonicalSession,getBotMemoryService,getBotRemoteResourceSource,getBotRemoteSettingsSource,setBotProfileAvatar,updateBotProfile,activeOwnerScopeKey,isAppSessionBoundaryPending,listBotSkillsForBot,readBotSkillForBot,saveBotSkillForSession,deleteBotSkillForBot,requestBotRuntimeEpochRefresh,runRegisteredBotLifecycleAction,listBotSettingsCapabilities,validateBotCapabilityAdditions,botLinkedProjectAccess});
+export const botRemoteManagement=createBotRemoteManagement({
+  getBotAutonomySettingsView: (...args) => getBotAutonomySettingsView(...args),
+  setBotAutonomySchedulerBotId: (...args) => setBotAutonomySchedulerBotId(...args),
+  readEffectiveBotModelChain: (...args) => readEffectiveBotModelChain(...args),
+  resolveAvailableTaskModels: (...args) => resolveAvailableTaskModels(...args),
+  createBotProfile: (...args) => createBotProfile(...args),
+  createBotCanonicalSession: (...args) => createBotCanonicalSession(...args),
+  getBotMemoryService: (...args) => getBotMemoryService(...args),
+  getBotRemoteResourceSource: (...args) => getBotRemoteResourceSource(...args),
+  getBotRemoteSettingsSource: (...args) => getBotRemoteSettingsSource(...args),
+  setBotProfileAvatar: (...args) => setBotProfileAvatar(...args),
+  updateBotProfile: (...args) => updateBotProfile(...args),
+  activeOwnerScopeKey: (...args) => activeOwnerScopeKey(...args),
+  isAppSessionBoundaryPending: (...args) => isAppSessionBoundaryPending(...args),
+  listBotSkillsForBot: (...args) => listBotSkillsForBot(...args),
+  readBotSkillForBot: (...args) => readBotSkillForBot(...args),
+  saveBotSkillForSession: (...args) => saveBotSkillForSession(...args),
+  deleteBotSkillForBot: (...args) => deleteBotSkillForBot(...args),
+  requestBotRuntimeEpochRefresh: (...args) => requestBotRuntimeEpochRefresh(...args),
+  runRegisteredBotLifecycleAction: (...args) => runRegisteredBotLifecycleAction(...args),
+  listBotSettingsCapabilities: (...args) => listBotSettingsCapabilities(...args),
+  validateBotCapabilityAdditions: (...args) => validateBotCapabilityAdditions(...args),
+  botLinkedProjectAccess: (...args) => botLinkedProjectAccess(...args),
+});

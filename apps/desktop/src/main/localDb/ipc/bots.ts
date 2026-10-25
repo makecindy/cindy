@@ -74,8 +74,8 @@ import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSign
 import { createBotProfileService } from '@cindy/app-runtime/botProfileService';
 export type * from '@cindy/app-runtime/botProfileService';
 const profiles = createBotProfileService({
-  provisionDefaultBot, resolveBusinessSessionId,
-  getDbClient, tryGetDbClient, getMakerIfReady, activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath, readEffectiveBotModelChain, validateTaskModel, ensureProjectGitInitialized, readGitSafetySettings, requestBotRuntimeEpochRefresh, migrateLegacyTeammateAvatar, decodeBotAvatarImage, storeTeammateAvatarImage, readDefaultTeammatePortrait, readBotCreationDraft, getResolvedMainLocale, enqueueBotInvitation: (...args) => enqueueBotInvitation(...args), coordinateBotCanonicalReplacement, broadcastBotRemoteResourceChanged, signalBotAutonomyBotsChanged, notifyAgentIslandCompanionChanged, broadcastSessionPatched, createMessage,
+  provisionDefaultBot: (...args) => provisionDefaultBot(...args), resolveBusinessSessionId: (...args) => resolveBusinessSessionId(...args),
+  getDbClient: (...args) => getDbClient(...args), tryGetDbClient: (...args) => tryGetDbClient(...args), getMakerIfReady: (...args) => getMakerIfReady(...args), activeOwnerScopeKey: (...args) => activeOwnerScopeKey(...args), isAppSessionBoundaryPending: (...args) => isAppSessionBoundaryPending(...args), ownerScopedUserDataPath: (...args) => ownerScopedUserDataPath(...args), readEffectiveBotModelChain: (...args) => readEffectiveBotModelChain(...args), validateTaskModel: (...args) => validateTaskModel(...args), ensureProjectGitInitialized: (...args) => ensureProjectGitInitialized(...args), readGitSafetySettings: (...args) => readGitSafetySettings(...args), requestBotRuntimeEpochRefresh: (...args) => requestBotRuntimeEpochRefresh(...args), migrateLegacyTeammateAvatar: (...args) => migrateLegacyTeammateAvatar(...args), decodeBotAvatarImage: (...args) => decodeBotAvatarImage(...args), storeTeammateAvatarImage: (...args) => storeTeammateAvatarImage(...args), readDefaultTeammatePortrait: (...args) => readDefaultTeammatePortrait(...args), readBotCreationDraft: (...args) => readBotCreationDraft(...args), getResolvedMainLocale: (...args) => getResolvedMainLocale(...args), enqueueBotInvitation: (...args) => enqueueBotInvitation(...args), coordinateBotCanonicalReplacement: (...args) => coordinateBotCanonicalReplacement(...args), broadcastBotRemoteResourceChanged: (...args) => broadcastBotRemoteResourceChanged(...args), signalBotAutonomyBotsChanged: (...args) => signalBotAutonomyBotsChanged(...args), notifyAgentIslandCompanionChanged: (...args) => notifyAgentIslandCompanionChanged(...args), broadcastSessionPatched: (...args) => broadcastSessionPatched(...args), createMessage: (...args) => createMessage(...args),
   legacyUserDataPath: () => app.getPath('userData'), logger: createLogger('bots'),
   mapper: {extractMessagePreview,sessionCreateToRow,sessionToCamel},
   broadcastProfileChanged: payload => {
@@ -116,7 +116,18 @@ export function getBotMemoryService(): ReturnType<typeof createBotMemoryService>
 }
 export function registerBotIpc(): void {
   setRemoteBotSessionLookup(readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch);
-  registerBotProfileHandlers({ipcMain,isDeviceLinkInvoke,assertTrustedAppRendererEvent,getDbClient,tryGetDbClient,...profiles,readBotModelChainSettingsState,writeBotModelChainSettings,resetBotModelChainSettings,readEffectiveBotModelChain,validateTaskModel,validateBotCapabilityAdditions});
+  registerBotProfileHandlers({
+    ipcMain, isDeviceLinkInvoke, assertTrustedAppRendererEvent,
+    getDbClient: (...args) => getDbClient(...args),
+    tryGetDbClient: (...args) => tryGetDbClient(...args),
+    ...profiles,
+    readBotModelChainSettingsState: (...args) => readBotModelChainSettingsState(...args),
+    writeBotModelChainSettings: (...args) => writeBotModelChainSettings(...args),
+    resetBotModelChainSettings: (...args) => resetBotModelChainSettings(...args),
+    readEffectiveBotModelChain: (...args) => readEffectiveBotModelChain(...args),
+    validateTaskModel: (...args) => validateTaskModel(...args),
+    validateBotCapabilityAdditions: (...args) => validateBotCapabilityAdditions(...args),
+  });
   // Source preparation is local-only and account-independent, including for a
   // Bot that has not been created yet. Saving still uses choose-avatar below.
   ipcMain.handle('local-db:bots:choose-avatar-source', async (event) => {

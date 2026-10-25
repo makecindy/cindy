@@ -5,6 +5,7 @@ import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../../..
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { canResumeAfterRuntimeFallback } from '../../../maker-ipc/botCandidateRecovery';
+import { createSessionRuntimeFallback } from '@cindy/app-runtime/sessionRuntimeFallback';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
@@ -176,6 +177,8 @@ vi.mock('../../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../../maker-host/index.js', () => ({
   validateBotCapabilityAdditions: h.validateCapabilityAdditions,
+  listBotSettingsCapabilities: (input: Parameters<ReturnType<typeof createBotCapabilityService>['forSettings']>[0]) =>
+    createBotCapabilityService(capabilityDeps).forSettings(input),
   getMaker: () => ({ getSession: h.getSession, listAgentSkills: async () => ({ skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] }) }),
   getPluginRegistry: () => ({
     getPlugins: () => ['memory', 'xdt_helper', 'contacts', 'lsp'].map((id) => ({ id, name: id, description: id })),
@@ -5926,7 +5929,7 @@ describe('Bot Session task end-to-end runtime', () => {
         restore.push(() => spy.mockRestore());
       }
       if (surface === 'own-skills') {
-        const index = await import('../../../maker-ipc/botSkillQueryIndex.js');
+        const index = await import('@cindy/companion-core/botSkillQueryIndex');
         const read = index.queryBotSkillIndex;
         const spy = vi.spyOn(index, 'queryBotSkillIndex').mockImplementation((...args) => afterRead(() => read(...args)));
         restore.push(() => spy.mockRestore());
@@ -6133,11 +6136,8 @@ describe('Bot Session task end-to-end runtime', () => {
   // Execute the production fallback entry with the real delegation snapshot query.
   // Native engine mutation is unnecessary: an unpinned task reaches the catalog picker.
   function automaticTaskFallback() {
-    const source = readFileSync(new URL('../../../maker-ipc/register.ts', import.meta.url), 'utf8');
-    const body = source.slice(source.indexOf('  const maybeApplySessionRuntimeFallback ='),
-      source.indexOf('  const sessionControlService ='));
     const pick = vi.fn(() => null);
-    const deps = {
+    const apply = createSessionRuntimeFallback({
       hasExplicitSessionTaskModel,
       captureSessionRuntimeControlOwnerEpoch: () => 1,
       readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'openai', model: 'gpt-6-astra' },
@@ -6150,15 +6150,22 @@ describe('Bot Session task end-to-end runtime', () => {
       getDesktopProviderService: () => ({ listProviders: async () => [] }),
       getActiveCatalog: () => ({}),
       pickSessionRuntimeFallback: pick,
+      maker: { getSession: () => undefined, closeSession: async () => {} },
+      pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
+      withSendToSessionLock: async (_id: string, work: () => Promise<unknown>) => work(),
+      sessionRuntimeControlOwnerEpochMatches: () => true,
+      getDbClient: () => ({}) as never,
+      recordFailedSessionRuntimeFallbackCandidate: () => false,
+      applySessionRuntimeSelection: async () => ({ superseded: false, deferred: false }),
+      cancelPendingSessionRuntimeMutation: () => false,
+      getPendingCredentialSwitchTarget: () => undefined,
+      clearPendingCredentialSwitchForSession: () => {},
+      broadcastSessionRuntimeProjection: async () => {},
+      agentSwitchDeps: {} as never,
+      acceptSessionRuntimeMutation: () => {},
+      withRehydrateCloseSuppressed: async (_id: string, work: () => Promise<unknown>) => work(),
       log: { warn: vi.fn() },
-    };
-    const js = transpileModule(`${body}\nreturn maybeApplySessionRuntimeFallback;`, {
-      compilerOptions: { target: ScriptTarget.ES2022 },
-    }).outputText;
-    const apply = new Function(...Object.keys(deps), js)(...Object.values(deps)) as
-      (id: string, attempt: number, token: number, requireRouteChange?: boolean) => Promise<{
-        session: null; outcome: 'unchanged' | 'exhausted';
-      }>;
+    } as never);
     return { apply, pick };
   }
 
