@@ -7,14 +7,16 @@
  * - `preparing-update`：正在检查/下载，或旧补丁正被更新版本替换（superseding，
  *   与 UpdateBanner 一致此时禁止 relaunch，防止装到旧补丁）——按钮转圈等待。
  * - `no-update`：无补丁可装（idle/error）——引导「重新检查更新」。
- * - `init-failed`：错误码明确不是 MIGRATE_FAILED（如插件目录 EPERM 导致的
- *   DB_INIT_FAILED）——与应用版本无关，不提更新，只给真实原因与「重试」。
+ * - `init-failed`：DB_INIT_FAILED（如插件目录 EPERM）——不引导更新，给中性说明与「重试」。
+ * - `corrupt`：DB_CORRUPT_NO_BACKUP——自动恢复已耗尽，重试不会改变结果，
+ *   只引导复制技术细节求助，不提供重试。
  */
 export type LocalDbFatalView =
   | 'install-update'
   | 'preparing-update'
   | 'no-update'
-  | 'init-failed';
+  | 'init-failed'
+  | 'corrupt';
 
 export type UpdateStatusValue = UpdateStatusPayload['status'];
 
@@ -23,7 +25,8 @@ export function resolveLocalDbFatalView(
   code?: string,
 ): LocalDbFatalView {
   // 错误码是第一决策维度：只有 MIGRATE_FAILED（或未知码，保持旧行为）才走更新链路。
-  if (code === 'DB_INIT_FAILED' || code === 'DB_CORRUPT_NO_BACKUP') return 'init-failed';
+  if (code === 'DB_CORRUPT_NO_BACKUP') return 'corrupt';
+  if (code === 'DB_INIT_FAILED') return 'init-failed';
   switch (status) {
     case 'ready':
       return 'install-update';

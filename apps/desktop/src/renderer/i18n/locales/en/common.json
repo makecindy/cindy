@@ -1080,8 +1080,13 @@
     },
     "initFailed": {
       "title": "Local database failed to start",
-      "description": "The local database couldn't start. This isn't caused by the app version, so updating won't help. Try again first; if it keeps happening, check access permissions on the app data folders (including the plugins folder) and share the technical details below with the team.",
-      "retry": "Try Again"
+      "description": "The local database couldn't start. Try again first. If it keeps failing, check access permissions on the app data folders (including the plugins folder) and share the technical details below with the team.",
+      "retry": "Retry Starting Database"
+    },
+    "corrupt": {
+      "title": "Local database is damaged and can't be recovered automatically",
+      "description": "The local database is damaged and no usable backup could restore it, so trying again won't change the result. Copy the technical details below and share them with the team to get help recovering your data.",
+      "copy": "Copy Technical Details"
     },
     "noUpdate": {
       "title": "Local data can't be opened right now",

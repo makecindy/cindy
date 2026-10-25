@@ -32,6 +32,12 @@ export function LocalDbFatalScreen({
   const view = resolveLocalDbFatalView(status, code);
 
   const handleConfirm = () => {
+    if (view === 'corrupt') {
+      // 自动恢复已耗尽，重试无意义；复制技术细节便于向开发团队求助。
+      const text = [code, message].filter(Boolean).join('\n');
+      void navigator.clipboard?.writeText(text).catch(() => {});
+      return;
+    }
     if (view === 'init-failed') {
       // 重新走一遍 ensureReady；与应用更新无关。
       window.location.reload();
@@ -51,23 +57,29 @@ export function LocalDbFatalScreen({
   };
 
   const title =
-    view === 'init-failed'
-      ? t('localDbFatal.initFailed.title')
-      : view === 'no-update'
+    view === 'corrupt'
+      ? t('localDbFatal.corrupt.title')
+      : view === 'init-failed'
+        ? t('localDbFatal.initFailed.title')
+        : view === 'no-update'
         ? t('localDbFatal.noUpdate.title')
         : t('localDbFatal.updateReady.title');
   const description =
-    view === 'init-failed'
-      ? t('localDbFatal.initFailed.description')
-      : view === 'install-update'
+    view === 'corrupt'
+      ? t('localDbFatal.corrupt.description')
+      : view === 'init-failed'
+        ? t('localDbFatal.initFailed.description')
+        : view === 'install-update'
       ? t('localDbFatal.updateReady.description')
       : view === 'preparing-update'
         ? t('localDbFatal.preparing.description')
         : t('localDbFatal.noUpdate.description');
   const confirmText =
-    view === 'init-failed'
-      ? t('localDbFatal.initFailed.retry')
-      : view === 'install-update'
+    view === 'corrupt'
+      ? t('localDbFatal.corrupt.copy')
+      : view === 'init-failed'
+        ? t('localDbFatal.initFailed.retry')
+        : view === 'install-update'
         ? t('localDbFatal.updateReady.confirm')
         : t('localDbFatal.noUpdate.checkUpdate');
 
