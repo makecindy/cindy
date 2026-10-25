@@ -21,7 +21,9 @@ async function fixture() {
 // only the supervised child is the signed graphical executable. tier: unit.
 it.each(['darwin','linux','win32'] as const)('registers the desktop host command on %s and preserves the headless boot boundary',async platform=>{
   const directory=await mkdtemp(path.join(os.tmpdir(),'cindy-platform-service-'));directories.push(directory);
-  const executable=path.join(directory,'Cindy Host',platform==='win32'?'Cindy.exe':'Cindy');
+  // Linux systemd descriptors use POSIX paths even when this matrix case runs
+  // on a Windows host; keep that fixture independent of the test runner path.
+  const executable=platform==='linux'?'/opt/cindy/Cindy Host/Cindy':path.join(directory,'Cindy Host',platform==='win32'?'Cindy.exe':'Cindy');
   const execute=vi.fn(async(_file:string,args:string[])=>({stdout:args.includes('/user')?'"user","S-1-5-21-111-222-333-1001"':'',stderr:''}));
   const manager=new TerminalServiceManager(path.join(directory,'profile'),path.join(directory,'app','cli.js'),process.execPath,{
     platform,home:directory,uid:12345,execute,desktopHost:{executable,args:[]},
