@@ -205,6 +205,7 @@ export async function createTerminalWorktrees(options: {
     ...archive,
     ...snapshots,
     ...resourceSafety,
+    archiveOnSnapshot: true,
     withLegacyWorktreeRuntimeGuard,
   });
   const recordedRecovery = createRecordedWorktreeRecovery({

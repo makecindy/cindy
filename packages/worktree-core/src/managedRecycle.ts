@@ -59,6 +59,8 @@ export type ManagedRecyclePorts = Pick<
     ReturnType<typeof createWorktreeResourceSafety>,
     "assertManagedResourcePath" | "assertWorktreeGitIdentity"
   > & {
+    /** Terminal hosts retain an encrypted archive for packaged-worker recovery. */
+    archiveOnSnapshot?: boolean;
     withLegacyWorktreeRuntimeGuard<T>(
       task: (held: () => boolean) => Promise<T>,
     ): Promise<T>;
@@ -90,6 +92,7 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
     assertWorktreeGitIdentity,
     store,
     withLegacyWorktreeRuntimeGuard,
+    archiveOnSnapshot = false,
   } = ports;
   const { directoryIdentity, requestWorktreeRecycle, hasOtherGeneration } =
     createWorktreeRecycleRequests(ports);
@@ -361,10 +364,11 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
                 `refs/cindy/worktree-recovery/${record.id}/${randomUUID()}`,
                 { includeUntracked: true },
               );
-              // Keep the encrypted archive alongside the Git snapshot so an
-              // interrupted removal can still prove and restore ignored or
-              // untracked files after a restart.
-              record.archive = await createRecoveryArchive(meta.path, record.id);
+              // Terminal hosts keep the encrypted archive alongside the Git
+              // snapshot; Desktop retains its existing snapshot-only path.
+              record.archive = archiveOnSnapshot
+                ? await createRecoveryArchive(meta.path, record.id)
+                : undefined;
             }
             record.phase = "snapshotted";
             await writeRecycleRecord(record);
