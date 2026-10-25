@@ -806,7 +806,7 @@ it.each([{ hasSummary: true, withNotes: true }, { hasSummary: true, withNotes: f
   }
   const input = screen.getByText('settings.providers.models.advanced.price.input').parentElement!;
   expect(input.textContent).toContain('¥0.016');
-  expect(input.textContent).toContain(' · ');
+  expect(input.textContent).not.toContain(' · ');
   expect(input.textContent).toContain('¥112');
   expect(input.querySelector('s')?.textContent).toBe('¥0.02');
   const output = screen.getByText('settings.providers.models.advanced.price.output').parentElement!;
