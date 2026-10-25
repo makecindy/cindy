@@ -6,6 +6,7 @@ export const {
   readWorktreeHeadRef,
   worktreeContentBaselineMatches,
   worktreeStagedContentMatches,
+  worktreeContentMatches,
   captureWorktreeContent,
 } = service;
 export { WorktreeChangedDuringSnapshotError } from '@cindy/worktree-core/contentSnapshot';

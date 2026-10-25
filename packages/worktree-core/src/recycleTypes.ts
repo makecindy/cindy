@@ -30,6 +30,8 @@ export interface WorktreeRecycleRecord {
     commit: string;
     ref: string;
     indexHash: string;
+    /** True when the snapshot also contains non-ignored untracked content. */
+    untracked?: true;
   };
   restoredGeneration?: string;
   /** Temporary checkout used to repair a partially removed worktree. */

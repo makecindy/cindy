@@ -61,6 +61,136 @@ export function createWorktreeContentSnapshots(
     );
   }
 
+  async function withTemporaryIndex<T>(
+    run: (env: Record<string, string>) => Promise<T>,
+  ): Promise<T> {
+    const temp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "cindy-worktree-index-"),
+    );
+    try {
+      return await run({
+        GIT_INDEX_FILE: path.join(temp, "index"),
+        GIT_OPTIONAL_LOCKS: "0",
+      });
+    } finally {
+      await fs.rm(temp, { recursive: true, force: true });
+    }
+  }
+
+  async function untrackedNestedRepositories(
+    worktreePath: string,
+    extraEnv: Record<string, string>,
+  ): Promise<string[]> {
+    const { stdout } = await gitExec(
+      ["ls-files", "--others", "--exclude-standard", "-z"],
+      worktreePath,
+      { extraEnv },
+    );
+    return stdout
+      .split("\0")
+      .filter((entry) => entry.endsWith("/"))
+      .map((entry) => entry.slice(0, -1));
+  }
+
+  async function unmarkHiddenEdits(
+    worktreePath: string,
+    extraEnv: Record<string, string>,
+  ): Promise<void> {
+    const { stdout } = await gitExec(["ls-files", "-v", "-z"], worktreePath, {
+      extraEnv,
+    });
+    const marked: string[] = [];
+    for (const entry of stdout.split("\0")) {
+      const tag = entry[0];
+      if (
+        !tag ||
+        entry[1] !== " " ||
+        (tag === tag.toUpperCase() && tag !== "S")
+      )
+        continue;
+      const file = entry.slice(2);
+      if (tag.toUpperCase() === "S") {
+        try {
+          await fs.lstat(path.join(worktreePath, file));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+      }
+      marked.push(file);
+    }
+    for (let start = 0; start < marked.length; start += 200) {
+      await gitExec(
+        [
+          "update-index",
+          "--no-assume-unchanged",
+          "--no-skip-worktree",
+          "--",
+          ...marked.slice(start, start + 200),
+        ],
+        worktreePath,
+        { extraEnv },
+      );
+    }
+  }
+
+  async function addWorktreeContent(
+    worktreePath: string,
+    mode: "--all" | "--update",
+    extraEnv: Record<string, string>,
+  ): Promise<void> {
+    await unmarkHiddenEdits(worktreePath, extraEnv);
+    const nested =
+      mode === "--all"
+        ? await untrackedNestedRepositories(worktreePath, extraEnv)
+        : [];
+    if (nested.length === 0) {
+      await gitExec(["add", mode, "--", "."], worktreePath, { extraEnv });
+      return;
+    }
+    const pathspec = path.join(
+      path.dirname(extraEnv.GIT_INDEX_FILE),
+      "pathspec",
+    );
+    await fs.writeFile(
+      pathspec,
+      [".", ...nested.map((entry) => `:(exclude,literal)${entry}`)].join("\0") +
+        "\0",
+    );
+    await gitExec(
+      ["add", mode, `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"],
+      worktreePath,
+      { extraEnv },
+    );
+  }
+
+  async function fullContentTree(worktreePath: string): Promise<string> {
+    return withTemporaryIndex(async (extraEnv) => {
+      const { stdout: indexPath } = await gitExec(
+        ["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        worktreePath,
+      );
+      await fs.copyFile(indexPath.trim(), extraEnv.GIT_INDEX_FILE);
+      await addWorktreeContent(worktreePath, "--all", extraEnv);
+      const { stdout } = await gitExec(["write-tree"], worktreePath, {
+        extraEnv,
+      });
+      return stdout.trim();
+    });
+  }
+
+  async function worktreeContentMatches(
+    worktreePath: string,
+    snapshot: NonNullable<WorktreeRecycleRecord["snapshot"]>,
+  ): Promise<boolean> {
+    return (
+      snapshot.untracked === true &&
+      (await worktreeStagedContentMatches(worktreePath, snapshot)) &&
+      (await fullContentTree(worktreePath)) === snapshot.tree &&
+      (await worktreeStagedContentMatches(worktreePath, snapshot))
+    );
+  }
+
   /** Staged content of the live index, read from a copy so the live index is never locked or rewritten. */
   async function stagedTree(worktreePath: string): Promise<string | null> {
     const temp = await fs.mkdtemp(
@@ -112,7 +242,10 @@ export function createWorktreeContentSnapshots(
   async function captureWorktreeContent(
     worktreePath: string,
     ref: string,
-    { stagedContentOnly = false }: { stagedContentOnly?: boolean } = {},
+    {
+      stagedContentOnly = false,
+      includeUntracked = false,
+    }: { stagedContentOnly?: boolean; includeUntracked?: boolean } = {},
   ): Promise<NonNullable<WorktreeRecycleRecord["snapshot"]>> {
     const temp = await fs.mkdtemp(
       path.join(os.tmpdir(), "cindy-worktree-index-"),
@@ -143,7 +276,11 @@ export function createWorktreeContentSnapshots(
       );
       const indexTree = staged.trim();
       // Untracked/ignored bytes go exclusively to the encrypted recovery archive.
-      await gitExec(["add", "--update", "--", "."], worktreePath, options);
+      await addWorktreeContent(
+        worktreePath,
+        includeUntracked ? "--all" : "--update",
+        options.extraEnv,
+      );
       const { stdout: contents } = await gitExec(
         ["write-tree"],
         worktreePath,
@@ -187,11 +324,20 @@ export function createWorktreeContentSnapshots(
         commit,
         ref,
         indexHash: originalIndexHash,
+        ...(includeUntracked ? { untracked: true as const } : {}),
       };
-      const unchanged = stagedContentOnly
-        ? await worktreeStagedContentMatches(worktreePath, snapshot)
-        : await worktreeContentBaselineMatches(worktreePath, snapshot);
-      if (!unchanged) throw new WorktreeChangedDuringSnapshotError();
+      try {
+        const unchanged =
+          stagedContentOnly || includeUntracked
+            ? await worktreeStagedContentMatches(worktreePath, snapshot)
+            : await worktreeContentBaselineMatches(worktreePath, snapshot);
+        if (!unchanged) throw new WorktreeChangedDuringSnapshotError();
+      } catch (error) {
+        await gitExec(["update-ref", "-d", ref, commit], worktreePath).catch(
+          () => undefined,
+        );
+        throw error;
+      }
       return snapshot;
     } finally {
       await fs.rm(temp, { recursive: true, force: true });
@@ -201,6 +347,7 @@ export function createWorktreeContentSnapshots(
     readWorktreeHeadRef,
     worktreeContentBaselineMatches,
     worktreeStagedContentMatches,
+    worktreeContentMatches,
     captureWorktreeContent,
   };
 }
