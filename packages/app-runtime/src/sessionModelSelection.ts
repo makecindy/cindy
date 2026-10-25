@@ -26,7 +26,7 @@ import type { SessionModelSelectionHost } from './sessionModelSelectionHost.js';
 
 /** The original Desktop SET_MODEL transaction, with platform services supplied by the host. */
 export function createSessionModelSelection(host: SessionModelSelectionHost) {
-const { isDeviceLinkInvoke, deviceLinkInvokeControllerSupports, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, sessionRuntimeControlOwnerEpochMatches, assertReviewSettingsUnlocked, getDbClient, canApplyAutomaticRuntimeSelection, agentSwitchPending, applyAgentDeviceRuntimeSelection, hasSessionProvider, hydrateSessionProvider, log, getSessionProvider, listSshCodexProviders, getSessionRuntimeControlSnapshot, maker, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeRefreshEffort, getSessionEffort, getSessionDbAgentKind, assertModelRouteUsable, resolveSessionRuntimeAxes, clearPendingCredentialSwitchForSession, agentSwitchDeps, wakeSessionInputAfterCredentialSwitch, markRemoteSettingPersistedInsideHandler, resolvePendingRuntimeAxisPatch, acceptSessionRuntimeMutation, getSessionFastMode, deferSessionRuntimeAxisMutation, getPendingCredentialSwitchTarget, broadcastSessionRuntimeProjection, isSessionInTurn, setSessionProvider, clearSessionProvider, setSessionEffort, setSessionFastMode, withRehydrateCloseSuppressed, getSessionLastLiveUsage, resolveConfiguredContextWindow, rehydrateColdPiRuntimeForWindowVerification, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionPatched, getCurrentDbClientSnapshot, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, applyRuntimeSetModelChange, registerPendingCredentialSwitchForSession, getCodexProxyAuthInjectionState, persistSessionFields, updateScheduledPreference, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation, recordSessionContextSnapshot, withSendToSessionLock } = host;
+const { isDeviceLinkInvoke, deviceLinkInvokeControllerSupports, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, sessionRuntimeControlOwnerEpochMatches, assertReviewSettingsUnlocked, getDbClient, canApplyAutomaticRuntimeSelection, agentSwitchPending, applyAgentDeviceRuntimeSelection, hasSessionProvider, hydrateSessionProvider, log, getSessionProvider, listSshCodexProviders, getSessionRuntimeControlSnapshot, maker, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeRefreshEffort, getSessionEffort, getSessionDbAgentKind, assertModelRouteUsable, resolveSessionRuntimeAxes, clearPendingCredentialSwitchForSession, agentSwitchDeps, wakeSessionInputAfterCredentialSwitch, markRemoteSettingPersistedInsideHandler, resolvePendingRuntimeAxisPatch, acceptSessionRuntimeMutation, getSessionFastMode, deferSessionRuntimeAxisMutation, getPendingCredentialSwitchTarget, broadcastSessionRuntimeProjection, isSessionInTurn, setSessionProvider, clearSessionProvider, setSessionEffort, setSessionFastMode, withRehydrateCloseSuppressed, getSessionLastLiveUsage, resolveConfiguredContextWindow, readStoredSessionContextWindowBudget, rehydrateColdPiRuntimeForWindowVerification, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionPatched, getCurrentDbClientSnapshot, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, applyRuntimeSetModelChange, registerPendingCredentialSwitchForSession, getCodexProxyAuthInjectionState, persistSessionFields, updateScheduledPreference, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation, recordSessionContextSnapshot, withSendToSessionLock } = host;
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode { return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code; }
 const handleSetModel = async (
     sessionId: unknown,
@@ -500,6 +500,11 @@ const handleSetModel = async (
       // 按目标窗口懒创建；apply 之后的终态活进程核验必须同步跳过，否则只会换成
       // 'Pi target runtime could not be verified'。
       let coldPiRouteWithoutLiveWindowCheck = false;
+      // Task-level context budgets are host-owned. Read once per model transaction so
+      // cold-Pi pressure checks and final window verification use the same value.
+      const sessionContextWindowBudget = readStoredSessionContextWindowBudget
+        ? await readStoredSessionContextWindowBudget(sessionId)
+        : null;
       const targetProviderId =
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
@@ -601,7 +606,7 @@ const handleSetModel = async (
           const coldPiLastLiveUsage = getSessionLastLiveUsage(sessionId);
           const coldPiTargetContextWindow = lookupVerifiedContextWindow(
             (_agentKind, modelId, pid) =>
-              resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
+              resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId, sessionContextWindowBudget),
             model,
             targetRouteProviderId,
             'pi',
@@ -686,7 +691,9 @@ const handleSetModel = async (
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
           sshCodexProviders
             ? resolveVerifiedContextWindow({ providers: sshCodexProviders }, runtimeAgentKind, pid ?? 'openai', modelId)
-            : resolveConfiguredContextWindow(getActiveCatalog(), runtimeAgentKind, pid, modelId);
+            : resolveConfiguredContextWindow(
+                getActiveCatalog(), runtimeAgentKind, pid, modelId, sessionContextWindowBudget,
+              );
         const catalogTargetWindow = lookupVerifiedContextWindow(
           resolveRouteWindow,
           model,
@@ -1180,7 +1187,7 @@ const handleSetModel = async (
           // Pi reports the configured native budget, which may exceed the route
           // ceiling. Final verification must not undo the history safety cap.
           const verifiedPiWindow = resolveConfiguredContextWindow(
-            getActiveCatalog(), 'pi', targetRouteProviderId, model,
+            getActiveCatalog(), 'pi', targetRouteProviderId, model, sessionContextWindowBudget,
           );
           const finalPiWindow = verifiedPiWindow === null
             ? reportedPiWindow : Math.min(reportedPiWindow, verifiedPiWindow);
@@ -1459,6 +1466,7 @@ const handleSetModel = async (
                   dbToMakerAgentKind(agentKind),
                   pid,
                   modelId,
+                  sessionContextWindowBudget,
                 ),
               model,
               targetRouteProviderId,

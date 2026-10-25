@@ -32,20 +32,39 @@ describe('writable directory grant wiring', () => {
   });
 
   it('blocks raw local DB updates and consumes picker evidence before local create', () => {
-    const sessions = read('main/localDb/ipc/sessions.ts');
-    const createStart = sessions.indexOf("ipcMain.handle('local-db:sessions:create'");
-    const updateStart = sessions.indexOf("ipcMain.handle('local-db:sessions:update'");
+    const sessions = readFileSync(
+      resolve(desktopRoot, '../../../packages/app-runtime/src/sessionService.ts'),
+      'utf8',
+    ).replace(/\r\n?/g, '\n');
+    const createStart = Math.max(
+      sessions.indexOf("'local-db:sessions:create'"),
+      sessions.indexOf('"local-db:sessions:create"'),
+    );
+    const updateStart = Math.max(
+      sessions.indexOf("'local-db:sessions:update'"),
+      sessions.indexOf('"local-db:sessions:update"'),
+    );
     const create = sessions.slice(createStart, updateStart);
     expect(create).toContain('consumeWritableDirectoryPickerGrants({');
     expect(create.indexOf('consumeWritableDirectoryPickerGrants({')).toBeLessThan(
       create.indexOf('db.insert(sessions)'),
     );
     // update handler 只做 adapter,业务体在 updateSessionInDb(MCP 会话操作工具共用同一路径)。
-    const update = sessions.slice(updateStart, sessions.indexOf("'local-db:sessions:patch-meta'"));
+    const patchMetaStart = Math.max(
+      sessions.indexOf("'local-db:sessions:patch-meta'"),
+      sessions.indexOf('"local-db:sessions:patch-meta"'),
+    );
+    const update = sessions.slice(updateStart, patchMetaStart);
     expect(update).toContain('return updateSessionInDb(sid, p, opts)');
     const updateBody = sessions.slice(
-      sessions.indexOf('export async function updateSessionInDb('),
-      sessions.indexOf('export async function patchSessionMetaInDb('),
+      Math.max(
+        sessions.indexOf('export async function updateSessionInDb('),
+        sessions.indexOf('async function updateSessionInDb('),
+      ),
+      Math.max(
+        sessions.indexOf('export async function patchSessionMetaInDb('),
+        sessions.indexOf('async function patchSessionMetaInDb('),
+      ),
     );
     expect(updateBody).toContain('p.extraDirs !== undefined || p.writableDirs !== undefined');
   });

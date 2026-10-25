@@ -17,17 +17,54 @@ import { describe, expect, it } from 'vitest';
 const registerSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
   'utf8',
-).replace(/\r\n?/g, '\n');
+).replace(/\r\n?/g, '\n')
+  + '\n'
+  + readFileSync(
+    resolve(__dirname, '../../../../../packages/app-runtime/src/makerInputSubmission.ts'),
+    'utf8',
+  ).replace(/\r\n?/g, '\n')
+  + '\n'
+  + readFileSync(
+    resolve(__dirname, '../../../../../packages/app-runtime/src/makerInputControls.ts'),
+    'utf8',
+  ).replace(/\r\n?/g, '\n');
 const sessionsSource = readFileSync(
   resolve(__dirname, '..', 'localDb', 'ipc', 'sessions.ts'),
   'utf8',
+).replace(/\r\n?/g, '\n')
+  + '\n'
+  + readFileSync(
+    resolve(__dirname, '../../../../../packages/app-runtime/src/sessionService.ts'),
+    'utf8',
+  ).replace(/\r\n?/g, '\n').replaceAll('"', "'")
+  + '\n'
+  + readFileSync(
+    resolve(__dirname, '../../../../../packages/app-runtime/src/sessionTitlePersistence.ts'),
+    'utf8',
+  ).replace(/\r\n?/g, '\n').replaceAll('"', "'");
+const remoteAutoTitleSource = readFileSync(
+  resolve(__dirname, '../../../../../packages/app-runtime/src/remoteInputAutoTitle.ts'),
+  'utf8',
 ).replace(/\r\n?/g, '\n');
+
+const channelLiteral: Record<string, string> = {
+  INPUT_ENQUEUE: 'maker:input:enqueue',
+  INPUT_STEER: 'maker:input:steer',
+  INPUT_STOP: 'maker:input:update-content',
+  INPUT_COMPACT: 'maker:input:compact',
+  INPUT_UPDATE_CONTENT: 'maker:input:update-content',
+  INPUT_MOVE: 'maker:input:move',
+};
 
 function handlerBody(channel: string, nextChannel: string): string {
   const start = registerSource.search(
-    new RegExp(`ipcMain\\.handle\\(\\s*MAKER_INVOKE\\.${channel}`),
+    new RegExp(
+      `ipcMain\\.handle\\(\\s*(?:MAKER_INVOKE\\.${channel}|["']${channelLiteral[channel] ?? ''}["'])`,
+    ),
   );
-  const nextPattern = new RegExp(`ipcMain\\.handle\\(\\s*MAKER_INVOKE\\.${nextChannel}`);
+  const nextPattern = new RegExp(
+    `ipcMain\\.handle\\(\\s*(?:MAKER_INVOKE\\.${nextChannel}|["']${channelLiteral[nextChannel] ?? ''}["'])`,
+  );
   const nextMatch = nextPattern.exec(registerSource.slice(start + 1));
   const end = nextMatch ? start + 1 + nextMatch.index : -1;
   expect(start).toBeGreaterThan(-1);
@@ -128,7 +165,7 @@ describe('device-link auto-title wiring', () => {
       }
 
       if (channel === 'INPUT_STEER') {
-        expect(body).toContain(
+        expect(body.replace(/\s+/g, ' ')).toContain(
           'allowMissingTrustedContexts: deviceLinkInvoke && steerOpts?.removeFromQueue === true',
         );
         const steerAt = body.indexOf('inputCoordinator.steer(', finalGuardAt);
@@ -186,9 +223,9 @@ describe('device-link auto-title wiring', () => {
   });
 
   it('只对远控调用生效:本机 renderer 走 maker:auto-title,不在这里重复起名', () => {
-    const start = registerSource.indexOf('const prepareDeviceLinkAutoTitle =');
+    const start = remoteAutoTitleSource.indexOf('const prepareDeviceLinkAutoTitle =');
     expect(start).toBeGreaterThan(-1);
-    const body = registerSource.slice(start, registerSource.indexOf('\n  };', start));
+    const body = remoteAutoTitleSource.slice(start, remoteAutoTitleSource.indexOf('\n  };', start));
     expect(body).toMatch(/if \(!isDeviceLinkInvoke\(\)\) return noop;/);
     // 预检失败按「要起名」放行:一次 DB 抖动不该让标题永久停在 New Maker。
     expect(body).toMatch(/eligible = true;/);
@@ -218,14 +255,18 @@ describe('user rename notification ordering', () => {
     ] as const) {
       const noteAt = sessionsSource.indexOf(note);
       expect(noteAt).toBeGreaterThan(-1);
-      const writeAt = sessionsSource.indexOf(write, noteAt);
+      const writeAt = write === 'await withStatusWriteLock('
+        ? sessionsSource.indexOf(write, noteAt)
+        : write === 'withStatusWriteLock(db, sessionId, patch.status, async () => {'
+          ? noteAt + sessionsSource.slice(noteAt).search(/withStatusWriteLock\(\s*db,\s*sessionId,\s*patch\.status,\s*async\s*\(\)\s*=>\s*\{/)
+          : noteAt + sessionsSource.slice(noteAt).search(/getDbClient\(\)\s*\.tx\(['"]sessions\.renameTitles['"]/);
       expect(writeAt).toBeGreaterThan(noteAt);
     }
   });
 
   it('自动起名自己的写入不发改名记号(否则一起名就自我禁用)', () => {
-    const start = sessionsSource.indexOf('export async function persistSessionTitleIfStillDraft');
-    const end = sessionsSource.indexOf('export async function clearSessionContextInDb', start);
+    const start = sessionsSource.indexOf('async function persistSessionTitleIfStillDraft');
+    const end = sessionsSource.indexOf('return {', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(sessionsSource.slice(start, end)).not.toContain('noteUserTitleWritten');

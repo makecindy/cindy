@@ -1,4 +1,4 @@
-import type { Catalog } from '@cindy/model-providers';
+import type { AgentKind, Catalog, CatalogModel } from '@cindy/model-providers';
 import { dbToMakerAgentKind } from '@cindy/maker-shared/agent-kind-conversion';
 
 /** Route identity carried by both persisted sessions and their renderer projection. */
@@ -9,6 +9,35 @@ export interface ContextWindowSession {
 }
 
 export { resolveVerifiedContextWindow } from '@cindy/model-providers/verifiedContextWindow';
+
+/** Resolve the unique catalog route used to build task-level context budget bounds. */
+export function resolveRouteContextWindowBounds(
+  catalog: Pick<Catalog, 'providers'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): { providerId: string; defaultWindow: number; maxWindow: number | null } | null {
+  const candidates: { providerId: string; model: CatalogModel }[] = [];
+  for (const provider of catalog.providers) {
+    if (provider.routing[agent]?.disabled === true) continue;
+    if (providerId && provider.id !== providerId) continue;
+    for (const model of provider.models[agent] ?? []) {
+      if (model.id === modelId) candidates.push({ providerId: provider.id, model });
+    }
+  }
+  if (candidates.length !== 1) return null;
+  const { providerId: sourceProviderId, model } = candidates[0];
+  const contextWindow = Number.isFinite(model.contextWindow) && model.contextWindow > 0
+    ? Math.round(model.contextWindow) : null;
+  const declaredMax = typeof model.contextWindowMax === 'number' &&
+    Number.isFinite(model.contextWindowMax) && model.contextWindowMax > 0
+    ? Math.round(model.contextWindowMax) : null;
+  const maxWindow = declaredMax ?? (model.contextWindowVerified === true ? contextWindow : null);
+  const anchor = maxWindow ?? contextWindow;
+  if (anchor === null) return null;
+  const defaultWindow = contextWindow === null ? anchor : Math.min(contextWindow, anchor);
+  return { providerId: sourceProviderId, defaultWindow, maxWindow };
+}
 import { resolveVerifiedContextWindow } from '@cindy/model-providers/verifiedContextWindow';
 
 /** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */

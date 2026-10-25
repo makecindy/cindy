@@ -114,9 +114,14 @@ describe('wire source readers', () => {
 describe('delivery-path wiring (source contract)', () => {
   const read = (rel: string) =>
     readFileSync(resolve(process.cwd(), rel), 'utf8').replace(/\r\n?/g, '\n');
-  const register = read('src/main/maker-ipc/register.ts');
-  const coordinator = read('src/main/maker-ipc/agent-input-coordinator.ts');
-  const transaction = read('src/main/maker-ipc/makerSendTransaction.ts');
+  const register = [
+    read('src/main/maker-ipc/register.ts'),
+    read('../../packages/app-runtime/src/makerSteerTransaction.ts'),
+  ].join('\n');
+  const steerSource = read('../../packages/app-runtime/src/makerSteerTransaction.ts');
+  const coordinator = read('../../packages/app-runtime/src/agent-input-coordinator.ts');
+  const transaction = read('../../packages/app-runtime/src/makerSendTransaction.ts');
+  const builderSource = read('../../packages/app-runtime/src/sessionControlInput.ts');
   const queue = read('../../packages/maker-shared/src/agentInputQueue.ts');
 
   const between = (source: string, start: string, end: string) => {
@@ -140,7 +145,7 @@ describe('delivery-path wiring (source contract)', () => {
     const direct = between(
       register,
       'async function sendUserMessageWithAwaitedGitBaseline',
-      'async function readSenderIdentity',
+      'const readSenderIdentity',
     );
     expect(direct).toContain('shouldPrependMobileClientPromptNote(message, session.agentKind)');
     expect(direct).toContain(
@@ -161,9 +166,9 @@ describe('delivery-path wiring (source contract)', () => {
 
   it('steer prepends the source note from coordinator-transmitted fields', () => {
     const steer = between(
-      register,
+      steerSource,
       'const steerToAgentAccepted = async',
-      'const trustedDesktopSteerText',
+      'return { steerToAgentAccepted',
     );
     expect(steer).toContain('origin: so.sourceOrigin');
     expect(steer).toContain('sourcePlugin: so.sourcePlugin');
@@ -185,9 +190,9 @@ describe('delivery-path wiring (source contract)', () => {
 
   it.each(['receipt', 'group-peer', 'user'])('preserves %s queue visibility and final model content', async kind => {
     const builder = between(
-      register,
+      builderSource,
       'async function buildSessionControlInputItem',
-      'const orcaInterAgentDispatcher',
+      'return buildSessionControlInputItem',
     );
     // Execute the actual host builder with only its runtime dependencies stubbed.
     // This protects the behavior without fixing its conditional expression shape.

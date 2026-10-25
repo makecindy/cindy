@@ -35,11 +35,11 @@ const TERMINAL_ROOT = path.resolve(MAIN_ROOT, '../../../../apps/cindy-terminal/s
 const ALLOWED_FILES = new Set([
   'cindy-media/legacyDeadDirs.ts',
   'im/host.ts',
+  '../../../cindy-terminal/src/im/transport-host.ts',
   '../../../../packages/media-core/src/legacy-image-cache.ts',
   'modelCacheStore.ts',
   'session-share/sessionShareExport.ts',
   'session-share/sessionShareImport.ts',
-  'videoCacheStore.ts',
 ]);
 
 function* walkTsFiles(dir: string): Generator<string> {

@@ -996,8 +996,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           await withWorkerTransition(target.id, async () => {
             const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);
             const currentWorker = currentWorkers.find((worker) => worker.id === target.id);
+            if (!currentWorker) throw new Error('worker no longer belongs to an active team');
             acceptedSnapshot = {
-              previousStatus: currentWorker?.status ?? target.status,
+              previousStatus: currentWorker.status,
               previousPending: autoBridge.get(target.sessionId),
               previousManualInterrupt: deps.getManualInterrupt(target.sessionId),
             };

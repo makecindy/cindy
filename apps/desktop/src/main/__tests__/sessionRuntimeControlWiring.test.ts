@@ -13,10 +13,19 @@ const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'),
   /\r\n?/g,
   '\n',
 );
-const registerSource = [readMakerRegisterSource(), readSharedRuntimeSource('interruptedTurnRecovery'), readSharedRuntimeSource('sessionRecoveryLeases')].join('\n');
+const registerSource = [
+  readMakerRegisterSource(),
+  readSharedRuntimeSource('interruptedTurnRecovery'),
+  readSharedRuntimeSource('sessionRecoveryLeases'),
+  readSharedRuntimeSource('sessionRuntimeManagement'),
+  readSharedRuntimeSource('sessionRuntimeAxisHandlers'),
+  readSharedRuntimeSource('sessionModelSelection'),
+].join('\n');
 const coldPiRehydrationSource = readSharedRuntimeSource('coldPiRehydration');
 const coldPiRehydrationFailureSource = readSharedRuntimeSource('coldPiRehydrationFailure');
 const runtimeControlSource = readSharedRuntimeSource('sessionRuntimeControl');
+const runtimeManagementSource = readSharedRuntimeSource('sessionRuntimeManagement');
+const sessionModelSelectionSource = readSharedRuntimeSource('sessionModelSelection');
 const deviceLinkHostSource = readFileSync(
   resolve(mainRoot, 'device-link/index.ts'),
   'utf8',
@@ -228,7 +237,7 @@ describe('active Claude subscription Fast setting', () => {
       sessionId: 'active-claude-task', enabled: true, sessions: {}, eq: vi.fn(),
       getDbClient: () => ({ drizzle: { select: () => query } }),
       agentSwitchPending: new Map(), readSessionRuntimeProfiles: async () => ({ effective: profile }),
-      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed }), supportsSubscriptionFastPolicy,
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed, onFastModeChanged }), supportsSubscriptionFastPolicy,
       getSessionProvider: () => provider.id,
       getActiveCatalog: () => ({ providers: [provider as ProviderView] }),
       assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
@@ -1180,11 +1189,10 @@ describe('session runtime control wiring', () => {
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
-    const setRuntime = handlerBody(
-      registerSource,
+    const setRuntimeStart = runtimeManagementSource.indexOf(
       'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {',
-      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
     );
+    const setRuntime = runtimeManagementSource.slice(setRuntimeStart);
     const setRuntimeGuard = setRuntime.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
     );
@@ -1392,10 +1400,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('keeps the model switch alive when cold Pi rehydration fails (dead stored route)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
+    const setModel = sessionModelSelectionSource.slice(
+      sessionModelSelectionSource.indexOf('const handleSetModel = async ('),
     );
     // 存量 BYOM 路由已死（provider 被删/不再提供该模型）时冷启动 bootstrap 必然
     // fail-closed 失败；恢复失败若拒绝切模，发送与切模互相锁死（会话永久卡死）。
@@ -1417,10 +1423,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
+    const setModel = sessionModelSelectionSource.slice(
+      sessionModelSelectionSource.indexOf('const handleSetModel = async ('),
     );
     // 冷启动核实(2~3s)必须经预检：目标窗口对**已知占用**有余量时不再拉起运行时，
     // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。

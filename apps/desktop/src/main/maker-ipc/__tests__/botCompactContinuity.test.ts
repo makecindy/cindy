@@ -63,7 +63,12 @@ describe('三个 harness 都会报压缩边界', () => {
 });
 
 describe('显式配置变化的伙伴运行实例刷新', () => {
-  const register = read('apps/desktop/src/main/maker-ipc/register.ts');
+  const register = [
+    read('apps/desktop/src/main/maker-ipc/register.ts'),
+    read('packages/app-runtime/src/botRuntimeRefreshHost.ts'),
+    read('packages/app-runtime/src/botCompactRuntimeRefresh.ts'),
+    read('packages/app-runtime/src/botCapabilityPreflight.ts'),
+  ].join('\n');
 
   it('已登记的配置刷新可在轮次结束后执行', () => {
     expect(register).toContain('botCompactRuntimeRefreshCoordinator.attempt(session)');
@@ -86,8 +91,12 @@ describe('显式配置变化的伙伴运行实例刷新', () => {
 });
 
 describe('Hermes capability epoch', () => {
-  const register = read('apps/desktop/src/main/maker-ipc/register.ts');
-  const runtime = read('apps/desktop/src/main/maker-ipc/botProfileRuntime.ts');
+  const register = [
+    read('apps/desktop/src/main/maker-ipc/register.ts'),
+    read('packages/app-runtime/src/botCapabilityPreflight.ts'),
+    read('packages/app-runtime/src/botRuntimeRefreshHost.ts'),
+  ].join('\n');
+  const runtime = read('packages/app-runtime/src/botProfileRuntime.ts');
 
   it('每次发送前探测 canonical Chat 的档案、Skill、MCP、Toolset 与队友名册指纹', () => {
     expect(register).toContain('refreshBotCapabilityEpochBeforeSend');
@@ -111,7 +120,10 @@ describe('Hermes capability epoch', () => {
 describe('压缩不换会话', () => {
   it('重建用的是同一条会话 id —— 侧栏、作品集、右栏都不会因为压缩而断掉', () => {
     // 这一条是「不抄 Hermes 续接链」的立身之本:换 id 才需要链。
-    expect(read('apps/desktop/src/main/maker-ipc/register.ts')).toContain(
+    expect([
+      read('apps/desktop/src/main/maker-ipc/register.ts'),
+      read('packages/app-runtime/src/botRuntimeRefreshHost.ts'),
+    ].join('\n')).toContain(
       'maker.getSession(expectedSession.id) === expectedSession',
     );
   });

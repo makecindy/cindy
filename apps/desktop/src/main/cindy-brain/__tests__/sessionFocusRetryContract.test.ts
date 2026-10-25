@@ -9,7 +9,11 @@ describe('session focus retry wiring', () => {
     'utf8',
   ).replace(/\r\n/g, '\n');
   const gatewaySource = readFileSync(
-    resolve(process.cwd(), 'src/main/cindy-brain/subscriptionGateway.ts'),
+    resolve(process.cwd(), '../../packages/app-runtime/src/subscriptionGateway.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const ghostEventsSource = readFileSync(
+    resolve(process.cwd(), '../../packages/app-runtime/src/ghostSessionEvents.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
@@ -34,9 +38,9 @@ describe('session focus retry wiring', () => {
   });
 
   it('releases raw focus when session-switch eligibility is temporarily unavailable', () => {
-    const start = mainSource.indexOf('export function notifyGhostSessionEvent(');
-    const end = mainSource.indexOf('\n}\n\n/**\n * 会话切换上报入口', start);
-    const body = mainSource.slice(start, end);
+    const start = ghostEventsSource.indexOf('function notifyGhostSessionEvent(');
+    const end = ghostEventsSource.indexOf('\n}\n\nfunction isGhostEligibleSession', start);
+    const body = ghostEventsSource.slice(start, end);
 
     expect(body).toContain('onRetry: () => void = () => {}');
     expect(body).toContain("if (info.outcome === 'retry') onRetry();");

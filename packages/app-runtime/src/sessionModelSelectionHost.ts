@@ -70,7 +70,9 @@ export interface SessionModelSelectionHost extends
   pendingCredentialSwitchHolder: Pick<PendingCredentialSwitchService, 'get' | 'has' | 'clear' | 'register'> | null;
   withRehydrateCloseSuppressed<T>(id: string, run: () => Promise<T>): Promise<T>;
   getSessionLastLiveUsage(id: string): {contextTokens: number; contextWindow: number; capturedAtMs: number} | undefined;
-  resolveConfiguredContextWindow(catalog: Pick<Catalog, 'providers'>, agent: AgentKind, providerId: string | null | undefined, model: string): number | null;
+  resolveConfiguredContextWindow(catalog: Pick<Catalog, 'providers'>, agent: AgentKind, providerId: string | null | undefined, model: string, sessionBudget?: number | null): number | null;
+  /** Saved task-level context budget, when the host persists this optional Desktop setting. */
+  readStoredSessionContextWindowBudget?: (id: string) => Promise<number | null>;
   rehydrateColdPiRuntimeForWindowVerification(id: string): Promise<void>;
   contextOverflowRolloverHolder: Pick<ReturnType<typeof createContextOverflowRollover>, 'prepareModelWindowSwitch'> | null;
   broadcastSessionPatched(id: string, patch: Record<string, unknown>, owner?: DataOwnerBroadcastScope): void;

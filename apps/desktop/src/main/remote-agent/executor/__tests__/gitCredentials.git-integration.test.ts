@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isShareCredentialCommand, shareCredentialGitReads } from '../../credentials';
 import { RemoteExecutor } from '../executor';
 import { ExecutorGate, type ExecutorAction } from '../gate';
-import { GitCredentialHistory } from '../gitCredentials';
-import * as executorShell from '../shell';
+import { GitCredentialHistory } from '@cindy/remote-agent/executor/gitCredentials';
+import * as executorShell from '@cindy/remote-agent/executor/shell';
 import { ExecutorWorkspace } from '../workspace';
 
 // Windows 上每次 spawn git 要数百毫秒。

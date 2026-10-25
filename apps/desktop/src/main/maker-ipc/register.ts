@@ -58,7 +58,7 @@ import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSource, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
 import { captureAgentRequest as captureRequest, type CapturedAgentRequest } from './forwardedRequest.js';
-import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
+import { verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { configureBotTodoDispatch, settleBotTodoForSession } from './botTodoAccess.js';
 import { createBotTodoDispatch } from './botTodoDispatch.js';
 import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationInput } from './botTaskCoordination.js';
@@ -186,7 +186,10 @@ import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.j
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
-import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId } from '../maker-host/model-context-settings.js';
+import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
+import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
+import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
+import { MAX_CONTEXT_WINDOW_BUDGET, MIN_CONTEXT_WINDOW_BUDGET } from '../../shared/sessionContextWindowBudget.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -1196,6 +1199,7 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { createSubscriptionFastPolicy } from '../maker-host/subscription-fast-policy.js';
 import { readCompactionPct } from '../maker-host/compaction-settings-store.js';
 import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import {
@@ -3936,6 +3940,23 @@ async function syncLibraryReadonlyExtraDir(
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
 let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null = null;
+
+/** De-duplicate repeated budget notifications for the same live session. */
+const appliedContextWindowBudgets = new Map<string, number | null>();
+/** Budget rebuilds deferred while a turn is active and replayed at send boundaries. */
+const pendingSessionContextWindowBudgetReconciles = new Set<string>();
+
+let sessionContextWindowBudgetApplier:
+  | ((sessionId: string, change: { previous: number | null; next: number | null }) => Promise<void>)
+  | null = null;
+
+export async function applySessionContextWindowBudgetChange(
+  sessionId: string,
+  change: { previous: number | null; next: number | null },
+): Promise<void> {
+  await sessionContextWindowBudgetApplier?.(sessionId, change);
+}
+
 const overflowSuppressedBroadcasts = new Map<
   string,
   { sessionId: string; event: AgentEvent; persistId?: string; resolvedContent?: unknown }
@@ -4925,6 +4946,8 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
   gitSnapshotCoordinator?.onSessionClosed(session.id);
   clearOrcaMcpHydrated(session.id);
   knownNonOrcaSessionIds.delete(session.id);
+  appliedContextWindowBudgets.delete(session.id);
+  pendingSessionContextWindowBudgetReconciles.delete(session.id);
   lastReportedCostUsdBySession.delete(session.id);
   lastReportedModelUsageBySession.delete(session.id);
   turnModelPromiseBySession.delete(session.id);
@@ -7879,6 +7902,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
     await assertCurrent?.();
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
+    await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());
     await assertCurrent?.();
     if (isCancelled?.()) return false;
     const { session: resumedSession } = await bootstrapSession(opts);
@@ -9263,10 +9287,93 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionRuntimeGenerationMatches(sessionId, expectedGeneration);
   cancelPendingAgentSwitchHolder = (sessionId) => {
     agentSwitchPending.clear(sessionId);
+    appliedContextWindowBudgets.delete(sessionId);
+    // Cancelling a route switch must not discard a still-pending budget replay intent.
     broadcastSessionPatched(sessionId, {
       agentSwitchIntent: null,
       agentSwitchIntentCanceled: true,
     });
+  };
+
+  const runtimeMutationDeps = () => ({
+    maker,
+    isSessionInTurn,
+    registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+    clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+    wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+    getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+    codexAuthInjection: getCodexProxyAuthInjectionState(),
+    logger: log,
+  });
+
+  const reconcileSessionContextWindowBudgetUnderLock = async (
+    sessionId: string,
+    previous: number | null,
+  ): Promise<void> => {
+    const live = getMakerIfReady()?.getSession(sessionId);
+    if (!live) {
+      appliedContextWindowBudgets.delete(sessionId);
+      pendingSessionContextWindowBudgetReconciles.delete(sessionId);
+      return;
+    }
+    const latestBudget = await readStoredSessionContextWindowBudget(sessionId);
+    if (appliedContextWindowBudgets.has(sessionId)
+      && appliedContextWindowBudgets.get(sessionId) === latestBudget) {
+      pendingSessionContextWindowBudgetReconciles.delete(sessionId);
+      return;
+    }
+    const [row] = await getDbClient().drizzle
+      .select({ agentKind: sessions.agentKind, model: sessions.model, providerId: sessions.providerId })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (!row?.model) return;
+    const agent = dbToMakerAgentKind(row.agentKind);
+    const providerId = getSessionProvider(sessionId) ?? row.providerId;
+    if (!contextWindowBudgetChangesEffectiveWindow({
+      catalog: getActiveCatalog(), agent, providerId, modelId: row.model,
+      previous, next: latestBudget,
+    })) return;
+
+    const pendingTarget = getPendingCredentialSwitchTarget(sessionId);
+    if (pendingTarget) {
+      await registerPendingCredentialSwitchForSession(sessionId, {
+        ...pendingTarget,
+        forceSessionRebuild: true,
+      });
+      pendingSessionContextWindowBudgetReconciles.add(sessionId);
+      return;
+    }
+    const result = await applyRuntimeSetModelChange({
+      ...runtimeMutationDeps(),
+      sessionId,
+      model: live.model,
+      providerId: getSessionProvider(sessionId),
+      forceSessionRebuild: true,
+    });
+    if (result.status === 'applied') {
+      appliedContextWindowBudgets.set(sessionId, latestBudget);
+      pendingSessionContextWindowBudgetReconciles.delete(sessionId);
+      return;
+    }
+    pendingSessionContextWindowBudgetReconciles.add(sessionId);
+  };
+
+  sessionContextWindowBudgetApplier = async (sessionId, change) => {
+    const activeMaker = getMakerIfReady();
+    if (!activeMaker || !activeMaker.getSession(sessionId)) return;
+    await withSendToSessionLock(sessionId, () =>
+      reconcileSessionContextWindowBudgetUnderLock(sessionId, change.previous));
+  };
+
+  const replayPendingSessionContextWindowBudgetUnderLock = async (
+    sessionId: string,
+    before?: () => void,
+  ): Promise<void> => {
+    if (!pendingSessionContextWindowBudgetReconciles.has(sessionId)) return;
+    before?.();
+    await reconcileSessionContextWindowBudgetUnderLock(
+      sessionId, appliedContextWindowBudgets.get(sessionId) ?? null);
   };
 
   // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts。切换后
@@ -9846,6 +9953,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           signal,
         });
       }
+      await replayPendingSessionContextWindowBudgetUnderLock(sessionId, () => {
+        stage = 'direct-send:reconcileContextWindowBudget';
+      });
       let resolvedSelection: ScheduledModelSelection | undefined;
       if (selection) {
         stage = 'direct-send:applyScheduledModelSelection';
@@ -10711,7 +10821,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ...(params.autoReviewUserText.kind === 'delegated-continuation' ? {
                 [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId)),
                 [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const,
-              } : { [AUTO_REVIEW_USER_INTENT]: '' }),
+              } : { [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(params.autoReviewUserText) ?? '' }),
             } : {}),
             planMode: false,
             onAccepted: persistUserMessage,
@@ -10841,7 +10951,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ...(params.autoReviewUserText.kind === 'delegated-continuation' ? {
               [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId)),
               [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const,
-            } : { [AUTO_REVIEW_USER_INTENT]: '' }),
+            } : { [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(params.autoReviewUserText) ?? '' }),
           } : {}),
           planMode: false,
           onAccepted: persistUserMessage,
@@ -14942,6 +15052,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      await replayPendingSessionContextWindowBudgetUnderLock(sessionId);
       // Queued Orca delivery and resume both use this transaction. A failed
       // cross-engine preparation may retain its intent without throwing.
       if (agentSwitchPending.get(sessionId)) {
@@ -16993,7 +17104,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   const handleSetModel = createSessionModelSelection({
-    isDeviceLinkInvoke, deviceLinkInvokeControllerSupports, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, sessionRuntimeControlOwnerEpochMatches, assertReviewSettingsUnlocked, getDbClient, canApplyAutomaticRuntimeSelection, agentSwitchPending, applyAgentDeviceRuntimeSelection, hasSessionProvider, hydrateSessionProvider, log, getSessionProvider, listSshCodexProviders, getSessionRuntimeControlSnapshot, maker, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeRefreshEffort, getSessionEffort, getSessionDbAgentKind, assertModelRouteUsable, resolveSessionRuntimeAxes, clearPendingCredentialSwitchForSession, agentSwitchDeps, wakeSessionInputAfterCredentialSwitch, markRemoteSettingPersistedInsideHandler, resolvePendingRuntimeAxisPatch, acceptSessionRuntimeMutation, getSessionFastMode, deferSessionRuntimeAxisMutation, getPendingCredentialSwitchTarget, broadcastSessionRuntimeProjection, isSessionInTurn, setSessionProvider, clearSessionProvider, setSessionEffort, setSessionFastMode, withRehydrateCloseSuppressed, getSessionLastLiveUsage, resolveConfiguredContextWindow, rehydrateColdPiRuntimeForWindowVerification, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionPatched, getCurrentDbClientSnapshot, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, applyRuntimeSetModelChange, registerPendingCredentialSwitchForSession, getCodexProxyAuthInjectionState, persistSessionFields, updateScheduledPreference, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation, recordSessionContextSnapshot, withSendToSessionLock, get pendingCredentialSwitchHolder() { return pendingCredentialSwitchHolder; }, get contextOverflowRolloverHolder() { return contextOverflowRolloverHolder; }
+    isDeviceLinkInvoke, deviceLinkInvokeControllerSupports, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, sessionRuntimeControlOwnerEpochMatches, assertReviewSettingsUnlocked, getDbClient, canApplyAutomaticRuntimeSelection, agentSwitchPending, applyAgentDeviceRuntimeSelection, hasSessionProvider, hydrateSessionProvider, log, getSessionProvider, listSshCodexProviders, getSessionRuntimeControlSnapshot, maker, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeRefreshEffort, getSessionEffort, getSessionDbAgentKind, assertModelRouteUsable, resolveSessionRuntimeAxes, clearPendingCredentialSwitchForSession, agentSwitchDeps, wakeSessionInputAfterCredentialSwitch, markRemoteSettingPersistedInsideHandler, resolvePendingRuntimeAxisPatch, acceptSessionRuntimeMutation, getSessionFastMode, deferSessionRuntimeAxisMutation, getPendingCredentialSwitchTarget, broadcastSessionRuntimeProjection, isSessionInTurn, setSessionProvider, clearSessionProvider, setSessionEffort, setSessionFastMode, withRehydrateCloseSuppressed, getSessionLastLiveUsage, resolveConfiguredContextWindow, readStoredSessionContextWindowBudget, rehydrateColdPiRuntimeForWindowVerification, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionPatched, getCurrentDbClientSnapshot, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, applyRuntimeSetModelChange, registerPendingCredentialSwitchForSession, getCodexProxyAuthInjectionState, persistSessionFields, updateScheduledPreference, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation, recordSessionContextSnapshot, withSendToSessionLock, get pendingCredentialSwitchHolder() { return pendingCredentialSwitchHolder; }, get contextOverflowRolloverHolder() { return contextOverflowRolloverHolder; }
   });
   applyPiModelSettingsRefresh = async (sessionId, model, providerId) => {
     const generation = getSessionRuntimeControlSnapshot(sessionId).generation;
@@ -17043,7 +17154,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   registerSessionRuntimeAxisHandlers(ipcMain, {
-    sessionRuntimeControlOwnerEpochMatches, withRehydrateCloseSuppressed, maker, setSessionEffort, setSessionFastMode, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionRuntimeProjection, log, agentSwitchDeps, readUsableAgentDeviceProviders, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeAxes, persistSessionFields, agentSwitchPending, wakeSessionInputAfterCredentialSwitch, isDeviceLinkInvoke, assertTrustedAppRendererEvent, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, updateScheduledPreference, markRemoteSettingPersistedInsideHandler, getDbClient, updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, recordUserSessionRuntimeAxisMutation, readSessionRuntimeProfiles, withSendToSessionLock, assertReviewSettingsUnlocked, get pendingCredentialSwitchHolder() { return pendingCredentialSwitchHolder; }
+    sessionRuntimeControlOwnerEpochMatches, withRehydrateCloseSuppressed, maker, setSessionEffort, setSessionFastMode, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionRuntimeProjection, log, agentSwitchDeps, readUsableAgentDeviceProviders, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeAxes, persistSessionFields, agentSwitchPending, wakeSessionInputAfterCredentialSwitch, isDeviceLinkInvoke, assertTrustedAppRendererEvent, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, updateScheduledPreference, markRemoteSettingPersistedInsideHandler, getDbClient, updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, recordUserSessionRuntimeAxisMutation, readSessionRuntimeProfiles, withSendToSessionLock, assertReviewSettingsUnlocked, createSubscriptionFastPolicy, get pendingCredentialSwitchHolder() { return pendingCredentialSwitchHolder; }
   });
 
   ipcMain.handle(

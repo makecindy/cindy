@@ -187,7 +187,7 @@ const EXEMPTIONS: Exemption[] = [
     signatures: [{ match: 'fontWeight …bold', expected: 1 }],
   },
   {
-    file: 'src/main/oauthResultPage.ts',
+    file: '../../packages/auth-client/src/oauthResultPage.ts',
     rule: 'string-weight',
     reason: '登录品牌画布家族(自包含品牌页生成器,§3 豁免表)',
     signatures: [{ match: 'font-weight:700', expected: 2 }],
@@ -643,6 +643,11 @@ function scan(): Violation[] {
     push(rel, text, 'font-shorthand', findFontShorthands(text));
     push(rel, text, 'fixed-leading', findFixedLeadingWithScalingToken(text));
   }
+  // OAuth callback HTML moved into the shared auth client during the headless
+  // extraction; keep its inline brand weight in the same exemption scan.
+  const oauthResultPage = '../../packages/auth-client/src/oauthResultPage.ts';
+  const oauthText = prepareTsContent(readFileSync(join(ROOT, oauthResultPage), 'utf8'));
+  push(oauthResultPage, oauthText, 'string-weight', findStringWeightViolations(oauthText));
   for (const rel of collectFiles(/\.css$/)) {
     const text = stripCssComments(readFileSync(join(ROOT, rel), 'utf8'));
     push(

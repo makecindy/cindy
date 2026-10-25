@@ -10,10 +10,10 @@ import { describe, expect, it } from 'vitest';
  * established source-contract test pattern for main-process auth boundaries.
  */
 describe('market Ghost session boundary', () => {
-  const source = readFileSync(
-    resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
-    'utf8',
-  ).replace(/\r\n/g, '\n');
+  const source = [
+    readFileSync(resolve(process.cwd(), 'src/main/cindy-brain/index.ts'), 'utf8'),
+    readFileSync(resolve(process.cwd(), '../../packages/app-runtime/src/media/providerMediaChannels.ts'), 'utf8'),
+  ].join('\n').replace(/\r\n/g, '\n');
   const marketServiceSource = readFileSync(
     resolve(process.cwd(), 'src/main/plugin-market/service.ts'),
     'utf8',

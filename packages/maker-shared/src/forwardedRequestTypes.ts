@@ -3,6 +3,8 @@ export interface ForwardedRequestSource {
   userText: string | null;
   sessionId?: string;
   clientId?: string;
+  /** Host evidence that the relayed user words were verified as the owner's request. */
+  ownerVerified?: true;
 }
 
 /** Kept under the existing protected, non-human input receipt. */
@@ -20,6 +22,10 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (source.userText === null) return { userText: null };
   if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
     || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
-  return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId };
+  return {
+    userText: source.userText,
+    sessionId: source.sessionId,
+    clientId: source.clientId,
+    ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}),
+  };
 }
-

@@ -3,7 +3,7 @@ import { sessions } from '@cindy/runtime-db/schema';
 import { MAKER_INVOKE } from '@cindy/maker-shared/maker-channels';
 import { throwIpcError } from '@cindy/remote-agent/ipcValidate';
 import { isIpcError } from '@cindy/remote-agent/shared/ipc-errors';
-import { effectiveSourceIdForModel, findCatalogModel, type ProviderView, type AgentKind } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, findCatalogModel, supportsSubscriptionFastPolicy, type ProviderView, type AgentKind } from '@cindy/model-providers';
 import { isUserPendingAgentSwitchIntent, projectPendingAgentSwitchIntent, type PendingAgentSwitchIntent } from '@cindy/im-runtime/sessionAgentSwitch';
 import type { Maker } from '@cindy/maker-core';
 import type { SessionModelSelectionHost } from './sessionModelSelectionHost.js';
@@ -15,7 +15,7 @@ import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
 
 export interface SessionRuntimeAxisHost extends Pick<SessionModelSelectionHost,
   'sessionRuntimeControlOwnerEpochMatches' | 'withRehydrateCloseSuppressed' |
-  'setSessionEffort' | 'setSessionFastMode' | 'recordRecoveredSessionRuntimeAxisMutation' |
+  'setSessionEffort' | 'setSessionFastMode' | 'getSessionProvider' | 'recordRecoveredSessionRuntimeAxisMutation' |
   'broadcastSessionRuntimeProjection' | 'log' | 'agentSwitchDeps' | 'getDesktopProviderService' |
   'getActiveCatalog' | 'resolveSessionRuntimeAxes' | 'persistSessionFields' | 'agentSwitchPending' |
   'wakeSessionInputAfterCredentialSwitch' | 'isDeviceLinkInvoke' | 'captureSessionRuntimeControlOwnerEpoch' |
@@ -28,13 +28,14 @@ export interface SessionRuntimeAxisHost extends Pick<SessionModelSelectionHost,
   assertTrustedAppRendererEvent(event: unknown): void;
   readUsableAgentDeviceProviders(device: string, kind: AgentKind, model: string, provider: string | null): Promise<ProviderView[]>;
   readSessionRuntimeProfiles(id: string): Promise<{baseline: SessionRuntimeProfile; effective: SessionRuntimeProfile; control: SessionRuntimeControlSnapshot; pendingMutation?: PendingSessionRuntimeMutation | null} | null>;
+  createSubscriptionFastPolicy(sessionId: string, providerId: () => string | null | undefined): { isAllowed(): boolean };
 }
 export type SessionRuntimeAxisHandler = (event: unknown, sessionId: unknown, value: unknown) => Promise<unknown>;
 /** Original Desktop handlers; Node supplies the same owner-scoped services and native runtimes. */
 export function registerSessionRuntimeAxisHandlers(ipcMain: {
   handle(channel: string, handler: SessionRuntimeAxisHandler): void;
 }, host: SessionRuntimeAxisHost) {
-  const { sessionRuntimeControlOwnerEpochMatches, withRehydrateCloseSuppressed, maker, setSessionEffort, setSessionFastMode, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionRuntimeProjection, log, agentSwitchDeps, readUsableAgentDeviceProviders, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeAxes, persistSessionFields, agentSwitchPending, wakeSessionInputAfterCredentialSwitch, isDeviceLinkInvoke, assertTrustedAppRendererEvent, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, updateScheduledPreference, markRemoteSettingPersistedInsideHandler, getDbClient, updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, recordUserSessionRuntimeAxisMutation, readSessionRuntimeProfiles, withSendToSessionLock, assertReviewSettingsUnlocked } = host;
+  const { sessionRuntimeControlOwnerEpochMatches, withRehydrateCloseSuppressed, maker, setSessionEffort, setSessionFastMode, getSessionProvider, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionRuntimeProjection, log, agentSwitchDeps, readUsableAgentDeviceProviders, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeAxes, persistSessionFields, agentSwitchPending, wakeSessionInputAfterCredentialSwitch, isDeviceLinkInvoke, assertTrustedAppRendererEvent, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, updateScheduledPreference, markRemoteSettingPersistedInsideHandler, getDbClient, updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, recordUserSessionRuntimeAxisMutation, readSessionRuntimeProfiles, withSendToSessionLock, assertReviewSettingsUnlocked, createSubscriptionFastPolicy, pendingCredentialSwitchHolder } = host;
   const recoverRemoteRuntimeAxisPersistence = async (
     sessionId: string,
     previousProfile: SessionRuntimeProfile,
@@ -221,7 +222,7 @@ export function registerSessionRuntimeAxisHandlers(ipcMain: {
       // 跳过对仍在跑的旧 turn 的 runtime 推送(与 renderer 本地分支的 deferred 守卫同因,
       // 这里是唯一 choke point,同时覆盖 device-link 远程入口;review P2 2026-07-04)。
       // 本地与设备互联均由此 handler 等待落盘，重建时再应用。
-      if (host.pendingCredentialSwitchHolder?.has(sessionId)) {
+      if (pendingCredentialSwitchHolder?.has(sessionId)) {
         await commitRuntimeAxisAfterPersistence({
           persist: persistEffort,
           commit: commitEffort,
@@ -307,7 +308,7 @@ export function registerSessionRuntimeAxisHandlers(ipcMain: {
       if (typeof sessionId !== 'string' || (typeof requestedSpeed !== 'boolean' && requestedSpeed !== 'ultrafast')) {
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
-      const enabled: boolean | 'ultrafast' = requestedSpeed;
+      let enabled: boolean | 'ultrafast' = requestedSpeed;
       const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
       const assertSharedTaskCurrent = captureSharedTaskSettingGuard(sessionId);
       const assertOwnerCurrent = () => {
@@ -345,6 +346,13 @@ export function registerSessionRuntimeAxisHandlers(ipcMain: {
           );
         }
         const userIntent = agentSwitchPending.get(sessionId);
+        const fastProfile = (await readSessionRuntimeProfiles(sessionId))?.effective;
+        assertOwnerCurrent();
+        const subscriptionForbidsFast = !fastProfile?.agentDeviceId && !createSubscriptionFastPolicy(
+          sessionId,
+          () => fastProfile?.providerId ?? getSessionProvider(sessionId),
+        ).isAllowed();
+        if (subscriptionForbidsFast) enabled = false;
         if (enabled === 'ultrafast') {
           const profiles = await readSessionRuntimeProfiles(sessionId);
           const profile = isUserPendingAgentSwitchIntent(userIntent)
@@ -402,7 +410,11 @@ export function registerSessionRuntimeAxisHandlers(ipcMain: {
           log.debug('set-fast-mode: session not found, no-op', { sessionId });
           return remoteResponse;
         }
-        if (sess.agentKind !== 'codex' && sess.agentKind !== 'pi') {
+        const claudeSubscription = sess.agentKind === 'claude-code' && !fastProfile?.agentDeviceId &&
+          supportsSubscriptionFastPolicy(getActiveCatalog().providers.find(
+            provider => provider.id === (fastProfile?.providerId ?? getSessionProvider(sessionId)),
+          ));
+        if (sess.agentKind !== 'codex' && sess.agentKind !== 'pi' && !claudeSubscription) {
           await commitRuntimeAxisAfterPersistence({
             persist: persistFastMode,
             commit: commitFastMode,
@@ -415,7 +427,7 @@ export function registerSessionRuntimeAxisHandlers(ipcMain: {
           return remoteResponse;
         }
         // 同 set-effort:pending 凭证切换期间不触碰仍在跑的旧 turn,持久化走各自 DB 路径。
-        if (host.pendingCredentialSwitchHolder?.has(sessionId)) {
+        if (pendingCredentialSwitchHolder?.has(sessionId)) {
           await commitRuntimeAxisAfterPersistence({
             persist: persistFastMode,
             commit: commitFastMode,

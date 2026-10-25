@@ -9,7 +9,7 @@ describe('official profile writer wiring', () => {
   it('index 对正式 profile 落地 XDT_OFFICIAL_SHARED_PROFILE,migrate 在备份前拒绝', () => {
     const indexSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8');
     const migrateSource = readFileSync(
-      resolve(process.cwd(), 'src/main/localDb/migrate.ts'),
+      resolve(process.cwd(), '../../packages/runtime-db/src/migrate.ts'),
       'utf8',
     );
     expect(indexSource).toContain("process.env.XDT_OFFICIAL_SHARED_PROFILE = '1'");

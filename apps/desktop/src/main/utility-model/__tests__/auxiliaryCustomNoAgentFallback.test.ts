@@ -20,7 +20,10 @@ describe('custom auxiliary chain does not hit the session agent', () => {
   });
 
   it('pinned-card summaries skip agent oneShot when the auxiliary list is customized', () => {
-    const source = readFileSync(path.join(root, 'sessionTaskSummary.ts'), 'utf8');
+    const source = readFileSync(
+      path.resolve(root, '../../../../packages/app-runtime/src/sessionTaskSummary.ts'),
+      'utf8',
+    );
     expect(source).toContain('const auxiliaryChain = getEffectiveAuxiliaryModelChain();');
     expect(source).toContain("auxiliaryChain.source !== 'auto' ||");
     expect(source).not.toContain('isAuxiliaryModelCustomized');

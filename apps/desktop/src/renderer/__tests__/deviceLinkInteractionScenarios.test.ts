@@ -1332,7 +1332,10 @@ describe('远程交互接线不变式', () => {
     expect(appSrc).toContain('model: modelId');
     expect(appSrc).not.toContain('markModelChoice === false ? {} : { model: modelId }');
 
-    const draftSrc = read('state/newMakerDraft.ts');
+    const draftSrc = readFileSync(
+      resolve(__dirname, '../../../../../packages/app-runtime/src/newMakerDraft.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
     expect(draftSrc).toContain('if (!opts.markModelChoice && modelChosen[vendor] === true)');
     expect(draftSrc).toContain('delete nextPatch.model');
     expect(draftSrc).toContain('delete nextPatch.providerId');
@@ -1644,7 +1647,10 @@ describe('远程交互接线不变式', () => {
   });
 
   it('F2: fork IPC handler 广播 sessions:created(否则 fork 会话在被控端/其它控制端不出现)', () => {
-    const src = mainSrc('maker-ipc/fork.ts');
+    const src = readFileSync(
+      resolve(__dirname, '../../../../../packages/app-runtime/src/sessionForkIpc.ts'),
+      'utf8',
+    );
     expect(src).toContain('broadcastSessionCreated(session.id)');
     expect(src).toContain('emitSessionCreated');
     const helper = mainSrc('localDb/ipc/sessionCreatedBroadcast.ts');
@@ -1661,7 +1667,10 @@ describe('远程交互接线不变式', () => {
   });
 
   it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
-    const runnerSrc = mainSrc('scheduler-host/runner.ts');
+    const runnerSrc = readFileSync(
+      resolve(__dirname, '../../../../../packages/app-runtime/src/schedulePromptRunner.ts'),
+      'utf8',
+    );
     const hostSrc = mainSrc('scheduler-host/index.ts');
     expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
     expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
