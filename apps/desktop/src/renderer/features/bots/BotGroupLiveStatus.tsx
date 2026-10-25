@@ -1,3 +1,5 @@
+import { useNavigate } from 'react-router-dom';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 /**
  * 群聊的「正在进行」：
  *
@@ -44,6 +46,7 @@ function pendingBot(speaker: BotGroupLiveSpeaker) {
 export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: BotGroupLiveSpeaker; showStatus?: boolean }) {
   const { t } = useTranslation();
   const { member, sessionId, activity: speakerActivity } = speaker;
+  const navigate = useNavigate();
   const live = useAgentIslandActivity(sessionId ?? '');
   const waiting = live?.phase === 'needs-interaction';
   return (
@@ -77,6 +80,9 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
             ) : null}
           </p>
         ) : null}
+        {sessionId ? <Button type="button" variant="secondary" tone="quiet" size="sm" compact className="self-start" onClick={() => navigate(standardSessionRoute(sessionId))}>
+          {t('bots.groupChat.progress.viewProcess')}
+        </Button> : null}
         {sessionId && live?.phase === 'running' ? <BotGroupLivePreview sessionId={sessionId} /> : null}
         {sessionId ? <BotGroupPendingInteraction sessionId={sessionId} bot={pendingBot(speaker)} /> : null}
       </div>
@@ -115,7 +121,7 @@ export function BotGroupProgressStrip({
 }) {
   const { t } = useTranslation();
   const [mountedAt] = useState(() => Date.now());
-  const [expanded, setExpanded] = useState(false);
+  const navigate = useNavigate();
   const stepSpeaker = step
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === step.step.botId)
       ?? speakers.find((speaker) => speaker.member.botId === step.step.botId)
@@ -136,17 +142,15 @@ export function BotGroupProgressStrip({
   // that is not an action anyone should read.
   const rawAction = live?.compactDetail?.trim() || '';
   const action = isBotGroupNoReplyText(rawAction) ? '' : rawAction;
-  const canView = !!sessionId && live?.phase === 'running';
+  const canView = !!sessionId;
   return (
     <div className="shrink-0 px-5 pt-2">
       <div
         data-testid="bot-group-progress"
-        data-expanded={expanded && canView ? '' : undefined}
-        // A content-width capsule above the composer; opening the process turns it into a panel.
-        className={cn('mx-auto flex min-w-0 flex-col border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          expanded && canView ? 'w-full max-w-[760px] rounded-xl' : 'w-fit max-w-[min(760px,100%)] rounded-full')}
+        // Process opens the existing task page; the strip stays compact.
+        className="mx-auto flex min-w-0 flex-col border border-[var(--border-default)] bg-[var(--surface-elevated)] w-fit max-w-[min(760px,100%)] rounded-full"
       >
-        <div className={cn('flex min-h-9 min-w-0 items-center gap-2 py-1', expanded && canView ? 'px-3' : 'pl-2 pr-1')}>
+        <div className="flex min-h-9 min-w-0 items-center gap-2 py-1 pl-2 pr-1">
           {member ? <BotAvatar bot={member} size="xs" /> : null}
           <p role="status" aria-live="polite" className="flex min-w-0 flex-1 items-center gap-1 truncate text-12 leading-5 text-[var(--text-secondary)]">
             {workStep ? (
@@ -167,8 +171,8 @@ export function BotGroupProgressStrip({
           </p>
           <span className="flex shrink-0 items-center gap-1">
             {canView ? (
-              <Button type="button" variant="secondary" tone="quiet" size="sm" compact aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-                {t(expanded ? 'bots.groupChat.progress.hideProcess' : 'bots.groupChat.progress.viewProcess')}
+              <Button type="button" variant="secondary" tone="quiet" size="sm" compact onClick={() => sessionId && navigate(standardSessionRoute(sessionId))}>
+                {t('bots.groupChat.progress.viewProcess')}
               </Button>
             ) : null}
             {canStopAll ? (
@@ -206,14 +210,6 @@ export function BotGroupProgressStrip({
             )}
           </span>
         </div>
-        {expanded && canView && sessionId ? (
-          <div className="flex min-w-0 flex-col gap-1 border-t border-[var(--border-default)] px-3 py-2">
-            {action ? (
-              <p className="min-w-0 truncate text-12 text-[var(--status-bar-accent)]">{action}</p>
-            ) : null}
-            <BotGroupLivePreview sessionId={sessionId} lines={8} className="text-12" />
-          </div>
-        ) : null}
       </div>
     </div>
   );

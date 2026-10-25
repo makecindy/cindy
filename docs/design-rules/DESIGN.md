@@ -637,7 +637,7 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 ([group chat §5](../product-rules/bot-group-chat.md#5-界面)). Its collapsed outer frame uses
 the **Desktop group progress capsule** registered in §5: a centered, content-width capsule
 containing the speaker/step status, elapsed time, current action and separate process/stop controls.
-Opening the process changes that outer frame into a panel, using the ordinary container tier.
+The process action opens the exact task in the ordinary Session UI (2026-10-25). It no longer expands an inline panel.
 The registration covers only the collapsed outer frame; the inner buttons retain their own
 control-tier treatment. Keep semantic surface/border/text colors in both Light and Dark.
 It does not authorize pill-shaped toolbars or other status panels.
@@ -768,7 +768,7 @@ There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separat
 | **Keyboard keycap** | Every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut. Border, fill, padding and text colors stay appropriate to the surrounding surface; the radius is the shared cross-surface rule. *(Registered 2026-09-06, #4001.)* | 4px |
 | **Data mark** | A visible layer inside a chart or visualization whose shape belongs to the data rather than to the control. Members below. *(Registered 2026-09-07.)* | 0px or 2px, pinned per member |
 | **Bot Market opening bubble tail** | Only the opening-line bubble in the Bot Market detail header (`BotMarketDialog`): 12px bubble with a square bottom-left corner joined to a curved SVG tail on the left that follows the bubble fill and border. Not a general chat-bubble shape; any other bubble needs its own adjudication. *(User ruling 2026-10-15; decision log 10-15.)* | 12px, bottom-left square + tail |
-| **Desktop group progress capsule** | Only the collapsed outer status-and-controls frame of `BotGroupProgressStrip`, centered above the group composer at content width. The expanded process panel uses the ordinary container tier; child controls keep their own assignments. See §4 component entry and decision log 10-20, [#6549](https://github.com/makecindy/cindy/pull/6549). | Pill (9999px) while collapsed |
+| **Desktop group progress capsule** | Only the collapsed outer status-and-controls frame of `BotGroupProgressStrip`, centered above the group composer at content width. The process action opens the ordinary task page; child controls keep their own assignments. See §4 component entry and decision log 10-20, [#6549](https://github.com/makecindy/cindy/pull/6549). | Pill (9999px) while collapsed |
 
 **Overlap.** A keyboard shortcut frame retains its registered 4px treatment when another channel, such as colour, also encodes data. Data encoding alone does not override the keycap entry. Other overlaps must be resolved explicitly in the registration; listing order alone does not grant precedence.
 

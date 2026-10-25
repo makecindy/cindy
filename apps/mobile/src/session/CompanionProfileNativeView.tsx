@@ -6,7 +6,7 @@ export interface CompanionProfileNativeViewProps {
   resource: RemoteResource | null; data: CompanionProfileData | null; editor: CompanionProfileData | null;
   panel?: ProfilePanel; values: ProfileValues; busy: boolean; online: boolean; dirty: boolean;
   loading: boolean; error: boolean; errorLabel?: string; conflict: boolean; receipt: string | null;
-  confirmation: ProfilePanel | null; deleted: boolean; artifacts: ReactNode; models: ReactNode;
+  confirmation: ProfilePanel | null; deleted: boolean; channels: ReactNode; artifacts: ReactNode; models: ReactNode;
   /** Saved-memories page (list / detail / edit), and whether the host offers it. */
   memoryPage: ReactNode; hasMemoryEntries: boolean;
   onClose(): void; onClosed?(): void; onBack?(): void; onOpen(page: string): void;

@@ -166,8 +166,11 @@ type MaterializeLocal = Omit<CompanionMaterializeHost, 'latestRows'>;
 
 function createMaterializer(input: {
   ensureCanonicalSession: (botId: string) => Promise<string>;
+  /** False when the task's queue could not be read. */
+  discardInvitationWelcome?: (sessionId: string) => Promise<boolean>;
   rebuildContext: (sessionId: string) => Promise<'rebuilt' | 'busy'>;
   selfDeviceId?: () => string | null;
+  log?: CompanionLog;
 }): MaterializeLocal {
   return {
     applyTodos: async (botId, items, remove, fence) => {
@@ -211,11 +214,25 @@ function createMaterializer(input: {
         ...(description !== undefined ? { description } : {}),
         ...(identitySource !== undefined ? { identitySource } : {}),
         ...(userContextSource !== undefined ? { userContextSource } : {}),
-        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined, { templateId });
+        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined, { templateId, replacesUnfinishedMeeting: true });
       if ('imageBase64' in restored) {
         const image = decodeBotAvatarImage(restored.imageBase64);
         fence.assertCurrent();
         if (image) await setBotProfileAvatar(id, image);
+      }
+      // The meeting record is gone, so no new greeting can be queued; one an unfinished meeting
+      // already queued (even one restored from the crash snapshot) must not go out on the owner's
+      // first message. Not tied to the record, so a retry that finds it already gone still clears it.
+      if (input.discardInvitationWelcome) {
+        const [row] = await getDbClient().drizzle.select({ sessionId: botProfiles.canonicalSessionId })
+          .from(botProfiles).where(eq(botProfiles.id, id)).limit(1);
+        fence.assertCurrent();
+        if (row?.sessionId) {
+          // Best effort: an unreadable queue must not fail a take-over that otherwise works.
+          const cleared = await input.discardInvitationWelcome(row.sessionId).catch(() => false);
+          fence.assertCurrent();
+          if (!cleared) input.log?.warn('Queued invitation welcome could not be cleared', { sessionId: row.sessionId });
+        }
       }
     },
     applyCapabilities: async (botId, value, fence) => {
@@ -363,6 +380,8 @@ async function companionSessionIds(botId: string): Promise<string[]> {
 export function createCompanionCloudHost(input: {
   deliverToCanonical: CompanionCloudHost['deliverToCanonical'];
   ensureCanonicalSession: (botId: string) => Promise<string>;
+  /** Remove the greeting request an unfinished meeting queued in this task (cloud-companions.md §6); false when its queue is unreadable. */
+  discardInvitationWelcome?: (sessionId: string) => Promise<boolean>;
   rebuildContext: (sessionId: string) => Promise<'rebuilt' | 'busy'>;
   /** A turn is running (or queued) in this Session. */
   isTurnActive?: (sessionId: string) => boolean;

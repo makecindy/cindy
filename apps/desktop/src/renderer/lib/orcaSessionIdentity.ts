@@ -33,7 +33,7 @@ export function getSessionRouteOwnerId(route: string): string | null {
 }
 
 /**
- * The Bot page for a Bot's own chat (main task, history, channel chat), read from
+ * The companion entry for its main chat, or the ordinary page for other tasks, read from
  * the in-memory profile projection only: no IPC and no module load on a click. A
  * background task stays on its ordinary `/cc-agent/:id` route; an unloaded projection
  * falls back to the ordinary route too (the notification entry reloads it first).
@@ -74,4 +74,9 @@ export async function resolveSessionRoute(
   if (botRoute) return botRoute;
 
   return `/cc-agent/${sessionId}`;
+}
+
+/** Open the exact task with the ordinary UI, without resolving its parent or companion. */
+export function standardSessionRoute(sessionId: string, deviceId?: string | null): string {
+  return `/cc-agent/${encodeURIComponent(sessionId)}${deviceId ? `?device=${encodeURIComponent(deviceId)}` : ''}`;
 }

@@ -1,3 +1,4 @@
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 /**
  * 伙伴设置 →「消息平台」: 这位伙伴自己的 IM 机器人。
  *
@@ -230,8 +231,8 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
-                  <ConnectionLanes api={im} connectionId={view.id} botId={bot.id} botName={bot.name}
-                    platform={platformName(view)} canOpenHistory={target.kind === 'local'} />
+                  <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
+                    platform={platformName(view)} deviceId={target.deviceId} />
                 ) : null}
               </li>
             );
@@ -378,12 +379,11 @@ const LANE_KIND_KEY: Record<BotImConnectionLane['kind'], string> = {
 /**
  * 一条连接的「隐藏任务」小节: 主人私聊(伙伴主任务)、每个群 / 话题与其他人的私聊各一行,
  * 显示状态、最近活动和当前上下文里的消息数; 卡住时可以让某一条重新开始(同一条任务,
- * 记录保留, 下一条消息换干净的上下文)。点击记录复用主界面的只读历史页, 不取消隐藏。
+ * 记录保留, 下一条消息换干净的上下文)。点击记录打开原任务的普通界面, 不取消隐藏。
  */
-function ConnectionLanes({ api, connectionId, botId, botName, platform, canOpenHistory }: {
-  api: BotImConnectionApi | null; connectionId: string; botId: string; botName: string; platform: string;
-  /** The read-only history page lives on the teammate's computer; a remote teammate's lanes only list. */
-  canOpenHistory: boolean;
+function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
+  api: BotImConnectionApi | null; connectionId: string; botName: string; platform: string;
+  deviceId?: string;
 }) {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
@@ -552,8 +552,7 @@ function ConnectionLanes({ api, connectionId, botId, botName, platform, canOpenH
           <div key={lane.sessionId} className="flex items-center gap-3">
             <button
               type="button"
-              disabled={!canOpenHistory}
-              onClick={() => navigate(`/bots/${encodeURIComponent(botId)}/history/${encodeURIComponent(lane.sessionId)}`)}
+              onClick={() => navigate(standardSessionRoute(lane.sessionId, deviceId))}
               className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
                 <span className="flex min-w-0 items-center gap-1.5">

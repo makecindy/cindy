@@ -911,6 +911,15 @@ describe('Scheduler', () => {
     expect(sawDelete).toBe(true);
   });
 
+  it('delete rejects a missing schedule without emitting changed', async () => {
+    const changed = vi.fn();
+    const missingId = 'does-not-exist';
+    h.scheduler.on('changed', changed);
+
+    await expect(h.scheduler.delete(missingId)).rejects.toThrow(/schedule not found/i);
+    expect(changed).not.toHaveBeenCalled();
+  });
+
   it('start() loads active schedules and recomputes nextFireAt for stale ones', async () => {
     // 用 daily cron 避免触发 interval 自动迁移分支（那是另一个测试覆盖）
     h.storage.schedules.set('preseeded', {

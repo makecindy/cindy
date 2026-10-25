@@ -51,10 +51,6 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).toContain('normalizeWorkingDirForGrouping');
   });
 
-  it('excludes Orca workers from searchable sessions', () => {
-    expect(conversationSearchSource).toContain("ne(sessions.orcaRole, 'worker')");
-  });
-
   it('scopes content retrieval to searchable session ids including global search', () => {
     expect(conversationSearchSource).toContain('sessionIds: allowedSessionIds');
     expect(conversationSearchSource).not.toContain(
@@ -272,7 +268,7 @@ describe('conversationSearch recent activity SQL filtering', () => {
 });
 
 describe('conversationSearch plugin background tasks', () => {
-  it('excludes hidden tasks from title and content candidates', async () => {
+  it('includes hidden tasks in title and content candidates', async () => {
     const db = createSearchDb();
     const client = makeSearchDbClient(db);
     setCurrentDbClient(client, 'test-user');
@@ -285,9 +281,9 @@ describe('conversationSearch plugin background tasks', () => {
       insertSearchSession(db, 'background', 20, null);
       db.prepare('UPDATE sessions SET hidden_at = 5 WHERE id = ?').run('background');
       const response = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
-      expect(response.results.map((result) => result.session.id)).toEqual(['shown']);
+      expect(response.results.map((result) => result.session.id).sort()).toEqual(['background', 'shown']);
       expect(mocks.searchChatHistoryHybrid).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionIds: ['shown'] }),
+        expect.objectContaining({ sessionIds: expect.arrayContaining(['background', 'shown']) }),
       );
     } finally {
       clearCurrentDbClient(client);
@@ -297,11 +293,11 @@ describe('conversationSearch plugin background tasks', () => {
 });
 
 // Production search entry + real SQLite. The prior source-only test could not
-// catch missing companion transcripts and accidentally exposed remote lanes. DB tier.
+// catch missing companion transcripts. Owner search now covers all sources. DB tier.
 describe('conversationSearch personal companion chats', () => {
   // 测试价值: searchConversations 必须返回本机渠道记录并标成只读, 旧覆盖只验证渠道被排除。
-  // 最小输入: 一条渠道链接(含迁移来源)及同词消息; 验证远程、删除与群专线仍不放行。DB tier。
-  it('finds local channel transcripts like history while retaining remote and deletion boundaries', async () => {
+  // 最小输入: 渠道、群专线、后台任务及同词消息; 主人跨电脑可读，删除记录仍排除。DB tier。
+  it('finds every owner task locally and remotely while retaining deletion boundaries', async () => {
     const db = createSearchDb();
     const client = makeSearchDbClient(db);
     setCurrentDbClient(client, 'test-user');
@@ -329,7 +325,7 @@ describe('conversationSearch personal companion chats', () => {
         if (role) db.prepare('INSERT INTO bot_session_links VALUES (?, ?, ?)').run(id, 'bot', role);
       }
       const result = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
-      const localIds = ['channel', 'feishu-channel', 'imported', 'main', 'old', 'old-channel', 'task'];
+      const localIds = ['channel', 'feishu-channel', 'group', 'imported', 'main', 'old', 'old-channel', 'review', 'task'];
       expect(result.results.map(item => item.session.id).sort()).toEqual(localIds);
       expect(result.results.find(item => item.session.id === 'old')?.session.companion).toEqual({
         id: 'bot', name: 'Melody', role: 'history', readOnly: true,
@@ -344,10 +340,10 @@ describe('conversationSearch personal companion chats', () => {
       const archived = await searchConversations({ query: 'needle', filters: { status: 'archived' } });
       expect(archived.results.map(item => item.session.id).sort()).toEqual(['imported', 'old', 'old-channel']);
       const remote = await searchConversations({ query: 'needle' }, { remoteVisibleOnly: true });
-      expect(remote.results.map(item => item.session.id)).toEqual(['task']);
+      expect(remote.results.map(item => item.session.id).sort()).toEqual(localIds);
       db.exec("UPDATE bot_profiles SET hidden_at = NULL");
       const visibleRemote = await searchConversations({ query: 'needle', filters: { status: 'archived' } }, { remoteVisibleOnly: true });
-      expect(visibleRemote.results.map(item => item.session.id).sort()).toEqual(['imported', 'old']);
+      expect(visibleRemote.results.map(item => item.session.id).sort()).toEqual(['imported', 'old', 'old-channel']);
 
       // A content-only hit must retain its client id and read-only owner so the
       // existing result handler can open history at the exact message.
@@ -368,7 +364,7 @@ describe('conversationSearch personal companion chats', () => {
         contentHit: { messageId: 'channel-message', messageClientId: 'channel-client' },
       });
       const remoteContent = await searchConversations({ query: 'contentneedle' }, { remoteVisibleOnly: true });
-      expect(remoteContent.results).toEqual([]);
+      expect(remoteContent.results).toEqual(content.results);
       db.exec("UPDATE bot_profiles SET status = 'deleting'");
       const deleting = await searchConversations({ query: 'needle' });
       expect(deleting.results.some(item => ['channel', 'feishu-channel', 'old-channel'].includes(item.session.id))).toBe(false);

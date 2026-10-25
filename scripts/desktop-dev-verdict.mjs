@@ -197,6 +197,19 @@ export function buildDesktopDevVerdictFromWhoami(report, context = {}) {
   }
 
   const code = 'WHOAMI_MISMATCH';
+  // 进程表读不到（spawnSync 溢出等）时 match 必然是 false。这种情况既不能算 ready，
+  // 也不能说「没起」：用独立 verdict 让上层能区分「真的没起」和「查不了」。
+  if (report?.processScan?.ok === false) {
+    return {
+      state: 'failed',
+      code: 'WHOAMI_UNAVAILABLE',
+      message: `Could not read the process table (${report.processScan.code ?? 'unknown'}: ${report.processScan.message ?? 'no detail'}); desktop dev readiness for this checkout is unknown.`,
+      mode: context.isolated ? 'isolated' : 'shared',
+      ...(context.sandbox ? { sandbox: context.sandbox } : {}),
+      root: expectedRoot,
+      commit: expectedCommit,
+    };
+  }
   return {
     state: 'failed',
     code,

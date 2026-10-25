@@ -31,7 +31,8 @@ vi.mock('@/lib/conversationSearchService', () => ({
   searchConversations: vi.fn(),
 }));
 
-vi.mock('@/lib/orcaSessionIdentity', () => ({
+vi.mock('@/lib/orcaSessionIdentity', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/orcaSessionIdentity')>(),
   resolveSessionRoute: vi.fn(),
 }));
 
@@ -752,9 +753,8 @@ describe('ConversationSearchBox live search', () => {
   });
 });
 
-// Real search control: a hidden/unloaded companion must not fall back to an
-// ordinary writable task, and the selected message anchor must survive. Unit tier.
-// 渠道结果同样必须使用现有历史路由与消息锚点; 不增加新 UI。既有个人历史覆盖缺少 channel。
+// Explicit search opens the exact ordinary task regardless of companion role;
+// the selected message anchor survives even without a loaded roster. Unit tier.
 it.each(['canonical', 'history', 'channel'] as const)('opens %s companion search results without the loaded roster', async role => {
   const hit = { messageId: 'message', messageClientId: 'client', role: 'assistant' as const,
     createdAt: '2026-10-20T00:00:00Z', snippet: null, preview: 'needle reply', score: 1, ftsRank: 1, vectorRank: null };
@@ -772,7 +772,7 @@ it.each(['canonical', 'history', 'channel'] as const)('opens %s companion search
   expect(result.textContent).toContain('Melody');
   fireEvent.click(result);
   await waitFor(() => expect(navigate).toHaveBeenCalledWith(
-    role !== 'canonical' ? '/bots/bot/history/chat' : '/bots/bot/session/chat',
+    '/cc-agent/chat',
     { state: { searchJump: { kind: 'conversation-search', sessionId: 'chat', messageId: 'message', messageClientId: 'client' } } },
   ));
 });

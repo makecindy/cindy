@@ -2962,6 +2962,7 @@ class CindyMcpGateway {
   private readonly disclosedSchemas = new Map<string, string>();
   /** 本次调用跳过了权限询问（hook 未披露即放行）：按 toolCallId 记账，execute 见此标记一律回路标。 */
   private readonly permissionSkippedCalls = new Set<string>();
+  private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
 
@@ -3236,6 +3237,26 @@ class CindyMcpGateway {
   }
 
   /**
+   * Sorted, prompt-ready server/tool names worth re-surfacing after compaction:
+   * only tools that still exist AND whose stored fingerprint still matches the
+   * live schema — a removed or schema-drifted tool must not be advertised as
+   * safe to call directly (the gate would re-close on it and waste a round-trip).
+   */
+  disclosedKeysForPrompt(limit = 48): string {
+    const all: string[] = [];
+    for (const [key, fingerprint] of this.disclosedSchemas) {
+      const tool = this.tools.get(key);
+      if (!tool || this.schemaFingerprint(tool) !== fingerprint) continue;
+      const sep = key.indexOf('\u0000');
+      all.push(sep === -1 ? key : key.slice(0, sep) + '/' + key.slice(sep + 1));
+    }
+    all.sort();
+    const shown = all.slice(0, limit);
+    if (all.length > limit) shown.push('… +' + (all.length - limit) + ' more');
+    return shown.join(', ');
+  }
+
+  /**
    * 按当前 schema 记一次披露并落盘。披露判定按 schema 指纹而非 Pi 版本：Pi 升级不会
    * 作废未变 schema 的披露；schema 真变动时指纹失配，门重新武装。
    */
@@ -3498,6 +3519,32 @@ class CindyMcpGateway {
     this.botHelperFacadeEnabled = options.botMemoryFacade === true;
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
+    // Token hygiene: post-compaction the model loses the memory of which MCP tools
+    // it already inspected and re-runs cindy_mcp_list_tools "to be safe". Inject a
+    // one-shot custom message into the first run after each successful compaction
+    // instead of editing the system prompt every run; the message then lives in
+    // context like any other turn until the next compaction summarizes it away.
+    this.disclosureNotePending = false;
+    pi.on?.('session_compact', () => { this.disclosureNotePending = true; });
+    pi.on?.('before_agent_start', () => {
+      if (!this.disclosureNotePending) return undefined;
+      this.disclosureNotePending = false;
+      const keys = this.disclosedKeysForPrompt();
+      if (!keys) return undefined;
+      return {
+        message: {
+          customType: 'cindy-mcp-disclosure-state',
+          content: [{
+            type: 'text',
+            text: 'MCP tools whose schemas you already inspected for this session (persisted across restarts): '
+              + keys + '. Call them directly while you still remember their parameter shapes. If compaction '
+              + 'blurred the details, re-inspect just the tools you need via cindy_mcp_list_tools instead of '
+              + 'guessing parameters. (One-shot reminder after context compaction.)',
+          }],
+          display: false,
+        },
+      };
+    });
 
     if (this.botMemoryFacadeEnabled) {
       pi.registerTool({

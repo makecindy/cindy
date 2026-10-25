@@ -3,7 +3,6 @@ import {
   cachedSessionForSearchResult,
   conversationSearchActiveFilterCount,
   conversationSearchAllowsLocalWrites,
-  conversationSearchCompanionParams,
   conversationSearchOriginsFromDeviceModels,
   conversationSearchSessionCacheKey,
   isConversationSearchChannelNotAllowed,
@@ -219,7 +218,7 @@ describe('searchConversationsAcrossDevices', () => {
         ],
       },
     );
-    expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
+    expect(page.results.map((item) => item.session.id)).toEqual(['hit', 'worker']);
   });
 
   it('does not invoke a device that is offline or unresponsive', async () => {
@@ -539,7 +538,4 @@ it('preserves companion identity and the selected archived transcript', () => {
   hit.session.companion = { id: 'bot', name: 'Melody', role: 'history', readOnly: true };
   const item = toSearchListItem(hit, Date.now());
   expect(item.title).toBe('Melody · Remote planning');
-  expect(conversationSearchCompanionParams(item)).toEqual({
-    resourceCollectionId: 'teammates', resourceKind: 'bot', resourceId: 'bot', resourceHistorySessionId: 'old',
-  });
 });

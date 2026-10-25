@@ -760,7 +760,18 @@
     "home": "メインのパソコン",
     "chat": "チャット",
     "showReplyTarget": "返信の対象メッセージを表示",
-    "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。すべてのチームメイトに適用されます。以前の返信には表示されません。"
+    "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。すべてのチームメイトに適用されます。以前の返信には表示されません。",
+    "channels": "メッセージサービス",
+    "channelsEmpty": "接続されたサービスはありません",
+    "channelTasksEmpty": "タスクはまだありません",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "仲間をインポート",

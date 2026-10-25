@@ -760,7 +760,18 @@
     "home": "Main Computer",
     "chat": "Chat",
     "showReplyTarget": "Show which message a reply answers",
-    "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Applies to all teammates. Older replies don’t show this."
+    "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Applies to all teammates. Older replies don’t show this.",
+    "channels": "Messaging platforms",
+    "channelsEmpty": "No messaging platforms connected",
+    "channelTasksEmpty": "No tasks yet",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "Import a teammate",

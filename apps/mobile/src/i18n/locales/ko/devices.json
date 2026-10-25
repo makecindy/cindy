@@ -760,7 +760,18 @@
     "home": "주 컴퓨터",
     "chat": "채팅",
     "showReplyTarget": "답장 대상 메시지 표시",
-    "showReplyTargetHint": "팀원 답장 위에 어떤 메시지에 대한 답장인지 표시합니다. 모든 팀원에게 적용되며, 이전 답장에는 표시되지 않습니다."
+    "showReplyTargetHint": "팀원 답장 위에 어떤 메시지에 대한 답장인지 표시합니다. 모든 팀원에게 적용되며, 이전 답장에는 표시되지 않습니다.",
+    "channels": "메시지 플랫폼",
+    "channelsEmpty": "연결된 메시지 플랫폼이 없습니다",
+    "channelTasksEmpty": "아직 작업 기록이 없습니다",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "동료 가져오기",

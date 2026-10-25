@@ -173,7 +173,6 @@ import {
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
 import {
   conversationSearchAllowsLocalWrites,
-  conversationSearchCompanionParams,
   conversationSearchOriginsFromDeviceModels,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
@@ -2385,7 +2384,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         deviceName: session.deviceLinkDeviceName ?? deviceId,
         sessionId: session.id,
         ...(focusClientId ? { focusClientId } : {}),
-        ...conversationSearchCompanionParams(item),
       },
     } as const;
     rememberTask(href);

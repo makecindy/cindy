@@ -42,11 +42,21 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const soleOwner = me?.role === 'owner' && group.members.length === 1;
-  const [name, setName] = useState(group.name);
-  const [topic, setTopic] = useState(group.topic ?? '');
-  const [description, setDescription] = useState(group.description ?? '');
-  const [replyMode, setReplyMode] = useState(group.replyMode);
-  const [speakingMode, setSpeakingMode] = useState(group.speakingMode);
+  const groupValues = { name: group.name, topic: group.topic ?? '', description: group.description ?? '',
+    replyMode: group.replyMode, speakingMode: group.speakingMode, expectedRevision: group.revision! };
+  // A draft owns its fields and base revision together; a clean form reads one live snapshot.
+  const [draft, setDraft] = useState<(typeof groupValues & { saved?: boolean }) | null>(null);
+  const awaitingSnapshot = !!draft?.saved && group.revision! <= draft.expectedRevision;
+  const { name, topic, description, replyMode, speakingMode, expectedRevision } =
+    draft && (!draft.saved || awaitingSnapshot) ? draft : groupValues;
+  const editGroup = (change: Partial<Omit<typeof groupValues, 'expectedRevision'>>) => {
+    setDraft(current => ({ ...((current?.saved ? null : current) ?? groupValues), ...change }));
+  };
+  useEffect(() => {
+    if (draft?.saved && group.revision! > draft.expectedRevision) {
+      setDraft(current => current === draft ? null : current);
+    }
+  }, [draft, group.revision]);
   const [nickname, setNickname] = useState(me?.nickname ?? '');
   const [editingProfile, setEditingProfile] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -54,13 +64,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
-  const dirty = useRef(false);
-  const draftRevision = useRef(group.revision!);
-  const editGroup = () => { if (!dirty.current) draftRevision.current = group.revision!; dirty.current = true; };
   const nicknameDirty = useRef(false);
-  useEffect(() => {
-    if (!dirty.current) { setName(group.name); setTopic(group.topic ?? ''); setDescription(group.description ?? ''); setReplyMode(group.replyMode); setSpeakingMode(group.speakingMode); }
-  }, [group.name, group.topic, group.description, group.replyMode, group.speakingMode]);
   useEffect(() => { if (!nicknameDirty.current) setNickname(me?.nickname ?? ''); }, [me?.nickname]);
   useEffect(() => {
     let stale = false;
@@ -125,22 +129,27 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       {error && <p role="alert" className="text-13 text-[var(--error-fg)]">{error}</p>}
       <form className="space-y-3" onSubmit={event => {
         event.preventDefault();
-        void mutate({ type: 'update', name, topic, description, responseMode: replyMode, speakingMode, expectedRevision: draftRevision.current }).then(ok => { if (ok) dirty.current = false; });
+        // The write is already committed. Retry the projection read, never the old CAS.
+        if (awaitingSnapshot) { refreshBotGroups(); return; }
+        void mutate({ type: 'update', name, topic, description, responseMode: replyMode, speakingMode,
+          expectedRevision }).then(ok => {
+            if (ok) setDraft({ name, topic, description, replyMode, speakingMode, expectedRevision, saved: true });
+          });
       }}>
-        <FormField label={t(key('name'))}>{props => <Input {...props} value={name} maxLength={40} required disabled={!manager || busy}
-          onChange={event => { editGroup(); setName(event); }} />}</FormField>
-        <FormField label={t(key('topic'))}>{props => <Input {...props} value={topic} maxLength={250} disabled={!manager || busy}
-          onChange={event => { editGroup(); setTopic(event); }} />}</FormField>
-        <FormField label={t(key('description'))}>{props => <Input {...props} value={description} maxLength={2000} disabled={!manager || busy}
-          onChange={event => { editGroup(); setDescription(event); }} />}</FormField>
+        <FormField label={t(key('name'))}>{props => <Input {...props} value={name} maxLength={40} required disabled={!manager || busy || awaitingSnapshot}
+          onChange={name => editGroup({ name })} />}</FormField>
+        <FormField label={t(key('topic'))}>{props => <Input {...props} value={topic} maxLength={250} disabled={!manager || busy || awaitingSnapshot}
+          onChange={topic => editGroup({ topic })} />}</FormField>
+        <FormField label={t(key('description'))}>{props => <Input {...props} value={description} maxLength={2000} disabled={!manager || busy || awaitingSnapshot}
+          onChange={description => editGroup({ description })} />}</FormField>
         {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
         <FormField label={t(shared('replyMode'))}>{props => <Select {...props} label={t(shared('replyMode'))} value={replyMode}
-          disabled={!manager || busy} options={(['all', 'mentioned'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
-          onValueChange={value => { editGroup(); setReplyMode(value as typeof replyMode); }} />}</FormField>
+          disabled={!manager || busy || awaitingSnapshot} options={(['all', 'mentioned'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
+          onValueChange={value => editGroup({ replyMode: value as typeof replyMode })} />}</FormField>
         {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
         {group.singleSpeaker ? null : <FormField label={t(shared('speakingMode'))}>{props => <Select {...props} label={t(shared('speakingMode'))} value={speakingMode}
-          disabled={!manager || busy} options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
-          onValueChange={value => { editGroup(); setSpeakingMode(value as typeof speakingMode); }} />}</FormField>}
+          disabled={!manager || busy || awaitingSnapshot} options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
+          onValueChange={value => editGroup({ speakingMode: value as typeof speakingMode })} />}</FormField>}
         {manager && <Button type="submit" size="sm" variant="secondary" disabled={busy || !name.trim()}>{t(key('save'))}</Button>}
       </form>
       {/* The organizer arranges a 分工 whose steps are not written out; a 分工 works in the project folder. */}

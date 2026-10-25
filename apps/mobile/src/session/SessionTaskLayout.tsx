@@ -1,10 +1,9 @@
-import { useCallback, useRef, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { Alert, Platform, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
-import { conversationSearchCompanionParams } from './conversationSearch';
 import { MessageHistoryOverlay } from './RecentMessageHistories';
 import { useSessionPaneLayout } from './ResidentHomeList';
 import { remoteSessionStore, useRemoteSessionDetail } from './remoteSessionStore';
@@ -24,12 +23,19 @@ export interface SessionTaskChrome {
 export function SessionTaskLayout({ children }: {
   children(chrome: SessionTaskChrome): ReactNode;
 }) {
-  const params = useLocalSearchParams<{ sessionId: string; deviceId?: string }>();
+  const params = useLocalSearchParams<{ sessionId: string; deviceId?: string; deviceName?: string; resourceHistorySessionId?: string; focusClientId?: string }>();
   const sessionId = readRouteParam(params.sessionId) ?? '';
   const deviceId = readRouteParam(params.deviceId)
     ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
   const session = useRemoteSessionDetail(deviceId, sessionId);
   const navigation = useNavigation<SessionRouteParamsNavigation>();
+  const legacyHistory = readRouteParam(params.resourceHistorySessionId) === sessionId && !!sessionId;
+  useEffect(() => {
+    if (legacyHistory && deviceId) switchDrawerSessionInPlace(navigation, {
+      sessionId, deviceId, deviceName: readRouteParam(params.deviceName) ?? deviceId,
+      focusClientId: readRouteParam(params.focusClientId) ?? undefined,
+    });
+  }, [legacyHistory, deviceId, sessionId, navigation, params.deviceName, params.focusClientId]);
   const paneLayout = useSessionPaneLayout();
   const adaptiveWindow = useAdaptiveWindow();
   const { t } = useTranslation();
@@ -39,7 +45,7 @@ export function SessionTaskLayout({ children }: {
     const target = item.session as RemoteSession;
     const focusClientId = 'searchFocusClientId' in item
       ? (item as { searchFocusClientId?: string }).searchFocusClientId : undefined;
-    if (target.id === sessionId && !focusClientId) return;
+    if (target.id === sessionId && !focusClientId && !('searchLocallyCached' in item)) return;
     const targetDeviceId = target.canonicalDeviceId ?? target.deviceLinkDeviceId
       ?? remoteSessionStore.getSessionDeviceId(target.id);
     if (!targetDeviceId) {
@@ -52,9 +58,9 @@ export function SessionTaskLayout({ children }: {
       deviceName: target.deviceLinkDeviceName ?? targetDeviceId,
       sessionId: target.id,
       ...(focusClientId ? { focusClientId } : {}),
-      ...conversationSearchCompanionParams(item),
     });
   }, [navigation, sessionId, t]);
+  if (legacyHistory && deviceId) return null;
   return <View style={styles.root}>
     <SideChatTaskBoundary key={JSON.stringify([deviceId, sessionId])} deviceId={deviceId}
       sessionId={sessionId} enabled={session?.source === 'side-chat'}>

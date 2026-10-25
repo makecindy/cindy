@@ -3276,7 +3276,8 @@ describe('Telegram / Slack-grade timeline', () => {
       expect(strip.textContent).not.toContain('NO_REPLY');
       mocks.activity = { compactDetail: '正在读 README.md', startedAtMs: Date.now() - 5_000, phase: 'running' };
       fireEvent.click(within(strip).getByRole('button', { name: 'bots.groupChat.progress.viewProcess' }));
-      await waitFor(() => expect(screen.getByTestId('bot-group-progress').textContent).toContain('正在读 README.md'));
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/plan-mimi');
+      expect(mocks.stopBotGroupRound).not.toHaveBeenCalled();
     } finally {
       mocks.activity = null;
     }

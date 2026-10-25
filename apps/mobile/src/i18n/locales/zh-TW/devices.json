@@ -760,7 +760,18 @@
     "home": "主力電腦",
     "chat": "對話",
     "showReplyTarget": "顯示回覆對應的訊息",
-    "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。對所有夥伴生效，較早的回覆不顯示。"
+    "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。對所有夥伴生效，較早的回覆不顯示。",
+    "channels": "訊息平台",
+    "channelsEmpty": "尚未連接訊息平台",
+    "channelTasksEmpty": "尚無任務紀錄",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "匯入夥伴",

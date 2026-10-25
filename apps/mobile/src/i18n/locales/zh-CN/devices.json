@@ -760,7 +760,18 @@
     "home": "主力电脑",
     "chat": "对话",
     "showReplyTarget": "显示回复对应的消息",
-    "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。对所有伙伴生效，较早的回复不显示。"
+    "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。对所有伙伴生效，较早的回复不显示。",
+    "channels": "消息平台",
+    "channelsEmpty": "还没有连接消息平台",
+    "channelTasksEmpty": "还没有任务记录",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "飞书",
+      "lark": "Lark",
+      "wecom": "企业微信",
+      "dingtalk": "钉钉",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "导入伙伴",
