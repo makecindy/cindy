@@ -3,10 +3,12 @@ import { createBotRemoteResourceInvalidation } from '@cindy/app-runtime/botRemot
 import { getSafeDataOwnerPushStamp, tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import { readTaskResponsibilities } from './botTaskResponsibility.js';
 const log=createLogger('maker-ipc:bot-remote-resource');
-export const { onBotRemoteResourceChanged, broadcastBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForSession } = createBotRemoteResourceInvalidation({
+export const { onBotRemoteResourceChanged, broadcastBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForSession, scheduleBotRemoteResourceChangedForDelegation, scheduleBotRemoteResourceChangedForFollowedSession } = createBotRemoteResourceInvalidation({
   getDbClient,activeOwnerScopeKey,isAppSessionBoundaryPending,getSafeDataOwnerPushStamp,tapWindowBroadcast,log,
+  ownerScopedUserDataPath,readTaskResponsibilities,
   broadcastLocal(channel,payload){
     for(const win of BrowserWindow.getAllWindows()){
       if(win.isDestroyed())continue;

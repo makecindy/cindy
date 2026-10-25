@@ -78,6 +78,9 @@ function fail(message) {
 
 const listed = spawnSync('git', ['ls-files', '-z'], {
   encoding: 'buffer',
+  // Keep this guard working as the repository grows. The NUL-delimited file
+  // list already exceeds Node's default 1 MiB spawn buffer on large branches.
+  maxBuffer: 16 * 1024 * 1024,
 });
 
 if (listed.status !== 0) {

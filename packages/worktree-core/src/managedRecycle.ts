@@ -361,9 +361,10 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
                 `refs/cindy/worktree-recovery/${record.id}/${randomUUID()}`,
                 { includeUntracked: true },
               );
-              // New snapshots contain every non-ignored file. Legacy archives
-              // remain attached only to records created by older clients.
-              record.archive = undefined;
+              // Keep the encrypted archive alongside the Git snapshot so an
+              // interrupted removal can still prove and restore ignored or
+              // untracked files after a restart.
+              record.archive = await createRecoveryArchive(meta.path, record.id);
             }
             record.phase = "snapshotted";
             await writeRecycleRecord(record);

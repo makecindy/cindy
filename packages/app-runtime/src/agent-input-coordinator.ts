@@ -730,6 +730,8 @@ type AgentInputSendFailure = Extract<
 >;
 
 interface SessionInputState {
+  /** Runtime courtesy clock; never persisted or used for list ordering. */
+  lastUserActionAt: number | null;
   pendingQueue: AgentInputQueuedMessage[];
   pendingCompacts: PendingCompactRequest[];
   steeringQueueClientIds: string[];
@@ -877,6 +879,7 @@ function createInitialInputState(
   fencedStaleTerminal: { instanceId: string; generation: number } | null = null,
 ): SessionInputState {
   return {
+    lastUserActionAt: null,
     pendingQueue: [],
     pendingCompacts: [],
     steeringQueueClientIds: [],
@@ -1353,16 +1356,31 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
    * other tasks, Orca, plugins, shared-task guests and automatic resumes never qualify.
    */
   isActiveInputOwnerAuthored(sessionId: string): boolean {
+    return this.activeInputHasOwnerAuthor(sessionId, false);
+  }
+
+  /** A retry/continuation may retain the authority of the owner's original input. */
+  isActiveInputOwnerContinuation(sessionId: string): boolean {
+    return this.activeInputHasOwnerAuthor(sessionId, true);
+  }
+
+  private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
     if (item.sourcePlugin || item.sharedTaskAuthor || item.botTaskCoordination) return false;
-    if (item.clientId.startsWith('plugin-task:') || item.originalSyntheticTrigger) return false;
+    const continuation = allowContinuation && !!item.retrySourceClientId;
+    if (item.clientId.startsWith('plugin-task:')) return false;
+    if (item.originalSyntheticTrigger && !(continuation && item.originalSyntheticTrigger === 'continue')) return false;
     // Automatic continuations and zero-output retries are never fresh owner input.
-    if (item.autoResume) return false;
+    if (item.autoResume && !continuation) return false;
     const text = item.autoReviewUserText;
     return typeof text === 'string' && !!text.trim() && !text.startsWith('[UI_ACTION_TRIGGER]');
+  }
+
+  getLastUserActionAt(sessionId: string): number | null {
+    return this.states.get(sessionId)?.lastUserActionAt ?? null;
   }
 
   /** Inputs consumed by this native turn, excluding queued work and stale generations. */
@@ -1964,7 +1982,7 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         });
         // 手动「继续」是真人介入,与 retryLastError 同口径刷新 userSendAt(否则
         // 会话活跃信号 / 列表排序不会反映这次人工动作)。
-        this.touchUserSend(sessionId, opts?.sendAtMs);
+        this.noteUserAction(sessionId);
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'ui-continue-queue-head-unlock');
         return this.getProjection(sessionId);
@@ -2010,7 +2028,8 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
     // 而静默顺延(PR #972 review P2)。侧栏排序的 bump 语义保留在派发时刻 ——
     // runner 的 accepted 回调按直发路径同款调 touchUserSendInDb(ctx.firedAt)。
     if (!automaticOrigin) {
-      this.touchUserSend(sessionId, opts?.sendAtMs);
+      if (isUiContinuationItem(item)) this.noteUserAction(sessionId);
+      else this.touchUserSend(sessionId, opts?.sendAtMs);
     }
     // 视觉连续性: 当这条入队后立即可派发(agent 空闲、队列此前为空、无暂停/锁/恢复
     // 阻塞)时, 跳过中间态 emit 并同步进入 drain —— drain 的同步前半段会先把队首
@@ -3115,7 +3134,7 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         sessionId,
         clientId: pausedQueueHeadRecoveryClientId,
       });
-      this.touchUserSend(sessionId);
+      this.noteUserAction(sessionId);
     } else {
       this.clearErrorUnlessQueueHeadBlocked(state);
     }
@@ -3442,7 +3461,7 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         attemptToken ?? undefined,
       );
     }
-    if (!automatic) this.touchUserSend(sessionId);
+    if (!automatic) this.noteUserAction(sessionId);
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'retry');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'retry');
@@ -6431,9 +6450,14 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
     if (byClientId.size === 0) this.steerRequestLineages.delete(sessionId);
   }
 
+  private noteUserAction(sessionId: string): void {
+    this.getState(sessionId).lastUserActionAt = Date.now();
+    this.deps.onUserAction?.(sessionId);
+  }
+
   private touchUserSend(sessionId: string, atMs?: number): void {
     // 真人接手在派发/落库失败时也成立；限额预算与渠道 turn 的认领分别通知。
-    this.deps.onUserAction?.(sessionId);
+    this.noteUserAction(sessionId);
     void this.host.touchUserSendInDb(sessionId, atMs).catch((err) => {
       this.host.logger.warn('touchUserSend failed', { sessionId, error: errorMessage(err) });
     });

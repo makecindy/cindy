@@ -129,7 +129,7 @@ export function createBotImConnectionRuntime<Event>(host: ReturnType<typeof crea
   Pick<ReturnType<typeof createBotProfileService>, 'archiveBotChannelLanes'> &
   Pick<ReturnType<typeof createBotProfileLocks>, 'withBotProfileLocks'> &
   Pick<ReturnType<typeof createWechatChannelSettings>, 'readWechatChannelSettings' | 'writeWechatCompanionBinding'> &
-  Pick<ReturnType<typeof createBotImLaneRuntime>, 'listBotImConnectionLanes' | 'resetBotImConnectionLane'> & {
+  Pick<ReturnType<typeof createBotImLaneRuntime>, 'listBotImConnectionLanes' | 'resetBotImConnectionLane' | 'archiveBotImConnectionLane'> & {
   getDbClient(): DbClient;
   log: DbLogger;
   ownerScopedImSecrets: IMHost['secrets'];
@@ -139,7 +139,7 @@ export function createBotImConnectionRuntime<Event>(host: ReturnType<typeof crea
 }) {
 const { getDbClient, log, ownerScopedImSecrets, ipcMain, assertTrustedAppRendererEvent, broadcast,
   archiveBotChannelLanes, withBotProfileLocks, readWechatChannelSettings, writeWechatCompanionBinding,
-  listBotImConnectionLanes, resetBotImConnectionLane, addBotImConnectionRecord, listBotImConnections,
+  listBotImConnectionLanes, resetBotImConnectionLane, archiveBotImConnectionLane, addBotImConnectionRecord, listBotImConnections,
   listBotImConnectionsForBot, readBotImConnection, removeBotImConnectionRecord,
   setBotImConnectionGroupActivation, updateBotImConnectionRecord }=host;
 let deps: BotImConnectionRuntimeDeps | null = null;
@@ -202,8 +202,8 @@ function toView(record: BotImConnectionRecord): BotImConnectionView {
   return { ...record, status: statusOf(transport), identity: identityOf(transport) };
 }
 
-function buildBotImConnectionListPayload(): BotImConnectionListPayload {
-  return { connections: listBotImConnections().map(toView) };
+function buildBotImConnectionListPayload(botId?: string): BotImConnectionListPayload {
+  return { connections: listBotImConnections().filter((record) => botId === undefined || record.botId === botId).map(toView) };
 }
 
 function broadcastChanged(): void {
@@ -749,6 +749,22 @@ function registerBotImConnectionIpc(): void {
       throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
     }
     return resetBotImConnectionLane(p.id, p.sessionId, laneOptions);
+  });
+  ipcMain.handle('botImConnection:archive-lane', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; sessionId?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    if (typeof p.sessionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(p.sessionId)) {
+      throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
+    }
+    return archiveBotImConnectionLane(p.id, p.sessionId, laneOptions).catch((error: unknown) => {
+      const code = error && typeof error === 'object' && 'code' in error ? (error as {code?: unknown}).code : undefined;
+      if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS') throw error;
+      if (error instanceof Error && (error.message === 'ARCHIVE_CAPACITY_REACHED' || error.message === 'OWNER_CHANGED')) {
+        throwIpcError('PRECONDITION_FAILED', error.message);
+      }
+      throwIpcError('INTERNAL', 'LANE_ARCHIVE_FAILED');
+    });
   });
 }
 

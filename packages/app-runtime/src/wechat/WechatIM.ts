@@ -28,7 +28,7 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 import type { SharedPermission } from '@cindy/im-runtime/sharedPermission';
 import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '@cindy/im-runtime/permissionPresentation';
 
-import { autoReviewUnavailablePromptLine } from '@cindy/im-runtime/autoReviewUnavailablePrompt';
+import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '@cindy/im-runtime/autoReviewUnavailablePrompt';
 import { buildImReplyContextBlock } from '@cindy/im-runtime/replyContext';
 import { captureImContext } from '@cindy/companion-core/imMessageSource';
 import type { ImSessionRepo } from '@cindy/im-runtime/sessionRepo';
@@ -2107,8 +2107,8 @@ function formatWechatInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
     const unavailable = autoReviewUnavailablePromptLine(request);
     return `需要确认工具“${request.displayName ?? request.toolName}”。
-${request.description ?? ''}
-${unavailable ? `${unavailable}\n` : ''}回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
+${permissionPromptDescription(request) ?? ''}
+${unavailable ? `${unavailable}\n` : ''}${permissionOperationPreview(request) ? `操作：\n${permissionOperationPreview(request)}\n` : ''}回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;

@@ -1,9 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { and, count, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { DbClient } from '@cindy/runtime-db';
 import { botSessionLinks, messages, sessions } from '@cindy/runtime-db/schema';
 import type { DbLogger } from '@cindy/runtime-db/logging';
 import { throwIpcError } from '@cindy/remote-agent/ipcValidate';
-import type { BotImConnectionLane, BotImConnectionLanesPayload, BotImConnectionRecord, BotImLaneKind } from '@cindy/companion-core/botImConnection';
+import type { BotImConnectionLane, BotImConnectionLanesPayload, BotImConnectionRecord, BotImLaneKind, BotImTaskArchiveActivity } from '@cindy/companion-core/botImConnection';
+import type { BotImTaskArchiveCleanup } from './botImConnectionStore.js';
 import { companionConnectionRouteKeyPrefix } from '@cindy/im-runtime/imBotBindingRoute';
 export interface BotImLaneRuntimeDeps {
   /** 这条任务此刻是否有一轮在跑(live 会话)。 */
@@ -32,6 +34,7 @@ export interface BotImLaneActivity {
 export interface BotImLaneStore {
   listLinks(botId: string): Promise<BotImLaneLink[]>;
   readActivity(sessionId: string): Promise<BotImLaneActivity>;
+  readArchiveActivity?(sessionId: string, archive?: number | BotImTaskArchiveActivity): Promise<{messageId: string | null; hasNewActivity: boolean}>;
 }
 
 export interface BotImLaneListOptions {
@@ -43,9 +46,10 @@ export interface BotImLaneListOptions {
 export function createBotImLaneRuntime(host: {
   getDbClient(): DbClient;
   readBotImConnection(id: string): BotImConnectionRecord | null;
+  archiveBotImTaskRow: (expected: BotImConnectionRecord, sessionId: string, reclaimable?: readonly BotImTaskArchiveCleanup[], activity?: BotImTaskArchiveActivity) => Promise<BotImConnectionRecord | null>;
   log: DbLogger;
 }) {
-const { getDbClient, readBotImConnection, log }=host;
+const { getDbClient, readBotImConnection, archiveBotImTaskRow, log }=host;
 let deps: BotImLaneRuntimeDeps | null = null;
 
 function configureBotImLaneRuntime(next: BotImLaneRuntimeDeps | null): void {
@@ -251,11 +255,22 @@ async function resetBotImConnectionLane(
   return listBotImConnectionLanes(id, options);
 }
 
+/** Archive only a connection list row; the underlying task and route remain intact. */
+async function archiveBotImConnectionLane(id: string, sessionId: string, options: BotImLaneListOptions = {}): Promise<BotImConnectionLanesPayload> {
+  const record = requireRecord(id);
+  const links = await listScopedLinks(record);
+  if (!links.some((item) => item.sessionId === sessionId)) throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
+  const activity = await store.readActivity(sessionId);
+  const archiveActivity: BotImTaskArchiveActivity = { messageId: activity.origin.senderName, generation: randomBytes(6).toString('hex') };
+  if (!await archiveBotImTaskRow(record, sessionId, [], archiveActivity)) throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
+  return listBotImConnectionLanes(id, options);
+}
+
 const __testing = {
   setStore(next: BotImLaneStore | null): void {
     store = next ?? dbLaneStore;
   },
 };
 
-return { configureBotImLaneRuntime, parseLaneRouteKey, listBotImConnectionLanes, resetBotImConnectionLane, __testing };
+return { configureBotImLaneRuntime, parseLaneRouteKey, listBotImConnectionLanes, resetBotImConnectionLane, archiveBotImConnectionLane, __testing };
 }

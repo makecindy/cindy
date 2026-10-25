@@ -1,6 +1,6 @@
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { botSessionLinks } from '@cindy/runtime-db/schema';
+import { botDelegations, botProfiles, botSessionLinks } from '@cindy/runtime-db/schema';
 import type { DbClient } from '@cindy/runtime-db';
 import type { DbLogger } from '@cindy/runtime-db/logging';
 import type { BroadcastLocal, OwnerBroadcastTap } from './ownerBroadcast.js';
@@ -12,6 +12,8 @@ export function createBotRemoteResourceInvalidation(host: Pick<OwnerBroadcastTap
   isAppSessionBoundaryPending(): boolean;
   broadcastLocal: BroadcastLocal;
   log: DbLogger;
+  ownerScopedUserDataPath?: () => string;
+  readTaskResponsibilities?: (root: string, botId: string) => Promise<Record<string, unknown>>;
 }) {
 const {getDbClient, activeOwnerScopeKey, isAppSessionBoundaryPending, broadcastLocal, log, getSafeDataOwnerPushStamp, tapWindowBroadcast}=host;
 const localListeners = new Set<(botId: string) => void>();
@@ -96,5 +98,37 @@ function scheduleBotRemoteResourceChangedForSession(
   });
 }
 
-return { onBotRemoteResourceChanged, broadcastBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForSession };
+function scheduleBotRemoteResourceChangedForDelegation(delegationId: string, childSessionId: string | null): void {
+  if (!childSessionId) return;
+  let ownerScope: string;
+  try { ownerScope = activeOwnerScopeKey(); } catch { return; }
+  void getDbClient().drizzle.select({ botId: botDelegations.requestingBotId }).from(botDelegations)
+    .where(eq(botDelegations.id, delegationId)).limit(1)
+    .then(([row]) => { if (row?.botId && isOwnerScopeCurrent(ownerScope)) broadcastBotRemoteResourceChanged(row.botId); })
+    .catch((error: unknown) => log.warn('resolve teammate delegation invalidation failed', { error: error instanceof Error ? error.message : String(error) }));
+}
+
+function scheduleBotRemoteResourceChangedForFollowedSession(sessionId: string): void {
+  let ownerScope: string;
+  try { ownerScope = activeOwnerScopeKey(); } catch { return; }
+  void (async () => {
+    const db = getDbClient().drizzle;
+    const [started, bots] = await Promise.all([
+      db.select({ botId: botDelegations.requestingBotId }).from(botDelegations).where(eq(botDelegations.childSessionId, sessionId)),
+      db.select({ id: botProfiles.id }).from(botProfiles).where(eq(botProfiles.status, 'active')),
+    ]);
+    const botIds = new Set(started.map((row) => row.botId));
+    if (host.ownerScopedUserDataPath && host.readTaskResponsibilities) {
+      const root = host.ownerScopedUserDataPath();
+      await Promise.all(bots.filter(({ id }) => !botIds.has(id)).map(async ({ id }) => {
+        const records = await host.readTaskResponsibilities!(root, id).catch(() => ({}));
+        if (Object.hasOwn(records, sessionId)) botIds.add(id);
+      }));
+    }
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    for (const botId of botIds) broadcastBotRemoteResourceChanged(botId);
+  })().catch((error: unknown) => log.warn('resolve followed task invalidation failed', { error: error instanceof Error ? error.message : String(error) }));
+}
+
+return { onBotRemoteResourceChanged, broadcastBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForSession, scheduleBotRemoteResourceChangedForDelegation, scheduleBotRemoteResourceChangedForFollowedSession };
 }

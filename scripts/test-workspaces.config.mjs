@@ -336,7 +336,12 @@ export default {
     {
       ...requiredUnitWorkspace('cindy-terminal', 'apps/cindy-terminal'),
       tiers: {
-        unit: { status: 'required', command: unitVitestCommand(1), exclude: ['**/*.integration.test.ts'] },
+        unit: {
+          status: 'required',
+          preflight: [{ type: 'packageScript', script: 'build' }],
+          command: unitVitestCommand(1),
+          exclude: ['**/*.integration.test.ts'],
+        },
         integration: {
           status: 'manual', execution: 'exclusive', coverage: 'allowlist',
           reason: 'Real terminal IPC, native agents, Chromium, encrypted vaults and plugin subprocesses use isolated temporary owners and explicit platform acceptance.',
