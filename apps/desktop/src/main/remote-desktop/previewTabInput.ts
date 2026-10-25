@@ -705,6 +705,20 @@ export class TabInputInjector {
       .catch(() => undefined);
   }
 
+  /**
+   * `Input.synthesizeTapGesture` checks its point against the size of the webview itself (not of
+   * the host window) before it reads it in host coordinates, and refuses a point outside with
+   * "Position out of bounds". In a window that holds the webview away from the host's origin
+   * (a side panel: measured x = 762 for a 359 px wide view) every host point is out, so the
+   * gesture can only be used where the host point also falls inside the webview's own size.
+   */
+  private gestureInBounds(host: { x: number; y: number }): boolean {
+    const view = this.viewport;
+    return (
+      view !== null && host.x >= 0 && host.y >= 0 && host.x < view.width && host.y < view.height
+    );
+  }
+
   /** What the host says about the point: the webview is on top, something else is, or unknown. */
   private async pointStatus(host: {
     x: number;
@@ -734,7 +748,9 @@ export class TabInputInjector {
     // The tap gesture goes through the host window's hit test, so it may only be used where the
     // webview itself is on top: a menu or dialog of the host app over it would take the tap.
     let why: string = 'blocked';
-    if (this.origin?.hitBlocked !== true) {
+    if (this.origin?.hitBlocked !== true && !this.gestureInBounds(host)) {
+      why = 'out-of-bounds';
+    } else if (this.origin?.hitBlocked !== true) {
       const status = await this.pointStatus(host);
       why = status;
       if (status === 'free') {
@@ -765,7 +781,9 @@ export class TabInputInjector {
     const sessionId = this.route?.sessionId;
     const at = { x: local.x, y: local.y };
     try {
-      await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at }, sessionId);
+      // No mouseMoved first: the press carries the position, and on a tab the browser holds
+      // back (hidden or covered window) a move waited for its acknowledgement for 5 s while
+      // the press and release answered at once (measured), long enough to lose the tap.
       await this.send(
         'Input.dispatchMouseEvent',
         { type: 'mousePressed', ...at, button: 'left', clickCount: 1 },
