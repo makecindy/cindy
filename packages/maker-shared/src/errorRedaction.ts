@@ -243,3 +243,12 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
   }
   return { code: match[1], fallback: match[2] || message };
 }
+
+/** Resending unchanged content cannot fix these explicit configuration failures. */
+export function requiresAgentErrorConfigurationChange(message: string): boolean {
+  const code = parseAgentErrorCode(message)?.code;
+  return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
+    || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
+    || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
+    || code === 'DEVICE_LINK_CONTROL_DISABLED';
+}

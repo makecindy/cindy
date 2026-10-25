@@ -113,6 +113,8 @@ export async function resolveBotRouteForSessionEntry(
 }
 
 export interface SessionEntryNavigatorDeps {
+  /** Compare an explicit link device with this computer before consulting local ownership. */
+  isRemoteDevice?: (deviceId: string) => Promise<boolean>;
   /** The target from the projection already in memory; null when it does not know the Session. */
   readKnownBotRoute: (sessionId: string) => BotSessionEntryTarget | null;
   /** Re-reads the projection for a Session it did not know (see resolveBotRouteForSessionEntry). */
@@ -122,11 +124,11 @@ export interface SessionEntryNavigatorDeps {
   /** Asks main to dispose the card of this island click (see BotSessionEntryTarget). */
   consumeAlert: (sessionId: string, islandEntryId: string) => void;
   /** `isLatest` lets the ordinary path drop its own late async route result too. */
-  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean) => void;
+  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean, deviceId?: string) => void;
 }
 
 export interface SessionEntryNavigator {
-  (sessionId: string, messageClientId?: string, islandEntryId?: string): void;
+  (sessionId: string, messageClientId?: string, islandEntryId?: string, deviceId?: string): void;
   /** Report every location the router has committed (`pathname + search`). */
   locationCommitted: (path: string) => void;
 }
@@ -174,31 +176,42 @@ export function createSessionEntryNavigator(
       throw error;
     }
   };
-  const open = (sessionId: string, messageClientId?: string, islandEntryId?: string) => {
+  const open = (sessionId: string, messageClientId?: string, islandEntryId?: string, deviceId?: string) => {
     const entry = ++sequence;
     pending = null;
     committedSinceOpen = new Set();
     const isLatest = () => sequence === entry;
-    const known = deps.readKnownBotRoute(sessionId);
-    // Background tasks keep their ordinary page with message anchors and visible-session reporting.
-    if (known && !known.route.startsWith('/cc-agent/')) {
-      openBotTarget(entry, sessionId, known, islandEntryId);
+    if (deviceId && deps.isRemoteDevice) {
+      void deps.isRemoteDevice(deviceId).then((remote) => {
+        if (!isLatest()) return;
+        if (remote) deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
+        else openLocal();
+      });
       return;
     }
-    let movedToBotPage = false;
-    deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage);
-    if (known) return;
-    const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
-    void deps.resolveBotRoute(sessionId).then((target) => {
-      if (!isLatest() || !target || target.route.startsWith('/cc-agent/')) return;
-      // Correct only this entry's own landing: the ordinary page, or the Bot page the ordinary
-      // path already resolved to. Any other committed location means the user moved on.
-      for (const path of committedSinceOpen) {
-        if (path !== ordinaryRoute && path !== target.route) return;
+    openLocal();
+    function openLocal() {
+      const known = deps.readKnownBotRoute(sessionId);
+      // Background tasks keep their ordinary page with message anchors and visible-session reporting.
+      if (known && !known.route.startsWith('/cc-agent/')) {
+        openBotTarget(entry, sessionId, known, islandEntryId);
+        return;
       }
-      movedToBotPage = true;
-      openBotTarget(entry, sessionId, target, islandEntryId);
-    });
+      let movedToBotPage = false;
+      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage);
+      if (known) return;
+      const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
+      void deps.resolveBotRoute(sessionId).then((target) => {
+        if (!isLatest() || !target || target.route.startsWith('/cc-agent/')) return;
+        // Correct only this entry's own landing: the ordinary page, or the Bot page the ordinary
+        // path already resolved to. Any other committed location means the user moved on.
+        for (const path of committedSinceOpen) {
+          if (path !== ordinaryRoute && path !== target.route) return;
+        }
+        movedToBotPage = true;
+        openBotTarget(entry, sessionId, target, islandEntryId);
+      });
+    }
   };
   return Object.assign(open, {
     locationCommitted: (path: string) => {

@@ -129,7 +129,7 @@ describe('伙伴创建兼容旧创建链接', () => {
   it('侧栏加号复用同一个创建弹窗入口', () => {
     expect(sidebar).not.toContain('?add=1');
     // 伙伴段头的加号与空态入口都走同一个创建菜单。
-    expect(sidebar).toContain('<BotCreateMenu variant="header" entryHint={marketHint} />');
+    expect(sidebar).toContain('<BotCreateMenu variant="header" />');
     expect(sidebar).toContain("<BotCreateMenu label={t('bots.add')} />");
   });
 });

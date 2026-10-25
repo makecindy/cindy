@@ -96,7 +96,6 @@ import { textFilePreviewResult, TEXT_PREVIEW_LIMIT_MB } from './text-file-previe
 import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { machineIdSync } from 'node-machine-id';
 import windowStateKeeper from 'electron-window-state';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { assertCindyMakeEnabled } from './cindy-make/featureGate.js';
@@ -5676,9 +5675,8 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // Device ID (hardware-based, survives app reinstall)
-  const machineId = machineIdSync();
-  ipcMain.handle('get-device-id', () => machineId);
+  // Device ID: use the identity registered by auth, including isolated dev overrides.
+  ipcMain.handle('get-device-id', () => authManager.getDeviceId());
 
   // CC 网络调试开关 — renderer Settings → Experimental "CC 网络调试日志" 操作此值。
   // 改写 process.env.XDT_CC_DEBUG_NET, 让 buildClaudeEnv 在下次 spawn cc 时注入

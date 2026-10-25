@@ -40,6 +40,20 @@ Cindy 的产品形态不止本地桌面单机。同一个功能可能运行在�
    同步 topic 路由；不登记，手机／远程控制端就永远调不通。
 3. 手机版需不需要对应的入口／UI／交互？
 
+## 远程新建 SSH 项目的目录归属（#7117）
+
+`maker:create-session` 的路径守卫先按执行端点识别目录：显式 `remoteHostId` 经既有
+SSH 就绪与目录探测后，将主机和规范化路径一同交给创建处理器，不用本机文件系统探测
+SSH 路径。旧控制端省略主机时，按当前账号的 session 记录查找唯一 SSH 归属；本地目录
+与 SSH 同时命中、或多个 SSH 主机命中时拒绝猜测。记录只能解析归属，不能替代实时探测。
+显式 `remoteHostId: null` 选择本地；`agentDeviceId` 指定另一电脑运行 Agent 时，文件仍属
+被控电脑，不反查 SSH。探测失败不降级到本机创建，探测期间撤权或切账号也不能继续创建。
+
+`worktree:create` 等其它入口保留本地目录与网络盘超时检查。此修复不改变 wire 字段、
+allowlist、重试或 relay 生命周期；手机端完整保留“主机 + 路径”的选择与记忆仍需单独适配。
+实现与回归：`device-link/remote-workdir-guard.ts`、`device-link/dispatch.ts`、
+`maker-ipc/register.ts` 与 `__tests__/deviceLinkHostDispatch.test.ts`（均相对 Desktop main）。
+
 ## 远程任务存档的即时反馈
 
 桌面与手机的远程任务列表在点击存档后立即乐观移走任务行，不能等待远程预检或写入

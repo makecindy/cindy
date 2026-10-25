@@ -27,6 +27,7 @@ import {
   buildFocusDeepLink,
   buildProjectDeepLink,
   buildSessionDeepLink,
+  buildHistorySessionDeepLink,
   buildSessionMessageDeepLink,
   findDeepLinkInArgv,
   redactConsumedDeepLinkInArgv,
@@ -58,6 +59,19 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
   };
   return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
+
+describe('history task links', () => {
+  it.each([
+    ['task/一', 'host', 'task/一', 'host'],
+    ['local::task', 'host', 'task', 'host'],
+    ['other::task', 'host', 'task', 'other'],
+  ])('routes %s to its owning computer', (key, localDeviceId, sessionId, deviceId) => {
+    const url = buildHistorySessionDeepLink(key, localDeviceId);
+    expect(parseDeepLink(url)).toEqual({ type: 'session', id: sessionId, deviceId });
+    expect(new URL(url).searchParams.get('device')).toBe(deviceId);
+    expect(url).not.toContain('::');
+  });
+});
 
 describe('chat invitation handoff', () => {
   const token = 'synthetic-invitation-'.padEnd(43, 'a');
@@ -274,12 +288,11 @@ describe('parseDeepLink', () => {
     });
   });
 
-  it('tolerates the device-frozen link format when routing a click', () => {
-    // 远程会话深链带 `?device=`(renderer 生成);main 端点击路由按 sessionId
-    // 导航即可,未知参数不拖累 session / message 解析。
+  it('preserves the owning device and message anchor when routing an external click', () => {
     expect(parseDeepLink(buildSessionDeepLink('abc-123', { deviceId: 'dev-1' }))).toEqual({
       type: 'session',
       id: 'abc-123',
+      deviceId: 'dev-1',
     });
     expect(
       parseDeepLink(buildSessionMessageDeepLink('abc-123', 'm1', { deviceId: 'dev-1' })),
@@ -287,6 +300,7 @@ describe('parseDeepLink', () => {
       type: 'session',
       id: 'abc-123',
       messageClientId: 'm1',
+      deviceId: 'dev-1',
     });
   });
 

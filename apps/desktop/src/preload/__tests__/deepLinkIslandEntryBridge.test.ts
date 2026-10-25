@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
-import { openMainWindowSession, setDeepLinkMainWindow } from '../../main/deepLink';
+import { handleIncomingDeepLink, openMainWindowSession, setDeepLinkMainWindow, takePendingDeepLink } from '../../main/deepLink';
 
 vi.mock('electron', () => ({ app: { focus: vi.fn() }, BrowserWindow: class {} }));
 vi.mock('../../main/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }) }));
@@ -47,6 +47,20 @@ function connect() {
 afterEach(() => setDeepLinkMainWindow(null));
 
 describe('Agent Island click id across the preload deep-link bridge', () => {
+  // External links must keep their owning computer through both the live bridge
+  // and the cold-start buffer; otherwise a same-id local task wins.
+  it('preserves a remote task and message through live delivery and cold start', () => {
+    const href = 'cindy://session/same?device=other-mac&message=m-1';
+    const expected = { type: 'session', id: 'same', deviceId: 'other-mac', messageClientId: 'm-1' };
+    const { received } = connect();
+    handleIncomingDeepLink(href, 'open-url');
+    expect(received).toEqual([expected]);
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(href, 'argv');
+    expect(takePendingDeepLink()).toEqual(expected);
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
   it('carries the click id main put on a loaded main window session entry', () => {
     const { received } = connect();
     openMainWindowSession('lane-1', { islandEntryId: '42' });

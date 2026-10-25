@@ -23,6 +23,7 @@ import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } f
 
 const DESCRIPTION = [
   HISTORY_DEVICE_DESCRIPTION,
+  'sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
   '列出所选电脑数据库里的 session 元数据(id / title / workingDir / agentKind / model /',
   '时间戳 / messageCount 等), 按多种过滤条件组合查。**不返回 messages 内容** —',
   '要拉具体聊天内容请用 get_chat_history。',
@@ -152,6 +153,7 @@ export function registerListSessionsTool(
         sessions: page.items.map((s) => {
           const out: Record<string, unknown> = {
             id: s.id,
+            ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(s.id) } : {}),
             title: s.title,
             workingDir: s.workingDir,
             agentKind: s.agentKind,

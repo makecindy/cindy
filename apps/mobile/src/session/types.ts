@@ -292,6 +292,8 @@ export interface InputProjection {
   toolLoop?: MobileToolLoopErrorDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
+  /** Explicit failed-turn continuation eligibility; absent on older hosts. */
+  errorCanContinue?: boolean;
   autoResumePending?: Record<string, unknown> | null;
   /** Current vendor-turn owner for an auto-resume continuation, when supported by the host. */
   continuationTurnClientId?: string | null;

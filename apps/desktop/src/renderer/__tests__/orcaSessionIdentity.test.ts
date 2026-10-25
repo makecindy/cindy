@@ -141,6 +141,12 @@ describe('orcaSessionIdentity', () => {
     await expect(resolveSessionRoute('bot-main', { orcaRole: null })).resolves.toBe('/cc-agent/bot-main');
   });
 
+  it('does not redirect an explicitly remote task to a same-id local Bot', async () => {
+    bots.profiles = [{ id: 'local', sessions: [{ id: 'same', role: 'canonical', kind: 'chat' }] }];
+    await expect(resolveSessionRoute('same', { orcaRole: null }, { remote: true })).resolves.toBe('/cc-agent/same');
+    await expect(resolveSessionRoute('same', { orcaRole: null })).resolves.toBe('/bots/local');
+  });
+
   it('routes orphaned Orca workers back through the index fallback', async () => {
     const api = electronApiMock();
     api.localDb.orcaWorkflows.getByWorkerSession.mockResolvedValue(null);

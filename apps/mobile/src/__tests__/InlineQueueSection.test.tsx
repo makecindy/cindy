@@ -71,6 +71,37 @@ it('allows clearing an error without retry content', async () => {
   await show({ projection: { ...projection, errorRetryText: null } });
   expect(button('retry').disabled).toBe(true); expect(button('clearError').disabled).toBe(false);
 });
+// Scheduler failures release the original recovery record. The real error UI
+// must activate the manual continuation callback while retaining its busy gate.
+it('continues a settled error without replaying its old scheduled input', async () => {
+  const onContinueAfterError = vi.fn();
+  const props = { projection: { ...projection, errorRetryText: null }, onContinueAfterError };
+  await show(props);
+  expect(button('retry').disabled).toBe(false);
+  await act(async () => button('retry').click());
+  expect(onContinueAfterError).toHaveBeenCalledOnce();
+  expect(retry).not.toHaveBeenCalled();
+  await show({ ...props, busy: true });
+  expect(button('retry').disabled).toBe(true);
+  await show({ onContinueAfterError });
+  await act(async () => button('retry').click());
+  expect(retry).toHaveBeenCalledOnce();
+  expect(onContinueAfterError).toHaveBeenCalledOnce();
+});
+// #7119 review: a host-confirmed scheduler failure without a retry token must
+// obey the existing history-error exclusions. Unit: render the real component;
+// previously these three minimal errors exposed a continuation action.
+it.each([
+  'codex not authenticated: no_credentials',
+  'thread not found',
+  'invalid_encrypted_content',
+])('does not offer continuation for a non-retryable error: %s', async (error) => {
+  const onContinueAfterError = vi.fn();
+  await show({ projection: { ...projection, error, errorRetryText: null, errorCanContinue: true }, onContinueAfterError });
+  expect(button('retry')).toBeNull();
+  expect(button('clearError').disabled).toBe(false);
+  expect(onContinueAfterError).not.toHaveBeenCalled();
+});
 // Review #6347: the real error actions must announce in-flight work, separately
 // from read-only disabling. Existing tests only checked activation, not VoiceOver
 // state. Minimal input: busy=true with a recovery action; unit (RN props -> DOM).

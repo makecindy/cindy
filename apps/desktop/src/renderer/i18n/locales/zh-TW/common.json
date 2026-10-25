@@ -13172,7 +13172,7 @@
         "unarchiveAll": "全部取消歸檔",
         "openInExplorer": "在檔案管理器中開啟",
         "newInDirectory": "在此目錄新建任務",
-        "copyDeepLink": "複製深度連結",
+        "copyDeepLink": "複製專案連結",
         "syncCodex": "同步此專案的 Codex 任務",
         "syncCodexDone": "Codex 同步完成：連結 {{inserted}} 條，更新 {{updated}} 條",
         "syncCodexAlreadyLinked": "此專案的 Codex 任務已經連結過了",
@@ -13181,7 +13181,7 @@
         "search": "在專案內搜尋任務"
       },
       "deepLink": {
-        "copied": "已複製深度連結",
+        "copied": "連結已複製",
         "copyFailed": "複製失敗，請手動複製",
         "projectNotFound": "找不到對應的專案，可能已被歸檔或不在本機"
       },

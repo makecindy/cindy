@@ -54,6 +54,7 @@ function loadedBotChatRoute(sessionId: string): string | null {
 export async function resolveSessionRoute(
   sessionId: string,
   session?: Pick<Session, 'orcaRole'> & Partial<Pick<Session, 'source'>> | null,
+  options?: { remote?: boolean },
 ): Promise<string> {
   const targetSession = session ?? (await getSessionFor(sessionId).catch(() => null));
   if (!CINDY_MAKE_ENABLED && isCindyMakeSource(targetSession?.source)) return '/cc-agent';
@@ -70,7 +71,7 @@ export async function resolveSessionRoute(
   }
 
   // Notifications, task cards and the main sidebar agree on one page per task.
-  const botRoute = loadedBotChatRoute(sessionId);
+  const botRoute = options?.remote ? null : loadedBotChatRoute(sessionId);
   if (botRoute) return botRoute;
 
   return `/cc-agent/${sessionId}`;

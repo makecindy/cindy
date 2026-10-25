@@ -57,7 +57,9 @@ function setup(history: Partial<XdtHelperHistoryDeps>) {
 describe('get_task_digest', () => {
   it('keeps every text field within 300 characters and the whole reply within 2KB', async () => {
     const taskDigest = vi.fn(async () => ({ ok: true as const, digest }));
-    const reg = setup({ taskDigest });
+    const sessionUrl = 'cindy://session/s-9?device=laptop';
+    const buildUrl = vi.fn(() => sessionUrl);
+    const reg = setup({ taskDigest, sessionUrl: buildUrl });
     const { text, json } = parse(await reg.call('get_task_digest', { session_id: 'laptop::s-9' }));
     expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
     expect(json).toMatchObject({ ok: true, session_id: 'laptop::s-9', phase: 'waiting-answer', queued_count: 1, tool_in_flight: true });
@@ -66,6 +68,8 @@ describe('get_task_digest', () => {
       if (value !== null) expect(Array.from(String(value)).length).toBeLessThanOrEqual(300);
     }
     expect(taskDigest).toHaveBeenCalledWith({ sessionId: 'laptop::s-9', callerSessionId: 'bot-main' });
+    expect(json.sessionUrl).toBe(sessionUrl);
+    expect(buildUrl).toHaveBeenCalledWith('laptop::s-9');
   });
 
   it('leaves a short digest untouched', () => {

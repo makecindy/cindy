@@ -524,6 +524,52 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  // #7119: UI eligibility must survive the actual projection -> light subscriber
+  // path and disappear when an older host omits the optional field (unit).
+  it('projects host continuation eligibility to light subscribers and revokes missing eligibility', () => {
+    const notify = vi.fn();
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, notify);
+    const failed = projection(SESSION_ID, { error: 'capacity', errorCanContinue: true });
+    onInputProjection?.(failed);
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(true);
+    const afterEligible = notify.mock.calls.length;
+    onInputProjection?.(projection(SESSION_ID, { error: 'capacity' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(false);
+    expect(notify.mock.calls.length).toBeGreaterThan(afterEligible);
+    unsubscribe();
+  });
+
+  // #7119 round 2: projection eligibility belongs to one error episode. Real
+  // status/event/persist ingress must revoke it without another projection,
+  // while a duplicate terminal or paired done for the same error preserves it.
+  it.each(['turn-start', 'replacement', 'recoverable', 'persisted', 'clear'] as const)(
+    'revokes continuation eligibility at the %s boundary without a projection', async (boundary) => {
+      onInputProjection?.(projection(SESSION_ID, { error: 'capacity', errorCanContinue: true }));
+      const terminal = (message: string, persistId?: string, errorStatus?: number) => onEvent?.({
+        sessionId: SESSION_ID, persistId,
+        event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message, errorStatus } },
+      });
+      terminal('capacity', 'eligible-error', 503);
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'claude-code', data: {} } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(true);
+      if (boundary === 'turn-start') {
+        emitStatus({ status: 'Running', isRunning: true });
+        terminal('capacity');
+      } else if (boundary === 'replacement') {
+        terminal('different error', 'different-id');
+      } else if (boundary === 'recoverable') {
+        onEvent?.({ sessionId: SESSION_ID,
+          event: { type: 'error', source: 'claude-code', data: { isTerminal: false, message: 'retrying' } } });
+      } else if (boundary === 'persisted') {
+        onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'eligible-error' });
+      } else {
+        makerChatStore.clearError(SESSION_ID);
+        await flushPromises();
+      }
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(false);
+    },
+  );
+
   it.each(['local', 'remote'])('retains IM completion provenance through %s ingress and resets it for App turns', (source) => {
     if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const emit = (event: unknown) => {

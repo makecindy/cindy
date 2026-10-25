@@ -172,6 +172,46 @@ describe('伙伴归属表', () => {
 });
 
 describe('通知入口在伙伴投影未加载时的路由', () => {
+  // External task links carry a device, including this computer's own id. Resolve
+  // it within the existing latest-entry guard before consulting local Bot ownership.
+  it.each([true, false])('routes an explicit device without letting a same-id local Bot win (remote=%s)', async (remote) => {
+    const openOrdinary = vi.fn();
+    const openBotRoute = vi.fn();
+    const readKnownBotRoute = vi.fn(() => ({ route: '/bots/local', consumesAlert: false }));
+    const open = createSessionEntryNavigator({
+      isRemoteDevice: async () => remote,
+      readKnownBotRoute,
+      resolveBotRoute: vi.fn(),
+      openBotRoute, consumeAlert: vi.fn(), openOrdinary,
+    });
+    open('same', 'message-1', undefined, 'device-1');
+    await Promise.resolve();
+    if (remote) {
+      expect(openOrdinary).toHaveBeenCalledWith('same', 'message-1', expect.any(Function), 'device-1');
+      expect(readKnownBotRoute).not.toHaveBeenCalled();
+      expect(openBotRoute).not.toHaveBeenCalled();
+    } else {
+      expect(openBotRoute).toHaveBeenCalledWith('/bots/local', undefined);
+      expect(openOrdinary).not.toHaveBeenCalled();
+    }
+  });
+
+  it('drops a delayed device lookup after a newer entry has opened', async () => {
+    let resolveDevice!: (remote: boolean) => void;
+    const openOrdinary = vi.fn();
+    const open = createSessionEntryNavigator({
+      isRemoteDevice: () => new Promise((resolve) => { resolveDevice = resolve; }),
+      readKnownBotRoute: () => null, resolveBotRoute: async () => null,
+      openBotRoute: vi.fn(), consumeAlert: vi.fn(), openOrdinary,
+    });
+    open('old', undefined, undefined, 'other-mac');
+    open('new');
+    resolveDevice(true);
+    await Promise.resolve();
+    expect(openOrdinary).toHaveBeenCalledTimes(1);
+    expect(openOrdinary).toHaveBeenCalledWith('new', undefined, expect.any(Function));
+  });
+
   function deps(over: {
     current?: BotProfile[];
     loaded?: BotProfile[];

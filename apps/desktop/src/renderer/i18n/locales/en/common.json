@@ -13226,7 +13226,7 @@
         "unarchiveAll": "Restore all",
         "openInExplorer": "Open in file manager",
         "newInDirectory": "New session in this directory",
-        "copyDeepLink": "Copy deep link",
+        "copyDeepLink": "Copy Project Link",
         "syncCodex": "Sync Codex sessions for this project",
         "syncCodexDone": "Codex sync complete: {{inserted}} linked, {{updated}} updated",
         "syncCodexAlreadyLinked": "Codex sessions for this project are already linked",
@@ -13235,7 +13235,7 @@
         "search": "Search sessions in this project"
       },
       "deepLink": {
-        "copied": "Deep link copied",
+        "copied": "Link copied",
         "copyFailed": "Copy failed, please copy manually",
         "projectNotFound": "Project not found — it may have been archived or doesn't exist on this device"
       },

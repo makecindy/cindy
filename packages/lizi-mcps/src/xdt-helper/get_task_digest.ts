@@ -33,6 +33,7 @@ export interface TaskDigestRoute {
 
 export interface TaskDigestWire {
   session_id: string;
+  sessionUrl?: string;
   /** 另一台电脑的名字;本机为 null。 */
   device: string | null;
   title: string;
@@ -111,6 +112,7 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
 }
 
 const DESCRIPTION = [
+  '已知任务 id、需要给用户任务链接时也用本工具；sessionUrl 可直接写成 [任务标题](sessionUrl)。',
   '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、最近用户消息(排除隐藏协调/续跑输入)、最新助手回复首尾片段、待回答的问题、错误、当前模型路线、',
   '建议换到的下一条路线(只在出错或撞用量上限、换模型确实有用且装得下当前上下文时,给你候选链里还没试过的那条;否则 null,此时提醒主人)、PR 状态、排队消息数、谁开的 / 谁在跟。',
   'idle_minutes 距最后一次动静的分钟数;tool_in_flight 为 true 表示有工具调用(如长时间构建、测试)正在执行,宿主不知道时不出现。',
@@ -156,7 +158,10 @@ export function registerGetTaskDigestTool(
         callerSessionId: deps.getSessionContext?.()?.sessionId,
       });
       if (!result.ok) return errorPayload(result.errorCode, result.message);
-      return okPayload({ ...boundTaskDigest(result.digest) });
+      return okPayload({ ...boundTaskDigest({
+        ...result.digest,
+        ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(result.digest.session_id) } : {}),
+      }) });
     },
   });
 }
