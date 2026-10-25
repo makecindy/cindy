@@ -161,6 +161,36 @@ describe('TabInputInjector', () => {
       expect(h.injector.pressed.touches).toBe(0);
     });
 
+    it('ends the finger that went down first and goes on moving the one that went down later', async () => {
+      const h = setup();
+      await h.injector.inject([
+        touch('start', [[1, 0.1, 0.1]]),
+        touch('start', [
+          [1, 0.1, 0.1],
+          [2, 0.9, 0.9],
+        ]),
+        touch('move', [
+          [1, 0.2, 0.1],
+          [2, 0.8, 0.9],
+        ]),
+        touch('end', [[2, 0.8, 0.9]]),
+        touch('move', [[2, 0.5, 0.9]]),
+        touch('move', [[2, 0.2, 0.9]]),
+      ]);
+      expect(typesOf(h)).toEqual([
+        ['touchStart', [1]],
+        ['touchStart', [1, 2]],
+        ['touchMove', [1, 2]],
+        ['touchEnd', [1]],
+        ['touchMove', [2]],
+        ['touchMove', [2]],
+      ]);
+      // The ended finger goes out where it last was; the one left follows its own track.
+      expect(touches(h.commands)[3]?.touchPoints).toEqual([point(1, 160, 50)]);
+      expect(touches(h.commands).at(-1)?.touchPoints).toEqual([point(2, 160, 450)]);
+      expect(h.injector.pressed.touches).toBe(1);
+    });
+
     it('moves the rest when it moved with the lift, and ends a finger a move left out', async () => {
       const h = setup();
       await h.injector.inject([
