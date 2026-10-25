@@ -8,8 +8,8 @@
  *   与 UpdateBanner 一致此时禁止 relaunch，防止装到旧补丁）——按钮转圈等待。
  * - `no-update`：无补丁可装（idle/error）——引导「重新检查更新」。
  * - `init-failed`：DB_INIT_FAILED（如插件目录 EPERM）——不引导更新，给中性说明与「重试」。
- * - `corrupt`：DB_CORRUPT_NO_BACKUP——自动恢复已耗尽，重试不会改变结果，
- *   只引导复制技术细节求助，不提供重试。
+ * - `corrupt`：DB_CORRUPT_NO_BACKUP——可能是自动恢复已耗尽，也可能是共享库被其它实例占用
+ *   （关闭后重试可恢复），故保留「重试」，并额外提供复制技术细节的求助入口。
  */
 export type LocalDbFatalView =
   | 'install-update'

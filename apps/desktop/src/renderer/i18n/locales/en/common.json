@@ -1080,12 +1080,12 @@
     },
     "initFailed": {
       "title": "Local database failed to start",
-      "description": "The local database couldn't start. Try again first. If it keeps failing, check access permissions on the app data folders (including the plugins folder) and share the technical details below with the team.",
+      "description": "The local database couldn't start. Try again first. If it keeps failing, share the technical details below with the team.",
       "retry": "Retry Starting Database"
     },
     "corrupt": {
-      "title": "Local database is damaged and can't be recovered automatically",
-      "description": "The local database is damaged and no usable backup could restore it, so trying again won't change the result. Copy the technical details below and share them with the team to get help recovering your data.",
+      "title": "Local database can't be opened",
+      "description": "The local database may be damaged, or it may be in use by another Cindy instance sharing the same data. If another instance is open, close it and retry. If the problem persists, no usable backup could restore it automatically; copy the technical details and share them with the team to get help recovering your data.",
       "copy": "Copy Technical Details"
     },
     "noUpdate": {

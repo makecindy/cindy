@@ -32,14 +32,8 @@ export function LocalDbFatalScreen({
   const view = resolveLocalDbFatalView(status, code);
 
   const handleConfirm = () => {
-    if (view === 'corrupt') {
-      // 自动恢复已耗尽，重试无意义；复制技术细节便于向开发团队求助。
-      const text = [code, message].filter(Boolean).join('\n');
-      void navigator.clipboard?.writeText(text).catch(() => {});
-      return;
-    }
-    if (view === 'init-failed') {
-      // 重新走一遍 ensureReady；与应用更新无关。
+    if (view === 'init-failed' || view === 'corrupt') {
+      // 重新走一遍 ensureReady；与应用更新无关（corrupt 也可能因关闭占用库的其它实例而恢复）。
       window.location.reload();
       return;
     }
@@ -75,11 +69,9 @@ export function LocalDbFatalScreen({
         ? t('localDbFatal.preparing.description')
         : t('localDbFatal.noUpdate.description');
   const confirmText =
-    view === 'corrupt'
-      ? t('localDbFatal.corrupt.copy')
-      : view === 'init-failed'
-        ? t('localDbFatal.initFailed.retry')
-        : view === 'install-update'
+    view === 'init-failed' || view === 'corrupt'
+      ? t('localDbFatal.initFailed.retry')
+      : view === 'install-update'
         ? t('localDbFatal.updateReady.confirm')
         : t('localDbFatal.noUpdate.checkUpdate');
 
@@ -106,6 +98,19 @@ export function LocalDbFatalScreen({
               <p className="text-13 text-[var(--confirm-desc)]">
                 {t('localDbFatal.preparing.progress', { progress: Math.round(progress) })}
               </p>
+            )}
+            {view === 'corrupt' && (message || code) && (
+              <button
+                type="button"
+                className="text-12 text-[var(--text-tertiary)] underline transition-colors hover:text-[var(--text-secondary)]"
+                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                onClick={() => {
+                  const text = [code, message].filter(Boolean).join('\n');
+                  void navigator.clipboard?.writeText(text).catch(() => {});
+                }}
+              >
+                {t('localDbFatal.corrupt.copy')}
+              </button>
             )}
             {(message || code) && (
               <details className="mt-1 w-full">
