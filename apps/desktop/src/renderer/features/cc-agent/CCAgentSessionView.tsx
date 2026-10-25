@@ -44,7 +44,6 @@ import {
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionRouteOriginGate } from './SessionRouteOriginGate';
-import { sideChatTaskRoute } from '@/features/right-sidebar/plugins/side-chat/state';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
@@ -2876,7 +2875,7 @@ function CCAgentSessionContent({
           toast.info(t('chat.sideChat.mainTaskOnly'));
           return;
         }
-        void openSideChatTab(sessionId, { prompt: payload.args, onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)) });
+        void openSideChatTab(sessionId, { prompt: payload.args });
         return;
       }
       if (payload.command === 'cmd') {
@@ -3569,7 +3568,6 @@ function CCAgentSessionContent({
         const accepted = await openSideChatTab(sessionId, {
           prompt: args,
           attachments: files,
-          onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)),
         });
         return { handled: true, accepted, message };
       }
@@ -5266,7 +5264,7 @@ function CCAgentSessionContent({
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'
-        ? (quote) => openSideChatTab(sessionId, { quote, onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)) }) : undefined}
+        ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
       historyLoaded={historyLoaded}

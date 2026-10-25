@@ -2039,7 +2039,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
     const normalized = raw.startsWith('xdt-audio://') && props.allowPrivilegedLinks !== false ? raw : normalizeMarkdownImageSrc(raw, props.workingDir, props.allowPrivilegedLinks !== false);
     if (!normalized) return null;
-    const src = rewriteToRemoteMediaOrigin(normalized, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+    // Local audio has its own extension-checked protocol; xdt-file serves
+    // images/documents/video and rejects MP3. Preserve the encoded path and
+    // select the handler before wrapping the URL for a remote source device.
+    const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
+    const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
     return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);

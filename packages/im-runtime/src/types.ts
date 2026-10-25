@@ -376,6 +376,8 @@ export interface ImUiTextPack {
   agent: {
     completedNoText: string;
     runtimeError: (errMsg: string) => string;
+    /** Shown when a rich component answer cannot be projected to channel text. */
+    richAnswerIncomplete?: string;
     sendInternalError: (errMsg: string) => string;
     apiKeyMissing: string;
     /** 按实际会话路由生成鉴权失败提示；未提供时回退到 apiKeyMissing。 */

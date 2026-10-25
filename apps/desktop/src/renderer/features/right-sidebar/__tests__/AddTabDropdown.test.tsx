@@ -193,7 +193,7 @@ it.each([undefined, { groupId: 'left' as const }, { onOptimisticAdd: vi.fn() }])
   const onSelect = vi.fn();
   render(<Entries sessionId="task-1" onSelect={onSelect} sideChatPlacement={placement} />);
   await act(async () => fireEvent.click(screen.getByText('chat.sideChat.new')));
-  expect(m.openSideChat).toHaveBeenCalledExactlyOnceWith('task-1', { placement, onOpen: expect.any(Function) });
+  expect(m.openSideChat).toHaveBeenCalledExactlyOnceWith('task-1', { placement });
   expect(onSelect).not.toHaveBeenCalled();
 });
 

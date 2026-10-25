@@ -9,6 +9,8 @@ import type { AgentRuntimeConfig } from '@cindy/maker-core';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { codexPackagePathPrepends } from '../agent-binaries/codex-cli-launcher.js';
 
 import {
   isModelDisabled,
@@ -316,7 +318,12 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter
   // 在 env-builder 每次 codex spawn 时求值(结果已 memoize)。
   get pathPrepends() {
-    return [bundledRipgrepDir()];
+    return [
+      bundledRipgrepDir(),
+      ...(process.platform === 'win32'
+        ? codexPackagePathPrepends(getCachedBinaryStatus('codex').binaryPath, process.platform)
+        : []),
+    ];
   },
   userDataPath: app.getPath('userData'),
   get memoryEnabled() {

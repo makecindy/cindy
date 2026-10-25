@@ -49,6 +49,7 @@ import { presentSharedPermissionCard } from "./permissionPresentation";
 import { describeInteractionSource } from "./interactionSource";
 import { hasSessionPermissionUpdates } from "@cindy/maker-core";
 import { stripInternalWebCitations } from "@cindy/maker-shared/internal-citation";
+import { hasRichAnswer, richAnswerText } from "@cindy/maker-shared/rich-answer";
 import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
@@ -3258,17 +3259,23 @@ export function createTurnRunner(
    * 消息只留干净正文(error 收口不置 done — 保留过程区, 用户能看到死在哪步)。
    * 纯文本快答没有 tool_use, renderActivity 返回空串, 视图与旧行为逐字一致。
    */
-  function composeStreamingView(turn: TurnState): string {
+  function composeStreamingView(turn: TurnState, final = turn.done): string {
     const rawBody = turn.outputCardPrefix
       ? turn.outputCardPrefix + turn.presenter.wholeText()
       : turn.presenter.wholeText();
-    // External-channel safeguard: maker-core normally strips these tokens,
-    // while this boundary also protects old continuations and future adapters.
-    const body = stripInternalWebCitations(rawBody);
+    const body = composeOutboundBody(rawBody, final);
     if (turn.done) return body;
     // 过程区在上、正文在下的合成骨架与官方 bot 共用(presenter.composeRunning →
     // composeProgressView); 纯文本快答无 tool_use 时过程区为空, 视图与旧行为逐字一致。
     return turn.presenter.composeRunning(body);
+  }
+
+  /** Project component answers for channels while preserving the protocol source in storage. */
+  function composeOutboundBody(source: string, final: boolean): string {
+    const body = stripInternalWebCitations(richAnswerText(source));
+    return final && !body.trim() && hasRichAnswer(source)
+      ? (ui.agent.richAnswerIncomplete ?? "回复内容未完整生成，请重新发送。")
+      : body;
   }
 
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
@@ -3331,7 +3338,7 @@ export function createTurnRunner(
     final: boolean,
   ): string {
     const header = t.header;
-    const publicBody = stripInternalWebCitations(t.buffer);
+    const publicBody = composeOutboundBody(t.buffer, final);
     // Rich transports resolve managed refs themselves. A remote session's refs
     // must stay text, never reach those host-local file/media resolvers.
     const body = state.makerSession.remoteHostId
@@ -3563,13 +3570,14 @@ export function createTurnRunner(
         return;
       }
       if (silenced && !t.streamingHandlePromise) return;
+      const projectedBody = composeOutboundBody(t.buffer, true);
       if (
         output.kind === "chunked-text" &&
         !state.makerSession.remoteHostId &&
-        t.buffer.includes("![")
+        projectedBody.includes("![")
       ) {
         const materialized = await materializeLocalMarkdownImages({
-          text: t.buffer,
+          text: projectedBody,
           workingDir: state.workingDir,
           sessionId: state.makerSession.id,
           maxImages: 4,
@@ -4308,7 +4316,7 @@ export function createTurnRunner(
         : undefined,
     );
     if (turn?.streamingHandle) {
-      const view = composeStreamingView(turn);
+      const view = composeStreamingView(turn, true);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
     } else {
@@ -4352,16 +4360,14 @@ export function createTurnRunner(
     state: SessionState,
     turn: TurnState,
   ): Promise<void> {
-    if (
-      output.kind !== "chunked-text" ||
-      turn.allowedFileRoots.length === 0 ||
-      !turn.presenter.wholeText().includes("![")
-    ) {
+    if (output.kind !== "chunked-text" || turn.allowedFileRoots.length === 0) {
       return;
     }
+    const projectedBody = composeOutboundBody(turn.presenter.wholeText(), true);
+    if (!projectedBody.includes("![")) return;
     try {
       const materialized = await materializeLocalMarkdownImages({
-        text: turn.presenter.wholeText(),
+        text: projectedBody,
         workingDir: state.workingDir,
         sessionId: state.makerSession.id,
         maxImages: 4,

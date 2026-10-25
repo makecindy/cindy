@@ -3034,6 +3034,99 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  // #6884: exercise the real runner's outbound boundary. Existing cases only used
+  // plain text; one component fence used to reach the transport as protocol JSON.
+  // Unit tier: in-memory session/transport, no external sends or database writes.
+  describe('rich answers at the IM boundary', () => {
+    const rich = '```cindy-ui\n' + JSON.stringify({
+      version: 1, seq: 1, op: 'create', id: 'answer', kind: 'heading', props: { text: 'Readable answer' },
+    }) + '\n```';
+
+    it.each(['rich-card', 'chunked-text', 'start-failed', 'terminal-error'] as const)(
+      'projects component output for %s while leaving the session event intact', async (kind) => {
+        const previousOutput = fakeAdapter.output;
+        const commitFinal = vi.fn<(payload: { text: string }) => Promise<void>>(async () => undefined);
+        const replace = vi.fn();
+        const finalize = vi.fn();
+        mocks.feishuIm.startStreamingText.mockResolvedValue({
+          messageId: 'rich', append: vi.fn(), replace, finalize, close: vi.fn(),
+        });
+        if (kind === 'start-failed') mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('offline'));
+        if (kind === 'chunked-text') fakeAdapter.output = {
+          kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal,
+        };
+        try {
+          const h = setupSession(async () => ({ accepted: true }));
+          const observed = vi.fn();
+          h.session.onEvent(observed);
+          await runDefaultTurn();
+          const source = `Before\n\n${rich}\n\nAfter`;
+          const event: AgentEvent = { type: 'text', data: { text: source, isFinal: true } };
+          h.emit(event);
+          await flushMicrotasks();
+          h.emit(kind === 'terminal-error'
+            ? { type: 'error', data: { message: 'process exited', isTerminal: true } }
+            : { type: 'done', data: {} });
+          await waitForAssertion(() => {
+            const text = kind === 'chunked-text' ? commitFinal.mock.calls[0]?.[0].text
+              : kind === 'start-failed' ? mocks.feishuIm.sendText.mock.calls.at(-1)?.[1]
+                : finalize.mock.calls[0]?.[0];
+            expect(text).toContain('### Readable answer');
+            expect(text).toContain('Before');
+            expect(text).toContain('After');
+            expect(text).not.toContain('cindy-ui');
+            expect(text).not.toContain('"op"');
+            if (kind === 'terminal-error') expect(text).toContain('process exited');
+          });
+          expect(observed).toHaveBeenCalledWith(event);
+          expect(event.data).toEqual({ text: source, isFinal: true });
+          expect(mocks.persistAssistantMessage).not.toHaveBeenCalled();
+        } finally {
+          fakeAdapter.output = previousOutput;
+        }
+      },
+    );
+
+    it('waits on an incomplete component instead of streaming raw JSON, then shows readable content', async () => {
+      const replace = vi.fn();
+      const finalize = vi.fn();
+      mocks.feishuIm.startStreamingText.mockResolvedValue({
+        messageId: 'rich', append: vi.fn(), replace, finalize, close: vi.fn(),
+      });
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn();
+      h.emit({ type: 'text', data: { text: '```cindy-ui\n{"version":1,"seq":1', isFinal: false } });
+      await waitForAssertion(() => expect(replace).toHaveBeenCalledWith(''));
+      h.emit({ type: 'text', data: { text: rich, isFinal: true } });
+      await waitForAssertion(() => expect(replace).toHaveBeenLastCalledWith('### Readable answer'));
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(finalize).toHaveBeenCalledWith('### Readable answer'));
+      expect(JSON.stringify(replace.mock.calls)).not.toContain('cindy-ui');
+    });
+
+    it.each([
+      ['```cindy-ui\n{"version":', 'Some content could not be displayed.', false],
+      ['```cindy-ui\ninvalid\n```', 'Some content could not be displayed.', false],
+      ['```cindy-ui\n{"version":', /Some content could not be displayed\.[\s\S]*process exited/, true],
+      ['Before\n\n```cindy-ui\ninvalid\n```\n\nAfter', /Before\s+After/, false],
+      ['# Markdown\n\n```json\n{"op":"create"}\n```', '# Markdown\n\n```json\n{"op":"create"}\n```', false],
+    ] as const)('keeps final output readable without changing ordinary code blocks (%s)', async (source, expected, failed) => {
+      setMainLocale('en');
+      const finalize = vi.fn();
+      mocks.feishuIm.startStreamingText.mockResolvedValue({
+        messageId: 'rich', append: vi.fn(), replace: vi.fn(), finalize, close: vi.fn(),
+      });
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn();
+      h.emit({ type: 'text', data: { text: source, isFinal: true } });
+      h.emit(failed ? { type: 'error', data: { message: 'process exited', isTerminal: true } }
+        : { type: 'done', data: {} });
+      await waitForAssertion(() => expect(finalize).toHaveBeenCalledWith(
+        typeof expected === 'string' ? expected : expect.stringMatching(expected),
+      ));
+    });
+  });
+
   it('commits one terminal payload for a chunked-text output driver', async () => {
     const previousOutput = fakeAdapter.output;
     const beginReply = vi.fn(async () => undefined);
@@ -3075,7 +3168,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
-  it('materializes local Markdown images before committing chunked-text output', async () => {
+  // #7125 review: image components must reach the existing attachment pipeline,
+  // including error finalization; otherwise WeChat removes the projected image.
+  it.each(['markdown', 'component', 'component-error'] as const)('materializes %s images before committing chunked-text output', async (kind) => {
     const previousOutput = fakeAdapter.output;
     const commitFinal = vi.fn(async () => undefined);
     fakeAdapter.output = {
@@ -3092,15 +3187,22 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       const { turnPromise } = await startDefaultTurn();
       await turnPromise;
 
+      const markdown = '![测试图片](F:\\XDMaker\\generated.png)';
+      const source = kind === 'markdown' ? markdown : '```cindy-ui\n' + JSON.stringify({
+        version: 1, seq: 1, op: 'create', id: 'image', kind: 'image',
+        props: { src: 'F:\\XDMaker\\generated.png', alt: '测试图片' },
+      }) + '\n```';
       h.emit({
         type: 'text',
-        data: { text: '![测试图片](F:\\XDMaker\\generated.png)', isFinal: true },
+        data: { text: source, isFinal: true },
       });
-      h.emit({ type: 'done', data: {} });
+      h.emit(kind === 'component-error'
+        ? { type: 'error', data: { message: 'process exited', isTerminal: true } }
+        : { type: 'done', data: {} });
       await flushMicrotasks();
 
       expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith({
-        text: '![测试图片](F:\\XDMaker\\generated.png)',
+        text: kind === 'markdown' ? markdown : '![测试图片](<F:\\XDMaker\\generated.png>)',
         workingDir: 'F:\\XDMaker',
         sessionId: 'feishu-session',
         maxImages: 4,
@@ -3108,8 +3210,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       });
       expect(commitFinal).toHaveBeenCalledWith({
         userId: 'ou_user',
-        text: '测试图片',
-        terminal: 'done',
+        text: kind === 'component-error' ? expect.stringMatching(/测试图片[\s\S]*process exited/) : '测试图片',
+        terminal: kind === 'component-error' ? 'error' : 'done',
+        ...(kind === 'component-error' ? { errorCode: 'agent_turn_error' } : {}),
         threadTs: undefined,
         mediaAbsPaths: ['C:\\cindy-media\\generated.png'],
         allowedFileRoots: ['F:\\XDMaker'],
