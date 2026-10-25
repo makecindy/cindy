@@ -27,6 +27,10 @@ export default {
     'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
   },
   cases: {
+    'nested-lists': {
+      about: 'Tab nests a new list item and sending retains Markdown indentation',
+      viewport: { width: 760, height: 460 },
+    },
     'voice-hold': {
       about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
       viewport: { width: 360, height: 400 },
@@ -44,6 +48,29 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'nested-lists') {
+      const editor = page.locator('.ProseMirror[contenteditable="true"]');
+      for (const [kind, parent, expected] of [
+        ['bullet', '- parent', '- parent\n  - child'],
+        ['ordered', '1. parent', '1. parent\n   1. child'],
+        ['task', '- [x] parent', '- [x] parent\n  - [ ] child'],
+      ]) {
+        await editor.click();
+        await page.keyboard.type(parent);
+        await editor.press('Shift+Enter');
+        await editor.press('Tab');
+        await page.keyboard.type('child');
+        assert.equal(await editor.evaluate((node) => node.contains(document.activeElement)), true);
+        assert.equal(await editor.locator('li li').count(), 1);
+        await ui.capture(`nested-${kind}`);
+        await editor.press('Enter');
+        await page.waitForFunction(
+          (text) => document.querySelector('[data-testid="sent"]')?.textContent === text,
+          expected,
+        );
+      }
+      return;
+    }
     if (ui.case === 'voice-hold') {
       const editor = page.locator('.ProseMirror');
       const hint = page.getByTestId('composer-voice-hint');

@@ -8,7 +8,7 @@
  */
 import { InputRule, Node, mergeAttributes, wrappingInputRule, type NodeConfig } from '@tiptap/core';
 import { Fragment, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
-import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
+import { liftListItem, sinkListItem, splitListItem } from '@tiptap/pm/schema-list';
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 
@@ -194,6 +194,17 @@ const listItemConfig: NodeConfig = {
   },
   renderHTML({ HTMLAttributes }) {
     return ['li', mergeAttributes(HTMLAttributes), 0];
+  },
+  addKeyboardShortcuts() {
+    return {
+      // Composer palettes and prompt acceptance handle Tab before this keymap.
+      // Shift+Tab remains available to the existing permission-mode shortcut.
+      Tab: () => {
+        const { view } = this.editor;
+        if (!this.editor.isEditable || view.composing) return false;
+        return sinkListItem(this.type)(view.state, view.dispatch);
+      },
+    };
   },
 };
 

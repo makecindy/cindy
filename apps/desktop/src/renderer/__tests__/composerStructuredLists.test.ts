@@ -378,6 +378,59 @@ describe('composer structured list input rules', () => {
 });
 
 describe('composer structured list keyboard commands', () => {
+  // Regression: the composer accepts structured lists but leaves Tab unbound.
+  // Production entry/result: dispatch a keyboard event through the real list
+  // extension; both editor structure and serialized Markdown must become nested.
+  // Existing coverage restores nested documents but never creates one with Tab.
+  // Minimal input: two sibling items, caret in the second. Tier: unit (jsdom).
+  it.each([
+    ['bullet', '- parent', 'child', '- parent\n  - child'],
+    ['ordered', '1. parent', 'child', '1. parent\n   1. child'],
+    ['task', '- [x] parent', 'child', '- [x] parent\n  - [ ] child'],
+    ['empty', '- parent', '', '- parent\n  - '],
+  ])('nests the current %s item with Tab and serializes its indentation', (_kind, parent, child, expected) => {
+    const editor = makeEditor();
+    typeThroughInputRules(editor, parent);
+    expect(handleStructuredListBreak(editor.view)).toBe(true);
+    typeThroughInputRules(editor, child);
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+
+    editor.view.dom.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    const list = editor.state.doc.firstChild;
+    expect(list?.childCount).toBe(1);
+    expect(list?.firstChild?.lastChild?.type).toBe(list?.type);
+    expect(serializeEditorContent(editor).text).toBe(expected);
+  });
+
+  // Do not take Tab focus navigation without a parent item or take a modified
+  // shortcut such as Shift+Tab, which the composer reserves for permission mode.
+  it.each([
+    ['plain paragraph', 'plain', {}],
+    ['first item', '- parent', {}],
+    ['Shift+Tab', '- parent', { shiftKey: true }],
+    ['Ctrl+Tab', '- parent', { ctrlKey: true }],
+    ['Alt+Tab', '- parent', { altKey: true }],
+    ['Meta+Tab', '- parent', { metaKey: true }],
+  ])('leaves %s to existing keyboard behavior', (_kind, parent, modifiers) => {
+    const editor = makeEditor();
+    typeThroughInputRules(editor, parent);
+    if (Object.keys(modifiers).length > 0) {
+      expect(handleStructuredListBreak(editor.view)).toBe(true);
+      typeThroughInputRules(editor, 'child');
+    }
+    const before = editor.getJSON();
+    const event = new KeyboardEvent('keydown', {
+      key: 'Tab', bubbles: true, cancelable: true, ...modifiers,
+    });
+
+    editor.view.dom.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(editor.getJSON()).toEqual(before);
+  });
+
   it('splits a non-empty item and exits from the empty continuation item', () => {
     const editor = makeEditor({
       type: 'doc',
