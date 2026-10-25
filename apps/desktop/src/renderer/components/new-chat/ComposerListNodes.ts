@@ -184,6 +184,36 @@ function fenceAwareWrappingInputRule(
   });
 }
 
+/** Preserve source formatting only when Tab creates a new child list. */
+function sinkComposerListItem(view: EditorView, itemType: NodeType): boolean {
+  const { state } = view;
+  const { $from, $to } = state.selection;
+  const range = $from.blockRange($to, (node) =>
+    node.childCount > 0 && node.firstChild?.type === itemType);
+  if (!range || range.startIndex === 0) return false;
+  const sourceList = range.parent;
+  const previousItem = sourceList.child(range.startIndex - 1);
+  const hasChildList = previousItem.lastChild?.type === sourceList.type;
+
+  return sinkListItem(itemType)(state, (tr) => {
+    if (!hasChildList) {
+      // Sinking adds an item/list pair below the source list. Address that
+      // exact level even if the selection starts inside a deeper existing list.
+      const depth = range.depth + 2;
+      const $nested = tr.selection.$from;
+      const nestedList = $nested.node(depth);
+      // Keep the native child ordinal (1); copy only the user's formatting.
+      // Apply this in the same transaction so one undo restores the whole edit.
+      tr.setNodeMarkup($nested.before(depth), undefined, {
+        ...nestedList.attrs,
+        marker: sourceList.attrs.marker,
+        separator: sourceList.attrs.separator,
+      });
+    }
+    view.dispatch(tr);
+  });
+}
+
 const listItemConfig: NodeConfig = {
   name: 'listItem',
   group: 'block',
@@ -202,7 +232,7 @@ const listItemConfig: NodeConfig = {
       Tab: () => {
         const { view } = this.editor;
         if (!this.editor.isEditable || view.composing) return false;
-        return sinkListItem(this.type)(view.state, view.dispatch);
+        return sinkComposerListItem(view, this.type);
       },
     };
   },

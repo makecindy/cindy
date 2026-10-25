@@ -54,6 +54,9 @@ export default {
         ['bullet', '- parent', '- parent\n  - child'],
         ['ordered', '1. parent', '1. parent\n   1. child'],
         ['task', '- [x] parent', '- [x] parent\n  - [ ] child'],
+        ['plus', '+ parent', '+ parent\n  + child'],
+        ['parenthesized', '7) parent', '7) parent\n   1) child'],
+        ['cjk', '3、parent', '3、parent\n  1、child'],
       ]) {
         await editor.click();
         await page.keyboard.type(parent);
