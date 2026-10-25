@@ -4,6 +4,7 @@ import type { DbClient } from '@cindy/runtime-db';
 import type { DbLogger } from '@cindy/runtime-db/logging';
 import { botProfiles } from '@cindy/runtime-db/schema';
 import { throwIpcError } from '@cindy/remote-agent/ipcValidate';
+import { isIpcError } from '@cindy/remote-agent/shared/ipc-errors';
 import { BOT_IM_CONNECTION_CHANGED_EVENT, type BotImChannel, type BotImConnectionAddInput, type BotImConnectionAddResult,
   type BotImConnectionGroupsPayload, type BotImConnectionListPayload, type BotImConnectionRecord,
   type BotImConnectionRemoveResult, type BotImConnectionView, type BotImFeishuService } from '@cindy/companion-core/botImConnection';
@@ -758,6 +759,7 @@ function registerBotImConnectionIpc(): void {
       throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
     }
     return archiveBotImConnectionLane(p.id, p.sessionId, laneOptions).catch((error: unknown) => {
+      if (isIpcError(error)) throw error;
       const code = error && typeof error === 'object' && 'code' in error ? (error as {code?: unknown}).code : undefined;
       if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS') throw error;
       if (error instanceof Error && (error.message === 'ARCHIVE_CAPACITY_REACHED' || error.message === 'OWNER_CHANGED')) {

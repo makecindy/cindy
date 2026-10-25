@@ -1,10 +1,34 @@
+/**
+ * main/im/shared/botImLaneRuntime.ts
+ * ---------------------------------------------------------------------------
+ * 伙伴「消息平台」页的隐藏任务小节: 列出一条连接下有任务的落点, 并能让某一条重新开始。
+ *
+ *   - 主人私聊落在伙伴主任务(bot_session_links role=canonical);
+ *   - 群 / 话题 / 其他人的私聊各一条隐藏专线(role=channel, route_key 以这条连接的
+ *     `im:<channel>:<botContextId>:` 开头, 见 imBotBindingRoute.ts)。
+ *
+ * 范围只按 伙伴 id + 这条连接的 route key 前缀取, 别的伙伴、同一伙伴的其它连接都不会混进来。
+ * 状态只读已有数据: 正在回复取 live 会话, 出错取最近一条消息是否为错误行, 不另存状态。
+ *
+ * 「重新开始」不另写一套换会话逻辑: 由 register.ts 注入伙伴已有的显式重启
+ * (restartBotCanonicalRuntime → contextOverflowRollover.prepareNativeSessionRecovery),
+ * 与空闲间隔刷新共用同一套交接 + commitRebuild: 同一条任务、记录不删, 下一条消息
+ * 换一个干净的原生会话。这里只负责校验这条任务确实属于这条连接。
+ */
+
 import { randomBytes } from 'node:crypto';
 import { and, count, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { DbClient } from '@cindy/runtime-db';
 import { botSessionLinks, messages, sessions } from '@cindy/runtime-db/schema';
 import type { DbLogger } from '@cindy/runtime-db/logging';
 import { throwIpcError } from '@cindy/remote-agent/ipcValidate';
-import type { BotImConnectionLane, BotImConnectionLanesPayload, BotImConnectionRecord, BotImLaneKind, BotImTaskArchiveActivity } from '@cindy/companion-core/botImConnection';
+import type {
+  BotImConnectionLane,
+  BotImConnectionLanesPayload,
+  BotImConnectionRecord,
+  BotImLaneKind,
+  BotImTaskArchiveActivity,
+} from '@cindy/companion-core/botImConnection';
 import type { BotImTaskArchiveCleanup } from './botImConnectionStore.js';
 import { companionConnectionRouteKeyPrefix } from '@cindy/im-runtime/imBotBindingRoute';
 export interface BotImLaneRuntimeDeps {
@@ -34,7 +58,10 @@ export interface BotImLaneActivity {
 export interface BotImLaneStore {
   listLinks(botId: string): Promise<BotImLaneLink[]>;
   readActivity(sessionId: string): Promise<BotImLaneActivity>;
-  readArchiveActivity?(sessionId: string, archive?: number | BotImTaskArchiveActivity): Promise<{messageId: string | null; hasNewActivity: boolean}>;
+  readArchiveActivity?(sessionId: string, archive?: number | BotImTaskArchiveActivity): Promise<{
+    messageId: string | null;
+    hasNewActivity: boolean;
+  }>;
 }
 
 export interface BotImLaneListOptions {
@@ -42,14 +69,30 @@ export interface BotImLaneListOptions {
   knownGroups?: (record: BotImConnectionRecord) => Promise<Array<{ chatId: string; chatName: string | null }>>;
 }
 
-
 export function createBotImLaneRuntime(host: {
   getDbClient(): DbClient;
   readBotImConnection(id: string): BotImConnectionRecord | null;
-  archiveBotImTaskRow: (expected: BotImConnectionRecord, sessionId: string, reclaimable?: readonly BotImTaskArchiveCleanup[], activity?: BotImTaskArchiveActivity) => Promise<BotImConnectionRecord | null>;
+  listBotImConnections(): BotImConnectionRecord[];
+  archiveBotImTaskRow: (
+    expected: BotImConnectionRecord,
+    sessionId: string,
+    reclaimable?: readonly BotImTaskArchiveCleanup[],
+    activity?: BotImTaskArchiveActivity,
+  ) => Promise<BotImConnectionRecord | null>;
+  scopeKey(): string;
+  isAppSessionBoundaryPending(): boolean;
   log: DbLogger;
 }) {
-const { getDbClient, readBotImConnection, archiveBotImTaskRow, log }=host;
+const {
+  getDbClient,
+  readBotImConnection,
+  listBotImConnections,
+  archiveBotImTaskRow,
+  scopeKey,
+  isAppSessionBoundaryPending,
+  log,
+} = host;
+
 let deps: BotImLaneRuntimeDeps | null = null;
 
 function configureBotImLaneRuntime(next: BotImLaneRuntimeDeps | null): void {
@@ -68,6 +111,21 @@ function readOrigin(agentMeta: string | null): BotImLaneActivity['origin'] {
   } catch {
     return { chatName: null, senderName: null };
   }
+}
+
+/** Keep archive reclamation and list activity on the same visible-message boundary. */
+async function readLatestActivity(db: DbClient['drizzle'], sessionId: string) {
+  const [latest] = await db
+    .select({ role: messages.role, createdAt: messages.createdAt })
+    .from(messages)
+    .where(and(
+      eq(messages.sessionId, sessionId),
+      isNull(messages.rewindAt),
+      inArray(messages.role, ['user', 'assistant', 'error']),
+    ))
+    .orderBy(desc(messages.createdAt), desc(sql<number>`rowid`))
+    .limit(1);
+  return latest;
 }
 
 const dbLaneStore: BotImLaneStore = {
@@ -111,12 +169,7 @@ const dbLaneStore: BotImLaneStore = {
       .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'context_rebuild')))
       .orderBy(desc(messages.createdAt), desc(messageRowid))
       .limit(1);
-    const [latest] = await db
-      .select({ role: messages.role, createdAt: messages.createdAt })
-      .from(messages)
-      .where(and(visible, inArray(messages.role, ['user', 'assistant', 'error'])))
-      .orderBy(desc(messages.createdAt), desc(messageRowid))
-      .limit(1);
+    const latest = await readLatestActivity(db, sessionId);
     const [lastUser] = await db
       .select({ agentMeta: messages.agentMeta })
       .from(messages)
@@ -135,6 +188,29 @@ const dbLaneStore: BotImLaneStore = {
       contextMessageCount: Number(counted?.n ?? 0),
       origin: readOrigin(lastUser?.agentMeta ?? null),
     };
+  },
+
+  async readArchiveActivity(sessionId, archive) {
+    const db = getDbClient().drizzle;
+    if (typeof archive === 'number') {
+      // Older clients stored only a timestamp. Keep that format readable.
+      const latest = await readLatestActivity(db, sessionId);
+      return { messageId: null, hasNewActivity: latest !== undefined && latest.createdAt > archive };
+    }
+    // Persist a stable message identity, never SQLite's mutable hidden rowid.
+    // Resolve its current position in the same query, including rewound rows.
+    // If history pruning removed the anchor, any visible message restores the
+    // row: an invalid display boundary must not hide future activity forever.
+    const afterAnchor = archive?.messageId === undefined || archive.messageId === null
+      ? undefined
+      : sql`rowid > coalesce((select rowid from messages where id = ${archive.messageId} and session_id = ${sessionId}), 0)`;
+    const [latest] = await db.select({ id: messages.id }).from(messages).where(and(
+      eq(messages.sessionId, sessionId),
+      isNull(messages.rewindAt),
+      inArray(messages.role, ['user', 'assistant', 'error']),
+      afterAnchor,
+    )).orderBy(desc(sql<number>`rowid`)).limit(1);
+    return { messageId: latest?.id ?? null, hasNewActivity: latest !== undefined };
   },
 };
 
@@ -184,6 +260,12 @@ function requireRecord(id: string): BotImConnectionRecord {
   return record;
 }
 
+function archiveBoundary(record: BotImConnectionRecord, sessionId: string, cutoff: number): number | BotImTaskArchiveActivity {
+  return record.archivedTaskActivity && Object.hasOwn(record.archivedTaskActivity, sessionId)
+    ? record.archivedTaskActivity[sessionId]
+    : cutoff;
+}
+
 async function listBotImConnectionLanes(
   id: string,
   options: BotImLaneListOptions = {},
@@ -201,8 +283,15 @@ async function listBotImConnectionLanes(
       log.warn(`bot im connection ${id}: known groups unavailable: ${String(err)}`);
     }
   }
-  const lanes = await Promise.all(
-    links.map(async (link): Promise<BotImConnectionLane> => {
+  const rows = await Promise.all(
+    links.map(async (link): Promise<BotImConnectionLane | null> => {
+      const archivedAt = record.archivedTaskRows?.[link.sessionId];
+      if (typeof archivedAt === 'number') {
+        const activity = store.readArchiveActivity
+          ? await store.readArchiveActivity(link.sessionId, archiveBoundary(record, link.sessionId, archivedAt))
+          : { messageId: null, hasNewActivity: false };
+        if (!activity.hasNewActivity) return null;
+      }
       const activity = await store.readActivity(link.sessionId);
       const running = deps?.isTurnRunning(link.sessionId) === true;
       const name =
@@ -223,6 +312,7 @@ async function listBotImConnectionLanes(
       };
     }),
   );
+  const lanes = rows.filter((lane): lane is BotImConnectionLane => lane !== null);
   // 主人私聊在最前, 其余按最近活动倒序。
   lanes.sort((a, b) => {
     if (a.kind === 'owner-dm' || b.kind === 'owner-dm') return a.kind === 'owner-dm' ? -1 : 1;
@@ -255,15 +345,75 @@ async function resetBotImConnectionLane(
   return listBotImConnectionLanes(id, options);
 }
 
-/** Archive only a connection list row; the underlying task and route remain intact. */
-async function archiveBotImConnectionLane(id: string, sessionId: string, options: BotImLaneListOptions = {}): Promise<BotImConnectionLanesPayload> {
+/** Archive only a connection list row. The underlying session keeps running unchanged. */
+async function archiveBotImConnectionLane(
+  id: string,
+  sessionId: string,
+  options: BotImLaneListOptions = {},
+): Promise<BotImConnectionLanesPayload> {
+  const owner = scopeKey();
+  const assertCurrent = () => {
+    if (isAppSessionBoundaryPending() || scopeKey() !== owner) {
+      throwIpcError('PRECONDITION_FAILED', 'OWNER_CHANGED');
+    }
+  };
+  assertCurrent();
   const record = requireRecord(id);
   const links = await listScopedLinks(record);
-  if (!links.some((item) => item.sessionId === sessionId)) throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
-  const activity = await store.readActivity(sessionId);
-  const archiveActivity: BotImTaskArchiveActivity = { messageId: activity.origin.senderName, generation: randomBytes(6).toString('hex') };
-  if (!await archiveBotImTaskRow(record, sessionId, [], archiveActivity)) throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
-  return listBotImConnectionLanes(id, options);
+  const link = links.find((item) => item.sessionId === sessionId);
+  assertCurrent();
+  if (!link) throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
+  // Fix the boundary before waiting on reclamation or the settings-file lock.
+  // A message arriving during those awaits must be able to restore the row.
+  const activity = store.readArchiveActivity
+    ? await store.readArchiveActivity(sessionId)
+    : { messageId: null, hasNewActivity: false };
+  assertCurrent();
+  const archiveActivity = { messageId: activity.messageId, generation: randomBytes(6).toString('hex') };
+  const reclaimable: BotImTaskArchiveCleanup[] = [];
+  // Capacity is shared by the owner. An empty old connection must not strand
+  // obsolete markers that block archiving in every other connection.
+  for (const candidate of [record, ...listBotImConnections().filter((item) => item.id !== id)]) {
+    if (!candidate.archivedTaskRows) continue;
+    let candidateLinks: ScopedLink[];
+    try {
+      candidateLinks = candidate.id === id ? links : await listScopedLinks(candidate);
+    } catch {
+      assertCurrent();
+      continue; // A failed route lookup is not evidence that its rows are gone.
+    }
+    assertCurrent();
+    const linkedIds = new Set(candidateLinks.map((item) => item.sessionId));
+    const cutoffs: Record<string, number> = Object.create(null);
+    for (const [archivedId, cutoff] of Object.entries(candidate.archivedTaskRows)) {
+      if (candidate.id === id && archivedId === sessionId) continue;
+      if (!linkedIds.has(archivedId)) {
+        cutoffs[archivedId] = cutoff;
+        continue;
+      }
+      let hasNewActivity = false;
+      try {
+        hasNewActivity = store.readArchiveActivity
+          ? (await store.readArchiveActivity(archivedId, archiveBoundary(candidate, archivedId, cutoff))).hasNewActivity
+          : false;
+      } catch {
+        // Missing activity evidence must not reveal a still-archived row.
+      }
+      assertCurrent();
+      if (hasNewActivity) cutoffs[archivedId] = cutoff;
+    }
+    if (Object.keys(cutoffs).length) reclaimable.push({ connection: candidate, cutoffs });
+  }
+  assertCurrent();
+  const current = requireRecord(id);
+  if (current.botId !== record.botId || current.botContextId !== record.botContextId || current.channel !== record.channel) {
+    throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
+  }
+  if (!await archiveBotImTaskRow(record, sessionId, reclaimable, archiveActivity)) throwIpcError('NOT_FOUND', 'LANE_NOT_FOUND');
+  assertCurrent();
+  const payload = await listBotImConnectionLanes(id, options);
+  assertCurrent();
+  return payload;
 }
 
 const __testing = {

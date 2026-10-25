@@ -302,5 +302,16 @@ async function removeBotImConnectionRecord(id: string): Promise<BotImConnectionR
   return previous;
 }
 
-return {listBotImConnections,readBotImConnection,listBotImConnectionsForBot,addBotImConnectionRecord,updateBotImConnectionRecord,archiveBotImTaskRow,setBotImConnectionGroupActivation,removeBotImConnectionRecord};
+return {
+  listBotImConnections,
+  readBotImConnection,
+  listBotImConnectionsForBot,
+  addBotImConnectionRecord,
+  updateBotImConnectionRecord,
+  archiveBotImTaskRow,
+  setBotImConnectionGroupActivation,
+  removeBotImConnectionRecord,
+  scopeKey: host.scopeKey,
+  isAppSessionBoundaryPending: () => host.isAppSessionBoundaryPending?.() ?? false,
+};
 }

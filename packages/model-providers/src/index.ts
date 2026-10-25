@@ -1,4 +1,13 @@
-export { parseModelDisplayPricing, type ModelDisplayPricing } from './modelDisplayPricing.js';
+export {
+  parseModelDisplayPricing,
+  type ModelDisplayPricing,
+  type ModelDisplayPricingSummary,
+  type SummaryQuote,
+} from './modelDisplayPricing.js';
+export {
+  providerProtocolCandidates,
+  type ProviderProtocolCandidate,
+} from './providerProtocolProbe.js';
 export { remoteInvocationModels } from './remoteModels.js';
 /**
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
@@ -26,6 +35,7 @@ export type {
 
 export type {
   AgentKind,
+  ModelInterfaceSnapshot,
   ProviderWireProtocol,
   CodexCompatibilityWireProtocol,
   Effort,
@@ -193,6 +203,7 @@ export {
   defaultEffortForCapabilities,
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,

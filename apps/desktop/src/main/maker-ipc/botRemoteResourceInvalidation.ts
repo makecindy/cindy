@@ -9,7 +9,7 @@ const log=createLogger('maker-ipc:bot-remote-resource');
 export const { onBotRemoteResourceChanged, broadcastBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForSession, scheduleBotRemoteResourceChangedForDelegation, scheduleBotRemoteResourceChangedForFollowedSession } = createBotRemoteResourceInvalidation({
   getDbClient,activeOwnerScopeKey,isAppSessionBoundaryPending,getSafeDataOwnerPushStamp,tapWindowBroadcast,log,
   ownerScopedUserDataPath,readTaskResponsibilities,
-  broadcastLocal(channel,payload){
+  broadcastLocal(channel,payload,_stamp){
     for(const win of BrowserWindow.getAllWindows()){
       if(win.isDestroyed())continue;
       try{win.webContents.send(channel,payload);}
