@@ -39,11 +39,14 @@ import {
   parseClaudeCliLoginStatus,
   parseClaudeCliPlanUsageLine,
   peekClaudeCliLoginStatus,
+  probeClaudeCliLoginStatus,
   readClaudeCliPlanUsage,
   readClaudeCliLoginStatus,
   refreshClaudeCliLoginStatus,
   resetClaudeNativeCliForTest,
   runClaudeCliLogin,
+  runClaudeCliLoginWithEnv,
+  setClaudeCliAccountEnvProvider,
 } from '../claude-native-cli.js';
 
 type FakeChild = EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: ReturnType<typeof vi.fn> };
@@ -85,6 +88,7 @@ function argsOf(call: unknown[]): string[] {
 
 beforeEach(() => {
   resetClaudeNativeCliForTest();
+  setClaudeCliAccountEnvProvider(null);
   h.binary = '/opt/cindy/claude';
   h.envProxy = false;
   h.resolved = null;
@@ -334,6 +338,82 @@ describe('readClaudeCliPlanUsage', () => {
     h.binary = null;
     await expect(readClaudeCliPlanUsage()).rejects.toThrow('unavailable');
     expect(h.spawn).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：status / login / get_usage 拉起的 CLI env 带上活动账号的
+ *   CLAUDE_CONFIG_DIR；账号目录坏掉时登录态为「未登录」而不是主账号的登录态。
+ * - 规则依据：docs/dev-rules/claude-multi-account.md §4.2、§4.4（失败不回落主账号）。
+ * - 现有覆盖缺口：以上用例只覆盖默认配置目录。
+ * - 最小失败输入：活动账号 env provider 抛错 → 旧实现会继续用默认目录读到主账号登录态。
+ * - tier：unit（假 child_process，无真实 CLI）。
+ */
+describe('多账号:CLI env 跟随活动账号', () => {
+  const ACCOUNT_DIR = 'C:\\Users\\me\\AppData\\Roaming\\Cindy\\claude-accounts\\acct_work0001';
+  const envOf = (call: unknown[]) => (call[2] as { env: Record<string, string> }).env;
+
+  it('status / login / get_usage 都用活动账号的配置目录', async () => {
+    setClaudeCliAccountEnvProvider(async () => ({ CLAUDE_CONFIG_DIR: ACCOUNT_DIR }));
+    h.spawn.mockImplementation(() => fakeChild({ stdout: LOGGED_OUT }));
+    await refreshClaudeCliLoginStatus({ force: true });
+    expect(envOf(h.spawn.mock.calls[0]!)).toEqual({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: ACCOUNT_DIR });
+
+    h.spawn.mockReset();
+    h.spawn.mockImplementation(() => fakeChild({ code: 1 }));
+    await expect(readClaudeCliPlanUsage()).rejects.toThrow();
+    expect(envOf(h.spawn.mock.calls[0]!).CLAUDE_CONFIG_DIR).toBe(ACCOUNT_DIR);
+  });
+
+  it('活动账号目录不可用:按未登录处理,不拉起 CLI,也不回落主账号的登录', async () => {
+    h.spawn.mockImplementation(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus({ force: true });
+    expect(peekClaudeCliLoginStatus()).toMatchObject({ loggedIn: true });
+    h.spawn.mockReset();
+    setClaudeCliAccountEnvProvider(async () => {
+      throw new Error('profile_unavailable');
+    });
+    await expect(refreshClaudeCliLoginStatus({ force: true })).resolves.toEqual({ loggedIn: false });
+    expect(peekClaudeCliLoginStatus()).toEqual({ loggedIn: false });
+    expect(h.spawn).not.toHaveBeenCalled();
+    await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toEqual({
+      ok: false,
+      reason: 'local_unavailable',
+    });
+    expect(h.spawn).not.toHaveBeenCalled();
+  });
+
+  it('按指定账号探测与登录:用给定 env,且不改活动账号的登录态缓存', async () => {
+    h.spawn.mockImplementation(() => fakeChild({ stdout: LOGGED_OUT }));
+    await refreshClaudeCliLoginStatus({ force: true });
+    h.spawn.mockReset();
+
+    const other = { CLAUDE_CONFIG_DIR: ACCOUNT_DIR };
+    let loggedIn = false;
+    h.spawn.mockImplementation((_bin: string, args: string[]) =>
+      args[1] === 'login'
+        ? (() => {
+            loggedIn = true;
+            return fakeChild({ code: 0 });
+          })()
+        : fakeChild({ stdout: loggedIn ? SUBSCRIPTION : LOGGED_OUT }),
+    );
+    await expect(probeClaudeCliLoginStatus(other)).resolves.toEqual({ loggedIn: false });
+    const result = await runClaudeCliLoginWithEnv(other, new AbortController().signal);
+    expect(result).toMatchObject({ ok: true, status: { loggedIn: true, email: 'user@example.com' } });
+    for (const call of h.spawn.mock.calls) expect(envOf(call).CLAUDE_CONFIG_DIR).toBe(ACCOUNT_DIR);
+    expect(argsOf(h.spawn.mock.calls.find((c) => argsOf(c)[1] === 'login')!)).toEqual(['auth', 'login', '--claudeai']);
+    // 活动账号(此处是主账号)的缓存不受影响。
+    expect(peekClaudeCliLoginStatus()).toEqual({ loggedIn: false });
+  });
+
+  it('按指定账号登录:已是非订阅登录时不改它', async () => {
+    h.spawn.mockImplementation(() => fakeChild({ stdout: API_KEY_LOGIN }));
+    await expect(
+      runClaudeCliLoginWithEnv({ CLAUDE_CONFIG_DIR: ACCOUNT_DIR }, new AbortController().signal),
+    ).resolves.toEqual({ ok: false, reason: 'not_a_subscription' });
+    expect(h.spawn).toHaveBeenCalledTimes(1);
   });
 });
 

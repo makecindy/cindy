@@ -93,13 +93,45 @@ function cliBinaryPath(): string | null {
 }
 
 /**
- * 登录与登录态检查用 CLI 默认配置目录(dev 多实例也一样),凭证库因此与终端里的
- * `claude`、订阅会话共用同一份。process.env 的 CLAUDE_CONFIG_DIR 在 boot 期已被剥离。
+ * 活动 Claude 账号的 CLI env(docs/dev-rules/claude-multi-account.md)。主账号返回 `{}`
+ * = CLI 默认配置目录,与终端里的 `claude` 共用同一份登录;额外账号返回它自己的
+ * `CLAUDE_CONFIG_DIR`,凭证仍由 CLI 自己在该目录里管理,Cindy 不读。
+ * 未注入(多账号未启用 / 单测)时等同主账号。
  */
-async function cliEnv(options: { network: boolean }): Promise<NodeJS.ProcessEnv> {
+type AccountEnvProvider = () => Promise<Record<string, string>>;
+let accountEnvProvider: AccountEnvProvider | null = null;
+
+export function setClaudeCliAccountEnvProvider(provider: AccountEnvProvider | null): void {
+  accountEnvProvider = provider;
+}
+
+/** 活动账号的配置目录不可用:调用方按未登录 / 不可用处理,绝不回落主账号。 */
+class ClaudeCliAccountUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`active Claude account is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'ClaudeCliAccountUnavailableError';
+  }
+}
+
+async function activeAccountEnv(): Promise<Record<string, string>> {
+  if (!accountEnvProvider) return {};
+  try {
+    return await accountEnvProvider();
+  } catch (err) {
+    throw new ClaudeCliAccountUnavailableError(err);
+  }
+}
+
+/**
+ * 登录与登录态检查默认用活动账号的配置目录(主账号 = CLI 默认目录,dev 多实例也一样)。
+ * process.env 的 CLAUDE_CONFIG_DIR 在 boot 期已被剥离,只有这里显式给出的账号 env 生效。
+ */
+async function cliEnv(options: { network: boolean; accountEnv?: Record<string, string> }): Promise<NodeJS.ProcessEnv> {
+  const account = options.accountEnv ?? (await activeAccountEnv());
   return {
     ...cleanProcessEnv(),
     ...(options.network ? await claudeCliNetworkEnv() : {}),
+    ...account,
   };
 }
 
@@ -211,8 +243,20 @@ export function refreshClaudeCliLoginStatus(options?: { force?: boolean }): Prom
   }
   const flight = (async () => {
     try {
+      let env: NodeJS.ProcessEnv;
+      try {
+        env = await cliEnv({ network: false });
+      } catch (err) {
+        // 活动账号目录坏了:明确报未登录,不能沿用上一次(可能是主账号)的登录态。
+        log.warn('claude auth status skipped: active account unavailable', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        const loggedOut: ClaudeCliLoginStatus = { loggedIn: false };
+        publishClaudeCliLoginStatus(loggedOut);
+        return loggedOut;
+      }
       const result = await runCli(['auth', 'status', '--json'], {
-        env: await cliEnv({ network: false }),
+        env,
         timeoutMs: STATUS_TIMEOUT_MS,
       });
       const status = parseClaudeCliLoginStatus(result.stdout);
@@ -434,6 +478,58 @@ export async function runClaudeCliLogin(signal: AbortSignal): Promise<ClaudeCliL
   if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
   if (after.loggedIn) return { ok: true, status: after };
   return { ok: false, reason: after.notSubscription ? 'not_a_subscription' : 'login_failed' };
+}
+
+// ── 指定账号(多账号设置页:列表探测、首次登录) ──────────────────────────────
+
+/**
+ * 用给定账号 env 读一次登录态。不进缓存、不影响活动账号的登录态,也不走退避;
+ * 输出异常按未登录处理,拉起失败抛出由调用方决定展示。
+ */
+export async function probeClaudeCliLoginStatus(accountEnv: Record<string, string>): Promise<ClaudeCliLoginStatus> {
+  const result = await runCli(['auth', 'status', '--json'], {
+    env: await cliEnv({ network: false, accountEnv }),
+    timeoutMs: STATUS_TIMEOUT_MS,
+  });
+  return parseClaudeCliLoginStatus(result.stdout) ?? { loggedIn: false };
+}
+
+/**
+ * 在给定账号的配置目录里拉起 `claude auth login --claudeai`(浏览器授权与 token 落盘全在
+ * CLI 内,Cindy 不接触凭证)。语义与 runClaudeCliLogin 相同,但不改活动账号的缓存。
+ */
+export async function runClaudeCliLoginWithEnv(
+  accountEnv: Record<string, string>,
+  signal: AbortSignal,
+): Promise<ClaudeCliLoginResult> {
+  if (!cliBinaryPath()) return { ok: false, reason: 'local_unavailable' };
+  let before: ClaudeCliLoginStatus;
+  try {
+    before = await probeClaudeCliLoginStatus(accountEnv);
+  } catch (err) {
+    log.warn('claude auth status (account) failed', { error: err instanceof Error ? err.message : String(err) });
+    return { ok: false, reason: 'local_unavailable' };
+  }
+  if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  if (before.loggedIn) return { ok: true, status: before };
+  if (before.notSubscription) return { ok: false, reason: 'not_a_subscription' };
+  try {
+    const result = await runCli(['auth', 'login', '--claudeai'], {
+      env: await cliEnv({ network: true, accountEnv }),
+      timeoutMs: LOGIN_TIMEOUT_MS,
+      signal,
+    });
+    if (result.reason === 'cancelled') return { ok: false, reason: 'login_cancelled' };
+    if (result.reason === 'timeout') return { ok: false, reason: 'timeout' };
+    if (result.code !== 0) log.warn('claude auth login (account) exited with an error', { code: result.code });
+    const after = await probeClaudeCliLoginStatus(accountEnv);
+    if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+    if (after.loggedIn) return { ok: true, status: after };
+    return { ok: false, reason: after.notSubscription ? 'not_a_subscription' : 'login_failed' };
+  } catch (err) {
+    log.warn('claude auth login (account) failed to start', { error: err instanceof Error ? err.message : String(err) });
+    return { ok: false, reason: 'local_unavailable' };
+  }
 }
 
 /** @internal 单测用。 */
