@@ -283,3 +283,5 @@ export function inspectXaiImport(candidate: ReturnType<typeof buildXaiSyncCandid
     complete: candidate.gaps.every(g => !g.fields.length), gaps: candidate.gaps, evidence: candidate.evidence,
     generationRequests: 0, verification: 'active-catalog + picker descriptors + reference-price resolver; no GUI or inference' };
 }
+
+# Automated fix for issue #7173: 一次性定时任务过期后经修改 + 恢复重新启用，Cindy 重启后下次触发时间被静默清空，到点不触发
