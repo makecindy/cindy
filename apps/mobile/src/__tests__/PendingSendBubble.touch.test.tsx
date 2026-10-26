@@ -53,6 +53,9 @@ vi.mock('lucide-react-native', () => ({ Check: () => null, AlertCircle: () => nu
   Bot: () => null, Ghost: () => null, Send: () => null, Timer: () => null,
   Monitor: () => null, Smartphone: () => null, Clock: () => null, ChevronDown: () => null }));
 vi.mock('@/session/SentInlineAtomBody', () => ({ SentInlineAtomBody: () => null }));
+// The height wrapper has its own lifecycle tests; keep this suite on pending
+// actions and native text selection without importing the native animation runtime.
+vi.mock('@/session/AnimatedContentHeight', () => ({ AnimatedContentHeight: ({ children }: { children: ReactNode }) => children }));
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
   useSentAttachmentThumbsVersion: () => 0 }));
 vi.mock('react-i18next', () => ({ initReactI18next: { type: '3rdParty', init: () => undefined },

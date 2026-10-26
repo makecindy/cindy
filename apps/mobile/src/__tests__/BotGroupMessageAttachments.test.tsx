@@ -6,6 +6,15 @@ import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 import { openBrowserAsync } from 'expo-web-browser';
 
 // The shared renderer imports site-video; replace only its native surface.
+// Adapt only the native animation/list surfaces. These suites keep the real
+// attachment/message gates; native motion has separate hook and device coverage.
+vi.mock('@legendapp/list/reanimated', async () => ({ AnimatedLegendList: (await import('@legendapp/list/react-native')).LegendList }));
+vi.mock('@/session/AnimatedContentHeight', () => ({ AnimatedContentHeight: ({ open = true, children }: any) => open ? children : null }));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardLift: ({ children }: any) => children }));
+vi.mock('@/session/useSmoothMessageFollow', async () => {
+  const { useRef, useCallback } = await import('react');
+  return { useSmoothMessageFollow: () => ({ scrollRef: useRef(null), move: useCallback(() => {}, []), cancel: useCallback(() => {}, []) }) };
+});
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
@@ -233,10 +242,12 @@ describe('group attachments the computer has not fetched yet', () => {
         pending('gone', 'gone.md', 'unavailable'), ready('photo', 'photo.png')],
     })));
     const chips = [...host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')];
-    expect(chips).toHaveLength(4);
+    expect(chips).toHaveLength(3);
     expect(chips[0]!.parentElement).toBe(chips[1]!.parentElement);
-    expect(chips[1]!.parentElement).not.toBe(chips[3]!.parentElement);
-    expect(resolveServerMedia).not.toHaveBeenCalled();
+    expect(chips[1]!.parentElement).not.toBe(chips[2]!.parentElement);
+    expect(resolveServerMedia.mock.calls.map(([id]) => id)).toEqual(['first', 'second', 'photo']);
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('https://example.invalid/signed/photo');
+    resolveServerMedia.mockClear();
     expect(resolveMedia).not.toHaveBeenCalled();
     await act(async () => chips[1]!.click());
     await act(async () => chips[0]!.click());
@@ -244,7 +255,7 @@ describe('group attachments the computer has not fetched yet', () => {
     expect(vi.mocked(openBrowserAsync).mock.calls.map(([url]) => url)).toEqual([
       'https://example.invalid/signed/second', 'https://example.invalid/signed/first',
     ]);
-    await act(async () => chips[3]!.click());
+    await act(async () => host!.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
     expect(resolveServerMedia).toHaveBeenLastCalledWith('photo');
     expect(host.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe('https://example.invalid/signed/photo');
     expect(openBrowserAsync).toHaveBeenCalledTimes(2);

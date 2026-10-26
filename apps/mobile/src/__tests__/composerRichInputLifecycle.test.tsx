@@ -15,9 +15,11 @@ const bridge = vi.hoisted(() => ({
   mounts: 0,
   clipboard: vi.fn<() => Promise<string>>(),
   inject: vi.fn(),
+  focus: vi.fn(),
+  platform: 'ios',
 }));
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' }, StyleSheet: { create: (styles: unknown) => styles },
+  Platform: { get OS() { return bridge.platform; } }, StyleSheet: { create: (styles: unknown) => styles },
   AppState: {
     get currentState() { return bridge.state; },
     addEventListener: (_: string, listener: (state: string) => void) => {
@@ -33,7 +35,7 @@ vi.mock('react-native-webview', async () => {
     bridge.onContentProcessDidTerminate = props.onContentProcessDidTerminate;
     bridge.onRenderProcessGone = props.onRenderProcessGone;
     useEffect(() => { bridge.mounts += 1; }, []);
-    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject }));
+    useImperativeHandle(ref, () => ({ injectJavaScript: bridge.inject, requestFocus: bridge.focus }));
     return null;
   }) };
 });
@@ -49,6 +51,7 @@ let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined; bridge.inject.mockReset();
   bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  bridge.platform = 'ios'; bridge.focus.mockReset();
   expect(bridge.listeners.size).toBe(0);
 });
 
@@ -82,6 +85,23 @@ function mount(hidden = false) {
   const send = (message: unknown) => act(() => bridge.onMessage({ nativeEvent: { data: JSON.stringify(message) } }));
   return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument };
 }
+
+// Unit: recommendation/explicit focus must acquire the Android IME only after
+// the editor is ready; restoring a draft or dictation selection must not open it.
+it.each(['ios', 'android'])('only explicitly focused documents request the %s native keyboard', platform => {
+  bridge.platform = platform;
+  const { ref, page, send } = mount();
+  ref.current!.focus();
+  expect(bridge.focus).not.toHaveBeenCalled();
+  send({ type: 'ready' });
+  expect(page.focus).toHaveBeenCalledOnce();
+  expect(bridge.focus).toHaveBeenCalledTimes(platform === 'android' ? 1 : 0);
+  bridge.focus.mockClear();
+  act(() => ref.current!.applyDocumentAndSetSelection(textComposerDocument('restored'), 0));
+  expect(bridge.focus).not.toHaveBeenCalled();
+  act(() => ref.current!.applyDocumentAndSetSelectionToEnd(textComposerDocument('recommendation')));
+  expect(bridge.focus).toHaveBeenCalledTimes(platform === 'android' ? 1 : 0);
+});
 
 it('never writes an older native edit back over later typing, but applies external replacements', () => {
   const { page, send, onChangeDocument, renderDocument } = mount();

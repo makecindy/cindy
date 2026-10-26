@@ -2,16 +2,20 @@
 import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ awaiting: new Set<string>() }));
+const h = vi.hoisted(() => ({ awaiting: new Set<string>(), unread: new Set<string>(),
+  listeners: new Set<() => void>(), rowRenders: [] as string[] }));
 vi.mock('react-native', () => ({
   View: ({ children, testID, style }: any) => el('div', { 'data-testid': testID, style: Object.assign({}, ...[style].flat().filter(Boolean)) }, children),
-  Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress,
-    style: Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat().filter(Boolean)) }, children),
+  Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => {
+    if (testID?.startsWith('teammates.item.')) h.rowRenders.push(testID);
+    return el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress,
+      style: Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat().filter(Boolean)) }, children);
+  },
   StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 },
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: async () => ({ blocks: [] }) }) }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
-  subscribe: () => () => {},
+  subscribe: (listener: () => void) => { h.listeners.add(listener); return () => { h.listeners.delete(listener); }; },
   getSessionLiveActivity: (id: string) => h.awaiting.has(id) ? { phase: 'needs-interaction' } : null,
   getPendingInteractions: () => [],
 } }));
@@ -34,10 +38,11 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (factory: (value: typeof colors) => unknown) => factory(colors), useTheme: () => ({ colors }) };
 });
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', null, text) }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: () => false }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: (_owner: string, _device: string, id: string) => h.unread.has(id) }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => Date.now() }));
 import { useTeammateEntries, useTeammateRowRenderer } from '../session/TeammateList';
+import * as markdown from '../session/messageMarkdown';
 /** The task home section's rows: the same entries and row renderer, without the section chrome. */
 function Rows(props: Parameters<typeof useTeammateRowRenderer>[0]) {
   const entries = useTeammateEntries(props.items, props.groups?.items);
@@ -48,8 +53,8 @@ const item = { key: 'host:bot', host: { deviceId: 'host', deviceName: 'Computer 
   ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, revision: '1', links: [], display: { title: 'Mimi', preview: 'Last reply' },
 } };
 let root: Root; let node: HTMLDivElement;
-beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); });
-afterEach(async () => { await act(async () => root.unmount()); });
+beforeEach(() => { h.rowRenders = []; h.awaiting.clear(); h.unread.clear(); Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); });
+afterEach(async () => { await act(async () => root.unmount()); vi.restoreAllMocks(); });
 async function render(online = true) {
   await act(async () => root.render(el(Rows, { items: [item], isOnline: () => online, onSelect: vi.fn() })));
 }
@@ -172,4 +177,64 @@ it('keeps a cloud companion quiet while its main computer looks offline: no offl
     onSelect: vi.fn() })));
   expect(node.textContent).not.toContain('devices.resources.hostOffline');
   expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')).toBeNull();
+});
+
+/**
+ * Performance regression through the production row renderer (unit, no timing budget):
+ * existing visual cases never refresh a roster with new-but-equal objects/callbacks.
+ * Two rows and one changed reply suffice to expose unnecessary native-row renders;
+ * clicking the retained row must still navigate with the latest resource and handler.
+ */
+it('only redraws the changed teammate after a roster refresh and opens the latest resource', async () => {
+  const parse = vi.spyOn(markdown, 'parseMobileMarkdownInlines');
+  const second = { ...item, key: 'host:second', item: { ...item.item,
+    ref: { ...item.item.ref, id: 'second' }, display: { title: 'Aster', preview: 'Unchanged' } } };
+  const firstSelect = vi.fn();
+  await act(async () => root.render(el(Rows, { items: [item, second], isOnline: () => true, onSelect: firstSelect })));
+  h.rowRenders = [];
+  parse.mockClear();
+  const fresh = structuredClone([item, second]);
+  // A new revision/link is navigation data, even when no visible field changed.
+  fresh[1].item.revision = '2';
+  fresh[1].item.links = [{ rel: 'conversation', target: { kind: 'session', sessionId: 'latest' } }] as any;
+  const latestSelect = vi.fn();
+  await act(async () => root.render(el(Rows, { items: fresh, isOnline: () => true, onSelect: latestSelect })));
+  expect(h.rowRenders).toEqual([]);
+  expect(parse).not.toHaveBeenCalled();
+  fresh[0] = { ...fresh[0], item: { ...fresh[0].item, display: { title: 'Mimi', preview: '**New reply**' } } };
+  await act(async () => root.render(el(Rows, { items: [...fresh], isOnline: () => true, onSelect: latestSelect })));
+  expect(h.rowRenders).toEqual(['teammates.item.host.bot']);
+  expect(parse).toHaveBeenCalledExactlyOnceWith('**New reply**');
+  expect(node.textContent).toContain('New reply');
+  expect(node.textContent).toContain('Unchanged');
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="teammates.item.host.second"]')!.click());
+  expect(latestSelect).toHaveBeenCalledExactlyOnceWith(fresh[1]);
+  expect(firstSelect).not.toHaveBeenCalled();
+  // The ordering helper deduplicates by retaining the last resource snapshot.
+  const duplicate = { ...fresh[1], item: { ...fresh[1].item, revision: '3' } };
+  await act(async () => root.render(el(Rows, { items: [...fresh, duplicate], isOnline: () => true, onSelect: latestSelect })));
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="teammates.item.host.second"]')!.click());
+  expect(latestSelect).toHaveBeenLastCalledWith(duplicate);
+});
+
+// A retained row must still reflect live interaction, read acknowledgement and
+// connectivity changes; none changes the cached preview's Markdown input.
+it('updates waiting, unread and connection states without reparsing the reply', async () => {
+  const parse = vi.spyOn(markdown, 'parseMobileMarkdownInlines');
+  const waiting = { ...item, item: { ...item.item,
+    links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 's1' } }] } };
+  const props = { items: [waiting], isOnline: () => true, onSelect: vi.fn() };
+  await act(async () => root.render(el(Rows, props)));
+  parse.mockClear();
+  await act(async () => { h.awaiting.add('s1'); h.listeners.forEach(listener => listener()); });
+  expect(node.textContent).toContain('devices.companions.awaiting · Last reply');
+  h.unread.add('bot');
+  await act(async () => root.render(el(Rows, { ...props })));
+  expect(node.querySelector('[data-testid="companion.row.unread"]')).not.toBeNull();
+  h.unread.clear();
+  await act(async () => root.render(el(Rows, { ...props, isOnline: () => false })));
+  expect(node.querySelector('[data-testid="companion.row.unread"]')).toBeNull();
+  expect(node.textContent).toContain('devices.resources.hostOffline · Last reply');
+  expect(node.textContent).not.toContain('devices.companions.awaiting');
+  expect(parse).not.toHaveBeenCalled();
 });

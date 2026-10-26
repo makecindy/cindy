@@ -39,6 +39,7 @@ import {
   focusMainWindow,
   handleIncomingDeepLink,
   openMainWindowVoiceSettings,
+  openMainWindowRemoteControlSettings,
   setDeepLinkMainWindow,
   takePendingDeepLink,
   takePendingDeepLinkFromRenderer,
@@ -189,7 +190,7 @@ describe('user-initiated main-window focus', () => {
 });
 
 describe('internal main-window navigation', () => {
-  it('focuses the main window and routes voice settings to the requested tab', () => {
+  it.each(['providers', 'remote-control'] as const)('focuses the main window and routes settings to %s', (tab) => {
     const send = vi.fn();
     const mainWindow = {
       isDestroyed: () => false,
@@ -207,7 +208,8 @@ describe('internal main-window navigation', () => {
     };
     setDeepLinkMainWindow(mainWindow as unknown as BrowserWindow);
 
-    openMainWindowVoiceSettings('providers');
+    if (tab === 'remote-control') openMainWindowRemoteControlSettings();
+    else openMainWindowVoiceSettings(tab);
 
     expect(mainWindow.show).toHaveBeenCalledOnce();
     expect(mainWindow.restore).toHaveBeenCalledOnce();
@@ -221,7 +223,7 @@ describe('internal main-window navigation', () => {
     }
     expect(send).toHaveBeenCalledWith('deep-link:navigate', {
       type: 'settings',
-      tab: 'providers',
+      tab,
     });
     setDeepLinkMainWindow(null);
   });

@@ -14,7 +14,7 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const perfHarness = readFileSync(resolve(process.cwd(), 'app/listperf.tsx'), 'utf8');
 
-    const listStart = source.search(/<LegendList\s/);
+    const listStart = source.search(/<AnimatedLegendList\s/);
     expect(listStart).toBeGreaterThan(-1);
     const listEnd = source.indexOf('      />', listStart);
     expect(listEnd).toBeGreaterThan(listStart);
@@ -32,13 +32,13 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     expect(source).not.toContain('MOBILE_TAIL_REVEAL_ITEM_COUNT');
     expect(listSource).not.toMatch(/\binitialScrollIndex\s*=/);
     // Manual data prepend 不能与 Android native MVCP 并行:它会在 cell 位置提交后异步补
-    // offset，中间坐标窗无 cell 而白屏。size 变化始终由 LegendList 锚定；data 变化只在读历史
-    // 时锚定——贴底跟随时锚定会把被整批替换的旧可见行钉住，重连补同步时先跳上去再拉回底部。
+    // offset，中间坐标窗无 cell 而白屏。读历史时 data/size 变化交给 LegendList 锚定；
+    // 贴底时交给唯一跟随控制器，避免 native MVCP 与连续高度/滚动补偿同时写 offset。
     expect(listSource).toContain('alignItemsAtEnd');
     expect(listSource).toContain('maintainScrollAtEnd');
     expect(listSource).toContain('maintainVisibleContentPosition={historyPrependNativeMvcpDisabled');
     expect(listSource).toContain('? false');
-    expect(listSource).toContain(': { data: anchorVisibleRowsOnDataChange, size: true }}');
+    expect(listSource).toContain(': { data: anchorVisibleRowsOnDataChange, size: anchorVisibleRowsOnDataChange }}');
     expect(source).toContain(
       'const anchorVisibleRowsOnDataChange = isAwayFromBottom || readingOlderRef.current;',
     );

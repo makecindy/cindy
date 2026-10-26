@@ -63,16 +63,25 @@ export function useComposerOverlayMetrics(overlayEl: HTMLElement | null): Compos
     };
     const ro = new ResizeObserver(() => measure(true));
     let observedTargets = new Set<HTMLElement>();
+    let centerOccupied = false;
     const syncResizeTargetsAndMeasure = (sync: boolean) => {
       const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
+      let changed = nextTargets.size !== observedTargets.size;
       for (const target of observedTargets) {
         if (!nextTargets.has(target)) ro.unobserve(target);
       }
       for (const target of nextTargets) {
-        if (!observedTargets.has(target)) ro.observe(target);
+        if (!observedTargets.has(target)) { ro.observe(target); changed = true; }
       }
       observedTargets = nextTargets;
-      measure(sync);
+      const occupied = (overlayEl.querySelector('[data-composer-center-group]')?.childElementCount ?? 0) > 0;
+      changed ||= occupied !== centerOccupied;
+      centerOccupied = occupied;
+      // Text/token mutations do not imply a new size. Reading geometry in that
+      // microtask forces layout ahead of ResizeObserver, repeatedly during send.
+      // New/removed absolute targets and an empty center lane need an immediate
+      // measurement; actual size changes remain owned by ResizeObserver.
+      if (!sync || changed) measure(sync);
     };
 
     // Seed with the current geometry so the first paint after remount does not

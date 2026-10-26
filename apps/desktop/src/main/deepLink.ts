@@ -96,7 +96,7 @@ export type DeepLinkPayload =
    *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
    *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' }
+  | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -416,6 +416,11 @@ export function focusMainWindow(platform: NodeJS.Platform = process.platform): b
  */
 export function openMainWindowVoiceSettings(tab: 'voice-input' | 'providers'): void {
   dispatchDeepLink({ type: 'settings', tab });
+}
+
+/** Internal menu-bar entry; reuse the existing main-window navigation queue. */
+export function openMainWindowRemoteControlSettings(): void {
+  dispatchDeepLink({ type: 'settings', tab: 'remote-control' });
 }
 
 /** 主进程内部入口(菜单栏余量面板)打开账单页的充值流程;URL 深链不开放这个 tab。 */

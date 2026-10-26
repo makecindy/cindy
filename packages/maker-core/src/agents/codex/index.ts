@@ -1264,6 +1264,13 @@ const CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
  */
 const CODEX_RECONNECT_STALL_TIMEOUT_MS = RETRY_ESCALATION_MAX_ELAPSED_MS;
 
+/**
+ * WebSocket 重试用尽后 Codex 改走 HTTPS 时推的 `warning`。之后要先上传完整历史才有事件,
+ * 慢网下可达数分钟,不再属于重连序列:清掉重连 deadline,由 Codex 自身 HTTP 超时与
+ * upstream-idle 看门狗兜底。
+ */
+const CODEX_HTTPS_FALLBACK_WARNING_PREFIX = 'Falling back from WebSockets to HTTPS transport';
+
 /** 只含空白、格式字符或控制字符的 text delta 不算重连已经恢复。 */
 const CODEX_INVISIBLE_TEXT_PATTERN = /[\s\p{Cf}\p{Cc}]/gu;
 
@@ -8923,7 +8930,7 @@ assertRouteCurrent();
         const stalledTurnGeneration = reconnectStallTurnGeneration;
         const allowPendingTurnStart = !isTurnInFlight;
         const stalledMessage =
-          `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+          `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
           'without making progress; the turn was interrupted automatically. ' +
           'You can send the next message to continue.';
         const emitStalled = (reason: string, message: string): void => {
@@ -12899,6 +12906,12 @@ assertRouteCurrent();
         // The completed review carries the actionable denial/timeout details. Keep the
         // warning for diagnostics to avoid rendering a duplicate error card.
         log.warn('Codex Guardian warning', { threadId: params.threadId, message: params.message });
+      },
+      warning: (params) => {
+        if (params.message.startsWith(CODEX_HTTPS_FALLBACK_WARNING_PREFIX)) {
+          log.info('codex fell back to HTTPS transport; reconnect deadline cleared', { threadId });
+          clearReconnectStall();
+        }
       },
       error: (params) => {
         // buffered turn 的 error (含终态) 同样进队列等对账 (greptile R11 P1 +

@@ -4103,6 +4103,85 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 2000 })).toBe(0);
   });
 
+  // #6958: short histories missed repeated scans of later turns; the first fix also
+  // scanned the entire remaining history for each narration in one long tool turn.
+  // Exercise real list/get, remote watermark and DM handlers with SQLite in the unit tier.
+  // A TEMP view counts role reads while retaining the real session/time index, so
+  // quadratic work fails deterministically without a host-sensitive time limit.
+  it.each(['later turns', 'single long tool turn'] as const)('bounds message reads through %s without losing replies behind empty rows', async (history) => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'root', role: 'user', content: '', createdAt: 1 });
+    const thread = await invoke('local-db:bots:dm-thread:ensure', {
+      botId: 'bot-1', rootSessionId: sessionId, rootClientId: 'root',
+    });
+    expect(thread.ok).toBe(true);
+    h.sqlite!.transaction(() => {
+      for (const id of [sessionId, thread.sessionId]) {
+        if (history === 'later turns') {
+          for (let i = 0; i < 100; i++) {
+            insertMessage(id, { id: `${id}-user-${i}`, role: 'user', content: '', createdAt: 1000 + i * 2 });
+            insertMessage(id, { id: `${id}-reply-${i}`, role: 'assistant', content: `Reply ${i}`, createdAt: 1001 + i * 2 });
+          }
+          for (let i = 0; i < 7500; i++) {
+            insertMessage(id, { id: `${id}-tool-${i}`, role: 'tool_use', content: {}, createdAt: 2000 + i });
+          }
+        } else {
+          for (let i = 0; i < 3800; i++) {
+            insertMessage(id, { id: `${id}-narration-${i}`, role: 'assistant', content: 'Checking', createdAt: 1000 + i * 2 });
+            insertMessage(id, { id: `${id}-tool-${i}`, role: 'tool_use', content: {}, createdAt: 1001 + i * 2 });
+          }
+          insertMessage(id, { id: `${id}-final`, role: 'assistant', content: 'Done', createdAt: 9000, agentMeta: { turnCompleted: true } });
+        }
+        for (let i = 0; i < 105; i++) {
+          insertMessage(id, { id: `${id}-empty-${i}`, role: 'assistant', content: '', createdAt: 10000 + i });
+        }
+      }
+    })();
+
+    const messageCount = h.sqlite!.prepare('SELECT COUNT(*) FROM messages').pluck().get() as number;
+    let roleReads = 0;
+    h.sqlite!.function('count_message_role', (role) => {
+      if (++roleReads > messageCount * 20) throw new Error('Message read budget exceeded');
+      return role;
+    });
+    h.sqlite!.exec(`CREATE TEMP VIEW messages AS SELECT
+      id, client_id, session_id, count_message_role(role) AS role, content,
+      tool_use_id, agent_meta, agent_kind, created_at, rewind_at FROM main.messages`);
+    h.db = drizzle(h.sqlite!, { logger: { logQuery() { roleReads = 0; } } });
+    const preview = history === 'later turns' ? 'Reply 98' : 'Done';
+    const replyAt = history === 'later turns' ? 1197 : 9000;
+    const replyCount = history === 'later turns' ? 99 : 1;
+    const [local] = await invoke('local-db:bots:list', { lastReadAtByBotId: { 'bot-1': 1 } });
+    expect(local).toMatchObject({ lastMessagePreview: preview, lastMessageAt: replyAt, unreadCount: replyCount });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({ lastMessagePreview: preview, lastMessageAt: replyAt });
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({ lastMessagePreview: preview, lastReplyAt: replyAt });
+    expect(await invoke('local-db:bots:dm-thread:list', { botId: 'bot-1', rootSessionId: sessionId }))
+      .toEqual([expect.objectContaining({ sessionId: thread.sessionId, replyCount, lastReplyAt: replyAt, lastAssistantAt: replyAt })]);
+  });
+
+  // The bound must preserve the former strict next_input < tool comparison, including
+  // ties, absent boundaries and inputs that do not start a new turn (#6958).
+  it.each([
+    { label: 'next input before tool', inputAt: 2000, toolAt: 2001, visible: true },
+    { label: 'next input tied with tool', inputAt: 2000, toolAt: 2000, visible: false },
+    { label: 'input tied with reply', inputAt: 1000, toolAt: 2000, visible: false },
+    { label: 'tool tied with reply', inputAt: 2000, toolAt: 1000, visible: true },
+    { label: 'rewound input', inputAt: 2000, toolAt: 3000, rewindAt: 4000, visible: false },
+    { label: 'auto-resume input', inputAt: 2000, toolAt: 3000, agentMeta: { autoResume: true }, visible: false },
+    { label: 'steer input', inputAt: 2000, toolAt: 3000, agentMeta: { delivery: 'steer' }, visible: false },
+    { label: 'rewound tool', inputAt: 3000, toolAt: 2000, toolRewindAt: 4000, visible: true },
+  ])('preserves reply visibility at the turn boundary: $label', async ({ inputAt, toolAt, rewindAt, agentMeta, toolRewindAt, visible }) => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'reply', role: 'assistant', content: 'Reply', createdAt: 1000 });
+    insertMessage(sessionId, { id: 'input', role: 'user', content: '', createdAt: inputAt, rewindAt, agentMeta });
+    insertMessage(sessionId, { id: 'tool', role: 'tool_use', content: {}, createdAt: toolAt, rewindAt: toolRewindAt });
+    expect(await unreadFor('bot-1', { 'bot-1': 1 })).toBe(visible ? 1 : 0);
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({
+      lastMessagePreview: visible ? 'Reply' : null,
+      lastReplyAt: visible ? 1000 : 0,
+    });
+  });
+
   it('reports zero when the caller has no read position for that Bot', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {

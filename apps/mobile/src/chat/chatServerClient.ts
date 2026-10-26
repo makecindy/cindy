@@ -31,7 +31,7 @@ export interface ChatExecutionFailure {
 }
 export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null; failures?: ChatExecutionFailure[] }
 /** `actorId` acts as one of the account's own actors (Chat Server `X-Chat-Actor`). */
-export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string) => Promise<T>;
+export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string, signal?: AbortSignal) => Promise<T>;
 /** An actor the account owns; a companion's `externalId` is its bot id on every computer. */
 export interface ChatActor { id: string; kind: string; externalId: string; name: string; avatar: string | null; homeDeviceId: string | null }
 export interface ChatCapabilities { companionHome: boolean }
@@ -397,8 +397,8 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return { ...page, messages: loaded, failures: await failures(roomId, loaded),
         before: messages.length === 100 ? chatCursor(messages.at(-1)!.seq) : null };
     },
-    async media(roomId: string, mediaId: string): Promise<BotGroupAttachment> {
-      const media = await request<{ name: string; type: string; size: string | number; url: string }>(`/conversations/${chatId(roomId)}/media/${chatId(mediaId)}`);
+    async media(roomId: string, mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> {
+      const media = await request<{ name: string; type: string; size: string | number; url: string }>(`/conversations/${chatId(roomId)}/media/${chatId(mediaId)}`, 'GET', undefined, undefined, signal);
       const size = Number(media.size);
       if (!Number.isSafeInteger(size) || size < 0) throw new Error('INVALID_MEDIA_SIZE');
       return { id: mediaId, name: media.name, mimeType: media.type, size, category: media.type.startsWith('image/') ? 'image' : 'file',

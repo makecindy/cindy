@@ -1,3 +1,10 @@
+import Reanimated from 'react-native-reanimated';
+import { useSmoothMessageFollow } from './useSmoothMessageFollow';
+import { AnimatedContentHeight } from './AnimatedContentHeight';
+import { DockKeyboardLift } from './ComposerDockKeyboardFollow';
+import { NativeKeyboardViewport, nativeKeyboardViewportAvailable } from './NativeKeyboardViewport';
+import { NativeAndroidComposerAnchor, NativeChatViewport, nativeAndroidKeyboardViewportAvailable, nativeChatViewportAvailable } from './NativeChatViewport';
+import { mobileNativeScrollMetrics } from './messageScroll';
 /**
  * 手机上的群聊页（docs/product-rules/bot-group-chat.md §8，对照桌面 BotGroupChatView.tsx）：
  * 顶栏（叠放头像、群名、成员名单、群设置）+ 多作者时间线 + 输入框。用户消息的附件见
@@ -74,9 +81,10 @@ import {
 } from './BotGroupAvatars';
 import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
-import { CompanionEntering, CompanionFadeIn } from './CompanionEntering';
+import { CompanionEntering, CompanionFadeIn, useMessageEntrances } from './CompanionEntering';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
+import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
 import { BotGroupQuote } from './BotGroupQuote';
@@ -134,7 +142,6 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   const [continuing, setContinuing] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
   const planPendingRef = useRef(false);
-  const scrollRef = useRef<ScrollView>(null);
   // iOS: the header floats on the task header's feathered blur and the timeline scrolls beneath it.
   const floatingHeader = Platform.OS === 'ios';
   const insets = useSafeAreaInsets();
@@ -143,13 +150,41 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   const nativeHeaderHeight = useHeaderHeight();
   const [headerHeight, setHeaderHeight] = useState(0);
   const stickToBottom = useRef(!messageId);
+  const [followingLatest, setFollowingLatest] = useState(!messageId);
+  const setFollowIntent = (following: boolean) => {
+    stickToBottom.current = following;
+    setFollowingLatest(following);
+  };
+  const keyboardTransition = useRef(false);
+  const keyboardInset = useRef(0);
+  const rawViewportHeight = useRef(0);
+  const userScrolling = useRef(false);
+  const touchingTimeline = useRef(false);
+  const group = chat.state.kind === 'ready' ? chat.state.group : null;
+  const focused = useIsFocused();
+  const { scrollRef, nativeScrollRef, move: moveTail, cancel: cancelTail } = useSmoothMessageFollow(focused && !!group && !nativeChatViewportAvailable, nativeKeyboardViewportAvailable);
+  const hasPositioned = useRef(false);
+  const followTail = () => {
+    if (nativeChatViewportAvailable) return;
+    if (!focused || !group || keyboardTransition.current || !stickToBottom.current
+      || touchingTimeline.current || userScrolling.current) return;
+    const { contentHeight, viewportHeight } = viewport.current;
+    if (viewportHeight <= 0 || contentHeight <= 0) return;
+    moveTail(Math.max(0, contentHeight - viewportHeight), hasPositioned.current);
+    hasPositioned.current = true;
+  };
+  const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
+  const androidComposerSurfaceId = nativeAndroidKeyboardViewportAvailable ? `group:${viewportOwner}` : undefined;
   const [jumpTarget, setJumpTarget] = useState(messageId ?? '');
   const [highlightId, setHighlightId] = useState('');
   const jumpAttempts = useRef(0);
   const messagePositions = useRef(new Map<string, number>());
-  const group = chat.state.kind === 'ready' ? chat.state.group : null;
-  const focused = useIsFocused();
-  const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
+  const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
+  const previewVisibility = useScrollViewMessageVisibility(
+    `${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? ''}`,
+    useMemo(() => group?.messages.map(message => message.id) ?? [], [group?.messages]),
+    focused && foreground,
+  );
   const [seen, setSeen] = useState<{ owner: string; sequence: string } | null>(null);
   const latestSequence = group?.messages.reduce((latest, message) => {
     const position = message.serverSequence ?? String(message.sequence);
@@ -165,10 +200,22 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
     contentHeight: 0, viewportHeight: 0, offsetY: 0 });
   if (viewport.current.owner !== viewportOwner) {
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
-    stickToBottom.current = !messageId;
+    setFollowIntent(!messageId);
+    keyboardTransition.current = false;
+    keyboardInset.current = 0;
+    rawViewportHeight.current = 0;
+    userScrolling.current = false;
+    touchingTimeline.current = false;
+    hasPositioned.current = false;
   } else if (viewport.current.group !== group) {
     if (!viewport.current.group || !group) {
       // Loading/error unmounts the ScrollView; its next instance starts unmeasured.
+      userScrolling.current = false;
+      touchingTimeline.current = false;
+      hasPositioned.current = false;
+      keyboardTransition.current = false;
+      keyboardInset.current = 0;
+      rawViewportHeight.current = 0;
       viewport.current.contentHeight = 0;
       viewport.current.viewportHeight = 0;
       viewport.current.offsetY = 0;
@@ -195,7 +242,10 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   }, [focused, group, user?.id, deviceId, groupId, viewportOwner, latestSequence, chat.server, chat.markRead]);
   useEffect(() => {
     const frame = requestAnimationFrame(acknowledge);
-    const subscription = AppState.addEventListener('change', state => { if (state === 'active') acknowledge(); });
+    const subscription = AppState.addEventListener('change', state => {
+      setForeground(state === 'active');
+      if (state === 'active') acknowledge();
+    });
     return () => { cancelAnimationFrame(frame); subscription.remove(); };
   }, [acknowledge]);
   // The list row seeds the header while the first read is in flight (display only).
@@ -226,14 +276,16 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
     Alert.alert(chat.online ? botGroupActionErrorText(t, error, fallbackKey) : t(offlineKey));
   }, [chat.online, offlineKey, t]);
   const locateMessage = useCallback((id: string) => {
-    stickToBottom.current = false;
+    setFollowIntent(false);
+    cancelTail();
     jumpAttempts.current = 0;
     setJumpTarget(id);
   }, []);
   useEffect(() => { if (messageId) locateMessage(messageId); }, [messageId, notificationResponse, locateMessage]);
   const positionAtMessage = useCallback((id: string, y: number) => {
-    stickToBottom.current = false;
-    scrollRef.current?.scrollTo({ y: Math.max(0, y - (floatingHeader ? headerHeight : 0) - spacing.md), animated: false });
+    setFollowIntent(false);
+    cancelTail();
+    nativeScrollRef.current?.scrollTo({ y: Math.max(0, y - (floatingHeader ? headerHeight : 0) - spacing.md), animated: false });
     setHighlightId(id);
     setJumpTarget('');
   }, [floatingHeader, headerHeight]);
@@ -298,7 +350,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   const continueRound = async () => {
     if (continuing) return;
     setContinuing(true);
-    stickToBottom.current = true;
+    setFollowIntent(true);
     try { await chat.act('continue'); } catch (error) { report(error, 'groupChat.timeline.continueFailed'); } finally { setContinuing(false); }
   };
 
@@ -307,7 +359,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
     if (planPendingRef.current) return;
     planPendingRef.current = true;
     setPlanPending({ planId, action });
-    stickToBottom.current = true;
+    setFollowIntent(true);
     try { await chat.act(`plan-${action}`, { planId }); } catch (error) { report(error, PLAN_ACTION_FAILED[action]); } finally {
       planPendingRef.current = false;
       setPlanPending(null);
@@ -327,7 +379,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   };
 
   const send = async (input: BotGroupSendInput) => {
-    stickToBottom.current = true;
+    setFollowIntent(true);
     const quote = replyTo;
     try {
       await chat.act('send', {
@@ -351,12 +403,20 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
   };
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    if (stickToBottom.current) setSeen(previous => previous?.owner === viewportOwner && previous.sequence === latestSequence
+    const metrics = mobileNativeScrollMetrics(androidComposerSurfaceId ? {
+      ...event.nativeEvent,
+      contentInset: { ...event.nativeEvent.contentInset, bottom: keyboardInset.current },
+    } : event.nativeEvent);
+    rawViewportHeight.current = event.nativeEvent.layoutMeasurement.height;
+    if (!androidComposerSurfaceId) keyboardInset.current = event.nativeEvent.contentInset?.bottom ?? 0;
+    Object.assign(viewport.current, { measuredGroup: group, ...metrics });
+    previewVisibility.setViewport(metrics.offsetY, metrics.viewportHeight);
+    const nearEnd = metrics.contentHeight - metrics.offsetY - metrics.viewportHeight < STICK_TO_BOTTOM_PX;
+    // A size-change scroll event can arrive before followTail. Only a user's
+    // gesture can give up follow intent; programmatic correction cannot.
+    if (userScrolling.current || nearEnd) setFollowIntent(nearEnd);
+    if (nearEnd) setSeen(previous => previous?.owner === viewportOwner && previous.sequence === latestSequence
       ? previous : { owner: viewportOwner, sequence: latestSequence });
-    Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
-      offsetY: contentOffset.y, viewportHeight: layoutMeasurement.height });
-    stickToBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
     acknowledge();
   };
 
@@ -380,8 +440,9 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
     onOpenSettings={direct ? undefined : () => setSettings(true)}
     settingsLabel={t('groupChat.settings.open')} />;
 
-  const offlineNote = group && !chat.online
-    ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t(offlineKey)}</Text> : null;
+  const offlineNote = <AnimatedContentHeight open={!!group && !chat.online}>
+    <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t(offlineKey)}</Text>
+  </AnimatedContentHeight>;
   let body;
   if (chat.state.kind === 'loading' && !chat.online) {
     // Nothing to show until the computer is reachable again; the screen re-reads on reconnect.
@@ -411,55 +472,103 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
       </MainWindowEmptyState>
     </View>;
   } else {
-    body = <KeyboardAvoidingView
+    body = <NativeKeyboardViewport style={styles.flex} enabled={nativeKeyboardViewportAvailable && focused}
+      followLatest={followingLatest}
+      onKeyboardTransition={({ nativeEvent }) => {
+        keyboardTransition.current = nativeEvent.active;
+        cancelTail();
+        if (!nativeEvent.active) {
+          keyboardInset.current = nativeEvent.bottom;
+          viewport.current.viewportHeight = Math.max(0, rawViewportHeight.current - nativeEvent.bottom);
+          previewVisibility.setViewport(viewport.current.offsetY, viewport.current.viewportHeight);
+          followTail();
+          acknowledge();
+        }
+      }}>
+      <NativeChatViewport style={styles.flex} active={focused} followLatest={followingLatest}
+        composerSurfaceId={androidComposerSurfaceId}
+        onViewportInsetChange={({ nativeEvent }) => {
+          keyboardInset.current = nativeEvent.bottom;
+          Object.assign(viewport.current, { viewportHeight: nativeEvent.viewportHeight, offsetY: nativeEvent.offsetY });
+          previewVisibility.setViewport(nativeEvent.offsetY, nativeEvent.viewportHeight);
+          acknowledge();
+        }}>
+      <KeyboardAvoidingView
       style={styles.flex}
-      enabled={Platform.OS === 'ios' || Platform.OS === 'android'}
+      enabled={!nativeKeyboardViewportAvailable && !androidComposerSurfaceId && (Platform.OS === 'ios' || Platform.OS === 'android')}
+      // The nested viewport starts below Android's in-flow header. KAV's
+      // local frame starts at zero, but keyboard coordinates are screen-based.
+      keyboardVerticalOffset={floatingHeader ? 0 : insets.top + headerHeight}
       behavior={keyboardAvoidingBehaviorForPlatform(
         Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
       )}
     >
       {floatingHeader ? null : offlineNote}
       {group.dissolvedAt ? <Text style={styles.offline}>{t('groupChat.lifecycle.dissolved')}</Text> : null}
-      <View style={styles.flex}>
-      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, floatingHeader && { paddingTop: headerHeight + spacing.md }]}
+      <View style={[styles.flex, { overflow: 'hidden' }]}>
+      <MessageListVisibilityContext.Provider value={previewVisibility}>
+      <Reanimated.ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, floatingHeader && { paddingTop: headerHeight + spacing.md }]}
         scrollIndicatorInsets={floatingHeader ? { top: headerHeight } : undefined} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
-        maintainVisibleContentPosition={chat.server ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
-        onScroll={onScroll} scrollEventThrottle={64}
-        onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; acknowledge(); }}
+        maintainVisibleContentPosition={chat.server && !stickToBottom.current ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
+        onTouchStart={() => { touchingTimeline.current = true; cancelTail(); }}
+        onTouchEnd={() => { touchingTimeline.current = false; followTail(); }}
+        onTouchCancel={() => { touchingTimeline.current = false; }}
+        onScrollBeginDrag={() => { userScrolling.current = true; setFollowIntent(false); cancelTail(); }}
+        onScrollEndDrag={event => { onScroll(event); userScrolling.current = false; followTail(); }}
+        onMomentumScrollBegin={() => { userScrolling.current = true; }}
+        onMomentumScrollEnd={event => { onScroll(event); userScrolling.current = false; followTail(); }}
+        onScroll={onScroll} scrollEventThrottle={16}
+        onLayout={event => {
+          rawViewportHeight.current = event.nativeEvent.layout.height;
+          viewport.current.viewportHeight = Math.max(0, rawViewportHeight.current - keyboardInset.current);
+          previewVisibility.setViewport(viewport.current.offsetY, viewport.current.viewportHeight);
+          followTail(); acknowledge();
+        }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
-          if (stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+          followTail();
           acknowledge();
         }}
         testID="botGroup.timeline">
         <BotGroupTimeline group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           highlightId={highlightId} onLocateMessage={locateMessage}
           onReply={(chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? message => setReplyTo(botGroupQuoteFromMessage(message)) : undefined}
-          onMessageLayout={(id, y) => {
+          onMessageLayout={(id, y, height) => {
+            previewVisibility.setLayout(id, { y, height });
             messagePositions.current.set(id, y);
             if (jumpTarget === id) positionAtMessage(id, y);
           }}
           resolveMedia={resolveMedia} resolveServerMedia={chat.media}
-          loadOlder={chat.loadOlder ? () => { stickToBottom.current = false; void chat.loadOlder!().catch(error => report(error, 'groupChat.loadFailedTitle')); } : undefined}
+          loadOlder={chat.loadOlder ? () => { setFollowIntent(false); void chat.loadOlder!().catch(error => report(error, 'groupChat.loadFailedTitle')); } : undefined}
           loadingOlder={chat.loadingOlder} continuing={continuing} planPending={planPending}
           onContinue={() => void continueRound()}
           onPlanAction={(action, planId) => void runPlanAction(action, planId)}
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
           onInteractionError={(message) => { if (message) Alert.alert(message); }} />
-      </ScrollView>
-      {newMessageCount > 0 ? <View style={styles.newMessages} accessibilityLiveRegion="polite">
+      </Reanimated.ScrollView>
+      </MessageListVisibilityContext.Provider>
+      {newMessageCount > 0 ? <NativeAndroidComposerAnchor surfaceId="" followKeyboard={!!androidComposerSurfaceId}
+        pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+        <DockKeyboardLift active={nativeKeyboardViewportAvailable} restingBottom={insets.bottom} keyboardGap={0}
+          pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+        <View style={styles.newMessages} accessibilityLiveRegion="polite">
         <CompanionFadeIn play distance={spacing.xs}>
           <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
             label: t('groupChat.timeline.newMessages', { count: newMessageCount }),
             accessibilityLabel: t('message.renderer.newMessagesToBottom'),
             testID: 'botGroup.newMessages',
-            onPress: () => { stickToBottom.current = true; scrollRef.current?.scrollToEnd({ animated: false }); },
+            onPress: () => { setFollowIntent(true); followTail(); },
           }} />
         </CompanionFadeIn>
-      </View> : null}
+        </View>
+        </DockKeyboardLift>
+      </NativeAndroidComposerAnchor> : null}
       </View>
+      <NativeAndroidComposerAnchor surfaceId={androidComposerSurfaceId ?? ''} followKeyboard={!!androidComposerSurfaceId}>
+      <DockKeyboardLift active={nativeKeyboardViewportAvailable} restingBottom={insets.bottom} keyboardGap={0}>
+      <AnimatedContentHeight>
       {replyTo ? <View style={styles.replyDraft}>
         <View style={styles.flex}><BotGroupQuote display={resolveBotGroupQuote(replyTo, group.messages)} onPress={() => locateMessage(replyTo.messageId)} /></View>
         <MainWindowActionButton density="compact" action={{ label: t('message.quote.remove'), onPress: () => setReplyTo(null), testID: 'botGroup.cancelReply' }} />
@@ -468,7 +577,12 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
         focusKey={replyTo?.messageId}
         running={group.round.status === 'running'} planState={botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
-    </KeyboardAvoidingView>;
+      </AnimatedContentHeight>
+      </DockKeyboardLift>
+      </NativeAndroidComposerAnchor>
+    </KeyboardAvoidingView>
+    </NativeChatViewport>
+    </NativeKeyboardViewport>;
   }
 
   return <SafeAreaView style={styles.screen} edges={floatingHeader ? ['left', 'right', 'bottom'] : ['top', 'left', 'right', 'bottom']} testID="botGroup.screen">
@@ -481,7 +595,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId, messageId, n
         {offlineNote}
       </View>
     </> : <>
-      {header}
+      <View testID="botGroup.flowHeader" onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}>{header}</View>
       {body}
     </>}
     {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
@@ -510,7 +624,7 @@ export function BotGroupTimeline({
   identityFor: BotGroupIdentityLookup;
   /** Reads a picture attached to a message from the computer. */
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
   loadOlder?: () => void;
   loadingOlder?: boolean;
   continuing: boolean;
@@ -519,7 +633,7 @@ export function BotGroupTimeline({
   onPlanAction(action: BotGroupPlanAction, planId: string): void;
   onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string): void;
   onInteractionError(message: string | null): void;
-  onMessageLayout?: (id: string, y: number) => void;
+  onMessageLayout?: (id: string, y: number, height: number) => void;
   onLocateMessage?: (id: string) => void;
   highlightId?: string;
   onReply?: (message: BotGroupMessageView) => void;
@@ -527,6 +641,9 @@ export function BotGroupTimeline({
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const messages = group.messages;
+  const entranceSignature = messages.map(message => message.id).join('\0');
+  const entranceKeys = useMemo(() => entranceSignature ? entranceSignature.split('\0') : [], [entranceSignature]);
+  const enteringMessageKeys = useMessageEntrances(entranceKeys, group.id);
   const planById = new Map(group.plans.map((plan) => [plan.id, plan]));
   const openPlan = openBotGroupPlan(group);
   const followUp = botGroupPlanFollowUp(openPlan);
@@ -550,10 +667,11 @@ export function BotGroupTimeline({
       // G2: the same teammate speaking again inside one time group keeps its avatar and name once.
       const continued = groupTime === undefined && message.kind === 'message' && message.authorKind === 'bot'
         && previous?.kind === 'message' && previous.authorKind === 'bot' && previous.authorBotId === message.authorBotId;
-      return <View key={message.id} style={[styles.item, highlightId === message.id && styles.locatedMessage]}
-        onLayout={event => onMessageLayout?.(message.id, event.nativeEvent.layout.y)}>
+      return <View key={message.id} style={highlightId === message.id && styles.locatedMessage}
+        onLayout={event => onMessageLayout?.(message.id, event.nativeEvent.layout.y, event.nativeEvent.layout.height)}>
+        <CompanionEntering id={message.id} arrivedAt={enteringMessageKeys.get(message.id)}>
+        <View style={[styles.item, (index > 0 || group.hasMoreBefore) && { paddingTop: spacing.lg }]}>
         {groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
-        <CompanionEntering id={message.id} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
         <BotGroupTimelineItem message={message} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
@@ -566,16 +684,18 @@ export function BotGroupTimeline({
           planPending={planCardPending(pendingFor(message.planId))}
           onPlanAction={(action) => { if (message.planId) onPlanAction(action, message.planId); }}
           onEditStep={(step, action, botId) => { if (message.planId) onEditStep(message.planId, step, action, botId); }} />
-        </CompanionEntering>
         {onReply && isBotGroupMessageQuotable(message) ? <Pressable
           accessibilityRole="button" accessibilityLabel={t('message.renderer.reply')}
           testID={`botGroup.reply.${message.id}`} onPress={() => onReply(message)}
           style={[styles.replyAction, message.isSelf === true && styles.ownReplyAction]}>
           <ChatReplyIcon size={iconSize.md} color={styles.replyIcon.color} />
         </Pressable> : null}
+        </View>
+        </CompanionEntering>
       </View>;
     })}
-    {openPlan && followUp ? <View style={styles.indented}>
+    <AnimatedContentHeight open={!!(openPlan && followUp)}>
+    {openPlan && followUp ? <View style={[styles.indented, { paddingTop: spacing.lg }]}>
       <BotGroupPlanFollowUpRow followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
         stepNumber={openPlan.steps.indexOf(followUp.kind === 'continue' ? followUp.next : followUp.failed) + 1} stepTotal={openPlan.steps.length}
         pending={followUpPending(pendingFor(openPlan.id))}
@@ -583,12 +703,17 @@ export function BotGroupTimeline({
         onRetry={() => onPlanAction('retry', openPlan.id)}
         onEnd={() => onPlanAction('dismiss', openPlan.id)} />
     </View> : null}
+    </AnimatedContentHeight>
+    <AnimatedContentHeight open={speakers.length > 0}>
+    <View style={[styles.item, (messages.length > 0 || group.hasMoreBefore || !!(openPlan && followUp)) && { paddingTop: spacing.lg }]}>
     {speakers.map((speaker) => {
       const member = memberById.get(speaker.botId)!;
-      return <BotGroupSpeakerRow key={`${speaker.botId}:${speaker.activity}`} deviceId={deviceId} online={online}
+      return <BotGroupSpeakerRow key={speaker.botId} deviceId={deviceId} online={online}
         identity={identityFor(member.botId, member.name)} sessionId={speaker.sessionId} activity={speaker.activity}
         onError={onInteractionError} />;
     })}
+    </View>
+    </AnimatedContentHeight>
   </>;
 }
 
@@ -609,7 +734,7 @@ function BotGroupTimelineItem({
   identityFor: BotGroupIdentityLookup;
   mentionLabels: readonly string[];
   resolveMedia: ResolveRemoteMediaFn;
-  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
+  resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
   canContinue: boolean;
   continuing: boolean;
   onContinue(): void;
@@ -715,7 +840,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   floatingHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   emptyActions: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.lg },
-  timeline: { flexGrow: 1, justifyContent: 'flex-end', gap: spacing.lg, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  // Row spacing belongs inside the animated row; a parent gap would still add
+  // or remove 16pt in one frame, even while its child grows/collapses smoothly.
+  timeline: { flexGrow: 1, justifyContent: 'flex-end', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   item: { gap: spacing.lg },
   // Aligns the follow-up card with message text, past the 28pt avatar and its gap (1:1 reply geometry).
   indented: { paddingLeft: BOT_GROUP_MESSAGE_AVATAR_SIZE + REPLY_AVATAR_GAP },

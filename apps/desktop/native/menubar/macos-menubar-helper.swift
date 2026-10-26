@@ -137,6 +137,9 @@ struct MBView: Decodable, Equatable {
   let moneySymbol: String
   let strings: [String: String]
   let statusTextByMode: [String: String?]
+  let attentionCount: Int?
+  let remotelyControlled: Bool?
+  let remoteControllerNames: [String]?
   let updatedAtMs: Double?
   let headlinePrimary: String
   let headlineSecondary: String?
@@ -151,6 +154,14 @@ struct MBView: Decodable, Equatable {
   let settings: MBSettings
   /// "sign-in" until the user signs in or skips sign-in; nothing was read.
   let gate: String?
+
+  /// The real item and its settings preview always use the same text.
+  var statusTitle: String {
+    guard gate == nil else { return "" }
+    let usage = (statusTextByMode[settings.statusText] ?? nil) ?? ""
+    guard let count = attentionCount, count > 0 else { return usage }
+    return usage.isEmpty ? String(count) : "\(count) · \(usage)"
+  }
 }
 
 struct MBIncoming: Decodable {
@@ -238,6 +249,10 @@ enum Palette {
   /// Red of the Cindy logo's ">" mark (the logo red, not a state color).
   static let brand = Color(nsColor: hex(0xF70121))
   static let warn = Color(nsColor: hex(0xEA6B17))
+  /// Shared by the menu-bar dot and its explanation inside the panel.
+  private static let remoteControlValue: UInt32 = 0xFF9F0A
+  static let remoteControlHex = String(format: "#%06X", remoteControlValue)
+  static let remoteControl = Color(nsColor: hex(remoteControlValue))
   static let error = Color(nsColor: hex(0xD91F37))
   static let focus = Color(nsColor: hex(0x417CDD))
   static let claude = Color(nsColor: hex(0xD97757))
@@ -389,14 +404,17 @@ enum Logos {
 
   /// Opaque silhouette with tonal, tapered strands and a larger, left-shifted earring.
   /// Fit the mark to the 18pt status canvas; other brand surfaces keep their original mark.
-  static func statusIcon(dark: Bool) -> NSImage? {
-    dark ? darkStatusIcon : lightStatusIcon
+  static func statusIcon(dark: Bool, controlled: Bool = false) -> NSImage? {
+    if controlled { return dark ? darkControlledStatusIcon : lightControlledStatusIcon }
+    return dark ? darkStatusIcon : lightStatusIcon
   }
 
   private static let lightStatusIcon = makeStatusIcon(dark: false)
   private static let darkStatusIcon = makeStatusIcon(dark: true)
+  private static let lightControlledStatusIcon = makeStatusIcon(dark: false, controlled: true)
+  private static let darkControlledStatusIcon = makeStatusIcon(dark: true, controlled: true)
 
-  private static func makeStatusIcon(dark: Bool) -> NSImage? {
+  private static func makeStatusIcon(dark: Bool, controlled: Bool = false) -> NSImage? {
     let silhouette = dark ? "#ffffff" : "#000000"
     let strand = dark ? "#686868" : "#bdbdbd"
     let earring = "M 10.22879,11.96118 L 13.40721,13.91787 L 13.40721,14.65125 L 10.22879,16.60782 L 10.22879,15.50708 L 12.30648,14.28390 L 10.22879,13.06192 L 10.22879,11.96118 Z"
@@ -459,12 +477,20 @@ enum Logos {
     L 17.346,7.646 L 17.475,7.644 L 17.604,7.649 L 17.735,7.660 L 17.866,7.678 L 18.000,7.700 Z
     "/>
     """
+    // Brighter orange for this small menu-bar indicator. The clear rim lets
+    // wallpaper show through and keeps the 5pt dot distinct from the silhouette.
     let svg = """
     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+      <defs><mask id="control-dot-cutout"><rect width="18" height="18" fill="white"/>
+        \(controlled ? "<circle cx=\"4.5\" cy=\"4.5\" r=\"3.25\" fill=\"black\"/>" : "")
+      </mask></defs>
+      <g mask="url(#control-dot-cutout)">
       <g transform="translate(-0.765 -0.445) scale(0.8157)">
         <path fill="\(silhouette)" fill-rule="evenodd" d="\(cindySilhouettePath) \(earring)"/>
         \(hairStrands)
       </g>
+      </g>
+      \(controlled ? "<circle cx=\"4.5\" cy=\"4.5\" r=\"2.5\" fill=\"\(Palette.remoteControlHex)\"/>" : "")
     </svg>
     """
     guard let data = svg.data(using: .utf8), let image = NSImage(data: data) else { return nil }
@@ -722,10 +748,9 @@ final class StatusController: NSObject, NSWindowDelegate {
     super.init()
     if let button = statusItem.button {
       // Wallpaper can give the menu bar a different appearance from the app.
-      statusAppearanceObservation = button.observe(\.effectiveAppearance, options: [.initial, .new]) { button, _ in
+      statusAppearanceObservation = button.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, _ in
         MainActor.assumeIsolated {
-          let dark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-          button.image = Logos.statusIcon(dark: dark)
+          self?.updateStatusIcon()
         }
       }
       button.imagePosition = .imageLeading
@@ -788,17 +813,17 @@ final class StatusController: NSObject, NSWindowDelegate {
 
   private func updateStatusTitle() {
     guard let button = statusItem.button else { return }
-    let mode = store.view?.settings.statusText ?? "icon"
-    let text = (store.view?.statusTextByMode[mode] ?? nil) ?? ""
+    updateStatusIcon()
+    let text = store.view?.statusTitle ?? ""
     if text.isEmpty {
       button.attributedTitle = NSAttributedString(string: "")
       button.imagePosition = .imageOnly
     } else {
       button.imagePosition = .imageLeading
       button.attributedTitle = NSAttributedString(
-        string: " " + text,
+        string: "\u{2009}" + text,
         attributes: [
-          .font: NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .semibold),
+          .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular),
           .baselineOffset: 0,
         ]
       )
@@ -807,6 +832,13 @@ final class StatusController: NSObject, NSWindowDelegate {
       button.setAccessibilityLabel(text.isEmpty ? "Cindy" : "Cindy, \(text)")
       button.toolTip = view.headlinePrimary
     }
+  }
+
+  private func updateStatusIcon() {
+    guard let button = statusItem.button else { return }
+    let dark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    let controlled = store.view?.remotelyControlled == true
+    button.image = Logos.statusIcon(dark: dark, controlled: controlled)
   }
 
   @objc func toggle() {
@@ -1684,6 +1716,60 @@ struct HatchPattern: Shape {
 
 // MARK: - Main page
 
+/// A quiet status strip, tied to the same state and color as the menu-bar dot.
+struct RemoteControlStatus: View {
+  let title: String
+  let detail: String
+  let names: [String]
+  let actionLabel: String
+  let action: () -> Void
+  @State private var hovering = false
+
+  private var description: String { names.isEmpty ? detail : names.joined(separator: " · ") }
+
+  var body: some View {
+    Button(action: action) {
+      HStack(alignment: .center, spacing: 10) {
+        Image(systemName: "desktopcomputer")
+          .font(.system(size: 16, weight: .regular))
+          .foregroundStyle(Palette.ink2)
+          .frame(width: 32, height: 32)
+          .background(Circle().fill(Palette.ink5))
+          .overlay(alignment: .topTrailing) {
+            Circle().fill(Palette.remoteControl)
+              .frame(width: 6, height: 6)
+              .offset(x: -1, y: 1)
+          }
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Palette.ink)
+          Text(description)
+            .font(.system(size: 11))
+            .foregroundStyle(Palette.ink2)
+            .lineSpacing(2)
+            .lineLimit(2)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        Image(systemName: "chevron.right")
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(hovering ? Palette.ink2 : Palette.ink3)
+          .accessibilityHidden(true)
+      }
+      .padding(10)
+      .background(RoundedRectangle(cornerRadius: 14, style: .circular).fill(hovering ? Palette.ink5 : .clear))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(PressScaleStyle())
+    .onHover { value in withAnimation(Motion.quick) { hovering = value } }
+    .help(description + "\n" + actionLabel)
+    .accessibilityLabel(title + ", " + description)
+    .accessibilityHint(actionLabel)
+  }
+}
+
 struct MainPage: View {
   @ObservedObject var store: MenubarStore
   let view: MBView
@@ -1719,19 +1805,29 @@ struct MainPage: View {
   }
 
   private var topBar: some View {
-    HStack(spacing: 0) {
-      Wordmark().frame(height: 13)
-      TimelineView(.periodic(from: .now, by: 15)) { context in
-        Text(updatedText(now: context.date))
-          .font(.system(size: 11))
-          .foregroundStyle(Palette.ink3)
-          .lineLimit(1)
-          .padding(.leading, 8)
+    VStack(spacing: 0) {
+      HStack(spacing: 0) {
+        Wordmark().frame(height: 13)
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+          Text(updatedText(now: context.date))
+            .font(.system(size: 11))
+            .foregroundStyle(Palette.ink3)
+            .lineLimit(1)
+            .padding(.leading, 8)
+        }
+        Spacer(minLength: 0)
+        RefreshButton(store: store)
       }
-      Spacer(minLength: 0)
-      RefreshButton(store: store)
+      .padding(EdgeInsets(top: 14, leading: 18, bottom: 4, trailing: 12))
+      if view.remotelyControlled == true {
+        RemoteControlStatus(
+          title: store.s("remoteControlTitle"), detail: store.s("remoteControlBody"),
+          names: view.remoteControllerNames ?? [], actionLabel: store.s("settings")
+        ) { controller.emitAndClose(["type": "open-remote-control-settings"]) }
+          .padding(EdgeInsets(top: 0, leading: 8, bottom: 4, trailing: 8))
+        Hairline().padding(.horizontal, 18)
+      }
     }
-    .padding(EdgeInsets(top: 14, leading: 18, bottom: 4, trailing: 12))
   }
 
   private func updatedText(now: Date) -> String {
@@ -1804,6 +1900,15 @@ struct GatePage: View {
     VStack(alignment: .leading, spacing: 0) {
       Wordmark().frame(height: 13)
         .padding(EdgeInsets(top: 18, leading: 18, bottom: 0, trailing: 18))
+
+      if store.view?.remotelyControlled == true {
+        RemoteControlStatus(
+          title: store.s("remoteControlTitle"), detail: store.s("remoteControlBody"),
+          names: store.view?.remoteControllerNames ?? [], actionLabel: store.s("settings")
+        ) { controller.emitAndClose(["type": "open-remote-control-settings"]) }
+          .padding(EdgeInsets(top: 8, leading: 8, bottom: 4, trailing: 8))
+        Hairline().padding(.horizontal, 18)
+      }
 
       Image(systemName: "person.crop.circle")
         .font(.system(size: 26, weight: .regular))
@@ -3535,7 +3640,7 @@ struct StatusPreview: View {
   @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
-    let text = (view.statusTextByMode[view.settings.statusText] ?? nil) ?? ""
+    let text = view.statusTitle
     let dark = colorScheme == .dark
     ZStack(alignment: .topLeading) {
       wallpaper(dark: dark)
@@ -3543,11 +3648,11 @@ struct StatusPreview: View {
         Spacer()
         Image(systemName: "wifi").font(.system(size: 12, weight: .semibold)).opacity(0.5).padding(.horizontal, 6)
         HStack(spacing: 5) {
-          if let icon = Logos.statusIcon(dark: dark) {
-            Image(nsImage: icon).renderingMode(.original).resizable().frame(width: 16, height: 16)
+          if let icon = Logos.statusIcon(dark: dark, controlled: view.remotelyControlled == true) {
+            Image(nsImage: icon).renderingMode(.original).resizable().frame(width: 18, height: 18)
           }
           if !text.isEmpty {
-            Text(text).font(.system(size: 12, weight: .semibold)).monospacedDigit().lineLimit(1).fixedSize()
+            Text(text).font(.system(size: 13, weight: .regular)).monospacedDigit().lineLimit(1).fixedSize()
           }
         }
         .padding(.horizontal, 7)

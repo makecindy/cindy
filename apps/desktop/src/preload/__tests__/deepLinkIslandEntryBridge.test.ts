@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
-import { handleIncomingDeepLink, openMainWindowSession, setDeepLinkMainWindow, takePendingDeepLink } from '../../main/deepLink';
+import { handleIncomingDeepLink, openMainWindowRemoteControlSettings, openMainWindowSession, setDeepLinkMainWindow, takePendingDeepLink } from '../../main/deepLink';
 
 vi.mock('electron', () => ({ app: { focus: vi.fn() }, BrowserWindow: class {} }));
 vi.mock('../../main/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }) }));
@@ -45,6 +45,22 @@ function connect() {
 }
 
 afterEach(() => setDeepLinkMainWindow(null));
+
+// Unit regression: a menu-bar click focused the app but preload silently dropped
+// the new settings tab. Exercise the real main dispatch and production bridge.
+it('delivers remote-control settings through the live bridge and cold-start buffer', () => {
+  const { received, deliver } = connect();
+  openMainWindowRemoteControlSettings();
+  const expected = { type: 'settings', tab: 'remote-control' };
+  expect(received).toEqual([expected]);
+  deliver({ type: 'settings', tab: 'unknown' });
+  deliver({ type: 'settings', tab: 'remote-control', connect: 'codex' });
+  expect(received).toEqual([expected]);
+  setDeepLinkMainWindow(null);
+  openMainWindowRemoteControlSettings();
+  expect(takePendingDeepLink()).toEqual(expected);
+  expect(takePendingDeepLink()).toBeNull();
+});
 
 describe('Agent Island click id across the preload deep-link bridge', () => {
   // External links must keep their owning computer through both the live bridge

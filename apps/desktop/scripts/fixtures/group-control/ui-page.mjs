@@ -332,6 +332,17 @@ export default {
     }
 
     if (ui.case === 'long-thread') {
+      // Browser integration: presentation translation must not enlarge the
+      // native range, which onScroll would mistake for the reader leaving tail.
+      const translatedRange = await scroller.evaluate(el => {
+        const content = el.querySelector('[data-bot-group-message-id]').parentElement;
+        const before = el.scrollHeight;
+        content.style.transform = 'translateY(100px)';
+        const after = el.scrollHeight;
+        content.style.transform = '';
+        return { before, after };
+      });
+      assert.equal(translatedRange.after, translatedRange.before, 'follow movement cannot add scrollable overflow');
       const bottomGap = () =>
         scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
       await page.waitForFunction(() => {

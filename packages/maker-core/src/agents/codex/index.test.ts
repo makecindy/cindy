@@ -31842,6 +31842,33 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  // #7055: after WebSocket retries Codex uploads the full history over HTTPS and emits
+  // nothing until the upload ends; on a slow link that exceeds the reconnect deadline.
+  it('HTTPS 回退开始后不再按重连 deadline 中断正在上传的请求', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { host, handle, handlers, seen } = await startReconnectTurn(agent, 'session-https-fallback');
+      emitReconnect(handlers, 1);
+      handlers.warning?.({
+        threadId: 'start-thread-id',
+        message: 'Falling back from WebSockets to HTTPS transport. stream disconnected before completion: ' +
+          'websocket closed by server before response.completed',
+      });
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error', data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(host.request.mock.calls.map(([method]) => method)).not.toContain(Method.TurnInterrupt);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { cancelled: false, completion: undefined, rejectAck: false },
     { cancelled: true, completion: undefined, rejectAck: false },

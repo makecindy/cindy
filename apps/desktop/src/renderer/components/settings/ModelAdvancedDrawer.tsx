@@ -1009,16 +1009,14 @@ export function ModelAdvancedDrawer({
                               key={role}
                               label={t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
                             >
-                              <span className="flex flex-wrap items-start justify-end gap-x-2 gap-y-2">
+                              <span className="flex flex-col items-end gap-1">
                                 {quotes.map((quote, index) => (
-                                  <span key={index} className="inline-flex min-w-0 max-w-full items-start gap-x-2">
-                                    {index > 0 && <span aria-hidden> · </span>}
-                                    <DisplayPricingQuote
-                                      quote={quote}
-                                      currency={primaryModel.currency!}
-                                      costDiscount={discount}
-                                    />
-                                  </span>
+                                  <DisplayPricingQuote
+                                    key={index}
+                                    quote={quote}
+                                    currency={primaryModel.currency!}
+                                    costDiscount={discount}
+                                  />
                                 ))}
                               </span>
                             </Row>

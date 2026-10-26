@@ -53,6 +53,20 @@ export function isNearMobileMessageListBottom(
   return isNearMessageListBottom(metrics, mobileMessageListNearBottomThreshold(bottomOverlayHeight));
 }
 
+/** Native insets reserve occluded pixels without resizing the Fabric frame. */
+export function mobileNativeScrollMetrics(event: {
+  contentSize: { height: number };
+  contentOffset: { y: number };
+  layoutMeasurement: { height: number };
+  contentInset?: { bottom?: number };
+}): MessageScrollMetrics {
+  return {
+    contentHeight: event.contentSize.height,
+    offsetY: event.contentOffset.y,
+    viewportHeight: Math.max(0, event.layoutMeasurement.height - (event.contentInset?.bottom ?? 0)),
+  };
+}
+
 export function mobileMessageListEndOffset(metrics: MessageScrollMetrics): number {
   return Math.max(0, metrics.contentHeight - metrics.viewportHeight);
 }

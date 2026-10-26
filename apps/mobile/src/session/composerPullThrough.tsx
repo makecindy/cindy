@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type Ref } from 'react';
-import { Animated, Platform, type ScrollView, type ScrollViewProps, type View } from 'react-native';
-import { measure, runOnJS, useAnimatedReaction, useAnimatedRef, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
+import { Platform, type ScrollView, type ScrollViewProps, type View } from 'react-native';
+import Animated, { measure, runOnJS, useAnimatedReaction, useAnimatedRef, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
 /**
@@ -108,7 +108,9 @@ export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThr
   // previous 挡掉同值，否则每帧都跨线程回 JS。runOnJS(setAttach) 必须内联调用：
   // 它的返回值若存进变量再被 worklet 捕获，会序列化成不可直接调用的 RemoteFunction
   // 代理，UI 线程一调就报 Tried to synchronously call a Remote Function。
-  const [attach, setAttach] = useState(
+  // Read the initial snapshot once. Eager arguments read UI-thread values on
+  // every render, blocking React during keyboard motion and flooding LogBox.
+  const [attach, setAttach] = useState(() =>
     resolvePullThroughAttach({ android, armed: bridge.armed.value === true, busy: bridge.event.value.active === true }),
   );
   useAnimatedReaction(

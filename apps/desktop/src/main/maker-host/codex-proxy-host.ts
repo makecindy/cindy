@@ -48,6 +48,7 @@ import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './s
 
 import {
   createAnthropicCompatProxy,
+  recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
@@ -382,6 +383,12 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
 // 放宽到 128MB 恢复与原生 codex 的对等;仍保留上限防内存被打爆(body 会整段
 // 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
 const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+
+// ChatGPT 订阅后端的 WebSocket 单条消息上限约 16 MiB(2026-10 实测:12 MiB 通过,16 MiB 起
+// 回 1009 Message Too Big;HTTP 无此限制)。连接回收后 Codex 要整段重发历史,图片多的会话会
+// 每次被拒、退到 HTTP 慢传。超过时先把最早的内联附件外置为本地文件,压到目标值再发。
+const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 15 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 12 * 1024 * 1024;
 
 export type CodexProxyAuthInjection = 'oauth-bearer' | 'env-key' | 'provider-oauth';
 
@@ -3447,6 +3454,30 @@ async function createCodexProxyHandle(
     const decision = route(body, ctx);
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
   };
+  const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
+  const fitWebSocketRequest = async (
+    request: Buffer,
+    ctx: { url: string; headers: Readonly<Record<string, string>> },
+    signal: AbortSignal,
+  ): Promise<Buffer> => {
+    const recover = attachmentRecovery({ reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers });
+    let recovered: Buffer | null = null;
+    try {
+      recovered = recover
+        ? await recoverOversizedMessage(request, CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES, body => recover(body, CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES), signal)
+        : null;
+    } catch {
+      // Same as HTTP recovery: never log paths or payloads.
+    }
+    if (!recovered) {
+      log.warn('oversized websocket request forwarded unchanged', { bytes: request.length });
+      return request;
+    }
+    log.info('oversized websocket attachments preserved outside request', {
+      originalBytes: request.length, recoveredBytes: recovered.length,
+    });
+    return recovered;
+  };
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
@@ -3477,11 +3508,12 @@ async function createCodexProxyHandle(
     },
     requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase),
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
-    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, message => {
+    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
       const body: unknown = JSON.parse(message.toString('utf8'));
       const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
       const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
-      return next ? Buffer.from(JSON.stringify(next)) : message;
+      const request = next ? Buffer.from(JSON.stringify(next)) : message;
+      return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
     }),
     transformResponse: (ctx) => {
       const response = {
@@ -3523,7 +3555,7 @@ async function createCodexProxyHandle(
       }),
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
-    oversizedRequestRecovery: createAttachmentRecovery(sessionIdFromHeaders),
+    oversizedRequestRecovery: attachmentRecovery,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,
