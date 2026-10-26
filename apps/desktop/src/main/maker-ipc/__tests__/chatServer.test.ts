@@ -470,7 +470,7 @@ describe('Chat Server result delivery and refresh', () => {
     if (stage === 'prepare') vi.mocked(deps.prepareAttachments).mockRejectedValueOnce(new Error('INVALID_ATTACHMENT'));
     else fixture.upload.mockRejectedValueOnce(new Error('MEDIA_UPLOAD_FAILED'));
     const input = { groupId: roomId, rootId: execution.source_message_id, text: '', clientId: 'pre-post-roster',
-      mentions: { all: true, botIds: [] }, attachments: [{}] };
+      mentions: { all: true, botIds: [] }, attachments: [{ id: 'file', name: 'log.txt', path: '/test/log.txt', category: 'file' as const, mimeType: 'text/plain' }] };
     expect(await service.chatServer!.reply(input)).toMatchObject({ ok: false });
     joined = true;
     expect(await service.chatServer!.reply(input)).toMatchObject({ ok: true });
