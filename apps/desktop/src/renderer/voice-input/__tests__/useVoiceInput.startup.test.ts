@@ -20,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   drainEngine: vi.fn(),
   engines: [] as Array<{ emit: (chunk: PcmChunk) => void; keepAlive: boolean }>,
   prepareMicrophone: vi.fn(),
-  releasePreparation: vi.fn(),
   promptExpired: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.translate }) }));
@@ -50,7 +49,7 @@ vi.mock('../audioContextPool', () => ({
 }));
 vi.mock('../WebMicAudioEngine', () => ({
   WebMicAudioEngine: class {
-    emit = (_chunk: PcmChunk) => {};
+    emit: (chunk: PcmChunk) => void = () => {};
     constructor(readonly options: { keepAlive: boolean }) {
       mocks.engines.push(this);
     }
@@ -81,6 +80,8 @@ vi.mock('../WebMicAudioEngine', () => ({
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
+import { prewarmVoiceInputAudio } from '../audioContextPool';
+import { createComposerLongPressVoiceGesture } from '../composerLongPressGesture';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -113,7 +114,7 @@ function mount() {
   const mute = deferred<{ ok: true }>();
   const permissionRequired = vi.fn();
   const api = {
-    onEvent: vi.fn((_listener: (event: VoiceInputRendererEvent) => void) => vi.fn()),
+    onEvent: vi.fn<(listener: (event: VoiceInputRendererEvent) => void) => () => void>(() => vi.fn()),
     start: vi.fn(() => connection.promise),
     stop: vi.fn().mockResolvedValue({ ok: true }),
     cancel: vi.fn().mockResolvedValue({ ok: true }),
@@ -150,12 +151,12 @@ function mount() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mocks.settings.fastActivationEnabled = false;
   mocks.engines.length = 0;
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
-  mocks.releasePreparation.mockReset();
-  mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
+  mocks.prepareMicrophone.mockReset();
 });
 afterEach(() => {
   cleanup();
@@ -164,29 +165,76 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
-  it('prepares only authorized devices without claiming recording or starting ASR', async () => {
+  // Regression (unit): an ordinary composer click opened an already authorized
+  // microphone before the 600ms hold threshold. Previous preparation coverage
+  // allowed this device access. Exercise the real hook and gesture with fake
+  // audio/provider boundaries: software may warm, capture must wait for start.
+  it.each([false, true])('prepares software without opening a microphone (permission granted: %s)', (granted) => {
     const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({
+      ok: granted, status: granted ? 'granted' : 'denied',
+    });
+    h.api.prewarm.mockClear();
+    vi.mocked(prewarmVoiceInputAudio).mockClear();
+
     h.result.current.prepare();
+
+    expect(h.api.prewarm).toHaveBeenCalledOnce();
+    expect(prewarmVoiceInputAudio).toHaveBeenCalledOnce();
     expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
-    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
-    const release = h.result.current.prepare();
-    expect(mocks.prepareMicrophone).toHaveBeenCalledOnce();
+    expect(mocks.startEngine).not.toHaveBeenCalled();
     expect(h.result.current.state).toBe('idle');
     expect(h.api.start).not.toHaveBeenCalled();
     expect(mocks.engines).toHaveLength(0);
-    await act(async () => { h.result.current.start(); });
-    expect(mocks.engines[0].keepAlive).toBe(true);
-    release?.();
-    expect(mocks.releasePreparation).toHaveBeenCalledOnce();
   });
 
-  it('releases unused press preparation when the composer unmounts', () => {
+  it('leaves the microphone closed for a short click and opens it only after a confirmed hold', async () => {
+    const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.mute.resolve({ ok: true });
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => h.result.current.getState(),
+      prepare: () => h.result.current.prepare(),
+      start: () => h.result.current.start(),
+      stop: () => h.result.current.stop(),
+    });
+    try {
+      gesture.press({ x: 0, y: 0 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+      expect(mocks.startEngine).not.toHaveBeenCalled();
+      gesture.release();
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(h.result.current.state).toBe('idle');
+      expect(h.api.start).not.toHaveBeenCalled();
+
+      gesture.press({ x: 0, y: 0 });
+      await act(async () => { await vi.advanceTimersByTimeAsync(599); });
+      expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+      expect(mocks.startEngine).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(mocks.startEngine).toHaveBeenCalledOnce();
+      expect(mocks.engines[0].keepAlive).toBe(false);
+      expect(h.result.current.state).toBe('listening');
+      await act(async () => { gesture.release(); });
+      expect(mocks.stopEngine).toHaveBeenCalled();
+      expect(h.result.current.state).toBe('done');
+    } finally {
+      gesture.dispose();
+    }
+  });
+
+  it.each([false, true])('uses the selected keep-alive policy on explicit start after preparation (%s)', async (fastActivationEnabled) => {
+    mocks.settings.fastActivationEnabled = fastActivationEnabled;
     const h = mount();
     h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
     h.result.current.prepare();
-    h.unmount();
-    expect(mocks.releasePreparation).toHaveBeenCalledOnce();
-    expect(h.api.start).not.toHaveBeenCalled();
+
+    await act(async () => { h.result.current.start(); });
+
+    expect(mocks.startEngine).toHaveBeenCalledOnce();
+    expect(mocks.engines[0].keepAlive).toBe(fastActivationEnabled);
+    expect(h.result.current.state).toBe('listening');
   });
 
   it('ends before the microphone produces its first frame and closes the late microphone', async () => {
