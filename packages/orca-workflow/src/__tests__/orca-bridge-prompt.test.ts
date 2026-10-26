@@ -164,7 +164,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
       'Orders are self-contained: state, premises, acceptance, and a "supersedes earlier orders" header when replacing one — never assume the worker just read your previous message.',
     );
     expect(prompt).toContain(
-      'When you invalidate your own premise (history rewrite, retracted decision, overturned finding), sweep the team before your own work: steer-correct or interrupt every running or queued order built on that premise.',
+      'When you invalidate your own premise (history rewrite, retracted decision, overturned finding), sweep the team before your own work: in one parallel tool-call batch, steer-correct or interrupt every running order built on that premise and revise or withdraw queued ones (update_queued_message / cancel_queued_message), then continue your own work; rule 5\'s parallel-batch semantics apply.',
     );
     expect(prompt).toContain(
       'Never simulate an interrupt or merge with multiple stop, update, cancel, or send calls because the queue may advance between calls.',
