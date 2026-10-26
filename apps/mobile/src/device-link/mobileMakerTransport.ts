@@ -53,7 +53,7 @@ import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type {
   HistoryViewPage,
   HistoryDetailPage,
-  HistoryWorkSummary,
+  HistoryWorkReference,
 } from "@cindy/maker-shared/message-window";
 import type {
   MobileGoalLimitsInput,
@@ -560,12 +560,12 @@ export interface MobileMakerTransport {
   ): Promise<HistoryViewPage<RemoteMessage>>;
   readWorkDetails(
     sessionId: string,
-    ref: HistoryWorkSummary,
+    ref: HistoryWorkReference,
     after?: string,
   ): Promise<HistoryDetailPage<RemoteMessage>>;
   setHistoryExpanded(
     sessionId: string,
-    refs: readonly HistoryWorkSummary[],
+    refs: readonly HistoryWorkReference[],
   ): Promise<void>;
   aroundMessages(
     sessionId: string,
