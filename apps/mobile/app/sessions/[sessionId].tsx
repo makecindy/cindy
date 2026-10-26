@@ -338,6 +338,7 @@ import {
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
+import { useComposerPressFallback } from '@/session/composerPressFallback';
 import { useComposerDock } from '@/session/composerMorph';
 import { DockKeyboardLift, DockKeyboardViewportSpacer } from '@/session/ComposerDockKeyboardFollow';
 import { useComposerPillOpen } from '@/session/useComposerPillOpen';
@@ -7343,6 +7344,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   };
 
   const pendingImagePreview = useComposerPendingImagePreview({ attachments, previews: attachmentPreviews, pendingUploads, getUploadedAttachmentId });
+  // 发送按之前先让编辑器把当前内容(含输入法未提交的组字文本)发布一次:native 草稿
+  // 平时只收已提交正文,不补这一刀,Android 拼音输入法下发出的是组字前的旧正文。
+  // 这一步放在 send() 之外:send() 的同步段要当场占住发送锁,不能在它前面插 await。
+  const handleSendPress = () => {
+    void (async () => {
+      await composerInputRef.current?.flush?.();
+      await send();
+    })();
+  };
   const renderComposerControls = ({ composerLayout, composerSendUnavailableReason, composerStopDisabledReason, composerStopDisabled, composerShowInlineStop, composerSendSlotIsStop, composerShowSendButton, composerSendDisabled, voiceIsListening, voiceIsProcessing, voiceProcessingIndicator, voiceIsBusy, voiceRecordingTimer, composerVoicePlacement }: SessionComposerControlState): SessionComposerControls => {
     composerSendTargetEnabledRef.current = composerShowSendButton && !composerLayout.send.disabled;
     if (!composerShowSendButton) sendButtonFrameRef.current = null;
@@ -7366,6 +7376,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           setModelSheetOpen(false);
           setPermissionSheetOpen(true);
         }}
+        pressInFallback
         style={[
           styles.composerInlineToolButton,
           permissionSheetOpen && styles.composerToolButtonActive,
@@ -7535,6 +7546,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         setContextSheetView('main');
         setContextSheetOpen(true);
       }}
+      pressInFallback
       style={[
         styles.composerInlineToolButton,
         composerLayout.attachment.active && styles.composerToolButtonActive,
@@ -7623,6 +7635,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       disabled={composerStopDisabled}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={stopSession}
+      pressInFallback
       pressedStyle={styles.sendButtonPressed}
       style={[
         styles.sendButton,
@@ -7662,7 +7675,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
           onLayout={measureSendButtonTarget}
-          onPress={send}
+          onPress={handleSendPress}
+          pressInFallback
           pressedStyle={styles.sendButtonPressed}
           style={[
             styles.sendButton,
@@ -11920,6 +11934,10 @@ function SessionComposerInput({
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
   const { document: composerDocument, draft } = useSyncExternalStore(source.subscribe, source.getSnapshot);
+  // 输入法组字中的预编辑文本存在性(正文不公开,只报有没有)。组字未结束时草稿正文
+  // 是空的,若按草稿判空,发送位整排消失,用户只能先收键盘才发得出(Android 拼音
+  // 输入法)。发送位按「有可发内容」判,组字文本也算。
+  const [composerPreedit, setComposerPreedit] = useState(false);
   const { t, i18n: i18nInstance } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -11952,6 +11970,7 @@ function SessionComposerInput({
     // Stop 的可见性跟随真实运行 / 队列状态；断线时只单独禁用交互。
     canStop: canStopComposer,
     draftText: draft,
+    hasPreedit: composerPreedit,
     queueBusy,
     quoteCount: composerQuoteCount,
     sendUnavailableReason: composerSendUnavailableReason,
@@ -11964,6 +11983,7 @@ function SessionComposerInput({
     canUseComposer,
     composerQuoteCount,
     composerSendUnavailableReason,
+    composerPreedit,
     draft,
     i18nInstance.language,
     queueBusy,
@@ -12352,6 +12372,7 @@ function SessionComposerInput({
                         onPasteImages={onPasteImages}
                         onPasteImagesLoading={beginPastePlaceholders}
                         onPasteImagesLoadFailed={failPastePlaceholders}
+                        onPreeditChange={setComposerPreedit}
                         placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                         resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
                         testID="session.composerRichInput"
@@ -12692,6 +12713,11 @@ interface RouteActionButtonProps {
   onPressIn?: PressableProps['onPressIn'];
   onPressOut?: PressableProps['onPressOut'];
   onResponderMove?: PressableProps['onResponderMove'];
+  /**
+   * 按下即生效的兜底:平台中途取消手势时 onPress 永不到达(按钮只闪一下就没了),
+   * 宽限到期后照样触发。正常松手仍然立即触发。详见 composerPressFallback。
+   */
+  pressInFallback?: boolean;
   /** responder 被系统/滚动终止时的回调(正常松手不触发);语音按钮用它撤销按下即录。 */
   onTouchCancel?: PressableProps['onTouchCancel'];
   pressedStyle?: StyleProp<ViewStyle>;
@@ -12716,6 +12742,7 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
   onPressOut,
   onResponderMove,
   onTouchCancel,
+  pressInFallback = false,
   pressedStyle,
   style,
   testID,
@@ -12724,6 +12751,23 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
   const resolvedDisabledStyle = disabledStyle === undefined ? styles.sendButtonDisabled : disabledStyle;
   const resolvedPressedStyle = pressedStyle === undefined ? styles.routeButtonPressed : pressedStyle;
   const interactionDisabled = disabled || busy || !onPress;
+  const pressFallback = useComposerPressFallback({
+    enabled: pressInFallback && !interactionDisabled,
+    onPress: () => onPress?.(),
+  });
+  const handlePressIn = useCallback((event: GestureResponderEvent) => {
+    pressFallback.beginPress(event.nativeEvent.pageX, event.nativeEvent.pageY);
+    onPressIn?.(event);
+  }, [onPressIn, pressFallback]);
+  const handlePress = useCallback(() => {
+    // 兜底已经先执行过动作:正常松手不再重复执行。
+    if (pressFallback.finishPress()) return;
+    onPress?.();
+  }, [onPress, pressFallback]);
+  const handleResponderMove = useCallback((event: GestureResponderEvent) => {
+    pressFallback.movePress(event.nativeEvent.pageX, event.nativeEvent.pageY);
+    onResponderMove?.(event);
+  }, [onResponderMove, pressFallback]);
   return (
     <Pressable
       ref={ref}
@@ -12740,10 +12784,10 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
       hitSlop={hitSlop}
       onLayout={onLayout}
       onLongPress={interactionDisabled ? undefined : onLongPress}
-      onPress={interactionDisabled ? undefined : onPress}
-      onPressIn={interactionDisabled ? undefined : onPressIn}
+      onPress={interactionDisabled ? undefined : handlePress}
+      onPressIn={interactionDisabled ? undefined : handlePressIn}
       onPressOut={interactionDisabled ? undefined : onPressOut}
-      onResponderMove={interactionDisabled ? undefined : onResponderMove}
+      onResponderMove={interactionDisabled ? undefined : handleResponderMove}
       onTouchCancel={interactionDisabled ? undefined : onTouchCancel}
       style={({ pressed }) => [
         style,
@@ -12790,6 +12834,7 @@ function ComposerRuntimePill({
       disabled={disabled}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={onPress}
+      pressInFallback
       style={styles.composerRuntimePill}
       testID={testID}
     >

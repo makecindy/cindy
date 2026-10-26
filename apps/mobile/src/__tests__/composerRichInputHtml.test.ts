@@ -353,6 +353,7 @@ describe('mobile composer rich input HTML', () => {
       cindyComposer?: {
         applyDocument(value: unknown, focusAfter?: boolean, caret?: { nodeIndex: number; offset: number }): void;
         commitPaste(requestId: string, nodes: unknown[]): void;
+        flush(): void;
         setConfig(value: { maxHeight: number }): void;
       };
       getSelection(): typeof selection;
@@ -441,6 +442,7 @@ describe('mobile composer rich input HTML', () => {
 
     // IME completion may arrive on either side of blur. Keep preedit text
     // private until completion/cancellation, then publish the final DOM once.
+    // 组字期间只报存在性(preedit),正文一个字都不外泄:发送位靠它保持可用。
     for (const completion of ['compositionend', 'compositioncancel']) {
       for (const blurFirst of [false, true]) {
         windowStub.cindyComposer?.applyDocument({
@@ -451,10 +453,13 @@ describe('mobile composer rich input HTML', () => {
         listeners.get('compositionstart')?.();
         children[0].nodeValue = '草稿候选';
         listeners.get('input')?.();
-        expect(messages.slice(beforeComposition)).toEqual([]);
+        expect(messages.slice(beforeComposition)).toEqual([{ type: 'preedit', active: true }]);
         if (blurFirst) {
           listeners.get('blur')?.();
-          expect(messages.slice(beforeComposition)).toEqual([{ type: 'blur' }]);
+          expect(messages.slice(beforeComposition)).toEqual([
+            { type: 'preedit', active: true },
+            { type: 'blur' },
+          ]);
           expect(children[0].nodeValue).toBe('草稿候选');
         }
 
@@ -468,8 +473,8 @@ describe('mobile composer rich input HTML', () => {
           document: { version: 1, nodes: [{ type: 'text', text: finalText }] },
         }] : [];
         expect(messages.slice(beforeComposition)).toEqual(blurFirst
-          ? [{ type: 'blur' }, ...changes]
-          : [...changes, { type: 'blur' }]);
+          ? [{ type: 'preedit', active: true }, { type: 'blur' }, ...changes, { type: 'preedit', active: false }]
+          : [{ type: 'preedit', active: true }, ...changes, { type: 'preedit', active: false }, { type: 'blur' }]);
 
         // Completion must also unlock ordinary editing after refocusing.
         listeners.get('focus')?.();
@@ -481,6 +486,37 @@ describe('mobile composer rich input HTML', () => {
         });
       }
     }
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+
+    // 发送前 flush:组字中的当前 DOM 一次性发布给 native,并回执已发布。
+    // 不补这一刀,Android 拼音输入法下 native 草稿停在组字前的旧正文。
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: '草稿' }],
+    }, true);
+    listeners.get('compositionstart')?.();
+    children[0].nodeValue = '草稿候选';
+    listeners.get('input')?.();
+    const beforeFlush = messages.length;
+    windowStub.cindyComposer?.flush();
+    expect(messages.slice(beforeFlush)).toEqual([
+      {
+        type: 'change',
+        document: { version: 1, nodes: [{ type: 'text', text: '草稿候选' }] },
+      },
+      { type: 'preedit', active: false },
+      { type: 'flushed' },
+    ]);
+    // flush 结束组字:之后的输入照常逐次上抛。
+    children[0].nodeValue = '草稿之后';
+    listeners.get('input')?.();
+    expect(messages.at(-1)).toEqual({
+      type: 'change',
+      document: { version: 1, nodes: [{ type: 'text', text: '草稿之后' }] },
+    });
     windowStub.cindyComposer?.applyDocument({
       version: 1,
       nodes: [{ type: 'text', text: 'hello world' }],

@@ -126,6 +126,29 @@ describe('shared session composer action model', () => {
     expect(attachmentOnly.statusText).toBe('就绪');
   });
 
+  it('keeps send available while an IME composition is pending', () => {
+    // Android 拼音输入法组字未结束时,草稿正文还是空的,但输入框里已经有字:
+    // 发送位必须仍然可用,否则用户只能先收键盘才发得出。
+    const preedit = buildSessionComposerLayout({
+      attachmentBusy: false,
+      attachmentCount: 0,
+      attachmentPickerOpen: false,
+      canStop: false,
+      draftText: '',
+      hasPreedit: true,
+      queueBusy: false,
+      sending: false,
+      voiceState: 'idle',
+    });
+    expect(preedit.primaryAction).toBe('send');
+    expect(preedit.send).toEqual({
+      disabled: false,
+      disabledReason: null,
+      label: '发送',
+      visible: true,
+    });
+  });
+
   it('enables send for quote-only drafts (chat-text-quote)', () => {
     const quoteOnly = buildSessionComposerLayout({
       attachmentBusy: false,

@@ -36,6 +36,11 @@ export interface ComposerRichInputHandle {
   /** Apply a document and place the caret where possible without opening the keyboard. */
   applyDocumentAndSetSelection(document: ComposerDocument, offset: number): void;
   blur(): void;
+  /**
+   * 把编辑器当前内容(含输入法未提交的组字文本)发布给 native,并等这次发布落地。
+   * 发送前调用:native 草稿平时只收已提交正文,不补这一刀就会发出组字前的旧正文。
+   */
+  flush(): Promise<void>;
   focus(): void;
   insertNode(node: ComposerNode): void;
 }
@@ -59,6 +64,8 @@ export interface ComposerRichInputProps {
   onPasteImages?: (uris: string[]) => void;
   onPasteImagesLoadFailed?: () => void;
   onPasteImagesLoading?: (count: number) => void;
+  /** 输入法组字中的预编辑文本存在性变化(正文不公开,只报有没有)。 */
+  onPreeditChange?(active: boolean): void;
   opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;
@@ -71,6 +78,9 @@ interface PendingImagePaste {
   settledIndexes: Set<number>;
   urisByIndex: Map<number, string>;
 }
+
+/** flush 的回执等待上限:WebView 失联时不让发送无限期挂着。 */
+const COMPOSER_FLUSH_TIMEOUT_MS = 300;
 
 /** Editable WebView wrapper; the native side only accepts the semantic protocol above. */
 const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputProps>(
@@ -90,6 +100,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     onPasteImages,
     onPasteImagesLoadFailed,
     onPasteImagesLoading,
+    onPreeditChange,
     opticalPadding = true,
     placeholder,
     resolveSessionLinkLabel,
@@ -110,6 +121,8 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       caret?: { nodeIndex: number; offset: number };
     } | null>(null);
     const pendingFocusRef = useRef(false);
+    /** flush 的等待者:WebView 回报 flushed 后统一放行。 */
+    const flushWaitersRef = useRef<(() => void)[]>([]);
     const pendingNodeInsertionsRef = useRef<ComposerNode[]>([]);
     const pendingImagePastesRef = useRef(new Map<string, PendingImagePaste>());
     const pendingImagePasteOrderRef = useRef<string[]>([]);
@@ -167,6 +180,8 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       pendingPastedImageFilesRef.current.clear();
       if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
+      // 编辑器重建后组字状态不存在了:发送位不能继续按「有组字文本」亮着。
+      onPreeditChange?.(false);
       onBlur?.();
     }, () => readyRef.current);
     const { generation, current: currentGeneration } = recovery;
@@ -238,6 +253,21 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             };
           }
           if (readyRef.current) inject('window.cindyComposer.blur();');
+        },
+        // 把当前 DOM(含未提交的组字文本)发布给 native,并等这次发布落地。
+        // WebView 失联时超时放行:发送不能被一个回不来的回执卡死。
+        flush: () => {
+          if (!readyRef.current) return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            const settle = () => {
+              clearTimeout(timer);
+              flushWaitersRef.current = flushWaitersRef.current.filter((waiter) => waiter !== settle);
+              resolve();
+            };
+            const timer = setTimeout(settle, COMPOSER_FLUSH_TIMEOUT_MS);
+            flushWaitersRef.current.push(settle);
+            inject('window.cindyComposer.flush();');
+          });
         },
         focus: focusEditor,
         insertNode: (node) => {
@@ -406,6 +436,18 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
+      if (message.type === 'preedit') {
+        // 组字中的正文不公开,只报存在性:发送位要保持可用,但草稿不动。
+        onPreeditChange?.(message.active);
+        return;
+      }
+      if (message.type === 'flushed') {
+        // 同批的 change 先于 flushed 到达,此时 native 草稿已是编辑器当前内容。
+        const waiters = flushWaitersRef.current;
+        flushWaitersRef.current = [];
+        for (const waiter of waiters) waiter();
+        return;
+      }
       if (message.type === 'change') {
         if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
@@ -470,7 +512,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, onPreeditChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     return (

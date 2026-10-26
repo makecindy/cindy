@@ -11,6 +11,13 @@ export type ComposerWebMessage =
   | { type: 'pong'; id: number }
   | { type: 'height'; height: number }
   | { type: 'change'; document: unknown; documentId?: number }
+  /**
+   * 组字中的预编辑文本存在性。正文不在这条消息里(等 compositionend/cancel 才
+   * 公开),native 只用它决定发送位是否可用。
+   */
+  | { type: 'preedit'; active: boolean }
+  /** flush 的回执:正文已按当前 DOM 发布,排在同批 change 之后。 */
+  | { type: 'flushed' }
   | { type: 'selection'; documentId: number; before: ComposerSelectionPrefix; through: ComposerSelectionPrefix }
   | { type: 'paste-text-request'; requestId: string; text?: string }
   | { type: 'paste-images-start'; requestId: string; count: number }
@@ -56,6 +63,10 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
       return { type: 'change', document: message.document,
         ...(message.documentId === undefined ? {} : { documentId: message.documentId as number }) };
     }
+    if (message.type === 'preedit') {
+      return typeof message.active === 'boolean' ? { type: 'preedit', active: message.active } : null;
+    }
+    if (message.type === 'flushed') return { type: 'flushed' };
     if (message.type === 'selection') {
       if (!isOffset(message.documentId) || !isPrefix(message.before) || !isPrefix(message.through)) return null;
       return { type: 'selection', documentId: message.documentId, before: message.before, through: message.through };

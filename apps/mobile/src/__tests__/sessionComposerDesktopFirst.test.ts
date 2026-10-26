@@ -830,6 +830,23 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toMatch(/(?:const|let)\s+durationMs\b/);
   });
 
+  // 组字中的预编辑文本(Android 拼音输入法)必须仍能发出去:WebView 侧的
+  // 'preedit' 存在性信号喂给共享布局保住发送位,发送前 flush 把编辑器当前
+  // DOM 一次性发布成草稿。失效后果:输入法展开时点发送发的是组字前的旧正文,
+  // 或发送位整排消失,用户只能先收键盘才发得出。
+  it('keeps the send path usable while an IME composition is pending', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const task = source.slice(source.indexOf('export default function SessionScreen()'), source.indexOf('function SessionComposerPalette('));
+    const input = source.slice(source.indexOf('function SessionComposerInput('), source.indexOf('function SessionSearchSheet('));
+    // flush 必须在抓草稿之前:抓到的必须是编辑器当前内容,不是组字前的旧正文。
+    expect(task).toContain('await composerInputRef.current?.flush?.();');
+    expect(task).toContain('onPress={handleSendPress}');
+    expect(task.indexOf('await composerInputRef.current?.flush?.();')).toBeLessThan(task.indexOf('await send();'));
+    // 组字存在性信号 → 共享布局的 hasPreedit → 发送位不消失。
+    expect(input).toContain('onPreeditChange={setComposerPreedit}');
+    expect(input).toContain('hasPreedit: composerPreedit,');
+  });
+
   it('lets the whole top edge of the card resize without covering attachments or text', () => {
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
     const touchStart = sharedSource.indexOf('resizeGrabberTouch: {');

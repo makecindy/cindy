@@ -499,9 +499,12 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   };
 
   root.addEventListener('input', notify);
-  root.addEventListener('compositionstart', () => { composing = true; });
-  root.addEventListener('compositionend', () => { composing = false; notify(); });
-  root.addEventListener('compositioncancel', () => { composing = false; notify(); });
+  // 组字中的预编辑文本不对 native 公开正文(它在 compositionend/cancel 前随时可能变),
+  // 但 native 必须知道「编辑器里还有没提交的字」,否则草稿判空时发送位整排消失,
+  // Android 拼音输入法下用户只能先收键盘才发得出。只报存在性,不报正文。
+  root.addEventListener('compositionstart', () => { composing = true; post({ type: 'preedit', active: true }); });
+  root.addEventListener('compositionend', () => { composing = false; notify(); post({ type: 'preedit', active: false }); });
+  root.addEventListener('compositioncancel', () => { composing = false; notify(); post({ type: 'preedit', active: false }); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
   // A resize-to-collapsed gesture blurs the WebView immediately. Flush any
   // settled DOM edits before native changes state. A pending paste has already
@@ -606,6 +609,15 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     },
     focus() { reportUserSelection = true; placeCaretAtEnd(); },
     blur() { root.blur(); },
+    // 发送前把编辑器当前内容(含未结束的组字文本)一次性发布给 native:native 的
+    // 草稿平时只收「已提交」的正文,组字中的拼音不会自动上抛,不补这一刀,发送
+    // 拿到的就是组字前的旧正文。flush 后正文与输入框里看到的完全一致。
+    flush() {
+      composing = false;
+      notify();
+      post({ type: 'preedit', active: false });
+      post({ type: 'flushed' });
+    },
     insertNode(node) { insertAtSelection(node); },
     commitPaste(requestId, nodes) { commitPaste(requestId, nodes); },
     resolveSessionLink(href, label) { resolveSessionLink(href, label); },

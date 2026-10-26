@@ -131,6 +131,10 @@ export const ComposerNativeInput = forwardRef<
     blur() {
       void native.current?.blur();
     },
+    // 原生编辑器逐次上报正文,没有「未提交组字文本」这层状态,直接放行。
+    flush() {
+      return Promise.resolve();
+    },
     applyDocumentAndSetSelectionToEnd(document) {
       rememberedSelection.current = null;
       void native.current?.setDocument(

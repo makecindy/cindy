@@ -25,6 +25,12 @@ export interface SessionComposerLayoutInput {
   attachmentPickerOpen: boolean;
   canStop: boolean;
   draftText: string;
+  /**
+   * 输入法组字中的预编辑文本存在(正文尚未提交)。发送位必须仍然可用:
+   * Android 拼音输入法下草稿正文在组字结束前是空的,若按草稿判空,发送按钮
+   * 整排消失,用户只能先收键盘才发得出。
+   */
+  hasPreedit?: boolean;
   queueBusy: boolean;
   /** 待发送的选中文字引用条数(chat-text-quote)。缺省 0;纯引用无草稿也可发送。 */
   quoteCount?: number;
@@ -154,7 +160,7 @@ export function buildSessionComposerLayout(
   const hasDraft = input.draftText.trim().length > 0;
   const hasAttachments = input.attachmentCount > 0;
   const hasQuotes = (input.quoteCount ?? 0) > 0;
-  const canSend = hasDraft || hasAttachments || hasQuotes;
+  const canSend = hasDraft || hasAttachments || hasQuotes || input.hasPreedit === true;
   // 语音生命周期(listening/submitting/refining)内发送槽常驻(对齐桌面主槽永远占位):
   // 录音期间发送键就是「结束并发送」,转写落地前后布局都不变——否则首段转写让 canSend
   // 翻 true 的瞬间发送键才冒出来,右对齐按钮组整体左移,语音按钮让出的位置正好被
