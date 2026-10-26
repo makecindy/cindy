@@ -327,6 +327,37 @@ describe('preview host', () => {
     expect(never.touchEmulation.at(-1)).toEqual({ enabled: false });
   });
 
+  it('opens the same tab again only after the previous lease gave its layout back', async () => {
+    const h = setup();
+    const [tab] = h.host.list();
+    const first = (await h.host.open(tab))!;
+    // The old injector's "back to mouse" is slow to be answered.
+    let answer!: () => void;
+    const gate = new Promise<void>((resolve) => (answer = resolve));
+    const original = vi.mocked(h.guest.debugger.sendCommand).getMockImplementation()!;
+    vi.mocked(h.guest.debugger.sendCommand).mockImplementation(async (method, params) => {
+      if (
+        method === 'Emulation.setTouchEmulationEnabled' &&
+        (params as { enabled?: boolean })?.enabled === false
+      )
+        await gate;
+      return original(method, params);
+    });
+    h.host.end(first);
+    const reopened = h.host.open(tab);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The new lease has not switched the touch layout on over the old one's pending "off".
+    expect(h.touchEmulation).toEqual([{ enabled: true, maxTouchPoints: 5 }]);
+    answer();
+    const second = (await reopened)!;
+    expect(h.touchEmulation).toEqual([
+      { enabled: true, maxTouchPoints: 5 },
+      { enabled: false },
+      { enabled: true, maxTouchPoints: 5 },
+    ]);
+    expect(h.host.current(second)).toBe(true);
+  });
+
   it('refuses to open a tab whose guest was rebuilt or whose binding moved on', async () => {
     const h = setup();
     const [tab] = h.host.list();

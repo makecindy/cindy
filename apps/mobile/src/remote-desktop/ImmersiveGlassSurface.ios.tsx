@@ -2,7 +2,7 @@ import { StyleSheet } from "react-native";
 import { GlassView } from "expo-glass-effect";
 import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
 import { navigationChrome, radius, useTheme } from "@/theme";
-import { ImmersiveGlassSurface as PlainSurface } from "./ImmersiveGlassSurface";
+import { ImmersivePlainSurface } from "./ImmersivePlainSurface";
 
 /** Whether the controls sit on liquid glass (and so use the clear-glass palette). */
 export function useImmersiveGlass(): boolean {
@@ -19,7 +19,7 @@ export function useImmersiveGlass(): boolean {
 export function ImmersiveGlassSurface() {
   const { mode } = useTheme();
   const glass = useLiquidGlassAvailable();
-  if (!glass) return <PlainSurface />;
+  if (!glass) return <ImmersivePlainSurface />;
   return (
     <GlassView
       glassEffectStyle="clear"

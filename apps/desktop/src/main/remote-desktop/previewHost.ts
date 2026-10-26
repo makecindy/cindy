@@ -113,6 +113,21 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
   const sessions = new Map<DesktopPreviewSource, Session>();
   /** Tabs being opened: already asked to keep painting, not yet a lease. */
   const opening = new Map<string, PreviewViewport | null>();
+  /**
+   * Injectors still giving the tab back its mouse layout. A tab is opened only after the
+   * previous injector on it has finished: its late `setTouchEmulationEnabled(false)` would
+   * otherwise undo the new injector's `true`, which is not sent again.
+   */
+  const disposing = new Map<string, Promise<void>>();
+  const disposeInjector = (tabId: string, injector: TabInputInjector) => {
+    const done: Promise<void> = injector
+      .dispose()
+      .catch(() => undefined)
+      .finally(() => {
+        if (disposing.get(tabId) === done) disposing.delete(tabId);
+      });
+    disposing.set(tabId, done);
+  };
   const castingTabs = () => [
     ...new Set([...[...sessions.keys()].map((source) => source.tabId), ...opening.keys()]),
   ];
@@ -275,6 +290,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
     },
 
     async open(tab, viewport) {
+      await disposing.get(tab.tabId);
       const binding = env.index.current(tab.tabId, tab.webContentsId);
       const guest = env.guest(tab.tabId);
       if (
@@ -316,7 +332,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
         releaseRendering();
         opening.delete(tab.tabId);
         syncCasting();
-        void injector.dispose();
+        disposeInjector(tab.tabId, injector);
       };
       let measured;
       try {
@@ -412,7 +428,7 @@ export function createPreviewHost(env: PreviewHostEnv): DesktopPreviewDeps {
       session.listeners.clear();
       session.capture.stop();
       session.releaseRendering();
-      void session.injector.dispose();
+      disposeInjector(session.source.tabId, session.injector);
       // The tab's own layout comes back with it leaving the cast set.
       syncCasting();
     },
