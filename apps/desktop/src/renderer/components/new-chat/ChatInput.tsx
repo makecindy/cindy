@@ -9000,19 +9000,15 @@ export function ChatInput({
   // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
   const voiceHintEmpty =
     !!editor && !editor.isDestroyed && composerDocIsEmpty(editor.state.doc) && !hasVoiceDraftText;
-  const voiceHint = voiceHintEmpty
-    ? voiceBusyOnCurrentComposer && voiceInput.state === 'listening'
-      ? t(
-          composerVoiceHolding || voiceButtonHolding
-            ? 'newChat.chatInput.voiceInput.speakRelease'
-            : 'newChat.chatInput.voiceInput.speakPressAgain',
-        )
-      : composerVoiceHovered && composerVoiceHoverHintReady && composerLongPressVoiceInputEnabled && !composerTypingLocked
-        ? t('newChat.chatInput.voiceInput.holdComposer')
-        : null
+  const recordingVoiceHint = voiceHintEmpty && voiceBusyOnCurrentComposer && voiceInput.state === 'listening'
+    ? t(
+        composerVoiceHolding || voiceButtonHolding
+          ? 'newChat.chatInput.voiceInput.speakRelease'
+          : 'newChat.chatInput.voiceInput.speakPressAgain',
+      )
     : null;
   const showRecommendationOverlay =
-    !voiceHint && shouldShowComposerPromptRecommendation({
+    !recordingVoiceHint && shouldShowComposerPromptRecommendation({
       ...recommendationComposerState,
       prompt: recommendedPrompt,
     });
@@ -9024,7 +9020,14 @@ export function ChatInput({
   const [dismissedPreviewPrompt, setDismissedPreviewPrompt] = useState<string | null>(null);
   if (!previewPrompt && dismissedPreviewPrompt !== null) setDismissedPreviewPrompt(null);
   const showPromptPreview =
-    !!previewPrompt && previewPrompt !== dismissedPreviewPrompt && !composerMutationLocked && !voiceHint;
+    !!previewPrompt && previewPrompt !== dismissedPreviewPrompt && !composerMutationLocked && !recordingVoiceHint;
+  // 录音状态优先；悬停教学只占用没有推荐词或建议预览的空位，不影响 Tab 采纳。
+  const voiceHint = recordingVoiceHint ?? (
+    voiceHintEmpty && !showRecommendationOverlay && !showPromptPreview &&
+    composerVoiceHovered && composerVoiceHoverHintReady && composerLongPressVoiceInputEnabled && !composerTypingLocked
+      ? t('newChat.chatInput.voiceInput.holdComposer')
+      : null
+  );
   promptPreviewInputGuardRef.current = () => {
     if (!showPromptPreview) return false;
     setDismissedPreviewPrompt(previewPrompt ?? null);

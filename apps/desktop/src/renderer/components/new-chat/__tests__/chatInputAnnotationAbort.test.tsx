@@ -23,6 +23,13 @@ import type { UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import type { InputDeviceRendererAction } from '../../../../shared/inputDevices';
+import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  __testing as promptRecommendations,
+  beginPromptRecommendationPrediction,
+  clearPromptRecommendationSession,
+  resolvePromptRecommendationPrediction,
+} from '@/lib/promptRecommendationStore';
 
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as ComponentProps<typeof ModelSelector>['onModelChange'] | undefined, remoteProviders: [] as ProviderView[],
@@ -148,7 +155,7 @@ beforeEach(() => {
   window.electronAPI = api;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 });
-afterEach(() => { cleanup(); clearDraft('composer-regression'); h.remoteProviders = []; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearDraft('composer-regression'); clearPromptRecommendationSession('composer-regression'); h.remoteProviders = []; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}) {
   const attachmentState: ComponentProps<typeof ChatInput>['attachmentState'] = {
@@ -302,6 +309,95 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
   view.rerender(<ChatInput {...view.props} />);
   fireEvent.pointerEnter(area);
   expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+});
+
+async function supplyRecommendation() {
+  vi.spyOn(makerChatStore, 'getPromptRecommendationCompletionStatus').mockReturnValue({
+    turnStoppedByUser: false, hasTerminalError: false, sideTask: false,
+    hasBackgroundAgentWork: false, hasAutoDrainingQueue: false,
+  });
+  await act(async () => {
+    promptRecommendations.applyRunningSnapshot(new Map([['composer-regression', { isRunning: true }]]));
+    promptRecommendations.noteTurnEnded('composer-regression', 200);
+    promptRecommendations.applyRunningSnapshot(new Map());
+    promptRecommendations.settleCompletion('composer-regression');
+    const seq = beginPromptRecommendationPrediction('composer-regression', 200)!;
+    resolvePromptRecommendationPrediction('composer-regression', 200, seq, 'Continue with the recommendation');
+  });
+}
+
+// #7220: hover teaching must not remove a visible recommendation or its real
+// acceptance paths. Run the actual hover timer, store, editor and DOM handlers.
+it.each(['Tab', 'badge'])('keeps the recommendation available to %s after composer hover', async method => {
+  supplyRangeGeometry();
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await supplyRecommendation();
+  expect(screen.getByText('Continue with the recommendation')).toBeTruthy();
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerOver(h.editor!.view.dom);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    expect(screen.getByText('Continue with the recommendation')).toBeTruthy();
+    const badge = screen.getByRole('button', {
+      name: 'newChat.chatInput.recommendationShortcut: Continue with the recommendation',
+    });
+    await act(async () => {
+      if (method === 'Tab') fireEvent.keyDown(h.editor!.view.dom, { key: 'Tab' });
+      else fireEvent.click(badge);
+    });
+    expect(h.editor!.getText()).toBe('Continue with the recommendation');
+    expect(screen.queryByRole('button', { name: /recommendationShortcut:/ })).toBeNull();
+    expect(promptRecommendations.getSessionSnapshot('composer-regression')).toBeUndefined();
+    expect(view.props.onSend).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('keeps a homepage suggestion preview above hover teaching and preserves its keyboard guard', async () => {
+  const view = renderComposer({ previewPrompt: 'Homepage suggestion' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerOver(h.editor!.view.dom);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    expect(screen.getByTestId('chat-input-prompt-preview').textContent).toBe('Homepage suggestion');
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Tab' });
+    expect(screen.queryByTestId('chat-input-prompt-preview')).toBeNull();
+    expect(h.editor!.getText()).toBe('');
+    expect(view.props.onSend).not.toHaveBeenCalled();
+    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.holdComposer');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(['recommendation', 'preview'])('still starts long-press recording while showing a %s', async content => {
+  const view = renderComposer({ sessionId: 'composer-regression',
+    ...(content === 'preview' ? { previewPrompt: 'Homepage suggestion' } : {}),
+  });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  if (content === 'recommendation') await supplyRecommendation();
+  vi.useFakeTimers();
+  try {
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
+    fireEvent.mouseDown(h.editor!.view.dom, { button: 0, detail: 1, clientX: 10, clientY: 10 });
+    expect(h.prepare).toHaveBeenCalledOnce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    view.rerender(<ChatInput {...view.props} />);
+    expect(h.listening).toBe(true);
+    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakRelease');
+    expect(screen.queryByTestId('chat-input-prompt-preview')).toBeNull();
+    expect(screen.queryByText('Continue with the recommendation')).toBeNull();
+    await act(async () => { fireEvent.mouseUp(window, { button: 0 }); });
+    expect(h.stop).toHaveBeenCalledOnce();
+  } finally {
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    vi.useRealTimers();
+  }
 });
 
 // #374 / voiceInputButtonAnchor: the real toolbar must keep the voice control
