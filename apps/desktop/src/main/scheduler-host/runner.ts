@@ -2099,11 +2099,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
             });
             throw new RoutineDispatchDeferredError('Routine revision changed before dispatch');
           }
-          // bump userSendAt:侧栏排序主键已切到 userSendAt ?? updatedAt,自动化任务
-          // fire 属"这个会话有了新一轮输入",与用户按下发送同权重,让 fire 出来的会话
-          // 即时冒到列表顶(否则已被用户发过消息、userSendAt 非空的绑定会话会被冻结在
-          // 旧时刻顶不上来)。fire-and-forget:失败只 warn,不阻塞本轮 run —— 它只是排序
-          // 元数据,落库失败最多让本次 fire 的会话晚一拍冒头,不影响 agent 执行。
+          // 保留 scheduler 的既有 userSendAt 写入；该入口同时推进列表 lastActivityAt。
+          // userSendAt 的历史口径清理另行处理，不改变活跃礼让判据。
           // 用 ctx.firedAt 对齐本轮 run.firedAt,顺延重试时也稳定。
           void touchUserSendInDb(session.id, ctx.firedAt).catch((err) => {
             this.deps.logger.warn?.('[runner] touchUserSend failed', {

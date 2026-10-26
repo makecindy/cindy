@@ -12622,6 +12622,7 @@
     }
   },
   "ccAgent": {
+    "sessionEntry": {"missing":"이 세션을 찾을 수 없습니다. 삭제되었을 수 있습니다.","denied":"현재 계정 또는 컴퓨터에서 이 세션에 접근할 수 없습니다.","failed":"이 세션을 불러오지 못했습니다.","back":"세션 목록으로 돌아가기","retry":"세션 다시 불러오기"},
     "contextWindowBudget": {
       "menuTitle": "이 작업의 컨텍스트 창",
       "triggerLabel": "작업 컨텍스트 창, 현재 {{window}}",

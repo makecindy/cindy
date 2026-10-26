@@ -17,6 +17,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
@@ -4011,6 +4012,7 @@ function MessageBubble({
             renderText={(text, index) => (
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
+                  codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
                   onOpenPayload={actions.onOpenPayload}
@@ -4026,6 +4028,7 @@ function MessageBubble({
           />
         ) : (
           <MarkdownBody
+            codeCopyEnabled={!shareSelectionActive}
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
             allowIosUITextView={!shouldCollapseLongMessage || actions.companion === true}
@@ -5849,6 +5852,7 @@ function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; ac
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
 function MarkdownBodyBase({
   allowIosUITextView = true,
+  codeCopyEnabled = true,
   boundTextRuns = false,
   markdownImageCacheKey,
   layout,
@@ -5877,6 +5881,8 @@ function MarkdownBodyBase({
    * 气泡(长代码围栏横向裁切 + 纵向巨高空白)。
    */
   pinContentWidth?: boolean;
+  /** 分享图片选择态关闭块级操作,避免把按钮带进导出内容。 */
+  codeCopyEnabled?: boolean;
   /** 完成态消息为 true:各块 Text 开原生选中(含内嵌图片 View 的块除外,Android 上有风险)。 */
   selectable?: boolean;
   /** 消息流式中:文件 chip 层跳过远端验证。 */
@@ -6128,14 +6134,17 @@ function MarkdownBodyBase({
     if (block.type === 'code') {
       // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
       // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
+      const showCodeCopyButton = codeCopyEnabled && block.text.trim().length > 0;
       return (
         <View key={block.key} style={styles.markdownCodeFrame}>
+          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
           <View
             style={[
               styles.markdownCodeContent,
               {
                 paddingHorizontal: layout.codePaddingHorizontal,
-                paddingVertical: layout.codePaddingVertical,
+                paddingBottom: layout.codePaddingVertical,
+                paddingTop: showCodeCopyButton ? 0 : layout.codePaddingVertical,
               },
             ]}
           >
@@ -6274,7 +6283,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}

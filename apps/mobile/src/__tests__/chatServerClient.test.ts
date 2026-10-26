@@ -14,6 +14,37 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('direct Chat Server client', () => {
+  // #6907: existing fixtures never pair a human's group name A with account ownerName B (unit tier).
+  it('keeps owner labels scoped to each group and follows refreshed names without changing identities', () => {
+    const human = { ...snapshot().members[0], name: 'Nickname A' };
+    const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Companion X', ownerName: 'Account B' };
+    const messages = [message(20), { ...message(21), authorId: bot.id, author: { kind: 'bot', name: bot.name } }];
+    const group = (name: string, roomNumber = 1) => ({ ...snapshot(), room: room(roomNumber), members: [{ ...human, name }, bot], messages });
+    const project = (s: ChatSnapshot) => chatGroupView({ snapshot: s, messages, before: null }, id(11));
+    const first = group('Nickname A');
+    expect(project(first).messages.map(m => m.authorName)).toEqual(['Nickname A', 'Companion X (Nickname A)']);
+    expect(chatRoomRow(first.room, first).item.display.subtitle).toBe('Nickname A · Companion X (Nickname A)');
+    expect(project(group('Nickname C')).messages[1].authorName).toBe('Companion X (Nickname C)');
+    expect(project(group('Nickname D', 2)).messages[1].authorName).toBe('Companion X (Nickname D)');
+    expect(project(first).messages[1].authorName).toBe('Companion X (Nickname A)');
+    for (const name of ['Account B', '   ']) expect(project(group(name)).messages[1].authorName).toBe('Companion X (Account B)');
+    expect(project({ ...first, members: [bot] }).messages[1].authorName).toBe('Companion X (Account B)');
+    expect(project({ ...first, members: [{ ...human, state: 'left' }, bot] }).messages[1].authorName).toBe('Companion X (Account B)');
+    expect(project({ ...first, members: [{ ...bot, ownerName: '   ' }] }).messages[1].authorName).toBe('Companion X');
+    expect(project(first).members.find(m => m.actorId === bot.id)).toMatchObject({ botId: bot.id, isOwned: false });
+    expect(bot).toMatchObject({ name: 'Companion X', ownerName: 'Account B', ownerActorId: human.id });
+  });
+  it.each(['Account B', ''])('keeps direct owner labels from account %s', ownerName => {
+    const human = { ...snapshot().members[0], name: 'Nickname A' };
+    const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Companion X', ownerName };
+    const source = { ...snapshot(), room: { ...room(), kind: 'direct' }, members: [human, bot] };
+    const messages = [{ ...message(20), authorId: bot.id, author: { kind: 'bot', name: bot.name } }];
+    const label = ownerName ? 'Companion X (Account B)' : 'Companion X';
+    const view = chatGroupView({ snapshot: source, messages, before: null }, human.id);
+    expect(view).toMatchObject({ name: label, messages: [{ authorName: label }] });
+    expect(view.members.find(m => m.actorId === bot.id)?.name).toBe(label);
+    expect(chatRoomRow(source.room, source).groupMembers?.find(m => m.botId === bot.id)?.name).toBe(label);
+  });
   it('preserves thread identity through projection into the history new-message counter', () => {
     const view = chatGroupView({ snapshot: snapshot(), before: null, messages: [message(20),
       { ...message(21), threadRootId: id(20) }, { ...message(22), threadRootId: id(99) }] }, id(11));
@@ -271,16 +302,17 @@ describe('direct Chat Server client', () => {
   // original must not send a stale quote or silently lose the user's reply.
   it('sends a fresh quote with the companion recipient and rejects a deleted original', async () => {
     const original = { ...message(20), authorId: id(12), author: { kind: 'bot', name: 'Before rename' } };
-    const member = { ...snapshot().members[0], id: id(12), kind: 'bot', state: 'joined', name: 'Current name' };
+    const owner = { ...snapshot().members[0], name: 'Nickname A' };
+    const member = { ...owner, id: id(12), kind: 'bot', state: 'joined', name: 'Current name', ownerName: 'Account B' };
     const request = vi.fn().mockImplementation(async (path: string, method?: string) => {
       if (method === 'POST') return { id: id(21) };
-      return path.endsWith('/members') ? [member] : original;
+      return path.endsWith('/members') ? [member, owner] : original;
     });
     const client = createChatServerClient(request);
     const input = { clientId: 'quote-reply-operation', text: 'Agreed', mentions: { all: false, botIds: [] }, quote: { messageId: id(20) } };
     await client.send(id(1), input);
     expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/messages`, 'POST', expect.objectContaining({
-      mentions: [id(12)], content: [expect.objectContaining({ type: 'card' }), { type: 'text', text: 'Agreed' }],
+      mentions: [id(12)], content: [expect.objectContaining({ type: 'card', data: expect.objectContaining({ authorName: 'Current name (Nickname A)' }) }), { type: 'text', text: 'Agreed' }],
     }));
     original.deleted = true;
     request.mockClear();

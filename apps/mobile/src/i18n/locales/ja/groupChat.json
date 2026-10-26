@@ -197,20 +197,25 @@
     "add": "仲間を追加",
     "projectDirOnComputer": "パソコンで選択・変更できます",
     "memberActions": "{{name}} の操作",
-    "managementComputer": "管理用コンピュータ",
     "retry": "再試行",
-    "reconnect": "再接続",
     "conflict": "グループ設定が更新されました。内容を確認してから再保存してください。入力内容は保持されています。",
     "archive": "グループチャットをアーカイブ",
     "archiveConfirmTitle": "「{{name}}」をアーカイブしますか？",
     "archiveNote": "アーカイブできるのは所有者のみです。新しいメッセージは送信できなくなりますが、履歴は保持されます。",
-    "managementStatus": {
-      "ready": "接続済み",
-      "loading": "接続中…",
-      "noHost": "未接続",
-      "permission": "読み取り専用",
-      "upgrade": "更新が必要",
-      "unavailable": "設定を取得できません"
+    "description": "グループの説明",
+    "descriptionSaveFailed": "グループの説明を保存できませんでした。",
+    "makeAdmin": "管理者にする",
+    "removeAdmin": "管理者を解除",
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "guest": "ゲスト"
+    },
+    "cloudStatus": {
+      "loading": "設定を読み込み中…",
+      "permission": "この設定を変更できるのはグループのオーナーと管理者だけです。",
+      "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
     }
   },
   "errors": {

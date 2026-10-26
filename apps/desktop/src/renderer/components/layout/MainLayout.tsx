@@ -1,3 +1,4 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -134,7 +135,6 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
   isAgentIslandVisibleSessionOwnedByBotRoute,
-  resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
@@ -491,6 +491,8 @@ export function MainLayout() {
     if (!document.hasFocus()) return;
     if (isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute(location.pathname)) return;
     if (isAgentIslandVisibleSessionOwnedByBotRoute(location.pathname)) return;
+    // The task view confirms metadata and rendered history before acknowledging a single task.
+    if (typeof visibleSessions === 'string') return;
     void window.electronAPI.agentIsland?.setVisibleSession?.(
       visibleSessions,
     );
@@ -554,17 +556,22 @@ export function MainLayout() {
   currentPathRef.current = `${location.pathname}${location.search}`;
   const navigateToOrdinarySession = useCallback(
     (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string) => {
-      if (deviceId) remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
-      // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get
-      // 会 miss → 远程 Orca lead/worker 被当普通会话路由,CCAgentSessionView 再
-      // redirect 到 orca 路由时会丢 searchJump 锚点。传入远程镜像的 session 对象,
-      // 让 Orca 路由一步到位(Codex review P2,与 SessionLinkChip 同款处理)。
+      // 已知镜像可提前解析 Orca 角色；明确指定电脑时，先由任务入口恢复并校验
+      // 来源，避免读到本机同 ID。Worker 后续转到 Lead 时保留 device 和 searchJump。
       const remoteSession =
         remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
           s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
-      void resolveSessionRoute(sessionId, remoteSession, { remote: !!deviceId }).then((target) => {
+      const route = deviceId
+        ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
+          ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
+        : resolveSessionRoute(sessionId, remoteSession);
+      void route.then((target) => {
         if (!isLatest()) return;
-        const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);
+        if (deviceId && target !== '/cc-agent') {
+          const url = new URL(target, 'https://cindy.invalid');
+          url.searchParams.set('device', deviceId);
+          target = `${url.pathname}${url.search}`;
+        }
         if (messageClientId) {
           // 带消息锚点:即使已在目标路由也要 navigate——新的 location.state 才能
           // 触发 CCAgentSessionView 的 searchJump 消费 effect(定位 + 高亮)。
@@ -582,17 +589,7 @@ export function MainLayout() {
         } else if (currentPathRef.current !== target) {
           navigate(target);
         }
-        // 通知点击跳转专用的 visible-session 上报:故意只 gate isAgentIslandSupported(),
-        // 不像上面的 syncAgentIslandVisibleSession / OrcaSplitView 那样加 document.hasFocus()
-        // 或 orca-split / workdir-browse 归属守卫。原因:通知触发跳转时主窗口 focus 往往还
-        // 没稳定(见 main 端 isAgentIslandPendingFocusAck 放宽),本路径是唯一能在这段 focus
-        // 竞态里把灵动岛收起的上报来源。若把 orca / files 路由交还各自 owner 组件,它们都带
-        // document.hasFocus() 守卫、竞态期不会上报,首个权限卡片会退回"必须先点窗口才收起"
-        // 的旧 bug。worker deep link 直接按 route query 上报 [Lead, Worker]，普通会话
-        // 上报单个 session；窗口 focus 稳定后 owner 组件继续维护同一份可见集合。
-        if (isAgentIslandSupported()) {
-          void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSession);
-        }
+
       });
     },
     [navigate],
@@ -602,6 +599,10 @@ export function MainLayout() {
   // One navigator for the layout's lifetime: its sequence must span re-renders so a
   // late lookup for an earlier notification cannot override a newer click.
   const [navigateToSession] = useState(() => createSessionEntryNavigator({
+    captureOwner: () => {
+      const owner = getDataOwnerGeneration();
+      return () => isDataOwnerGenerationCurrent(owner);
+    },
     isRemoteDevice: async (deviceId) => deviceId !== await window.electronAPI.getDeviceId(),
     readKnownBotRoute: (sessionId) => botRouteForOwnedSession(getBotProfiles(), sessionId)
       ?? remoteBotRouteForSession(readRemoteBots(), sessionId),
@@ -609,7 +610,14 @@ export function MainLayout() {
       readProfiles: getBotProfiles,
       loadProfiles: ensureBotProfilesLoaded,
     }),
-    openBotRoute: (route, islandEntryId) => {
+    openBotRoute: (route, islandEntryId, messageClientId, sessionId) => {
+      if (messageClientId && sessionId) {
+        sessionEntryDepsRef.current.navigate(route, { state: {
+          ...(islandEntryId ? islandEntryRouteState(islandEntryId) : {}),
+          searchJump: { kind: 'conversation-search', sessionId, messageId: messageClientId, messageIdKind: 'clientId', messageClientId },
+        } });
+        return;
+      }
       // 只读历史由自己的归属门禁在显示后处置被点的卡:点击编号随路由状态交过去,已在该页也要重新交一次。
       if (islandEntryId) {
         sessionEntryDepsRef.current.navigate(route, {

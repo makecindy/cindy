@@ -349,6 +349,7 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
 // ── 每轮事件累计状态 ─────────────────────────────────────────────────────────
 
 interface TurnAccumulator {
+  userDispatchPending: boolean;
   /** 创建目标之前已在运行的轮次；只保存在本生命周期内，不计入目标裁决。 */
   precedingTurn: { session: SessionLike; generation: number } | null;
   text: string;
@@ -374,6 +375,7 @@ function freshTurn(
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
   return {
+    userDispatchPending: false,
     precedingTurn: null,
     text: '',
     sawToolUse: false,
@@ -630,6 +632,7 @@ export class GoalController {
         previousBoundary?.pendingPersistence ?? null,
         previousBoundary?.pendingCompletion ?? null,
       );
+      editBoundary.userDispatchPending = true;
       this.turns.set(sessionId, editBoundary);
       let editObjectivePersisted = false;
       let updatedState: GoalState | null = null;
@@ -705,6 +708,7 @@ export class GoalController {
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    createBoundary.userDispatchPending = true;
     createBoundary.precedingTurn = previousBoundary?.precedingTurn ?? null;
     this.turns.set(sessionId, createBoundary);
     let createdState: GoalState | null = null;
@@ -842,7 +846,7 @@ export class GoalController {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
           this.stopSession(sessionId);
-          this.emit(limited);
+          this.emit(limited, current.status);
         }
         return limited;
       }
@@ -982,7 +986,7 @@ export class GoalController {
         await this.resumeGoal(sessionId);
         return reconcileLifecycleChange();
       }
-      this.emit(next);
+      this.emit(next, state.status);
       if (
         next.status === 'active' &&
         state.status === 'budgetLimited' &&
@@ -1128,9 +1132,12 @@ export class GoalController {
     }
     await this.awaitPendingLifecycle(clearBoundary);
     if (this.turns.get(sessionId) !== clearBoundary) return;
+    const previousGoal = await this.deps.storage.get(sessionId);
+    if (this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
     if (this.turns.get(sessionId) !== clearBoundary) return;
     this.deps.emitStatus({ sessionId, goal: null });
+    if (previousGoal) this.deps.onGoalStopped?.(sessionId, this.now());
     this.turns.delete(sessionId);
   }
 
@@ -1187,7 +1194,7 @@ export class GoalController {
       }),
     );
     if (this.turns.get(sessionId) !== pauseBoundary) return;
-    if (updated) this.emit(updated);
+    if (updated) this.emit(updated, state.status);
   }
 
   /**
@@ -1338,6 +1345,7 @@ export class GoalController {
       lookupBoundary.pendingPersistence,
       lookupBoundary.pendingCompletion,
     );
+    resumedBoundary.userDispatchPending = !opts?.auto;
     this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
@@ -1756,9 +1764,12 @@ export class GoalController {
     return session ? session.isTurnRunning() : false;
   }
 
-  private emit(state: GoalState): void {
+  private emit(state: GoalState, previousStatus?: GoalState['status']): void {
     if (this.disposed || this.disposing) return;
     this.deps.emitStatus({ sessionId: state.sessionId, goal: toPayload(state) });
+    if (previousStatus === 'active' && state.status !== 'active') {
+      this.deps.onGoalStopped?.(state.sessionId, state.updatedAt);
+    }
   }
 
   /**
@@ -1993,6 +2004,7 @@ export class GoalController {
           // null emit 属于同一顺序提交；后续新目标必须在它之后再 emit active，
           // 否则旧 completion 的迟到 null 会把新 chip 隐藏。
           this.deps.emitStatus({ sessionId, goal: null });
+          this.deps.onGoalStopped?.(sessionId, this.now());
         })(),
       );
       if (isCurrentTurn()) this.stopSession(sessionId);
@@ -2091,7 +2103,7 @@ export class GoalController {
       },
     );
     if (!isCurrentTurn()) return;
-    if (updated) this.emit(updated);
+    if (updated) this.emit(updated, state.status);
 
     this.resetTurn(sessionId);
 
@@ -2122,7 +2134,7 @@ export class GoalController {
         }),
       );
       if (!isCurrent()) return true;
-      if (blocked) this.emit(blocked);
+      if (blocked) this.emit(blocked, 'active');
     } catch (persistError) {
       this.deps.logger.error('[goal] failed to persist dispatch failure', {
         sessionId,
@@ -2420,7 +2432,7 @@ export class GoalController {
       );
       if (!isCurrentLifecycle()) return;
       this.stopSession(sessionId);
-      if (limited) this.emit(limited);
+      if (limited) this.emit(limited, state.status);
       return;
     }
     const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
@@ -2537,6 +2549,12 @@ export class GoalController {
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };
+      const userDispatchAt = this.now();
+      const noteUserDispatched = () => {
+        if (!dispatchBoundary?.userDispatchPending) return;
+        dispatchBoundary.userDispatchPending = false;
+        this.deps.onGoalUserDispatched?.(sessionId, userDispatchAt);
+      };
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {
@@ -2558,6 +2576,7 @@ export class GoalController {
           signal: dispatchAbortController.signal,
         },
       );
+      if (result.accepted) noteUserDispatched();
       if (pendingHandoff && result.accepted) {
         agentHandoffPending.consume(sessionId);
       }

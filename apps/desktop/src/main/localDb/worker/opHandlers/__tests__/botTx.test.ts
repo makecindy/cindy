@@ -97,8 +97,9 @@ describe('Bot named worker transactions', () => {
         const row = db.prepare(`SELECT p.status, v.capabilities_json AS capabilities FROM bot_profiles p
           JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
           WHERE p.id = 'saved-bot'`).get() as { status: string; capabilities: string };
+        const config = JSON.parse(row.capabilities);
         return row.status === 'active' ? {
-          chain: normalizeBotModelChain(JSON.parse(row.capabilities).modelChain), current,
+          chain: normalizeBotModelChain(config.modelChain, config), current,
           hasRuntimeOverride: false, scheduledModelBaseline: readBaseline(),
         } : null;
       },
@@ -194,6 +195,23 @@ describe('Bot named worker transactions', () => {
     await h.reconcile()('saved-session');
     await h.scope.restore('saved-session');
     expect(h.current().model).toBe('temporary');
+    expect(h.readBaseline()).toBeNull();
+  });
+
+  it('keeps a legacy location-only save across restart and old automation cleanup', async () => {
+    const h = savedModelFixture();
+    const legacy = { harness: 'codex', model: 'old', providerId: 'connected-custom', effort: 'high', fastMode: false };
+    db.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(legacy), 'saved-bot');
+    h.pause(true);
+    h.save('old', 1, { capabilitiesJson: JSON.stringify({ ...legacy, agentDeviceId: 'share:new-location' }) });
+    expect(JSON.parse(h.readBaseline()!)).toMatchObject({ pendingBotProfileVersion: 2 });
+    await h.scope.restore('saved-session', 'automation');
+    expect(h.current().model).toBe('temporary');
+    h.pause(false);
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session', 'automation');
+    expect(h.current()).toMatchObject({ model: 'old', agentDeviceId: 'share:new-location' });
     expect(h.readBaseline()).toBeNull();
   });
 

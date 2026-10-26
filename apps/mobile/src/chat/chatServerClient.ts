@@ -1,7 +1,7 @@
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** The existing Chat Server HTTP contract; no device-link or executor registration. */
 import { botGroupMessageSummaryText, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName as memberName, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
 import i18next from 'i18next';
@@ -10,6 +10,7 @@ import { botGroupQuoteFromMessage, buildBotGroupQuoteCard } from '@cindy/maker-s
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
+  topic?: string; description?: string;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
@@ -38,6 +39,16 @@ export interface ChatCapabilities { companionHome: boolean }
 /** Compare-and-set result: a conflict carries the main computer another device already chose. */
 export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null }
+export type ChatGroupSettingsAction =
+  | { type: 'update'; expectedRevision: number; name?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean }
+  | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' };
+
+/** Prefer an owned owner, then the human's admin role, as on Desktop. */
+export function chatGroupManager(snapshot: ChatSnapshot, self: string) {
+  const managers = snapshot.members.filter(member => member.state === 'joined'
+    && (member.id === self || member.ownerActorId === self) && ['owner', 'admin'].includes(member.role));
+  return managers.find(member => member.role === 'owner') ?? managers.find(member => member.id === self) ?? managers[0];
+}
 
 export function chatId(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('INVALID_CHAT_ID');
@@ -62,8 +73,6 @@ export function chatRejection(error: unknown, status: number, code: string): Rec
   const details = (error as { details?: unknown }).details;
   return details && typeof details === 'object' && !Array.isArray(details) ? details as Record<string, unknown> : {};
 }
-const memberName = (member: ChatMember) => member.kind === 'bot' && member.ownerName?.trim()
-  ? `${member.name} (${member.ownerName.trim()})` : member.name;
 // A recognized 引用回复 card renders as the quote; an unknown revision keeps its readable fallback.
 // A task card is the message's task only on a teammate's own message (bot-group-chat.md §10).
 const taskCardOf = (message: ChatMessage) => message.author.kind === 'bot' ? message.content.map(readBotGroupTaskCard).find(Boolean) ?? null : null;
@@ -90,17 +99,18 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
   const members = snapshot?.members.filter(member => member.state === 'joined') ?? [];
   const last = snapshot?.messages.filter(message => !message.threadRootId && !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? 1 : -1)[0];
+  const ownerMembers = room.kind === 'direct' ? [] : members;
   return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
     lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined,
     chatUnread: snapshot?.reads && selfId ? chatUnread(snapshot, selfId) : undefined,
-    groupMembers: snapshot ? members.map(chatMemberIdentity) : undefined, item: {
+    groupMembers: snapshot ? members.map(member => chatMemberIdentity(member, ownerMembers)) : undefined, item: {
     ref: { collectionId: 'bot-groups', kind: 'bot-group', id: room.id },
     revision: String(room.head ?? room.revision), display: { title: room.name,
-      subtitle: members.map(memberName).join(' · '),
-      ...(snapshot ? { preview: last ? mobileMarkdownPreviewText(botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || members.map(memberName).join(' · ') : '' } : {}),
+      subtitle: members.map(member => memberName(member, ownerMembers)).join(' · '),
+      ...(snapshot ? { preview: last ? mobileMarkdownPreviewText(botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || members.map(member => memberName(member, ownerMembers)).join(' · ') : '' } : {}),
       timestamp: Date.parse(last?.createdAt ?? room.updated_at),
       lastReplyAt: snapshot && selfId ? chatLastReplyAt(snapshot.messages, selfId) : undefined },
-    links: members.map(member => ({ rel: 'member', label: memberName(member),
+    links: members.map(member => ({ rel: 'member', label: memberName(member, ownerMembers),
       target: { kind: 'resource', ref: { collectionId: 'teammates', kind: 'bot', id: member.id } } })),
   } };
 }
@@ -145,7 +155,7 @@ export function chatReadAt(snapshot: ChatSnapshot, selfId: string): number {
 }
 
 /** Public profile images never enter the computer's local media resolver. */
-function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView, 'avatar' | 'avatarUrl'> {
+export function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView, 'avatar' | 'avatarUrl'> {
   const raw = value ?? '';
   try { return { avatar: '', avatarUrl: chatHttpsUrl(raw) }; } catch { /* Not a public HTTPS image. */ }
   // The server also accepts the existing bundled presets and short emoji identities.
@@ -154,8 +164,8 @@ function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView, 'avata
   return { avatar, avatarUrl: null };
 }
 
-function chatMemberIdentity(member: ChatMember) {
-  return { botId: member.id, name: memberName(member), ...chatMemberAvatar(member.avatar), avatarColor: '' };
+function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) {
+  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.avatar), avatarColor: '' };
 }
 
 /**
@@ -164,9 +174,10 @@ function chatMemberIdentity(member: ChatMember) {
  */
 export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = []): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
+  const ownerMembers = room.kind === 'direct' ? [] : members;
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
-    ...chatMemberIdentity(member), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
+    ...chatMemberIdentity(member, ownerMembers), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role,
     ...(member.ownerActorId === selfId && member.kind === 'bot'
       ? { homeDeviceId: actors.find(actor => actor.id === member.id)?.homeDeviceId ?? null } : {}),
@@ -191,7 +202,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       ...(task ? { task } : {}), threadRootId: message.threadRootId,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joined && typeof joined.data?.displayName === 'string' ? joined.data.displayName
-        : member ? memberName(member) : message.author.name,
+        : member ? memberName(member, ownerMembers) : message.author.name,
       isSelf: message.authorId === selfId, content: contentText(message), mentions: { all: false, botIds: message.mentions ?? [] },
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
       noticeCode: joined ? 'member-joined' : null, planId: null, files: [],
@@ -202,11 +213,13 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const failure = readBotGroupExecutionFailure(row, room.id);
     if (!failure) return [];
     const member = members.find(candidate => candidate.id === failure.botId);
-    return [{ ...failure, botName: member ? memberName(member) : '' }];
+    return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
   return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
-    name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(memberName).join(', ') || room.name : room.name,
+    name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
+    topic: room.topic, description: room.description,
+    supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
@@ -245,16 +258,32 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   }
   let supportsDissolve = false;
   let supportsListRemoval = false;
+  let singleSpeaker = false;
   async function identity() {
-    const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number } }>('/me');
+    const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number } }>('/me');
     if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
     supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
     supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
+    singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
     return chatId(me.actor.id);
   }
   return {
     personalList,
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker }),
+    async groupSettings(roomId: string) {
+      const [snapshot, self] = await Promise.all([
+        request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
+      ]);
+      if (snapshot.room.id !== roomId || snapshot.room.kind !== 'group' || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
+      return { snapshot, self, manager: chatGroupManager(snapshot, self) };
+    },
+    /** The server rechecks the selected owned actor's live role for every write. */
+    async manageGroup(roomId: string, managerId: string, action: ChatGroupSettingsAction, operationId: string) {
+      const path = `/conversations/${chatId(roomId)}`;
+      const { type, ...body } = action;
+      return request(type === 'member' ? `${path}/members` : path, type === 'member' ? 'POST' : 'PATCH',
+        { operationId, ...body }, chatId(managerId));
+    },
     async syncListState(force = false) {
       await identity();
       if (supportsListRemoval) await (force ? personalList.sync(request) : personalList.ensureSynced(request));
@@ -421,7 +450,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (current) { if (BigInt(readSeq) > BigInt(current.read_seq)) current.read_seq = readSeq; }
       else page.snapshot.reads.push({ thread_key: key, read_seq: readSeq });
     },
-    async send(roomId: string, input: { clientId: string; text: string; mentions: { all: boolean; botIds: string[] }; quote?: { messageId: string }; threadRootId?: string }) {
+    async send(roomId: string, input: { conversationKind?: 'direct'; clientId: string; text: string; mentions: { all: boolean; botIds: string[] }; quote?: { messageId: string }; threadRootId?: string }) {
       const key = JSON.stringify([roomId, input.clientId, input.text, input.mentions, input.quote?.messageId, input.threadRootId]);
       const known = input.quote ? postedQuotes.get(key) : undefined;
       const content: ChatMessage['content'] = known?.content ?? [{ type: 'text', text: input.text }];
@@ -434,7 +463,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (original.deleted || (original.threadRootId && original.threadRootId !== input.threadRootId) || original.origin === 'system') throw new Error('QUOTE_UNAVAILABLE');
         const member = members.find(member => member.id === original.authorId);
         const quote = botGroupQuoteFromMessage({ id: original.id, sequence: Number(original.seq), authorKind: original.author.kind === 'human' ? 'user' : 'bot',
-          authorName: member ? memberName(member) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
+          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : members) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
           attachments: original.content.filter(block => block.type === 'media').map(block => ({ name: attachmentName(block) })) });
         // Quote positions are only an optional UI hint; never round a server cursor into it.
         if (!Number.isSafeInteger(quote.sequence)) quote.sequence = null;

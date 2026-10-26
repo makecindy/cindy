@@ -197,20 +197,25 @@
     "add": "新增夥伴",
     "projectDirOnComputer": "在電腦上選擇或更換",
     "memberActions": "{{name}} 的操作",
-    "managementComputer": "管理電腦",
     "retry": "重試",
-    "reconnect": "重連",
     "conflict": "群設定已更新，請核對後再儲存。輸入已保留。",
     "archive": "封存群聊",
     "archiveConfirmTitle": "封存「{{name}}」？",
     "archiveNote": "僅群主可封存。封存後無法繼續傳送訊息，歷史訊息會保留。",
-    "managementStatus": {
-      "ready": "已連線",
-      "loading": "連線中…",
-      "noHost": "已中斷",
-      "permission": "無管理權限",
-      "upgrade": "需更新電腦端",
-      "unavailable": "設定讀取失敗"
+    "description": "群組簡介",
+    "descriptionSaveFailed": "群組簡介未儲存",
+    "makeAdmin": "設為管理員",
+    "removeAdmin": "取消管理員",
+    "roles": {
+      "owner": "群主",
+      "admin": "管理員",
+      "member": "成員",
+      "guest": "訪客"
+    },
+    "cloudStatus": {
+      "loading": "正在讀取群組設定…",
+      "permission": "只有群主和管理員可以修改這些設定",
+      "unavailable": "群組設定讀取失敗，請重試"
     }
   },
   "errors": {

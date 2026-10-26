@@ -12622,6 +12622,7 @@
     }
   },
   "ccAgent": {
+    "sessionEntry": {"missing":"找不到这条任务，它可能已被删除。","denied":"当前账号或电脑无法访问这条任务。","failed":"未能加载这条任务。","back":"返回任务列表","retry":"重新加载任务"},
     "contextWindowBudget": {
       "menuTitle": "任务上下文窗口",
       "triggerLabel": "任务上下文窗口，当前 {{window}}",

@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   pin: vi.fn(),
   merge: vi.fn(),
   view: vi.fn(),
+  navigate: vi.fn(),
+  requestedSessionId: undefined as string | undefined,
   online: true,
   listed: true,
   lastReplyAt: 0,
@@ -22,7 +24,11 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLink
 vi.mock('../CloudCompanionOfflineView', () => ({
   CloudCompanionOfflineView: (props: unknown) => { h.cloudView(props); return <div>cloud-offline-view</div>; },
 }));
-vi.mock('react-router-dom', () => ({ useParams: () => ({ deviceId: 'home', botId: 'writer' }) }));
+vi.mock('react-router-dom', () => ({
+  useLocation: () => ({ search: '?keep=1', state: { searchJump: { messageClientId: 'reply' } } }),
+  Navigate: (props: unknown) => { h.navigate(props); return <div>original-task</div>; },
+  useParams: () => ({ deviceId: 'home', botId: 'writer', sessionId: h.requestedSessionId }),
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
   markRemoteBotRead: h.markRead,
@@ -58,6 +64,8 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
 import { CLOUD_HOME_GRACE_MS, RemoteBotSessionView } from '../RemoteBotSessionView';
 beforeEach(() => {
   h.markRead.mockClear();
+  h.navigate.mockReset();
+  h.requestedSessionId = undefined;
   h.online = true;
   h.listed = true;
   h.lastReplyAt = 0;
@@ -83,6 +91,24 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+// Unit regression: an exact notification link must retain its task, host and anchor
+// when the canonical link changed, its host is offline, or the companion lookup fails.
+it.each(['changed', 'offline', 'failed'] as const)('preserves the original task when the companion is %s', async (reason) => {
+  h.requestedSessionId = 'old-canonical';
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  if (reason === 'offline') h.online = false;
+  if (reason === 'failed') h.invoke.mockRejectedValue(new Error('Unavailable'));
+  render(<RemoteBotSessionView />);
+  await screen.findByText('original-task');
+  expect(h.navigate).toHaveBeenLastCalledWith({
+    to: '/cc-agent/old-canonical?keep=1&device=home',
+    state: { searchJump: { messageClientId: 'reply' } }, replace: true,
+  });
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.cloudView).not.toHaveBeenCalled();
+  expect(h.markRead).not.toHaveBeenCalled();
+});
 // Unit regression: a host conversation link + active bot session must reach the shared
 // parent chat as canonical, or its post-send follow-up invitation can never appear.
 it('resolves the latest canonical task and passes its verified identity to writable chat', async () => {

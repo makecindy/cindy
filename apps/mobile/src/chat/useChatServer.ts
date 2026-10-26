@@ -298,7 +298,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         : [...mentions.botIds];
       const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
       if (root && joined.some(member => member.id === root.authorId && member.kind === 'bot')) recipients.push(root.authorId);
-      await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text), threadRootId,
+      await api.client.send(groupId, { ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}), clientId: String(input.clientId), text: String(input.text), threadRootId,
         ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
           ? { quote: { messageId: String(input.quote.messageId) } } : {}),
         mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });

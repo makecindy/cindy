@@ -155,12 +155,8 @@ describe('Bot task creation cannot leave navigation permanently gated', () => {
 describe('Bot task route recovery', () => {
   const source = readFileSync(resolve(__dirname, '..', 'BotSessionView.tsx'), 'utf8');
 
-  it('keeps load failures visible and retryable instead of silently redirecting', () => {
-    expect(source).not.toContain('<Navigate');
-    expect(source).toContain("kind: 'error'");
-    expect(source).toContain('setReloadVersion');
-    expect(source).toContain('bots.sessionLoadFailedTitle');
-  });
+  // Retryable load failures are exercised through the rendered BotSessionView
+  // in botIslandVisibility.test.tsx. Valid stale URLs may redirect to their task.
 
   it('passes the live Bot roster and the teammate identity into the shared task composer', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list(');

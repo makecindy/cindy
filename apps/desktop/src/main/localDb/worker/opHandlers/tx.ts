@@ -320,16 +320,24 @@ function projectAliasesReplaceIdentity(
   })();
 }
 
+/** Main → worker internal flag: absent keeps the original behavior. */
+function expectOptionalFlag(value: unknown, name: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw invalidArgs(`${name} must be a boolean`);
+  return value;
+}
+
 function botsCreateProfile(db: Database.Database, args: unknown): void {
   const p = asRecord(args, 'bots.createProfile args');
   const id = expectString(p.id, 'id');
   const now = expectNumber(p.now, 'now');
+  const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
   db.transaction(() => {
     const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
     const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
       FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
       WHERE p.status != 'archived'`).all() as Array<{ id: string; name: string; config: string; identity: string }>;
-    if (rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName'))) ||
+    if ((!allowDuplicateName && rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName')))) ||
         (config.templateId === 'cindy' && rows.some(row => JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
       throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
     }
@@ -365,6 +373,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
   const id = expectString(p.id, 'id');
   const expectedVersion = expectNumber(p.expectedCurrentVersion, 'expectedCurrentVersion');
   const now = expectNumber(p.now, 'now');
+  const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
   const avatarRef = p.botAvatarRef === undefined
     ? null
     : asRecord(p.botAvatarRef, 'botAvatarRef');
@@ -390,7 +399,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
       throw Object.assign(new Error('Teammate avatar changed during update'), { code: 'PRECONDITION_FAILED' });
     }
-    if (p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
+    if (!allowDuplicateName && p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
       const name = normalizeBotName(expectString(p.displayName, 'displayName'));
       const others = db.prepare("SELECT display_name AS name FROM bot_profiles WHERE id != ? AND status != 'archived'").all(id) as Array<{ name: string }>;
       if (others.some(row => normalizeBotName(row.name) === name)) throw Object.assign(new Error('A companion with this name already exists'), { code: 'ALREADY_EXISTS' });

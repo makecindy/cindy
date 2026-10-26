@@ -7,7 +7,7 @@ import { ChatInviteButton, ChatMessageActions } from '../ChatServerControls';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { botGroupDraftText, botGroupThreadDraftKey } from '../botGroupAttachments';
-import { clearDraft, discardDraftScope, getDraft } from '@/lib/composerDraftStore';
+import { clearDraft, discardDraftScope, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import { flashThreadTarget } from '../BotGroupThreadViews';
 import { chatErrorKey } from '../chatError';
 import type { BotGroupDetail, BotGroupMessageView } from '../../../../shared/botGroupChat';
@@ -687,6 +687,68 @@ describe('chat interaction controls', () => {
     view.unmount();
     await act(async () => settle({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
     expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))).toBeUndefined();
+  });
+
+  // #6930 ownership review, unit: the real drop/composer entry points must fence
+  // in-flight media work. Existing reopen tests only waited inside the reply IPC.
+  // Minimal inputs: one pending Ghost resolve/cache or shared-image materialization.
+  it.each(['resolve-owner', 'resolve-discard', 'cache-owner', 'cache-discard'])('does not revive a Thread draft after Ghost %s invalidation', async scenario => {
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const resolved = { kind: 'image', url: 'cindy-media://blobs/source.png' };
+    const meta = { name: 'ghost.png', ext: '.png', size: 42, mimeType: 'image/png', url: 'cindy-media://blobs/copied.png' };
+    const resolvePanelMedia = vi.fn(() => scenario.startsWith('resolve') ? pending : Promise.resolve(resolved));
+    const cacheMediaForSession = vi.fn(() => pending);
+    const cleanupCachedImages = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electronAPI, { ghosts: { resolvePanelMedia }, cacheMediaForSession, cleanupCachedImages });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const panel = (await screen.findByText('Root message')).closest('aside')!;
+    fireEvent.drop(panel, { dataTransfer: { types: ['text/uri-list'], getData: (type: string) => type === 'text/uri-list' ? 'cindy-ghost://helper/media/image.png' : '' } });
+    await waitFor(() => expect(scenario.startsWith('resolve') ? resolvePanelMedia : cacheMediaForSession).toHaveBeenCalledOnce());
+    act(() => { if (scenario.endsWith('owner')) mocks.ownerCurrent = false; else discardDraftScope('bot-group:' + group.id); });
+    await act(async () => finish(scenario.startsWith('resolve') ? resolved : meta));
+    expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))?.attachments ?? []).toEqual([]);
+    expect(screen.queryByText('ghost.png')).toBeNull();
+    if (scenario.startsWith('resolve')) expect(cacheMediaForSession).not.toHaveBeenCalled();
+    else expect(cleanupCachedImages).toHaveBeenCalledExactlyOnceWith([meta.url]);
+  });
+
+  it.each(['materialize-discard', 'materialize-owner', 'materialize-reject', 'reply-failure', 'reply-success'])('releases only unsent owned Thread media on %s', async scenario => {
+    const room = { ...group, id: 'cleanup-' + scenario };
+    const key = botGroupThreadDraftKey(room.id, 'root');
+    const files = [
+      { id: 'image', name: 'shared.png', path: 'clipboard://shared', ext: '.png', size: 42, mimeType: 'image/png', category: 'image' as const, url: 'cindy-media://blobs/shared.png', cacheUrlShared: true },
+      { id: 'file', name: 'log.txt', path: '/cache/owned.bin', ext: '.txt', size: 3, mimeType: 'text/plain', category: 'file' as const },
+      { id: 'shared-file', name: 'history.txt', path: '/cache/shared.bin', ext: '.txt', size: 3, mimeType: 'text/plain', category: 'file' as const, stagedPathShared: true },
+    ];
+    saveDraft(key, { text: null, attachments: files });
+    let finish!: (value?: unknown) => void;
+    let reject!: (reason: Error) => void;
+    const pending = new Promise((resolve, fail) => { finish = resolve; reject = fail; });
+    const meta = { name: 'private.png', ext: '.png', size: 42, mimeType: 'image/png', url: 'cindy-media://blobs/private.png' };
+    const cacheMediaForSession = vi.fn(() => scenario.startsWith('materialize') ? pending : Promise.resolve(meta));
+    const cleanupCachedImages = vi.fn().mockResolvedValue(undefined);
+    const cleanupStagedChatAttachments = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electronAPI, { cacheMediaForSession, cleanupCachedImages, cleanupStagedChatAttachments, getFileThumbnail: vi.fn(async () => null) });
+    mocks.reply.mockReturnValue(pending);
+    render(<ChatThreadPanel group={room} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(scenario.startsWith('materialize') ? cacheMediaForSession : mocks.reply).toHaveBeenCalledOnce());
+    act(() => { if (scenario.endsWith('owner')) mocks.ownerCurrent = false; else discardDraftScope('bot-group:' + room.id); });
+    await act(async () => {
+      if (scenario.endsWith('reject')) reject(new Error('cache failed'));
+      else finish(scenario.startsWith('materialize') ? meta : { ok: scenario === 'reply-success', messageId: 'sent', errorCode: 'REQUEST_TIMEOUT' });
+    });
+    expect(getDraft(key)?.attachments ?? []).toEqual([]);
+    if (scenario.startsWith('materialize')) expect(mocks.reply).not.toHaveBeenCalled();
+    if (scenario === 'reply-success') {
+      expect(cleanupCachedImages).not.toHaveBeenCalled();
+      expect(cleanupStagedChatAttachments).not.toHaveBeenCalled();
+    } else {
+      expect(cleanupStagedChatAttachments).toHaveBeenCalledExactlyOnceWith(['/cache/owned.bin']);
+      if (!scenario.endsWith('reject')) expect(cleanupCachedImages).toHaveBeenCalledExactlyOnceWith([meta.url]);
+      expect(cleanupCachedImages.mock.calls.flat(2)).not.toContain(files[0].url);
+    }
   });
 
   it('keeps a failed reply draft and reuses its operation id; IME confirmation does not send', async () => {

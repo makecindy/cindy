@@ -1136,6 +1136,7 @@ export type AgentIslandDeviceSessionEventKind = 'done' | 'error' | 'needs-reply'
 
 export interface AgentIslandDeviceSessionEvent {
   sessionId: string;
+  deviceId: string;
   title: string | null;
   deviceName: string | null;
   kind: AgentIslandDeviceSessionEventKind;
@@ -1203,6 +1204,7 @@ export function syncAgentIslandDeviceSessions(
     if (transition.event) {
       result.events.push({
         sessionId: input.sessionId,
+        deviceId: input.deviceId,
         title: input.title,
         deviceName: input.deviceName,
         kind: transition.event,

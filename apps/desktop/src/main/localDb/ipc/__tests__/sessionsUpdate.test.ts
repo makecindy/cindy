@@ -199,7 +199,9 @@ import {
   setSessionWorktreeRecycle,
   updateSessionInDb,
   touchUserSendInDb,
+  touchSessionActivityInDb,
 } from '../sessions';
+import { markSessionTurnEnded, drainSessionActiveTurnWrites, beginSessionTurnEndedSuppression } from '../../sessionActiveTurn';
 import {
   clearAllSessionAttention,
   getAttentionCount,
@@ -256,6 +258,7 @@ function createDb(): void {
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       parent_session_id TEXT,
       forked_at_message_id TEXT,
       worktree_path TEXT,
@@ -1062,6 +1065,56 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'cc-local' }),
     );
+  });
+
+  it('advances the bounded-list clock monotonically on handoffs without changing the last human send', async () => {
+    const before = h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local');
+    await touchSessionActivityInDb('codex-local', 1_786_500_050_000);
+    await touchSessionActivityInDb('codex-local', 1_786_500_040_000);
+    expect(h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local')).toEqual(before);
+    expect(h.sqlite!.prepare('SELECT last_activity_at, updated_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000, updated_at: 1_786_500_050_000 });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'codex-local', patch: {
+        lastActivityAt: new Date(1_786_500_050_000).toISOString(),
+        updatedAt: new Date(1_786_500_050_000).toISOString(),
+      },
+    }));
+    await invokeUpdate('codex-local', { title: 'Renamed', status: 'archived' });
+    markSessionTurnEnded('codex-local');
+    await drainSessionActiveTurnWrites('codex-local');
+    const releaseSuppression = beginSessionTurnEndedSuppression();
+    try {
+      await touchSessionActivityInDb('codex-local', 1_786_500_070_000);
+    } finally {
+      releaseSuppression();
+    }
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000 });
+  });
+
+  it('writes human send and activity together without rewinding a newer handoff', async () => {
+    await touchSessionActivityInDb('codex-local', 1_786_500_060_000);
+    await touchUserSendInDb('codex-local', 1_786_500_050_000);
+    expect(h.sqlite!.prepare('SELECT user_send_at, last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ user_send_at: 1_786_500_050_000, last_activity_at: 1_786_500_060_000 });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+      patch: expect.objectContaining({ lastActivityAt: new Date(1_786_500_060_000).toISOString() }),
+    }));
+    h.tapWindowBroadcast.mockClear();
+    await touchUserSendInDb('codex-local', 1_786_500_050_000);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not advance a terminal handoff while the goal is active', async () => {
+    h.sqlite!.exec("CREATE TABLE session_goals (session_id TEXT PRIMARY KEY, status TEXT); INSERT INTO session_goals VALUES ('codex-local', 'active')");
+    await touchSessionActivityInDb('codex-local', 1_786_500_050_000, true);
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: null });
+    h.sqlite!.prepare("UPDATE session_goals SET status = 'paused'").run();
+    await touchSessionActivityInDb('codex-local', 1_786_500_060_000, true);
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_060_000 });
   });
 
   it.each([

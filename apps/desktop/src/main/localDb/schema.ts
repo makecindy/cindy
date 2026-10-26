@@ -182,12 +182,10 @@ export const sessions = sqliteTable(
     providerId: text('provider_id'),
     /**
      * 用户最近一次"按下发送"的时刻（unix ms，NULL = 从未发过）。
-     * Sidebar Project / 组内 session 排序唯一时间轴：
-     *   - 首条消息发出时由 renderer 通过 touchUserSend IPC 立刻 bump
-     *   - NULL ⟺ 草稿，由 projectGrouping 直接归到未分类
-     * 不被 model/effort/title 改动等"字段类"修改触发——updatedAt 才是。
+     * 保留真人发送语义及现有写入点；列表排序使用 lastActivityAt，旧数据回落到此列。
      */
     userSendAt: integer('user_send_at'), // unix ms
+    lastActivityAt: integer('last_activity_at'),
     /**
      * Agent 来源标识——session 级别。决定本 session 内 messages.agent_meta 的 JSON 形态。
      * 默认 'cc'（Claude Code）。未来扩展 'codex' 等时新建 session 即可，老 session 不动。

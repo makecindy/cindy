@@ -168,6 +168,8 @@ vi.mock('../layoutPreferenceStore.js', () => ({
 }));
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: () => ({ ownerStamp: { dataOwnerId: 'test-owner', ownerGeneration: 1 } }),
+  isDataOwnerBroadcastScopeCurrent: () => true,
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
@@ -7092,6 +7094,16 @@ describe('Agent Island device sessions', () => {
     expect(channels).not.toContain(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL);
   });
 
+  it('keeps the originating device when a remote island card opens its task', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    setDeepLinkMainWindow(null);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: () => true } });
+    service.setDeviceSessions([deviceSession('completed')]);
+    (service as unknown as { focusSession(id: string): void }).focusSession('remote-1');
+    expect(takePendingDeepLink()).toMatchObject({ type: 'session', id: 'remote-1', deviceId: 'device-a' });
+    service.resetRuntimeState();
+  });
+
   it('hands observed transitions to desktop notifications when the island is off', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
@@ -7110,6 +7122,7 @@ describe('Agent Island device sessions', () => {
     expect(onDeviceSessionEvent).toHaveBeenCalledTimes(1);
     expect(onDeviceSessionEvent).toHaveBeenCalledWith({
       sessionId: 'remote-1',
+      deviceId: 'device-a',
       title: 'Fix login',
       deviceName: 'Studio Mac',
       kind: 'done',

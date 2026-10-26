@@ -28,6 +28,7 @@ const chatWindow = vi.hoisted(() => ({ url: 'file:///app/index.html#/bots/groups
 vi.mock('../deepLink', () => ({
   getDeepLinkMainWindow: () => ({ isFocused: () => true, isVisible: () => true, webContents: { getURL: () => chatWindow.url } }),
   openMainWindowChatMessage: vi.fn(),
+  openMainWindowSession: vi.fn(),
 }));
 vi.mock('../agent-island/companionIdentity', () => ({ companionAvatarThumbnail: async () => undefined }));
 
@@ -38,6 +39,7 @@ const registeredHandlers = new Map<string, IpcHandler>();
 
 // Notification 构造调用计数(每条 toast 一次)。
 const notificationCtor = vi.fn();
+const notificationClicks: Array<() => void> = [];
 // Notification.isSupported() — 默认 true; 单独用例需改成 false 时,setMock 之前覆盖。
 let notificationSupported = true;
 
@@ -55,6 +57,7 @@ class FakeNotification {
   }
   on(evt: string, cb: (...args: unknown[]) => void): this {
     if (evt === 'close') this.closeCb = cb;
+    if (evt === 'click') notificationClicks.push(cb);
     return this;
   }
   show(): void {
@@ -156,6 +159,7 @@ async function freshService() {
   vi.resetModules();
   registeredHandlers.clear();
   notificationCtor.mockClear();
+  notificationClicks.length = 0;
   warn.mockClear();
   notificationSupported = true;
   ownerScopeCurrent = true;
@@ -199,6 +203,28 @@ const baseDeps = (feishuIm: FakeFeishuIM) => ({
 });
 
 describe('notificationService — channels 分发', () => {
+  // Regression: OS click must keep host + original task + reply anchor through reload,
+  // and a notification from the previous account must not navigate the new account.
+  it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {
+    const { showDesktopSessionEvent, initNotificationService } = await freshService();
+    const { openMainWindowSession } = await import('../deepLink');
+    vi.mocked(openMainWindowSession).mockClear();
+    showDesktopSessionEvent(() => null, {
+      sessionId: 'remote-task', deviceId: 'studio', messageClientId: 'answer', title: 'Reply', kind: 'done',
+    });
+    notificationClicks[0]!();
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('remote-task', { deviceId: 'studio', messageClientId: 'answer' });
+    ownerScopeCurrent = false;
+    notificationClicks[0]!();
+    expect(openMainWindowSession).toHaveBeenCalledTimes(1);
+    ownerScopeCurrent = true;
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    readSessionNotificationPreview.mockResolvedValue({ reply: { clientId: 'reply-original', text: 'Answer' } });
+    await invokeHandler({ sessionId: 'original', title: 'Reply', kind: 'done' });
+    notificationClicks.at(-1)!();
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('original', { messageClientId: 'reply-original' });
+  });
+
   it('does not suppress an unread thread merely because its group is focused', async () => {
     const { showDesktopChatMessage } = await freshService();
     const payload = { groupId: 'group-1', groupName: 'Group', messageId: 'message-1', senderName: 'Other', avatar: '', preview: 'Reply' };
@@ -909,6 +935,7 @@ describe('notificationService — channels 分发', () => {
     );
 
     notificationCtor.mockClear();
+    notificationClicks.length = 0;
     showDesktopSessionEvent(() => null, { sessionId: '', title: '', kind: 'error' });
     expect(notificationCtor).toHaveBeenCalledWith(
       expect.objectContaining({

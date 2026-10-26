@@ -197,20 +197,25 @@
     "add": "添加伙伴",
     "projectDirOnComputer": "在电脑上选择或更换",
     "memberActions": "{{name}} 的操作",
-    "managementComputer": "管理电脑",
     "retry": "重试",
-    "reconnect": "重连",
     "conflict": "群设置已更新，请核对后再保存。输入已保留。",
     "archive": "归档群聊",
     "archiveConfirmTitle": "归档「{{name}}」？",
     "archiveNote": "仅群主可归档。归档后不能继续发消息，历史消息保留。",
-    "managementStatus": {
-      "ready": "已连接",
-      "loading": "连接中…",
-      "noHost": "已断开",
-      "permission": "无管理权限",
-      "upgrade": "需更新电脑端",
-      "unavailable": "设置读取失败"
+    "description": "群简介",
+    "descriptionSaveFailed": "群简介未保存",
+    "makeAdmin": "设为管理员",
+    "removeAdmin": "取消管理员",
+    "roles": {
+      "owner": "群主",
+      "admin": "管理员",
+      "member": "成员",
+      "guest": "访客"
+    },
+    "cloudStatus": {
+      "loading": "正在读取群设置…",
+      "permission": "只有群主和管理员可以修改这些设置",
+      "unavailable": "群设置读取失败，请重试"
     }
   },
   "errors": {

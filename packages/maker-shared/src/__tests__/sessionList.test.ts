@@ -220,6 +220,19 @@ describe('sessionList', () => {
     });
   });
 
+  it('uses handoff activity for remote ordering and row time without changing legacy fallbacks', () => {
+    const now = Date.parse('2026-01-01T00:10:00.000Z');
+    const sessions = [
+      session('legacy', { userSendAt: '2026-01-01T00:04:00.000Z', updatedAt: '2026-01-01T00:09:00.000Z' }),
+      session('handoff', { lastActivityAt: '2026-01-01T00:08:00.000Z', userSendAt: '2026-01-01T00:01:00.000Z' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    expect(sections.flatMap(section => section.data).map(item => item.session.id)).toEqual(['handoff', 'legacy']);
+    expect(toRemoteSessionListItem(sessions[1], now)).toMatchObject({
+      lastActivityAt: '2026-01-01T00:08:00.000Z', detail: expect.stringContaining('2 minutes ago'),
+    });
+  });
+
   it('caps oversized message counts at 1000+', () => {
     const item = toRemoteSessionListItem(session('s-big', {
       title: '大库',

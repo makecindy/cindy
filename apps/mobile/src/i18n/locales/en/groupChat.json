@@ -197,20 +197,25 @@
     "add": "Add teammate",
     "projectDirOnComputer": "Choose or change it on your computer",
     "memberActions": "Actions for {{name}}",
-    "managementComputer": "Management computer",
     "retry": "Retry",
-    "reconnect": "Reconnect",
     "conflict": "Group settings changed. Review them before saving again. Your input was kept.",
     "archive": "Archive group chat",
     "archiveConfirmTitle": "Archive “{{name}}”?",
     "archiveNote": "Only a group owner can archive it. This stops new messages and keeps the history.",
-    "managementStatus": {
-      "ready": "Connected",
-      "loading": "Connecting…",
-      "noHost": "Disconnected",
-      "permission": "Read-only",
-      "upgrade": "Update needed",
-      "unavailable": "Settings unavailable"
+    "description": "Group Description",
+    "descriptionSaveFailed": "Couldn’t save the group description.",
+    "makeAdmin": "Make Admin",
+    "removeAdmin": "Remove Admin Role",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member",
+      "guest": "Guest"
+    },
+    "cloudStatus": {
+      "loading": "Loading settings…",
+      "permission": "Only group owners and admins can change these settings.",
+      "unavailable": "Couldn’t load group settings. Try again."
     }
   },
   "errors": {

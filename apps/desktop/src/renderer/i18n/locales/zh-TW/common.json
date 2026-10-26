@@ -12622,6 +12622,7 @@
     }
   },
   "ccAgent": {
+    "sessionEntry": {"missing":"找不到這條任務，它可能已被刪除。","denied":"目前帳號或電腦無法存取這條任務。","failed":"未能載入這條任務。","back":"返回任務列表","retry":"重新載入任務"},
     "contextWindowBudget": {
       "menuTitle": "任務上下文視窗",
       "triggerLabel": "任務上下文視窗，目前 {{window}}",

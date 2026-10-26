@@ -18,6 +18,8 @@ import {
 import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
 import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import { registerLoadedBotProfilesReader } from './botSessionOwners';
+import { canonicalBotSession } from './botSessionOwners';
+export { canonicalBotSession } from './botSessionOwners';
 import type { BotGender } from '../../../shared/botGender';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
@@ -224,11 +226,6 @@ export interface BotProfile {
  * Resolve canonical ownership from the projected bot_session_links registry.
  * The top-level canonicalSessionId remains a migration/output mirror only.
  */
-export function canonicalBotSession(bot: BotProfile): BotSessionProjection | undefined {
-  const matches = bot.sessions.filter((session) => session.role === 'canonical');
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
 export function canonicalBotSessionId(bot: BotProfile): string | undefined {
   return canonicalBotSession(bot)?.id;
 }

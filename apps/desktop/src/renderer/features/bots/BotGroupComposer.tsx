@@ -63,6 +63,7 @@ import {
 } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
+import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -382,9 +383,21 @@ export function BotGroupComposer({
     if (files.length > 0) attachmentState.clearFiles();
     onSendStart?.({ clientId: attempt.clientId, text: attempt.text, mentions, attachments: files.map(botGroupAttachmentPreview), quote: null });
     const owner = getDataOwnerGeneration();
+    const discardToken = discardTokenRef.current;
+    const isCurrent = () => isDataOwnerGenerationCurrent(owner) && isDraftDiscardTokenCurrent(discardToken);
+    const releaseUnsent = () => {
+      cleanupStagedChatAttachmentFiles(files);
+      // Only new private materialization results belong to this request. Never
+      // release a shared source or the media of a successfully committed reply.
+      const sourceUrls = new Set(files.map(file => file.url));
+      const urls = [...new Set((attempt.prepared ?? []).flatMap(file =>
+        file.url && !sourceUrls.has(file.url) ? [file.url] : []))];
+      if (urls.length) void window.electronAPI.cleanupCachedImages(urls).catch(() => undefined);
+      if (attemptRef.current === attempt) attemptRef.current = null;
+    };
     const fail = (message: string) => {
+      if (!isCurrent()) { releaseUnsent(); return; }
       onSendSettled?.(attempt.clientId, { ok: false });
-      if (!isDraftDiscardTokenCurrent(discardTokenRef.current)) return;
       // A reply may fail after its panel closed. Recover only that thread's draft,
       // without overwriting anything written since or reviving a discarded draft.
       if (!mountedRef.current) {
@@ -403,16 +416,19 @@ export function BotGroupComposer({
       // Keep the same burned-in bytes on retry, as the main-group outbox does.
       if (!attempt.prepared) attempt.prepared = files.length
         ? await materializeAnnotatedAttachmentsForSend(files, attachmentScope, { burnFailure: 'abort' }) ?? [] : [];
-      if (!isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(discardTokenRef.current)) return;
+      if (!isCurrent()) { releaseUnsent(); return; }
       const result = await sendReply({ text: attempt.text, clientId: attempt.clientId, mentions,
         ...(attempt.prepared.length ? { attachments: toBotGroupAttachmentInputs(attempt.prepared) } : {}) });
-      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!isCurrent()) {
+        if (!result.ok) releaseUnsent();
+        return;
+      }
       if (!result.ok) { fail(t(chatErrorKey(result.errorCode))); return; }
       if (attemptRef.current === attempt) attemptRef.current = null;
       onSendSettled?.(attempt.clientId, { ok: true, messageId: result.messageId });
       onSent?.();
     } catch (error) {
-      if (isDataOwnerGenerationCurrent(owner)) fail(t(isAnnotationBurnInError(error) ? 'chat.media.annotateBurnFailedNotSent' : 'bots.groupChat.server.requestFailed'));
+      fail(t(isAnnotationBurnInError(error) ? 'chat.media.annotateBurnFailedNotSent' : 'bots.groupChat.server.requestFailed'));
     } finally {
       sendingRef.current = false;
       setSending(false);

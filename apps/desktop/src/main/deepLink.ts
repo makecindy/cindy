@@ -54,6 +54,7 @@ import {
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
 import { cancelProviderImport, createProviderImportDraftFromRest } from './provider-import/providerImport';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap';
 
 const log = createLogger('deepLink');
 
@@ -301,6 +302,9 @@ export function buildFocusDeepLink(source: string): string {
 //   - mainWindow 已存在 + MainLayout 必然已 mount (用户已登录),dispatchDeepLink
 //     直接 webContents.send,不进 pending
 let pendingDeepLink: DeepLinkPayload | null = null;
+// Internal notification ownership stays in Main; external URLs keep their
+// existing ability to survive login without binding to the signed-out owner.
+let pendingDeepLinkOwner: DataOwnerBroadcastScope | undefined;
 // Invitation targets must survive unrelated navigation and login focus callbacks.
 const pendingChatInvitations: Array<Extract<DeepLinkPayload, { type: 'chat-invite' | 'chat-invite-malformed' }>> = [];
 let mainWindowRef: BrowserWindow | null = null;
@@ -434,13 +438,16 @@ export function openMainWindowBillingTopUp(): void {
  */
 export function openMainWindowSession(
   sessionId: string,
-  options?: { focus?: boolean; islandEntryId?: string },
+  options?: { focus?: boolean; islandEntryId?: string; deviceId?: string; messageClientId?: string },
 ): void {
   dispatchDeepLink(
-    options?.islandEntryId
-      ? { type: 'session', id: sessionId, islandEntryId: options.islandEntryId }
-      : { type: 'session', id: sessionId },
+    { type: 'session', id: sessionId,
+      ...(options?.islandEntryId ? { islandEntryId: options.islandEntryId } : {}),
+      ...(options?.deviceId ? { deviceId: options.deviceId } : {}),
+      ...(options?.messageClientId ? { messageClientId: options.messageClientId } : {}),
+    },
     options?.focus !== false,
+    captureDataOwnerBroadcastScope(),
   );
 }
 
@@ -470,7 +477,7 @@ function safeDeepLinkLog(payload: DeepLinkPayload) {
   return payload.type === 'chat-invite' || payload.type === 'shared-task-join' || payload.type === 'provider-share-join' ? { type: payload.type } : payload;
 }
 
-function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
+function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true, owner?: DataOwnerBroadcastScope): void {
   // 纯前台意图:main 进程内消化。冷启动时窗口还没建,app 启动流程本身会前台,直接丢弃。
   if (payload.type === 'focus') {
     if (shouldFocus) focusMainWindow();
@@ -504,6 +511,7 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
       });
     }
     pendingDeepLink = payload;
+    pendingDeepLinkOwner = owner;
     log.debug('buffered pending deep link until renderer pull', safeDeepLinkLog(payload));
     // Agent-key first tap may switch in the background. A buffered deep link
     // from that path must not steal the frontmost app.
@@ -543,7 +551,10 @@ export function takePendingDeepLink(): DeepLinkPayload | null {
   if (invitation) return invitation;
   if (!pendingDeepLink) return null;
   const payload = pendingDeepLink;
+  const owner = pendingDeepLinkOwner;
   pendingDeepLink = null;
+  pendingDeepLinkOwner = undefined;
+  if (owner && !isDataOwnerBroadcastScopeCurrent(owner)) return null;
   log.info('renderer pulled pending deep link', safeDeepLinkLog(payload));
   return payload;
 }

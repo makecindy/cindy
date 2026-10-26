@@ -122,6 +122,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/bots/market/:packageId? BotMarketRoute',
     '/bots/remote/:deviceId/:botId RemoteBotSessionView',
     '/bots/remote/:deviceId/:botId/history/:sessionId BotHistorySessionView',
+    '/bots/remote/:deviceId/:botId/session/:sessionId RemoteBotSessionView',
     '/bots/roster BotRosterView',
     '/cc-agent/:sessionId CCAgentSessionView',
     '/cc-agent/boot SecondaryWindowBootGate',

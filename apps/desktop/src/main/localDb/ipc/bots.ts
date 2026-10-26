@@ -1765,10 +1765,11 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
 
 /**
  * Trusted, main-only inputs of a companion restored from the cloud (cloud-companions.md §3.1):
- * the preset it was made from, and whether the cloud profile replaces a copy whose first meeting
- * never finished. Never reachable from a renderer or model body.
+ * the preset it was made from, whether the cloud profile replaces a copy whose first meeting
+ * never finished, and whether its name may equal another companion's here (the display-name check is
+ * skipped; the default Cindy stays unique). Never reachable from a renderer or model body.
  */
-export interface RestoredBotOrigin { templateId?: unknown; replacesUnfinishedMeeting?: true }
+export interface RestoredBotOrigin { templateId?: unknown; replacesUnfinishedMeeting?: true; allowSameName?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
 export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
@@ -1885,6 +1886,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     avatarColor,
     identitySource,
     capabilitiesJson: safeJson(persistedCapabilities),
+    ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
     now,
   });
   } catch (error) {
@@ -2113,6 +2115,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
         id,
         ...(modelSelectionChanged ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
+        ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
         ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
         ...(patch.description !== undefined ? { description: patch.description } : {}),
         ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),

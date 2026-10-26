@@ -12676,6 +12676,7 @@
     }
   },
   "ccAgent": {
+    "sessionEntry": {"missing":"This session could not be found. It may have been deleted.","denied":"This account or computer cannot access this session.","failed":"Could not load this session.","back":"Back to Sessions","retry":"Reload Session"},
     "contextWindowBudget": {
       "menuTitle": "Task context window",
       "triggerLabel": "Task context window, currently {{window}}",

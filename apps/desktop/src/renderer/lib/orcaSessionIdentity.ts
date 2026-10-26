@@ -32,6 +32,13 @@ export function getSessionRouteOwnerId(route: string): string | null {
   }
 }
 
+/** Keep the owning device when a Worker entry moves into its Lead's sidebar. */
+export function orcaWorkerSessionRoute(leadSessionId: string, workerSessionId: string, search = ''): string {
+  const params = new URLSearchParams(search);
+  params.set('worker', workerSessionId);
+  return `/cc-agent/${encodeURIComponent(leadSessionId)}?${params}`;
+}
+
 /**
  * The companion entry for its main chat, or the ordinary page for other tasks, read from
  * the in-memory profile projection only: no IPC and no module load on a click. A
@@ -67,7 +74,7 @@ export async function resolveSessionRoute(
     const workflow = await orcaWorkflowsFor(sessionId)
       .getByWorkerSession(sessionId)
       .catch(() => null);
-    return workflow ? `/cc-agent/${workflow.leadSessionId}?worker=${sessionId}` : '/cc-agent';
+    return workflow ? orcaWorkerSessionRoute(workflow.leadSessionId, sessionId) : '/cc-agent';
   }
 
   // Notifications, task cards and the main sidebar agree on one page per task.

@@ -2741,13 +2741,16 @@ export class AgentIslandService {
     if (!nextSessionId) return;
     const now = Date.now();
     const islandEntryId = this.recordIslandEntryAlert(nextSessionId, now);
+    const deviceId = this.state.sessions.get(nextSessionId)?.sourceDeviceId
+      ?? this.companionChats.get(nextSessionId)?.input.deviceId;
+    const target = { ...(islandEntryId ? { islandEntryId } : {}), ...(deviceId ? { deviceId } : {}) };
     this.playConfiguredSound('select', now);
     if (this.state.appFocused && this.state.visibleSessionIds.has(nextSessionId)) {
       const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
       if (focusChanged) this.publish();
       // 已在看的目标未必能处置这张卡(如只读历史):这次点击仍要交给 renderer,
       // 入口导航器发现目标地址已提交时直接按点击编号申请处置,不会再导航一次。
-      if (islandEntryId) openMainWindowSession(nextSessionId, { islandEntryId });
+      if (islandEntryId) openMainWindowSession(nextSessionId, target);
       return;
     }
 
@@ -2756,7 +2759,7 @@ export class AgentIslandService {
     // Reuse the primary-window handoff: it retains navigation while the
     // renderer reloads and restores macOS app focus. A one-shot notification
     // sent during loading is lost before MainLayout can acknowledge the task.
-    openMainWindowSession(nextSessionId, islandEntryId ? { islandEntryId } : undefined);
+    openMainWindowSession(nextSessionId, Object.keys(target).length ? target : undefined);
   }
 
   private readonly completionActionsPending = new Set<string>();

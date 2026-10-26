@@ -20,6 +20,8 @@ vi.mock('../CompanionShadowBanner', () => ({ CompanionShadowBanner: ({ botId }: 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
   useParams: () => mocks.params,
+  useLocation: () => ({ search: '', state: null }),
+  Navigate: () => <div data-testid="original-task" />,
 }));
 // The private-chat topic host belongs to the chat surface these tests isolate.
 vi.mock('../BotDmThreadHost', () => ({ BotDmThreadHost: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
@@ -72,6 +74,7 @@ const readyBot = {
 };
 
 beforeEach(() => {
+  mocks.read = undefined;
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
@@ -116,8 +119,8 @@ describe('Bot conversation read position', () => {
     markBotRead('bot-1', 5_000);
     installElectronApi({ ...readyBot, sessions: [{ id: 'session-1', kind: 'chat', role: 'history', status: 'active' }] });
     const view = render(<BotSessionView />);
-    await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
-    expect(view.getByTestId('chat').dataset.canonicalChat).toBe('false');
+    await waitFor(() => expect(view.getByTestId('original-task')).toBeTruthy());
+    expect(view.queryByTestId('chat')).toBeNull();
     expect(mocks.read).toBeUndefined();
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
   });

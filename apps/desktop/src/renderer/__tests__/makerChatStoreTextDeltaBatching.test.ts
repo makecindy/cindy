@@ -2533,7 +2533,7 @@ describe('makerChatStore text delta batching', () => {
 
     vi.advanceTimersByTime(32);
     expect(notifyCount).toBe(1);
-    expect(sessionsBus.emitPatch).toHaveBeenCalledTimes(1);
+    expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
     unsubscribe();
   });
 
@@ -2592,7 +2592,25 @@ describe('makerChatStore text delta batching', () => {
     }
   });
 
-  it('does not starve a Map-only sidebar patch behind 8 continuously active sessions', () => {
+  it.each(['user', 'assistant'] as const)(
+    'does not invent a sorting timestamp for a persisted %s message',
+    (role) => {
+      vi.mocked(sessionsBus.emitPatch).mockClear();
+      emitDbMessageCreated({
+        clientId: 'goal-round-message',
+        role,
+        content: 'goal intermediate round',
+        createdAt: '2026-10-24T12:00:00.000Z',
+      });
+      vi.runOnlyPendingTimers();
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+        expect.objectContaining({ clientId: 'goal-round-message', role }),
+      ]);
+      expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not advance sidebar activity for repeated tool DB echoes during streaming', () => {
     const patchOnlySessionId = MULTI_SESSION_IDS[8];
     onEvent?.({
       sessionId: patchOnlySessionId,
@@ -2628,7 +2646,6 @@ describe('makerChatStore text delta batching', () => {
         },
       });
     }
-    // 完全相同的 DB echo 让 setState 走 no-op，只剩 sidebar patch 待发。
     emitDbMessageCreated(persistedTool, patchOnlySessionId);
 
     vi.advanceTimersByTime(32);
@@ -2646,10 +2663,10 @@ describe('makerChatStore text delta batching', () => {
     }
     vi.advanceTimersByTime(32);
 
-    expect(sessionsBus.emitPatch).toHaveBeenCalledTimes(1);
-    expect(sessionsBus.emitPatch).toHaveBeenCalledWith(patchOnlySessionId, {
-      updatedAt: expect.any(String),
-    });
+    expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(patchOnlySessionId).messages).toEqual([
+      expect.objectContaining({ clientId: 'fair-tool-row', role: 'tool_use' }),
+    ]);
   });
 
   it('flushes pending text before a closed status finalizes the session', () => {

@@ -86,6 +86,27 @@ it('lists and opens an existing joined server group with all computers and the r
   await act(async () => { await chat.act('send', { text: 'hello', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
   expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-operation', content: [{ type: 'text', text: 'hello' }], mentions: [] } }));
 });
+// #6907: the hook must pass direct-room scope to the real client's quote projection (unit tier).
+it('keeps the account owner label when quoting from a direct phone entry', async () => {
+  const botId = '00000000-0000-4000-8000-000000000003';
+  const owner = { id: self, kind: 'human', state: 'joined', name: 'Nickname A', ownerActorId: self, ownerName: '', role: 'member', avatar: null };
+  const bot = { ...owner, id: botId, kind: 'bot', name: 'Companion X', ownerName: 'Account B' };
+  const message = { id: self, seq: '1', authorId: botId, author: { kind: 'bot', name: bot.name }, content: [{ type: 'text', text: 'Example' }],
+    createdAt: '2026-10-09', deleted: false, threadRootId: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/snapshot')) return { room: { ...room, kind: 'direct' }, members: [owner, bot], messages: [message], cursor: '1' };
+    if (path.endsWith('/members')) return [owner, bot];
+    if (path.endsWith('/messages/' + self)) return message;
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  await act(async () => { await chat.act('send', { text: 'Agreed', clientId: 'direct-quote-scope', quote: { messageId: self }, mentions: { all: false, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith('/v1/conversations/' + id + '/messages', expect.objectContaining({ method: 'POST', body: expect.objectContaining({
+    mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
+  }) }));
+});
 it('never includes the current human actor in explicit or everyone server mentions', async () => {
   const other = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;

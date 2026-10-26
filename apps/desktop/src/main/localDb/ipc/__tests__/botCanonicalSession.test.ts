@@ -315,6 +315,7 @@ function createDb(filename = ':memory:'): void {
       summary TEXT,
       provider_id TEXT,
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       orca_role TEXT,
       parent_session_id TEXT,
@@ -809,6 +810,22 @@ describe('Bot canonical Session lifecycle', () => {
     } finally { vi.mocked(control.validateTaskModel).mockResolvedValue(true); }
   });
 
+  it('validates a legacy location-only selection before persisting settings', async () => {
+    const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(route), 'bot-1');
+    const before = h.sqlite!.prepare("SELECT * FROM bot_profile_versions WHERE bot_id = 'bot-1'").all();
+    const control = await import('../../../maker-ipc/appDefaultModelControl.js');
+    vi.mocked(control.validateTaskModel).mockClear().mockResolvedValue(false);
+    try {
+      await expect(invoke('local-db:bots:update', {
+        id: 'bot-1', capabilities: { agentDeviceId: 'share:unavailable-location' },
+      })).rejects.toThrow('Model route unavailable');
+      expect(control.validateTaskModel).toHaveBeenCalledWith({ ...route, agentDeviceId: 'share:unavailable-location' });
+      expect(h.sqlite!.prepare("SELECT * FROM bot_profile_versions WHERE bot_id = 'bot-1'").all()).toEqual(before);
+    } finally { vi.mocked(control.validateTaskModel).mockResolvedValue(true); }
+  });
+
   it.each(['rename', 'skills'])('allows legacy chain-only profile maintenance with an unavailable provider: %s', async edit => {
     const id = 'legacy-chain-only';
     await invoke('local-db:bots:create', { id, name: 'Legacy' });
@@ -985,6 +1002,55 @@ describe('Bot canonical Session lifecycle', () => {
         .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
       await expect(updateStoredBotProfile({ id: 'bot-1', name: 'Cindy' })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
       expect(stored().invitation).toMatchObject({ stage: 'skills' });
+    });
+  });
+
+  // cloud-companions.md §3.1 (2026-10-26): a companion taken over from another computer may share its
+  // name with a different companion already here; the two stay independent.
+  describe('cloud take-over next to a same-named local companion', () => {
+    const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
+
+    it('creates the copy without the name check', async () => {
+      const { createBotProfile } = await import('../bots');
+      const created = await createBotProfile({ id: 'import_other', name: 'release bot' }, { allowSameName: true });
+      expect(created.id).toBe('import_other');
+      await createBotProfile({ id: 'import_third', name: 'Release Bot' }, { allowSameName: true });
+      expect(names()).toEqual(['bot-1', 'import_third']);
+    });
+
+    it('still refuses a same-named ordinary creation', async () => {
+      const { createBotProfile } = await import('../bots');
+      await expect(createBotProfile({ id: 'import_other', name: 'Release Bot' })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      await expect(createBotProfile({ id: 'import_other', name: 'Release Bot' }, { templateId: undefined })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      expect(names()).toEqual(['bot-1']);
+    });
+
+    it('does not let a renderer or model body switch the name check off', async () => {
+      const { createBotProfile } = await import('../bots');
+      for (const flag of ['allowSameName', 'allowDuplicateName']) {
+        await expect(invoke('local-db:bots:create', { id: 'import_other', name: 'Release Bot', [flag]: true }))
+          .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+        await expect(createBotProfile({ id: 'import_other', name: 'Release Bot', [flag]: true })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      }
+      expect(names()).toEqual(['bot-1']);
+    });
+
+    it('keeps the default Cindy unique for a take-over', async () => {
+      const { createBotProfile } = await import('../bots');
+      await invoke('local-db:bots:create', { id: 'local-cindy', name: 'Cindy', templateId: 'cindy' });
+      await expect(createBotProfile({ id: 'import_cindy', name: 'Cindy 2' }, { templateId: 'cindy', allowSameName: true }))
+        .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      expect(h.sqlite!.prepare("SELECT COUNT(*) FROM bot_profiles WHERE id = 'import_cindy'").pluck().get()).toBe(0);
+    });
+
+    it('takes over an existing copy whose cloud name now matches another local companion', async () => {
+      await invoke('local-db:bots:create', { id: 'import_copy', name: 'Copy' });
+      await expect(updateStoredBotProfile({ id: 'import_copy', name: 'Release Bot' })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      await expect(invoke('local-db:bots:update', { id: 'import_copy', name: 'Release Bot', allowSameName: true }))
+        .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      const updated = await updateStoredBotProfile({ id: 'import_copy', name: 'Release Bot' }, undefined, undefined, { allowSameName: true });
+      expect(updated.name).toBe('Release Bot');
+      expect(names()).toEqual(['bot-1', 'import_copy']);
     });
   });
 

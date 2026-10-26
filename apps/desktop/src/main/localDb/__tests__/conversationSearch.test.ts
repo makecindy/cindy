@@ -95,6 +95,7 @@ function createSearchDb(): Database.Database {
       summary TEXT,
       provider_id TEXT,
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       orca_role TEXT,
       parent_session_id TEXT,

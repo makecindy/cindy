@@ -6,8 +6,8 @@
  * 补读。回复用群聊同一个输入框的话题模式（BotGroupComposer `mode="thread"`），发出即乐观插入，
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare, X } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import type { DragEvent } from 'react';
@@ -43,6 +43,7 @@ import {
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
 import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
@@ -168,7 +169,6 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const titleId = useId();
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
   const sharing = useShareSelectionActive(shareScope);
   const readOnly = Boolean(group.archived || group.dissolvedAt);
@@ -180,13 +180,14 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     Array.from(event.dataTransfer.types).some(type => type === 'Files' || type === 'text/uri-list');
   const dropAttachments = (event: DragEvent) => {
     if (isGlobalDropIntercepted(event.nativeEvent)) return;
-    const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(event.dataTransfer);
-    if (ghostMediaUri) {
-      void attachGhostMediaToSession(ghostMediaUri, attachmentScope, t);
-      return;
-    }
     const token = captureDraftDiscardToken(attachmentScope);
     const owner = getDataOwnerGeneration();
+    const isCurrent = () => isDataOwnerGenerationCurrent(owner) && isDraftDiscardTokenCurrent(token);
+    const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(event.dataTransfer);
+    if (ghostMediaUri) {
+      void attachGhostMediaToSession(ghostMediaUri, attachmentScope, t, isCurrent);
+      return;
+    }
     const attach = (items: Pick<DroppedFileItems, 'files' | 'directories'>) => {
       if (!aliveRef.current || !isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(token)) return;
       if (items.directories.length > 0) toast.warning(t('bots.groupChat.composer.folderNotSupported'));
@@ -525,36 +526,33 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const firstNewIndex = readBefore === null ? -1 : replyRows.findIndex(message => message.sequence > readBefore && !message.isSelf && !message.deleted && message.authorKind !== 'system');
   const firstNewId = firstNewIndex > 0 ? replyRows[firstNewIndex]!.id : null;
 
-  return <aside ref={panelRef} aria-labelledby={titleId}
-        onDragEnter={event => {
+  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} dragHandlers={{
+        onDragEnter: event => {
           if (!isAttachmentDrag(event)) return;
           event.preventDefault();
           dragCounterRef.current += 1;
           setDragOver(true);
-        }}
-        onDragOver={event => {
+        },
+        onDragOver: event => {
           if (!isAttachmentDrag(event)) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'copy';
-        }}
-        onDragLeave={event => {
+        },
+        onDragLeave: event => {
           if (!isAttachmentDrag(event)) return;
           event.preventDefault();
           dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
           if (!dragCounterRef.current) setDragOver(false);
-        }}
-        onDrop={event => {
+        },
+        onDrop: event => {
           if (!isAttachmentDrag(event)) return;
           event.preventDefault();
           dragCounterRef.current = 0;
           setDragOver(false);
           dropAttachments(event);
-        }}
-        style={resize?.width === undefined ? undefined : { width: resize.width, maxWidth: 'none' }}
-        className="relative flex h-full min-w-0 w-1/2 max-w-[min(50%,28rem)] shrink-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <h2 id={titleId} className="text-15 font-medium text-[var(--text-primary)]">{t(key('topic'))}</h2>
-          <div className="flex items-center gap-1">
+        },
+        }} actions={<>
+
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -565,13 +563,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
                 </Button>
               </Tip>
             ) : null}
-            <Tip text={t('bots.close')}>
-              <Button variant="secondary" tone="quiet" size="md"
-                className="w-8 rounded-none px-0 [&::before]:rounded-full"
-                aria-label={t('bots.close')} onClick={onClose}><X size={17} aria-hidden /></Button>
-            </Tip>
-          </div>
-        </header>
+        </>}>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onScroll={(event) => {
             const element = event.currentTarget;
@@ -581,11 +573,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             if (!wasAtBottom && stickToBottomRef.current) refreshRef.current();
           }}>
           <div ref={contentRef} className="flex min-w-0 flex-col">
-            {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
-            <div data-testid="bot-group-thread-replies" className="mt-3 flex select-none items-center gap-3 text-12 text-[var(--text-tertiary)]">
-              <span className="shrink-0">{replyCount > 0 ? t(key('replyCount'), { count: replyCount }) : t(key('replies'))}</span>
-              <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
-            </div>
+            <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
+              {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
+            </ThreadPanelRoot>
             {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
             {replyRows.map(message => (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
@@ -638,9 +628,5 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             />
           </div>
         </>}
-        {/* Keep the existing Shift+Tab route from Close back into the group. */}
-        {resize && <div role="separator" aria-orientation="vertical" aria-label={t('diffPanel.shell.resizeHandleAria')}
-          tabIndex={0} {...resize.handleProps}
-          className="absolute inset-y-0 left-0 z-10 w-2 touch-none cursor-col-resize hover:border-l hover:border-[var(--text-tertiary)] focus-visible:border-l focus-visible:border-[var(--focus-ring)] focus-visible:outline-none" />}
-  </aside>;
+  </ThreadPanel>;
 }

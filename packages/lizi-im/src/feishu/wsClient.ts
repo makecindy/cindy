@@ -933,14 +933,19 @@ async function processClaimedMessage(
     return;
   }
 
-  // 飞书普通「回复某条消息」只在 parent_id 表达引用关系;root_id 也会出现在
-  // 话题链路,不能拿它判普通回复。严格限定群主流(!thread_id),确保已有话题
-  // @bot 与普通群主流 @bot 不经过新增 REST/上下文路径。
+  // Resolve private/main-stream quotes. Topic replies retain their history path;
+  // directly received merged forwards always need their embedded messages.
   const parentMessageId = data.message?.parent_id;
   const resolvedReply =
-    isGroup && !incomingThreadId && parentMessageId
-      ? await outbound.resolveReplyMessage(parentMessageId, chatId)
-      : null;
+    msgType === 'merge_forward'
+      ? await outbound.resolveReplyMessage(messageId, chatId)
+      : (!isGroup || !incomingThreadId) && parentMessageId
+        ? await outbound.resolveReplyMessage(parentMessageId, chatId)
+        : null;
+
+  if (msgType === 'merge_forward' && !resolvedReply) {
+    unsupported = [...unsupported, { type: 'merge_forward', label: '合并转发内容读取失败' }];
+  }
 
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
@@ -987,7 +992,10 @@ async function processClaimedMessage(
           speaker: { id: senderOpenId, name: '', isOwner: senderIsOwner },
         }
       : {}),
-    ...(resolvedReply ? { replyContext: resolvedReply.replyContext } : {}),
+    ...(resolvedReply ? {
+      replyContext: resolvedReply.replyContext,
+      ...(resolvedReply.attachments?.length ? { feishuReplyAttachments: resolvedReply.attachments } : {}),
+    } : {}),
     attachments,
     unsupported,
     raw: data,

@@ -79,7 +79,7 @@ it('does not accept an arbitrary task id from a Bot URL', async () => {
 
 it('drops the previous binding synchronously when navigating to a different Bot task', async () => {
   h.get.mockResolvedValue({ id: 'bot', status: 'active', sessions: [
-    { id: 'chat', kind: 'chat', status: 'active' },
+    { id: 'chat', kind: 'chat', status: 'active', role: 'canonical' },
   ] });
   const view = render(<BotSessionView />);
   await screen.findByText('companion:bot');
@@ -88,6 +88,13 @@ it('drops the previous binding synchronously when navigating to a different Bot 
   view.rerender(<BotSessionView />);
   expect(screen.queryByText('companion:bot')).toBeNull();
   expect(screen.queryByText('task controls')).toBeNull();
+});
+it('opens the original task when a stale bot URL rejects with NOT_FOUND, without adopting a bot', async () => {
+  h.get.mockRejectedValue(new Error('[NOT_FOUND] Bot 不存在'));
+  render(<BotSessionView />);
+  await act(async () => {});
+  expect(h.redirect).toHaveBeenCalledWith({ to: '/cc-agent/chat', state: null, replace: true });
+  expect(screen.queryByText('companion:bot')).toBeNull();
 });
 it('follows a rename saved from settings while the chat stays open', async () => {
   h.get.mockResolvedValue({ id: 'bot', name: 'Melody', status: 'active', sessions: [
@@ -121,14 +128,16 @@ it('never shows the first-hello wait in a channel-routed (non-canonical) task of
   ] });
   h.profiles = [{ id: 'bot', name: 'Melody', avatar: '🎵', avatarColor: 'violet', invitation: { stage: 'welcome' } }];
   render(<BotSessionView />);
-  expect((await screen.findByText('companion:bot')).getAttribute('data-invitation-stage')).toBe('');
+  await act(async () => {});
+  expect(h.redirect).toHaveBeenCalledWith({ to: '/cc-agent/chat', state: null, replace: true });
+  expect(screen.queryByText('companion:bot')).toBeNull();
 });
 
 // Legacy URLs retain the exact task and host; the ordinary page owns access and recovery.
 it.each([undefined, 'remote computer'])('redirects history to the ordinary task page (%s)', async deviceId => {
   h.params = { botId: 'bot', sessionId: 'old/task', deviceId };
   await act(async () => { render(<BotHistorySessionView />); });
-  expect(h.redirect).toHaveBeenCalledWith({ to: `/cc-agent/old%2Ftask${deviceId ? '?device=remote%20computer' : ''}`, state: null, replace: true });
+  expect(h.redirect).toHaveBeenCalledWith({ to: `/cc-agent/old%2Ftask${deviceId ? '?device=remote+computer' : ''}`, state: null, replace: true });
   expect(h.get).not.toHaveBeenCalled();
   expect(h.history).not.toHaveBeenCalled();
   expect(h.invoke).not.toHaveBeenCalled();
