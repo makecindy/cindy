@@ -3,6 +3,10 @@
  * the local transcript JSONL. Lines here mirror the real CLI format (user / assistant / summary
  * entries, content blocks, usage).
  */
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -10,6 +14,7 @@ import {
   buildMissionSnapshot,
   estimateTokens,
   planHandoff,
+  readMissionSnapshotFile,
   renderMissionBrief,
 } from '../handoff.js';
 
@@ -129,6 +134,22 @@ describe('buildMissionSnapshot', () => {
     expect(s.goal!.endsWith('…')).toBe(true);
     expect(s.filesTouched).toHaveLength(40);
     expect(s.filesTouched.at(-1)).toBe('/f59.ts');
+  });
+});
+
+describe('readMissionSnapshotFile', () => {
+  // Transcripts can be tens of MB; the file reader streams lines (CRLF too) and must give the
+  // same snapshot as the in-memory parser.
+  it('streams a real file to the same snapshot, including CRLF line endings', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-handoff-'));
+    try {
+      const file = path.join(dir, 'sess-1.jsonl');
+      await writeFile(file, `${typicalTranscript().join('\r\n')}\r\n`);
+      expect(await readMissionSnapshotFile(file)).toEqual(buildMissionSnapshot(typicalTranscript()));
+      await expect(readMissionSnapshotFile(path.join(dir, 'missing.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

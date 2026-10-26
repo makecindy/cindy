@@ -1,4 +1,80 @@
 {
+  "claudeAccounts": {
+    "settings": {
+      "title": "Claude 帳號",
+      "hint": "每個帳號只需登入一次，之後切換不必再次登入。所有帳號都使用這台電腦上 Claude Code 的記憶、技能和任務記錄。",
+      "ownership": "只新增屬於你自己的 Claude 帳號。Anthropic 的條款不允許共用帳號。",
+      "master": "主帳號",
+      "active": "使用中",
+      "switch": "切換",
+      "remove": "移除",
+      "add": "新增帳號",
+      "nameLabel": "帳號名稱",
+      "namePlaceholder": "例如：工作",
+      "signIn": "登入",
+      "signingIn": "請在瀏覽器中完成登入…",
+      "cancel": "取消",
+      "check": "檢查帳號",
+      "checking": "正在檢查…",
+      "health": {
+        "ok": "已登入 · 目錄已連結",
+        "loggedOut": "已登出",
+        "checkFailed": "無法連線 Claude Code",
+        "needsRepair": "下次使用時自動修復：{{names}}",
+        "mirror": "複製模式：每輪結束後同步記憶"
+      },
+      "removeConfirm": {
+        "title": "移除「{{label}}」？",
+        "description": "這會刪除該帳號在這台電腦上的登入。你的記憶、技能和任務記錄仍保留在主帳號中。",
+        "confirm": "移除",
+        "cancel": "取消"
+      },
+      "toast": {
+        "added": "已新增 {{label}}",
+        "removed": "已移除 {{label}}",
+        "switched": "現在使用 {{label}}。執行中的任務會在目前這一輪結束後切換。"
+      },
+      "error": {
+        "timeout": "登入逾時，請重試。",
+        "local_unavailable": "這台電腦上的 Claude Code 尚未就緒，請稍後重試。",
+        "login_failed": "登入未完成，請重試。",
+        "not_a_subscription": "該帳號不是以 Claude 訂閱（Pro 或 Max）登入。",
+        "duplicate_identity": "這個 Claude 帳號已經新增過了。",
+        "invalid_label": "請輸入 1–40 個字元的名稱。",
+        "profile_unavailable": "無法準備該帳號的目錄，請點選「檢查帳號」。",
+        "no_owner": "請先登入 Cindy，或選擇「略過登入」。",
+        "not_logged_in": "該帳號已登出。請移除後重新新增。",
+        "unknown_account": "該帳號已不存在。",
+        "generic": "發生問題，請重試。"
+      }
+    },
+    "handoff": {
+      "menuItem": "在另一個 Claude 帳號上繼續…",
+      "title": "在另一個 Claude 帳號上繼續",
+      "description": "先選擇帳號，再選擇接手這個任務的方式。按下繼續之前不會傳送任何內容。",
+      "account": "帳號",
+      "noOtherAccounts": "請先在 設定 → 模型供應商 → Claude Code 中新增另一個 Claude 帳號。",
+      "resumeTitle": "恢復這個任務",
+      "resumeDetail": "同一段對話，保留完整細節。新帳號會一次性讀取約 {{tokens}} 個 token。",
+      "resumeDetailUnknown": "同一段對話，保留完整細節。",
+      "briefTitle": "依簡報新建任務",
+      "briefDetail": "目標、計畫、檔案和未解決問題的簡短摘要：約 {{tokens}} 個 token。",
+      "recommended": "推薦",
+      "interrupted": "上一步（{{tool}}）被中斷，重試前會先檢查它。",
+      "resume": "在此恢復",
+      "brief": "依簡報新建任務",
+      "cancel": "取消",
+      "unavailable": {
+        "not_found": "這個任務還沒有已儲存的 Claude Code 記錄。",
+        "not_claude": "只有 Claude Code 任務可以在 Claude 帳號之間切換。",
+        "unreadable": "無法讀取這個任務的記錄。"
+      },
+      "toast": {
+        "resumed": "已切換到 {{label}}。傳送下一則訊息時，這個任務會在該帳號上繼續。",
+        "briefReady": "已切換到 {{label}}。簡報已放進一個新任務。"
+      }
+    }
+  },
   "localAgent": {"title":"本機應用程式連線","empty":"尚未連接應用程式","description":"允許已授權的本機應用程式使用 Cindy 的模型與執行能力。供應商登入仍由 Cindy 管理。","revoke":"撤銷連線","failed":"無法讀取應用程式連線。","connectTitle":"連接本機應用程式","connectMessage":"允許「{{app}}」使用 Cindy？","connectDetail":"此應用程式可以查看模型與供應商目錄、建立自己的執行並提供工具。原生執行可以依目前系統使用者的權限讀寫檔案、執行命令；工作目錄不限制存取範圍。供應商憑證保留在 Cindy。可在設定 → 遠端連線 → 本機應用程式連線中個別撤銷連線。","cancel":"取消","allow":"允許連接","revokeMessage":"撤銷所有本機應用程式連線？","revokeDetail":"所有本機應用程式連線將失效，正在執行的接入任務會停止。需要時可重新申請連線。","clientIdentity":"應用程式自報編號：{{id}}\n版本：{{version}}\n名稱與編號由申請方提供，不代表 Cindy 已驗證其發行者。","revokeOneMessage":"撤銷「{{app}}」的這條連線？","revokeOneDetail":"透過此連線執行的任務會停止。其他應用程式連線不受影響，需要時可重新申請連線。","revokeConnection":"撤銷「{{app}}」的連線","clientId":"應用程式編號：{{id}}","operationFailed":"無法確認本機應用程式操作的結果，請先查看目前狀態。","invalidConnection":"應用程式連線編號無效。","revokeFailed":"無法確認撤銷結果，請查看目前連線狀態。","loading":"正在讀取應用程式連線…","revoking":"正在撤銷連線…","authorizationRequired":"此操作需要有效的本機應用程式授權。","pairExpired":"連線申請已過期或取消，請從應用程式重新申請連線。","busy":"本機應用程式仍有執行正在運行，或已達執行上限，請先結束不用的執行。","limitReached":"已達本機應用程式連線上限，請在設定中撤銷不用的連線。","invalidWorkspace":"應用程式須指定此電腦上已存在的絕對工作目錄。","sessionExists":"此應用程式連線已在使用該執行編號。","executionUnavailable":"所請求的執行或工具呼叫無法使用，訊息與工具操作未被重播。","selectionUnavailable":"所選模型、供應商或推理強度無法使用，請在應用程式中重新選擇。","requestNotReplayed":"此請求未被重複執行，請在應用程式中查看原操作結果。","storageUnavailable":"無法讀取或儲存本機應用程式連線資料，已保留現有授權紀錄。","stopUnconfirmed":"已阻止繼續向此執行傳送訊息，但尚未確認程序已停止。","interactionUnavailable":"引擎需要此應用程式無法接收的互動操作。","interrupted":"本次傳送已中斷。","toolTimeout":"應用程式工具呼叫已逾時，未自動重試。","connectResult":"請返回申請連線的應用程式查看結果，授權由 Cindy 確認視窗決定。","invalidRequest":"應用程式請求無效，或該操作不受支援。","hostInUse":"此設定檔的本機應用程式連線正由另一個 Cindy 執行個體管理，請在該執行個體中查看連線。","developerConnection":"開發連線","copyCode":"複製連線碼","codeCopied":"連線碼已複製","codeCopyFailed":"無法複製連線碼","developerState":{"ready":"供此電腦上的應用程式暫時連線，仍需在此 Cindy 中授權。重新啟動後需重新複製。","starting":"正在準備連線…","owner-unavailable":"請先登入或進入本機模式","host-in-use":"此資料目錄的連線正由另一個 Cindy 管理","failed":"本機連線未能啟動","stopped":"本機連線已停止"}},
   "attachmentAccessConfirmation": {
     "title": "確認附件存取",

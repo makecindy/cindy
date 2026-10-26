@@ -539,6 +539,15 @@ export const MAKER_INVOKE = {
   CLAUDE_OAUTH_LOGIN: 'maker:claude-oauth:login',
   CLAUDE_OAUTH_LOGOUT: 'maker:claude-oauth:logout',
   CLAUDE_OAUTH_CANCEL: 'maker:claude-oauth:cancel',
+  // Claude 多账号(docs/dev-rules/claude-multi-account.md)。只在本机使用:登录在本机浏览器
+  // 完成,不进 device-link 白名单。
+  CLAUDE_ACCOUNTS_LIST: 'maker:claude-accounts:list',
+  CLAUDE_ACCOUNTS_ADD: 'maker:claude-accounts:add',
+  CLAUDE_ACCOUNTS_CANCEL_ADD: 'maker:claude-accounts:cancel-add',
+  CLAUDE_ACCOUNTS_SWITCH: 'maker:claude-accounts:switch',
+  CLAUDE_ACCOUNTS_REMOVE: 'maker:claude-accounts:remove',
+  CLAUDE_ACCOUNTS_HEALTH: 'maker:claude-accounts:health',
+  CLAUDE_ACCOUNTS_HANDOFF_PREVIEW: 'maker:claude-accounts:handoff-preview',
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态(login/logout/cancel),
   // 供 responses-bridge 直连 api.x.ai;登录写 safeStorage provider secret 'xai'。
   XAI_OAUTH_LOGIN: 'maker:xai-oauth:login',

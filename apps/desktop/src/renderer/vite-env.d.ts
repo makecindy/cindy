@@ -6868,6 +6868,20 @@ interface ElectronAPI {
     }) => Promise<{ authorized: boolean }>;
     /** 取消对应登录尝试。 */
     claudeOAuthCancel: (loginKey?: string) => Promise<{ authorized: boolean }>;
+    /** Claude 多账号:列表(主账号恒在,不含路径)。 */
+    claudeAccountsList: () => Promise<import('../shared/claudeAccounts').ClaudeAccountsListView>;
+    /** 添加账号:在新账号自己的配置目录里拉起一次官方 CLI 登录。 */
+    claudeAccountsAdd: (label: string, loginKey: string) => Promise<import('../shared/claudeAccounts').ClaudeAccountAddResult>;
+    /** 取消对应的添加(登录)尝试。 */
+    claudeAccountsCancelAdd: (loginKey: string) => Promise<void>;
+    /** 切换活动账号(无需再次登录);活会话在下一个 turn 边界按新账号重建。 */
+    claudeAccountsSwitch: (accountId: string) => Promise<import('../shared/claudeAccounts').ClaudeAccountSwitchResult>;
+    /** 移除额外账号(主账号不可移除;主账号数据不受影响)。 */
+    claudeAccountsRemove: (accountId: string) => Promise<{ ok: true }>;
+    /** 各账号登录态与目录链接健康(只读)。 */
+    claudeAccountsHealth: () => Promise<import('../shared/claudeAccounts').ClaudeAccountHealthView[]>;
+    /** 任务交接预览:只读本机转录,不消耗 token。 */
+    claudeAccountsHandoffPreview: (sessionId: string) => Promise<import('../shared/claudeAccounts').ClaudeHandoffPreview>;
     /** 启动 xAI 浏览器或设备码 OAuth 登录；成功写 safeStorage。 */
     xaiOAuthLogin: (
       method?: 'browser' | 'device',

@@ -1,4 +1,5 @@
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
+import { ClaudeAccountsPanel } from './ClaudeAccountsPanel';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
@@ -3364,6 +3365,10 @@ export function ProvidersSection() {
                         }
                       />
                     </div>
+                  )}
+                  {/* Claude 多账号:只在本机 Claude Code 订阅已连接时出现(主账号恒在、不可移除)。 */}
+                  {effectiveSelected.id === 'anthropic' && effectiveSelected.connected && !effectiveSelected.suspended && (
+                    <ClaudeAccountsPanel />
                   )}
                   {/* 发现失败与「有没有模型」是正交的:失败时刻意保留上次成功的清单(它是陈旧
                     但可溯源的真数据),于是老用户清单照常显示 —— 若把提示只放进空态分支,他

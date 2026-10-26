@@ -1,4 +1,80 @@
 {
+  "claudeAccounts": {
+    "settings": {
+      "title": "Claude accounts",
+      "hint": "Sign in to each account once, then switch without signing in again. Every account uses this computer's Claude Code memory, skills and session history.",
+      "ownership": "Only add Claude accounts that belong to you. Anthropic's terms don't allow sharing an account.",
+      "master": "Master",
+      "active": "Active",
+      "switch": "Switch",
+      "remove": "Remove",
+      "add": "Add account",
+      "nameLabel": "Account name",
+      "namePlaceholder": "For example, Work",
+      "signIn": "Sign in",
+      "signingIn": "Finish signing in in your browser…",
+      "cancel": "Cancel",
+      "check": "Check accounts",
+      "checking": "Checking…",
+      "health": {
+        "ok": "Signed in · folders linked",
+        "loggedOut": "Signed out",
+        "checkFailed": "Couldn't reach Claude Code",
+        "needsRepair": "Repaired on next use: {{names}}",
+        "mirror": "Copy mode: memory syncs after each turn"
+      },
+      "removeConfirm": {
+        "title": "Remove “{{label}}”?",
+        "description": "This removes its sign-in from this computer. Your memory, skills and session history stay with the master account.",
+        "confirm": "Remove",
+        "cancel": "Cancel"
+      },
+      "toast": {
+        "added": "Added {{label}}",
+        "removed": "Removed {{label}}",
+        "switched": "Now using {{label}}. Running sessions switch after their current turn."
+      },
+      "error": {
+        "timeout": "Sign-in timed out. Try again.",
+        "local_unavailable": "Claude Code isn't ready on this computer yet. Try again in a moment.",
+        "login_failed": "Sign-in didn't finish. Try again.",
+        "not_a_subscription": "That account isn't signed in with a Claude subscription (Pro or Max).",
+        "duplicate_identity": "That Claude account is already added.",
+        "invalid_label": "Enter a name of 1–40 characters.",
+        "profile_unavailable": "Couldn't prepare this account's folder. Run Check accounts.",
+        "no_owner": "Sign in to Cindy or choose Skip Sign-In first.",
+        "not_logged_in": "That account is signed out. Remove it and add it again.",
+        "unknown_account": "That account no longer exists.",
+        "generic": "Something went wrong. Try again."
+      }
+    },
+    "handoff": {
+      "menuItem": "Continue on another Claude account…",
+      "title": "Continue on another Claude account",
+      "description": "Choose the account, then how to pick up this session. Nothing is sent until you continue.",
+      "account": "Account",
+      "noOtherAccounts": "Add another Claude account first, in Settings → Providers → Claude Code.",
+      "resumeTitle": "Resume this session",
+      "resumeDetail": "Same conversation with full detail. The new account reads about {{tokens}} tokens once.",
+      "resumeDetailUnknown": "Same conversation with full detail.",
+      "briefTitle": "New session from a brief",
+      "briefDetail": "A short summary of the goal, plan, files and open problems: about {{tokens}} tokens.",
+      "recommended": "Recommended",
+      "interrupted": "The last step ({{tool}}) was interrupted and is checked before trying again.",
+      "resume": "Resume here",
+      "brief": "New session from brief",
+      "cancel": "Cancel",
+      "unavailable": {
+        "not_found": "This session has no saved Claude Code history yet.",
+        "not_claude": "Only Claude Code sessions can move between Claude accounts.",
+        "unreadable": "Couldn't read this session's history."
+      },
+      "toast": {
+        "resumed": "Switched to {{label}}. This session continues there with your next message.",
+        "briefReady": "Switched to {{label}}. The brief is ready in a new session."
+      }
+    }
+  },
   "localAgent": {"title":"Local App Connections","empty":"No connected apps","description":"Authorized local apps can use Cindy models and agent capabilities. Cindy keeps supplier credentials.","revoke":"Revoke Connection","failed":"Could not read app connections.","connectTitle":"Connect a Local App","connectMessage":"Allow “{{app}}” to use Cindy?","connectDetail":"This app can list models and providers, create its own executions, and supply tools. Native execution can read and write files and run commands with your system user permissions; the working directory does not restrict access. Provider credentials stay in Cindy. Revoke individual connections in Settings → Remote Connections → Local App Connections.","cancel":"Cancel","allow":"Allow Connection","revokeMessage":"Revoke all local app connections?","revokeDetail":"All local app connections will stop working and their running tasks will stop. Apps can request a new connection when needed.","clientIdentity":"App-reported ID: {{id}}\nVersion: {{version}}\nThe requesting app supplies its name and ID; Cindy has not verified its publisher.","revokeOneMessage":"Revoke this connection for “{{app}}”?","revokeOneDetail":"Tasks running through this connection will stop. Other app connections will keep working. The app can request a new connection when needed.","revokeConnection":"Revoke connection for “{{app}}”","clientId":"App ID: {{id}}","operationFailed":"Could not confirm the local app operation. Check its current state before continuing.","invalidConnection":"The app connection ID is invalid.","revokeFailed":"Could not confirm the revocation. Check the current connection state.","loading":"Loading app connections…","revoking":"Revoking connection…","authorizationRequired":"This operation requires valid local app authorization.","pairExpired":"The connection request expired or was cancelled. Request a new connection from the app.","busy":"A local app execution is still running or the execution limit is reached. End unused executions first.","limitReached":"The local app connection limit is reached. Revoke unused connections in Settings.","invalidWorkspace":"The app must specify an existing absolute working directory on this computer.","sessionExists":"This execution ID is already in use by this app connection.","executionUnavailable":"The requested execution or tool call is unavailable. Messages and tool operations were not replayed.","selectionUnavailable":"The selected model, provider, or reasoning effort is unavailable. Select an available option in the app.","requestNotReplayed":"This request was not repeated. Check the original operation result in the app.","storageUnavailable":"Could not read or save local app connection data. Existing authorization records were retained.","stopUnconfirmed":"Further messages to this execution are blocked, but the process has not been confirmed stopped.","interactionUnavailable":"The engine requires an interaction that this app cannot receive.","interrupted":"This send was interrupted.","toolTimeout":"The app tool timed out. It was not automatically retried.","connectResult":"Return to the requesting app for the connection result. Authorization is decided in the Cindy confirmation window.","invalidRequest":"The app request is invalid or the operation is unsupported.","hostInUse":"Another Cindy instance manages local app connections for this profile. View the connections in that instance.","developerConnection":"Development Connection","copyCode":"Copy Connection Code","codeCopied":"Connection code copied","codeCopyFailed":"Could not copy the connection code","developerState":{"ready":"For temporary connections from apps on this computer. Approval in this Cindy is still required. Copy a new code after restarting.","starting":"Preparing connection…","owner-unavailable":"Sign in or enter local mode first","host-in-use":"Another Cindy manages connections for this data folder","failed":"The local connection could not start","stopped":"The local connection has stopped"}},
   "attachmentAccessConfirmation": {
     "title": "Confirm Attachment Access",

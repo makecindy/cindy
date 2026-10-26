@@ -280,6 +280,13 @@ import {
   type RsbNativePopupEvent,
 } from '../shared/rsbNativePopup';
 import type {
+  ClaudeAccountAddResult,
+  ClaudeAccountHealthView,
+  ClaudeAccountSwitchResult,
+  ClaudeAccountsListView,
+  ClaudeHandoffPreview,
+} from '../shared/claudeAccounts';
+import type {
   DesktopAccountDeletionAvailabilityResult,
   DesktopAccountDeletionChallengeResult,
   DesktopAccountDeletionConfirmInput,
@@ -7799,6 +7806,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:claude-oauth:logout', ownerScope),
     claudeOAuthCancel: (loginKey?: string): Promise<{ authorized: boolean }> =>
       ipcRenderer.invoke('maker:claude-oauth:cancel', loginKey),
+
+    // Claude 多账号(docs/dev-rules/claude-multi-account.md):每个方法一个动作,返回值不含路径。
+    claudeAccountsList: (): Promise<ClaudeAccountsListView> => ipcRenderer.invoke('maker:claude-accounts:list'),
+    claudeAccountsAdd: (label: string, loginKey: string): Promise<ClaudeAccountAddResult> =>
+      ipcRenderer.invoke('maker:claude-accounts:add', { label, loginKey }),
+    claudeAccountsCancelAdd: (loginKey: string): Promise<void> =>
+      ipcRenderer.invoke('maker:claude-accounts:cancel-add', loginKey),
+    claudeAccountsSwitch: (accountId: string): Promise<ClaudeAccountSwitchResult> =>
+      ipcRenderer.invoke('maker:claude-accounts:switch', accountId),
+    claudeAccountsRemove: (accountId: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:claude-accounts:remove', accountId),
+    claudeAccountsHealth: (): Promise<ClaudeAccountHealthView[]> => ipcRenderer.invoke('maker:claude-accounts:health'),
+    claudeAccountsHandoffPreview: (sessionId: string): Promise<ClaudeHandoffPreview> =>
+      ipcRenderer.invoke('maker:claude-accounts:handoff-preview', sessionId),
 
     // xAI(SuperGrok 订阅)OAuth —— 与 claudeOAuth* 同形态。
     xaiOAuthLogin: (

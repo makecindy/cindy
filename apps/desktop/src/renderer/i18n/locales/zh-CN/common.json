@@ -1,4 +1,80 @@
 {
+  "claudeAccounts": {
+    "settings": {
+      "title": "Claude 账号",
+      "hint": "每个账号只需登录一次，之后切换无需再次登录。所有账号都使用这台电脑上 Claude Code 的记忆、技能和任务记录。",
+      "ownership": "只添加属于你自己的 Claude 账号。Anthropic 的条款不允许共用账号。",
+      "master": "主账号",
+      "active": "使用中",
+      "switch": "切换",
+      "remove": "移除",
+      "add": "添加账号",
+      "nameLabel": "账号名称",
+      "namePlaceholder": "例如：工作",
+      "signIn": "登录",
+      "signingIn": "请在浏览器中完成登录…",
+      "cancel": "取消",
+      "check": "检查账号",
+      "checking": "正在检查…",
+      "health": {
+        "ok": "已登录 · 目录已链接",
+        "loggedOut": "已退出登录",
+        "checkFailed": "无法连接 Claude Code",
+        "needsRepair": "下次使用时自动修复：{{names}}",
+        "mirror": "复制模式：每轮结束后同步记忆"
+      },
+      "removeConfirm": {
+        "title": "移除“{{label}}”？",
+        "description": "这会删除该账号在这台电脑上的登录。你的记忆、技能和任务记录仍保留在主账号中。",
+        "confirm": "移除",
+        "cancel": "取消"
+      },
+      "toast": {
+        "added": "已添加 {{label}}",
+        "removed": "已移除 {{label}}",
+        "switched": "现在使用 {{label}}。正在运行的任务会在当前这一轮结束后切换。"
+      },
+      "error": {
+        "timeout": "登录超时，请重试。",
+        "local_unavailable": "这台电脑上的 Claude Code 还没准备好，请稍后重试。",
+        "login_failed": "登录未完成，请重试。",
+        "not_a_subscription": "该账号不是用 Claude 订阅（Pro 或 Max）登录的。",
+        "duplicate_identity": "这个 Claude 账号已经添加过了。",
+        "invalid_label": "请输入 1–40 个字符的名称。",
+        "profile_unavailable": "无法准备该账号的目录，请点击“检查账号”。",
+        "no_owner": "请先登录 Cindy，或选择“跳过登录”。",
+        "not_logged_in": "该账号已退出登录。请移除后重新添加。",
+        "unknown_account": "该账号已不存在。",
+        "generic": "出了点问题，请重试。"
+      }
+    },
+    "handoff": {
+      "menuItem": "在另一个 Claude 账号上继续…",
+      "title": "在另一个 Claude 账号上继续",
+      "description": "先选择账号，再选择接手这个任务的方式。点击继续之前不会发送任何内容。",
+      "account": "账号",
+      "noOtherAccounts": "请先在 设置 → 模型供应商 → Claude Code 中添加另一个 Claude 账号。",
+      "resumeTitle": "恢复这个任务",
+      "resumeDetail": "同一段对话，保留完整细节。新账号会一次性读取约 {{tokens}} 个 token。",
+      "resumeDetailUnknown": "同一段对话，保留完整细节。",
+      "briefTitle": "根据简报新建任务",
+      "briefDetail": "目标、计划、文件和未解决问题的简短摘要：约 {{tokens}} 个 token。",
+      "recommended": "推荐",
+      "interrupted": "上一步（{{tool}}）被中断，重试前会先检查它。",
+      "resume": "在此恢复",
+      "brief": "根据简报新建任务",
+      "cancel": "取消",
+      "unavailable": {
+        "not_found": "这个任务还没有保存的 Claude Code 记录。",
+        "not_claude": "只有 Claude Code 任务可以在 Claude 账号之间切换。",
+        "unreadable": "无法读取这个任务的记录。"
+      },
+      "toast": {
+        "resumed": "已切换到 {{label}}。发送下一条消息时，这个任务会在该账号上继续。",
+        "briefReady": "已切换到 {{label}}。简报已放进一个新任务。"
+      }
+    }
+  },
   "localAgent": {"title":"本机应用连接","empty":"尚未连接应用","description":"允许已授权的本机应用使用 Cindy 的模型与执行能力。供应商登录仍由 Cindy 管理。","revoke":"撤销连接","failed":"无法读取应用连接。","connectTitle":"连接本机应用","connectMessage":"允许“{{app}}”使用 Cindy？","connectDetail":"此应用可以查看模型与供应商目录、创建自己的执行并提供工具。原生执行可以按当前系统用户的权限读写文件、运行命令；工作目录不限制访问范围。供应商凭证保留在 Cindy。可在设置 → 远程连接 → 本机应用连接中单独撤销连接。","cancel":"取消","allow":"允许连接","revokeMessage":"撤销所有本机应用连接？","revokeDetail":"所有本机应用的连接会失效，正在运行的接入任务会停止。需要使用时可重新申请连接。","clientIdentity":"应用自报编号：{{id}}\n版本：{{version}}\n名称和编号由申请方提供，不代表 Cindy 已验证其发布者。","revokeOneMessage":"撤销“{{app}}”的这条连接？","revokeOneDetail":"这条连接正在运行的任务会停止。其他应用连接不受影响。需要使用时可重新申请连接。","revokeConnection":"撤销“{{app}}”的连接","clientId":"应用编号：{{id}}","operationFailed":"无法确认本机应用操作的结果，请先查看当前状态。","invalidConnection":"应用连接编号无效。","revokeFailed":"无法确认撤销结果，请查看当前连接状态。","loading":"正在读取应用连接…","revoking":"正在撤销连接…","authorizationRequired":"此操作需要有效的本机应用授权。","pairExpired":"连接申请已过期或取消，请从应用重新申请连接。","busy":"本机应用仍有执行正在运行，或已达到执行上限，请先结束不用的执行。","limitReached":"已达到本机应用连接上限，请在设置中撤销不用的连接。","invalidWorkspace":"应用须指定此电脑上已存在的绝对工作目录。","sessionExists":"此应用连接已在使用该执行编号。","executionUnavailable":"所请求的执行或工具调用不可用，消息与工具操作未被重放。","selectionUnavailable":"所选模型、供应商或推理强度不可用，请在应用中重新选择。","requestNotReplayed":"此请求未被重复执行，请在应用中查看原操作结果。","storageUnavailable":"无法读取或保存本机应用连接数据，已保留现有授权记录。","stopUnconfirmed":"已阻止继续向此执行发送消息，但尚未确认进程已停止。","interactionUnavailable":"引擎需要此应用无法接收的交互操作。","interrupted":"本次发送已中断。","toolTimeout":"应用工具调用已超时，未自动重试。","connectResult":"请返回申请连接的应用查看结果，授权由 Cindy 确认窗口决定。","invalidRequest":"应用请求无效，或该操作不受支持。","hostInUse":"此配置的本机应用连接正由另一个 Cindy 实例管理，请在该实例中查看连接。","developerConnection":"开发连接","copyCode":"复制连接码","codeCopied":"连接码已复制","codeCopyFailed":"未能复制连接码","developerState":{"ready":"供此电脑上的应用临时连接，仍需在此 Cindy 中授权。重启后需重新复制。","starting":"正在准备连接…","owner-unavailable":"请先登录或进入本地模式","host-in-use":"此数据目录的连接正由另一个 Cindy 管理","failed":"本机连接未能启动","stopped":"本机连接已停止"}},
   "attachmentAccessConfirmation": {
     "title": "确认附件访问",

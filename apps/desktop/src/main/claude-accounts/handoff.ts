@@ -8,6 +8,8 @@
  * Mission Brief instead. The user always chooses; this module only measures and recommends.
  * Design: docs/dev-rules/claude-multi-account.md §4.6.
  */
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 
 export const RESUME_CHEAP_THRESHOLD_TOKENS = 40_000;
 
@@ -110,7 +112,11 @@ function usageTokens(usage: unknown): number | null {
   return parts.reduce((a, b) => a + b, 0);
 }
 
-export function buildMissionSnapshot(lines: Iterable<string>): MissionSnapshot {
+/**
+ * Incremental snapshot builder: feed transcript lines one at a time (so large files can be
+ * streamed), then `finish()`. Unparseable or irrelevant lines are skipped.
+ */
+export function createMissionSnapshotBuilder(): { push(line: string): void; finish(): MissionSnapshot } {
   const prompts: string[] = [];
   const todosRef: { value: MissionSnapshot['todos'] } = { value: [] };
   const files: string[] = [];
@@ -121,15 +127,15 @@ export function buildMissionSnapshot(lines: Iterable<string>): MissionSnapshot {
     contextTokens: null,
   };
 
-  for (const line of lines) {
-    if (!line || !line.trim()) continue;
+  function push(line: string): void {
+    if (!line || !line.trim()) return;
     let entry: Json | null;
     try {
       entry = asObject(JSON.parse(line));
     } catch {
-      continue;
+      return;
     }
-    if (!entry || entry.isSidechain === true) continue;
+    if (!entry || entry.isSidechain === true) return;
 
     if (typeof entry.sessionId === 'string') snap.sessionId = entry.sessionId;
     if (typeof entry.cwd === 'string') snap.cwd = entry.cwd;
@@ -137,16 +143,16 @@ export function buildMissionSnapshot(lines: Iterable<string>): MissionSnapshot {
 
     if (entry.type === 'summary' && typeof entry.summary === 'string') {
       snap.compactSummary = clip(entry.summary, SUMMARY_MAX);
-      continue;
+      return;
     }
     const message = asObject(entry.message);
-    if (!message) continue;
+    if (!message) return;
 
     if (entry.type === 'user') {
       if (entry.isCompactSummary === true) {
         const text = textOf(message.content);
         if (text) snap.compactSummary = clip(text, SUMMARY_MAX);
-        continue;
+        return;
       }
       const blocks = Array.isArray(message.content) ? message.content : [];
       let hadToolResult = false;
@@ -161,12 +167,12 @@ export function buildMissionSnapshot(lines: Iterable<string>): MissionSnapshot {
           errorsSinceInstruction.push(`${tool}: ${text || 'error'}`);
         }
       }
-      if (hadToolResult || entry.isMeta === true) continue;
+      if (hadToolResult || entry.isMeta === true) return;
       const text = textOf(message.content).trim();
-      if (!text || NOT_A_PROMPT.some((re) => re.test(text))) continue;
+      if (!text || NOT_A_PROMPT.some((re) => re.test(text))) return;
       prompts.push(text);
       errorsSinceInstruction = [];
-      continue;
+      return;
     }
 
     if (entry.type === 'assistant') {
@@ -199,17 +205,41 @@ export function buildMissionSnapshot(lines: Iterable<string>): MissionSnapshot {
     }
   }
 
-  const interrupted = [...pending.values()].at(-1);
-  return {
-    ...snap,
-    ...(prompts[0] !== undefined ? { goal: clip(prompts[0], GOAL_MAX) } : {}),
-    recentInstructions: prompts.slice(1).slice(-MAX_INSTRUCTIONS).map((p) => clip(p, INSTRUCTION_MAX)),
-    todos: todosRef.value,
-    filesTouched: files.slice(-MAX_FILES),
-    recentErrors: errorsSinceInstruction.slice(-MAX_ERRORS),
-    ...(interrupted ? { interrupted } : {}),
-    userTurns: prompts.length,
-  };
+  function finish(): MissionSnapshot {
+    const interrupted = [...pending.values()].at(-1);
+    return {
+      ...snap,
+      ...(prompts[0] !== undefined ? { goal: clip(prompts[0], GOAL_MAX) } : {}),
+      recentInstructions: prompts.slice(1).slice(-MAX_INSTRUCTIONS).map((p) => clip(p, INSTRUCTION_MAX)),
+      todos: todosRef.value,
+      filesTouched: files.slice(-MAX_FILES),
+      recentErrors: errorsSinceInstruction.slice(-MAX_ERRORS),
+      ...(interrupted ? { interrupted } : {}),
+      userTurns: prompts.length,
+    };
+  }
+
+  return { push, finish };
+}
+
+export function buildMissionSnapshot(lines: Iterable<string>): MissionSnapshot {
+  const builder = createMissionSnapshotBuilder();
+  for (const line of lines) builder.push(line);
+  return builder.finish();
+}
+
+/** Stream a transcript file line by line (constant memory) into a snapshot. Rejects if unreadable. */
+export async function readMissionSnapshotFile(file: string): Promise<MissionSnapshot> {
+  const builder = createMissionSnapshotBuilder();
+  const stream = createReadStream(file, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) builder.push(line);
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+  return builder.finish();
 }
 
 /** Rough token estimate (≈4 characters per token). Used only to compare options. */

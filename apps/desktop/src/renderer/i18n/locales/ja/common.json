@@ -1,4 +1,80 @@
 {
+  "claudeAccounts": {
+    "settings": {
+      "title": "Claude アカウント",
+      "hint": "各アカウントに一度ログインすれば、以後は再ログインせずに切り替えられます。どのアカウントも、このコンピューターの Claude Code のメモリ、スキル、セッション履歴を使います。",
+      "ownership": "ご自身の Claude アカウントだけを追加してください。Anthropic の規約ではアカウントの共有は認められていません。",
+      "master": "メイン",
+      "active": "使用中",
+      "switch": "切り替え",
+      "remove": "削除",
+      "add": "アカウントを追加",
+      "nameLabel": "アカウント名",
+      "namePlaceholder": "例：仕事用",
+      "signIn": "ログイン",
+      "signingIn": "ブラウザーでログインを完了してください…",
+      "cancel": "キャンセル",
+      "check": "アカウントを確認",
+      "checking": "確認中…",
+      "health": {
+        "ok": "ログイン済み · フォルダーはリンク済み",
+        "loggedOut": "ログアウト済み",
+        "checkFailed": "Claude Code に接続できません",
+        "needsRepair": "次回の使用時に修復されます：{{names}}",
+        "mirror": "コピーモード：各ターンの後にメモリを同期します"
+      },
+      "removeConfirm": {
+        "title": "「{{label}}」を削除しますか？",
+        "description": "このコンピューター上のこのアカウントのログイン情報が削除されます。メモリ、スキル、セッション履歴はメインアカウントに残ります。",
+        "confirm": "削除",
+        "cancel": "キャンセル"
+      },
+      "toast": {
+        "added": "{{label}} を追加しました",
+        "removed": "{{label}} を削除しました",
+        "switched": "{{label}} を使用中です。実行中のセッションは現在のターンが終わると切り替わります。"
+      },
+      "error": {
+        "timeout": "ログインがタイムアウトしました。もう一度お試しください。",
+        "local_unavailable": "このコンピューターの Claude Code はまだ準備できていません。少し待ってからお試しください。",
+        "login_failed": "ログインが完了しませんでした。もう一度お試しください。",
+        "not_a_subscription": "このアカウントは Claude サブスクリプション（Pro または Max）でログインしていません。",
+        "duplicate_identity": "この Claude アカウントはすでに追加されています。",
+        "invalid_label": "1〜40 文字の名前を入力してください。",
+        "profile_unavailable": "このアカウントのフォルダーを準備できませんでした。「アカウントを確認」を実行してください。",
+        "no_owner": "先に Cindy にログインするか、「ログインをスキップ」を選んでください。",
+        "not_logged_in": "このアカウントはログアウトしています。削除してから追加し直してください。",
+        "unknown_account": "このアカウントはもう存在しません。",
+        "generic": "問題が発生しました。もう一度お試しください。"
+      }
+    },
+    "handoff": {
+      "menuItem": "別の Claude アカウントで続ける…",
+      "title": "別の Claude アカウントで続ける",
+      "description": "アカウントを選んでから、このセッションの引き継ぎ方を選びます。続行するまで何も送信されません。",
+      "account": "アカウント",
+      "noOtherAccounts": "先に 設定 → プロバイダー → Claude Code で別の Claude アカウントを追加してください。",
+      "resumeTitle": "このセッションを再開",
+      "resumeDetail": "同じ会話をすべての詳細ごと引き継ぎます。新しいアカウントは約 {{tokens}} トークンを一度だけ読み込みます。",
+      "resumeDetailUnknown": "同じ会話をすべての詳細ごと引き継ぎます。",
+      "briefTitle": "要約から新しいセッション",
+      "briefDetail": "目標、計画、ファイル、未解決の問題の短い要約：約 {{tokens}} トークン。",
+      "recommended": "おすすめ",
+      "interrupted": "最後のステップ（{{tool}}）は中断されたため、再試行の前に確認されます。",
+      "resume": "ここで再開",
+      "brief": "要約から新しいセッション",
+      "cancel": "キャンセル",
+      "unavailable": {
+        "not_found": "このセッションにはまだ保存された Claude Code の履歴がありません。",
+        "not_claude": "Claude アカウント間で移せるのは Claude Code のセッションだけです。",
+        "unreadable": "このセッションの履歴を読み込めませんでした。"
+      },
+      "toast": {
+        "resumed": "{{label}} に切り替えました。次のメッセージから、このセッションはそちらで続きます。",
+        "briefReady": "{{label}} に切り替えました。要約を新しいセッションに用意しました。"
+      }
+    }
+  },
   "localAgent": {"title":"ローカルアプリの接続","empty":"接続済みのアプリはありません","description":"承認したローカルアプリが Cindy のモデルと実行機能を利用できます。認証情報は Cindy が管理します。","revoke":"接続を解除","failed":"アプリの接続を読み込めませんでした。","connectTitle":"ローカルアプリを接続","connectMessage":"「{{app}}」に Cindy の利用を許可しますか？","connectDetail":"このアプリはモデルとプロバイダーの一覧を取得し、独自の実行を作成してツールを提供できます。ネイティブ実行では、現在の OS ユーザーの権限でファイルを読み書きし、コマンドを実行できます。作業ディレクトリはアクセス範囲を制限しません。認証情報は Cindy が保持します。設定 → リモート接続 → ローカルアプリの接続で個別に解除できます。","cancel":"キャンセル","allow":"接続を許可","revokeMessage":"すべてのローカルアプリ接続を取り消しますか？","revokeDetail":"すべてのローカルアプリ接続が無効になり、実行中のタスクが停止します。必要に応じて再接続できます。","clientIdentity":"アプリが申告した ID：{{id}}\nバージョン：{{version}}\n名前と ID は申請元の申告であり、Cindy が発行元を確認したことを意味しません。","revokeOneMessage":"「{{app}}」のこの接続を取り消しますか？","revokeOneDetail":"この接続で実行中のタスクが停止します。他のアプリ接続には影響しません。必要に応じて再接続できます。","revokeConnection":"「{{app}}」の接続を取り消す","clientId":"アプリ ID：{{id}}","operationFailed":"ローカルアプリの操作結果を確認できませんでした。現在の状態を確認してから続けてください。","invalidConnection":"アプリ接続の ID が無効です。","revokeFailed":"接続の解除を確認できませんでした。現在の接続状態を確認してください。","loading":"アプリの接続を読み込み中…","revoking":"接続を解除中…","authorizationRequired":"この操作には有効なローカルアプリの承認が必要です。","pairExpired":"接続リクエストの有効期限が切れたか、キャンセルされました。アプリから接続を再申請してください。","busy":"ローカルアプリの実行が続いているか、実行数の上限に達しています。不要な実行を先に終了してください。","limitReached":"ローカルアプリの接続数が上限に達しています。設定で不要な接続を解除してください。","invalidWorkspace":"アプリは、このコンピューター上に存在する作業ディレクトリを絶対パスで指定する必要があります。","sessionExists":"このアプリ接続では、その実行 ID がすでに使われています。","executionUnavailable":"要求された実行またはツール呼び出しは利用できません。メッセージやツール操作は再実行されていません。","selectionUnavailable":"選択したモデル、プロバイダー、または推論強度は利用できません。アプリで利用可能な項目を選択してください。","requestNotReplayed":"このリクエストは再実行されていません。アプリで元の操作結果を確認してください。","storageUnavailable":"ローカルアプリの接続データを読み込めないか、保存できませんでした。既存の承認記録は保持されています。","stopUnconfirmed":"この実行への追加メッセージは停止しましたが、プロセスの終了はまだ確認できていません。","interactionUnavailable":"エンジンが必要とする操作を、このアプリでは受け取れません。","interrupted":"今回の送信は中断されました。","toolTimeout":"アプリのツールがタイムアウトしました。自動で再試行していません。","connectResult":"接続結果は申請元のアプリで確認してください。承認は Cindy の確認ウィンドウで決定します。","invalidRequest":"アプリのリクエストが無効か、この操作はサポートされていません。","hostInUse":"このプロファイルのローカルアプリ接続は、別の Cindy インスタンスが管理しています。そのインスタンスで接続を確認してください。","developerConnection":"開発用接続","copyCode":"接続コードをコピー","codeCopied":"接続コードをコピーしました","codeCopyFailed":"接続コードをコピーできませんでした","developerState":{"ready":"このパソコンのアプリから一時的に接続できます。この Cindy での許可が必要です。再起動後はコードをコピーし直してください。","starting":"接続を準備しています…","owner-unavailable":"先にログインするかローカルモードに入ってください","host-in-use":"このデータフォルダーの接続は別の Cindy が管理しています","failed":"ローカル接続を開始できませんでした","stopped":"ローカル接続は停止しています"}},
   "attachmentAccessConfirmation": {
     "title": "添付ファイルへのアクセスを確認",

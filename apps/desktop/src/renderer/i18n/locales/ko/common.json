@@ -1,4 +1,80 @@
 {
+  "claudeAccounts": {
+    "settings": {
+      "title": "Claude 계정",
+      "hint": "계정마다 한 번만 로그인하면 이후에는 다시 로그인하지 않고 전환할 수 있습니다. 모든 계정이 이 컴퓨터의 Claude Code 메모리, 스킬, 세션 기록을 사용합니다.",
+      "ownership": "본인 소유의 Claude 계정만 추가하세요. Anthropic 약관은 계정 공유를 허용하지 않습니다.",
+      "master": "기본",
+      "active": "사용 중",
+      "switch": "전환",
+      "remove": "삭제",
+      "add": "계정 추가",
+      "nameLabel": "계정 이름",
+      "namePlaceholder": "예: 업무용",
+      "signIn": "로그인",
+      "signingIn": "브라우저에서 로그인을 완료하세요…",
+      "cancel": "취소",
+      "check": "계정 확인",
+      "checking": "확인 중…",
+      "health": {
+        "ok": "로그인됨 · 폴더 연결됨",
+        "loggedOut": "로그아웃됨",
+        "checkFailed": "Claude Code에 연결할 수 없습니다",
+        "needsRepair": "다음에 사용할 때 복구됩니다: {{names}}",
+        "mirror": "복사 모드: 턴이 끝날 때마다 메모리를 동기화합니다"
+      },
+      "removeConfirm": {
+        "title": "“{{label}}”을(를) 삭제할까요?",
+        "description": "이 컴퓨터에서 이 계정의 로그인 정보가 삭제됩니다. 메모리, 스킬, 세션 기록은 기본 계정에 그대로 남습니다.",
+        "confirm": "삭제",
+        "cancel": "취소"
+      },
+      "toast": {
+        "added": "{{label}}을(를) 추가했습니다",
+        "removed": "{{label}}을(를) 삭제했습니다",
+        "switched": "이제 {{label}}을(를) 사용합니다. 실행 중인 세션은 현재 턴이 끝나면 전환됩니다."
+      },
+      "error": {
+        "timeout": "로그인 시간이 초과되었습니다. 다시 시도하세요.",
+        "local_unavailable": "이 컴퓨터의 Claude Code가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요.",
+        "login_failed": "로그인이 완료되지 않았습니다. 다시 시도하세요.",
+        "not_a_subscription": "이 계정은 Claude 구독(Pro 또는 Max)으로 로그인되어 있지 않습니다.",
+        "duplicate_identity": "이 Claude 계정은 이미 추가되어 있습니다.",
+        "invalid_label": "1~40자의 이름을 입력하세요.",
+        "profile_unavailable": "이 계정의 폴더를 준비하지 못했습니다. \"계정 확인\"을 실행하세요.",
+        "no_owner": "먼저 Cindy에 로그인하거나 \"로그인 건너뛰기\"를 선택하세요.",
+        "not_logged_in": "이 계정은 로그아웃되었습니다. 삭제한 뒤 다시 추가하세요.",
+        "unknown_account": "이 계정은 더 이상 존재하지 않습니다.",
+        "generic": "문제가 발생했습니다. 다시 시도하세요."
+      }
+    },
+    "handoff": {
+      "menuItem": "다른 Claude 계정에서 계속…",
+      "title": "다른 Claude 계정에서 계속",
+      "description": "계정을 고른 다음 이 세션을 이어받을 방법을 선택하세요. 계속하기 전에는 아무것도 전송되지 않습니다.",
+      "account": "계정",
+      "noOtherAccounts": "먼저 설정 → 제공자 → Claude Code에서 다른 Claude 계정을 추가하세요.",
+      "resumeTitle": "이 세션 다시 시작",
+      "resumeDetail": "같은 대화를 모든 내용 그대로 이어갑니다. 새 계정은 약 {{tokens}}개의 토큰을 한 번 읽습니다.",
+      "resumeDetailUnknown": "같은 대화를 모든 내용 그대로 이어갑니다.",
+      "briefTitle": "요약으로 새 세션",
+      "briefDetail": "목표, 계획, 파일, 해결되지 않은 문제의 짧은 요약: 약 {{tokens}}개 토큰.",
+      "recommended": "추천",
+      "interrupted": "마지막 단계({{tool}})가 중단되어 다시 시도하기 전에 확인합니다.",
+      "resume": "여기서 다시 시작",
+      "brief": "요약으로 새 세션",
+      "cancel": "취소",
+      "unavailable": {
+        "not_found": "이 세션에는 아직 저장된 Claude Code 기록이 없습니다.",
+        "not_claude": "Claude 계정 간에 옮길 수 있는 것은 Claude Code 세션뿐입니다.",
+        "unreadable": "이 세션의 기록을 읽을 수 없습니다."
+      },
+      "toast": {
+        "resumed": "{{label}}(으)로 전환했습니다. 다음 메시지부터 이 세션이 그 계정에서 이어집니다.",
+        "briefReady": "{{label}}(으)로 전환했습니다. 요약을 새 세션에 준비했습니다."
+      }
+    }
+  },
   "localAgent": {"title":"로컬 앱 연결","empty":"연결된 앱 없음","description":"승인된 로컬 앱이 Cindy 모델과 실행 기능을 사용할 수 있습니다. 제공자 인증 정보는 Cindy가 관리합니다.","revoke":"연결 해제","failed":"앱 연결을 불러오지 못했습니다.","connectTitle":"로컬 앱 연결","connectMessage":"“{{app}}”의 Cindy 사용을 허용할까요?","connectDetail":"이 앱은 모델과 제공자 목록을 확인하고 자체 실행을 만들며 도구를 제공할 수 있습니다. 네이티브 실행은 현재 시스템 사용자 권한으로 파일을 읽고 쓰거나 명령을 실행할 수 있으며, 작업 디렉터리가 접근 범위를 제한하지 않습니다. 제공자 인증 정보는 Cindy가 보관합니다. 설정 → 원격 연결 → 로컬 앱 연결에서 개별 연결을 해제할 수 있습니다.","cancel":"취소","allow":"연결 허용","revokeMessage":"모든 로컬 앱 연결을 해제할까요?","revokeDetail":"모든 로컬 앱 연결이 무효화되고 실행 중인 작업이 중지됩니다. 필요하면 다시 연결할 수 있습니다.","clientIdentity":"앱이 제공한 ID: {{id}}\n버전: {{version}}\n이름과 ID는 요청 앱이 제공하며, Cindy가 게시자를 확인했다는 의미가 아닙니다.","revokeOneMessage":"“{{app}}”의 이 연결을 취소할까요?","revokeOneDetail":"이 연결에서 실행 중인 작업이 중지됩니다. 다른 앱 연결에는 영향을 주지 않습니다. 필요하면 다시 연결할 수 있습니다.","revokeConnection":"“{{app}}” 연결 취소","clientId":"앱 ID: {{id}}","operationFailed":"로컬 앱 작업 결과를 확인하지 못했습니다. 현재 상태를 확인한 후 계속하세요.","invalidConnection":"앱 연결 ID가 유효하지 않습니다.","revokeFailed":"연결 해제 결과를 확인하지 못했습니다. 현재 연결 상태를 확인하세요.","loading":"앱 연결을 불러오는 중…","revoking":"연결 해제 중…","authorizationRequired":"이 작업에는 유효한 로컬 앱 승인이 필요합니다.","pairExpired":"연결 요청이 만료되었거나 취소되었습니다. 앱에서 새 연결을 요청하세요.","busy":"로컬 앱 실행이 진행 중이거나 실행 한도에 도달했습니다. 사용하지 않는 실행을 먼저 종료하세요.","limitReached":"로컬 앱 연결 한도에 도달했습니다. 설정에서 사용하지 않는 연결을 해제하세요.","invalidWorkspace":"앱은 이 컴퓨터에 존재하는 작업 디렉터리의 절대 경로를 지정해야 합니다.","sessionExists":"이 앱 연결에서 해당 실행 ID를 이미 사용하고 있습니다.","executionUnavailable":"요청한 실행 또는 도구 호출을 사용할 수 없습니다. 메시지와 도구 작업은 다시 실행되지 않았습니다.","selectionUnavailable":"선택한 모델, 제공자 또는 추론 강도을 사용할 수 없습니다. 앱에서 사용 가능한 항목을 선택하세요.","requestNotReplayed":"이 요청은 다시 실행되지 않았습니다. 앱에서 원래 작업 결과를 확인하세요.","storageUnavailable":"로컬 앱 연결 데이터를 읽거나 저장하지 못했습니다. 기존 승인 기록은 유지되었습니다.","stopUnconfirmed":"이 실행에 추가 메시지를 보내는 것은 차단되었지만 프로세스가 중지되었는지는 확인되지 않았습니다.","interactionUnavailable":"엔진에 필요한 상호작용을 이 앱이 받을 수 없습니다.","interrupted":"이번 전송이 중단되었습니다.","toolTimeout":"앱 도구 호출 시간이 초과되었습니다. 자동으로 재시도하지 않았습니다.","connectResult":"연결 결과는 요청한 앱에서 확인하세요. 승인은 Cindy 확인 창에서 결정합니다.","invalidRequest":"앱 요청이 유효하지 않거나 지원하지 않는 작업입니다.","hostInUse":"이 프로필의 로컬 앱 연결은 다른 Cindy 인스턴스가 관리합니다. 해당 인스턴스에서 연결을 확인하세요.","developerConnection":"개발용 연결","copyCode":"연결 코드 복사","codeCopied":"연결 코드를 복사했습니다","codeCopyFailed":"연결 코드를 복사하지 못했습니다","developerState":{"ready":"이 컴퓨터의 앱에서 임시로 연결합니다. 이 Cindy에서 승인이 필요합니다. 다시 시작하면 코드를 다시 복사하세요.","starting":"연결 준비 중…","owner-unavailable":"먼저 로그인하거나 로컬 모드로 들어가세요","host-in-use":"다른 Cindy가 이 데이터 폴더의 연결을 관리하고 있습니다","failed":"로컬 연결을 시작하지 못했습니다","stopped":"로컬 연결이 중지되었습니다"}},
   "attachmentAccessConfirmation": {
     "title": "첨부 파일 접근 확인",
