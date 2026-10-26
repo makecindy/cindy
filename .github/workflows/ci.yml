@@ -183,6 +183,11 @@ jobs:
         if: matrix.shard == 1
         run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
 
+      # Native timezone changes need a process; keep this outside the unit shards.
+      - name: Run native timezone regression
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/renderer/__tests__/dateSessionGrouping.integration.test.ts --pool=forks --maxWorkers=1
+
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
         if: matrix.shard == 1
@@ -289,6 +294,9 @@ jobs:
       # 保留 Windows 路径、进程与锁的自测覆盖。
       - name: Run Windows test runner self-tests
         run: pnpm test:runner
+
+      - name: Run native timezone regression
+        run: pnpm --filter desktop exec vitest run src/renderer/__tests__/dateSessionGrouping.integration.test.ts --pool=forks --maxWorkers=1
 
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
