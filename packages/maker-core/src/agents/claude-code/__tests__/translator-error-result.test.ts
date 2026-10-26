@@ -560,7 +560,7 @@ describe('Claude Code translator is_error result guard', () => {
     expect(errors).toHaveLength(attempt >= 2 ? 1 : 0);
     if (attempt >= 2) {
       expect(errors[0]?.data).toMatchObject({ isTerminal: false, willRetry: true });
-      expect((errors[0]?.data as { message: string }).message).toContain('(auto-retry 2/3)');
+      expect((errors[0]?.data as { message: string }).message).toBe('Reconnecting... 2/3');
       expect(events.indexOf(errors[0]!)).toBeLessThan(events.findIndex((e) => e.type === 'text'));
     }
     expect(events.some((e) => e.type === 'text' && (e.data as { text?: string }).text === 'Recovered after retry.')).toBe(true);
@@ -796,10 +796,12 @@ describe('Claude Code translator is_error result guard', () => {
   });
 
   it.each([
-    { error_status: 529, error: 'overloaded_error', marker: '(auto-retry 2/10)' },
-    { error_status: null, error: 'timeout', marker: 'Reconnecting... 2/10' },
-    { error_status: null, error: 'connection_error', marker: 'Reconnecting... 2/10' },
-  ])('surfaces repeated $error retries as non-terminal progress', async ({ error_status, error, marker }) => {
+    { error_status: 529, error: 'overloaded_error' },
+    { error_status: null, error: 'overloaded_error' },
+    { error_status: null, error: 'unknown' },
+    { error_status: null, error: 'timeout' },
+    { error_status: null, error: 'connection_error' },
+  ])('surfaces repeated $error retries as non-terminal progress', async ({ error_status, error }) => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx(tracker);
@@ -827,9 +829,15 @@ describe('Claude Code translator is_error result guard', () => {
       isTerminal: false,
       willRetry: true,
     });
-    // 进度后缀与 Codex 侧同一套跨 agent 协议，renderer 只需一份解析。
-    expect((errors[0]?.data as { message: string }).message).toContain(marker);
-    expect((errors[0]?.data as { message: string }).message).toContain(error_status != null ? 'HTTP 529' : 'connection error');
+    // PR #7202 review: auto-retry means overload on mobile; connection retries
+    // must use the existing Reconnecting protocol. Preserve statusless overloads.
+    const message = (errors[0]?.data as { message: string }).message;
+    if (error_status == null && error !== 'overloaded_error') {
+      expect(message).toContain('Reconnecting... 2/10');
+    } else {
+      expect(message).toContain('(auto-retry 2/10)');
+      expect(message).toContain(error_status != null ? 'HTTP 529' : 'overloaded_error');
+    }
     // 非终止 → 不得让上层收口本轮。
     expect(events.some((e) => e.type === 'done')).toBe(false);
   });
