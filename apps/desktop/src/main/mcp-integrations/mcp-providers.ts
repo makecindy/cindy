@@ -1,3 +1,5 @@
+import { executeCurrentGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
+import { executeArchivedGroupTool } from '../maker-ipc/archivedGroupRecovery.js';
 import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
@@ -1048,6 +1050,33 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (!owned) throw new Error('当前调用未绑定伙伴主任务');
           return owned.botId;
         },
+      },
+      // Group tools use only the live execution identity, never the account UI's proxy actor.
+      currentGroup: (sessionId, request) => {
+        if (request.type === 'list-archived' || request.type === 'restore-archived') {
+          const db = tryGetDbClient();
+          return executeArchivedGroupTool(sessionId, request, {
+            input: getTaskActionInputState,
+            caller: async callerSessionId => {
+              if (!db || db !== tryGetDbClient() || isAppSessionBoundaryPending()) return null;
+              const caller = await db.queryOne<{ botId: string; source: string; role: string; status: string; botStatus: string; archivedAt: number | null; remoteHostId: string | null }>(
+                `SELECT b.bot_id AS botId, s.source, b.role, s.status, p.status AS botStatus,
+                 b.archived_at AS archivedAt, s.remote_host_id AS remoteHostId
+                 FROM sessions s JOIN bot_session_links b ON b.session_id = s.id
+                 JOIN bot_profiles p ON p.id = b.bot_id WHERE s.id = ? LIMIT 1`, [callerSessionId]);
+              return db === tryGetDbClient() && !isAppSessionBoundaryPending() ? caller ?? null : null;
+            },
+          });
+        }
+        const input = getTaskActionInputState(sessionId);
+        const assertCurrent = () => {
+          const fresh = getTaskActionInputState(sessionId);
+          if (fresh.key !== input.key || fresh.boundary !== input.boundary || input.permission?.isCurrent?.() !== true)
+            throw new Error('GROUP_AUTHORIZATION_REQUIRED');
+          if (request.type === 'manage' && input.permission?.planModeEnabled !== false)
+            throw new Error('GROUP_AUTHORIZATION_REQUIRED');
+        };
+        return executeCurrentGroupTool(sessionId, request, assertCurrent);
       },
       // 伙伴的主力电脑:与界面同一条路径(本机交出 / 请主力电脑交出 / 在这台电脑继续)。
       teammateHome: {

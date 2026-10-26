@@ -23,12 +23,18 @@ export function isActiveBotGroupMember(member: Pick<BotGroupMemberView, 'status'
   return member.status === 'active';
 }
 
+/** Shared role projection for UI affordances and current-bot tool checks.
+ * Callers must separately verify membership, requester authority and server authorization. */
+export function chatGroupRolePermissions(role: string | null | undefined) {
+  return { owner: role === 'owner', manager: role === 'owner' || role === 'admin' };
+}
+
 /** UI affordances only; the server must authorize every mutation against current membership. */
 export function chatGroupMembership(group: Pick<BotGroupSummary, 'serverBacked' | 'members'>) {
   const self = group.members.find(member => member.isSelf === true);
   const owned = (member: BotGroupMemberView) => member.isOwned === true || member.isSelf === true;
-  const owner = group.serverBacked === true && group.members.some(member => owned(member) && member.role === 'owner');
-  const manager = owner || (group.serverBacked === true && group.members.some(member => owned(member) && member.role === 'admin'));
+  const owner = group.serverBacked === true && group.members.some(member => owned(member) && chatGroupRolePermissions(member.role).owner);
+  const manager = group.serverBacked === true && group.members.some(member => owned(member) && chatGroupRolePermissions(member.role).manager);
   // Leaving also removes this account's companions. Another owner from this same account
   // therefore cannot satisfy LAST_OWNER, even when the human is only an ordinary member.
   const otherOwner = group.members.some(member => member.isOwned === false && !member.isSelf && member.role === 'owner');

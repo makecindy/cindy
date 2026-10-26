@@ -801,6 +801,87 @@ Desktop 群聊与话题之间的分隔线支持左右拖拽和方向键调宽；
 `ChatThreadPanel.tsx`。回归：`chatServerThreads.test.ts`、`chatServer.test.ts`（thread previews and main-chat shares）、
 `BotGroupChatView.test.tsx`（thread previews and posting to the main chat）、`maker-shared` 的 `botGroupThreadShare.test.ts`。
 
+
+### 伙伴自身群角色与群管理工具（#6906，2026-10-23）
+
+群专线的 helper bots 索引提供 get_current_group 和 manage_current_group。
+Host 从活跃执行绑定群与伙伴，不接受模型指定群或执行身份；查询读取当前服务端快照、成员与队列，
+返回伙伴自身角色、请求者角色和有效权限。角色投影复用 chatGroupRolePermissions。
+公开成员保留 ownerActorId／ownerName，以区分同名伙伴；计划返回 currentStep 及每步的位置、
+任务、负责伙伴 Chat actor ID 与状态，使移除／更换步骤有查询依据。查询同时返回 currentExecution
+（本次工具绑定的执行 ID、sourceMessageId、planId、planStep）和队列内各执行的同样来源关联；
+需要全部停止时先停止其他执行，最后停止 currentExecution，避免自己的工具授权提前失效。人类主人请求且当前伙伴
+有管理角色时，额外返回主人自有的可邀请伙伴（本地 botId 与 Chat actorId），复用 ownedBots
+身份映射；非主人请求不暴露该非群成员名册，也不增加伙伴私人资料访问。
+UI 的账号代演规则仍可选主人拥有的群主／管理员；伙伴工具只使用当前 execution.bot_id，
+绝不调用 managementActor 借用主人或另一伙伴的身份。
+
+当前可写范围为：执行伙伴本身拥有对应角色，且发起请求的是它的人类主人。
+主人可以指挥这位伙伴自己的群角色，沿用界面的主人代伙伴管理规则；主人、另一伙伴的高权限
+不能补足执行伙伴缺失的角色。其他成员对这位伙伴的工具授权仍可查询群角色，但暂不开放群管理：
+现有客户端管理合同只传 X-Chat-Actor 与操作内容，没有请求者／租约的原子授权字段，
+仅客户端预检不能承诺解决非主人请求者在提交瞬间被撤权的竞态。
+工具返回 GROUP_REQUESTER_AUTHORIZATION_UNSUPPORTED，而不是借高权限伙伴执行。
+这不证明服务端未实现新能力；本次未取得服务端仓库读取权限，也未验证生产部署。
+在明确新合同并配套服务端校验之前，不猜测字段或静默降级。
+
+| 既有能力 | 当前群工具覆盖 | 权限及边界 |
+| --- | --- | --- |
+| 自身角色、有效权限、公开成员与队列 | get_current_group | 活跃授权执行；chat-only 专线仍禁用工具，不开放私人资料 |
+| 群名、主题、简介、响应及发言模式 | update | 当前伙伴 owner/admin；群 revision 校验；仅修改传入字段 |
+| 成员邀请、移除、封禁、解禁 | member | 当前伙伴 owner/admin；保护群主、执行伙伴与请求者；最终由服务端校验目标 |
+| 成员管理员／普通角色 | member.action=role | 当前伙伴 owner；禁止降级群主或将成员提升为群主 |
+| 创建／撤销邀请链接 | createInvite / revokeInvite | 当前伙伴 owner/admin；撤销复用 UI 口令解析；严格校验回执 |
+| 归档／取消归档 | archive；私聊 get_archived_groups / restore_archived_group | 当前伙伴 owner/admin；检查 revision；归档中止群执行后由主人私聊发起恢复；已解散群不可恢复 |
+| 停止某次执行 | execution | 当前伙伴 owner/admin；先核对目标属于本群；使用同一操作标识 |
+| 队列／分工开始、继续、重试、停止、结束、移除／更换步骤 | plan | 当前伙伴 owner/admin；检查计划 revision 与目标成员 |
+| 全部停止 | 查询队列后按项停止 | 每项独立授权与回执；不宣称批次原子完成；停止当前执行后旧权限失效 |
+| 群主转让／解散 | 不提供伙伴工具；保留人类群设置入口 | 2026-10-23 评审裁决：不可逆且影响大，由人类操作；Full Access 或确认均不开放伙伴执行 |
+| 成员昵称／头像、伙伴工具／私人资料授权 | 保持原有设置入口 | 不借群角色修改其他伙伴授权 |
+| 本机项目目录、负责人设置、创建新讨论／分工安排 | 保持原有入口 | 本次没有增加本机文件访问或计划生成接口 |
+
+每次操作及排队出队时重新核验成员、伙伴归属、访问版本、请求者与执行租约；读取之后、
+HTTP 提交之前再次检查。Host 同时绑定运行中任务的权限／计划模式代次与输入边界。
+伙伴计划控制与人类入口一样先替换本群旧安排意图，并释放其挂起消息；取消等待结束后仍重新校验授权，
+旧 planner 的迟到结果不能重新创建／启动计划或安排讨论。回归见 chatServer.test.ts 的
+“retires an old planner before bot plan management” 场景。
+manage_current_group 的直接／渐进调用均按次进入任务的工具权限流程：Ask 确认、Auto 审核、
+Full Access 沿用正常语义；群角色校验不能替代任务权限。转让／解散不属于伙伴工具白名单，
+共享 schema 和 Host 均拒绝旧参数，不返回这两项可用权限，也不保留确认后放行路径。
+人类 UI、共享角色权限与服务端既有转让／解散合同保留，不因伙伴工具收窄而删改。
+执行停止收到成功回执后立即移除本机对应执行、撤销工具授权并中止群专线，
+不等待 WebSocket 通知或心跳；明确拒绝或结果未知时不误停本机执行。
+其他成功群管理写入也立即复用 checkLease 核对本群所有本机执行，覆盖归档、计划停止
+及成员移除／封禁的连带撤权；服务端判为失效的执行立即撤权并中止，仍有效的执行保留。
+群主目标保护只适用于仍在群内的群主，保留历史 owner 角色的已离群成员可以重新邀请。
+撤权后不能用旧快照或持久专线恢复授权。管理写请求禁用自动认证重发；明确的服务端拒绝返回错误码，
+超时、5xx 或损坏回执返回 GROUP_RESULT_UNKNOWN，要求先查询再决定是否以原 operationId 重试。
+本轮仍有未知操作时阻止新的写入，成功读取群状态后才允许重新决定。
+同一 operationId 与内容的已成功回执在当前授权核验后返回，不再套用首次写入的旧版本；
+撤权仍拒绝读取回执，同一标识更换内容仍返回 OPERATION_CONFLICT。
+结果未知的操作在成功查询之后，可由调用者明确决定以相同标识和内容重试：保留首次提交的
+完整 HTTP 路由及载荷（含计划 dismiss 在 waiting 时转为 stop 的结果），让服务端返回幂等回执，
+不被本地已经变化的版本提前拦住；角色、请求者与当前执行仍逐次核验，新操作仍检查版本。
+如果归档、成员变更或人类群管理使执行失效，查询也可能被拒绝，必须通过有权的群设置核对，不换身份重试。
+
+取消归档有独立恢复入口，不续用被归档撤销的执行租约。主人在同一伙伴的 canonical／私聊话题
+任务请求 get_archived_groups，查询这个伙伴自身当前有管理角色的归档群 ID、名称与版本，
+再调用 restore_archived_group。Host 从私聊绑定反查伙伴身份，逐次核对主人输入、任务／账号／
+权限代次、有效私聊绑定，以及群内这位伙伴与主人仍在群，恢复写入只带该伙伴的 X-Chat-Actor。
+恢复工具在捕获本次授权前刷新 Chat Server 的账号／endpoint 绑定，不依赖先打开群界面；
+切换后旧绑定的在途读取仍拒绝返回结果，新绑定重新核对主人私聊授权。
+群专线、后台任务、别的伙伴来信与非主人输入不能使用此入口；角色不授予其他管理动作或私人访问。
+恢复写入接入正常任务审批、Plan 模式拒绝，禁用认证自动重发；未知结果阻止后续恢复写入，
+成功读取后才可明确重试原操作。恢复查询也返回仍待核对的已取消归档群，避免丢失核对目标。
+以上恢复与尝试记录均为当前 Host 生命周期内状态，不宣称有跨重启持久发件箱。
+
+实现与合同证据：maker-ipc/currentGroupManagement.ts、botGroupToolAuthorization.ts、chatServer.ts
+的活跃执行注册与 api、archivedGroupRecovery.ts、mcp-integrations/mcp-providers.ts；工具发现见
+packages/lizi-mcps/src/xdt-helper/group_management.ts 与 helper 工厂。
+回归：chatServer.test.ts 的 #6906 分组经真实适配器和隔离 HTTP fixture 验证角色矩阵、主人代演、
+非主人拒绝、排队及读取等待撤权、目标保护、未知回执、邀请和队列控制，以及旧转让／解散参数拒绝；
+lizi_xdtHelperMcpServer.test.ts 经真实 MCP Client 验证三个 harness 的发现与调用路径。
+测试数据没有访问业务群；不代表真实服务端、多客户端一致性、安装版模型或线上权限验收通过。
 ### 收到消息后的注意、定位与回应
 
 - 桌面运行时由 Chat Server 实时事件触发原生通知；手机由 Chat Server 直接发 APNs／FCM，不依赖电脑在线。

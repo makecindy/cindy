@@ -399,6 +399,12 @@ Chat Server 群消息投影（Desktop IPC 与 `bot-group-chat` 远程资源共�
 
 ### 群解散与个人列表移除
 
+伙伴工具边界（#6944，2026-10-23）：以下生命周期合同供人类 UI／远控管理使用，
+不意味着向 Agent 开放。get_current_group 不投影转让／解散可用操作；manage_current_group
+的共享 Zod schema 与 Host 再校验均拒绝 transfer／dissolve，不保留确认后放行分支。
+禁止通过 member.role=owner 替代转让；成员角色工具仍仅接受 admin／member。
+人类 UI 的既有路由、共享 chatGroupRolePermissions 和合法主人代演保持不变。
+
 `GET /me` 明确声明 `groupLifecycleVersion: 1` / `conversationListStateVersion: 1` 才启用对应动作。
 缺能力或旧副本拒绝时显示不可用，不回退为 archive 或兼容 delete。服务端合同及迁移由
 `xindong/cindy-server#921` 提供；该 PR 的实际启动迁移核验与部署仍为独立上线条件。

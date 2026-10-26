@@ -413,6 +413,22 @@ describe('helper task workspace and SkillHub publication authorization', () => {
       expect(policy(undefined, JSON.stringify({ name, args: {} }))).toBe('auto-approve');
     }
   });
+
+  // #6944 review, unit: real policy entry must not silently trust group writes.
+  // Minimum failure: a direct rename in Ask; existing helper tests omit this tool.
+  it('routes direct, progressive and nameless group mutations through task permission review while preserving queries', () => {
+    const args = { operationId: '70000000-0000-4000-8000-000000000001', action: { type: 'update', expectedRevision: 1, name: 'Renamed' } };
+    expect(policy('manage_current_group', args)).toBe('prompt-each-time');
+    expect(policy('call_tool', { name: 'manage_current_group', args })).toBe('prompt-each-time');
+    expect(policy(undefined, JSON.stringify({ name: 'manage_current_group', args }))).toBe('prompt-each-time');
+    expect(policy('get_current_group', {})).toBe('auto-approve');
+    expect(policy('call_tool', { name: 'get_current_group', args: {} })).toBe('auto-approve');
+    const restore = { groupId: '70000000-0000-4000-8000-000000000002', operationId: args.operationId, expectedRevision: 2 };
+    expect(policy('restore_archived_group', restore)).toBe('prompt-each-time');
+    expect(policy('call_tool', { name: 'restore_archived_group', args: restore })).toBe('prompt-each-time');
+    expect(policy(undefined, JSON.stringify({ name: 'restore_archived_group', args: restore }))).toBe('prompt-each-time');
+    expect(policy('get_archived_groups', {})).toBe('auto-approve');
+  });
 });
 
 describe('Telegram bot tool authorization', () => {

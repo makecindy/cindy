@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./group-management": "./src/xdt-helper/group_management.ts",
     "./computer": "./src/computer/index.ts"
   },
   "scripts": {
