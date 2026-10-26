@@ -1,7 +1,8 @@
 /**
  * 余额 / 配额耗尽类错误识别（renderer 侧）—— 判断一条错误 message 是不是「上游明确
  * 说这个账号没钱 / 没配额了」。ErrorBanner 用它在来源确定是 Cindy AI 网关时把错误条
- * 换成「余额不足，请充值后继续」并给出通往计费页的内联出口。
+ * 换成「余额不足，请充值后继续」并给出通往计费页的内联出口；已知上游资源包
+ * 错误单独展示，不把网关转发来源等同于用户欠费来源。
  *
  * **与 networkError.ts / overloadError.ts 的分工**：那两份分别管「网络到不了上游」与
  * 「上游没有容量」，本份管「上游通了、账号自己的钱用完了」。三者的下一步完全不同：
@@ -15,3 +16,11 @@
 
 // 判定本身(文案 pattern + 带状态码上下文的 402)住在 shared,IM 渠道的失败说明共用同一份。
 export { isQuotaExhaustedErrorMessage } from '../../shared/providerErrors';
+
+/** The observed BigModel resource-package error (#7180) refers to upstream
+ * capacity, even when a Cindy gateway request carries it. This is a display
+ * distinction only: do not weaken deterministic quota or automatic retry rules.
+ */
+export function isUpstreamResourceQuotaErrorMessage(message: string): boolean {
+  return message.includes('无可用资源包');
+}

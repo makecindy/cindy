@@ -68,7 +68,10 @@ import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/over
 import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
-import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import {
+  isQuotaExhaustedErrorMessage,
+  isUpstreamResourceQuotaErrorMessage,
+} from '@/utils/quotaError';
 import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
@@ -339,7 +342,15 @@ export function ErrorBanner({
   const geminiLimit = isProviderSafetyRefusal ? null : parseGeminiInputRateLimit(error);
   const isQuotaExhausted =
     !isProviderSafetyRefusal && geminiLimit === null && isQuotaExhaustedErrorMessage(error);
+  // #7180: an upstream resource package is separate from the user's Cindy balance.
+  // Keep the error-time provider snapshot and the original quota/retry semantics.
+  const isGatewayUpstreamQuotaExhausted =
+    !isProviderSafetyRefusal &&
+    geminiLimit === null &&
+    (errorSourceProviderId?.trim() || null) === 'xd' &&
+    isUpstreamResourceQuotaErrorMessage(error);
   const isGatewayQuotaExhausted =
+    !isGatewayUpstreamQuotaExhausted &&
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
     isQuotaExhausted;
@@ -657,6 +668,8 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.claudeSubscriptionOpusPlanMismatch');
   } else if (isGatewayProxyTokenInvalid) {
     displayError = t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry');
+  } else if (isGatewayUpstreamQuotaExhausted) {
+    displayError = t('chat.errorBanner.gatewayUpstreamQuotaExhausted');
   } else if (isGatewayQuotaExhausted) {
     // 「配额或余额不足，请检查供应商账户」对网关用户是半句话:账户就在 Cindy 里,
     // 该说的是「去充值」而不是「去检查」。右端的内联出口负责「去哪充」。
@@ -774,6 +787,7 @@ export function ErrorBanner({
   const canShowErrorDetails =
     isReconnectStalled ||
     piCloudContextRecovery ||
+    isGatewayUpstreamQuotaExhausted ||
     isNetworkishError ||
     isOverloadError ||
     isStreamInterrupted ||
