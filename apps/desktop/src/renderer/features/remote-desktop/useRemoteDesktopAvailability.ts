@@ -15,7 +15,13 @@ const OFFLINE = 'remoteDesktop.shortcut.offline';
 const DISABLED = 'remoteDesktop.disabled';
 // Probe outcomes that may change without a presence edge: repeat them when the
 // shortcut is revealed instead of keeping a stale failure.
-const RETRYABLE_PROBE_REASONS = new Set([CHECK_INTERRUPTED, OFFLINE, DISABLED]);
+const RETRYABLE_PROBE_REASONS = new Set([
+  CHECK_INTERRUPTED,
+  OFFLINE,
+  DISABLED,
+  'remoteDesktop.shortcut.screenRecordingRequired',
+  'remoteDesktop.shortcut.noDisplay',
+]);
 
 export function remoteDesktopUnavailableReason(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -162,12 +168,16 @@ function probeDesktop(deviceId: string, scope: string, retry = false): void {
     .then((value) => {
       if (probes.get(deviceId) !== pending) return;
       const reason = remoteDesktopUnavailableReason(value);
+      if (reason && RETRYABLE_PROBE_REASONS.has(reason)) {
+        saveProbeFailure(deviceId, scope, reason);
+        return;
+      }
       probes.set(deviceId, {
         ...pending,
         checking: false,
         reason,
         failures: 0,
-        retryAt: reason === DISABLED ? Date.now() + 30_000 : 0,
+        retryAt: 0,
       });
       notifyProbes();
     })

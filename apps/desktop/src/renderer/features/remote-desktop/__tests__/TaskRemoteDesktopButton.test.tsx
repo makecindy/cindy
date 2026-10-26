@@ -330,3 +330,43 @@ it('rechecks a cached disabled result only after a later user interaction', asyn
   expect(invoke).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
 });
+
+// PR #7235 review: capability failures survived unmounts but could never recover.
+// Exercise the real shortcut with one online peer, no presence/version change,
+// and restored display/permission. Existing retries cover transport errors only.
+it.each([
+  [{ ...capabilities, displays: [] }, 'remoteDesktop.shortcut.noDisplay'],
+  [
+    { ...capabilities, permissions: { screenRecording: 'missing', accessibility: 'granted' } },
+    'remoteDesktop.shortcut.screenRecordingRequired',
+  ],
+])(
+  'recovers a cached capability refusal with interaction backoff: %s',
+  async (value, reasonKey) => {
+    invoke.mockResolvedValueOnce(value).mockResolvedValueOnce(value);
+    const view = render(<TaskRemoteDesktopButton deviceId="remote" />);
+    await act(async () => {});
+    expect(screen.getByRole('button').getAttribute('aria-label')).toContain(i18n.t(reasonKey));
+    view.unmount();
+    render(<TaskRemoteDesktopButton deviceId="remote" />);
+    await act(async () => {});
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledOnce();
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(invoke).toHaveBeenCalledOnce();
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button').getAttribute('aria-label')).toContain(i18n.t(reasonKey));
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    fireEvent.focus(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    fireEvent.focus(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+  },
+);
