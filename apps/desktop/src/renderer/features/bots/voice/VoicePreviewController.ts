@@ -64,7 +64,7 @@ export class VoicePreviewController {
     try {
       await stopped;
       if (generation !== this.generation) return;
-      const { sampleRate } = await this.deps.api.preview({
+      const audio = await this.deps.api.preview({
         ...selection,
         previewId: id,
         botId: this.deps.botId,
@@ -73,7 +73,7 @@ export class VoicePreviewController {
       });
       if (generation !== this.generation) return;
       this.update('playing');
-      await player.play(() => this.deps.api.readPreview(id), sampleRate);
+      await player.play(() => this.deps.api.readPreview(id), 'format' in audio ? audio : audio.sampleRate);
       if (generation === this.generation) this.update('complete');
     } catch (error) {
       if (generation === this.generation)

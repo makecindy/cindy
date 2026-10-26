@@ -108,6 +108,7 @@ it('imports read_seq and acknowledges only displayed incoming messages with thei
     createdAt: '2026-10-09T10:00:00.123Z', deleted: false, threadRootId: null }));
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/read')) return { readSeq: options.body.readSeq };
     if (path.includes('/messages?')) return messages;
     const value = await original(path, options);
     return path.endsWith('/snapshot') ? { ...value, messages, cursor: second, reads: [{ thread_key: 'main', read_seq: first }] } : value;
@@ -121,7 +122,11 @@ it('imports read_seq and acknowledges only displayed incoming messages with thei
   expect(unread()).toBe(true);
   await act(async () => { await chat.markRead!([messages[0].id, messages[1].id]); });
   expect(unread()).toBe(false);
-  expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/read`, expect.objectContaining({
+    method: 'POST', body: { operationId: `read-main:${second}`, readSeq: second },
+  }));
+  await act(async () => { await chat.markRead!([messages[0].id, messages[1].id]); });
+  expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/read'))).toHaveLength(1);
 });
 it('resolves everyone using authorized members at send time instead of the displayed snapshot', async () => {
   const joined = '00000000-0000-4000-8000-000000000003';

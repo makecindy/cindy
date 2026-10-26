@@ -238,6 +238,22 @@ export const MAKER_INVOKE = {
   SET_THINKING_ENABLED: 'maker:set-thinking-enabled',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
+  /**
+   * 任务级工作上下文窗口档位（tokens；null = 跟随模型默认）。
+   *
+   * 被控端落库并应用到活实例（空闲关 handle 冷重建 / 回合中登记 pending）。
+   * 与 SET_PLAN_MODE 同类：会话级设置、无本机 shell/UI 副作用。控制端用
+   * `deviceLink.invoke(deviceId, …)` 调；老被控端无此 channel →
+   * CHANNEL_NOT_ALLOWED → 控制端提示「该设备版本不支持」。
+   */
+  SET_CONTEXT_WINDOW_BUDGET: 'maker:set-context-window-budget',
+  /**
+   * 会话级窗口边界的**只读**查询（路由默认 / 路由物理上限 / 该路由的模型级上限）。
+   * 控制端在远程任务上打开档位菜单时按需拉取：只有被控端本地目录 + 本地上限 store 才知道
+   * 该路由能放到多大，控制端据此才敢提供「更大」的档位。老被控端无此 channel →
+   * CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」并如实说明。
+   */
+  GET_CONTEXT_WINDOW_BOUNDS: 'maker:get-context-window-bounds',
   /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
   EXPORT_SESSION_HTML: 'maker:export-session-html',
   /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
@@ -612,6 +628,7 @@ export const MAKER_INVOKE = {
    * 需要 code 渲染分类文案）。带密钥材料，不进 device-link 白名单（口径同 test-connection）。
    */
   PROVIDER_MODELS_FETCH: 'maker:provider:models-fetch',
+  PROVIDER_DETECT: 'maker:provider:detect',
   /**
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非 bespoke 四家）的登录 / 登出 / 取消。
    * 入参 = providerId；login 走 generic-oauth Runner（PKCE 浏览器流），成功后拉动态模型
@@ -691,6 +708,8 @@ export const MAKER_INVOKE = {
   /** New wire contract for automatic done acknowledgements; old peers reject it safely. */
   WORKER_ACKNOWLEDGE_DONE: 'maker:worker:acknowledge-done',
   WORKER_ARCHIVE: 'maker:worker:archive',
+  /** 修改已创建 Worker 的展示角色名(role)与 team 内唯一标识(label)。 */
+  WORKER_UPDATE: 'maker:worker:update',
   TEAM_END: 'maker:team:end',
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',
@@ -856,6 +875,7 @@ export const MAKER_INVOKE = {
   COMPANION_CLOUD_MERGE_CINDY: 'maker:companion-cloud:merge-cindy',
   /** A file of the companion's room, brought to this computer (works while its home is offline). */
   COMPANION_CLOUD_ATTACHMENT: 'maker:companion-cloud:attachment',
+  COMPANION_CLOUD_DISMISS_NOTICES: 'maker:companion-cloud:dismiss-notices',
   /** Local copy of an avatar from another computer or the cloud (looked up first, optionally fetched). */
   COMPANION_AVATAR_RESOLVE: 'maker:companion-avatar:resolve',
 } as const;

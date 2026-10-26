@@ -8,7 +8,7 @@ vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: () => true, readFileSync: () => '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
-vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => null, getDbClient: () => ({ drizzle: {
   select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }) }) }),
   insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
 } }) }));

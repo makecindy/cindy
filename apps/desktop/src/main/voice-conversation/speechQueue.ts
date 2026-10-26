@@ -1,5 +1,6 @@
 import { SpeechSynthesisSession } from './speech.js';
 import { SpeechError } from './speechError.js';
+import type { SpeechAudioResult } from '../../shared/voiceConversation.js';
 
 /** Two independent transports: the playing segment and at most one lookahead.
  * Readers still apply backpressure; cancellation revokes both, including pending headers.
@@ -12,13 +13,20 @@ export class SpeechSynthesisQueue {
 
   async start(
     input: Parameters<SpeechSynthesisSession['start']>[0],
-  ): Promise<{ sampleRate: number }> {
+  ): Promise<SpeechAudioResult> {
     if (this.sessions.has(input.requestId) || this.sessions.size >= 2)
       throw new SpeechError('request');
     const session = this.create();
     this.sessions.set(input.requestId, session);
     try {
-      return await session.start(input);
+      const result = await session.start(input);
+      // Encoded audio has reached EOF during prefetch; there is no PCM reader
+      // to drain later. Only release this session, never a replacement request.
+      if ('format' in result && this.sessions.get(input.requestId) === session) {
+        this.sessions.delete(input.requestId);
+        session.cancel();
+      }
+      return result;
     } catch (error) {
       if (this.sessions.get(input.requestId) === session) this.sessions.delete(input.requestId);
       session.cancel();

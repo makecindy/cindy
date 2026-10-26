@@ -1289,8 +1289,11 @@ describe('sentence playback', () => {
     f.controller.end();
   });
 
-  it('prefetches only one segment and drops pending audio on a committed interruption', async () => {
+  // Unit: encoded results must retain the same prefetch/interruption contract;
+  // the old PCM-only fixtures could not detect a dropped MP3 format at playback.
+  it.each(['pcm', 'mp3'] as const)('prefetches only one %s segment and drops pending audio on a committed interruption', async format => {
     const f = fixture();
+    if (format === 'mp3') f.api.speak.mockResolvedValue({ format: 'mp3', data: new Uint8Array([1]).buffer });
     let finish!: () => void;
     f.player.play.mockImplementationOnce(async (_read, _rate, started) => {
       started?.();
@@ -1304,6 +1307,8 @@ describe('sentence playback', () => {
     await Promise.resolve();
     f.controller.updateMessages([user(), streamingReply('第一句话。')]);
     await vi.waitFor(() => expect(f.player.play).toHaveBeenCalledOnce());
+    expect(f.player.play.mock.calls[0][1]).toEqual(format === 'mp3'
+      ? { format: 'mp3', data: new Uint8Array([1]).buffer } : 24000);
     f.controller.updateMessages([user(), streamingReply('第一句话。第二句话。')]);
     f.controller.updateMessages([user(), streamingReply('第一句话。第二句话。第三句话。')]);
     expect(f.api.speak.mock.calls.map(([value]) => value.text)).toEqual([
@@ -1321,11 +1326,12 @@ describe('sentence playback', () => {
     f.controller.end();
   });
 
-  it('plays prepared sentences in order, pauses lookahead, and listens only after the final tail drains', async () => {
+  it.each(['pcm', 'mp3'] as const)('plays prepared %s sentences in order, pauses lookahead, and listens only after the final tail drains', async format => {
     const f = fixture();
+    if (format === 'mp3') f.api.speak.mockResolvedValue({ format: 'mp3', data: new Uint8Array([1]).buffer });
     const finishes: Array<() => void> = [];
-    f.player.play.mockImplementation(async (read, _rate, started) => {
-      await read();
+    f.player.play.mockImplementation(async (read, audio, started) => {
+      if (typeof audio === 'number') await read();
       started?.();
       await new Promise<void>((resolve) => finishes.push(resolve));
     });
@@ -1351,7 +1357,7 @@ describe('sentence playback', () => {
     finishes[1]();
     await vi.waitFor(() => expect(finishes).toHaveLength(3));
     expect(f.api.readSpeech.mock.calls.map((call) => call[1])).toEqual(
-      f.api.speak.mock.calls.map(([request]) => request.requestId),
+      format === 'mp3' ? [] : f.api.speak.mock.calls.map(([request]) => request.requestId),
     );
     finishes[2]();
     await vi.waitFor(() => expect(f.controller.getSnapshot().phase).toBe('listening'));

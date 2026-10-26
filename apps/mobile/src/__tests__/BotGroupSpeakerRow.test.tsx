@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  push: vi.fn(),
   invoke: vi.fn(),
   subscribe: vi.fn(async () => undefined),
   unsubscribe: vi.fn(async () => undefined),
@@ -18,7 +19,8 @@ vi.mock('react-native', () => ({
   View: ({ children, testID, accessibilityLabel }: any) => el('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children),
   StyleSheet: { create: (value: unknown) => value },
 }));
-vi.mock('expo-router', () => ({ useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
+vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, action.label) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }), useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: { name?: string }) => options?.name ? `${key}:${options.name}` : key }) }));
 vi.mock('lucide-react-native', () => ({ CircleAlert: () => null, Sparkles: () => null }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
@@ -100,5 +102,14 @@ it('does not subscribe without a lane or while the computer is offline', async (
   await render({ sessionId: null, activity: 'planning' });
   await render({ online: false, sessionId: 's3' });
   expect(h.subscribe).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+// Regression: a group lane must open its original task on the correct computer.
+it('opens the ordinary task with no companion wrapper or new execution', async () => {
+  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false });
+  h.invoke.mockClear();
+  await act(async () => node.querySelector('button')!.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'group-lane', deviceId: 'studio' } });
   expect(h.invoke).not.toHaveBeenCalled();
 });

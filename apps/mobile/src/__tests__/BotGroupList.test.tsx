@@ -88,7 +88,14 @@ vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammat
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 
 import { BotGroupListRow } from '@/session/BotGroupList';
-import { TeammateCreateButton } from '@/session/TeammateCreateButton';
+import { useTeammateCreateController } from '@/session/TeammateCreateController';
+import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+
+/** The home teammate section's create trigger: the caller's button inside the controller's menu. */
+function CreateTrigger(props: Parameters<typeof useTeammateCreateController>[0]) {
+  const create = useTeammateCreateController(props);
+  return el('div', null, create.renderTrigger(el(HomeHeaderGlassButton, { accessibilityLabel: create.label, testID: 'teammates.create', onPress: create.press, children: null })), create.sheets);
+}
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -158,11 +165,11 @@ describe('group row', () => {
   });
 });
 
-describe('create from the teammate page + menu', () => {
+describe('create from the home teammate section + menu', () => {
   async function render(groupTargets = [mac], nativeMenu = true) {
     h.nativeMenu = nativeMenu;
     const onGroupCreated = vi.fn();
-    await act(async () => root.render(el(TeammateCreateButton, {
+    await act(async () => root.render(el(CreateTrigger, {
       targets: [mac], groupTargets, preferredDeviceId: 'pc', onCreated: vi.fn(), onGroupCreated,
     })));
     return onGroupCreated;

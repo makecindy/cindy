@@ -1,6 +1,11 @@
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
+import { matchOfficialProviders, bindDetectedProvider, isAgentSelectableModel, isLoopbackProviderUrl } from '@cindy/model-providers';
+import type { ProviderConnectionTestResult } from '../../../shared/providerConnectionTest';
+import type { DetectedProviderDraft, DetectionCatalog } from '../../../shared/providerDetection';
+import { OFFICIAL_API_PRESETS } from './AddProviderWizard';
+let detectionRequestSequence = 0;
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
@@ -154,7 +159,25 @@ function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
   return 'openai-responses';
 }
 
+function modelTypeLabelKey(mode: string | undefined): string {
+  if (mode === 'chat') return 'settings.providers.models.kindFilter.chat';
+  const category: Record<string, string> = {
+    image_generation: 'image', video_generation: 'video', audio_speech: 'tts',
+    audio_transcription: 'stt', audio_generation: 'audio', realtime: 'realtime', embedding: 'embedding',
+  };
+  return mode && category[mode] ? `newChat.modelSelector.category.${category[mode]}`
+    : 'settings.providers.connection.modelTypeAutomatic';
+}
+
+function bindAddPageProvider(preset: ProviderPreset, baseUrl: string): ProviderPreset | undefined {
+  const runtimes = Object.assign({}, ...AGENTS.map(agent =>
+    bindDetectedProvider(preset, agent, baseUrl)?.runtimes ?? {}));
+  return Object.keys(runtimes).length ? { ...preset, runtimes } : undefined;
+}
+
 interface ProviderConnectionDialogProps {
+  draft?: DetectedProviderDraft;
+  onDetected?: (draft: DetectedProviderDraft) => void;
   initial?: CustomProviderConfig;
   /** Effective modes from the same connection's active catalog, separate from editable overrides. */
   catalogModels?: ProviderView['models'];
@@ -205,6 +228,14 @@ interface RuntimeFields extends RuntimeFillDraft {
   videoApi?: 'xai-videos';
 }
 
+function followsDefaultConnection(agent: DialogAgentKind, value: RuntimeFields, source: RuntimeFields): boolean {
+  return value.baseUrl.trim() === source.baseUrl.trim() && value.apiKey === source.apiKey &&
+    JSON.stringify(value.headers) === JSON.stringify(source.headers) &&
+    JSON.stringify(value.models) === JSON.stringify(source.models) &&
+    value.wireProtocol === defaultWireFor(agent) && !value.requestPath && !value.modelsUrl &&
+    !value.catalogPresetId && !value.piCatalogProviderId && !value.imageApi && !value.videoApi && !value.supportsImageGeneration;
+}
+
 function runtimeProbeFields(
   agent: DialogAgentKind,
   runtime: RuntimeFields,
@@ -249,6 +280,8 @@ interface TestState {
   /** 失败分类码（providerError.<code> i18n 键）。 */
   code?: string;
   latencyMs?: number;
+  decision?: ProviderConnectionTestResult['decision'];
+  attempts?: ProviderConnectionTestResult['attempts'];
 }
 const IDLE_TEST: TestState = { status: 'idle' };
 
@@ -411,6 +444,8 @@ function PresetDropdown({
 }
 
 export function ProviderConnectionDialog({
+  draft,
+  onDetected,
   initial,
   catalogModels,
   existingIds,
@@ -424,6 +459,8 @@ export function ProviderConnectionDialog({
   const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
   const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
   const editing = !!initial;
+  const simpleAdding = !editing && !!onDetected;
+  const [manualOpen, setManualOpen] = useState(false);
   const catalogModelsRef = useRef(catalogModels);
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
@@ -455,14 +492,26 @@ export function ProviderConnectionDialog({
     input?.focus();
     input?.scrollIntoView?.({ block: 'nearest' });
   }, [fieldError]);
-  const [name, setName] = useState(initial?.name ?? '');
+  const [name, setName] = useState(initial?.name ?? draft?.config.name ?? '');
   const [manualModel, setManualModel] = useState('');
   const [manualModelMode, setManualModelMode] = useState('inherit');
-  const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
+  const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => {
+    const fields = initRuntimes(initial ?? draft?.config);
+    if (simpleAdding && !draft) for (const a of AGENTS) fields[a].headers = [];
+    if (draft) {
+      for (const a of AGENTS) fields[a].apiKey = draft.keys?.[a] ?? (a === draft.agent ? draft.apiKey : '');
+      if (simpleAdding) for (const a of AGENTS) if (!draft.config.runtimes[a]) {
+        const source = fields[draft.agent as DialogAgentKind];
+        fields[a] = { ...fields[a], baseUrl: source.baseUrl, apiKey: source.apiKey,
+          headers: source.headers, models: source.models };
+      }
+    }
+    return fields;
+  });
   const [activeTab, setActiveTab] = useState<DialogAgentKind>(
     () =>
-      (focusAgent && VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) ? focusAgent as DialogAgentKind : null) ??
-      ((initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code'),
+      draft?.agent ?? (focusAgent && VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) ? focusAgent as DialogAgentKind : null) ??
+      ((initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || (simpleAdding ? 'pi' : 'claude-code')),
   );
   const [hasKey, setHasKey] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
@@ -473,14 +522,25 @@ export function ProviderConnectionDialog({
   const [imageGenerationReloadConfirmation, setImageGenerationReloadConfirmation] =
     useState<ImageGenerationReloadConfirmation | null>(null);
   // 鉴权形态：API key（默认）/ OAuth / 无鉴权（本机或受信自托管代理）。
-  const [authMode, setAuthModeState] = useState<CustomProviderAuthMode>(
+  const [selectedAuthMode, setAuthModeState] = useState<CustomProviderAuthMode>(
     initial?.auth?.method === 'oauth'
       ? 'oauth'
-      : initial?.auth?.method === 'none'
+      : (initial ?? draft?.config)?.auth?.method === 'none'
         ? 'none'
         : 'apiKey',
   );
+  // The simplified add form has no auth selector. Infer no-auth only for an
+  // entirely local, credential-free draft; independent engines must not lose auth.
+  // Keep the key input visible so adding credentials switches back to API-key mode.
+  const authMode: CustomProviderAuthMode = simpleAdding && selectedAuthMode !== 'oauth'
+    ? rt[activeTab].baseUrl.trim() && Object.values(rt).every(fields =>
+        !fields.apiKey.trim() && !fields.headers.some(header => header.name.trim()) &&
+        (!fields.baseUrl.trim() || isLoopbackProviderUrl(fields.baseUrl.trim())) &&
+        (!fields.modelsUrl.trim() || isLoopbackProviderUrl(fields.modelsUrl.trim())))
+      ? 'none' : 'apiKey'
+    : selectedAuthMode;
   const authModeRef = useRef(authMode);
+  authModeRef.current = authMode;
   const setAuthMode = useCallback((mode: CustomProviderAuthMode) => {
     authModeRef.current = mode;
     setAuthModeState(mode);
@@ -705,7 +765,23 @@ export function ProviderConnectionDialog({
       fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>,
     ) => {
       setRt((prev) => {
-        const updated = fn(prev);
+        const updated = { ...fn(prev) };
+        // The add page edits one default connection. Keep independently configured
+        // draft fields, but let untouched engines follow this connection.
+        if (simpleAdding) {
+          const source = activeTab;
+          for (const agent of AGENTS) {
+            if (agent === source || !followsDefaultConnection(agent, prev[agent], prev[source])) continue;
+            const next = { ...updated[agent] };
+            for (const field of ['baseUrl', 'apiKey', 'headers', 'models'] as const) {
+              if (JSON.stringify(prev[agent][field]) === JSON.stringify(prev[source][field]) &&
+                  JSON.stringify(updated[agent][field]) === JSON.stringify(prev[agent][field])) {
+                Object.assign(next, { [field]: updated[source][field] });
+              }
+            }
+            updated[agent] = next;
+          }
+        }
         const normalized = Object.fromEntries(
           AGENTS.map((agent) => [
             agent,
@@ -730,7 +806,7 @@ export function ProviderConnectionDialog({
         return normalized;
       });
     },
-    [rowId],
+    [rowId, simpleAdding, activeTab],
   );
 
   // 编辑态回填的已存明文 key(按 agent);测试连接据此判定凭证材料是否被改动。
@@ -861,6 +937,7 @@ export function ProviderConnectionDialog({
                   ...(m.mode ? { mode: m.mode } : {}),
                   ...(m.modalities ? { modalities: { input: [...m.modalities.input], output: [...m.modalities.output] } } : {}),
                   ...(m.officialDocs ? { officialDocs: m.officialDocs } : {}),
+                  ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
                   ...(m.api ? { api: m.api } : {}),
                   ...(m.piApi ? { piApi: m.piApi } : {}),
                   ...(m.route ? { route: m.route } : {}),
@@ -892,6 +969,154 @@ export function ProviderConnectionDialog({
     },
     [i18n.language, setRtSynced],
   );
+
+  const [detection, setDetection] = useState<{ signature: string; preset?: ProviderPreset; pending?: boolean; ambiguous?: boolean; code?: string } | null>(null);
+  const discoveryCache = useRef(new Map<DialogAgentKind, { signature: string; promise: Promise<DetectionCatalog> }>(
+    draft?.catalog ? [[draft.agent, { signature: `${draft.agent}:${providerModelFetchRequestSignature(rt[draft.agent], authMode)}`,
+      promise: Promise.resolve(draft.catalog) }]] : [],
+  ));
+  const importedOnce = useRef(new Set<DialogAgentKind>(draft ? [draft.agent] : []));
+  const detectionSignature = `${activeTab}:${providerModelFetchRequestSignature(rt[activeTab], authMode)}`;
+  const detectionContext = useRef({ name, activeTab, onDetected, signature: detectionSignature });
+  const previousDetectionSignatures = useRef(new Map<DialogAgentKind, string>());
+  detectionContext.current = { name, activeTab, onDetected, signature: detectionSignature };
+
+  const enterDetectedProvider = useCallback((preset: ProviderPreset) => {
+    if (savingRef.current || childLayerRef.current || runtimeFillRef.current || connectionTestRef.current) return;
+    const context = detectionContext.current;
+    const sourceAgent = context.activeTab;
+    const fields = rtRef.current[sourceAgent];
+    const agent = preset.runtimes[sourceAgent] ? sourceAgent : AGENTS.find(a =>
+      preset.runtimes[a] && followsDefaultConnection(a, rtRef.current[a], fields));
+    if (!agent) return;
+    const runtimes: CustomProviderConfig['runtimes'] = {};
+    const keys: Partial<Record<AgentKind, string>> = {};
+    for (const a of AGENTS) {
+      const value = rtRef.current[a];
+      if (!value.baseUrl.trim()) continue;
+      const inherits = followsDefaultConnection(a, value, fields);
+      if (!preset.runtimes[a] && inherits) continue;
+      keys[a] = value.apiKey;
+      runtimes[a] = { baseUrl: value.baseUrl.trim(), models: value.models.filter(m => m.id.trim()),
+        wireProtocol: customProviderWireProtocolForSave(a, value.wireProtocol, defaultWireFor(a)),
+        headers: Object.fromEntries(value.headers.filter(h => h.name.trim()).map(h => [h.name.trim(), h.value])),
+        ...(value.requestPath ? { requestPath: value.requestPath } : {}),
+        ...(value.modelsUrl.trim() ? { modelsUrl: value.modelsUrl.trim() } : {}),
+        ...(value.catalogPresetId ? { catalogPresetId: value.catalogPresetId } : {}),
+        ...(value.piCatalogProviderId ? { piCatalogProviderId: value.piCatalogProviderId } : {}),
+        ...(value.imageApi ? { imageApi: value.imageApi } : {}),
+        ...(value.videoApi ? { videoApi: value.videoApi } : {}),
+        ...(a === 'codex' && value.supportsImageGeneration && canRuntimeUseNativeImageGeneration(value) ? { supportsImageGeneration: true } : {}),
+      };
+    }
+    const bound: ProviderPreset = { ...preset, authMethod: authModeRef.current === 'none' ? 'none' : 'apiKey',
+      runtimes: Object.fromEntries(AGENTS.flatMap(a => {
+        const runtime = preset.runtimes[a];
+        if (!runtime) return [];
+        const value = rtRef.current[a];
+        const independent = a !== sourceAgent && !followsDefaultConnection(a, value, fields);
+        // The existing wizard has one shared key. Never enroll independent
+        // drafts into its fetch/save loop; they remain in config/keys untouched.
+        if (independent) return [];
+        // Inherited connections use each engine's provider defaults.
+        return [[a, { ...runtime,
+          headers: { ...runtime.headers, ...runtimes[a]?.headers },
+          ...(value.requestPath ? { requestPath: value.requestPath } : {}),
+          ...(value.modelsUrl.trim() ? { modelsUrl: value.modelsUrl.trim() } : {}),
+          ...(runtimes[a]?.supportsImageGeneration ? { supportsImageGeneration: true } : {}),
+          ...(value.wireProtocol !== defaultWireFor(a) || runtimes[a]?.supportsImageGeneration ? { wireProtocol: value.wireProtocol } : {}),
+        }]];
+      })),
+    };
+    // The cache is settled before announcing a match; no credentials enter saved detection data.
+    const cache = discoveryCache.current.get(sourceAgent);
+    void (cache?.signature === context.signature ? cache.promise : Promise.resolve(undefined)).then(catalog => {
+      if (detectionContext.current.signature !== context.signature || savingRef.current || childLayerRef.current || runtimeFillRef.current) return;
+      context.onDetected?.({ preset: bound, agent, apiKey: fields.apiKey, keys, catalog,
+        config: { id: 'draft', name: context.name, auth: { method: bound.authMethod ?? 'apiKey' }, runtimes } });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (editing || !onDetected || authMode === 'oauth' || saving || !dialog.open) return;
+    let live = true;
+    // Correlation only, scoped to this renderer; randomUUID requires a secure context.
+    const requestId = `detect-${Date.now()}-${++detectionRequestSequence}`;
+    const agent = activeTab;
+    const fields = rt[agent];
+    const signature = detectionSignature;
+    const previousSignature = previousDetectionSignatures.current.get(agent);
+    previousDetectionSignatures.current.set(agent, signature);
+    if (previousSignature && previousSignature !== signature) {
+      setRtSynced(prev => ({ ...prev, [agent]: { ...prev[agent], models: prev[agent].models.map(model => {
+        const { discoveredMetadata: _metadata, discoveredCost: _cost, ...userFields } = model;
+        return userFields;
+      }) } }));
+    }
+    setDetection(null);
+    const timer = setTimeout(() => {
+      if (modelFetchInFlightRef.current || !fields.baseUrl.trim() || !areProviderRequestUrlsAllowed(authMode, fields.baseUrl)) return;
+      if (draft?.catalog && discoveryCache.current.get(agent)?.signature === signature) {
+        setDetection({ signature });
+        return;
+      }
+      setDetection({ signature, pending: true });
+      const all = [...presets, ...Object.values(OFFICIAL_API_PRESETS).filter(p => !presets.some(existing => existing.id === p.id))];
+      const official = matchOfficialProviders(fields.baseUrl.trim(), all);
+      const headers = Object.fromEntries(fields.headers.filter(h => h.name.trim()).map(h => [h.name.trim(), h.value]));
+      const spec = { agent, baseUrl: fields.baseUrl.trim(), apiKey: fields.apiKey.trim() || null,
+        authMethod: authMode, headers, wireProtocol: fields.wireProtocol };
+      const work = (async () => {
+        if (official.length) {
+          const preset = official.length === 1 ? bindAddPageProvider(official[0], spec.baseUrl) : undefined;
+          if (!preset) return { preset, ambiguous: official.length > 1, catalog: undefined };
+          const fetchAgent = preset.runtimes[agent] ? agent : AGENTS.find(a =>
+            preset.runtimes[a] && followsDefaultConnection(a, rtRef.current[a], fields));
+          if (!fetchAgent) return { preset: undefined, catalog: undefined };
+          const runtime = preset.runtimes[fetchAgent]!;
+          const catalog = await window.electronAPI.maker.fetchProviderModels({ ...spec, agent: fetchAgent,
+            allowEmpty: true, redirect: 'error',
+            baseUrl: runtime.baseUrl, modelsUrl: fields.modelsUrl.trim() || runtime.modelsUrl, wireProtocol: runtime.wireProtocol ?? defaultWireFor(fetchAgent),
+            headers: { ...runtime.headers, ...headers } });
+          return { preset, catalog };
+        }
+        const result = await window.electronAPI.maker.detectProvider?.({ ...spec, requestId });
+        const preset = result?.candidates.length === 1 ? all.find(p => p.id === result.candidates[0]) : undefined;
+        return { preset: preset && bindAddPageProvider(preset, spec.baseUrl), catalog: result?.catalog, ambiguous: result?.reason === 'conflict' };
+      })().catch(() => ({ preset: undefined, catalog: undefined, ambiguous: false }));
+      discoveryCache.current.set(agent, { signature, promise: work.then(r => r.catalog ?? { ok: false }) });
+      void work.then(({ preset, catalog, ambiguous }) => {
+        if (!live || detectionContext.current.signature !== signature) return;
+        if (catalog?.ok && catalog.models) {
+          const first = !importedOnce.current.has(agent);
+          importedOnce.current.add(agent);
+          setRtSynced(prev => ({ ...prev, [agent]: { ...prev[agent], models: [
+            ...prev[agent].models.filter(m => m.id.trim()).map(model => {
+              const fresh = catalog.models!.find(m => m.id === model.id);
+              // Refresh discovered facts after credentials/endpoint changes, without
+              // replacing explicit overrides or reselecting models the user removed.
+              return fresh ? { ...model,
+                discoveredMetadata: fresh.discoveredMetadata ?? { contextWindow: fresh.contextWindow },
+                discoveredCost: fresh.discoveredCost,
+              } : model;
+            }),
+            ...(first ? catalog.models!.filter(m => !prev[agent].models.some(row => row.id === m.id) && isAgentSelectableModel({ id: m.id, mode: m.discoveredMetadata?.mode })).map(m => ({
+              id: m.id, name: m.name, discoveredMetadata: m.discoveredMetadata ?? { contextWindow: m.contextWindow }, discoveredCost: m.discoveredCost,
+            })) : []),
+          ] } }));
+        }
+        if (preset && !AGENTS.some(a => preset!.runtimes[a] &&
+            (a === agent || followsDefaultConnection(a, rtRef.current[a], rtRef.current[agent])))) preset = undefined;
+        setDetection({ signature, preset, ambiguous, code: catalog && !catalog.ok ? (catalog.code ?? 'UNKNOWN') : undefined });
+      });
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      void window.electronAPI.maker.detectProvider?.({ requestId, cancel: true }).catch(() => undefined);
+    };
+    // A model selection/name change is not a new connection or a reason to restart detection.
+  }, [detectionSignature, presets, editing, authMode, saving, dialog.open, !!onDetected, setRtSynced]);
 
   // 编辑态：回填各已配置 runtime 的已存明文密钥（用户本机自己的 key）——
   // 让密钥框「能看」(eye 显形 / 可核对)，而非空白遮罩；据此点亮「已保存」徽标。
@@ -1202,7 +1427,8 @@ export function ProviderConnectionDialog({
   const boundPreset = presets.find(preset => preset.id === f.catalogPresetId);
   const templateBound = Boolean(f.catalogPresetId);
   const endpointTemplate = boundPreset?.runtimes[activeTab]?.baseUrl;
-  const fixedTemplateEndpoint = templateBound && !endpointTemplate?.includes('{');
+  // 只有 Pi runtime 的端点对用户开放改写；Claude / Codex 的模板绑定端点保持只读。
+  const fixedTemplateEndpoint = activeTab !== 'pi' && templateBound && !endpointTemplate?.includes('{');
   // Google inference and discovery already resolve to this native endpoint. The old
   // compatibility base remains stored as a template reference, never an editable choice.
   const displayedBaseUrl = fixedTemplateEndpoint && f.catalogPresetId === 'google-gemini-api'
@@ -1220,7 +1446,25 @@ export function ProviderConnectionDialog({
     return !template?.includes('{') || providerEndpointBindings(template, fields.baseUrl.trim()) !== null;
   }, [presets]);
 
+  const connectionTestRef = useRef<{ id: string; agent: DialogAgentKind; signature: string } | null>(null);
+  const connectionSignature = providerConnectionTestRequestSignature(runtimeProbeFields(activeTab, rt[activeTab], catalogModels?.[activeTab]), authMode);
+  const cancelConnectionTest = useCallback(() => {
+    const current = connectionTestRef.current;
+    if (!current) return;
+    connectionTestRef.current = null;
+    void window.electronAPI.maker.testProviderConnection({ kind: 'cancel', requestId: current.id }).catch(() => undefined);
+  }, []);
+  useLayoutEffect(() => {
+    const current = connectionTestRef.current;
+    if (current && (!dialog.open || current.agent !== activeTab || current.signature !== connectionSignature)) {
+      cancelConnectionTest();
+      setTest(previous => ({ ...previous, [current.agent]: IDLE_TEST }));
+    }
+  }, [activeTab, connectionSignature, dialog.open, cancelConnectionTest]);
+  useEffect(() => () => cancelConnectionTest(), [cancelConnectionTest]);
+
   const handleTest = useCallback(async () => {
+    if (connectionTestRef.current || modelFetchInFlightRef.current || picker) return;
     const agent = activeTab;
     const rf = rt[agent];
     const probeFields = runtimeProbeFields(agent, rf, catalogModels?.[agent]);
@@ -1270,6 +1514,15 @@ export function ProviderConnectionDialog({
       savedBaseline &&
       connectionTestCanUseSaved(probeFields, savedBaseline, authMode),
     );
+    const originalModel = draft?.config.runtimes[agent]?.models.find(model => model.id.trim() === firstModel);
+    const automatic = simpleAdding && agent === 'pi' && !rf.catalogPresetId && !rf.requestPath
+      && !originalModel?.api && !originalModel?.piApi && !originalModel?.route;
+    const cancellable = simpleAdding && agent === 'pi' && !rf.catalogPresetId
+      && (!probeRoute.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(probeRoute.api));
+    const requestId = cancellable ? 'connection-' + Date.now() + '-' + (++detectionRequestSequence) : undefined;
+    if (requestId) {
+      connectionTestRef.current = { id: requestId, agent, signature: requestSig };
+    }
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
       const result = await window.electronAPI.maker.testProviderConnection(
@@ -1277,13 +1530,14 @@ export function ProviderConnectionDialog({
           ? { kind: 'saved', providerId: initial!.id, agent }
           : {
               kind: 'adhoc',
+              ...(requestId ? { requestId, ...(automatic ? { strategy: 'auto' as const } : {}) } : {}),
               spec: {
                 agent,
                 baseUrl,
                 modelId: firstModel,
                 authMethod: authMode,
                 wireProtocol: probeWireProtocol,
-                ...(probeRoute.api ? { api: probeRoute.api } : {}),
+                ...(!automatic && probeRoute.api ? { api: probeRoute.api } : {}),
                 ...(rf.catalogPresetId ? { catalogPresetId: rf.catalogPresetId } : {}),
                 ...(probeRequestPath ? { requestPath: probeRequestPath } : {}),
                 apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
@@ -1291,6 +1545,7 @@ export function ProviderConnectionDialog({
               },
             },
       );
+      if (requestId && connectionTestRef.current?.id !== requestId) return;
       if (
         providerConnectionTestRequestSignature(
           runtimeProbeFields(agent, rtRef.current[agent], catalogModelsRef.current?.[agent]),
@@ -1298,13 +1553,28 @@ export function ProviderConnectionDialog({
         ) !== requestSig
       )
         return;
+      if (requestId) connectionTestRef.current = null;
+      if (result.decision === 'cancelled') {
+        setTest(previous => ({ ...previous, [agent]: IDLE_TEST }));
+        return;
+      }
+      if (automatic && result.ok && result.selected) {
+        const selected = result.selected;
+        const api = selected.wireProtocol === 'openai-chat' ? 'openai-completions' as const : selected.wireProtocol;
+        setRtSynced(previous => ({ ...previous, [agent]: { ...previous[agent],
+          baseUrl: selected.baseUrl, modelRouteBaseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol, requestPath: '',
+          models: previous[agent].models.map(model => model.id.trim() === firstModel
+            ? { ...model, api, piApi: api, route: { baseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol } } : model),
+        } }));
+      }
       setTest((prev) => ({
         ...prev,
         [agent]: result.ok
           ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'fail', code: result.code ?? 'UNKNOWN' },
+          : { status: 'fail', code: result.code ?? 'UNKNOWN', decision: result.decision, attempts: result.attempts },
       }));
     } catch (e) {
+      if (requestId && connectionTestRef.current?.id !== requestId) return;
       if (
         providerConnectionTestRequestSignature(
           runtimeProbeFields(agent, rtRef.current[agent], catalogModelsRef.current?.[agent]),
@@ -1312,11 +1582,12 @@ export function ProviderConnectionDialog({
         ) !== requestSig
       )
         return;
+      if (requestId) connectionTestRef.current = null;
       const ipc = extractIpcError(e);
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels]);
+  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels, simpleAdding, setRtSynced, picker, draft]);
 
   // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
   // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
@@ -1369,7 +1640,11 @@ export function ProviderConnectionDialog({
     modelFetchInFlightRef.current = true;
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
     try {
-      const result = await window.electronAPI.maker.fetchProviderModels({
+      const cached = !editing ? discoveryCache.current.get(agent) : undefined;
+      const cachedResult = cached?.signature === `${agent}:${requestSig}` ? await cached.promise : undefined;
+      if (providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig) return;
+      const result = cachedResult?.ok ? cachedResult : await window.electronAPI.maker.fetchProviderModels({
+        allowEmpty: !editing,
         agent,
         baseUrl,
         authMethod: authMode,
@@ -1383,7 +1658,8 @@ export function ProviderConnectionDialog({
         providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig
       )
         return; // 过期响应，静默丢弃
-      if (result.ok && result.models && result.models.length > 0) {
+      if (result.ok && result.models) {
+        if (!editing) discoveryCache.current.set(agent, { signature: `${agent}:${requestSig}`, promise: Promise.resolve(result) });
         // 用**响应到达时**的最新表单行构建弹层（rtRef），不是请求发出时的 rf 快照。
         const current = rtRef.current[agent].models
           .map((m) => ({
@@ -1396,7 +1672,8 @@ export function ProviderConnectionDialog({
             discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
             nameExplicit: m.nameExplicit,
-            ...(m.api ? { api: m.api } : {}),
+            ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
+          ...(m.api ? { api: m.api } : {}),
           ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
             ...(m.route ? { route: { ...m.route } } : {}),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
@@ -1439,6 +1716,7 @@ export function ProviderConnectionDialog({
               modalities: cur?.modalities,
               officialDocs: cur?.officialDocs,
               nameExplicit: cur ? (cur.nameExplicit ?? !cur.discoveredMetadata) : undefined,
+              ...(cur?.interfaceId ? { interfaceId: cur.interfaceId } : {}),
               ...(cur?.api ? { api: cur.api } : {}),
               ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
               ...(cur?.route ? { route: { ...cur.route } } : {}),
@@ -1514,6 +1792,7 @@ export function ProviderConnectionDialog({
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
       const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
+      const interfaceId = latest ? latest.interfaceId : m.interfaceId;
       const api = latest ? latest.api : m.api;
       const piApi = latest ? latest.piApi : m.piApi;
       const reasoningDefaultEffort = latest
@@ -1529,6 +1808,7 @@ export function ProviderConnectionDialog({
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
         discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
+        ...(interfaceId ? { interfaceId } : {}),
         ...(api ? { api } : {}),
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
         ...((latest?.route ?? m.route) ? { route: { ...(latest?.route ?? m.route)! } } : {}),
@@ -1557,6 +1837,7 @@ export function ProviderConnectionDialog({
           discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
           nameExplicit: m.nameExplicit,
+          ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
           ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
@@ -1584,7 +1865,7 @@ export function ProviderConnectionDialog({
   }, [picker, patch]);
 
   const handleSave = useCallback(async () => {
-    if (savingRef.current) return;
+    if (savingRef.current || connectionTestRef.current) return;
     setFieldError(null);
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -1625,6 +1906,8 @@ export function ProviderConnectionDialog({
     const keys: RuntimeKeys = {};
     for (const a of VISIBLE_AGENTS) {
       const rf = rt[a];
+      if (simpleAdding && activeTab === 'pi' && !rt.pi.catalogPresetId && a !== 'pi'
+        && (!draft?.config.runtimes[a] || followsDefaultConnection(a, rf, rt.pi))) continue;
       if (!rf.baseUrl.trim()) continue; // 该 runtime 未配置
       try {
         const u = new URL(rf.baseUrl.trim());
@@ -1659,6 +1942,7 @@ export function ProviderConnectionDialog({
           discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
           nameExplicit: m.nameExplicit,
+          ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
@@ -1689,6 +1973,7 @@ export function ProviderConnectionDialog({
       }
       // OAuth 形态模型可留空——授权成功后自动发现并持久化（与内置订阅统一）。
       if (models.length === 0 && authMode !== 'oauth') {
+        setManualOpen(true);
         setActiveTab(a);
         reportFieldError(
           `${a}:manualModel`,
@@ -1879,6 +2164,8 @@ export function ProviderConnectionDialog({
   }, [
     name,
     activeTab,
+    simpleAdding,
+    draft,
     rowId,
     reportFieldError,
     keyHydrationReady,
@@ -1937,6 +2224,10 @@ export function ProviderConnectionDialog({
     },
     [editing, onSaved, t],
   );
+
+  const detectionAuthFailed = !editing && detection?.signature === detectionSignature &&
+    authMode === 'apiKey' && detection.code === 'AUTH_INVALID';
+  const detectionKeyMissing = detectionAuthFailed && !f.apiKey.trim();
 
   const activeSavedBaseline = savedBaselineFor(activeTab);
   // 共享判据：当前表单的端点相对已存基线是否未变。密钥与请求头都只在
@@ -2074,14 +2365,14 @@ export function ProviderConnectionDialog({
         </div>
 
         {/* Body (scrollable) */}
-        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1">
+        <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-4 pb-4">
           <p className="text-13 leading-[1.55] text-[var(--settings-section-desc)]">
             {t('settings.providers.custom.dialog.desc')}
           </p>
 
           {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
               用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
-          {!editing && presets.length > 0 && (
+          {!editing && !simpleAdding && presets.length > 0 && (
             <div className="flex flex-col gap-2">
               <FieldLabel>{t('settings.providers.custom.presets.label')}</FieldLabel>
               <PresetDropdown
@@ -2109,6 +2400,7 @@ export function ProviderConnectionDialog({
             <FormField
               id={fieldId('name')}
               label={t('settings.providers.custom.fields.name')}
+              className={simpleAdding ? '[&>div>p:last-child]:!min-h-4' : undefined}
               error={errorFor('name')}
               required
               reserveFeedback
@@ -2117,6 +2409,7 @@ export function ProviderConnectionDialog({
                 <SettingsTextInput
                   {...control}
                   surface="ivory"
+                  size={simpleAdding ? 'md' : undefined}
                   value={name}
                   onChange={setName}
                   placeholder={t('settings.providers.custom.fields.namePlaceholder')}
@@ -2127,7 +2420,7 @@ export function ProviderConnectionDialog({
 
           {/* 鉴权形态：API 密钥 / OAuth / 无鉴权。 */}
           {!initial?.auth?.native && <>
-          <div className="flex flex-col gap-2">
+          {!simpleAdding && <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.authMode.label')}</FieldLabel>
             <SegmentedControl
               aria-label={t('settings.providers.custom.authMode.label')}
@@ -2202,10 +2495,10 @@ export function ProviderConnectionDialog({
                 {t('settings.providers.custom.authMode.noneHelp')}
               </span>
             )}
-          </div>
+          </div>}
 
           {/* Runtime 分段 Tab：Claude Code 与 Codex 各自维护端点、协议、模型与凭证。 */}
-          <div className="flex flex-col gap-2">
+          {!simpleAdding && <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.fields.protocols')}</FieldLabel>
             <SegmentedControl
               role="tablist"
@@ -2237,9 +2530,14 @@ export function ProviderConnectionDialog({
               })}
             />
             <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-              {templateBound ? (boundPreset ? presetDisplayName(boundPreset, i18n.language) : name) : t(TAB_META[activeTab].helpKey)}
+              {templateBound ? (boundPreset ? presetDisplayName(boundPreset, i18n.language) : name) : !editing && onDetected ? t('settings.providers.detection.hint') : activeTab === 'codex' ? (
+                <>
+                  <span>{t('settings.providers.custom.protocol.codexUpstream')}</span>
+                  <span>{t(customProviderCodexWireProtocolOption(f.wireProtocol).labelKey)}</span>
+                </>
+              ) : t(TAB_META[activeTab].helpKey)}
             </span>
-          </div>
+          </div>}
 
           {/* 当前 Tab 的独立配置面板 */}
           <div
@@ -2249,7 +2547,7 @@ export function ProviderConnectionDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {!templateBound && (
+            {(editing || !onDetected) && !templateBound && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
@@ -2309,7 +2607,7 @@ export function ProviderConnectionDialog({
                 id={fieldId(`${activeTab}:baseUrl`)}
                 label={t('settings.providers.custom.fields.baseUrl')}
                 error={errorFor(`${activeTab}:baseUrl`)}
-                labelAction={!templateBound && (
+                labelAction={!simpleAdding && !templateBound && (
                   <button
                     ref={runtimeFillTriggerRef}
                     type="button"
@@ -2319,12 +2617,13 @@ export function ProviderConnectionDialog({
                     {t('settings.providers.custom.runtimeFill.action')}
                   </button>
                 )}
-                reserveFeedback
+                reserveFeedback={!simpleAdding}
               >
                 {(control) => (
                   <SettingsTextInput
                     {...control}
                     surface="ivory"
+                    size={simpleAdding ? 'md' : undefined}
                     value={displayedBaseUrl}
                     readOnly={fixedTemplateEndpoint}
                     onChange={(v) => {
@@ -2337,7 +2636,7 @@ export function ProviderConnectionDialog({
             </div>
 
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
-            {!templateBound && activeTab !== 'pi' && f.wireProtocol !== 'google-generative-ai' && (
+            {(editing || !onDetected) && !templateBound && activeTab !== 'pi' && f.wireProtocol !== 'google-generative-ai' && (
               <div className="flex flex-col gap-[7px]">
                 <FormField
                   id={fieldId(`${activeTab}:requestPath`)}
@@ -2364,13 +2663,13 @@ export function ProviderConnectionDialog({
             )}
 
             {/* API 密钥（OAuth 形态隐藏——鉴权走 Runner 的 Bearer，不收集 key） */}
-            {authMode === 'apiKey' && (
+            {(simpleAdding || authMode === 'apiKey') && (
               <div className="flex flex-col gap-[7px]">
                 <FormField
                   id={fieldId(`${activeTab}:apiKey`)}
                   label={t('settings.providers.custom.fields.apiKey')}
-                  error={errorFor(`${activeTab}:apiKey`)}
-                  hint={t('settings.providers.custom.fields.apiKeyHelp')}
+                  error={errorFor(`${activeTab}:apiKey`) ?? (detectionAuthFailed && !detectionKeyMissing ? t('settings.providers.detection.authRejected') : undefined)}
+                  hint={detectionKeyMissing ? t('settings.providers.detection.keyRequired') : simpleAdding ? undefined : t('settings.providers.custom.fields.apiKeyHelp')}
                   labelAction={
                     activeKeyCanRemainSaved &&
                     f.apiKey.trim() && (
@@ -2392,13 +2691,14 @@ export function ProviderConnectionDialog({
                       {...control}
                       key={activeTab}
                       surface="ivory"
+                      size={simpleAdding ? 'md' : undefined}
                       value={f.apiKey}
                       onChange={(v) => {
                         keyEditRevisionRef.current[activeTab] += 1;
                         patch(activeTab, (x) => ({ ...x, apiKey: v }));
                       }}
                       placeholder={keyPlaceholder}
-                      mono
+                      mono={!simpleAdding}
                       secret
                       secretTipContentClassName="z-[10001]"
                     />
@@ -2407,6 +2707,18 @@ export function ProviderConnectionDialog({
               </div>
             )}
 
+          {!editing && detection?.signature === detectionSignature && (!detectionAuthFailed || detection.preset) && (
+            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-3 text-13 text-[var(--text-secondary)]" role="status">
+              <span>{detection.pending ? t('settings.providers.detection.pending') : detection.preset
+                ? t('settings.providers.detection.matched', { name: presetDisplayName(detection.preset, i18n.language) })
+                : t(detection.ambiguous ? 'settings.providers.detection.ambiguous' : 'settings.providers.detection.custom')}</span>
+              {detection.code && !detectionAuthFailed && <span className="text-[var(--error-fg)]">{t(`providerError.${detection.code}`)}</span>}
+              {detection.preset && <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="secondary" onClick={() => enterDetectedProvider(detection.preset!)}>{t('settings.providers.detection.configure')}</Button>
+                <Button type="button" variant="secondary" tone="quiet" onClick={() => setDetection(null)}>{t('settings.providers.detection.keepCustom')}</Button>
+              </div>}
+            </div>
+          )}
             {/* OAuth 形态:模型清单授权成功后自动发现（与内置订阅统一）,模型 / 请求头
                 收进默认折叠的「高级配置」——普通用户不需要看到这些字段。 */}
             {authMode === 'oauth' && (
@@ -2432,8 +2744,31 @@ export function ProviderConnectionDialog({
               <>
                 <div className="flex flex-col gap-2 text-13 text-[var(--text-secondary)]">
                   <span>{t('settings.providers.connection.modelCount', { count: f.models.filter((model) => model.id.trim()).length })}</span>
-                  <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>
-                  <FormField id={fieldId(`${activeTab}:manualModel`)} label={t('settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
+                  {!simpleAdding && <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>}
+                  {simpleAdding && <>
+                    {f.models.filter(model => model.id.trim()).map(model => (
+                      <div key={model.id} className="flex items-center justify-between gap-2 border-b border-[var(--border-default)] py-2">
+                        <span className="min-w-0 break-words text-[var(--text-primary)]">
+                          {model.id}{' '}
+                          <span className="inline-flex rounded-full border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--text-secondary)]">
+                            {t(modelTypeLabelKey(model.mode ?? model.discoveredMetadata?.mode))}
+                          </span>
+                        </span>
+                        <Button type="button" variant="secondary" size="sm" className="shrink-0"
+                          onClick={() => patch(activeTab, value => ({ ...value, models: value.models.filter(row => row.id !== model.id) }))}>
+                          {t('settings.providers.connection.removeModel')}
+                        </Button>
+                      </div>
+                    ))}
+                    <Button type="button" variant="secondary" className="w-full justify-between [--button-face-bg:transparent]"
+                      aria-expanded={manualOpen} aria-controls={fieldId('manual-fields')}
+                      onClick={() => setManualOpen(open => !open)}>
+                      {t('settings.providers.connection.manualAdd')}
+                      <ChevronDown size={14} aria-hidden className={cn('shrink-0', manualOpen && 'rotate-180')} />
+                    </Button>
+                  </>}
+                  {(!simpleAdding || manualOpen) && <div id={fieldId('manual-fields')} className="flex flex-col gap-3">
+                  <FormField id={fieldId(`${activeTab}:manualModel`)} label={t(simpleAdding ? 'settings.providers.connection.manualId' : 'settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
                         {(control) => (
                           <SettingsTextInput {...control} surface="ivory" value={manualModel}
                       onChange={setManualModel} />
@@ -2468,10 +2803,11 @@ export function ProviderConnectionDialog({
                     setManualModelMode('inherit');
                     setFieldError(null);
                   }}>{t('settings.providers.custom.fields.addModel')}</Button>
+                  </div>}
                 </div>
 
                 {/* 请求头（可选） */}
-                <div className="flex flex-col gap-2">
+                <div className={cn('flex flex-col gap-3', simpleAdding && 'border-t border-[var(--border-default)] pt-4')}>
                   <div className="flex items-center gap-2">
                     <FieldLabel>{t('settings.providers.custom.fields.headers')}</FieldLabel>
                     {/* 已存密文头时给明确徽标 —— 明文不回读进 renderer,无徽标会让人误以为没存上。 */}
@@ -2583,14 +2919,14 @@ export function ProviderConnectionDialog({
                       patch(activeTab, (x) => ({ ...x, headers: [...x.headers, row] }));
                       requestAnimationFrame(() => document.getElementById(nextId)?.focus());
                     }}
-                    className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
+                    className={cn('flex items-center gap-1.5 self-start text-13 font-medium text-[var(--settings-section-title)]', simpleAdding ? 'h-8 rounded-full border border-[var(--border-default)] px-4' : 'py-0.5')}
                   >
                     <Plus size={14} className="text-[var(--settings-section-desc)]" />
                     {t('settings.providers.custom.fields.addHeader')}
                   </button>
                 </div>
 
-                {authMode !== 'oauth' && (
+                {!simpleAdding && authMode !== 'oauth' && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
                     <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
                       <input
@@ -2623,7 +2959,7 @@ export function ProviderConnectionDialog({
                   </div>
                 )}
 
-                {authMode !== 'oauth' && (
+                {!simpleAdding && authMode !== 'oauth' && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
                     <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
                       <input
@@ -2658,7 +2994,7 @@ export function ProviderConnectionDialog({
 
                 {/* Codex Responses Provider 级能力。放在自定义请求头之后，默认收起；
                     同一张说明卡片支持 hover/focus 临时预览和 click/tap 固定。 */}
-                {canShowImageGenerationAdvanced && (
+                {!simpleAdding && canShowImageGenerationAdvanced && (
                   <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                     <button
                       type="button"
@@ -2799,7 +3135,7 @@ export function ProviderConnectionDialog({
                 {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
                     用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
             {authMode !== 'oauth' && (
-              <div className="flex min-h-[32px] flex-wrap items-center gap-2.5">
+              <div className="flex min-h-[32px] flex-wrap items-center gap-2.5 border-t border-[var(--border-default)] pt-4">
                     {!mediaOnly && <Button
                       variant="secondary"
                       size="sm"
@@ -2807,7 +3143,7 @@ export function ProviderConnectionDialog({
                       loading={test[activeTab].status === 'testing'}
                   type="button"
                   onClick={() => void handleTest()}
-                  disabled={test[activeTab].status === 'testing'}
+                  disabled={Object.values(test).some(value => value.status === 'testing')}
                     >
                       <Plug size={13} />
                       {t('settings.providers.custom.test.button')}
@@ -2838,8 +3174,32 @@ export function ProviderConnectionDialog({
                 )}
                 {!mediaOnly && test[activeTab].status === 'fail' && (
                   <span className="text-12 text-[var(--error-fg)]">
-                    {t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
+                    {test[activeTab].decision === 'inconclusive'
+                      ? t('settings.providers.custom.test.inconclusive')
+                      : test[activeTab].decision === 'next'
+                        ? t('settings.providers.custom.test.exhausted')
+                        : t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
                   </span>
+                )}
+                {!mediaOnly && test[activeTab].status === 'testing' && (
+                  <span role="status" className="text-12 text-[var(--text-secondary)]">{t('settings.providers.custom.test.testing')}</span>
+                )}
+                {!mediaOnly && test[activeTab].status === 'testing' && connectionTestRef.current && (
+                  <Button variant="secondary" size="sm" compact type="button" onClick={() => {
+                    cancelConnectionTest();
+                    setTest(previous => ({ ...previous, [activeTab]: IDLE_TEST }));
+                  }}>{t('settings.providers.custom.test.stop')}</Button>
+                )}
+                {!mediaOnly && simpleAdding && (
+                  <span className="w-full text-12 text-[var(--text-secondary)]">{t('settings.providers.custom.test.costHint')}</span>
+                )}
+                {!mediaOnly && test[activeTab].status === 'fail' && Boolean(test[activeTab].attempts?.length) && (
+                  <details className="w-full text-12 text-[var(--text-secondary)]">
+                    <summary>{t('settings.providers.custom.test.details')}</summary>
+                    <ul>{test[activeTab].attempts?.map(attempt => <li key={attempt.wireProtocol}>
+                      {attempt.wireProtocol}: {t('providerError.' + (attempt.code ?? 'UNKNOWN'))}
+                    </li>)}</ul>
+                  </details>
                 )}
                 {mediaOnly && (
                   <span className="w-full text-12 text-[var(--text-secondary)]">
@@ -2853,7 +3213,7 @@ export function ProviderConnectionDialog({
         </div>
 
         {/* Footer: only the save request owns this busy state. */}
-        <div className="flex shrink-0 flex-wrap justify-end gap-2.5 p-4">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2.5 border-t border-[var(--border-default)] p-4">
           <Button
             variant="secondary"
             size="lg"
@@ -2867,14 +3227,15 @@ export function ProviderConnectionDialog({
           </Button>
           <Button
             ref={saveButtonRef}
-            variant="primary"
+            variant={simpleAdding ? 'cta' : 'primary'}
             size="lg"
             loading={saving}
+            disabled={Object.values(test).some(value => value.status === 'testing')}
             onClick={() => void handleSave()}
-            palette="confirmation"
+            palette={simpleAdding ? 'default' : 'confirmation'}
             className="min-w-[96px]"
           >
-            {t('settings.providers.custom.save')}
+            {t(simpleAdding ? 'settings.providers.connection.saveProvider' : 'settings.providers.custom.save')}
           </Button>
         </div>
       </Dialog.Content>

@@ -14,7 +14,7 @@ import {
   width,
   testID as nativeTestID,
 } from "@expo/ui/jetpack-compose/modifiers";
-import { Fragment, isValidElement, useState, type ComponentProps } from "react";
+import { Fragment, isValidElement, useEffect, useState, type ComponentProps } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -26,7 +26,15 @@ import {
   buildPullDownMenuSections,
   resolvePullDownSubmenu,
 } from "./pullDownMenuModel";
-import { fontWeight, lineHeight, spacing, typeScale, useTheme } from "@/theme";
+import {
+  fontWeight,
+  iconSize,
+  iconStroke,
+  lineHeight,
+  spacing,
+  typeScale,
+  useTheme,
+} from "@/theme";
 import { Text as AppText } from "@/components/AppText";
 import type { NativePullDownAction } from "./NativePullDownMenu";
 
@@ -138,14 +146,27 @@ export function AnchoredPullDownMenu({
   style,
   testID,
   accessibilityLabel,
+  open: controlledOpen,
+  onOpenChange,
 }: ComponentProps<typeof CompatibleMenu>) {
   const { colors, mode } = useTheme();
-  const [open, setOpen] = useState(false);
+  const controlled = controlledOpen !== undefined;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    if (controlled) onOpenChange?.(next);
+    else setUncontrolledOpen(next);
+  };
   // Lazily create the Compose tree, then reuse it for this trigger's lifetime.
   // Removing it on every close adds Fabric mount work to the next input frame
   // and cuts off Material's exit animation. The popup itself still closes.
   const [mounted, setMounted] = useState(false);
   const [path, setPath] = useState<string[]>([]);
+  useEffect(() => {
+    if (!controlled || !controlledOpen) return;
+    setMounted(true);
+    setPath([]);
+  }, [controlled, controlledOpen]);
   const child = isValidElement(children)
     ? (children.props as AccessibilityProps)
     : {};
@@ -168,6 +189,10 @@ export function AnchoredPullDownMenu({
   };
   return (
     <View style={style}>
+      {controlled ? (
+        // The caller opens the menu (e.g. on its own long press); the content keeps its own touches.
+        <View collapsable={false} testID={testID}>{children}</View>
+      ) : (
       <Pressable
         accessibilityLabel={accessibilityLabel ?? child.accessibilityLabel}
         accessibilityHint={child.accessibilityHint}
@@ -185,7 +210,8 @@ export function AnchoredPullDownMenu({
           {children}
         </View>
       </Pressable>
-      {mounted ? (
+      )}
+      {mounted || (controlled && open) ? (
         // The anchor has no input of its own. RN must exclude the Host from
         // hit testing; Compose's popup receives input in its separate window.
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
@@ -271,6 +297,21 @@ export function AnchoredPullDownMenu({
                           }}
                           onClick={() => choose(action)}
                         >
+                          {action.icon ? (
+                            <DropdownMenuItem.LeadingIcon>
+                              <RNHostView matchContents>
+                                <action.icon
+                                  color={action.disabled
+                                    ? colors.textTertiary
+                                    : action.destructive
+                                      ? colors.destructive
+                                      : colors.textPrimary}
+                                  size={iconSize.md}
+                                  strokeWidth={iconStroke.regular}
+                                />
+                              </RNHostView>
+                            </DropdownMenuItem.LeadingIcon>
+                          ) : null}
                           <DropdownMenuItem.Text>
                             <Column>
                               <Text

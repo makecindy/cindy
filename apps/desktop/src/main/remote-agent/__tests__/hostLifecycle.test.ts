@@ -119,6 +119,30 @@ function sessionRoot(controller: string, sessionId: string): string {
 }
 
 describe('hosted shadow workspace cleanup', () => {
+  it('authorizes policy updates before persistence and waits for native confirmation', async () => {
+    let allowed = false;
+    let confirm!: () => void;
+    const fastPolicy = vi.fn(async (_origin: string, command: { revision: number; allowFast: boolean }) => {
+      await new Promise<void>(resolve => { confirm = resolve; });
+      return { revision: command.revision, allowFast: command.allowFast };
+    });
+    const host = createRemoteAgentHost({ isAgentAvailable: () => true, startHosted: async input => idleHandle(input),
+      isControllerAuthorized: () => allowed, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot, fastPolicy });
+    try {
+      const command = { op: 'fast-policy', group: 'openai', revision: 2, allowFast: false };
+      await expect(host.handle('controller-1', command)).rejects.toThrow();
+      expect(fastPolicy).not.toHaveBeenCalled();
+      allowed = true;
+      expect(await host.handle('controller-1', { op: 'caps' })).toHaveProperty('subscriptionFastPolicy', true);
+      let acknowledged = false;
+      const pending = host.handle('controller-1', command).then(value => { acknowledged = true; return value; });
+      await vi.waitFor(() => expect(fastPolicy).toHaveBeenCalledOnce());
+      expect(acknowledged).toBe(false);
+      confirm();
+      await expect(pending).resolves.toEqual({ revision: 2, allowFast: false });
+      expect(fastPolicy).toHaveBeenCalledWith('controller-1', expect.objectContaining({ group: 'openai', revision: 2, allowFast: false }));
+    } finally { host.dispose(); }
+  });
   it('removes the shadow workspace once the run is disposed', async () => {
     const starts: Array<() => void> = [];
     const first = whenStarted();

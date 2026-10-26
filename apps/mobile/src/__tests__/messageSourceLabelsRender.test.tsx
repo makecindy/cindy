@@ -11,11 +11,37 @@ vi.mock('@/platform/gestureHandler', () => {
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+// Native playback is covered by NativeVideoPlayer/inlineVideoPlayer; retain this suite's message assertions.
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+// Native motion is tested separately; keep this suite on the real message/model
+// gates while adapting the new native list and height surfaces to the DOM.
+vi.mock('@legendapp/list/reanimated', async () => ({
+  AnimatedLegendList: (await import('@legendapp/list/react-native')).LegendList,
+}));
+vi.mock('@/session/useSmoothMessageFollow', async () => {
+  const { useRef } = await import('react');
+  return { useSmoothMessageFollow: () => ({ scrollRef: useRef(null), move: viewportHarness.move, cancel: () => {} }) };
+});
+vi.mock('@/session/AnimatedContentHeight', () => ({
+  AnimatedContentHeight: ({ open = true, animateInitial, children }: any) => open
+    ? createElement('div', { 'data-entering': animateInitial ? 'true' : undefined }, children) : null,
+}));
+vi.mock('@/session/NativeKeyboardViewport', () => ({
+  nativeKeyboardViewportAvailable: true,
+  NativeKeyboardViewport: ({ children, ...props }: any) => { viewportHarness.viewport = props; return children; },
+}));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardLift: ({ children }: any) => children }));
 
+// Screen reader toggle and the system action menu availability, for the companion menu case.
+const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
+const motionPreference = vi.hoisted(() => ({ reduced: true }));
 const viewportHarness = vi.hoisted(() => ({
   list: null as any,
+  viewport: null as any,
   finishReveal: null as any,
   renders: 0,
+  move: vi.fn(),
+  seek: vi.fn(),
 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
@@ -23,11 +49,12 @@ const viewportHarness = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
   const React = await import("react");
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled }: any) =>
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable }: any) =>
     React.createElement(
       "div",
       {
         "data-testid": testID,
+        ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
         ...(onLongPress ? { onContextMenu: () => onLongPress() } : {}),
@@ -73,7 +100,14 @@ vi.mock("react-native", async () => {
       hairlineWidth: 1,
     },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
-    AccessibilityInfo: {},
+    AccessibilityInfo: {
+      isReduceMotionEnabled: () => Promise.resolve(motionPreference.reduced),
+      isScreenReaderEnabled: () => Promise.resolve(false),
+      addEventListener: (event: string, listener: (enabled: boolean) => void) => {
+        if (event === 'screenReaderChanged') a11y.screenReader = listener;
+        return { remove() {} };
+      },
+    },
     Alert: {},
     Linking: {},
     StatusBar: {},
@@ -90,8 +124,9 @@ vi.mock("@legendapp/list/react-native", () => ({
     viewportHarness.renders += 1;
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({
-      scrollToEnd() {},
+      scrollToEnd: viewportHarness.seek,
       scrollToOffset() {},
+      reportContentInset() {},
       getState() {
         return undefined;
       },
@@ -153,7 +188,10 @@ vi.mock("react-native-svg", () => ({
   default: () => null,
   Circle: () => null,
 }));
-vi.mock("react-native-uitextview", async () => ({ UITextView: (await import('react-native')).Text }));
+vi.mock("react-native-uitextview", async () => {
+  const { Text } = await import('react-native');
+  return { UITextView: (props: any) => createElement('div', { 'data-native-text-view': true }, createElement(Text, props)) };
+});
 vi.mock("expo-image", () => ({ Image: () => null }));
 // The site-video preview imports this native surface; label tests keep the
 // production renderer but must not load React Native's Flow runtime in Node.
@@ -201,7 +239,7 @@ vi.mock("@/session/remoteMediaDiskCacheExpo", () => ({
   downloadRemoteMediaShareTemp: vi.fn(),
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({
-  useReduceMotionEnabled: () => true,
+  useReduceMotionEnabled: () => motionPreference.reduced,
 }));
 vi.mock("@/session/expandedBlockMemory", () => ({
   useFoldableExpandedState: () => [false, vi.fn()],
@@ -210,7 +248,7 @@ vi.mock("@/platform/chrome", () => ({
   NativePullDownMenu: ({ children }: any) => children,
   showActionMenu: vi.fn(),
   usesNativePullDownMenu: () => false,
-  usesSystemActionMenu: () => false,
+  usesSystemActionMenu: () => a11y.systemMenu,
 }));
 vi.mock("@/session/MobileComposerInputRow", () => ({
   MobileComposerInputRow: () => null,
@@ -224,9 +262,6 @@ vi.mock("@/session/mathWebView", () => ({ MathFormulaWebView: () => null }));
 vi.mock("@/session/mediaPlayerWebView", () => ({
   RemoteMediaPlayerWebView: () => null,
 }));
-vi.mock("@/session/MarkdownBlockContent", () => ({
-  MarkdownBlockContent: () => null,
-}));
 // 只把菜单项 id 投到 DOM,供删除入口可见性断言;不渲染真实底部面板。
 vi.mock("@/session/MessageActionSheet", () => ({
   MessageActionSheet: ({ items }: any) =>
@@ -238,7 +273,11 @@ vi.mock("@/session/AuthorizationMessageCard", () => ({
   AuthorizationMessageCard: () => null,
 }));
 vi.mock("@/session/CompanionMessageActions", () => ({
-  CompanionMessageActions: () => null,
+  CompanionMessageActions: ({ actions, onAction }: any) =>
+    createElement("div", { "data-testid": "companion.messageActions" },
+      actions.some((action: any) => action.id === "add-to-chat")
+        ? createElement("button", { "data-testid": "companion.messageReply", onClick: () => onAction("add-to-chat") })
+        : null),
 }));
 vi.mock("@/session/CompanionMessageCard", () => ({
   CompanionMessageCard: () => null,
@@ -256,6 +295,7 @@ import { i18n } from "@/i18n";
 import { MessageRenderer } from "@/session/MessageRenderer";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
+import { MessageHistoryPositioning } from '@/session/messageHistoryActivity';
 import type { RemoteMessage } from "@/session/types";
 
 const msg = (
@@ -284,18 +324,106 @@ function render(
 }
 
 function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
-  const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: props.isSessionStreaming === true }).filter(
-    (item) => item.type === "message",
-  );
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const host = document.createElement("div");
   const root = createRoot(host);
-  act(() => root.render(<MessageRenderer items={items} {...props} />));
-  return { host, unmount: () => act(() => root.unmount()) };
+  const rerender = (messages: RemoteMessage[], props: Record<string, unknown>) => {
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: props.isSessionStreaming === true })
+      .filter(item => item.type === 'message');
+    act(() => root.render(<MessageRenderer items={items} {...props} />));
+  };
+  rerender(messages, props);
+  return { host, rerender, unmount: () => act(() => root.unmount()) };
 }
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+describe('live timeline entrances', () => {
+  it.each([false, true])('only runs initial history positioning when the empty list was still loading (%s)', loading => {
+    viewportHarness.seek.mockClear();
+    viewportHarness.finishReveal = null;
+    const h = mount([], { syncingWhileEmpty: loading });
+    try {
+      h.rerender([msg(`empty-${loading}`, 'First message', null)], { syncingWhileEmpty: false });
+      expect(viewportHarness.seek).toHaveBeenCalledTimes(loading ? 1 : 0);
+      expect(viewportHarness.finishReveal === null).toBe(!loading);
+    } finally { h.unmount(); }
+  });
+
+  it('uses one follow trajectory for a send request after initial history positioning', () => {
+    const messages = [msg('scroll-owner', 'Restored', null)];
+    viewportHarness.seek.mockClear();
+    viewportHarness.move.mockClear();
+    const h = mount(messages, { followLatestRequestKey: 0 });
+    try {
+      expect(viewportHarness.seek).toHaveBeenCalledWith({ animated: false });
+      act(() => {
+        viewportHarness.list.onLayout({ nativeEvent: { layout: { height: 600 } } });
+        viewportHarness.list.onContentSizeChange(400, 1200);
+        viewportHarness.finishReveal();
+      });
+      viewportHarness.seek.mockClear();
+      viewportHarness.move.mockClear();
+      h.rerender(messages, { followLatestRequestKey: 1 });
+      expect(viewportHarness.seek).not.toHaveBeenCalled();
+      expect(viewportHarness.move).toHaveBeenCalledWith(600, true);
+    } finally { h.unmount(); }
+  });
+
+  it('continues following after a recommendation changes the native bottom reservation', () => {
+    // Real renderer + tail controller, native geometry boundary only mocked.
+    // The native dock can cancel an in-flight follow before streaming growth
+    // reaches the end; without reconciliation the reply stays behind the dock.
+    const h = mount([msg('dock-resume', 'Restored', null)]);
+    try {
+      act(() => {
+        viewportHarness.list.onLayout({ nativeEvent: { layout: { height: 600 } } });
+        viewportHarness.list.onContentSizeChange(400, 1200);
+        viewportHarness.finishReveal();
+      });
+      viewportHarness.move.mockClear();
+      act(() => viewportHarness.viewport.onViewportInsetChange({ nativeEvent: {
+        bottom: 150, offsetY: 600, viewportHeight: 450, contentHeight: 1300,
+      } }));
+      expect(viewportHarness.move).toHaveBeenCalledWith(850, true);
+    } finally { h.unmount(); }
+  });
+
+  // Regression: the ready-history gate was inverted, so every live arrival
+  // bypassed the occupied-height animation. Observe the real renderer's motion
+  // boundary, including a work row; the native interpolation is tested separately.
+  it('keeps restored history still and grows messages and thinking only after the history is ready', () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    motionPreference.reduced = false;
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    const messages = [msg('entrance-history', 'Restored', null)];
+    const show = (ready: boolean) => act(() => root.render(
+      <MessageHistoryPositioning value={ready}>
+        <MessageRenderer scrollResetKey="entrance-regression" isSessionStreaming
+          items={buildMobileMessageRenderItems(messages, { isSessionStreaming: true })} />
+      </MessageHistoryPositioning>,
+    ));
+    try {
+      show(false);
+      show(true);
+      expect(host.querySelectorAll('[data-entering="true"]')).toHaveLength(0);
+      messages.push(msg('entrance-new', 'New question', null));
+      show(true);
+      expect(host.querySelectorAll('[data-entering="true"]')).toHaveLength(1);
+      messages.push({ ...msg('entrance-thinking', { kind: 'thinking', text: 'Checking', isRedacted: false }, null), role: 'thinking' });
+      show(true);
+      expect(host.querySelectorAll('[data-entering="true"]')).toHaveLength(2);
+      messages[2] = { ...messages[2], content: { kind: 'thinking', text: 'Checking more', isRedacted: false } };
+      show(true);
+      expect(host.querySelectorAll('[data-entering="true"]')).toHaveLength(2);
+    } finally {
+      act(() => root.unmount());
+      motionPreference.reduced = true;
+    }
+  });
 });
 
 describe("device source label", () => {
@@ -584,5 +712,84 @@ describe('private group reply source', () => {
     expect(html).toContain('群聊 ID：g-1');
     expect(html).toContain('message.groupSource');
     expect(render([{ ...msg('ordinary', 'Private', null), role: 'assistant' }])).not.toContain('message.groupSource');
+  });
+});
+
+// Regression: the companion menu disabled native text selection (2026-10-25 user decision).
+// Render the real MessageRenderer with one completed reply and system menus available;
+// verify native selectable text and a working Reply action coexist (unit tier).
+describe("companion text selection and actions", () => {
+  // The short-message case never enters the iOS long-message fallback. Removing
+  // the separate selection sheet must keep partial selection after expansion too.
+  it("keeps expanded long companion text in bounded native selection views", () => {
+    const text = "可以直接选择这段长消息中的文字。".repeat(180);
+    const h = mount([msg("long", text, null)], { companion: true });
+    try {
+      const toggle = h.host.querySelector('[data-testid="message.collapseToggle"]')!;
+      expect(toggle).not.toBeNull();
+      act(() => toggle.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      const body = h.host.querySelector('[data-testid="message.markdownBody"]')!;
+      const selectable = [...body.querySelectorAll('[data-native-text-view] [data-testid="message.markdownTextRun"]')];
+      expect(selectable.length).toBeGreaterThan(1);
+      expect(selectable.map(node => node.textContent).join('')).toBe(text);
+      expect(selectable.every(node => node.getAttribute('data-selectable') === 'true')).toBe(true);
+      expect(selectable.every(node => node.textContent!.length <= 1800)).toBe(true);
+    } finally { h.unmount(); }
+  });
+
+  // PR #7094: bounded paragraph runs do not bound code, quotes or table cells.
+  // Expand one oversized block through the same production entry; those native
+  // roots must retain RN Text fallback instead of mounting a giant UITextView.
+  it.each(["code", "blockquote", "table"])("keeps the stable fallback for expanded long %s blocks", (kind) => {
+    const text = "长内容".repeat(700);
+    const markdown = kind === "code" ? `\`\`\`text\n${text}\n\`\`\``
+      : kind === "blockquote" ? `> ${text}` : `| header | second |\n| --- | --- |\n| ${text} | cell |`;
+    const h = mount([msg("long-block", markdown, null)], { companion: true });
+    try {
+      act(() => h.host.querySelector('[data-testid="message.collapseToggle"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      const body = h.host.querySelector('[data-testid="message.markdownBody"]')!;
+      expect(body.textContent).toContain(text);
+      expect(body.querySelector('[data-native-text-view]')).toBeNull();
+      expect(body.querySelector('[data-selectable="true"]')).not.toBeNull();
+    } finally { h.unmount(); }
+  });
+
+  it.each(["user", "assistant"] as const)("keeps %s text selectable alongside Reply when system menus are available", (role) => {
+    a11y.systemMenu = true;
+    const onQuote = vi.fn();
+    const props = {
+      companion: true,
+      companionQuote: { names: { owner: "你", companion: "Vela" }, showReplyTargets: false, onQuote, onLocate: vi.fn() },
+      onAddMessageToComposer: vi.fn(),
+    };
+    const h = mount([{ ...msg("r1", "Done", { turnCompleted: true }), role }], props);
+    try {
+      const body = h.host.querySelector(`[data-testid="message.${role === "user" ? "user" : "agent"}Bubble"]`)!;
+      expect(body.querySelector('[data-selectable="true"]')?.textContent).toBe("Done");
+      expect(h.host.querySelector('[data-testid="companion.messageActions"]')).not.toBeNull();
+      const reply = h.host.querySelector('[data-testid="companion.messageReply"]')!;
+      act(() => reply.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(onQuote).toHaveBeenCalledExactlyOnceWith({ clientId: "r1", role, excerpt: "Done" });
+      expect(props.onAddMessageToComposer).not.toHaveBeenCalled();
+    } finally {
+      a11y.systemMenu = false;
+      h.unmount();
+    }
+  });
+
+  it("keeps inserting the link from rows that cannot be quoted", () => {
+    const onQuote = vi.fn();
+    const onAddMessageToComposer = vi.fn();
+    const h = mount([{ ...msg("e1", "Boom", { turnCompleted: true }), role: "error" }], {
+      companion: true,
+      companionQuote: { names: { owner: "你", companion: "Vela" }, showReplyTargets: false, onQuote, onLocate: vi.fn() },
+      onAddMessageToComposer,
+    });
+    try {
+      const reply = h.host.querySelector('[data-testid="companion.messageReply"]')!;
+      act(() => reply.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(onQuote).not.toHaveBeenCalled();
+      expect(onAddMessageToComposer).toHaveBeenCalledExactlyOnceWith("e1");
+    } finally { h.unmount(); }
   });
 });

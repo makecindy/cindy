@@ -66,6 +66,7 @@ const runtime = vi.hoisted(() => ({
     packageSha256: string | null;
     approvedManifest: GhostManifest;
     legacyMigrated: boolean;
+    simulatorMarketRelease?: { pluginId: string; releaseId: string; previousPackageSha256: string };
       } | null,
   ),
   pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
@@ -708,6 +709,79 @@ describe('same-release legacy organization source recovery', () => {
 });
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  it('upgrades the official simulator through the old route and atomically replaces its ledger key', async () => {
+    const item = summary({ ghostId: 'cindy-simulator', namespace: null,
+      currentRelease: { ...summary().currentRelease, id: RELEASE_ID, version: '2.0.0' } });
+    const oldManifest = manifest('baguette-simulator');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-simulator-migration-'));
+    roots.push(root);
+    const oldDir = path.join(root, 'baguette-simulator');
+    fs.mkdirSync(oldDir);
+    fs.writeFileSync(path.join(oldDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: oldDir, namespace: null, enabled: false }];
+    runtime.approvedInstallEvidence.mockReturnValue({ packageSha256: 'a'.repeat(64),
+      approvedManifest: normalizedManifest(oldManifest), legacyMigrated: false });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(summary({ ghostId: 'baguette-simulator', namespace: null }), {
+      manifestDigest: ghostManifestDigest(oldManifest),
+    }));
+    runtime.install.mockImplementation(async () => {
+      const next = manifest('cindy-simulator', '2.0.0');
+      const dir = path.join(root, 'cindy-simulator');
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(next));
+      runtime.ghosts = [{ manifest: next, dir, namespace: null, enabled: false }];
+      return runtime.ghosts[0];
+    });
+    const snapshot = await h.service.snapshot();
+    expect(runtime.install).toHaveBeenCalledOnce();
+    expect(runtime.install.mock.calls[0]![1]).toMatchObject({
+      ghostId: 'cindy-simulator', simulatorPreviousRelId: 'baguette-simulator',
+      simulatorMarketRelease: { pluginId: item.id, releaseId: RELEASE_ID },
+    });
+    expect(snapshot.items[0]).toMatchObject({ installState: 'installed', enabled: false });
+    expect(h.ledger.installationForPlugin({ ghostId: 'baguette-simulator', namespace: null })).toBeNull();
+    expect(h.ledger.installationForPlugin(item)).toMatchObject({ ghostId: 'cindy-simulator', releaseId: RELEASE_ID });
+  });
+
+  it('repairs a committed simulator rename after interruption before the market ledger write', async () => {
+    const item = summary({ ghostId: 'cindy-simulator', namespace: null,
+      currentRelease: { ...summary().currentRelease, id: RELEASE_ID, version: '2.0.0' } });
+    const next = manifest('cindy-simulator', '2.0.0');
+    runtime.ghosts = [{ ...ghostEntry('cindy-simulator'), manifest: next, namespace: null }];
+    runtime.approvedInstallEvidence.mockReturnValue({ packageSha256: item.currentRelease.sha256,
+      approvedManifest: normalizedManifest(next), legacyMigrated: false,
+      simulatorMarketRelease: { pluginId: item.id, releaseId: RELEASE_ID, previousPackageSha256: 'a'.repeat(64) },
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(summary({ ghostId: 'baguette-simulator', namespace: null })));
+    const snapshot = await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(snapshot.items[0]).toMatchObject({ installState: 'installed' });
+    expect(h.ledger.installationForPlugin(item)).toMatchObject({ releaseId: RELEASE_ID, version: '2.0.0' });
+    expect(h.ledger.installationForPlugin({ ghostId: 'baguette-simulator', namespace: null })).toBeNull();
+  });
+
+  it.each(['another-market-record', 'different-approved-package', 'server-rollback'] as const)(
+    'preserves the installed simulator on %s instead of creating or taking over another instance', async scenario => {
+      const rolledBack = scenario === 'server-rollback';
+      const item = summary({ ghostId: rolledBack ? 'baguette-simulator' : 'cindy-simulator', namespace: null });
+      const installedId = rolledBack ? 'cindy-simulator' : 'baguette-simulator';
+      runtime.ghosts = [{ ...ghostEntry(installedId), namespace: null }];
+      runtime.approvedInstallEvidence.mockReturnValue({ packageSha256: 'b'.repeat(64),
+        approvedManifest: normalizedManifest(manifest(installedId)), legacyMigrated: false });
+      const h = harness([item]);
+      const previous = recordForTest(summary({ ghostId: installedId, namespace: null }), {
+        pluginId: scenario === 'another-market-record' ? `c${'f'.repeat(24)}` : item.id,
+      });
+      h.ledger.upsertInstallation(previous);
+      const snapshot = await h.service.snapshot();
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(snapshot.items[0]!.installState).toBe('conflict');
+      expect(runtime.ghosts[0]!.manifest.id).toBe(installedId);
+    },
+  );
+
   // Unit: market install used four full synchronous scans before download.
   // Existing download-race cases protect the later fresh approval checks;
   // this first-install case protects the uninterrupted preflight work budget.

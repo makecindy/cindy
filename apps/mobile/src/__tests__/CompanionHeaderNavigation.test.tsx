@@ -9,18 +9,20 @@ import { useHostManagedSession } from '@/session/hostManagedSession';
 import type { RemoteResource } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
-  glance: {} as any, profile: {} as any, glanceTodos: { enabled: false } as any, unseen: false, markSeen: vi.fn(), push: vi.fn(), dismiss: vi.fn(), chooseMode: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
+  glance: {} as any, profile: {} as any, glanceTodos: { enabled: false } as any, unseen: false, markSeen: vi.fn(), push: vi.fn(), dismiss: vi.fn(), returnHome: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
   auth: { accountGeneration: 1, user: null },
   cloud: { supported: false, actors: [] as Array<{ kind: string; externalId: string; homeDeviceId: string | null }> },
   homeSheet: {} as any,
 }));
 vi.mock('react-native', () => ({
+  useWindowDimensions: () => ({ width: 662, height: 942 }),
   Keyboard: { dismiss: h.dismiss },
   View: ({ children, testID }: any) => createElement('div', { 'data-testid': testID }, children),
   Pressable: ({ children, onPress, testID, disabled }: any) => createElement('button', { onClick: onPress, disabled, 'data-testid': testID },
     typeof children === 'function' ? children({ pressed: false }) : children),
   StyleSheet: { create: (s: unknown) => s },
 }));
+vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 72, bottom: 0, left: 0, right: 0 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => createElement('span', null, children) }));
@@ -39,9 +41,15 @@ vi.mock('@/session/useCompanionGlanceTodos', () => ({
   dueTodos: () => [],
   useGlanceDueSeen: () => ({ unseen: h.unseen, markSeen: h.markSeen }),
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }), Stack: {
+  Screen: ({ options }: any) => { h.screenOptions.push(options); return typeof options.headerTitle === 'function'
+    ? createElement('div', { 'data-testid': 'native-title' }, options.headerTitle()) : null; },
+  Toolbar: Object.assign(({ children, placement }: any) => createElement('div', { 'data-toolbar': placement }, children), {
+    View: ({ children }: any) => children,
+  }),
+} }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
-vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: h.chooseMode }) }));
+vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ returnHome: h.returnHome }) }));
 vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => h.cloud }));
 vi.mock('@/session/CloudHomeSwitchSheet', () => ({ CloudHomeSwitchSheet: (props: unknown) => { h.homeSheet = props; return null; } }));
 import { CompanionHeader } from '@/session/CompanionHeader';
@@ -55,6 +63,22 @@ beforeEach(() => {
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
+
+// Unit regression: Duo's companion controls must live in the native bar, not a second row
+// below its status area. Existing navigation tests only exercised the in-content header.
+it('hosts the companion identity and actions in the system bar while keeping their behavior', async () => {
+  const onBack = vi.fn();
+  await act(async () => root.render(<CompanionHeader nativeHeader sessionId="s1" onQuoteTodo={() => {}} onAskCompanion={() => {}}
+    resource={resource} deviceId="pc" deviceName="PC" online onBack={onBack} onSearch={() => {}} />));
+  expect(host.querySelector('[data-toolbar="left"]')?.textContent).toContain('Cindy');
+  expect(host.querySelector('[data-testid="companion.header"]')).toBeNull();
+  await act(async () => button('companion.identity').click());
+  expect(h.glance.visible).toBe(true);
+  await act(async () => button('companion.settings').click());
+  expect(h.profile.visible).toBe(true);
+  await act(async () => button('companion.back').click());
+  expect(onBack).toHaveBeenCalledOnce();
+});
 
 it('goes back from the chat instead of opening a drawer, opens 近况 from the avatar and the profile from settings', async () => {
   const onBack = vi.fn(), onSearch = vi.fn();
@@ -130,6 +154,7 @@ function PageHost({ bindings }) {
   const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen, goBackToHome, companionWorkingLabel, quoteTodoInComposer, askCompanionInComposer, canUseComposer, composerDraftHydrated } = bindings;
   const currentSession = null;
   const isSideChatSheet = false;
+  const horizontalSystemHeader = bindings.nativeHeader ?? false;
   const companionSettingsRequest = bindings.companionSettingsRequest;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
@@ -140,14 +165,14 @@ function PageHost({ bindings }) {
 function StackScreen({ options }: { options: Record<string, unknown> }) { h.screenOptions.push(options); return null; }
 const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'CompanionHeader', 'StackScreen',
   `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, useHostManagedSession, CompanionHeader, StackScreen);
-const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false,
+const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false, nativeHeader: false,
   companionEntry: { ready: true },
   companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
   setSearchOpen: vi.fn(), goBackToHome: vi.fn(), companionWorkingLabel: null as string | null, quoteTodoInComposer: vi.fn(), askCompanionInComposer: vi.fn(), canUseComposer: true, composerDraftHydrated: true });
 const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => { root.render(<PageHost bindings={bindings} />); });
 
-it('wires the page: title while entry validation runs, Back to the roster, and the working breath', async () => {
-  const bindings = pageBindings(); bindings.companionEntry.ready = false;
+it.each([false, true])('wires the page: entry validation, Back and working breath (native=%s)', async nativeHeader => {
+  const bindings = pageBindings(); bindings.nativeHeader = nativeHeader; bindings.companionEntry.ready = false;
   await showPage(bindings);
   expect(host.textContent).toContain('Cindy');
   expect(button('companion.settings').disabled).toBe(true);
@@ -158,9 +183,9 @@ it('wires the page: title while entry validation runs, Back to the roster, and t
   expect(host.querySelector('[data-testid="ring"]')).not.toBeNull();
   await act(async () => button('companion.back').click());
   expect(bindings.goBackToHome).toHaveBeenCalledOnce();
-  // The companion row is the only header: the native bar the task header configured while the
-  // entry resolved must not keep its title and sync spinner on top of the identity.
-  expect(h.screenOptions).toContainEqual(expect.objectContaining({ headerShown: false, headerTitle: '' }));
+  // Replace the ordinary task title once the companion resolves, in either header host.
+  expect(h.screenOptions).toContainEqual(expect.objectContaining({ headerShown: nativeHeader, headerTitle: '' }));
+  if (nativeHeader) expect(h.screenOptions.some(options => options.headerShown === false)).toBe(false);
 });
 
 it('shows the ordinary task header on non-companion pages and while sharing', async () => {
@@ -221,7 +246,7 @@ it('names the main computer of a cloud companion and lets the profile change it'
   expect(h.homeSheet.visible).toBe(true);
   expect(h.homeSheet).toMatchObject({ botId: 'bot', homeDeviceId: 'pc', homeName: 'Office iMac' });
   await act(async () => h.homeSheet.onMoved({ deviceId: 'mac', name: 'Mac', online: true }));
-  expect(h.chooseMode).toHaveBeenCalledWith('teammates');
+  expect(h.returnHome).toHaveBeenCalledOnce();
   // 近况 offers the same switch (its row closes the sheet first).
   expect(h.glance.cloudHome).toBe(true);
   await act(async () => h.glance.onSwitchHome());
@@ -233,4 +258,3 @@ it('offers no computer change for a companion without a known main computer', as
   await act(async () => button('companion.settings').click());
   expect(h.profile.onOpenHome).toBeUndefined();
 });
-

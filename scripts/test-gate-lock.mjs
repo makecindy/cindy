@@ -192,6 +192,9 @@ function close(server) {
 
 async function listenForLock(port, banner) {
 	const server = net.createServer((socket) => {
+		// Probes can reset as soon as they recognize the banner. Their socket
+		// failure must not terminate the lock holder or release its test budget.
+		socket.on("error", () => socket.destroy());
 		socket.end(`${banner}\n`);
 	});
 	await listen(server, port);

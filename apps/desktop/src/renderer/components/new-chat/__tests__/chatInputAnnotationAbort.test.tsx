@@ -35,6 +35,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   draftSource: null as UseVoiceInputResult['draftSource'],
   draftRange: null as UseVoiceInputResult['draftRange'],
   cancel: vi.fn().mockResolvedValue(undefined),
+  prepare: vi.fn(),
   realModelSelector: false,
   listAgentSkills: vi.fn(),
   localProviders: [] as ProviderView[],
@@ -88,7 +89,7 @@ vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor |
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
   h.editor = editor;
   const state = h.voiceState ?? (h.listening ? 'listening' : 'idle');
-  return { state, isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: vi.fn(), stop: h.stop, cancel: h.cancel };
+  return { state, prepare: h.prepare, getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'), isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: () => { h.listening = true; return true; }, stop: h.stop, cancel: h.cancel };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, providerOrder: [], loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -139,6 +140,7 @@ beforeEach(() => {
   h.draftSource = null;
   h.draftRange = null;
   h.stop.mockClear();
+  h.prepare.mockClear();
   h.realModelSelector = false;
   h.cancel.mockReset().mockResolvedValue(undefined);
   h.atPanel = null;
@@ -231,6 +233,75 @@ it('locks editor and attachments for the whole voice run, but keeps permissions 
       expect(h.stop).toHaveBeenCalledExactlyOnceWith({ waitForRefinement: true, onReadyForEndCue: expect.any(Function) });
     }
   }
+});
+
+// User request 2026-10-24: empty composer hints must follow hover/hold/click,
+// and native selection must not take over a recording. Existing voice tests
+// only cover editability; minimal inputs below drive real DOM handlers (unit/jsdom).
+it('shows voice guidance only in an empty composer and distinguishes holding from clicking', async () => {
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const area = view.container.querySelector('[data-recommendation-active]')
+    ?? h.editor!.view.dom.parentElement!.parentElement!;
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerEnter(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.holdComposer');
+    fireEvent.pointerLeave(area);
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    fireEvent.pointerEnter(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    fireEvent.pointerLeave(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    // jsdom has no hit-testing; returning null leaves ProseMirror's ordinary
+    // mousedown path inert while the real composer handler still receives it.
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
+    fireEvent.mouseDown(h.editor!.view.dom, { button: 0, detail: 1, clientX: 10, clientY: 10 });
+    expect(h.prepare).toHaveBeenCalledOnce();
+    expect(h.listening).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    view.rerender(<ChatInput {...view.props} />);
+    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakRelease');
+    for (const type of ['selectstart', 'dragstart', 'mousemove']) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      h.editor!.view.dom.dispatchEvent(event);
+      expect(event.defaultPrevented, type).toBe(true);
+    }
+    await act(async () => { fireEvent.mouseUp(window, { button: 0 }); });
+    expect(h.stop).toHaveBeenCalledOnce();
+    const selection = new Event('selectstart', { bubbles: true, cancelable: true });
+    h.editor!.view.dom.dispatchEvent(selection);
+    expect(selection.defaultPrevented).toBe(true);
+    const releaseClick = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+    h.editor!.view.dom.dispatchEvent(releaseClick);
+    expect(releaseClick.defaultPrevented).toBe(true);
+    fireEvent.pointerDown(document.body, { button: 0 });
+    const nextSelection = new Event('selectstart', { bubbles: true, cancelable: true });
+    h.editor!.view.dom.dispatchEvent(nextSelection);
+    expect(nextSelection.defaultPrevented).toBe(false);
+  } finally {
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    vi.useRealTimers();
+  }
+
+  h.listening = false;
+  view.rerender(<ChatInput {...view.props} />);
+  fireEvent.click(screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' }));
+  view.rerender(<ChatInput {...view.props} />);
+  expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakPressAgain');
+  h.draftText = 'hello';
+  view.rerender(<ChatInput {...view.props} />);
+  expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+  h.draftText = '';
+  h.listening = false;
+  await act(async () => { h.editor!.commands.setContent('<p>Existing text</p>'); });
+  view.rerender(<ChatInput {...view.props} />);
+  fireEvent.pointerEnter(area);
+  expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
 });
 
 // #374 / voiceInputButtonAnchor: the real toolbar must keep the voice control

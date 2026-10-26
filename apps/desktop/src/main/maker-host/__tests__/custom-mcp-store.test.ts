@@ -148,13 +148,21 @@ describe('validateCustomMcpConfig', () => {
     expect(result.ok === false && result.message).toContain('reserved');
   });
 
+  // Native names are reserved even before any transport provider is registered.
+  it('rejects the native Apps id without rejecting a distinct custom id', () => {
+    expect(validateCustomMcpConfig({ ...valid, id: 'codex_apps' })).toMatchObject({
+      ok: false, code: 'INVALID_PARAMS', message: expect.stringContaining('reserved'),
+    });
+    expect(validateCustomMcpConfig({ ...valid, id: 'codex_apps_custom' })).toEqual({ ok: true });
+  });
+
   it('keeps accepting ids that only resemble a builtin name', () => {
     expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser_x' }, ['cindy_browser'])).toEqual({
       ok: true,
     });
   });
 
-  it('skips the reserved-id check when no reserved list is supplied', () => {
+  it('does not infer dynamic builtin names when no reserved list is supplied', () => {
     expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser' })).toEqual({ ok: true });
   });
 

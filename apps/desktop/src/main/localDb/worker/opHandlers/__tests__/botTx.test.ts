@@ -2,6 +2,11 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { tx } from '../tx.js';
+import { normalizeBotProfileModelChain } from '../../../ipc/botProfileVersioning';
+import { createBotModelRouteReconciler } from '../../../../maker-ipc/botModelRouteReconciler';
+import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent } from '../../../../maker-ipc/scheduledModelSelection';
+import { normalizeBotModelChain } from '../../../../../shared/botModelChain';
+import type { ScheduledModelSelection } from '../../../../maker-ipc/scheduledModelSelection';
 
 describe('Bot named worker transactions', () => {
   let db: Database.Database;
@@ -49,6 +54,258 @@ describe('Bot named worker transactions', () => {
   });
 
   afterEach(() => db.close());
+
+  // #6759: exercise the actual save transaction, then discard process-local
+  // reconciliation state before IM preparation and automation restore.
+  function savedModelFixture() {
+    const original: ScheduledModelSelection = {
+      agentKind: 'codex', model: 'old', providerId: 'connected-custom', effort: 'high', fastMode: false,
+    };
+    let current = { ...original, model: 'temporary' };
+    let owner = 'account-a';
+    const capabilities = (model: string) => JSON.stringify({ modelChain: [{
+      harness: 'codex', model, providerId: 'connected-custom', effort: 'high', fastMode: false,
+    }] });
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'saved-bot', displayName: 'Saved', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'identity', capabilitiesJson: capabilities('old'), now: 1,
+    } });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: {
+      botId: 'saved-bot', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      session: { id: 'saved-session', title: 'Saved', workingDir: '/tmp/saved-session',
+        workspaceKind: 'dialogue', model: 'temporary', effort: 'high', permissionMode: 'ask',
+        agentKind: 'codex', remoteHostId: null, providerId: 'connected-custom', extraDirs: '[]',
+        source: 'bot', createdAt: 2, updatedAt: 2 }, now: 2,
+    } });
+    const readBaseline = () => db.prepare('SELECT scheduled_model_baseline FROM sessions WHERE id = ?')
+      .pluck().get('saved-session') as string | null;
+    const writeBaseline = (value: string | null) => {
+      db.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?').run(value, 'saved-session');
+    };
+    writeBaseline(JSON.stringify({ ...original, scopeId: 'automation' }));
+    const pause = (paused: boolean) => {
+      db.prepare('UPDATE bot_profiles SET status = ? WHERE id = ?').run(paused ? 'paused' : 'active', 'saved-bot');
+    };
+    const save = (model: string, expectedCurrentVersion = 1, extra: Record<string, unknown> = {}) => tx(db, {
+      name: 'bots.updateProfile', args: { id: 'saved-bot', expectedCurrentVersion,
+        identitySource: 'identity', capabilitiesJson: capabilities(model), profileContentChanged: true, now: 3, ...extra },
+    });
+    let failApply = false;
+    const reconcile = () => createBotModelRouteReconciler({
+      ownerEpoch: () => owner,
+      read: async () => {
+        const row = db.prepare(`SELECT p.status, v.capabilities_json AS capabilities FROM bot_profiles p
+          JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+          WHERE p.id = 'saved-bot'`).get() as { status: string; capabilities: string };
+        return row.status === 'active' ? {
+          chain: normalizeBotModelChain(JSON.parse(row.capabilities).modelChain), current,
+          hasRuntimeOverride: false, scheduledModelBaseline: readBaseline(),
+        } : null;
+      },
+      apply: async (_id, route) => {
+        if (failApply) throw new Error('provider unavailable');
+        current = { ...route, effort: route.effort as ScheduledModelSelection['effort'] };
+      },
+      onSelectionAccepted: async () => { writeBaseline(null); },
+    });
+    const scopeDeps: Parameters<typeof createScheduledModelScope>[0] = {
+      read: async () => ({ profile: current, baseline: readBaseline(),
+        profileRevision: db.prepare("SELECT json_array(id, current_version) FROM bot_profiles WHERE id = 'saved-bot'").pluck().get() as string,
+      }),
+      write: async (sessionId, baseline, revision, expectedBaseline) => {
+        if (baseline) return writeScheduledModelBaselineIfProfileCurrent({
+          exec: async (sql, params) => db.prepare(sql).run(...params),
+        }, sessionId, baseline, revision ?? null, expectedBaseline);
+        writeBaseline(null);
+      },
+      apply: async (_id, route) => { current = route; }, isBusy: () => false, createId: () => 'unused',
+    };
+    const scope = createScheduledModelScope(scopeDeps);
+    return { original, readBaseline, pause, save, reconcile, scope, scopeDeps, writeBaseline, current: () => current,
+      changeOwner: () => { owner = 'account-b'; }, failApply: (fail: boolean) => { failApply = fail; } };
+  }
+
+  // Permission-only saves can now create a Profile version without model input.
+  // Exercise their intersection with the durable automation restore transaction.
+  it.each([false, true])('preserves the fallback on a permission-only save (stale payload: %s)', async stalePayload => {
+    const h = savedModelFixture();
+    const baseline = h.readBaseline();
+    expect(tx(db, { name: 'bots.updateProfile', args: {
+      id: 'saved-bot', expectedCurrentVersion: 1, now: 3, profileContentChanged: false,
+      canonicalPermissionMode: 'bypassPermissions',
+      ...(stalePayload ? { capabilitiesJson: JSON.stringify({ model: 'stale' }) } : {}),
+    } })).toEqual({ currentVersion: 2 });
+    expect(h.readBaseline()).toBe(baseline);
+    const saved = db.prepare('SELECT identity_source AS identity, capabilities_json AS config FROM bot_profile_versions WHERE version = 2')
+      .get() as { identity: string; config: string };
+    expect(saved.identity).toBe('identity');
+    expect(JSON.parse(saved.config)).toMatchObject({ permissions: 'trusted', modelChain: [{ model: 'old' }] });
+    expect(db.prepare('SELECT permission_mode FROM sessions').pluck().get()).toBe('bypassPermissions');
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current()).toMatchObject(h.original);
+  });
+
+  it('accepts a model save without reverting a newer permission choice', async () => {
+    const h = savedModelFixture();
+    tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'saved-session', mode: 'bypassPermissions' } });
+    h.save('permanent');
+    expect(JSON.parse(h.readBaseline()!)).toMatchObject({ pendingBotProfileVersion: 2 });
+    expect(JSON.parse(db.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE version = 2').pluck().get() as string))
+      .toMatchObject({ permissions: 'trusted' });
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('permanent');
+    expect(h.readBaseline()).toBeNull();
+    expect(db.prepare('SELECT permission_mode FROM sessions').pluck().get()).toBe('bypassPermissions');
+  });
+
+  it('keeps the baseline and permission when the expected Profile version is missing', () => {
+    const h = savedModelFixture();
+    const baseline = h.readBaseline();
+    db.prepare('DELETE FROM bot_profile_versions').run();
+    expect(() => h.save('permanent', 1, { canonicalPermissionMode: 'bypassPermissions' }))
+      .toThrowError(expect.objectContaining({ code: 'PRECONDITION_FAILED' }));
+    expect(h.readBaseline()).toBe(baseline);
+    expect(db.prepare('SELECT permission_mode FROM sessions').pluck().get()).toBe('ask');
+    expect(db.prepare('SELECT current_version FROM bot_profiles').pluck().get()).toBe(1);
+  });
+
+  it.each(['restart', 'account-change'])('accepts a paused permanent save after %s before restoring automation', async boundary => {
+    const h = savedModelFixture();
+    h.pause(true);
+    let reconcile = h.reconcile();
+    h.save('permanent');
+    await reconcile.profileChanged('saved-session');
+    if (boundary === 'restart') reconcile = h.reconcile();
+    else h.changeOwner();
+    h.pause(false);
+    await reconcile('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('permanent');
+    expect(h.readBaseline()).toBeNull();
+  });
+
+  it('accepts a same-route permanent save after restart without restoring the old provider choice', async () => {
+    const h = savedModelFixture();
+    h.pause(true);
+    h.save('temporary');
+    h.pause(false);
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('temporary');
+    expect(h.readBaseline()).toBeNull();
+  });
+
+  it('keeps the durable save and old baseline on failure, without restoring it while paused', async () => {
+    const h = savedModelFixture();
+    h.pause(true);
+    h.save('permanent');
+    const pending = h.readBaseline();
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('temporary');
+    expect(h.readBaseline()).toBe(pending);
+    h.pause(false);
+    h.failApply(true);
+    await expect(h.reconcile()('saved-session')).rejects.toThrow('provider unavailable');
+    expect(h.readBaseline()).toBe(pending);
+    h.failApply(false);
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('permanent');
+  });
+
+  it('does not invalidate a baseline for a non-model profile edit or a rejected save', async () => {
+    const h = savedModelFixture();
+    const baseline = h.readBaseline();
+    h.save('old', 1, { identitySource: 'new identity' });
+    expect(h.readBaseline()).toBe(baseline);
+    expect(() => h.save('permanent')).toThrow('Profile');
+    expect(h.readBaseline()).toBe(baseline);
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current()).toMatchObject(h.original);
+  });
+
+  it.each(['canonical', 'group', 'channel', 'thread', 'background', 'archived'])('marks only following profile links: %s', role => {
+    const h = savedModelFixture();
+    const baseline = h.readBaseline();
+    if (role === 'archived') db.prepare('UPDATE bot_session_links SET archived_at = 4').run();
+    else db.prepare('UPDATE bot_session_links SET role = ?').run(role);
+    h.save('permanent');
+    if (role === 'background' || role === 'archived') expect(h.readBaseline()).toBe(baseline);
+    else expect(JSON.parse(h.readBaseline()!)).toMatchObject({ pendingBotProfileVersion: 2, model: 'old' });
+  });
+
+  it('rolls back the pending marker with a failed profile transaction', () => {
+    const h = savedModelFixture();
+    const baseline = h.readBaseline();
+    expect(() => h.save('permanent', 1, { canonicalPermissionMode: 'invalid' })).toThrow('permission mode');
+    expect(h.readBaseline()).toBe(baseline);
+    expect(db.prepare('SELECT current_version FROM bot_profiles').pluck().get()).toBe(1);
+    expect(db.prepare('SELECT count(*) FROM bot_profile_versions').pluck().get()).toBe(1);
+  });
+
+  it('persists a permanent save even before the first automation scope exists', async () => {
+    const h = savedModelFixture();
+    h.writeBaseline(null);
+    h.save('permanent');
+    expect(JSON.parse(h.readBaseline()!)).toMatchObject({ pendingBotProfileVersion: 2 });
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('permanent');
+  });
+
+  it.each(['save-before-begin', 'save-during-begin', 'save-after-begin'].flatMap(order =>
+    [null, '{broken'].map(initialBaseline => ({ order, initialBaseline })),
+  ))('serializes the real scope writer and permanent save: $order / $initialBaseline', async ({ order, initialBaseline }) => {
+    const h = savedModelFixture();
+    h.writeBaseline(initialBaseline);
+    const scope = createScheduledModelScope({ ...h.scopeDeps,
+      write: async (...args) => {
+        if (order === 'save-during-begin') h.save('permanent');
+        return h.scopeDeps.write(...args);
+      },
+    });
+    if (order === 'save-before-begin') h.save('permanent');
+    if (order === 'save-before-begin') await expect(scope.begin('saved-session')).rejects.toThrow('pending');
+    else if (order === 'save-during-begin') await expect(scope.begin('saved-session')).rejects.toThrow('changed');
+    else await scope.begin('saved-session');
+    if (order === 'save-after-begin') h.save('permanent');
+    expect(JSON.parse(h.readBaseline()!)).toMatchObject({ pendingBotProfileVersion: 2 });
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('permanent');
+    expect(h.readBaseline()).toBeNull();
+  });
+
+  it('retries capture across an unrelated profile revision and preserves a rolled-back save', async () => {
+    const h = savedModelFixture();
+    h.writeBaseline(null);
+    const scope = createScheduledModelScope({ ...h.scopeDeps, write: async (...args) => {
+      expect(() => h.save('permanent', 1, { canonicalPermissionMode: 'invalid' })).toThrow('permission mode');
+      h.save('old', 1, { identitySource: 'new identity' });
+      return h.scopeDeps.write(...args);
+    } });
+    await expect(scope.begin('saved-session')).rejects.toThrow('changed');
+    expect(h.readBaseline()).toBeNull();
+    await expect(h.scope.begin('saved-session')).resolves.toBe('unused');
+    expect(JSON.parse(h.readBaseline()!).pendingBotProfileVersion).toBeUndefined();
+  });
+
+  it('preserves runtime fallback when a non-model edit normalizes a legacy chain-only profile', async () => {
+    const h = savedModelFixture();
+    const fallback = { ...h.original, model: 'runtime-fallback', scopeId: 'automation' };
+    h.writeBaseline(JSON.stringify(fallback));
+    const previous = JSON.parse(db.prepare('SELECT capabilities_json FROM bot_profile_versions').pluck().get() as string);
+    expect(previous.model).toBeUndefined();
+    const next = normalizeBotProfileModelChain({ ...previous, skills: ['new-skill'] });
+    h.save('old', 1, { capabilitiesJson: JSON.stringify(next), identitySource: 'edited identity' });
+    expect(h.readBaseline()).toBe(JSON.stringify(fallback));
+    await h.reconcile()('saved-session');
+    await h.scope.restore('saved-session');
+    expect(h.current().model).toBe('runtime-fallback');
+  });
 
   it('atomically rejects duplicate names and a second Cindy without touching the first profile', () => {
     const args = { id: 'first', displayName: 'Renamed', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Custom identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
@@ -130,6 +387,44 @@ describe('Bot named worker transactions', () => {
     ).toEqual({ hiddenAt: null, pinnedAt: null });
   });
 
+  // #6895: model saves must retire only live profile-following restores, and
+  // a later write failure must roll back both the profile and the restore clear.
+  it('retires only active profile-following restores atomically with the model save', () => {
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',
+      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+    } });
+    for (const role of ['canonical', 'group', 'channel', 'thread', 'worker', 'archived']) {
+      db.prepare(`INSERT INTO sessions
+        (id, title, workspace_kind, model, effort, permission_mode, status, total_token_usage,
+         total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled, agent_kind,
+         extra_dirs, source, created_at, updated_at, scheduled_model_baseline)
+        VALUES (?, 'Hermes', 'dialogue', 'temporary', 'high', 'ask', 'active',
+         0, 0, 0, 0, 0, 0, 'codex', '[]', 'bot', 2, 2, 'old-route')`).run(role);
+      db.prepare(`INSERT INTO bot_session_links
+        (id, bot_id, session_id, profile_version, role, created_at, archived_at)
+        VALUES (?, 'bot-1', ?, 1, ?, 2, ?)`).run(`link-${role}`, role, role === 'archived' ? 'channel' : role, role === 'archived' ? 3 : null);
+    }
+    const args = { id: 'bot-1', identitySource: 'identity', capabilitiesJson: '{"model":"new"}',
+      profileContentChanged: true, expectedCurrentVersion: 1, clearScheduledModelBaseline: true, now: 4 };
+    // Fail the permission write after restore retirement, not its early input
+    // validation, so this still verifies rollback of the combined transaction.
+    db.exec(`CREATE TRIGGER reject_permission_write BEFORE UPDATE OF permission_mode ON sessions
+      BEGIN SELECT RAISE(ABORT, 'permission write failed'); END`);
+    expect(() => tx(db, { name: 'bots.updateProfile', args: { ...args, canonicalPermissionMode: 'auto' } }))
+      .toThrow('permission write failed');
+    expect(db.prepare('SELECT current_version FROM bot_profiles').pluck().get()).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) FROM sessions WHERE scheduled_model_baseline IS NOT NULL').pluck().get()).toBe(6);
+    db.exec('DROP TRIGGER reject_permission_write');
+    tx(db, { name: 'bots.updateProfile', args });
+    const restores = db.prepare('SELECT id, scheduled_model_baseline AS baseline FROM sessions ORDER BY id')
+      .all() as Array<{ id: string; baseline: string }>;
+    for (const row of restores) {
+      if (row.id === 'archived' || row.id === 'worker') expect(row.baseline).toBe('old-route');
+      else expect(JSON.parse(row.baseline)).toMatchObject({ pendingBotProfileVersion: 2, model: 'temporary' });
+    }
+    expect(db.prepare('SELECT current_version FROM bot_profiles').pluck().get()).toBe(2);
+  });
   // #6782: production worker transactions; unit tier. Existing tests do not
   // interleave a composer permission commit with a settings save captured earlier.
   it.each([['ask', 'bypassPermissions', 'trusted'], ['trusted', 'ask', 'ask']])(

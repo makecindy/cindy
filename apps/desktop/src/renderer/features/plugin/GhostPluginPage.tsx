@@ -1,6 +1,6 @@
 import { CatalogDeviceScope, type CatalogDeviceControl } from './useCatalogDevice';
 import { RemotePluginPage } from './RemotePluginPage';
-import { featureRetirementById } from '../../../shared/featureRetirements';
+import { featureRetirementById, type FeatureRetirement } from '../../../shared/featureRetirements';
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
 /**
@@ -173,17 +173,19 @@ type PresentedGhostPluginItem = GhostPluginListItem & {
 function findInstalledRetirementReplacement(
   ghosts: readonly InstalledGhost[],
   marketItems: readonly PluginMarketItem[],
-  target: { ghostId: string; marketId: string } | undefined,
+  target: FeatureRetirement['replacement'],
 ): InstalledGhost | undefined {
   if (!target) return undefined;
   const marketItem = marketItems.find((item) => item.pluginId === target.marketId);
-  if (marketItem) {
-    return ghosts.find((ghost) => marketItemMatchesInstalledGhost(marketItem, ghost));
+  // IDs may change before all installations update. Reuse either ID in the
+  // market row's namespace; without a row the existing root-only fallback stays.
+  for (const ghostId of [target.ghostId, ...(target.previousGhostIds ?? [])]) {
+    const installed = marketItem
+      ? ghosts.find((ghost) => marketItemMatchesInstalledGhost({ ...marketItem, ghostId }, ghost))
+      : findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, ghostId));
+    if (installed) return installed;
   }
-  return findInstalledGhostByIdentity(
-    ghosts,
-    createPluginLogicalIdentity(null, target.ghostId),
-  );
+  return undefined;
 }
 
 /** 推荐区来源过滤:本地装的必然在已安装区,不设「本地」档(设计定稿)。 */

@@ -1,3 +1,5 @@
+import { isShadowedCompanionCanonical } from '../botSessionInputGuard.js';
+import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
@@ -18,8 +20,9 @@ import ts from 'typescript';
 
 import { describe, expect, it, vi } from 'vitest';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, type SendOptions } from '@cindy/maker-core';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
+import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -111,7 +114,7 @@ function botTaskDispatchSlice(): string {
     `${sendToSessionInternal}
 ${dispatchBotSessionMessage}
 const delegationDispatch = ${delegationDispatch};
-return { delegationDispatch };`,
+return { delegationDispatch, dispatchBotSessionMessage };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
 }
@@ -122,6 +125,7 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
+  dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
     input: Record<string, unknown>,
   ) => Promise<{ ok: boolean; wakeKind?: string }>;
@@ -130,6 +134,7 @@ const loadBotTaskDispatch = new Function(
 function botTaskDispatchHarness(
   rows: Record<string, { permissionMode: string | null; planModeEnabled: boolean }>,
   live: Record<string, object> = {},
+  overrides: Record<string, unknown> = {},
 ) {
   const bootstrapped: Array<Record<string, unknown>> = [];
   const sentTo: Array<{ sessionId: string; planMode: unknown }> = [];
@@ -147,9 +152,9 @@ function botTaskDispatchHarness(
     limit: async () => [],
   };
   const stubs: Record<string, unknown> = {
-    assertTaskActionCurrent, hasTaskActionAuthorization,
+    assertTaskActionCurrent, hasTaskActionAuthorization, TurnDispatchRejectedError,
     AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION,
-    restoreAutoReviewUserIntent, readAutoReviewHistory,
+    restoreAutoReviewUserIntent, readAutoReviewHistory, verifiedOwnerRequestText,
     maker: {
       getSession: (id: string) => live[id],
       getSessionMeta: async (id: string) => ({
@@ -183,6 +188,7 @@ function botTaskDispatchHarness(
     assertReviewExternalInputAllowed: asyncNoop,
     syncBotLanePermission: asyncNoop,
     reconcileBotModelRoute: asyncNoop,
+    scheduledModelScope: { restore: asyncNoop },
     refreshBotCapabilityEpochBeforeSend: asyncNoop,
     assertSessionNotRestarting: noop,
     sendToSessionLocks: new Map(),
@@ -214,11 +220,15 @@ function botTaskDispatchHarness(
       session: { id: string },
       _message: string,
       _clientId: string,
-      opts: SendOptions & { onAccepted?: () => Promise<void> },
+      opts: SendOptions & { onAccepted?: () => Promise<void>; onDispatching?: () => void },
     ) => {
-      sentTo.push({ sessionId: session.id, planMode: opts.planMode });
       sendOptions.push(opts);
       await opts.onAccepted?.();
+      try { opts.onDispatching?.(); } catch (error) {
+        if (error instanceof TurnDispatchRejectedError) return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+        throw error;
+      }
+      sentTo.push({ sessionId: session.id, planMode: opts.planMode });
       return { accepted: true };
     },
     assertDesktopSendDispatched: noop,
@@ -226,6 +236,7 @@ function botTaskDispatchHarness(
     GroupToolAuthorizationError: class extends Error {},
     AcceptedCallbackDispatchCancelled: class extends Error {},
   };
+  Object.assign(stubs, overrides);
   const scope = new Proxy(stubs, {
     // 自己声明的桩优先;JS 内建对象照常解析;其余自由标识符一读就失败。
     has: (target, key) => key in target || !(key in globalThis),
@@ -237,6 +248,103 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), bootstrapped, sentTo, sendOptions, readAutoReviewHistory };
 }
+
+// #6895 review: the cloud-room dispatcher bypassed the ordinary send transaction.
+// Execute that production closure with the real restore scope (unit behavior in
+// this existing guard fixture); assert the route used to send, not call strings.
+describe('companion internal delivery after automation', () => {
+  // #6895: rejected input must not bootstrap the old primary or consume its restore.
+  it.each(['already-shadowed', 'shadowed-while-waiting'] as const)('preserves automation state when %s', async (timing) => {
+    let shadowed = timing === 'already-shadowed';
+    let baseline: string | null = 'saved-pi-route';
+    const restore = vi.fn(async () => { baseline = null; });
+    const reconcile = vi.fn(async () => undefined);
+    const dbChain = { from: () => dbChain, where: () => dbChain,
+      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {}, {
+      getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+      isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+      scheduledModelScope: { restore }, reconcileBotModelRoute: reconcile,
+      waitForSendToSessionLock: async () => { shadowed = true; },
+    });
+    expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
+      .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY' });
+    expect(baseline).toBe('saved-pi-route');
+    expect(restore).not.toHaveBeenCalled();
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    if (timing === 'already-shadowed') expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  // #6895: hand-over may finish while restore awaits, before a turn exists.
+  // Exercise both consumers of the post-restore routing decision, without timers.
+  it.each(['live', 'queued'] as const)('rejects %s delivery when demoted during restoration', async (path) => {
+    let shadowed = false;
+    const dbChain = { from: () => dbChain, where: () => dbChain,
+      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+    const enqueue = vi.fn(async () => undefined);
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {
+      child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' },
+    }, {
+      getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+      isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+      scheduledModelScope: { restore: async () => { shadowed = true; } },
+      inputCoordinator: { ensureQueueRestored: async () => undefined, shouldQueueNewTurn: () => path === 'queued' },
+      enqueueSendToSessionMessage: enqueue,
+    });
+    expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Arrived during hand-over' }))
+      .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY' });
+    expect(h.sentTo).toEqual([]);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  // #6895 review: the post-restore check precedes asynchronous bootstrap and
+  // acceptance. Guard tier: demote at message persistence, then execute the real
+  // dispatch callback and prove neither live nor resumed delivery reaches send.
+  it.each(['live', 'resumed'] as const)('rejects %s delivery demoted immediately before dispatch', async (path) => {
+    let shadowed = false;
+    const dbChain = { from: () => dbChain, where: () => dbChain,
+      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
+      path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' } } : {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+        createDbMessage: async () => { shadowed = true; },
+      });
+    expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
+      .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'shadowed' });
+    expect(shadowed).toBe(true);
+    expect(h.sentTo).toEqual([]);
+    expect(h.sendOptions).toHaveLength(1);
+    expect(h.bootstrapped).toHaveLength(path === 'resumed' ? 1 : 0);
+  });
+
+  it.each(['live', 'resumed'] as const)('restores before %s dispatch reads its model', async (path) => {
+    const saved = { agentKind: 'pi' as const, model: 'saved-model', providerId: 'fixture-provider', effort: null, fastMode: false };
+    let current = { ...saved, agentKind: 'codex' as 'codex' | 'pi', model: 'temporary-model' };
+    let baseline: string | null = JSON.stringify({ ...saved, scopeId: 'automation' });
+    const live: Record<string, object> = {};
+    const makeLive = () => ({ id: 'child', ...current, isTurnRunning: () => false, getStatus: () => 'active' });
+    if (path === 'live') live.child = makeLive();
+    let dispatchedModel: string | undefined;
+    const scope = createScheduledModelScope({
+      createId: () => 'unused', read: async () => ({ profile: current, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => { current = { ...current, ...route } as typeof current; if (path === 'live') live.child = makeLive(); },
+    });
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, live, {
+      scheduledModelScope: scope,
+      maker: { getSession: (id: string) => live[id], getSessionMeta: async () => ({ id: 'child', ...current, workDir: '/tmp/fixture/child' }) },
+      bootstrapSession: async (opts: Record<string, unknown>) => ({ session: { id: 'child', model: opts.model } }),
+      sendUserMessageWithAwaitedGitBaseline: async (session: { model: string }) => { dispatchedModel = session.model; return { accepted: true }; },
+    });
+    const result = await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Next owner message', clientId: 'cloud-room:next' });
+    expect(result.ok).toBe(true);
+    expect(dispatchedModel).toBe('saved-model');
+    expect(baseline).toBeNull();
+  });
+});
 
 // PR #6514: source receipts must not promote a prior owner's deployment permission.
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure
@@ -268,6 +376,23 @@ describe('idle forwarded request authorization', () => {
       expect(opts[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
       expect(h.readAutoReviewHistory).toHaveBeenCalledWith('child');
     }
+  });
+
+  // Incident 2026-10-23: the owner's relayed "可以提交 pr" reached the task with an empty
+  // review intent. A relay the sending host verified carries exactly the owner's words.
+  it.each(['live', 'resumed'] as const)('%s dispatch reviews a verified owner relay against the owner words', async path => {
+    const live: Record<string, object> = path === 'live' ? { child: {
+      id: 'child', agentKind: 'claude-code', remoteHostId: null,
+      isTurnRunning: () => false, getStatus: () => 'active',
+    } } : {};
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, live);
+    await h.delegationDispatch({
+      targetSessionId: 'child', message: 'envelope', clientId: 'verified-relay',
+      autoReviewUserText: { kind: 'agent-request', request: {
+        userText: 'Submit the PR.', sessionId: 'source', clientId: 'owner-input', ownerVerified: true } },
+    });
+    expect(h.sendOptions[0]?.[AUTO_REVIEW_USER_INTENT]).toBe('Submit the PR.');
+    expect(h.readAutoReviewHistory).not.toHaveBeenCalled();
   });
 });
 

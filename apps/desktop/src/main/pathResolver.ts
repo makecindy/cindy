@@ -75,7 +75,8 @@ function pathSegments(value: string): string[] {
   return value.split(/[\\/]+/);
 }
 
-function safeDecodeHrefForLookup(value: string): string | null {
+/** Decode href filename characters once without introducing path or URL syntax. */
+export function safeDecodeHrefForLookup(value: string): string | null {
   let decoded: string;
   try {
     decoded = decodeURIComponent(value);

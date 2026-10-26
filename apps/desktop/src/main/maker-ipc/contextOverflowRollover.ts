@@ -315,7 +315,8 @@ export function withReplaySourceNotes(
 ): OverflowReplayWireMessage {
   if (!agentMeta) return wire;
   const sourceNote = buildWireMessageSourceNote(
-    { origin: agentMeta.origin, sourcePlugin: agentMeta.sourcePlugin, sharedTaskAuthor: agentMeta.sharedTaskAuthor },
+    { origin: agentMeta.origin, sourcePlugin: agentMeta.sourcePlugin, sharedTaskAuthor: agentMeta.sharedTaskAuthor,
+      autoReviewUserText: agentMeta.autoReviewUserText },
     {
       visibleText: typeof wire === 'string' ? wire : extractPlainText(wire.content),
       autoResume: agentMeta.autoResume === true,

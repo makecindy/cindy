@@ -571,6 +571,21 @@ export class PluginMarketLedger {
     this.write(data);
   }
 
+  /** The simulator keeps its server resource; replace both local route keys in one ledger write. */
+  migrateSimulatorInstallation(expected: PluginMarketInstallationRecord, next: PluginMarketInstallationRecord): boolean {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    const target = data.installations[pluginLedgerRecordKey(next)];
+    if (!current || canonicalJson(current) !== canonicalJson(expected) || !current.installed ||
+        current.ghostId !== 'baguette-simulator' || next.ghostId !== 'cindy-simulator' ||
+        current.scope !== 'public' || next.scope !== 'public' || current.namespace != null || next.namespace !== null ||
+        current.pluginId !== next.pluginId || (current.source !== 'market' && current.source !== 'legacy-adopted') ||
+        (target && target.installed)) return false;
+    this.replaceRecord(data, current, next);
+    this.write(data);
+    return true;
+  }
+
   backfillServerRoot(expected: PluginMarketInstallationRecord, serverRoot: string): boolean {
     const data = this.read();
     const current = data.installations[pluginLedgerRecordKey(expected)];

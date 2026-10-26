@@ -1,5 +1,3 @@
-import { UNSAFE_NavigationContext } from 'react-router-dom';
-import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { useContext, useRef, useState, useSyncExternalStore } from 'react';
 import { Puzzle } from 'lucide-react';
 import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
@@ -78,8 +76,6 @@ export function useTabCreationMenu({
   const session = remoteSessions.find(row => row.id === sessionId) ?? localSession;
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
   const pending = useRef<string | null>(null);
-  // Detached sidebar hosts have no Router and must hand content back to the main window.
-  const router = useContext(UNSAFE_NavigationContext);
   const items = listTabKindMenuMetas().filter(item => {
     if (item.kind.startsWith('ghost:')) return false;
     if (item.kind === 'subagents' && !subagentsAvailable) return false;
@@ -115,8 +111,6 @@ export function useTabCreationMenu({
       setOpeningSessionId(sessionId);
       const opening = openSideChatTab(sessionId, {
         placement: sideChatPlacement,
-        onOpen: !isSidebarWindow() && router
-          ? (id) => router.navigator.push(`${router.basename.replace(/\/$/, '')}/cc-agent/${id}`) : undefined,
       });
       void opening.finally(() => {
         if (pending.current === sessionId) pending.current = null;

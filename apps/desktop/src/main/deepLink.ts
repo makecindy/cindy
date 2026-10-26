@@ -77,7 +77,8 @@ export type DeepLinkPayload =
    * islandEntryId 只由主进程的灵动岛点击写入(URL 解析从不产生它),标识这一次点击,
    * 供 renderer 在导航落地后申请处置被点的那张卡。
    */
-  | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+  | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+  | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
   | { type: 'project'; workingDir: string }
   /**
    * 由 --open-folder argv 触发的 "新建对话 + 预填工作目录"。
@@ -95,7 +96,7 @@ export type DeepLinkPayload =
    *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
    *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' }
+  | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -144,11 +145,13 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   }
   if (!decoded) return null;
   if (type === 'session') {
-    // session 深链支持消息锚点 `?message=<clientId>`(其余 type 维持剥 query 语义)。
-    const messageClientId = parseSessionMessageParam(rawValue);
-    return messageClientId
-      ? { type: 'session', id: decoded, messageClientId }
-      : { type: 'session', id: decoded };
+    const messageClientId = parseSessionQueryParam(rawValue, 'message');
+    const deviceId = parseSessionQueryParam(rawValue, 'device');
+    return {
+      type: 'session', id: decoded,
+      ...(messageClientId ? { messageClientId } : {}),
+      ...(deviceId ? { deviceId } : {}),
+    };
   }
   if (type === 'project') {
     return { type: 'project', workingDir: decoded };
@@ -199,10 +202,10 @@ function parseSettingsConnectParam(rawValue: string): string | null | typeof INV
 }
 
 /**
- * 从 session 深链的原始 value(`<id>?message=...#...`)里抽 `message` 参数。
+ * 从 session 深链的原始 value 里抽消息锚点或设备归属。
  * 值为空 / 解码失败 → null(锚点非法不拖累 sessionId 本身的解析)。
  */
-function parseSessionMessageParam(rawValue: string): string | null {
+function parseSessionQueryParam(rawValue: string, key: 'message' | 'device'): string | null {
   const hashIdx = rawValue.indexOf('#');
   const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
   const queryIdx = noHash.indexOf('?');
@@ -210,7 +213,7 @@ function parseSessionMessageParam(rawValue: string): string | null {
   const query = noHash.slice(queryIdx + 1);
   for (const pair of query.split('&')) {
     const eqIdx = pair.indexOf('=');
-    if (eqIdx <= 0 || pair.slice(0, eqIdx) !== 'message') continue;
+    if (eqIdx <= 0 || pair.slice(0, eqIdx) !== key) continue;
     const rawParam = pair.slice(eqIdx + 1);
     if (!rawParam) return null;
     try {
@@ -237,6 +240,16 @@ export function buildSessionDeepLink(
 ): string {
   const device = opts?.deviceId ? `?device=${encodeURIComponent(opts.deviceId)}` : '';
   return `${URL_PREFIX}session/${encodeURIComponent(sessionId)}${device}`;
+}
+
+/** History tools use qualified ids for remote tasks; links always name the owning computer. */
+export function buildHistorySessionDeepLink(sessionKey: string, localDeviceId: string): string {
+  const separator = sessionKey.indexOf('::');
+  const deviceId = separator < 0 ? localDeviceId : sessionKey.slice(0, separator);
+  const sessionId = separator < 0 ? sessionKey : sessionKey.slice(separator + 2);
+  return buildSessionDeepLink(sessionId, {
+    deviceId: deviceId === 'local' ? localDeviceId : deviceId,
+  });
 }
 
 /** 带消息锚点(`?message=<clientId>`)的会话深链,与 renderer 侧实现等价镜像。 */
@@ -405,6 +418,11 @@ export function openMainWindowVoiceSettings(tab: 'voice-input' | 'providers'): v
   dispatchDeepLink({ type: 'settings', tab });
 }
 
+/** Internal menu-bar entry; reuse the existing main-window navigation queue. */
+export function openMainWindowRemoteControlSettings(): void {
+  dispatchDeepLink({ type: 'settings', tab: 'remote-control' });
+}
+
 /** 主进程内部入口(菜单栏余量面板)打开账单页的充值流程;URL 深链不开放这个 tab。 */
 export function openMainWindowBillingTopUp(): void {
   dispatchDeepLink({ type: 'settings', tab: 'billing', intent: 'topup' });
@@ -424,6 +442,11 @@ export function openMainWindowSession(
       : { type: 'session', id: sessionId },
     options?.focus !== false,
   );
+}
+
+/** An authenticated chat notification opens its exact message through the existing navigation queue. */
+export function openMainWindowChatMessage(groupId: string, messageId: string, threadRootId?: string, conversationKind?: 'direct'): void {
+  dispatchDeepLink({ type: 'chat-message', groupId, messageId, ...(conversationKind ? { conversationKind } : {}), ...(threadRootId ? { threadRootId } : {}) });
 }
 
 /** Sends a typed internal event to the primary renderer without broadcasting to utility windows. */

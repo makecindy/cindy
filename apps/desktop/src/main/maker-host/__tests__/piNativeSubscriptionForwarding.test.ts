@@ -8,6 +8,8 @@ const { ownerState } = vi.hoisted(() => ({
   ownerState: {
     pending: false,
     scope: 'cloud:owner-a:1',
+    fastAllowed: true,
+    afterFastRead: undefined as 'relax' | 'owner' | undefined,
   },
 }));
 
@@ -19,6 +21,18 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => ownerState.pending,
   activeOwnerScopeKey: () => ownerState.scope,
 }));
+vi.mock('../subscription-fast-policy.js', () => ({ createSubscriptionFastPolicy: () => ({
+  isAllowed: () => {
+    const allowed = ownerState.fastAllowed;
+    const action = ownerState.afterFastRead;
+    ownerState.afterFastRead = undefined;
+    if (action) queueMicrotask(() => {
+      if (action === 'relax') ownerState.fastAllowed = true;
+      else ownerState.scope = 'cloud:owner-b:2';
+    });
+    return allowed;
+  },
+}) }));
 
 vi.mock('../logger-adapter.js', () => ({
   createMakerLogger: () => {
@@ -99,6 +113,30 @@ describe('PI native subscription forwarding', () => {
     clearUsagePricing('session-fast');
     ownerState.pending = false;
     ownerState.scope = 'cloud:owner-a:1';
+    ownerState.fastAllowed = true;
+    ownerState.afterFastRead = undefined;
+  });
+
+  it.each(['relax', 'owner'] as const)('preserves the final boundary when %s changes during speed decompression', async action => {
+    ownerState.fastAllowed = false;
+    ownerState.afterFastRead = action;
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'session-fast', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify({ model: 'gpt-6.1-sol', input: [], service_tier: 'priority' }))),
+      parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res,
+    } as never);
+    if (action === 'owner') {
+      expect(injected.fetch).not.toHaveBeenCalled();
+      expect(res.status).toBe(503);
+    } else {
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0][1]!;
+      expect(JSON.parse(Buffer.from(sent.body as Uint8Array).toString()).service_tier).toBe('default');
+      expect(sent.headers).not.toHaveProperty('content-encoding');
+    }
   });
 
   it.each([['grok-4.7', true, 'grok-4.7-build-fast'], ['grok-4.7', false, 'grok-4.7'],

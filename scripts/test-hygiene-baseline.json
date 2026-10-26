@@ -379,9 +379,6 @@
     "apps/desktop/src/main/plugin-market/__tests__/sources-cache-lease.test.ts": {
       "realWaits": 1
     },
-    "apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts": {
-      "sourceReads": 4
-    },
     "apps/desktop/src/main/plugin-publisher/__tests__/host.test.ts": {
       "resetModules": 1
     },
@@ -458,9 +455,6 @@
       "realWaits": 2
     },
     "apps/desktop/src/main/voice-input/__tests__/globalShortcut.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/main/voice-input/__tests__/MacModifierShortcutListenerStartRace.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/main/voice-input/__tests__/RealtimeAsrWebSocketProvider.test.ts": {

@@ -55,12 +55,14 @@ export default function RemoteCollectionScreen() {
   return <RemoteCollectionScreenContent />;
 }
 
+/** Old links to the teammate list: teammates now live at the top of the home. */
 function LegacyTeammatesHomeRedirect() {
   const navigation = useTeammateNavigation();
   const focused = useIsFocused();
+  const returnHome = navigation.returnHome;
   useEffect(() => {
-    if (focused && navigation.hydrated) void navigation.chooseMode('teammates');
-  }, [focused, navigation.hydrated, navigation.chooseMode]);
+    if (focused) returnHome();
+  }, [focused, returnHome]);
   return null;
 }
 

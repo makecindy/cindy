@@ -28,6 +28,7 @@ import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugin
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
+import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -43,7 +44,7 @@ interface BotSkillCatalogItem {
 
 interface BotMcpCatalogItem {
   name: string;
-  source: 'builtin' | 'custom';
+  source: 'builtin' | 'custom' | 'harness';
   available?: boolean;
   generation?: string;
 }
@@ -295,6 +296,7 @@ export function buildBotProfileContextPrompt(displayName: string): string {
     `Active Cindy Bot profile: ${name}.`,
     'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Do not reverse who is the boss or invent a relationship from habitual forms of address. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
     'The user is talking to this named teammate inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
+    businessOwnershipPrompt.trim(),
     'Use available host tools for model changes and verify their results before claiming a change. Connecting a new model or signing in to a provider is managed in Cindy settings. Do not present terminal-only slash commands such as /login or /model as commands available in this chat or assume the user is in a Pi terminal. When the exact Cindy entry is unknown, say so rather than inventing steps. When the user asks about a native CLI, explain which instructions belong to that terminal. This distinction does not restrict native tools, Pi package management, extensions, or self-repair.',
   ].join('\n');
 }
@@ -434,7 +436,7 @@ export function resolveBotMcpReferences(input: {
 }): { resolved: string[]; unavailable: string[] } {
   const available = new Set(
     input.catalog
-      .filter((item) => item.source === 'custom' && item.available !== false)
+      .filter((item) => item.source !== 'builtin' && item.available !== false)
       .map((item) => item.name),
   );
   if (input.mode === 'inherit') {

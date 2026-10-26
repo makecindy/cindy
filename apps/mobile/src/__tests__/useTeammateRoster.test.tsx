@@ -42,6 +42,8 @@ it('offers only real online hosts advertising create, including a host with an e
   expect(h.link.invoke).toHaveBeenCalledTimes(2); // No extra capability probe or mutation.
   expect(result.authoritative).toBe(true);
   h.list.isOnline.mockReturnValue(false); await render(); expect(result.createTargets).toEqual([]);
+  // Offline cached shards no longer raise refresh errors, but are still not authoritative.
+  expect(result.authoritative).toBe(false);
 });
 it('does not treat initial offline discovery as authoritative; recovers on connection', async () => {
   h.link.status = 'offline'; await render(); expect(result.authoritative).toBe(false); expect(result.createTargets).toEqual([]);

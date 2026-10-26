@@ -1,4 +1,9 @@
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
+import { supportsSubscriptionFastPolicy } from '@cindy/model-providers';
+import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
+import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
+import { notifyProviderShareCatalogChanged } from './dispatch.js';
+import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
 import { readRemoteAgentLimitsState, saveRemoteAgentLimits } from '../remote-agent/host/limitsStore.js';
 import { remoteAgentLimitUsage, revalidateRemoteModelAccess } from './dispatch.js';
 /**
@@ -70,6 +75,7 @@ import {
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { broadcast as broadcastLocal } from './index.js';
 import { fetchIdentityCard, providerShareApi, providerShareLinkFor, sha256Hex } from './providerShareApi.js';
 import { configureProviderShareApprovalWindows } from './providerShareApprovalWindows.js';
 import {
@@ -300,6 +306,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
     },
   }, { readWatchedShares: readInvoke ? (hostDeviceId) => readProviderManagementShares(readInvoke, hostDeviceId) : undefined });
   startProviderShareGuest({
+    catalogChanged(deviceId) { emit(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed', payload: {} }); },
     changed(received) {
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
     },
@@ -348,6 +355,13 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throwIpcError('INVALID_PARAMS', 'Invalid command');
   const value = raw as Record<string, unknown>;
   switch (value.action) {
+    case 'get-fast-policy':
+    case 'set-fast-policy': {
+      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (value.action === 'get-fast-policy') return { action: value.action, providerId: value.providerId };
+      if (typeof value.allowFast !== 'boolean') throwIpcError('INVALID_PARAMS', 'allowFast must be a boolean');
+      return { action: value.action, providerId: value.providerId, allowFast: value.allowFast };
+    }
     case 'get-model-access':
     case 'set-model-access': {
       if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
@@ -725,6 +739,28 @@ async function createLink(
 async function execute(command: ProviderShareCommand, assertCurrent: () => void = () => undefined): Promise<unknown> {
   assertCurrent();
   switch (command.action) {
+    case 'get-fast-policy':
+    case 'set-fast-policy': {
+      const assertOwner = captureProviderManagementScope();
+      const assertScope = () => { assertCurrent(); assertOwner(); };
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+      assertScope();
+      const provider = providers.find(entry => entry.id === command.providerId);
+      const supported = supportsSubscriptionFastPolicy(provider);
+      if (command.action === 'set-fast-policy') {
+        if (!supported) throwIpcError('INVALID_PARAMS', 'Fast policy is available only for supported subscription accounts');
+        await providerFastPolicy.set(command.providerId, command.allowFast, assertScope);
+        // Publish catalog invalidation even if a native live update needs retrying.
+        emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
+        // Local subscription use also works without a running account/share transport.
+        broadcastLocal(MAKER_PUSH.PROVIDER_CHANGED, {});
+        tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
+        notifyProviderShareCatalogChanged(command.providerId);
+        await notifySubscriptionFastPolicyChanged();
+        assertScope();
+      }
+      return { supported, allowFast: supported ? providerFastPolicy.allows(command.providerId) : true };
+    }
     case 'get-model-access':
     case 'set-model-access': {
       const assertOwner = captureProviderManagementScope();

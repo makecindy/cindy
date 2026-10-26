@@ -1,3 +1,4 @@
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 /**
  * 伙伴设置 →「消息平台」: 这位伙伴自己的 IM 机器人。
  *
@@ -5,17 +6,22 @@
  * 把凭证填在这里, 这个机器人就是这位伙伴: 主人私聊进伙伴主任务, 群 / 话题 / 外部用户私聊各一条隐藏专线,
  * 同一伙伴的所有渠道共享记忆(规则见 docs/product-rules/cindy-bots-runtime.md)。
  * 与 设置 → IM 机器人 里那份个人 bot 各用各的凭证; 添加时也可以把那份个人 bot 一次性移过来
- * (个人 bot 随之清空)。远端伙伴没有这一页。
+ * (个人 bot 随之清空)。
+ *
+ * 伙伴在另一台电脑上时，同一页读写那台电脑的连接（经伙伴设置目标）：凭证只在保存它的电脑上输入和存放，
+ * 远程页不新建连接（只能把那台电脑设置里已配好的个人 bot 移过来），微信扫码授权与 X 登录授权也在那台电脑上完成。
  */
 
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Briefcase, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
+import { Archive, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { Button } from '@/components/ui/button';
+import { Collapse } from '@/components/ui/collapse';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
@@ -24,6 +30,7 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { formatRelative } from '@/hooks/useRelativeTime';
 import { extractIpcError } from '@/utils/ipcError';
 import type {
@@ -38,9 +45,13 @@ import type {
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
 import { useBotTranslation } from './botPronounContext';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { RemoteOfficialXCard } from './RemoteOfficialXCard';
 import type { BotProfile } from './botStore';
 import {
   addBotImConnection,
+  archiveBotImConnectionLane,
+  botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
   botImConnectionGroupsSupported,
   botImConnectionLanesSupported,
@@ -52,6 +63,7 @@ import {
   resetBotImConnectionLane,
   setBotImConnectionGroupActivation,
   useBotImConnections,
+  type BotImConnectionApi,
 } from './botImConnectionClient';
 
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
@@ -105,7 +117,10 @@ const STATUS_TEXT: Record<StatusTone, string> = {
 
 export function BotChannelsPage({ bot }: { bot: BotProfile }) {
   const { t } = useBotTranslation();
-  const { payload, loading, apply } = useBotImConnections();
+  // This computer's messaging stack, or the teammate's computer's through the settings target.
+  const target = useBotSettingsTarget();
+  const { im, wechat, x: remoteX } = target.channels;
+  const { payload, loading, apply } = useBotImConnections(im, target);
   const { confirm } = useConfirmDialog();
   const [adding, setAdding] = useState(false);
   const [wechatExpanded, setWechatExpanded] = useState(false);
@@ -138,7 +153,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
     if (!ok) return;
     setRemovingId(view.id);
     try {
-      apply(await removeBotImConnection(view.id));
+      apply(await removeBotImConnection(im, view.id));
     } catch {
       await confirm({
         title: t('bots.channels.removeConfirm.failed'),
@@ -152,7 +167,8 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
 
   return (
     <section className="flex flex-col gap-4 pt-3" aria-label={t('bots.channels.title')}>
-      {typeof window.electronAPI.hookControl?.setXCompanion === 'function' ? <HookConnectionsSection companion={{ id: bot.id, name: bot.name }} /> : null}
+      {remoteX ? <RemoteOfficialXCard bot={bot} api={remoteX} deviceName={target.deviceName ?? ''} /> : null}
+      {!remoteX && target.kind === 'local' && typeof window.electronAPI.hookControl?.setXCompanion === 'function' ? <HookConnectionsSection companion={{ id: bot.id, name: bot.name }} /> : null}
       {loading && !payload ? (
         <div className="flex justify-center py-6 text-[var(--text-tertiary)]">
           <Spinner size={16} />
@@ -211,11 +227,12 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
-                {view.channel === 'telegram' && view.botContextId && botImConnectionGroupsSupported() ? (
-                  <ConnectionGroups connectionId={view.id} botName={bot.name} />
+                {view.channel === 'telegram' && view.botContextId && botImConnectionGroupsSupported(im) ? (
+                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
                 ) : null}
-                {view.botContextId && botImConnectionLanesSupported() ? (
-                  <ConnectionLanes connectionId={view.id} botId={bot.id} botName={bot.name} />
+                {view.botContextId && botImConnectionLanesSupported(im) ? (
+                  <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
+                    platform={platformName(view)} deviceId={target.deviceId} />
                 ) : null}
               </li>
             );
@@ -232,7 +249,11 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
           {t('bots.channels.add.button')}
         </Button>
       </div>
-      {typeof window.electronAPI.wechatBot?.setCompanion === 'function' ? (
+      {wechat ? (
+        <WechatBotSection companion={{ id: bot.id, name: bot.name }} expanded={wechatExpanded}
+          host={{ name: target.deviceName ?? '', api: wechat }}
+          onToggle={() => setWechatExpanded((expanded) => !expanded)} />
+      ) : target.kind === 'local' && typeof window.electronAPI.wechatBot?.setCompanion === 'function' ? (
         <WechatBotSection companion={{ id: bot.id, name: bot.name }} expanded={wechatExpanded}
           onToggle={() => setWechatExpanded((expanded) => !expanded)} />
       ) : null}
@@ -243,7 +264,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
         {t('bots.channels.sharedMemoryNote', { name: bot.name })}
       </p>
       {adding ? (
-        <BotChannelAddDialog bot={bot} onApplied={apply} onOpenChange={setAdding} />
+        <BotChannelAddDialog bot={bot} api={im} remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName} onApplied={apply} onOpenChange={setAdding} />
       ) : null}
     </section>
   );
@@ -253,17 +274,19 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
  * 一条 Telegram 连接的「群聊」小节: 机器人进过的群 + 每群参与模式(仅 @ / 全响应)。
  * 与 设置 → IM 机器人 的同名设置各管各的 bot; 乐观更新, 保存失败回读正本并提示。
  */
-function ConnectionGroups({ connectionId, botName }: { connectionId: string; botName: string }) {
+function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnectionApi | null; connectionId: string; botName: string }) {
   const { t } = useBotTranslation();
   const [groups, setGroups] = useState<BotImConnectionGroup[] | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const latest = useRef(0);
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    void listBotImConnectionGroups(connectionId)
+    void listBotImConnectionGroups(apiRef.current, connectionId)
       .then((payload) => {
         if (!cancelled) setGroups(payload.groups);
       })
@@ -282,14 +305,14 @@ function ConnectionGroups({ connectionId, botName }: { connectionId: string; bot
         current ? current.map((g) => (g.chatId === chatId ? { ...g, activation: mode } : g)) : current,
       );
       setError(null);
-      void setBotImConnectionGroupActivation(connectionId, chatId, mode)
+      void setBotImConnectionGroupActivation(apiRef.current, connectionId, chatId, mode)
         .then((payload) => {
           if (revision === latest.current) setGroups(payload.groups);
         })
         .catch(() => {
           if (revision !== latest.current) return;
           setError('save');
-          void listBotImConnectionGroups(connectionId)
+          void listBotImConnectionGroups(apiRef.current, connectionId)
             .then((payload) => {
               if (revision === latest.current) setGroups(payload.groups);
             })
@@ -356,37 +379,49 @@ const LANE_KIND_KEY: Record<BotImConnectionLane['kind'], string> = {
 /**
  * 一条连接的「隐藏任务」小节: 主人私聊(伙伴主任务)、每个群 / 话题与其他人的私聊各一行,
  * 显示状态、最近活动和当前上下文里的消息数; 卡住时可以让某一条重新开始(同一条任务,
- * 记录保留, 下一条消息换干净的上下文)。点击记录复用主界面的只读历史页, 不取消隐藏。
+ * 记录保留, 下一条消息换干净的上下文)。点击记录打开原任务的普通界面, 不取消隐藏。
  */
-function ConnectionLanes({ connectionId, botId, botName }: { connectionId: string; botId: string; botName: string }) {
+function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
+  api: BotImConnectionApi | null; connectionId: string; botName: string; platform: string;
+  deviceId?: string;
+}) {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+  const [archivePendingId, setArchivePendingId] = useState<string | null>(null);
+  const archiveConfirmRef = useRef<HTMLButtonElement>(null);
   const [lanes, setLanes] = useState<BotImConnectionLane[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [resettingId, setResettingId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: 'done' | 'failed'; text: string } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const resettingRef = useRef(false);
+  const mutatingRef = useRef(false);
+  const loadGeneration = useRef(0);
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      void listBotImConnectionLanes(connectionId)
+      const generation = loadGeneration.current;
+      void listBotImConnectionLanes(apiRef.current, connectionId)
         .then((payload) => {
-          if (cancelled) return;
+          if (cancelled || generation !== loadGeneration.current || mutatingRef.current) return;
           setLanes(payload.lanes);
           setLoadFailed(false);
           setNow(Date.now());
         })
         .catch(() => {
-          if (!cancelled) setLoadFailed(true);
+          if (!cancelled && generation === loadGeneration.current && !mutatingRef.current) setLoadFailed(true);
         });
     };
     load();
     const timer = setInterval(() => {
-      if (!document.hidden && !resettingRef.current) load();
+      if (!document.hidden && !mutatingRef.current) load();
     }, LANES_REFRESH_MS);
     return () => {
       cancelled = true;
@@ -394,38 +429,71 @@ function ConnectionLanes({ connectionId, botId, botName }: { connectionId: strin
     };
   }, [connectionId, reloadToken]);
 
+  // Match SessionItem's inline archive confirmation: 4s or an outside click dismisses it.
+  useEffect(() => {
+    if (!archivePendingId) return;
+    if (!expanded) {
+      setArchivePendingId(null);
+      return;
+    }
+    const dismiss = () => setArchivePendingId(null);
+    const timer = setTimeout(dismiss, 4000);
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.target instanceof Node && archiveConfirmRef.current?.contains(event.target)) return;
+      dismiss();
+    };
+    document.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [archivePendingId, expanded]);
+
   const laneName = (lane: BotImConnectionLane) =>
     lane.kind === 'owner-dm' ? t('bots.channels.lanes.ownerName') : lane.name || lane.chatId || '';
 
-  const reset = async (lane: BotImConnectionLane) => {
-    if (resettingRef.current) return;
+  const mutate = async (lane: BotImConnectionLane, action: 'reset' | 'archive') => {
+    if (mutatingRef.current) return;
+    mutatingRef.current = true;
+    loadGeneration.current += 1;
     const name = laneName(lane);
-    const ok = await confirm({
-      title: t('bots.channels.lanes.resetConfirm.title', { lane: name }),
-      description: t(
-        lane.kind === 'owner-dm'
-          ? 'bots.channels.lanes.resetConfirm.ownerDescription'
-          : 'bots.channels.lanes.resetConfirm.description',
-        { name: botName },
-      ),
-      confirmText: t('bots.channels.lanes.resetConfirm.confirm'),
-      cancelText: t('bots.channels.lanes.resetConfirm.cancel'),
-    });
-    if (!ok) return;
-    resettingRef.current = true;
-    setResettingId(lane.sessionId);
-    setNotice(null);
+    const previousLanes = lanes;
     try {
-      const payload = await resetBotImConnectionLane(connectionId, lane.sessionId);
+      if (action === 'reset') {
+        const ok = await confirm({
+          title: t('bots.channels.lanes.resetConfirm.title', { lane: name }),
+          description: t(
+            lane.kind === 'owner-dm'
+              ? 'bots.channels.lanes.resetConfirm.ownerDescription'
+              : 'bots.channels.lanes.resetConfirm.description',
+            { name: botName },
+          ),
+          confirmText: t('bots.channels.lanes.resetConfirm.confirm'),
+          cancelText: t('bots.channels.lanes.resetConfirm.cancel'),
+        });
+        if (!ok) return;
+      }
+      if (action === 'reset') setResettingId(lane.sessionId);
+      else {
+        setArchivePendingId(null);
+        setArchivingId(lane.sessionId);
+        setLanes((current) => current?.filter((row) => row.sessionId !== lane.sessionId) ?? null);
+      }
+      setNotice(null);
+      const payload = await (action === 'reset' ? resetBotImConnectionLane : archiveBotImConnectionLane)(apiRef.current, connectionId, lane.sessionId);
       setLanes(payload.lanes);
       setNow(Date.now());
-      setNotice({ tone: 'done', text: t('bots.channels.lanes.resetDone', { lane: name }) });
+      if (action === 'reset') setNotice({ tone: 'done', text: t('bots.channels.lanes.resetDone', { lane: name }) });
     } catch {
-      setNotice({ tone: 'failed', text: t('bots.channels.lanes.resetFailed') });
+      if (action === 'archive') {
+        setLanes(previousLanes);
+        toast.error(t('bots.channels.lanes.archiveFailed'));
+      } else setNotice({ tone: 'failed', text: t('bots.channels.lanes.resetFailed') });
       setReloadToken((value) => value + 1);
     } finally {
-      resettingRef.current = false;
+      mutatingRef.current = false;
       setResettingId(null);
+      setArchivingId(null);
     }
   };
 
@@ -433,7 +501,19 @@ function ConnectionLanes({ connectionId, botId, botName }: { connectionId: strin
   const others = (lanes ?? []).filter((lane) => lane.kind !== 'owner-dm');
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-      <div className="text-12 font-medium text-[var(--text-primary)]">{t('bots.channels.lanes.title')}</div>
+      <div className="flex items-center justify-between text-12 font-medium text-[var(--text-primary)]">
+        <span>{t('bots.channels.lanes.title', { platform })}</span>
+        <ChromeIconButton
+          className="-my-[5px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          aria-label={t(expanded ? 'bots.channels.lanes.collapse' : 'bots.channels.lanes.expand', { platform })}
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronUp size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+        </ChromeIconButton>
+      </div>
+      <Collapse open={expanded} id={contentId} inert={!expanded} innerClassName="flex flex-col gap-2">
       <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.lanes.hint', { name: botName })}
       </p>
@@ -472,7 +552,7 @@ function ConnectionLanes({ connectionId, botId, botName }: { connectionId: strin
           <div key={lane.sessionId} className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => navigate(`/bots/${encodeURIComponent(botId)}/history/${encodeURIComponent(lane.sessionId)}`)}
+              onClick={() => navigate(standardSessionRoute(lane.sessionId, deviceId))}
               className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
                 <span className="flex min-w-0 items-center gap-1.5">
@@ -487,18 +567,50 @@ function ConnectionLanes({ connectionId, botId, botName }: { connectionId: strin
                 </span>
                 <span className="block text-11 leading-[1.5] text-[var(--text-tertiary)]">{meta.join(' · ')}</span>
             </button>
+            <div className="flex shrink-0 items-center gap-1">
+            {botImConnectionLaneArchiveSupported(api) ? (
+              <div className="relative flex h-7 w-7 shrink-0 items-center justify-end">
+              {archivePendingId === lane.sessionId ? (
+                <Button
+                  ref={archiveConfirmRef}
+                  type="button"
+                  variant="secondary"
+                  tone="danger-surface"
+                  size="xs"
+                  compact
+                  className="absolute right-0 top-1/2 w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
+                  aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
+                  disabled={archivingId !== null || resettingId !== null}
+                  onClick={() => void mutate(lane, 'archive')}
+                >
+                  {t('ccAgent.sidebar.sessionMenu.archived')}
+                </Button>
+              ) : (
+                <ChromeIconButton
+                  className="shrink-0 text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  aria-label={t('bots.channels.lanes.archiveAria', { lane: name })}
+                  tooltip={t('ccAgent.sidebar.sessionMenu.archived')}
+                  disabled={archivingId !== null || resettingId !== null}
+                  onClick={() => setArchivePendingId(lane.sessionId)}
+                >
+                  <Archive size={14} strokeWidth={2} aria-hidden />
+                </ChromeIconButton>
+              )}
+              </div>
+            ) : null}
             <Button
               type="button"
               variant="secondary"
               size="md"
               compact
               loading={resettingId === lane.sessionId}
-              disabled={resettingId !== null && resettingId !== lane.sessionId}
+              disabled={archivingId !== null || (resettingId !== null && resettingId !== lane.sessionId)}
               aria-label={t('bots.channels.lanes.resetAria', { lane: name })}
-              onClick={() => void reset(lane)}
+              onClick={() => void mutate(lane, 'reset')}
             >
               {t('bots.channels.lanes.reset')}
             </Button>
+            </div>
           </div>
         );
       })}
@@ -518,6 +630,7 @@ function ConnectionLanes({ connectionId, botId, botName }: { connectionId: strin
           {notice.text}
         </p>
       ) : null}
+      </Collapse>
     </div>
   );
 }
@@ -573,10 +686,15 @@ function SourceOption({
 
 function BotChannelAddDialog({
   bot,
+  api,
+  remoteName,
   onApplied,
   onOpenChange,
 }: {
   bot: BotProfile;
+  api: BotImConnectionApi | null;
+  /** Set for a teammate on another computer: credentials are typed and stored on that computer only. */
+  remoteName?: string;
   onApplied: (next: BotImConnectionListPayload) => void;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -602,10 +720,13 @@ function BotChannelAddDialog({
   const [adoptable, setAdoptable] = useState<BotImAdoptablePersonalBot[]>([]);
   const [source, setSource] = useState<'existing' | 'manual'>('existing');
   const existing = adoptable.find((item) => item.channel === channel) ?? null;
-  const useExisting = existing !== null && source === 'existing';
+  const credentialsHere = remoteName === undefined;
+  const useExisting = existing !== null && (source === 'existing' || !credentialsHere);
 
+  const apiRef = useRef(api);
+  apiRef.current = api;
   const refreshAdoptable = useCallback(() => {
-    void listAdoptablePersonalBots()
+    void listAdoptablePersonalBots(apiRef.current)
       .then((next) => setAdoptable(next.bots))
       .catch(() => setAdoptable([]));
   }, []);
@@ -619,7 +740,9 @@ function BotChannelAddDialog({
   const filled = (...values: string[]) => values.every((value) => value.trim().length > 0);
   const canSubmit = useExisting
     ? true
-    : channel === 'telegram'
+    : !credentialsHere
+      ? false
+      : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
         ? filled(appId, appSecret)
@@ -678,7 +801,7 @@ function BotChannelAddDialog({
     setBusy(true);
     setError(null);
     try {
-      const next = input ? await addBotImConnection(input) : await adoptPersonalBot({ botId: bot.id, channel });
+      const next = input ? await addBotImConnection(apiRef.current, input) : await adoptPersonalBot(apiRef.current, { botId: bot.id, channel });
       onApplied(next);
       onOpenChange(false);
     } catch (failure) {
@@ -776,17 +899,24 @@ function BotChannelAddDialog({
                     detail={adoptableIdentity(existing)}
                     onSelect={() => setSource('existing')}
                   />
-                  <SourceOption
-                    checked={!useExisting}
-                    disabled={busy}
-                    title={t('bots.channels.add.source.manual')}
-                    onSelect={() => setSource('manual')}
-                  />
+                  {credentialsHere ? (
+                    <SourceOption
+                      checked={!useExisting}
+                      disabled={busy}
+                      title={t('bots.channels.add.source.manual')}
+                      onSelect={() => setSource('manual')}
+                    />
+                  ) : null}
                 </div>
               ) : null}
               {useExisting ? (
                 <p className="px-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
                   {t('bots.channels.add.source.moveNote', { name: bot.name })}
+                </p>
+              ) : !credentialsHere ? (
+                // Tokens and secrets are typed where they are stored; they never travel to another computer.
+                <p className="px-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                  {t('bots.remoteSettings.finishOnHost', { device: remoteName })}
                 </p>
               ) : channel === 'telegram' ? (
                 <>

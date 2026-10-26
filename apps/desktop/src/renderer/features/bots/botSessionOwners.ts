@@ -12,8 +12,6 @@
 import type { BotSessionOwner } from '@/features/cc-agent/lib/projectGrouping';
 import type { BotProfile } from './botStore';
 import type { RemoteBot } from './remoteBotRoster';
-import { isBotGroupLaneSession } from './botGroupLane';
-import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
 
 /**
  * Find the Bot that owns a real Cindy Session through the projected
@@ -30,21 +28,7 @@ export function findBotProfileForSession(
   );
 }
 
-/**
- * Where a session-only entry (notification / Agent Island click, task deep
- * link) lands for a Bot-owned Session, and whether that target can dispose the
- * clicked Agent Island card itself.
- *
- * Targets that render no disposal control for this Session's error dispose the
- * clicked card instead: a hidden group lane lives inside its group chat (`consumesAlert`,
- * once the route commits); a read-only history transcript re-checks ownership
- * after it commits and may redirect away, so its gate disposes it once shown
- * (`gateConsumesAlert`). Unread errors are immune to passive visibility acks,
- * so without this the island card could never be cleared. Main only honours it
- * for the card that was actually clicked, and only while that card is unchanged
- * (see AgentIslandService.consumeIslandEntryAlert). A live chat keeps its own
- * ErrorBanner as the only disposal path.
- */
+/** Destination of a session-only entry and ownership of its error acknowledgement. */
 export interface BotSessionEntryTarget {
   route: string;
   /** The entry navigator disposes the clicked card once this route has committed. */
@@ -53,13 +37,8 @@ export interface BotSessionEntryTarget {
   gateConsumesAlert?: boolean;
 }
 
-/**
- * Resolve the public Bot route for a notification or other session-only entry.
- * The stable main task stays on the short Bot route; history keeps its own
- * read-only route, a group lane returns to its group and a private-chat topic
- * opens beside its private chat.
- * Background tasks keep their ordinary `/cc-agent/:sessionId` route with its
- * message anchors and error controls; other live chats use the Bot session route.
+/** The companion's main chat keeps its chat entry; every other task opens its ordinary page.
+ * The task page owns error recovery, so navigation must not consume its alert.
  */
 export function botRouteForOwnedSession(
   profiles: readonly BotProfile[],
@@ -68,34 +47,11 @@ export function botRouteForOwnedSession(
   const bot = findBotProfileForSession(profiles, sessionId);
   if (!bot) return null;
   const botRoute = `/bots/${encodeURIComponent(bot.id)}`;
-  const projection = bot.sessions.find((session) => session.id === sessionId);
-  if (isBotGroupLaneSession(projection)) {
-    return {
-      route: projection?.groupId ? `/bots/groups/${encodeURIComponent(projection.groupId)}` : botRoute,
-      consumesAlert: true,
-    };
-  }
-  if ((projection?.kind === 'thread' || projection?.role === 'thread') && projection.threadRoot) {
-    // A private-chat topic has no page of its own: open the private chat with the topic beside it.
-    return {
-      route: `${botRoute}/session/${encodeURIComponent(projection.threadRoot.rootSessionId)}?${BOT_DM_THREAD_PARAM}=${encodeURIComponent(sessionId)}`,
-      consumesAlert: false,
-    };
-  }
-  if (projection?.kind === 'history' || projection?.role === 'history'
-    || projection?.kind === 'channel' || projection?.role === 'channel') {
-    // Its ownership gate re-checks after the route commits and may redirect away, so the
-    // gate itself disposes the card once it shows the transcript.
-    return { route: `${botRoute}/history/${encodeURIComponent(sessionId)}`, consumesAlert: false, gateConsumesAlert: true };
-  }
   const canonicalSessionId = bot.sessions.find(
     (session) => session.role === 'canonical' || session.kind === 'chat',
   )?.id;
   if (canonicalSessionId === sessionId) return { route: botRoute, consumesAlert: false };
-  if (projection?.kind === 'worker' || projection?.role === 'delegation') {
-    return { route: `/cc-agent/${encodeURIComponent(sessionId)}`, consumesAlert: false };
-  }
-  return { route: `${botRoute}/session/${encodeURIComponent(sessionId)}`, consumesAlert: false };
+  return { route: `/cc-agent/${encodeURIComponent(sessionId)}`, consumesAlert: false };
 }
 
 /**
@@ -157,6 +113,8 @@ export async function resolveBotRouteForSessionEntry(
 }
 
 export interface SessionEntryNavigatorDeps {
+  /** Compare an explicit link device with this computer before consulting local ownership. */
+  isRemoteDevice?: (deviceId: string) => Promise<boolean>;
   /** The target from the projection already in memory; null when it does not know the Session. */
   readKnownBotRoute: (sessionId: string) => BotSessionEntryTarget | null;
   /** Re-reads the projection for a Session it did not know (see resolveBotRouteForSessionEntry). */
@@ -166,11 +124,11 @@ export interface SessionEntryNavigatorDeps {
   /** Asks main to dispose the card of this island click (see BotSessionEntryTarget). */
   consumeAlert: (sessionId: string, islandEntryId: string) => void;
   /** `isLatest` lets the ordinary path drop its own late async route result too. */
-  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean) => void;
+  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean, deviceId?: string) => void;
 }
 
 export interface SessionEntryNavigator {
-  (sessionId: string, messageClientId?: string, islandEntryId?: string): void;
+  (sessionId: string, messageClientId?: string, islandEntryId?: string, deviceId?: string): void;
   /** Report every location the router has committed (`pathname + search`). */
   locationCommitted: (path: string) => void;
 }
@@ -218,31 +176,42 @@ export function createSessionEntryNavigator(
       throw error;
     }
   };
-  const open = (sessionId: string, messageClientId?: string, islandEntryId?: string) => {
+  const open = (sessionId: string, messageClientId?: string, islandEntryId?: string, deviceId?: string) => {
     const entry = ++sequence;
     pending = null;
     committedSinceOpen = new Set();
     const isLatest = () => sequence === entry;
-    const known = deps.readKnownBotRoute(sessionId);
-    // Background tasks keep their ordinary page with message anchors and visible-session reporting.
-    if (known && !known.route.startsWith('/cc-agent/')) {
-      openBotTarget(entry, sessionId, known, islandEntryId);
+    if (deviceId && deps.isRemoteDevice) {
+      void deps.isRemoteDevice(deviceId).then((remote) => {
+        if (!isLatest()) return;
+        if (remote) deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
+        else openLocal();
+      });
       return;
     }
-    let movedToBotPage = false;
-    deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage);
-    if (known) return;
-    const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
-    void deps.resolveBotRoute(sessionId).then((target) => {
-      if (!isLatest() || !target || target.route.startsWith('/cc-agent/')) return;
-      // Correct only this entry's own landing: the ordinary page, or the Bot page the ordinary
-      // path already resolved to. Any other committed location means the user moved on.
-      for (const path of committedSinceOpen) {
-        if (path !== ordinaryRoute && path !== target.route) return;
+    openLocal();
+    function openLocal() {
+      const known = deps.readKnownBotRoute(sessionId);
+      // Background tasks keep their ordinary page with message anchors and visible-session reporting.
+      if (known && !known.route.startsWith('/cc-agent/')) {
+        openBotTarget(entry, sessionId, known, islandEntryId);
+        return;
       }
-      movedToBotPage = true;
-      openBotTarget(entry, sessionId, target, islandEntryId);
-    });
+      let movedToBotPage = false;
+      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage);
+      if (known) return;
+      const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
+      void deps.resolveBotRoute(sessionId).then((target) => {
+        if (!isLatest() || !target || target.route.startsWith('/cc-agent/')) return;
+        // Correct only this entry's own landing: the ordinary page, or the Bot page the ordinary
+        // path already resolved to. Any other committed location means the user moved on.
+        for (const path of committedSinceOpen) {
+          if (path !== ordinaryRoute && path !== target.route) return;
+        }
+        movedToBotPage = true;
+        openBotTarget(entry, sessionId, target, islandEntryId);
+      });
+    }
   };
   return Object.assign(open, {
     locationCommitted: (path: string) => {

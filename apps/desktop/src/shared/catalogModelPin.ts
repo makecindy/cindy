@@ -9,7 +9,7 @@
 
 export const CATALOG_MODEL_PIN_PREFIX = 'cat:';
 
-export type CatalogModelPinAgentKind = 'codex' | 'claude-code';
+export type CatalogModelPinAgentKind = 'codex' | 'claude-code' | 'pi';
 
 export interface CatalogModelPinRoute {
   providerId: string;
@@ -17,7 +17,7 @@ export interface CatalogModelPinRoute {
   model: string;
 }
 
-const CATALOG_MODEL_PIN_AGENTS = new Set<CatalogModelPinAgentKind>(['codex', 'claude-code']);
+const CATALOG_MODEL_PIN_AGENTS = new Set<CatalogModelPinAgentKind>(['codex', 'claude-code', 'pi']);
 
 /** Encode an exact provider × runtime × model route. */
 export function encodeCatalogModelPin(route: CatalogModelPinRoute): string {

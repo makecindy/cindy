@@ -185,7 +185,7 @@ const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
   rendererFunction('MarkdownSelectableText').getText(rendererSource) + String.raw`
-function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, selectable, text, layout, code = false }) {
+function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false }) {
   const styles = {};
   const onOpenPayload = undefined;
   const inlinesSelectable = () => true;

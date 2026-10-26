@@ -495,38 +495,52 @@ describe('Worker worktree subproject directory', () => {
       const checkout = new Promise<void>((resolve) => {
         finishCheckout = resolve;
       });
-      vi.mocked(awaitBackgroundCheckout).mockReset().mockReturnValue(checkout);
+      let signalCheckoutStarted!: () => void;
+      const checkoutStarted = new Promise<void>((resolve) => { signalCheckoutStarted = resolve; });
+      vi.mocked(awaitBackgroundCheckout).mockReset().mockImplementation(() => {
+        signalCheckoutStarted();
+        return checkout;
+      });
       const source = scenario === 'root' ? alias : path.join(alias, relative);
       let settled = false;
       const result = createWorkerWorktree(sessionId, source, 'main').then((value) => {
         settled = true;
         return value;
       });
-      if (scenario === 'root') {
-        expect(await result).toBe(target);
-        expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+      try {
+        if (scenario === 'root') {
+          expect(await result).toBe(target);
+          expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+          return;
+        }
+        // Windows CI can spend >1s in the real Git probe. Await the actual
+        // boundary (or an early result/failure), not vi.waitFor's 1s deadline.
+        await Promise.race([checkoutStarted, result]);
+        expect(awaitBackgroundCheckout).toHaveBeenCalledWith(sessionId);
+        expect(settled).toBe(false);
+        if (present) {
+          mkdirSync(subproject, { recursive: true });
+          writeFileSync(path.join(subproject, 'AGENTS.md'), 'Checked out rules');
+        }
+        if (scenario === 'external-symlink') {
+          const external = path.join(fixture, 'outside-checkout');
+          mkdirSync(external);
+          mkdirSync(path.dirname(subproject), { recursive: true });
+          symlinkSync(external, subproject, process.platform === 'win32' ? 'junction' : 'dir');
+        }
         finishCheckout();
-        return;
+        expect(await result).toBe(present ? subproject : target);
+        if (scenario === 'missing' || scenario === 'external-symlink')
+          expect(createLogger('test').warn).toHaveBeenCalledWith(
+            'Worker subproject is unavailable within the new worktree; using its root',
+            { sessionId },
+          );
+      } finally {
+        // A failed assertion must not leave a task using the next case's mocks
+        // or the fixture after afterAll removes it.
+        finishCheckout();
+        await result.catch(() => {});
       }
-      await vi.waitFor(() => expect(awaitBackgroundCheckout).toHaveBeenCalledWith(sessionId));
-      expect(settled).toBe(false);
-      if (present) {
-        mkdirSync(subproject, { recursive: true });
-        writeFileSync(path.join(subproject, 'AGENTS.md'), 'Checked out rules');
-      }
-      if (scenario === 'external-symlink') {
-        const external = path.join(fixture, 'outside-checkout');
-        mkdirSync(external);
-        mkdirSync(path.dirname(subproject), { recursive: true });
-        symlinkSync(external, subproject, process.platform === 'win32' ? 'junction' : 'dir');
-      }
-      finishCheckout();
-      expect(await result).toBe(present ? subproject : target);
-      if (scenario === 'missing' || scenario === 'external-symlink')
-        expect(createLogger('test').warn).toHaveBeenCalledWith(
-          'Worker subproject is unavailable within the new worktree; using its root',
-          { sessionId },
-        );
     },
   );
 });

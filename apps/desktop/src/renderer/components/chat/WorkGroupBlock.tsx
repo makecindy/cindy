@@ -520,7 +520,7 @@ export function WorkGroupBlock({
           )}
         </button>
 
-        {isLivePreviewVisible && (
+        <Collapse open={isLivePreviewVisible} animateResize>
           <div
             data-live-work-preview="true"
             className={cn(
@@ -544,9 +544,9 @@ export function WorkGroupBlock({
                   ),
                 )}
           </div>
-        )}
+        </Collapse>
 
-        <Collapse open={effectiveExpanded}>
+        <Collapse open={effectiveExpanded} animateResize>
           <div
             className={cn(
               'mt-1 min-w-0 pl-3 py-[2px]',

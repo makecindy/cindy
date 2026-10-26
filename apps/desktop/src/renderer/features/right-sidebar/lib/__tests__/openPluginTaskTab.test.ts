@@ -7,7 +7,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetStore, addTab, ensureHydrated, getBucket } from '../../store';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
-import { subscribeRevealSessionTab } from '../../globalTabs';
+import { __resetGlobalTabsForTest, addGlobalPluginTab, getActiveGlobalTabId, setActiveGlobalTabId, subscribeRevealSessionTab } from '../../globalTabs';
+import { __resetTabGroupsForTest, getGroupActiveTabId, setTabGroup } from '../../tabGroups';
 import { openPluginTaskTab } from '../openPluginTaskTab';
 import { _resetSidebarCommandsForTests, onRequestRightSidebarVisibility } from '../sidebarCommands';
 import { __resetSidebarTabWindowsStateForTest, __setSidebarTabWindowsStateForTest } from '@/lib/sidebarTabWindowState';
@@ -30,6 +31,7 @@ const ipc = {
 const visibility = vi.fn();
 
 beforeEach(() => {
+  __resetGlobalTabsForTest(); __resetTabGroupsForTest();
   __resetSidebarTabWindowsStateForTest();
   _resetStore(); _resetSidebarCommandsForTests();
   rows.clear(); active.clear(); localStorage.clear(); vi.clearAllMocks();
@@ -37,12 +39,36 @@ beforeEach(() => {
   window.electronAPI = { localDb: { rightSidebarTabs: ipc }, platform: 'darwin' } as unknown as Window['electronAPI'];
   onRequestRightSidebarVisibility(visibility);
 });
-afterEach(() => { _resetStore(); _resetSidebarCommandsForTests(); });
+afterEach(() => { _resetStore(); _resetSidebarCommandsForTests(); __resetGlobalTabsForTest(); __resetTabGroupsForTest(); });
 
 const taskTabs = (sessionId: string) =>
   getBucket(sessionId).tabs.filter((tab) => tab.kind === 'plugin-task').map((tab) => tab.state);
 
 describe('openPluginTaskTab', () => {
+  // PR #6939 discussion_r4357791816：先开页、后挂载目标任务时不能丢失选中。
+  // unit：无 Shell 订阅，验证真实任务桶与全局/组激活位；保留其他组与弹出窗口选择。
+  it.each(['same-group', 'other-group', 'popped-out', 'passive'] as const)(
+    'selects the target before its shell mounts without disturbing unrelated views: %s',
+    async (state) => {
+      const global = addGlobalPluginTab('manager')!;
+      setActiveGlobalTabId(global.id);
+      await openPluginTaskTab('task-2', 'sim', { userInitiated: false });
+      const tab = getBucket('task-2').tabs[0];
+      setTabGroup(tab.id, 'left');
+      setTabGroup(global.id, state === 'other-group' ? 'right' : 'left');
+      if (state === 'popped-out') {
+        __setSidebarTabWindowsStateForTest({ [tab.id]: { windowId: 'window-1', sessionId: 'task-2', open: true } });
+        window.electronAPI.sidebarTabWindow = { focus: vi.fn(async () => {}) } as unknown as Window['electronAPI']['sidebarTabWindow'];
+      }
+      await openPluginTaskTab('task-2', 'sim', { userInitiated: state !== 'passive' });
+      expect(getBucket('task-2').activeTabId).toBe(tab.id);
+      expect(getActiveGlobalTabId()).toBe(state === 'same-group' ? null : global.id);
+      expect(getGroupActiveTabId('left', 'task-2')).toBe(
+        state === 'same-group' || state === 'other-group' ? tab.id : null,
+      );
+    },
+  );
+
   // 弹出窗口自己的激活位与主窗任务桶不同；即使桶已激活目标也必须送选中请求。
   it('reveals an existing popped-out tab without stealing native focus', async () => {
     await openPluginTaskTab('task-1', 'sim');

@@ -32,7 +32,7 @@ const ghostNamespaceInput = z
   .union([z.string().min(1).max(128), z.null()])
   .optional()
   .describe(
-    "插件企业身份。字符串为企业 orgSlug。null 表示已确认 root；候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。",
+    '插件企业身份。字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 表示名为 null 的企业，不是 root。按发现结果保留类型，不要把 null 转成字符串。候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。',
   );
 
 const D_GHOST_LIST = [
@@ -56,6 +56,7 @@ const D_GHOST_INFO = [
   "返回单条完整形态:id、namespace(null=root，字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 仅当同名实例唯一。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
+  "GHOST_NAMESPACE_MISMATCH 表示插件已安装但 namespace 不匹配；按返回身份核对并修正参数，保留 JSON 类型，不能据此判断插件已卸载或自动改选其他实例。",
   "结构化错误:GHOST_NOT_FOUND / GHOST_AMBIGUOUS(同名多实例,candidates 为 {ghostId, namespace}。已确认 root 的 namespace 是 null；没有 namespace 字段的待迁移旧安装在候选里也会标成 null。旁边还有另一个同名实例、且没有已确认 root 时，传 namespace:null 会选中那份旧安装。按候选补 namespace 后重试，不要改选公开版) / GHOST_ASLEEP / GHOST_DISABLED_IN_WORKDIR / INTERNAL。升级普查中的旧插件没有 namespace 字段，省略 namespace 且同名唯一时才能解析。",
 ].join("\n");
 
@@ -77,6 +78,7 @@ const D_GHOST_CALL = [
   "调用某个插件(Ghost)提供的工具。ghost_id 与 tool 来自 ghost_info 或 ghost_list 的返回,",
   "或用户消息[插件指令]附带的工具清单;",
   "args 按该工具声明的参数 schema 传 JSON 对象。",
+  'namespace 按发现结果原样传入；root 使用 JSON null，不是字符串 "null"。GHOST_NAMESPACE_MISMATCH 表示地址不匹配、插件未执行；核对目标后修正参数，不要原样重试或自动改选其他实例。',
   "邮件默认先创建并展示 Cindy 草稿卡，供用户核对收件人和内容，等确认后再发送。只有用户已明确确认这封邮件，或有效的用户/任务指令明确授权该范围内直接发送时，才可不再询问；‘帮我写/回一封邮件’、修改草稿、自动审批或完全访问模式本身不等于确认发送。",
   "即使明确授权直接发送，也必须通过同一草稿卡的公共发送流程，使用最新编辑内容，并保留 10 秒倒计时、撤销和立即发送；不能用底层直发、CLI 或其他旁路跳过。卡片发送点击即为确认，不重复询问；等待最终回执才报告已发送，撤销后不得自动重试。",
   "伙伴中需要授权时，Host 发出独立持久卡并立即返回 SETUP_REQUIRED；结束本轮，等 Host 授权成功后自动续接，不要轮询或重复调用。普通任务仍沿用原调用等待。",
@@ -699,7 +701,7 @@ export async function handleGhostList(
       ghosts,
       hint:
         ghosts.length > 0
-          ? "按 manual 索引用 ghost_manual 读取手册;有工具时用 ghost_call({ghost_id, namespace, tool, args}) 调用已声明工具。同名插件必须带 namespace（null=root）。清单实时,勿缓存。"
+          ? '按 manual 索引用 ghost_manual 读取手册;有工具时用 ghost_call({ghost_id, namespace, tool, args}) 调用已声明工具。namespace 按条目原样保留类型：JSON null（不带引号）=root，字符串 "null" 是企业名；条目未提供该字段时省略。同名插件须按返回身份区分。清单实时,勿缓存。'
           : "当前没有已启用的插件。用户可在主界面侧边栏「插件」中安装或启用插件。",
     });
   } catch (err) {

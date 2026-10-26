@@ -24,6 +24,12 @@ export function isOpenAiSubscriptionProvider(provider: Pick<Provider, 'id' | 'au
     && (provider.id === 'openai' || provider.auth.native === 'codex');
 }
 
+/** Account policy, never inferred from a display name, endpoint or model family. */
+export function supportsSubscriptionFastPolicy(provider: Pick<Provider, 'id' | 'auth'> | null | undefined): boolean {
+  return isOpenAiSubscriptionProvider(provider) || !!provider && provider.auth?.method === 'oauth'
+    && (provider.id === 'anthropic' || provider.auth.native === 'claude');
+}
+
 /** Public catalog identity; never use this key to look up credentials or preferences. */
 export function providerCatalogId(provider: Pick<Provider, 'id' | 'auth'>): string {
   return provider.auth.native === 'claude' ? 'anthropic'

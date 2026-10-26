@@ -174,8 +174,8 @@ const sessionTitleIndex = new Map<string, string>();
  * 那个窗口里 sessionDeviceIndex 没有这条,`getSessionDeviceId` 返回 undefined —— 传输层据此把
  * 一个**远程**会话的操作发给本机 maker:首条消息、setGoal、流订阅全落错边(#807 review P1)。
  *
- * 所以创建成功后立刻把这个已确定的事实钉进来,recompute 时先铺钉子、再让分片派生值覆盖
- * (分片更完整,且与钉子不可能冲突)。钉子只影响 origin 判定,不伪造会话行 —— 会话进列表仍等
+ * 创建成功或打开带设备归属的链接后立刻把目标钉进来。recompute 时钉子优先于其它设备
+ * 的同 id 分片(复制的任务可能保留 id)。钉子只选择 origin 与标题,不伪造会话行 —— 会话进列表仍等
  * 权威快照。
  *
  * 不主动清理(含 clear / removeDevice):与 stickySessionOrigin 同一论证 —— 归属是单向的
@@ -451,7 +451,7 @@ function recompute(): void {
   sessionDeviceIndex.clear();
   sessionTitleIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
-  // 分片派生值随后覆盖同 id 的条目。
+  // 其它设备的同 id 分片不能覆盖显式指定的 origin。
   for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
   if (shards.size === 0) {
     mergedSnapshot = EMPTY;
@@ -464,8 +464,11 @@ function recompute(): void {
           shard.deviceId,
         );
         flat.push(projected);
-        sessionDeviceIndex.set(s.id, shard.deviceId);
-        if (projected.title) sessionTitleIndex.set(s.id, projected.title);
+        const pinnedDeviceId = pinnedOrigins.get(s.id);
+        if (!pinnedDeviceId || pinnedDeviceId === shard.deviceId) {
+          sessionDeviceIndex.set(s.id, shard.deviceId);
+          if (projected.title) sessionTitleIndex.set(s.id, projected.title);
+        }
       }
     }
     mergedSnapshot = flat;

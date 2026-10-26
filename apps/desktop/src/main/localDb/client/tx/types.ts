@@ -669,6 +669,8 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** A saved model choice supersedes automation restores in the same commit. */
+  clearScheduledModelBaseline?: boolean;
   /** Explicit settings changes also update the permanent chat in this transaction. */
   canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;

@@ -1,4 +1,5 @@
 import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
+import { teammateRoutineReviewIntent } from '../../shared/botAutonomy.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   PI_CACHE_RECOVERY_EXPECTATION,
@@ -1539,6 +1540,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               origin: soForReconcile.persistUserMessage?.origin,
               sourcePlugin: soForReconcile.persistUserMessage?.sourcePlugin,
               sharedTaskAuthor: soForReconcile.persistUserMessage?.sharedTaskAuthor,
+              autoReviewUserText: soForReconcile.persistUserMessage?.[FORWARDED_REQUEST_RECEIPT],
             },
             {
               visibleText: reconcilePersistText,
@@ -1668,16 +1670,22 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           throwIpcError('PRECONDITION_FAILED', 'Scheduled task modes changed before vendor dispatch');
         }
       };
-      const resolveScheduledIntent = so.origin?.kind === 'scheduler' ? async () => {
+      const scheduledOrigin = so.origin?.kind === 'scheduler' ? so.origin : undefined;
+      const resolveScheduledIntent = scheduledOrigin ? async () => {
+        // A queued teammate routine is reviewed against its own instruction, exactly as
+        // when it dispatches directly; never against unrelated main-task chat.
+        const routineIntent = teammateRoutineReviewIntent(scheduledOrigin.scheduleId, reconcilePersistText);
         let history: AutoReviewHistoryMessage[] = [];
-        try {
-          history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
-        } catch {
-          deps.log.warn('auto-review continuation history unavailable', { sessionId });
+        if (routineIntent === undefined) {
+          try {
+            history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
+          } catch {
+            deps.log.warn('auto-review continuation history unavailable', { sessionId });
+          }
         }
         latestScheduledModes = await deps.readScheduledPermissions?.(sessionId) ?? null;
         assertScheduledModes();
-        return restoreAutoReviewUserIntent(history);
+        return routineIntent ?? restoreAutoReviewUserIntent(history);
       } : undefined;
       if (resolveScheduledIntent) restoredAutoReviewIntent = undefined;
       if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && so[AUTO_REVIEW_DELEGATED_CONTINUATION]

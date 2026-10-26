@@ -64,6 +64,7 @@ import { configureRoutineHost, getRoutineEngine, routineTools, stopRoutines, upd
 import { handleRoutineRequest } from '../../cindy-brain/routineSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { companionHomes } from '../../companion-cloud/homes.js';
+import { admitTaskAction, assertTaskActionCurrent, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
 beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profiles); });
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot,
@@ -320,6 +321,106 @@ it('keeps a busy batch queued for 30 seconds and then executes it once', async (
   const history = await routineTools.history('bot', routine.id);
   expect(history).toHaveLength(1);
   expect(history[0]).toMatchObject({ id: pending.id, status: 'success', resultText: 'Reviewed PR' });
+});
+
+// #7044 / unit: publish through the real engine under an admitted tool's ALS,
+// then revoke that turn before dispatch. Existing busy-batch coverage has no
+// ambient credential, so it cannot catch failure before the busy check.
+it('defers a completion event under an expired tool context and retries the same batch once', async () => {
+  vi.useFakeTimers();
+  const engine = await getRoutineEngine();
+  engine.registerSource({ id: 'host:sessions', name: 'Sessions', status: 'listening',
+    events: [{ type: 'finished', name: 'Finished', fields: [] }] });
+  const routine = await routineTools.save('bot', {
+    name: 'Read-only watcher', prompt: 'Read the execution history', enabled: true,
+    triggers: [{ id: 'done', kind: 'event', sourceId: 'host:sessions', eventType: 'finished', filters: [] }],
+  });
+  const event = { id: 'completed-task', type: 'finished', subject: 'other-task', occurredAt: Date.now(), data: {} };
+  let current = true;
+  const admission = await admitTaskAction({ server: 'cindy_helper', tool: 'start_session_task', sessionId: 'parent', args: {} }, {
+    key: 'parent-turn', ownerInput: true, delegated: false,
+    assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); },
+  });
+  if (!admission.ok || !admission.run) throw new Error('Missing tool admission');
+  mock.scheduler.runNow.mockImplementationOnce(async () => {
+    // Exercise the queued Host delivery guard without loading the Electron dispatch graph.
+    await assertTaskActionCurrent();
+    return { runId: 'busy', deferred: true };
+  });
+  await admission.run(async () => {
+    current = false;
+    await engine.publish('host:sessions', event);
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = (await routineTools.history('bot', routine.id))[0];
+    expect(pending.error).toBeUndefined();
+    expect(pending).toMatchObject({ status: 'queued', events: [{ sourceId: 'host:sessions', event }] });
+    expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await routineTools.history('bot', routine.id)).toEqual([
+      expect.objectContaining({ id: pending.id, status: 'success', events: pending.events, resultText: 'Reviewed PR' }),
+    ]);
+    await engine.publish('host:sessions', event);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mock.scheduler.runNow).toHaveBeenCalledTimes(2);
+    // Isolation is local to execution; it must not revive the caller's grant.
+    await expect(assertTaskActionCurrent()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+});
+
+// #7044 / unit: even a still-valid caller grant must not become authority for
+// independent manual, timer or plugin-event runs (including later async work).
+it.each(['manual', 'interval', 'event'] as const)('isolates a %s routine from a valid caller grant', async (trigger) => {
+  vi.useFakeTimers();
+  const engine = await getRoutineEngine();
+  engine.registerSource({ id: 'plugin:mail', name: 'Mail', status: 'listening',
+    events: [{ type: 'mail', name: 'Mail', fields: [] }] });
+  const routine = await routineTools.save('bot', {
+    name: 'Watch', prompt: 'Read history', enabled: true,
+    triggers: trigger === 'event'
+      ? [{ id: 'mail', kind: 'event', sourceId: 'plugin:mail', eventType: 'mail', filters: [] }]
+      : [{ id: 'tick', kind: 'interval', intervalMs: 60_000 }],
+  });
+  const admission = await admitTaskAction({ server: 'cindy_helper', tool: 'start_session_task', sessionId: 'parent', args: {} }, {
+    key: 'parent-turn', ownerInput: true, delegated: false, assertCurrent: async () => {},
+  });
+  if (!admission.ok || !admission.run) throw new Error('Missing tool admission');
+  const observed: boolean[] = [];
+  mock.scheduler.runNow.mockImplementationOnce(async () => {
+    await Promise.resolve();
+    observed.push(hasTaskActionAuthorization());
+    return { runId: 'execution' };
+  });
+  await admission.run(async () => {
+    if (trigger === 'manual') await routineTools.runNow('bot', routine.id);
+    else if (trigger === 'event') await engine.publish('plugin:mail', { id: 'mail-1', type: 'mail', occurredAt: Date.now(), data: {} });
+    else { vi.setSystemTime(Date.now() + 60_000); await engine.tick(); }
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ status: 'success' });
+    expect(observed).toEqual([false]);
+    expect(hasTaskActionAuthorization('parent')).toBe(true);
+  });
+});
+
+// #7044 / unit: isolation is not a blanket authorization-error retry. A failure
+// returned by the independent execution may follow side effects and stays final.
+it('keeps an independent execution failure visible without replaying its batch', async () => {
+  vi.useFakeTimers();
+  const routine = await routineTools.save('bot', {
+    name: 'Watch', prompt: 'Read history', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60_000 }],
+  });
+  mock.storage.listRuns.mockResolvedValueOnce([
+    { id: 'execution', scheduleId: 'backing', firedAt: 1, status: 'failed', errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' },
+  ]);
+  await routineTools.runNow('bot', routine.id);
+  await vi.advanceTimersByTimeAsync(0);
+  expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    status: 'failed', error: 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+  });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
 });
 
 it('keeps attacker-controlled event strings on one escaped JSON line inside the data boundary', async () => {

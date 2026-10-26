@@ -14,6 +14,7 @@ import type { ProviderService } from '../maker-host/provider-service.js';
 import {
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerProviderRoutingContext,
+  type OrcaWorkerProviderSnapshot,
 } from './orcaWorkerCreationService.js';
 
 /** The SSH discovery projection is native OpenAI only and already ordered by remote default. */
@@ -111,6 +112,35 @@ export function deviceAvailableModels(views: ProviderView[], agent: AgentKind): 
       .map((provider) => ({ id: provider.id, name: provider.name })),
     defaultProviderId: effectiveSourceIdForModel(views, null, model.id, agent),
   }));
+}
+
+/**
+ * list_available_models 用：本机某种 Agent 的模型、提供它的来源与默认来源。
+ * 没有任何已启用来源提供的模型(提供商被关/断连后只剩目录骨架)不进返回，
+ * 否则 Lead 会把 `providers: []` 的模型当成仍可选(#6970)，与 deviceAvailableModels 口径一致。
+ */
+export function localAvailableModels(
+  availableModels: ReadonlyArray<{ id: string; displayName: string }>,
+  providers: ReadonlyArray<OrcaWorkerProviderSnapshot>,
+  resolveDefaultProviderIdForModel: (agent: AgentKind, model: string) => string | null,
+  agent: AgentKind,
+): Array<{
+  id: string;
+  label: string;
+  providers: Array<{ id: string; name: string }>;
+  defaultProviderId: string | null;
+}> {
+  return availableModels.flatMap((m) => {
+    const modelProviders = providers
+      .filter((provider) => provider.models.includes(m.id))
+      .map((provider) => ({ id: provider.id, name: provider.name }));
+    return modelProviders.length === 0 ? [] : [{
+      id: m.id,
+      label: m.displayName,
+      providers: modelProviders,
+      defaultProviderId: resolveDefaultProviderIdForModel(agent, m.id),
+    }];
+  });
 }
 
 /**

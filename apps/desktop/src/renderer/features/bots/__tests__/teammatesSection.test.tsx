@@ -95,9 +95,7 @@ vi.mock('../BotDeleteDialog', () => ({
 
 import { TeammatesSection } from '../TeammatesSection';
 import { BotConnectionStatus } from '../BotConnectionStatus';
-import { resetBotMarketEntryHintForTest } from '../botMarketEntryHint';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
-import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
 import { readTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
 
 interface BotFixture {
@@ -137,7 +135,6 @@ async function renderSidebar() {
 beforeEach(() => {
   messageListeners = [];
   window.localStorage.clear();
-  resetBotMarketEntryHintForTest();
   resetBotReadStateForTests();
   mocks.navigate.mockReset();
   mocks.observeSession.mockReset();
@@ -860,31 +857,5 @@ describe('cloud companions in the roster', () => {
     expect(screen.queryByText('Local preview')).toBeNull();
     expect(screen.queryByTestId('cindy-device-row')).toBeNull();
     expect(screen.getByText('Laptop preview')).toBeTruthy();
-  });
-});
-
-describe('new-entry hint on the header plus', () => {
-  const hiddenUntilHover = (el: HTMLElement) => {
-    for (let node: HTMLElement | null = el; node; node = node.parentElement) {
-      if (node.className.toString().includes('opacity-0')) return true;
-    }
-    return false;
-  };
-
-  it('keeps the plus visible until it is opened once, then goes back to hover-only', async () => {
-    await renderSidebar();
-    const unseen = screen.getByRole('button', { name: 'bots.list.createMenu · sidebar.navigation.new' });
-    expect(hiddenUntilHover(unseen)).toBe(false);
-
-    fireEvent.keyDown(unseen, { key: 'Enter' });
-    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
-    expect(hiddenUntilHover(screen.getByRole('button', { name: 'bots.list.createMenu' }))).toBe(true);
-  });
-
-  it('shows the same visible plus while the section is collapsed', async () => {
-    window.localStorage.setItem(sidebarOwnerStorageKey('sidebar.teammatesSection.v1', 'fixture-owner'), 'collapsed');
-    await renderSidebar();
-    const unseen = screen.getByRole('button', { name: 'bots.list.createMenu · sidebar.navigation.new' });
-    expect(hiddenUntilHover(unseen)).toBe(false);
   });
 });

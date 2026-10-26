@@ -4642,6 +4642,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('delivers Auto-Review ask to the channel on policy turns', async () => {
     const handle = await start('auto', async () => ({
       verdict: 'ask' as const,
+      reason: 'Writes outside the project.',
     }));
     await handle.send(
       { type: 'user', content: 'Touch an outside file.' },
@@ -4665,6 +4666,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolver).toHaveBeenCalledOnce();
+    // The channel card explains why Auto asked.
+    expect((resolver.mock.calls as unknown as Array<[{ metadata?: Record<string, unknown> }]>)[0]?.[0].metadata)
+      .toMatchObject({ autoReviewReason: 'Writes outside the project.' });
   });
 
   it('keeps a policy across internal continuation tools and clears it at agent_settled', async () => {

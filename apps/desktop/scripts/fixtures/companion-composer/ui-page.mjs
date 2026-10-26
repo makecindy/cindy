@@ -24,9 +24,13 @@ export default {
     'src/renderer/components/new-chat/NewGoalDialog': `export const NewGoalDialog = () => null;`,
     'src/renderer/components/new-chat/AtMentionPanel': `export const AtMentionPanel = () => null;`,
     'src/renderer/components/new-chat/SlashCommandPalette': `export const SlashCommandPalette = () => null;`,
-    'src/renderer/voice-input/useVoiceInput': `import { useState } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); return { state, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { setState('listening'); return true; }, stop: async () => { setState('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => setState('idle') }; }`,
+    'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
   },
   cases: {
+    'voice-hold': {
+      about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
+      viewport: { width: 360, height: 400 },
+    },
     default: {
       about:
         'Empty/text/attachment action switch, stable target, keyboard send, call return and stop/queue',
@@ -40,6 +44,113 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'voice-hold') {
+      const editor = page.locator('.ProseMirror');
+      const hint = page.getByTestId('composer-voice-hint');
+      const hintText = async (key) => {
+        await hint.waitFor();
+        assert.equal(await hint.textContent(), await ui.t(`newChat.chatInput.voiceInput.${key}`));
+      };
+      // Playwright fill mutates the DOM selection outside ProseMirror's input
+      // flow. After a hold/drag, that selection can be restored before deletion.
+      // Use the real next keyboard interaction and verify the entire document
+      // is selected before deleting, so a partial clear cannot hide a hint path.
+      const clearWithKeyboard = async () => {
+        await editor.press('ControlOrMeta+A');
+        await page.waitForFunction(() => {
+          const current = document.querySelector('.ProseMirror')?.editor;
+          if (!current) return false;
+          const { doc, selection } = current.state;
+          return doc.textBetween(selection.from, selection.to) === doc.textContent;
+        });
+        await editor.press('Backspace');
+        assert.equal(await editor.textContent(), '');
+        assert.equal(await editor.evaluate((node) => node.editor.isEmpty), true);
+      };
+      const card = page.locator('[data-split-group-composer-drop-target]');
+      const cardBox = await card.boundingBox();
+      // Start in the card's padding, outside the single text line.
+      await page.mouse.move(cardBox.x + 4, cardBox.y + 4);
+      await hintText('holdComposer');
+      await ui.capture('hover');
+      await page.mouse.down();
+      await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
+      await hintText('speakRelease');
+      await ui.capture('hold-empty');
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('.ProseMirror')?.textContent === 'Dictated message');
+      assert.equal(await hint.count(), 0);
+
+      // The gap above the toolbar is also part of the input surface.
+      const editorBox = await editor.boundingBox();
+      await page.mouse.move(cardBox.x + cardBox.width / 2, editorBox.y + editorBox.height + 5);
+      await page.mouse.down();
+      await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
+      await page.mouse.up();
+      await page.locator('.ProseMirror[contenteditable="true"]').waitFor();
+
+      const rect = await editor.boundingBox();
+      const middle = await editor.evaluate((node) => {
+        const text = node.querySelector('p').firstChild;
+        const range = document.createRange();
+        range.setStart(text, 8);
+        range.setEnd(text, 9);
+        const bounds = range.getBoundingClientRect();
+        return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      });
+      await page.mouse.move(middle.x, middle.y);
+      await page.mouse.down();
+      await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
+      await page.mouse.move(rect.x + rect.width - 8, rect.y + rect.height / 2, { steps: 12 });
+      assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '');
+      await page.mouse.move(rect.x + 2, middle.y, { steps: 12 });
+      assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '');
+      // Exercise selection changes that escape move/selectstart cancellation
+      // (an already-running native selection gesture). The editor must retain
+      // the insertion point, not adopt the expanded DOM selection.
+      const insertionPoint = await editor.evaluate((node) => node.editor.state.selection.from);
+      await editor.evaluate((node) => {
+        const text = node.querySelector('p').firstChild;
+        document.getSelection().setBaseAndExtent(text, 2, text, 5);
+      });
+      await page.waitForFunction(() => document.getSelection()?.isCollapsed);
+      assert.equal(await editor.evaluate((node) => node.editor.state.selection.from), insertionPoint);
+      assert.equal(await hint.count(), 0);
+      await page.mouse.up();
+      await page.locator('.ProseMirror[contenteditable="true"]').waitFor();
+      assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '');
+      // A queued native selection change can arrive after pointerup/mouseup.
+      // It must still be rejected until a new user interaction begins.
+      await editor.evaluate((node) => {
+        const text = node.querySelector('p').firstChild;
+        document.getSelection().setBaseAndExtent(text, 2, text, 5);
+      });
+      await page.waitForFunction(() => document.getSelection()?.isCollapsed);
+      assert.equal(await editor.evaluate((node) => node.editor.state.selection.empty), true);
+      // Releasing restores ordinary text selection.
+      const releasedText = await editor.locator('p').boundingBox();
+      await page.mouse.move(releasedText.x + 5, releasedText.y + releasedText.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(releasedText.x + 90, releasedText.y + releasedText.height / 2, { steps: 4 });
+      await page.mouse.up();
+      assert.notEqual(await page.evaluate(() => window.getSelection()?.toString()), '');
+      await clearWithKeyboard();
+      const mic = page.locator('button[aria-pressed]');
+      await mic.click();
+      await hintText('speakPressAgain');
+      await ui.capture('click-empty');
+      await mic.click();
+      await page.locator('.ProseMirror[contenteditable="true"]').waitFor();
+      await clearWithKeyboard();
+      await mic.hover();
+      await page.mouse.down();
+      await page.getByRole('button', { name: await ui.t('newChat.chatInput.voiceInput.releaseToStop'), exact: true }).waitFor();
+      await hintText('speakRelease');
+      await ui.capture('button-hold-empty');
+      await page.mouse.up();
+      await page.locator('.ProseMirror[contenteditable="true"]').waitFor();
+      return;
+    }
     // Screenshot harness defaults to reduced motion; opt in to verify real transitions.
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const editor = page.locator('[contenteditable]');

@@ -425,31 +425,43 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
-  it('delivers coordination actions without public prose, then preserves ordinary and completion replies', async () => {
+  // Regression: a delegated report used to leave only tool rows in the chat.
+  // The real pipeline must persist and broadcast its reply, then settle normally.
+  it('delivers coordination progress and final text through the ordinary message pipeline', async () => {
     const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
     h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(true);
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('coordination');
     try {
-      h.emit(event('text', { text: 'Internal file ownership agreement', isFinal: true }));
-      h.emit(event('text', { text: 'Internal standalone' }, { standaloneText: true }));
-      h.emit(event('thinking', { text: 'Internal reasoning' }));
-      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
-      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
-      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'The new machines are running; checking the test results.', isFinal: false },
+        { agentMeta: { assistantPhase: 'commentary' } }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task',
+        expect.objectContaining({ text: 'The new machines are running; checking the test results.' }),
+        expect.objectContaining({ botPrivateReply: false, assistantPhase: 'commentary' }), undefined);
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'text', data: expect.objectContaining({
+          text: 'The new machines are running; checking the test results.',
+        }) }),
+      }));
+      h.emit(event('text', { text: 'Progress notice' }, { standaloneText: true }));
+      expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Progress notice', { botPrivateReply: false });
+      h.emit(event('thinking', { text: 'Check the test results' }));
+      expect(effects.fn('onThinkingEvent')).toHaveBeenCalledOnce();
       h.emit(event('tool_use', { id: 'tool', name: 'read', input: {} }));
       expect(effects.fn('onToolUseEvent')).toHaveBeenCalledOnce();
       h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
         h.deps.agentInputCoordinatorHolder.isActiveTaskCoordination.mockReturnValue(false);
       });
-      h.emit(event('done', { result: 'Internal acknowledgement', finalText: 'Internal acknowledgement' }));
+      h.emit(event('done', { result: 'The tests passed.', finalText: 'The tests passed.' }));
       expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
-        event: expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: '', finalText: '' }),
-          agentMeta: expect.objectContaining({ botPrivateReply: true, botTaskCoordination: true }) }),
+        event: expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: 'The tests passed.', finalText: 'The tests passed.' }),
+          agentMeta: expect.objectContaining({ botPrivateReply: false, botTaskCoordination: true }) }),
       }));
-      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('Internal acknowledgement');
+      expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalled();
+      const persisted = effects.fn('onAssistantTextEvent').mock.calls.length;
       h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-delegation-completion:result');
       h.emit(event('text', { text: 'User requested final result', isFinal: true }));
-      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledTimes(persisted + 1);
     } finally { await h.dispose(); }
   });
 

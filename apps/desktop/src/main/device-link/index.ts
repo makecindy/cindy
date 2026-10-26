@@ -29,6 +29,7 @@ import {
   FILE_PEER_CHANNEL,
   isScopedPeer,
   parseSharedTaskPeer,
+  parseProviderSharePeer,
   probeSharedTaskHost,
   PROVIDER_SHARE_RELAY_CAPABILITY,
   sharedTaskTopics,
@@ -152,6 +153,7 @@ import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRunti
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import {
   isProviderShareRefusal,
+  getReceivedShares,
   noteProviderShareAccessFailure,
   PROVIDER_SHARE_UNAVAILABLE_MESSAGE,
   resolveRemoteAgentTargetWhenReady,
@@ -165,7 +167,7 @@ import {
   type MobileSessionEventKind,
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
-import { getSessionNotificationBody } from '../sessionNotificationCopy';
+import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
   handleContactsDeviceLinkStatusChanged,
@@ -684,6 +686,8 @@ function wsUrl(): string {
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
+  /** Host chrome follows the same controller set as CONTROLLED_STATE. */
+  onControlledStateChanged?: () => void;
 }
 
 let stopNetworkWatch: (() => void) | null = null;
@@ -1014,6 +1018,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 先注册远程活动监听，再接线入站帧；否则首个 subscribe / invoke 可能落在空窗期。
   setControllersChangedListener((controllers, updateRelaunchControllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
+    options.onControlledStateChanged?.();
     updateRelaunchControllersBusy = updateRelaunchControllers.length > 0;
     notifyUpdateRelaunchBusy();
   });
@@ -1064,6 +1069,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    const sharePeer = parseProviderSharePeer(env.src);
+    if (sharePeer && p?.channel === 'maker:provider:changed') {
+      if (sharePeer.role !== 'host' || !getReceivedShares().some(share => share.shareId === sharePeer.shareId
+        && share.hostDeviceId === sharePeer.deviceId && share.status === 'active')) return;
+      broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId: `share:${sharePeer.shareId}`, channel: p.channel, payload: {} });
+      return;
+    }
     const sourceEpoch = sharedHostStreams.get(env.src)?.epoch;
     // 词典同步帧在 main 侧消费,不转给 renderer —— 它不是远程视图事件,
     // renderer 也不该看到别的设备的同步状态。
@@ -2149,6 +2161,7 @@ export function sendMobileSessionNotify(payload: {
       selfDeviceId,
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
+      imageFallback: getNotificationImageLabel(),
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
       ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
     }),

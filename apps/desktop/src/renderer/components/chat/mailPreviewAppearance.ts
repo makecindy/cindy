@@ -1,5 +1,19 @@
 const authoredStyleAttribute = 'data-cindy-mail-authored-style';
 
+function rememberMailPreviewPaint(el: Element, style = el.getAttribute('style')) {
+  if (el.hasAttribute(authoredStyleAttribute)) return;
+  el.setAttribute(authoredStyleAttribute, JSON.stringify(el.tagName === 'A'
+    ? { style, href: el.getAttribute('href'), role: el.getAttribute('role') } : style));
+}
+
+/** Mail readers share the chat browser policy only for ordinary web links. */
+export function mailPreviewLinkUrl(value: string | null): string | undefined {
+  try {
+    const url = new URL(value || '');
+    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href;
+  } catch { /* Unsupported targets remain inert mail content. */ }
+}
+
 /** Restore both live nodes and browser-created clones from the same preview
  * metadata. The mail sanitizer strips this attribute from incoming/outgoing HTML. */
 export function restoreMailPreviewPaint(root: Element): void {
@@ -8,16 +22,37 @@ export function restoreMailPreviewPaint(root: Element): void {
     if (encoded === null) continue;
     el.removeAttribute(authoredStyleAttribute);
     try {
-      const style: unknown = JSON.parse(encoded);
-      if (style === null) el.removeAttribute('style');
-      else if (typeof style === 'string') el.setAttribute('style', style);
-    } catch { /* Invalid transient metadata is never interpreted as a style. */ }
+      const original: unknown = JSON.parse(encoded);
+      // Accept the original style-only format as well as link metadata.
+      const attributes = original && typeof original === 'object' ? original : { style: original };
+      for (const name of ['style', 'href', 'role']) {
+        const value = (attributes as Record<string, unknown>)[name];
+        if (value === null) el.removeAttribute(name);
+        else if (typeof value === 'string') el.setAttribute(name, value);
+      }
+    } catch { /* Invalid transient metadata is never applied. */ }
   }
 }
 
 /** Preview-only paint. Source HTML, CID images and editing spans stay intact. */
-export function followMailPreviewTheme(doc: Document, host: Document): () => void {
+export function followMailPreviewTheme(doc: Document, host: Document, reading = false): () => void {
   const restore = () => restoreMailPreviewPaint(doc.documentElement);
+  const paintLinks = () => {
+    if (!reading) return;
+    for (const link of doc.querySelectorAll<HTMLElement>('a')) {
+      for (const el of [link, ...link.querySelectorAll<HTMLElement>('*')]) {
+        rememberMailPreviewPaint(el);
+        el.style.setProperty('color', 'inherit', 'important');
+      }
+      const clickable = Boolean(mailPreviewLinkUrl(link.getAttribute('href')));
+      if (!clickable) {
+        link.removeAttribute('href');
+        if (link.getAttribute('role')?.toLowerCase().split(/\s+/).includes('link')) link.removeAttribute('role');
+      }
+      link.style.setProperty('text-decoration', clickable ? 'underline' : 'none', 'important');
+      link.style.setProperty('cursor', clickable ? 'pointer' : 'text', 'important');
+    }
+  };
   let previous = '';
   const paint = () => {
     const root = host.documentElement;
@@ -32,7 +67,7 @@ export function followMailPreviewTheme(doc: Document, host: Document): () => voi
     restore();
     // Light mode preserves authored paper, colors and decoration. Recoloring
     // white backgrounds there exposes seams around images and signature tables.
-    if (!dark || !surface || !text || !doc.defaultView) return;
+    if (!dark || !surface || !text || !doc.defaultView) { paintLinks(); return; }
 
     // Read all authored colors before changing inheritance. Keep the original
     // inline attributes so theme changes and cleanup are lossless, even after typing.
@@ -55,7 +90,7 @@ export function followMailPreviewTheme(doc: Document, host: Document): () => voi
       const { el } = entry;
       // Native Enter/split/undo can clone these nodes. Carry the authored
       // style with the clone so neither saving nor cleanup relies on identity.
-      el.setAttribute(authoredStyleAttribute, JSON.stringify(entry.style));
+      rememberMailPreviewPaint(el, entry.style);
       const set = (name: string, value: string) => el.style.setProperty(name, value, 'important');
       const background = colorInfo(entry.background), foreground = colorInfo(entry.color);
       if (background && background.brightness > 0.25) {
@@ -73,6 +108,7 @@ export function followMailPreviewTheme(doc: Document, host: Document): () => voi
     }
     doc.documentElement.style.setProperty('color-scheme', 'dark', 'important');
     doc.documentElement.style.setProperty('background-color', surface, 'important');
+    paintLinks();
   };
   paint();
   const observer = new MutationObserver(paint);

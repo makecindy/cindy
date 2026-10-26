@@ -14,6 +14,7 @@ import { WORKING_PHASES } from '../../../shared/workingStatus.js';
 import { resolveSystemLocale } from '../../../shared/locale.js';
 import type { botRemoteManagement } from './botRemoteManagement.js';
 import { editorCopy } from './botRemoteEditors.js';
+import { BOT_SETTINGS_ACTION_ID } from '../../../shared/botRemoteSettings.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../device-link/broadcast-tap.js';
 import {
   getBotRemoteResourceSource,
@@ -62,7 +63,8 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
       title: TEAMMATES_TITLE,
       placement: 'home-scope',
       icon: { name: 'users', fallbackText: '••' },
-      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }] } : {}),
+      // `management:settings` tells a desktop controller this host runs the teammate settings pages itself.
+      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }, { id: BOT_SETTINGS_ACTION_ID, label: 'Teammate settings' }] } : {}),
     },
     async list(_context, request) {
       const scope = captureDataOwnerBroadcastScope();
@@ -182,6 +184,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         return { effects: [], dailyCheck };
       }
 
+      if (management && request.actionId === BOT_SETTINGS_ACTION_ID) return management.settingsHost.invoke(context, request);
       if (management && request.actionId === 'open-agent-import' && request.resourceRef?.id === 'create') return {
         effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],
       };

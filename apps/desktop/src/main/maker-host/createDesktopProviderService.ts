@@ -1,4 +1,5 @@
 import { readProviderPresentation } from './provider-presentation-store.js';
+import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
@@ -1005,6 +1006,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
+    projectProvider: projectSubscriptionFastPolicy,
     getProviderPresentation: readProviderPresentation,
     getCatalog: getDesktopSelectableCatalog,
     connection: {

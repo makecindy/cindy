@@ -268,6 +268,17 @@ export interface HookEnvelope<TType extends HookMessageType, TPayload> {
 
 // ── 阶段 1: 连接与身份 ───────────────────────────────────────────────────────
 
+/** Cosmetic status reactions in the current connection's platform-native format.
+ * Client owns the palette; server owns lifecycle, cleanup and API fallbacks.
+ * Limits: 64 chars per name, 1–16 processing variants, 1–64 expressive errors.
+ */
+export interface HookStatusReactions {
+  queued: string;
+  processing: readonly string[];
+  error: string;
+  expressiveError?: readonly string[];
+}
+
 /**
  * hello(desktop -> server): 建连后第一帧, 自报身份与能力。
  * 工作区别名映射变更后, desktop 重发 hello 即时生效(server 以最新一帧为准)。
@@ -305,6 +316,10 @@ export interface HelloPayload {
    * 默认开启处理;新客户端始终显式发送当前有效值。
    */
   lifecycleAnnouncement?: boolean;
+  /** Optional client palette. Old servers ignore it; absent means server defaults.
+   * Re-hello replaces the declaration, including clearing it when omitted.
+   */
+  statusReactions?: HookStatusReactions;
 }
 
 /** welcome(server -> desktop): hello 的应答, 握手完成。 */

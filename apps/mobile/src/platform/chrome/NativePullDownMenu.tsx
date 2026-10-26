@@ -1,5 +1,6 @@
 import { MenuView, type MenuAction } from "@react-native-menu/menu";
 import { cloneElement, isValidElement, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react-native";
 import {
   NativeModules,
   Platform,
@@ -16,6 +17,8 @@ export type NativePullDownAction = {
   displayInline?: boolean;
   id: string;
   image?: MenuAction["image"];
+  /** 与 iOS image 对应的跨平台菜单图标。 */
+  icon?: LucideIcon;
   keepPresented?: boolean;
   preferredElementSize?: "small" | "medium" | "large";
   state?: "on" | "off" | "mixed";

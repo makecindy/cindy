@@ -3,25 +3,13 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { ChevronDown, Search } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useBotTranslation } from './botPronounContext';
-import {
-  getEffectiveBotModelChain,
-  subscribeBotGlobalModel,
-  type BotCapabilities,
-  type BotProfile,
-} from './botStore';
-import * as sessionService from '@/lib/sessionService';
-import { onPatch } from '@/lib/sessionsBus';
-import type { Session } from '@/lib/ccAgent.types';
-import {
-  getDataOwnerGeneration,
-  isDataOwnerGenerationCurrent,
-  isDataOwnerPushCurrent,
-} from '@/contexts/dataOwnerGeneration';
+import type { BotCapabilities, BotProfile } from './botStore';
+import type { BotCapabilityEntry as Entry, BotCapabilityKind as Kind } from './botSettingsTarget';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
-type Kind = 'skill' | 'mcp' | 'toolset';
-type Entry = { id: string; name: string; description?: string; available: boolean; personal?: boolean };
 const kinds: Kind[] = ['toolset', 'mcp', 'skill'];
 
 /** References are edited per companion; shared installations and connections stay host-owned. */
@@ -53,13 +41,11 @@ export function BotCapabilitySettings({
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const selected = { skill: skills, mcp: capabilities.mcpServers, toolset: capabilities.toolsets };
+  const target = useBotSettingsTarget();
   // Followed defaults can change when providers / available harnesses change, even
-  // if the local profile still holds the previous modelChain snapshot.
-  useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
-  const modelChain =
-    capabilities.modelChainOverride === null
-      ? getEffectiveBotModelChain()
-      : capabilities.modelChain;
+  // if the profile still holds the previous modelChain snapshot.
+  const defaultChain = target.useDefaultModelChain();
+  const modelChain = capabilities.modelChainOverride === null ? defaultChain : capabilities.modelChain;
   const modelChainKey = JSON.stringify(modelChain);
   const catalogKey = JSON.stringify([
     bot.id,
@@ -77,37 +63,8 @@ export function BotCapabilitySettings({
 
   useEffect(() => {
     if (!open) return;
-    const changed = (sessionId: string, patch: Partial<Session>) => {
-      if (sessionId !== bot.canonicalSessionId) return;
-      if (
-        [
-          'agentKind',
-          'model',
-          'providerId',
-          'effort',
-          'fastMode',
-          'runtimeGeneration',
-          'runtimeEffective',
-          'runtimePending',
-          'workingDir',
-          'remoteHostId',
-        ].some((key) => key in patch)
-      )
-        refresh();
-    };
-    const offLocal = onPatch(changed);
-    const offPush = window.electronAPI.localDb?.sessionsPush?.onPatched(
-      ({ sessionId, patch }, stamp) => {
-        if (isDataOwnerPushCurrent(stamp)) changed(sessionId, patch);
-      },
-    );
-    const offMcp = window.electronAPI.maker.onMcpChanged(refresh);
-    return () => {
-      offLocal();
-      offPush?.();
-      offMcp();
-    };
-  }, [open, bot.canonicalSessionId, refresh]);
+    return target.capabilities.watch(bot, refresh);
+  }, [open, bot.canonicalSessionId, refresh, target]);
 
   useEffect(() => {
     if (!open) return;
@@ -118,70 +75,8 @@ export function BotCapabilitySettings({
     setError(false);
     const load = async () => {
       try {
-        if (!bot.canonicalSessionId) throw new Error('Missing canonical task');
-        const session = await sessionService.get(bot.canonicalSessionId);
+        const next = await target.capabilities.load(bot, JSON.parse(modelChainKey), isCurrent);
         if (!isCurrent()) return;
-        const api = window.electronAPI.maker;
-        const mcpResult = await api.listCustomMcpServers({
-          agentKind:
-            session.runtimePending?.profile.agentKind ??
-            session.runtimeEffective?.agentKind ??
-            (session.agentKind === 'codex' || session.agentKind === 'pi'
-              ? session.agentKind
-              : 'claude-code'),
-          botSessionId: bot.canonicalSessionId,
-          modelChain: JSON.parse(modelChainKey),
-        });
-        if (!isCurrent()) return;
-        const agentKind = mcpResult.agentKind;
-        if (!agentKind) throw new Error('Missing next-turn route');
-        const results = await Promise.allSettled([
-          window.electronAPI.localDb.bots.listSkills(bot.id),
-          api.listAgentSkills(agentKind, {
-            forceReload: true,
-            workingDir: session.workingDir ?? undefined,
-            remoteHostId: session.remoteHostId ?? undefined,
-          }),
-          api.plugins.list(session.workingDir ?? undefined, true, {
-            botId: bot.id,
-            agentKind,
-            remoteHostId: session.remoteHostId,
-          }),
-        ]);
-        if (!isCurrent()) return;
-        const [personalResult, skillResult, toolsetResult] = results;
-        const next: Partial<Record<Kind, Entry[]>> = {};
-        if (skillResult.status === 'fulfilled' && skillResult.value.success) {
-          // Match resolveBotSkillReferences: the last entry for a name wins.
-          // Map retains first-seen display order without changing discovery data.
-          const skillsByName = new Map(
-            (skillResult.value.skills ?? []).map((item) => [item.name, item]),
-          );
-          next.skill = [...skillsByName.values()].map((item) => ({
-            id: item.name,
-            name: item.name,
-            description: item.description,
-            available: item.enabled !== false && item.runtimeStatus !== 'failed',
-          }));
-        }
-        if (personalResult.status === 'fulfilled') next.skill = [
-          ...personalResult.value.map(item => ({ id: `personal:${item.slug}`, name: item.name, available: item.enabled !== false, personal: true })),
-          ...(next.skill ?? []),
-        ];
-        next.mcp = mcpResult.servers.map((item) => ({
-          id: item.id,
-          name: item.name,
-          available: item.available === true,
-        }));
-        if (toolsetResult.status === 'fulfilled')
-          next.toolset = toolsetResult.value
-            .filter((item) => !['memory', 'xdt_helper', 'scheduler', 'lsp'].includes(item.id))
-            .map((item) => ({
-              id: item.id,
-              name: item.name,
-              description: item.description,
-              available: item.available === true,
-            }));
         setCatalog({ key: catalogKey, entries: next });
         setError(kinds.some((kind) => !next[kind]));
       } catch {
@@ -194,7 +89,7 @@ export function BotCapabilitySettings({
     return () => {
       requestRef.current += 1;
     };
-  }, [open, catalogKey, bot.id, bot.canonicalSessionId, modelChainKey]);
+  }, [open, catalogKey, bot.id, bot.canonicalSessionId, modelChainKey, target]);
   return (
     <details
       data-testid="bot-capability-editor"
@@ -253,8 +148,15 @@ export function BotCapabilitySettings({
             name: t(`settings.builtinTools.plugins.${item.id}.name`, { defaultValue: item.name }),
             description: t(`settings.builtinTools.plugins.${item.id}.description`, { defaultValue: item.description ?? '' }),
           } : item);
+          // A kept reference this computer does not have: its name (not its internal id), flagged as not here.
           for (const id of selected[kind])
-            if (!rows.some((item) => item.id === id)) rows.push({ id, name: id, available: false });
+            if (!rows.some((item) => item.id === id)) rows.push({
+              id,
+              name: kind === 'mcp' ? capabilities.mcpServerNames?.[id] || id
+                : kind === 'toolset' ? t(`settings.builtinTools.plugins.${id}.name`, { defaultValue: id }) : id,
+              available: false,
+              missing: true,
+            });
           const mode = kind === 'mcp' ? capabilities.mcpMode : kind === 'toolset' ? capabilities.toolsetMode : 'allowlist';
           // Inheritance can only become an explicit selection from a complete
           // catalog of this kind. Missing/refreshing entries must not drop tools.
@@ -281,7 +183,7 @@ export function BotCapabilitySettings({
                       <p className="text-13 font-medium text-[var(--text-primary)]">{item.name}</p>
                       {item.description && <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{item.description}</p>}
                       {item.personal && <p className="mt-1 text-12 text-[var(--text-secondary)]">{t('bots.capabilities.personalHint')}</p>}
-                      {!item.available && <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t('bots.capabilities.unavailableHint')}</p>}
+                      {!item.available && <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t(item.missing ? 'bots.capabilities.notOnThisComputer' : 'bots.capabilities.unavailableHint')}</p>}
                       {kind === 'toolset' && onConfigure && <Button type="button" size="sm" variant="secondary" className="mt-2"
                         onClick={() => onConfigure(kind, item.id)}>{t('bots.capabilities.configure')}</Button>}
                     </div>

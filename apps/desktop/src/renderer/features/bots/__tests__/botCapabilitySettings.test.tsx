@@ -66,6 +66,24 @@ describe('controlled capability page lifetime', () => {
   });
 });
 
+it('shows the name, not the internal id, of a kept reference this computer does not have', async () => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+      maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list, listAgentSkills: async () => ({ success: true, skills: [] }), plugins: { list: async () => [] } },
+    },
+  });
+  const bot = { id: 'bot-1', canonicalSessionId: 's1' } as BotProfile;
+  const capabilities = { modelChain: [], modelChainOverride: null, mcpMode: 'allowlist', mcpServers: ['mcp_9f3a', 'mcp_unnamed'],
+    mcpServerNames: { mcp_9f3a: '公司知识库' }, toolsets: [] } as unknown as BotProfile['capabilities'];
+  const view = render(<BotCapabilitySettings bot={bot} capabilities={capabilities} skills={[]} onChange={vi.fn()} expanded />);
+  expect(await view.findByText('公司知识库')).toBeTruthy();
+  expect(view.queryByText('mcp_9f3a')).toBeNull();
+  expect(view.getByText('mcp_unnamed')).toBeTruthy();
+  expect(view.getAllByText('bots.capabilities.notOnThisComputer')).toHaveLength(2);
+});
+
 it.each([
   { enabled: true, runtimeStatus: 'discovered', firstEnabled: false, firstStatus: 'discovered' },
   { enabled: false, runtimeStatus: 'discovered', firstEnabled: true, firstStatus: 'discovered' },

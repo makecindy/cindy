@@ -61,6 +61,23 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 [已知实现差异](model-catalog-maintenance.md#visibility)。该说明不是对本节合同的豁免；
 不得仅因代码仍在筛选就反向修改产品规则，也不能未验证便声称两者已一致。
 
+### 辅助模型的直接调用
+
+辅助模型的自定义 HTTP 连接按实际文本调用能力准入，不继承聊天引擎因兼容模式产生的
+默认关闭状态。候选默认可见；连接模型配置中显式保存的 `defaultEnabled` 和用户显示
+override 仍然优先。供应商／模型停用、退役、付费准入和凭证检查继续生效。
+内置及原生订阅适配器保持原有默认规则。
+
+选择记录继续使用 `cat:<连接>:<配置来源>:<模型>`；新增 `pi` 来源只标识连接与凭证，
+不启动 Pi，也不要求其实现 `Agent.oneShot`。已有 Codex / Claude Code 记录及轻量档位
+原样读取，不迁移或重排。候选和执行共用逐模型 HTTP 协议解析，未支持的 SDK 协议不列出。
+插件自行钉选继续沿用既有候选规则（含主干已支持的 Pi 路由）；上述直接调用的默认准入
+只用于辅助模型。插件跟随辅助模型链时使用用户已经保存的选择。
+语音润色继续遵循现有的 OpenAI / Cindy AI 白名单，不因辅助模型候选扩大而新增通道。
+
+实现与回归：`apps/desktop/src/main/utility-model/directTextRoute.ts`、
+`__tests__/auxiliaryDirectRoutes.test.ts`、`__tests__/oneShotCandidates.test.ts`。
+
 ## 3. 默认值演进与迁移
 
 - 默认值变化时，分别说明新用户、未自定义老用户、已自定义老用户的行为。

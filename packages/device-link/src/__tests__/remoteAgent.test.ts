@@ -21,6 +21,24 @@ import {
 const runId = '0f9c4a2e-6d1b-4c3a-9e8f-1a2b3c4d5e6f';
 const otherId = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
 
+describe('subscription Fast policy wire compatibility', () => {
+  it('advertises support only with an explicit capability', () => {
+    const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
+    expect(parseRemoteAgentCaps(caps).subscriptionFastPolicy).toBeUndefined();
+    expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicy: true }).subscriptionFastPolicy).toBe(true);
+    expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicy: 'true' }).subscriptionFastPolicy).toBeUndefined();
+  });
+  it('parses a narrow registration without trusting arbitrary execution options', () => {
+    const command = { op: 'fast-policy', group: 'openai-account', revision: 2, allowFast: false,
+      binding: { sessionId: runId, controllerDeviceId: 'computer', relay: 'abcdefghijklmnop' } };
+    expect(parseRemoteAgentRequest({ ...command, providerId: 'some-other-account' })).toEqual(command);
+    for (const patch of [{ allowFast: 'false' }, { revision: -1 }, { group: '../owner' },
+      { binding: { sessionId: '../task' } }, { binding: { sessionId: runId, controllerDeviceId: '{}' } }]) {
+      expect(() => parseRemoteAgentRequest({ ...command, ...patch })).toThrow();
+    }
+  });
+});
+
 describe('remote agent channel', () => {
   // Shared-model fork wire: old peers must not gain write support by default; task IDs
   // include group-relay IDs, while filesystem roots are never accepted from callers.
@@ -28,6 +46,9 @@ describe('remote agent channel', () => {
     const request = { op: 'fork', sourceSessionId: 'g123', newSessionId: otherId,
       agentKind: 'pi', sourceSdkSessionId: '/guest/pi-sessions/source.jsonl', model: 'model' };
     expect(parseRemoteAgentRequest({ ...request, hostedGuestHome: '/owner', workingDir: '/owner' })).toEqual(request);
+    // The FORK_FAILED opt-in survives the group relay hop only as an explicit `true`.
+    expect(parseRemoteAgentRequest({ ...request, acceptsForkFailed: true })).toEqual({ ...request, acceptsForkFailed: true });
+    expect(parseRemoteAgentRequest({ ...request, acceptsForkFailed: 'yes' })).toEqual(request);
     expect(() => parseRemoteAgentRequest({ ...request, sourceSessionId: '../owner' })).toThrow();
     expect(() => parseRemoteAgentRequest({ ...request, tailTurnsToDrop: -1 })).toThrow();
     expect(isRemoteAgentReadInvoke(REMOTE_AGENT_CHANNEL, [request])).toBe(false);

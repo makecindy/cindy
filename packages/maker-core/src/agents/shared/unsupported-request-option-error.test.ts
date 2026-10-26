@@ -53,6 +53,42 @@ describe('unsupported request option error', () => {
     ).toBe(true);
   });
 
+  // #6570: a nullable param means no parameter was specified, as does an omitted key.
+  describe.each(['prompt_cache_key', 'prompt_cache_retention'])('structured rejection of %s', (field) => {
+    describe.each([false, true])('wrapped in error: %s', (wrapped) => {
+      it.each(['omitted', 'null', 'named'] as const)('accepts param %s', (paramForm) => {
+        const error = {
+          code: null,
+          message: `Validation: Unsupported parameter(s): \`${field}\``,
+          type: 'invalid_request_error',
+          ...(paramForm === 'omitted' ? {} : { param: paramForm === 'null' ? null : field }),
+        };
+        const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
+        expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(true);
+        expect(unsupportedRequestOptionCompatOverride(message)).toEqual({ supportsLongCacheRetention: false });
+      });
+
+      it.each(['temperature', 'prompt_cache_options', '', 0, false, [], {}].map(param => ({ param })))('rejects non-cache param $param', ({ param }) => {
+        const error = { code: null, param, type: 'invalid_request_error', message: `Unsupported parameter(s): ${field}` };
+        const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
+        expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+        expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
+      });
+    });
+  });
+
+  it.each([
+    [400, 'invalid_request_error', 'Invalid value for prompt_cache_key'],
+    [400, 'invalid_request_error', 'Unsupported parameter(s): temperature'],
+    [400, 'authentication_error', 'Unsupported parameter(s): prompt_cache_key'],
+    [401, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
+    [429, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
+  ])('keeps null param from bypassing rejection criteria: %s %s %s', (status, type, message) => {
+    const rejection = `${status}: ` + JSON.stringify({ error: { code: null, param: null, type, message } });
+    expect(isUnsupportedRequestOptionErrorMessage(rejection)).toBe(false);
+    expect(unsupportedRequestOptionCompatOverride(rejection)).toBeUndefined();
+  });
+
   it.each([
     ['generic invalid request', '400: {"error":{"message":"invalid api key"}}'],
     ['rate limit', '429: rate limit exceeded, retry later'],

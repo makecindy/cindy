@@ -11,6 +11,8 @@ export type ComposerLongPressVoiceGestureOptions = {
   holdMs?: number;
   moveTolerancePx?: number;
   getState: () => VoiceInputState;
+  /** Prepare without recording. Cleanup cancels a short press or hands off after start. */
+  prepare?: () => (() => void) | void;
   /**
    * 开始录音。返回 `false` 表示这次没有占用录音（已在录音、被取消等），
    * 调用方不得再对当前会话执行 `stop()`。
@@ -68,11 +70,19 @@ export function createComposerLongPressVoiceGesture(
   let stopInFlight = false;
   let disposed = false;
   let startGeneration = 0;
+  let releasePreparation: (() => void) | void;
+
+  const clearPreparation = (): void => {
+    const release = releasePreparation;
+    releasePreparation = undefined;
+    release?.();
+  };
 
   const clearPending = (): void => {
     if (!pending) return;
     clearTimeout(pending.timer);
     pending = null;
+    clearPreparation();
   };
 
   const endHold = (): void => {
@@ -109,14 +119,18 @@ export function createComposerLongPressVoiceGesture(
 
   const beginVoiceInput = (): void => {
     pending = null;
-    if (disposed || !isIdleLike(options.getState())) return;
+    if (disposed || !isIdleLike(options.getState())) {
+      clearPreparation();
+      return;
+    }
     holding = true;
     options.onHoldStart?.();
     const generation = ++startGeneration;
     const currentStart = Promise.resolve()
       .then(() => options.start())
       .then((claimed) => claimed !== false)
-      .catch(() => false);
+      .catch(() => false)
+      .finally(clearPreparation);
     startPromise = currentStart;
     void currentStart.then((claimed) => {
       if (startPromise !== currentStart) return;
@@ -144,6 +158,11 @@ export function createComposerLongPressVoiceGesture(
         origin: point,
         timer: setTimeout(beginVoiceInput, holdMs),
       };
+      try {
+        releasePreparation = options.prepare?.();
+      } catch {
+        // Preparation is optional; the normal start path can still recover.
+      }
     },
     move(point) {
       if (!pending) return;

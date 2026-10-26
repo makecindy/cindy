@@ -2,24 +2,23 @@
 import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ awaiting: new Set<string>(), list: {} as any, scrollToOffset: vi.fn() }));
+const h = vi.hoisted(() => ({ awaiting: new Set<string>(), unread: new Set<string>(),
+  listeners: new Set<() => void>(), rowRenders: [] as string[] }));
 vi.mock('react-native', () => ({
   View: ({ children, testID, style }: any) => el('div', { 'data-testid': testID, style: Object.assign({}, ...[style].flat().filter(Boolean)) }, children),
-  Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress,
-    style: Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat().filter(Boolean)) }, children),
-  ActivityIndicator: () => null, RefreshControl: () => null, Image: () => null,
-  Animated: { View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children), Value: class { setValue() {} }, timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
-  Easing: { inOut: () => undefined, ease: undefined },
+  Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => {
+    if (testID?.startsWith('teammates.item.')) h.rowRenders.push(testID);
+    return el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress,
+      style: Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat().filter(Boolean)) }, children);
+  },
   StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 },
-  FlatList: ({ ref, ...props }: any) => { if (ref) ref.current = { scrollToOffset: h.scrollToOffset }; h.list = props; const { ListHeaderComponent, ListEmptyComponent, data, renderItem } = props; return el('div', null, ListHeaderComponent, data.length ? data.map((item: any, index: number) => renderItem({ item, index })) : ListEmptyComponent); },
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: async () => ({ blocks: [] }) }) }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
-  subscribe: () => () => {},
+  subscribe: (listener: () => void) => { h.listeners.add(listener); return () => { h.listeners.delete(listener); }; },
   getSessionLiveActivity: (id: string) => h.awaiting.has(id) ? { phase: 'needs-interaction' } : null,
   getPendingInteractions: () => [],
 } }));
-vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: ({ active }: any) => active ? el('i', { 'data-testid': 'ring' }) : null }));
 vi.mock('@/session/SessionRightSpinner', () => ({ SessionRightSpinner: ({ testID }: any) => el('i', { 'data-testid': testID }) }));
 vi.mock('@/session/BotGroupList', () => ({ OFFLINE_AVATAR_OPACITY: 0.45,
@@ -39,34 +38,29 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (factory: (value: typeof colors) => unknown) => factory(colors), useTheme: () => ({ colors }) };
 });
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', null, text) }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: () => false }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: (_owner: string, _device: string, id: string) => h.unread.has(id) }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => Date.now() }));
-import { TeammateList } from '../session/TeammateList';
-it('shows the localized cloud configuration error even alongside cached teammate rows', async () => {
-  await act(async () => root.render(el(TeammateList, { items: [item], error: 'CHAT_ENDPOINT_UNAVAILABLE', isOnline: () => false,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
-  expect(node.querySelector('[data-testid="teammates.error"]')?.textContent).toBe('groupChat.server.endpointUnavailable');
-});
+import { useTeammateEntries, useTeammateRowRenderer } from '../session/TeammateList';
+import * as markdown from '../session/messageMarkdown';
+/** The task home section's rows: the same entries and row renderer, without the section chrome. */
+function Rows(props: Parameters<typeof useTeammateRowRenderer>[0]) {
+  const entries = useTeammateEntries(props.items, props.groups?.items);
+  const render = useTeammateRowRenderer(props);
+  return el('div', null, entries.map((entry, index) => render(entry, index === entries.length - 1)));
+}
 const item = { key: 'host:bot', host: { deviceId: 'host', deviceName: 'Computer identity' }, item: {
   ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, revision: '1', links: [], display: { title: 'Mimi', preview: 'Last reply' },
 } };
 let root: Root; let node: HTMLDivElement;
-beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); });
-afterEach(async () => { await act(async () => root.unmount()); });
-async function render(error: string | null, online = true) {
-  await act(async () => root.render(el(TeammateList, { items: [item], error, isOnline: () => online, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+beforeEach(() => { h.rowRenders = []; h.awaiting.clear(); h.unread.clear(); Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); });
+afterEach(async () => { await act(async () => root.unmount()); vi.restoreAllMocks(); });
+async function render(online = true) {
+  await act(async () => root.render(el(Rows, { items: [item], isOnline: () => online, onSelect: vi.fn() })));
 }
-it('shows no retry button merely because the list is embedded in a picker', async () => {
-  await render(null);
-  expect(node.querySelector('[data-testid="teammates.refresh"]')).toBeNull();
-  expect(node.textContent).toContain('Last reply');
-});
-it('uses a concise recovery notice, not device IDs or transport diagnostics', async () => {
-  await render('[DEVICE_UNRESPONSIVE] private-device-id is unresponsive (circuit open)', false);
-  expect(node.textContent).toContain('devices.companions.stale');
-  expect(node.textContent).not.toMatch(/private-device-id|DEVICE_UNRESPONSIVE|circuit open|Computer identity/);
-  expect(node.querySelector('[data-testid="teammates.refresh"]')).not.toBeNull();
+it('marks an offline teammate in words, without device identity', async () => {
+  await render(false);
+  expect(node.textContent).not.toMatch(/Computer identity/);
   expect(node.textContent).toContain('devices.resources.hostOffline');
   // Desktop parity: the cached reply stays readable while the host is offline.
   expect(node.textContent).toContain('Last reply');
@@ -75,8 +69,8 @@ it('shows readable message previews rather than Markdown delimiters or link targ
   const formatted = { ...item, item: { ...item.item, display: {
     title: 'Mimi', preview: '**Ready** — [Weekly brief](https://example.com/brief)\n`notes.md`',
   } } };
-  await act(async () => root.render(el(TeammateList, { items: [formatted], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [formatted], isOnline: () => true,
+    onSelect: vi.fn() })));
   expect(node.textContent).toContain('Ready — Weekly brief notes.md');
   expect(node.textContent).not.toMatch(/\*\*|https:\/\/|`/);
 });
@@ -84,22 +78,20 @@ it('shows readable message previews rather than Markdown delimiters or link targ
 it('shows shared public generation instead of raw preview without changing online dot', async () => {
   const busy = { ...item, item: { ...item.item, display: { ...item.item.display,
     preview: 'Raw tool commentary', generation: { phase: 'replying', startedAt: 1 } } } };
-  await act(async () => root.render(el(TeammateList, { items: [busy], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [busy], isOnline: () => true,
+    onSelect: vi.fn() })));
   expect(node.textContent).toContain('devices.companions.working.replying');
   expect(node.textContent).not.toContain('Raw tool commentary');
   expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone')).toBe('ready');
-  await render(null, false);
+  await render(false);
   expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone')).toBe('off');
   expect(node.textContent).not.toContain('devices.companions.working.replying');
-  await render('Model error', true);
-  expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone')).toBe('ready');
 });
 
-it('keeps the connection green when the list cannot be used, and unknown neutral', async () => {
+it('keeps the connection green while the roster is unverified, and unknown neutral', async () => {
   for (const connected of [true, null]) {
-    await act(async () => root.render(el(TeammateList, { items: [item], error: 'API failed', isOnline: () => false,
-      connectionState: () => connected, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+    await act(async () => root.render(el(Rows, { items: [item], isOnline: () => false,
+      connectionState: () => connected, onSelect: vi.fn() })));
     expect(node.textContent).not.toContain('devices.resources.hostOffline');
     const tone = node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone');
     expect(tone).not.toBe('off');
@@ -116,8 +108,8 @@ it('falls back to the description, then an invitation, and flags a teammate that
     display: { title: 'Aster', subtitle: 'Weekly reports' } } };
   const empty = { ...item, key: 'host:empty', item: { ...item.item, ref: { ...item.item.ref, id: 'empty' },
     display: { title: 'Nova', status: { label: 'Needs attention', tone: 'warning' } } } };
-  await act(async () => root.render(el(TeammateList, { items: [described, empty], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [described, empty], isOnline: () => true,
+    onSelect: vi.fn() })));
   expect(node.textContent).toContain('Weekly reports');
   expect(node.textContent).toContain('devices.companions.startChat');
   // Attention reads as words before the preview (no colored flag in the time slot).
@@ -128,8 +120,8 @@ it('falls back to the description, then an invitation, and flags a teammate that
 
 it('keeps every row 78pt with the divider on the text column, none under the last row', async () => {
   const second = { ...item, key: 'host:second', item: { ...item.item, ref: { ...item.item.ref, id: 'second' }, display: { title: 'Aster', preview: 'Hi' } } };
-  await act(async () => root.render(el(TeammateList, { items: [item, second], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [item, second], isOnline: () => true,
+    onSelect: vi.fn() })));
   const rows = [...node.querySelectorAll('[data-testid^="teammates.item."]')] as HTMLElement[];
   expect(rows.map((row) => row.style.height)).toEqual(['78px', '78px']);
   const bodies = rows.map((row) => row.children[1] as HTMLElement);
@@ -139,8 +131,8 @@ it('keeps every row 78pt with the divider on the text column, none under the las
 
 it('shows the computer name only when two teammates share a name, on the title line', async () => {
   const twin = { ...item, key: 'other:bot', host: { deviceId: 'other', deviceName: 'Office iMac' } };
-  await act(async () => root.render(el(TeammateList, { items: [item, twin], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [item, twin], isOnline: () => true,
+    onSelect: vi.fn() })));
   expect(node.textContent).toContain('· Computer identity');
   expect(node.textContent).toContain('· Office iMac');
 });
@@ -148,8 +140,8 @@ it('shows the computer name only when two teammates share a name, on the title l
 it('prefixes a teammate stopped on a question or permission with 「等你确认」', async () => {
   const waiting = { ...item, item: { ...item.item, links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 's1' } }] } };
   h.awaiting = new Set(['s1']);
-  await act(async () => root.render(el(TeammateList, { items: [waiting], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [waiting], isOnline: () => true,
+    onSelect: vi.fn() })));
   expect(node.textContent).toContain('devices.companions.awaiting · Last reply');
   h.awaiting = new Set();
 });
@@ -159,8 +151,8 @@ it('mixes group chats into the list by latest activity', async () => {
   const group = { key: 'host:g1', host: item.host, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, revision: '1', links: [],
     display: { title: 'Launch', timestamp: 5 } } };
   const onGroup = vi.fn();
-  await act(async () => root.render(el(TeammateList, { items: [older], error: null, isOnline: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true,
+  await act(async () => root.render(el(Rows, { items: [older], isOnline: () => true,
+    onSelect: vi.fn(),
     groups: { items: [group], isOnline: () => true, onSelect: onGroup } })));
   const order = [...node.querySelectorAll('[data-testid^="teammates.item."], [data-testid^="group."]')].map((entry) => entry.getAttribute('data-testid'));
   expect(order).toEqual(['group.g1', 'teammates.item.host.bot']);
@@ -168,29 +160,11 @@ it('mixes group chats into the list by latest activity', async () => {
   expect(onGroup).toHaveBeenCalledWith(group);
 });
 
-it('reserves the native home bar once for content, scroll indicator and refresh; other routes keep automatic insets', async () => {
-  const props = { items: [item], error: null, isOnline: () => true, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn() };
-  await act(async () => root.render(el(TeammateList, { ...props, topInset: 106, notice: el('span', null, 'Preference could not be saved') })));
-  expect(Object.assign({}, ...h.list.contentContainerStyle.filter(Boolean)).paddingTop).toBe(106);
-  expect(h.list.contentInsetAdjustmentBehavior).toBe('never');
-  expect(h.list.automaticallyAdjustsScrollIndicatorInsets).toBe(false);
-  expect(h.list.scrollIndicatorInsets).toEqual({ top: 106 });
-  expect(h.list.refreshControl.props.progressViewOffset).toBe(106);
-  expect(node.textContent).toContain('Preference could not be saved');
-  // A kept-alive list may be scrolled past the header; the failure must come into view.
-  expect(h.scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: true });
-  await act(async () => root.render(el(TeammateList, { ...props,
-    scrollInsetProps: { contentInsetAdjustmentBehavior: 'automatic', automaticallyAdjustsScrollIndicatorInsets: true },
-  })));
-  expect(h.list.contentInsetAdjustmentBehavior).toBe('automatic');
-  expect(h.list.automaticallyAdjustsScrollIndicatorInsets).toBe(true);
-  expect(h.list.scrollIndicatorInsets).toBeUndefined();
-});
 
 it.each([false, null, true])('opens cached teammates while connection evidence is %s and the roster is unverified', async connected => {
   const select = vi.fn();
-  await act(async () => root.render(el(TeammateList, { items: [item], error: null, isOnline: () => false,
-    connectionState: () => connected, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: select, embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [item], isOnline: () => false,
+    connectionState: () => connected, onSelect: select })));
   const button = node.querySelector<HTMLButtonElement>('[data-testid="teammates.item.host.bot"]')!;
   expect(button.disabled).toBe(false);
   await act(async () => button.click());
@@ -199,8 +173,68 @@ it.each([false, null, true])('opens cached teammates while connection evidence i
 });
 
 it('keeps a cloud companion quiet while its main computer looks offline: no offline text, dot or dimming', async () => {
-  await act(async () => root.render(el(TeammateList, { items: [item], error: null, isOnline: () => false, quietPresence: () => true,
-    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  await act(async () => root.render(el(Rows, { items: [item], isOnline: () => false, quietPresence: () => true,
+    onSelect: vi.fn() })));
   expect(node.textContent).not.toContain('devices.resources.hostOffline');
   expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')).toBeNull();
+});
+
+/**
+ * Performance regression through the production row renderer (unit, no timing budget):
+ * existing visual cases never refresh a roster with new-but-equal objects/callbacks.
+ * Two rows and one changed reply suffice to expose unnecessary native-row renders;
+ * clicking the retained row must still navigate with the latest resource and handler.
+ */
+it('only redraws the changed teammate after a roster refresh and opens the latest resource', async () => {
+  const parse = vi.spyOn(markdown, 'parseMobileMarkdownInlines');
+  const second = { ...item, key: 'host:second', item: { ...item.item,
+    ref: { ...item.item.ref, id: 'second' }, display: { title: 'Aster', preview: 'Unchanged' } } };
+  const firstSelect = vi.fn();
+  await act(async () => root.render(el(Rows, { items: [item, second], isOnline: () => true, onSelect: firstSelect })));
+  h.rowRenders = [];
+  parse.mockClear();
+  const fresh = structuredClone([item, second]);
+  // A new revision/link is navigation data, even when no visible field changed.
+  fresh[1].item.revision = '2';
+  fresh[1].item.links = [{ rel: 'conversation', target: { kind: 'session', sessionId: 'latest' } }] as any;
+  const latestSelect = vi.fn();
+  await act(async () => root.render(el(Rows, { items: fresh, isOnline: () => true, onSelect: latestSelect })));
+  expect(h.rowRenders).toEqual([]);
+  expect(parse).not.toHaveBeenCalled();
+  fresh[0] = { ...fresh[0], item: { ...fresh[0].item, display: { title: 'Mimi', preview: '**New reply**' } } };
+  await act(async () => root.render(el(Rows, { items: [...fresh], isOnline: () => true, onSelect: latestSelect })));
+  expect(h.rowRenders).toEqual(['teammates.item.host.bot']);
+  expect(parse).toHaveBeenCalledExactlyOnceWith('**New reply**');
+  expect(node.textContent).toContain('New reply');
+  expect(node.textContent).toContain('Unchanged');
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="teammates.item.host.second"]')!.click());
+  expect(latestSelect).toHaveBeenCalledExactlyOnceWith(fresh[1]);
+  expect(firstSelect).not.toHaveBeenCalled();
+  // The ordering helper deduplicates by retaining the last resource snapshot.
+  const duplicate = { ...fresh[1], item: { ...fresh[1].item, revision: '3' } };
+  await act(async () => root.render(el(Rows, { items: [...fresh, duplicate], isOnline: () => true, onSelect: latestSelect })));
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="teammates.item.host.second"]')!.click());
+  expect(latestSelect).toHaveBeenLastCalledWith(duplicate);
+});
+
+// A retained row must still reflect live interaction, read acknowledgement and
+// connectivity changes; none changes the cached preview's Markdown input.
+it('updates waiting, unread and connection states without reparsing the reply', async () => {
+  const parse = vi.spyOn(markdown, 'parseMobileMarkdownInlines');
+  const waiting = { ...item, item: { ...item.item,
+    links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 's1' } }] } };
+  const props = { items: [waiting], isOnline: () => true, onSelect: vi.fn() };
+  await act(async () => root.render(el(Rows, props)));
+  parse.mockClear();
+  await act(async () => { h.awaiting.add('s1'); h.listeners.forEach(listener => listener()); });
+  expect(node.textContent).toContain('devices.companions.awaiting · Last reply');
+  h.unread.add('bot');
+  await act(async () => root.render(el(Rows, { ...props })));
+  expect(node.querySelector('[data-testid="companion.row.unread"]')).not.toBeNull();
+  h.unread.clear();
+  await act(async () => root.render(el(Rows, { ...props, isOnline: () => false })));
+  expect(node.querySelector('[data-testid="companion.row.unread"]')).toBeNull();
+  expect(node.textContent).toContain('devices.resources.hostOffline · Last reply');
+  expect(node.textContent).not.toContain('devices.companions.awaiting');
+  expect(parse).not.toHaveBeenCalled();
 });

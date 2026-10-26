@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { resolveRemoteText } from '@cindy/device-link';
 import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
 
 const PREFIX = 'cindy.remoteResources.v1.';
@@ -59,6 +60,11 @@ function normalize(raw: unknown): Snapshot {
           avatarColor: typeof member.avatarColor === 'string' ? member.avatarColor.slice(0, 64) : '' }];
       }) : undefined;
       return [{ key: `chat:${item.ref.id}`, host: { deviceId: '', deviceName: '' }, item, groupMembers,
+        ...(row.chatUnread && Number.isInteger(row.chatUnread.count) && row.chatUnread.count >= 0
+          && typeof row.chatUnread.mentioned === 'boolean' && Number.isInteger(row.chatUnread.threadCount)
+          && row.chatUnread.threadCount >= 0 && row.chatUnread.threadCount <= row.chatUnread.count
+          && typeof row.chatUnread.threadMentioned === 'boolean'
+          ? { chatUnread: { count: Math.min(row.chatUnread.count, 999), mentioned: row.chatUnread.mentioned, threadCount: Math.min(row.chatUnread.threadCount, 999), threadMentioned: row.chatUnread.threadMentioned } } : {}),
         ...(validSequence(row.lastReplySequence) ? { lastReplySequence: row.lastReplySequence } : {}) }];
     });
     (out.chatRosters ??= {})[realm] = { items, ids: [...new Set(roster.ids.filter(id => typeof id === 'string' && id.length <= 160))].slice(-2000) };
@@ -75,7 +81,11 @@ export async function readRemoteResourceSnapshot(userId: string): Promise<Snapsh
   let value = empty();
   try { if (raw && raw.length <= MAX_CHARS) value = normalize(JSON.parse(raw)); } catch { /* cache miss */ }
   if (epoch !== expected) return empty();
-  if (!snapshots.has(userId)) snapshots.set(userId, value);
+  if (!snapshots.has(userId)) {
+    snapshots.set(userId, value);
+    // Rows read before the disk answered (e.g. task follow marks) must see the restored roster.
+    if (raw) emit();
+  }
   return snapshots.get(userId)!;
 }
 
@@ -175,6 +185,30 @@ export function cachedBotIdForSession(userId: string, collectionId: string, devi
     && item.ref.kind === 'bot' && item.links.some(({ rel, target }) => rel === 'conversation'
       && target.kind === 'session' && target.sessionId === sessionId));
   return row?.item.ref.id ?? '';
+}
+const NO_FOLLOWERS: readonly HostedRemoteCollectionItem[] = [];
+let followIndex: { userId: string; revision: number; byTask: Map<string, HostedRemoteCollectionItem[]> } | null = null;
+/**
+ * Teammates whose roster row follows this task (link rel `following`), by name, as the desktop
+ * sidebar mark orders them. Same computer only; presentation only, never authorization.
+ */
+export function cachedTaskFollowers(userId: string, deviceId: string, sessionId: string): readonly HostedRemoteCollectionItem[] {
+  if (!userId || !deviceId) return NO_FOLLOWERS;
+  if (followIndex?.userId !== userId || followIndex.revision !== revision) {
+    const byTask = new Map<string, HostedRemoteCollectionItem[]>();
+    for (const row of snapshots.get(userId)?.items.teammates ?? []) {
+      if (row.item.ref.kind !== 'bot') continue;
+      for (const { rel, target } of row.item.links) {
+        if (rel !== 'following' || target.kind !== 'session') continue;
+        const key = JSON.stringify([row.host.deviceId, target.sessionId]);
+        byTask.set(key, [...(byTask.get(key) ?? []), row]);
+      }
+    }
+    const name = (row: HostedRemoteCollectionItem) => resolveRemoteText(row.item.display.title);
+    for (const rows of byTask.values()) rows.sort((left, right) => name(left).localeCompare(name(right)));
+    followIndex = { userId, revision, byTask };
+  }
+  return followIndex.byTask.get(JSON.stringify([deviceId, sessionId])) ?? NO_FOLLOWERS;
 }
 /** A cached roster row for display (name/avatar) only; never an authorization or availability signal. */
 export function cachedBotItem(userId: string, collectionId: string, deviceId: string, botId: string) {

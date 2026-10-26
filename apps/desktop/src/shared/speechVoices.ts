@@ -22,9 +22,20 @@ const GATEWAY_MINIMAX: readonly SpeechVoice[] = [
   { id: 'English_Trustworth_Man', name: 'Trustworthy Man' },
 ];
 
+// Qwen-Audio 3.1 Plus system voices, verified through Gateway /v1/audio/speech
+// with 24 kHz PCM on 2026-10-23. These are not Qwen3-TTS or 3.0 voice aliases.
+// https://help.aliyun.com/zh/model-studio/qwen-audio-tts-voice-list
+const GATEWAY_QWEN_AUDIO_31_PLUS: readonly SpeechVoice[] = [
+  { id: 'longanlingxin_v3.1', name: '龙安灵心_v3.1' },
+  { id: 'xunanchuan_v3.1', name: '许南川' },
+  { id: 'longanhuan_v3.1', name: '龙安欢_v3.1' },
+  { id: 'longanfengyue_v3.1', name: '龙安风悦_v3.1' },
+];
+
 export function gatewayReferenceSpeechVoices(modelId: string): readonly SpeechVoice[] {
   if (['elevenlabs/eleven_multilingual_v2', 'elevenlabs/eleven_v3'].includes(modelId))
     return GATEWAY_ELEVENLABS;
+  if (modelId === 'qwen/qwen-audio-3.1-tts-plus') return GATEWAY_QWEN_AUDIO_31_PLUS;
   // Exact documented versions, including their Gateway namespace. Unknown/new
   // models stay manual until their voice contract has been checked.
   if (/^minimax\/speech-(?:2\.[68]|0[12])-(?:hd|turbo)$/.test(modelId)) return GATEWAY_MINIMAX;

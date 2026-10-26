@@ -24,6 +24,11 @@ import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.j
 import { providerGroupReshare } from '../../provider-group/reshareRuntime.js';
 import { getProviderGroupOwnerScope } from '../../provider-group/runtime.js';
 import { readProviderGroup } from '../../provider-group/store.js';
+import { bindGroupFastPolicy, bindLocalHostedGroupFastPolicy, receiveGroupFastPolicy, startGroupFastPolicySync } from '../../provider-group/fastPolicyRuntime.js';
+import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
+import { captureProviderManagementScope } from '../../provider-group/managementScope.js';
+import { createSubscriptionFastPolicy } from '../../maker-host/subscription-fast-policy.js';
+import { getSessionProvider } from '../../maker-host/session-provider-store.js';
 import { remoteAgentPollerFor } from '../controller/service';
 import { getProviderShareUsageStore, installProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { currentProviderPartyUsageStore, flushProviderPartyUsage } from '../../usage/providerPartyUsageStore.js';
@@ -93,6 +98,7 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
 }
 
 let host: RemoteAgentHost | null = null;
+let stopFastPolicySync: (() => void) | undefined;
 
 /** 受邀者能用的供应商：分享的那一个，且本机仍开放「允许被远程调用」。 */
 function guestAllows(controller: string, providerId: string): boolean {
@@ -110,6 +116,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
   };
   // 同一份受邀者分配器同时提供匿名状态，沿用实际分配时记录的版本兼容情况。
   const groupRelay = createProviderGroupGuestRelay({
+    bindFastPolicy: bindGroupFastPolicy,
     scope: getProviderGroupOwnerScope,
     readGroup: readProviderGroup,
     connect: (agentDeviceId) => {
@@ -126,6 +133,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     log,
   });
   host = createRemoteAgentHost({
+    fastPolicy: receiveGroupFastPolicy,
     prepareImageEvent: (sessionId, event, upstream, retainForRecovery) => prepareGeneratedImageTransport(`remote:${sessionId}`, event, { upstream, retainForRecovery, invoke: remoteBackgroundInvoke }),
     imageArtifacts: async (sessionId, request) => {
       try { return await handleGeneratedImageArtifacts(sessionId, request, remoteBackgroundInvoke); }
@@ -139,7 +147,13 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
         return false;
       }
     },
-    startHosted: (input) => options.getMaker().startHostedAgentSession(input.kind, hostedStartOptions(input)),
+    startHosted: async (input) => {
+      if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
+      return options.getMaker().startHostedAgentSession(input.kind, {
+        ...hostedStartOptions(input),
+        fastModePolicy: createSubscriptionFastPolicy(input.hostSessionId, () => getSessionProvider(input.hostSessionId) ?? input.options.providerId),
+      });
+    },
     forkHosted: (kind, opts) => options.getMaker().forkSdkSession(kind, opts),
     bindOwnerProviderRoute: bindHostedSessionProvider,
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
@@ -195,6 +209,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     }),
     // Codex 与 Pi 的会话历史在受邀者目录里，随它整体删除；这里清 Claude Code 的项目记录与 Pi 子代理运行目录。
     purgeHostedTranscripts: async (hostSessionIds, nativeIds) => {
+      const assertCurrent = captureProviderManagementScope();
       const images = captureGeneratedImageStorage();
       for (const id of hostSessionIds) {
         for (const record of await images.journal.list(`remote:${id}`)) await images.release(record.scope, record.id);
@@ -202,6 +217,9 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
       await purgeClaudeHostedTranscripts(hostSessionIds);
       await purgeClaudeHostedSessionArtifacts(nativeIds);
       await purgePiHostedSubagentRuns(hostSessionIds, path.join(options.userDataDir, 'pi-agent-home'));
+      // These histories have been permanently revoked and purged. Ordinary
+      // task close/idle retains bindings so resuming cannot restore Fast.
+      await groupFastPolicyStore.forgetSessions(hostSessionIds, assertCurrent);
     },
     recordGuestUsage: (controller, sample) => {
       const peer = parseProviderSharePeer(controller);
@@ -220,6 +238,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     log,
   });
   const current = host;
+  stopFastPolicySync = startGroupFastPolicySync();
   setRemoteAgentHandler({
     handle: (controller, raw) => current.handle(controller, raw),
     abortAll: () => {
@@ -247,6 +266,8 @@ export function resolveRemoteAgentHostClaudeSessionId(sdkSessionId: string): str
 
 /** 退出时结束全部远程 Agent 任务。 */
 export function disposeRemoteAgentHost(): void {
+  stopFastPolicySync?.();
+  stopFastPolicySync = undefined;
   setRemoteAgentHandler(null);
   host?.dispose();
   host = null;

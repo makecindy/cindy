@@ -139,6 +139,9 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
+    autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
+    AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     MAIN_OWNED_SEND_CONTEXT: actual.MAIN_OWNED_SEND_CONTEXT,
@@ -200,6 +203,12 @@ vi.mock('../../maker-host/session-provider-store.js', async (importOriginal) => 
 vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getResponsesBridgeHandler: () => ({ handle: h.bridgeHandle }),
   getPiNativeSubscriptionHandler: vi.fn(),
+}));
+// The bridge preferences fixture uses the default allowing policy and must not
+// read Electron's owner/config files. Restriction behavior is exercised through
+// the real policy and async handler in subscription-fast-policy/Bridge tests.
+vi.mock('../../maker-host/subscription-fast-policy.js', () => ({
+  createSubscriptionFastPolicy: () => ({ isAllowed: () => true, isRequestAllowed: () => true }),
 }));
 vi.mock('../../maker-host/claude-fast-mode-log.js', () => ({
   createClaudeFastModeRequestTransform: () => () => null,
@@ -543,7 +552,8 @@ describe('hook task model selection on next send', () => {
       }));
       return makeFakeSession(opts.id ?? req.sessionId);
     });
-    expect((await createMakerHookSessionRunner({ log }).run(req)).status).toBe('ok');
+    const outcome = await createMakerHookSessionRunner({ log }).run(req);
+    expect(outcome.status, outcome.errorMessage ?? undefined).toBe('ok');
     expect(h.bridgeHandle).toHaveBeenCalledOnce();
   });
 

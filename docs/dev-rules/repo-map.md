@@ -3,9 +3,36 @@
 > **读取时机**：首次接触本仓、需要定位某个功能的代码位置、或新增代码／依赖前判断
 > 应该放进哪个模块时
 
-本文只做**定位导航**：每个目录一句话说明"它是干什么的、谁在用它"。事实源是各目录
-的 `package.json` 与 README；发现本文与代码不一致时，以代码为准并顺手修正本文。
+本文只做**定位导航**：先按用户行为找生产入口、共享判据和测试，再按目录判断代码归属。
+事实源是各目录的源码、`package.json` 与 README；发现本文与代码不一致时，以代码为准并顺手修正本文。
 依赖方向与解耦约束见 [`architecture-invariants.md`](architecture-invariants.md)。
+
+## 按用户行为定位
+
+模块约束从 [Desktop](../../apps/desktop/AGENTS.md)、[Mobile](../../apps/mobile/AGENTS.md)、
+[maker-core](../../packages/maker-core/AGENTS.md) 进入；下表记录现有入口，不另建任务生命周期框架。
+`register.ts` 仍负责部分宿主接线，按表中的函数／IPC 名定位即可，不必从头阅读。
+
+| 用户行为 | 生产入口与共享判据 | 从哪些测试开始 |
+| --- | --- | --- |
+| 发送、排队、插话、停止后继续 | [AgentInputCoordinator](../../apps/desktop/src/main/maker-ipc/agent-input-coordinator.ts) 持有输入事务；[register.ts](../../apps/desktop/src/main/maker-ipc/register.ts) 的 `sendToSessionInternal` 接宿主发送；[agentInputQueue](../../apps/desktop/src/shared/agentInputQueue.ts) 定义队列契约。个人 IM / 官方 hook 的调用方账本见 [IM 轮次流程](im-turn-flow.md)。 | [coordinator](../../apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts)、[队列契约](../../apps/desktop/src/main/__tests__/agentInputQueue.test.ts) |
+| 普通任务、伙伴与群任务切换权限 | [register.ts](../../apps/desktop/src/main/maker-ipc/register.ts) 的 `SET_PERMISSION_MODE` 与 [sessionPermissionChange](../../apps/desktop/src/main/maker-ipc/sessionPermissionChange.ts) 处理运行期变更；未加载运行时的持久化走 [sessionPermissionPersistence](../../apps/desktop/src/main/maker-ipc/sessionPermissionPersistence.ts)，伙伴专线同步走 [botPermissionSync](../../apps/desktop/src/main/maker-ipc/botPermissionSync.ts)。[permissionMode](../../packages/maker-shared/src/permissionMode.ts) 统一客户端的未知档位与 Full access 确认判据；实际执行权限仍由宿主／引擎决定。 | [权限持久化与专线同步](../../apps/desktop/src/main/maker-ipc/__tests__/sessionPermissionPersistence.test.ts)、[引擎控制](../../packages/maker-core/src/session-control.test.ts)、[跨端权限判据](../../packages/maker-shared/src/__tests__/permissionMode.test.ts) |
+| 重启后发现中断任务、运行中断后续跑 | 启动候选由 [sessionActiveTurn](../../apps/desktop/src/main/localDb/sessionActiveTurn.ts) 判定，[interruptedResumeCandidates](../../apps/desktop/src/main/localDb/interruptedResumeCandidates.ts) 补展示信息；运行期自动续跑由 [interruptedTurnAutoResume](../../apps/desktop/src/main/maker-ipc/interruptedTurnAutoResume.ts) 分类，再回输入协调器。两者不是同一触发条件。 | [启动中断判据](../../apps/desktop/src/main/localDb/__tests__/sessionActiveTurn.test.ts)、[启动恢复对话框](../../apps/desktop/src/renderer/features/cc-agent/__tests__/InterruptedTasksResumeDialog.test.tsx)、[自动续跑判据](../../apps/desktop/src/main/maker-ipc/__tests__/interruptedTurnAutoResume.test.ts) |
+| 新任务与伙伴选择默认模型 | Desktop 的 [newMakerDefaultTuple](../../apps/desktop/src/shared/newMakerDefaultTuple.ts) 选择默认组合；[botDefaultModelChain](../../apps/desktop/src/shared/botDefaultModelChain.ts) 复用推荐，但伙伴设置与新任务输入框选择独立。Mobile 的 [useNewSessionDefaultSelection](../../apps/mobile/src/session/useNewSessionDefaultSelection.ts) 调用 [newSession](../../apps/mobile/src/session/newSession.ts) 中的 `resolveNewSessionAutoDefault`，被控端默认与缓存由 [useNewSessionHostDefaults](../../apps/mobile/src/session/useNewSessionHostDefaults.ts) 提供。目录来源与覆盖顺序见[模型配置与下发](model-catalog-maintenance.md)。 | [默认组合](../../apps/desktop/src/renderer/lib/__tests__/newMakerDefaultTuple.test.ts)、[伙伴默认](../../apps/desktop/src/shared/__tests__/botDefaultModelChain.test.ts)、[手机默认与缓存](../../apps/mobile/src/__tests__/newSessionHostDefaults.test.tsx) |
+| 手机新建任务、创建中继续输入、失败回编辑 | [new.tsx](../../apps/mobile/app/sessions/new.tsx) 组装页面；[prepareNewSessionCreation](../../apps/mobile/src/session/prepareNewSessionCreation.ts) 先保存草稿与附件，再预建 worktree；[newSessionCreation](../../apps/mobile/src/session/newSessionCreation.ts) 持有跨页面的乐观创建管线；[useNewSessionDraftRecovery](../../apps/mobile/src/session/useNewSessionDraftRecovery.ts) 恢复草稿。 | [乐观创建](../../apps/mobile/src/__tests__/newSessionCreation.test.ts)、[真实恢复 hook](../../apps/mobile/src/__tests__/useNewSessionDraftRecovery.test.tsx)、[草稿持久化](../../apps/mobile/src/__tests__/newSessionCreationPersistence.test.ts) |
+
+同一行为涉及普通任务、伙伴、群、调度、本机与远程入口时，从公共入口反查调用方，保留产品规则明确的差异。
+手机新建页的[表单编辑与恢复](../../apps/mobile/src/session/newSessionForm.ts)、
+[工作区选择](../../apps/mobile/src/session/useNewSessionWorkspace.ts)、
+[worktree 偏好同步](../../apps/mobile/src/session/useNewSessionWorktreeSync.ts)、
+[语音与光标](../../apps/mobile/src/session/newSessionVoiceInput.ts)、
+[模型运行选项校准](../../apps/mobile/src/session/newSessionRuntimeReconciliation.ts)和
+[待发消息的会话适配](../../apps/mobile/src/session/mobileOutboxSessionAdapter.ts)可直接测试；
+创建前的附件与草稿写盘复用 [persistNewSessionCreationDraft](../../apps/mobile/src/session/persistNewSessionCreationDraft.ts)。
+最小草稿、附件与异步夹具复用 [fixtures/newSession](../../apps/mobile/src/__tests__/fixtures/newSession.ts)。
+测试优先直接 import 生产模块或挂载真实 hook；价值门槛与源码契约的适用范围见
+[工程约定 §3.2](engineering-conventions.md#32-新增测试的价值门槛)，选测入口见[开发流程](development-workflow.md)。
+创建中继续输入、离线历史与后台失败等已发生过的回归，见[任务回归场景](session-regressions.md)。
 
 ## 顶层结构
 
@@ -13,7 +40,7 @@
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `apps/`     | 终端产品（desktop、mobile）与随包分发的二进制资产                                                                              |
 | `packages/` | 客户端共享能力包（与 render／main 解耦，详见下表）                                                                             |
-| `config/`   | 运行期端点清单（`endpoint.json` / `endpoint.dev.json` / `endpoint.global.json`：auth、device-link 等线上 base URL）            |
+| `config/`   | 区域端点清单（CN / Global 的公共配置与本地 dev 模板）；新 worktree 的本地配置准备见[环境安装](environment-setup.md) |
 | `scripts/`  | 仓库级工程脚本：dev 启动包装、agent 二进制拉取（`ensure-agent-binaries.mjs`）、i18n／endpoint／文档等校验 guard、worktree 管理 |
 | `tools/`    | claude／codex／ripgrep／pi 四个 Desktop runtime 的版本 pin（`latest.json`）与更新器（`update.mjs`）                            |
 | `docs/`     | 规则文档：`dev-rules/`（工程）、`product-rules/`（产品）、`design-rules/`（设计入口）、`legal/` 等                             |
@@ -24,7 +51,7 @@
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/desktop`                                               | Cindy 桌面客户端（Electron + Vite），源码分 `main/`（主进程：业务逻辑、maker-host／maker-ipc、localDb、device-link、mcp-integrations、cindy-brain 等）、`renderer/`（纯渲染 UI：features、panels、themes、i18n 等）、`preload/`（最小桥接层）、`shared/`（主／渲染共享类型与常量）；SQLite migration 在 `apps/desktop/drizzle/` |
 | `apps/mobile`                                                | Cindy 手机客户端（Expo / React Native）：同账号登录、发现并远程控制桌面设备、镜像会话                                                                                                                                                                                                                                           |
-| `apps/claude-code-bin`、`apps/codex-bin`、`apps/ripgrep-bin` | 随桌面端分发的预编译 CLI 二进制（按平台分目录）。不是构建包、不进 git 历史；版本由 `tools/<kind>/latest.json` pin，`pnpm install` postinstall 按需下载                                                                                                                                                                          |
+| `apps/claude-code-bin`、`apps/codex-bin`、`apps/ripgrep-bin`、`apps/pi-bin` | 随桌面端分发的预编译 CLI 二进制（按平台分目录）。不是构建包、不进 git 历史；版本由 `tools/<kind>/latest.json` pin，`pnpm install` postinstall 按需下载 |
 | `apps/android-platform-tools-bin`                            | Android platform-tools（adb 等）二进制，当前仅 win32-x64，用于连接安卓设备                                                                                                                                                                                                                                                      |
 
 ## packages/

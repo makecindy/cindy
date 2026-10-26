@@ -16,5 +16,5 @@
   [`cindy-design-system.md`](./cindy-design-system.md)。
 - 权威视觉规范正本为 [`DESIGN.md`](./DESIGN.md)（视觉语言、颜色与主题 Token、排版、
   组件、布局、动效、交互、内容规范、登录链路）；仓库根 `DESIGN.md` 仅为跳转入口。
-- 登录域逐参数与 token 决策见 [`figma-component-spec.md`](./figma-component-spec.md)
-  与 [`token-decision-table.md`](./token-decision-table.md)。
+- 登录域现行规则与色值见 `DESIGN.md` §16；token / 尺寸决策记录见
+  [`token-decision-table.md`](./token-decision-table.md)。

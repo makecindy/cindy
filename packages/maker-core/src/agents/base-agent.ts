@@ -448,6 +448,11 @@ export interface LocalAgentProcessRegistration {
   pid: number;
   kind: 'claude' | 'pi';
   role: 'task-host' | 'control-plane-service';
+  /**
+   * 承载本进程的宿主 session id,供资源监视器显示归属任务。远端 transport
+   * 不触发登记,宿主可忽略。
+   */
+  sessionId?: string | null;
 }
 
 export interface CodexLocalCredentialModeSwitchContext {
@@ -867,6 +872,7 @@ export interface AgentDeps {
       resumeSessionId?: string;
       /** Preview must not prepare global skills or start a local model service. */
       purpose?: 'startup' | 'preview' | 'live-refresh';
+      sessionId?: string;
     },
   ) => Promise<PiNativeProvidersResult | null>;
 
@@ -1564,6 +1570,7 @@ export interface AgentDeps {
    * 「远端恒用网关」行为。
    */
   resolveRemoteClaudeRoute?: (opts: {
+    sessionId?: string;
     providerId?: string | null;
     model: string;
   }) => Promise<RemoteClaudeRoute | null>;
@@ -1721,7 +1728,7 @@ export interface BotRuntimeSkillPolicy {
 
 export interface BotRuntimeMcpEntry {
   name: string;
-  source: 'builtin' | 'custom';
+  source: 'builtin' | 'custom' | 'harness';
   available?: boolean;
 }
 
@@ -1930,6 +1937,12 @@ export interface StartSessionOptions {
   deviceHosted?: DeviceHostedSession;
   model: string;
   /**
+   * 本任务级工作上下文预算（tokens）。host 已按目录 `contextWindowMax` 与用户在同一
+   * 路由上设过的模型级上限收敛，引擎只需直接采用；缺席 = 跟随 `resolveModelContextLimit`
+   * / 目录默认（旧行为零变化）。
+   */
+  contextWindowBudget?: number;
+  /**
    * 本次会话显式选择的供应商来源。maker-core 只用它推导子进程凭证形态;
    * 具体上游路由仍由 host 的 proxy / provider catalog 负责。
    */
@@ -1940,6 +1953,8 @@ export interface StartSessionOptions {
    * Undefined means do not override the agent/server default.
    */
   fastMode?: boolean | 'ultrafast';
+  /** Trusted host restriction for this subscription run, including live policy changes. */
+  fastModePolicy?: import('./shared/fast-mode-policy.js').FastModePolicy;
   /**
    * Host-owned live pricing variant for request-level usage segments.
    * Pi reads this at each provider request boundary so a mid-turn Fast toggle
@@ -2464,6 +2479,13 @@ export interface AgentSessionHandle {
   countPendingWakeContinuations?(): number;
 
   /**
+   * 宿主发起的独占 RPC 操作(手动压缩 / rewind fork / 切模等)是否在途。
+   * 这类操作不预约 turn、也不置 isStreaming；运行时回收必须能看见它们，
+   * 不能把进程关在操作中间。不支持的 agent 留空(Session 层回退 false)。
+   */
+  hasPendingHostOperation?(): boolean;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */
@@ -2508,13 +2530,27 @@ export interface AgentSessionHandle {
   /** Actual runtime reviewer, not subscription availability. Only applies to harness-dispatched tools. */
   getAutoReviewOwner?(): 'native' | 'cindy';
 
-  /** 运行时切换模型 —— 不支持时抛 NotSupportedError。thinkingEnabled = 目标模型的思考开关意图（Pi 用它收敛切模后的 thinking level）。 */
-  setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean }): Promise<void>;
+  /** 运行时切换模型 —— 不支持时抛 NotSupportedError。
+   * thinkingEnabled = 目标模型的思考开关意图（Pi 用它收敛切模后的 thinking level）。 */
+  setModel?(
+    model: string,
+    opts?: {
+      providerId?: string | null;
+      effort?: Effort;
+      thinkingEnabled?: boolean;
+      /**
+       * 本任务级工作上下文预算（tokens）；host 已按目标路由的目录上限与模型级上限
+       * 收敛。显式传 null / undefined 时保持当前预算不变（host 在预算变化时直接
+       * 触发重建，不走热切）。
+       */
+      contextWindowBudget?: number | null;
+    },
+  ): Promise<void>;
 
   /** Read-only Pi preflight before the host changes its persisted route or context. */
   previewModelSwitch?(
     model: string,
-    opts?: { providerId?: string | null },
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
   ): Promise<PiModelSwitchPreview>;
 
   /**

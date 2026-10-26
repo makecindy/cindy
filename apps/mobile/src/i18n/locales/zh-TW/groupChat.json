@@ -60,6 +60,8 @@
     "send": "傳送"
   },
   "timeline": {
+    "newMessages_one": "{{count}} 則新訊息",
+    "newMessages_other": "{{count}} 則新訊息",
     "emptyTitle": "群聊裡還沒有訊息",
     "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
     "roundEnded": "夥伴們說完了",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "引用 {{name}}：{{summary}}",
     "deleted": "原訊息已刪除",
-    "attachments": "{{name}} 等 {{total}} 個附件"
+    "attachments": "{{name}} 等 {{total}} 個附件",
+    "unavailable": "無法找到這則訊息。"
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
@@ -113,6 +116,7 @@
     "start": "開始",
     "dismiss": "不用了",
     "editHint": "想換人或改步驟，直接說",
+    "autoNote": "做完一步會自動交給下一位。",
     "pauseNote": "每做完一步會停下來，等你點「繼續」。",
     "superseded": "已更新",
     "dismissed": "不用了",
@@ -171,6 +175,7 @@
     "replyModeAll": "大家都可以接話",
     "replyModeMentioned": "只有被 @ 的回答",
     "replyModeNote": "沒什麼可補充的夥伴不會說話。每輪最多聊 3 圈、10 則，之後等你點「繼續討論」。",
+    "replyModeNoteQueue": "夥伴們排隊依序回答，前 5 位自動接著說。引用夥伴的訊息或回覆它的話題，也會叫到它。",
     "replyModeSaveFailed": "回覆方式沒能儲存，請再試一次",
     "delete": "刪除群聊",
     "deleteNote": "只刪除這個群聊和其中的訊息，夥伴本身、它們的記憶和私聊都不受影響。",

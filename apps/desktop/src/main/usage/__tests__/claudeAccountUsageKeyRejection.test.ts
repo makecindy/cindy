@@ -150,5 +150,11 @@ describe('claudeAccountUsage Cindy AI key rejection', () => {
 
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
     expect(mocks.report).not.toHaveBeenCalled();
+    // Unit compatibility: the legacy reader keeps daily data without opting in
+    // to the enterprise switch (missing switch must not disable this path).
+    expect(usage.readClaudeAccountUsageSnapshot()).toEqual({
+      spend: 1, maxBudget: 10, currency: 'USD', budgetResetAt: null,
+      todaySpend: 0, fetchedAt: expect.any(Number),
+    });
   });
 });

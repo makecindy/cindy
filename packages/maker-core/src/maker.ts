@@ -44,6 +44,7 @@ import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilitie
 import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
 import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId, type SessionStartupPreferences } from './session.js';
+import { withFastModePolicy } from './agents/shared/fast-mode-policy.js';
 import { NotSupportedError } from './types/capabilities.js';
 import {
   AgentNotAuthenticatedError,
@@ -795,6 +796,7 @@ export class Maker {
         });
       }
       agentStartAttempted = true;
+      if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
@@ -836,6 +838,7 @@ export class Maker {
                 this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
             : undefined,
       });
+      handle = withFastModePolicy(handle, startOpts.fastModePolicy);
     } catch (error) {
       codexThreadClaim?.release();
       // A generic adapter error does not prove its process stopped. Preserve
@@ -1540,7 +1543,8 @@ export class Maker {
     if (this.shutdownStarted) throw new Error('Maker is shutting down; refusing to start a hosted session');
     if (!opts.deviceHosted) throw new Error('hosted sessions require deviceHosted');
     if (opts.remoteHostId) throw new Error('hosted sessions cannot target an SSH host');
-    return this.requireAgent(kind).startSession(opts);
+    if (opts.fastModePolicy && !(opts.fastModePolicy.isRequestAllowed?.() ?? opts.fastModePolicy.isAllowed())) opts.fastMode = false;
+    return withFastModePolicy(await this.requireAgent(kind).startSession(opts), opts.fastModePolicy);
   }
 
   /** A local application owns the transcript; supplier execution stays in Maker. */

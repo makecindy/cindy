@@ -28,6 +28,7 @@ vi.mock('../authBoundaryQuarantine.js', () => ({
 
 import {
   beginAppSessionBoundary,
+  onAppSessionInvalidated,
   commitActiveAppSession,
   commitVolatileAppSession,
   getActiveAppSession,
@@ -62,6 +63,20 @@ const createCloudCommit = new Function(
 ) => (ownerId: string, authRealmChanged: boolean) => void;
 
 describe('application session boundary isolation', () => {
+  it('cancels request scopes before boundaries and generation changes, and unsubscribes on completion', () => {
+    const observed: number[] = [];
+    const unsubscribe = onAppSessionInvalidated(() => observed.push(getActiveAppSession().generation));
+    const initial = getActiveAppSession();
+    const release = beginAppSessionBoundary();
+    release();
+    commitActiveAppSession(initial.mode, initial.dataOwnerId, true);
+    commitVolatileAppSession(initial.mode, initial.dataOwnerId, true);
+    unsubscribe();
+    const nextRelease = beginAppSessionBoundary();
+    nextRelease();
+    expect(observed).toEqual([initial.generation, initial.generation, initial.generation + 1]);
+  });
+
   it('does not treat a different durable Ghost projection owner as an App transition', () => {
     ghostBoundary.stable = false;
     expect(isAppSessionBoundaryPending()).toBe(false);

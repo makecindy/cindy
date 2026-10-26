@@ -250,7 +250,7 @@ describe('mobile native boundary contracts', () => {
     const viewport = elements.get('session.bottomViewport')!;
     const layer = elements.get('session.bottomLayer')!;
     expect(layer.parent).toBe(viewport);
-    expect(layer.openingElement.getText(source)).toContain('ref={bottomOverlayRef}');
+    expect(layer.openingElement.getText(source)).toContain('onLayout={handleBottomOverlayLayout}');
     expect(viewport.openingElement.getText(source)).toContain('pointerEvents="box-none"');
     for (const component of ['SessionComposerPalette', 'ComposerActivityStatus', 'SessionComposerInput']) {
       expect(viewport.getText(source)).toContain('<' + component);
@@ -308,7 +308,10 @@ describe('persistent native history ownership', () => {
     expect(home).toContain('{residentList.enabled ? (');
     expect(home).not.toContain('residentList.enabled && !embedded');
     const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    expect(route).toContain('<MessageHistoryOverlay enabled={!paneLayout.persistent || sessionListDrawerOverlayMounted}>');
+    const layout = readFileSync(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
+    expect(route).toContain('<SessionTaskLayout>');
+    expect(layout).toContain('<MessageHistoryOverlay enabled={false}>');
+    expect(layout).toContain('persistent={paneLayout.persistent}');
   });
   it('does not keep the old route preloading mechanism alongside the resident host', () => {
     const home = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');

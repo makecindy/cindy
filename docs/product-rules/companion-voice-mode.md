@@ -36,7 +36,7 @@
 - 当前仅支持 Desktop、本机伙伴一对一。群聊、Mobile、远程控制的麦克风、原生 Realtime speech-to-speech 不在此实现内。
 - 新 IPC 只接受可信应用顶层 Renderer，按窗口、账号代次、callId 和 canonical 任务绑定。callId 在发起请求前生成，使结束按钮也能取消连接过程；它不是授权凭证。接口不加入 device-link 或插件白名单。输入静音控制仍绑定当前窗口与 callId，输入每次重开分配新代次；旧代次 PCM 和识别回调不能进入新输入，结束中的迟到麦克风或 ASR 分配仍须释放。模型权限在开始和每次 TTS 请求、读取时复核。
 - ASR 适配器额外提供按上游 utterance/item ID 标识的分段事件，现有累积 `AsrEvent` 合同保持不变。连接在 150 秒轮换，沿用 voice-server 的 dictation 协议；切换期间最多缓存 5 秒输入，不能无声丢弃或重复发送前文。
-- Gateway 执行合同为 OpenAI 兼容 `POST <语音 API base>/audio/speech`。服务端下发的是与密钥配对的推理部署地址：仅在本地 Cindy AI TTS 连接中补齐末尾 `/v1`，已有 `/v1` 不重复添加，保留部署路径前缀；不回写聊天、图像等共用的 endpoint，也不改 BYOK 配置的 API base。body 包含 `model`、`voice`、`input`、`response_format: pcm`。PCM 固定为该协议规定的 24kHz、单声道、16bit little-endian。显式声明其他 native API 或 `null` 未验证 API 的 Cindy AI 模型不进入选择器；未声明协议的 Gateway 新模型沿用此端点合同。下发 `mode` 只代表能力分类，不证明具体音色、音频格式或端点可用。
+- Gateway 执行合同为 OpenAI 兼容 `POST <语音 API base>/audio/speech`。服务端下发的是与密钥配对的推理部署地址：仅在本地 Cindy AI TTS 连接中补齐末尾 `/v1`，已有 `/v1` 不重复添加，保留部署路径前缀；不回写聊天、图像等共用的 endpoint，也不改 BYOK 配置的 API base。body 包含 `model`、`voice`、`input`、`response_format: pcm`。PCM 固定为该协议规定的 24kHz、单声道、16bit little-endian。显式声明其他 native API 或 `null` 未验证 API 的 Cindy AI 模型不进入选择器；未声明协议的 Gateway 新模型沿用此端点合同。解析当前及内置 Registry 时均传入已发现的媒体 `mode`，避免 Qwen 等品牌的聊天前缀规则误排除语音型号；精确协议声明仍优先，不因 `mode` 绕过。下发 `mode` 只代表能力分类，不证明具体音色、音频格式或端点可用。回归见 `main/voice-conversation/__tests__/models.test.ts`。
 - 凭证只在 Main：Gateway 使用当前账号配对的 baseUrl / 密钥，BYOK 复用对应连接、对应 runtime 的 safeStorage 密钥和固定请求头。排除原生订阅 OAuth、远程或共享供应商；per-model 地址不得跨越凭证所属连接的 origin。开始时固定连接，每次合成与音频读取复核资格及路由/密钥是否变化；变化则停止该语音请求。禁止自动切换到其他供应商、系统朗读或另一条凭证。响应按 Renderer 播放速度读取，播放只预排约 300ms；中断丢弃旧请求和迟到音频。原始音频只在内存，不新增录音文件或对话音频归档。
 - 初始实现的声音活动判断是带迟滞的音量检测，配合浏览器回声消除与降噪。它不是语义 VAD，不能保证所有扬声器、蓝牙或噪声环境都能准确分辨插话。
 
@@ -56,6 +56,39 @@
 - 按句请求能缩短首句等待，但会增加请求次数，句间音色和语调的连续性取决于供应商；不保证无缝播报。厂商原生文本增量 WebSocket、跨句上下文参数及自适应分句仍属后续适配，不作为本轮已实现能力。
 
 ## BYOK 音频合同
+
+OpenRouter 的普通 `/api/v1/models` 目录不包含完整语音列表。对未指定查询条件的官方目录，
+模型发现额外查询 `?output_modalities=speech`，按 ID 合并，并仅将明确输出 `speech` 的条目
+识别为 `audio_speech`；`audio` 输入／输出的聊天模型保持聊天分类，已有名称、类型及开关覆盖
+继续生效。额外查询失败时保留已获取的聊天目录；用户指定的过滤参数或代理目录不被改写。
+语音的按字符／时长报价不写入聊天的 token 单价字段。
+登录后的发现与手动刷新均在每次分页／语音补查前复核登录代次及当前账号；取消、关闭登录
+窗口或切换账号后，不再使用已捕获的凭证追加目录请求，迟到结果不写入模型配置。
+
+OpenRouter BYOK 的官方 `/api` 和 `/api/v1` 连接只在语音请求中统一到
+`https://openrouter.ai/api/v1/audio/speech`，使用对应连接的 Bearer key、OpenAI 兼容音频
+适配器及原模型 ID；聊天地址不变。每次进入型号、切换型号或点击音色刷新时，从语音模型
+目录读取该型号的 `supported_voices`，不套用 Gateway 或厂商直连的参考音色；缺少该字段时
+保留手动输入，查询失败沿用现有错误／重试行为，不覆盖已选音色。仍可手动输入并试听。
+音色目录仅在内存，不进入公共 Registry 或持久配置。
+官方 OpenRouter OAuth 连接同样可用：只放行已识别的 OpenRouter PKCE contract 与官方
+API 地址，复用当前账号 generic OAuth 凭证库中的 API key；缺少凭证时不可选、不回退到
+API Key 连接的密钥。其他订阅 OAuth、未知 OAuth contract 及代理地址仍不进入此语音路由。
+
+OpenRouter 的 `minimax/speech-*` 型号实测拒绝 PCM，因此直接请求 MP3，不先发起会失败的
+付费 PCM 请求或自动换模型。仅匹配官方 API 地址；Gateway、自定义代理与 MiniMax 原生
+SSE 仍保持原合同。MP3 每个句段在现有预取阶段完整接收，最多 8 MiB，保留响应头 30 秒、
+读取停滞 15 秒及账号／连接／取消校验。通过本机 IPC 返回明确标记的内存音频，由浏览器
+原生解码器按实际采样率解码，再复用有界播放、暂停与插话取消；不落盘、不新增解码依赖。
+解码后最多 10 分钟，迟到解码结果不可在取消后重新播放。按句切分及一个预取段保持不变，
+但 MP3 需收齐当前句段才能解码，不承诺逐音频帧开播；其他模型仍边收 PCM 边播放。
+
+OpenRouter 没有统一的型号语速范围，部分上游会拒绝非默认值，因此本阶段使用供应商默认
+语速，不发送 `speed`；设置页复用“不支持调整语速”的现有状态。Main 投影的可选
+`speedRange` 为本机能力信息（`null` 表示不支持、缺省沿用原协议范围），不接受 Renderer
+自报能力、不写入偏好、不加入远程协议。旧偏好中的语速在运行时忽略，明确修改设置时才
+通过原保存流程移除。可发现和可选择不等于账户具有执行权限；音频听感仍需按实际上游验收。
+接口依据：[OpenRouter TTS](https://openrouter.ai/docs/guides/overview/multimodal/tts)。
 
 | 接口 | 请求与鉴权 | 响应 |
 | --- | --- | --- |
@@ -94,11 +127,13 @@
 - 参数依据：[OpenAI Speech](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)、[ElevenLabs speed](https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech#speed)、[MiniMax HTTP TTS](https://platform.minimax.io/docs/api-reference/speech-t2a-http)。
 
 - **OpenAI 兼容**：仅对已知精确型号及已知格式的日期版本提供代码内的官方参考列表；`gpt-4o-mini-tts` 与 `tts-1` / `tts-1-hd` 的集合分开。未知型号不强行填 `alloy`，也不探测不存在的通用 `/voices`。兼容服务可能只实现部分音色，列表明确标注为参考，是否可用仍需试听。[资料来源](https://developers.openai.com/api/docs/guides/text-to-speech#voice-options)。
-- **Cindy AI Gateway**：在服务端尚未提供音色目录接口时，仅为明确匹配的 `elevenlabs/eleven_multilingual_v2`、`elevenlabs/eleven_v3` 和 `minimax/speech-{2.8,2.6,02,01}-{hd,turbo}` 提供各 4 个公共参考音色，维护在 `shared/speechVoices.ts`。ElevenLabs 采用官方旧默认音色的替代项 Talia、Darian、Eldrin、Elowen；MiniMax 采用官方系统音色候选，不宣称已通过 Gateway 验证。进入页面和刷新均读取本地参考表，不探测 `/voices`，不增加可用模型或授权。仅新选择使用参考默认值，已有音色 ID 和手动输入继续保留，试听仍使用当前 Gateway 的真实合成接口。未来接入 Gateway 音色目录时，应以该连接的成功响应为准（包括空列表），不能用参考列表掩盖服务端结果。[ElevenLabs 替代说明](https://elevenlabs.io/docs/help-center/product/voices/my-voices/what-are-default-voices)、[MiniMax 系统音色](https://platform.minimax.io/docs/faq/system-voice-id)。
+- **Cindy AI Gateway**：在服务端尚未提供音色目录接口时，为明确匹配的 `elevenlabs/eleven_multilingual_v2`、`elevenlabs/eleven_v3` 和 `minimax/speech-{2.8,2.6,02,01}-{hd,turbo}` 提供各 4 个公共参考音色，维护在 `shared/speechVoices.ts`。ElevenLabs 采用官方旧默认音色的替代项 Talia、Darian、Eldrin、Elowen；MiniMax 采用官方系统音色候选，不宣称已通过 Gateway 验证。进入页面和刷新均读取本地参考表，不探测 `/voices`，不增加可用模型或授权。仅新选择使用参考默认值，已有音色 ID 和手动输入继续保留，试听仍使用当前 Gateway 的真实合成接口。未来接入 Gateway 音色目录时，应以该连接的成功响应为准（包括空列表），不能用参考列表掩盖服务端结果。[ElevenLabs 替代说明](https://elevenlabs.io/docs/help-center/product/voices/my-voices/what-are-default-voices)、[MiniMax 系统音色](https://platform.minimax.io/docs/faq/system-voice-id)。
+- **Gateway Qwen**：`qwen/qwen-audio-3.1-tts-plus` 同样走 OpenAI 兼容接口，提供龙安灵心_v3.1、许南川、龙安欢_v3.1、龙安风悦_v3.1 四个参考音色，新选择默认龙安灵心_v3.1。名称和完整 ID 来自 [Qwen-Audio 官方目录](https://help.aliyun.com/zh/model-studio/qwen-audio-tts-voice-list)，2026-10-23 已通过 Gateway 实测四个音色的 PCM 合成；该结论不扩展到其他 Qwen 型号或 BYOK 原生接口。该型号的语速范围为 0.5–2，UI 与 Main 共用限制；Gateway 实测 0.5 / 1.2 / 2 成功，0.25 / 4 失败，不能直接套用 OpenAI 的宽范围。范围依据见 [Qwen-Audio HTTP 参数](https://www.alibabacloud.com/help/en/model-studio/qwen-audio-tts-http-api)，更换模型沿用已有的语速调整提示，不自动重写旧偏好。刷新、手动输入、已有偏好和试听仍沿用上述 Gateway 规则。实现见 `shared/speechVoices.ts`，回归见 `main/voice-conversation/__tests__/voices.test.ts`。
 - **BYOK ElevenLabs**：从对应连接的 `/v2/voices` 分页查询账号音色；由既有 `/v1` base 替换末段，保留代理 origin 和路径前缀。无版本后缀的自定义代理尝试其 `<base>/voices` 旧接口。`high_quality_base_model_ids` 不作为模型可用性的硬过滤条件。失败时允许重试或手动输入。[资料来源](https://elevenlabs.io/docs/api-reference/voices/search)。
 - **BYOK MiniMax**：调用 `<base>/get_voice`，`voice_type: all`，合并 `system_voice`、`voice_cloning`、`voice_generation`；名称与 ID 分开，缺名称时显示 ID。音色 ID 接受真实型号所需的空格、括号等字符，保留长度、控制字符和路径分隔符校验。[资料来源](https://platform.minimax.io/docs/api-reference/voice-management-get)。
 - 音色选项与当前选中项默认只显示名称及供应商提供的风格说明；同名音色附加短 ID 尾缀，尾缀冲突时延长至可区分，缺名称时回退为完整 ID。不提供已选音色的 ID 展示栏或复制入口；手动输入仅作为目录外音色的兜底。显示缩写不改变选择值、伙伴偏好或合成请求中的完整 ID，也不触发已有偏好重写。
 - 进入页面先读取该伙伴已保存的选择，并显示所选音色上次成功获取的名称，再后台刷新目录；名称变化只更新显示，不改选音色、不重写伙伴偏好。没有名称缓存时，在原选择框内显示加载状态，不提前判定已选音色缺失或展开手动输入框。同一路由刷新保留现有名称和列表，刷新失败保留已知名称并提供重试提示；没有已知名称且获取失败、返回空列表或成功获取后已选 ID 未收录时才进入手动输入兜底，用户也可主动选择手动输入。切换伙伴、连接、runtime、型号或接口后立即隔离旧列表，迟到结果不能覆盖当前页面。加载状态使用既有控件和 Spinner，不通过新增、移除一整块表单表达加载。
+- 用户主动切换朗读模型时，优先使用该型号的已知默认音色；没有默认音色则在当前路由的音色目录成功返回后选择第一项，通过既有伙伴偏好保存完整选择，适用于所有供应商。空列表或查询失败不保存不完整选择，重试成功可继续补选；用户开始手动选择或输入（包括清空输入）后取消自动补选。打开页面、恢复默认和已有选择的目录刷新不触发补选或偏好重写；不跨模型沿用音色，不增加逐模型历史记忆，也不自动试听。实现与回归见 `CompanionVoiceSettings.tsx`、`SpeechVoicePicker.tsx` 与 `CompanionVoiceSettings.test.tsx`。
 - 目录请求只在 Main 使用当前连接的凭证，拒绝重定向，限制 15 秒、每页 2MB 和最多 1000 个音色 / 10 页；超过显示范围时提示手动输入兜底。账号、密钥或路由在请求期间变化则丢弃结果。账号专属完整音色列表只留在面板内存，不写入公共 Registry 或新的配置文件；已有伙伴偏好仅保存所选 ID，不自动迁移或重写。所选音色的显示名称单独缓存在现有 Renderer localStorage，按账号、伙伴、完整模型路由及音色 ID 匹配，每个账号最多 64 条，不含凭证或执行权限；重开、Renderer 重载后可复用，缓存损坏或不可用不影响真实配置。账号切换前发起的迟到请求不得写入缓存。
 - 用户点击试听后，以当前连接、型号、接口和音色合成短示例文本，并明确提示可能产生用量。复用既有 PCM 合成、解码和播放；不采集麦克风、不发送伙伴消息、不调用聊天模型，不使用供应商返回的任意 `preview_url`。试听结果表示这次调用结果，不持久标记整个账号或型号已验证。
 - 试听与语音模式/听写互斥，绑定可信窗口、账号和伙伴 canonical 任务。生成过程中也可停止；改选、隐藏页面、关面板、账号变化、系统挂起或权限阻塞时取消；开始语音前等待试听停止。窗口销毁与 60 秒总时限均释放 Main 的语音占用。晚到的结果不恢复播放、不覆盖新选择。

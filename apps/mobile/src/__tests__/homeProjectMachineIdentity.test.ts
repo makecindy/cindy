@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { MobileHomeDeviceFilterItem, MobileHomeProjectGroup } from '@/session/mobileHome';
 import { buildHomeProjectMachineIdentities } from '@/session/homeProjectMachineIdentity';
 
+const connected = {
+  status: 'online' as const,
+  getPresenceAvailability: (_deviceId: string): boolean | null => true,
+  unresponsiveDevices: new Set<string>(),
+  revokedDevices: new Set<string>(),
+};
+
 function project(key: string, deviceId: string | null, deviceName: string): MobileHomeProjectGroup {
   return {
     key, deviceId, deviceName, title: 'folder', workingDir: '/folder',
@@ -23,7 +30,7 @@ describe('project machine identity parity with Desktop', () => {
       projects: [project('a', 'win', 'Windows'), project('b', 'mac', 'MacBook'), project('c', 'mac', 'MacBook')],
       deviceFilters: [device('win', 'Windows'), device('mac', 'MacBook')],
       selectedDeviceId: null,
-    });
+    }, connected);
     expect([...result.values()].map((item) => item.displayLabel)).toEqual(['Windows', 'MacBook', 'MacBook']);
     expect(result.get('a')).toEqual({ displayLabel: 'Windows', disconnected: false, hideLabel: false });
   });
@@ -33,12 +40,12 @@ describe('project machine identity parity with Desktop', () => {
     const result = buildHomeProjectMachineIdentities({
       projects: [project('a', 'one', 'MacBook'), project('b', 'two', 'macbook')],
       deviceFilters, selectedDeviceId: null,
-    });
+    }, connected);
     expect(result.get('a')?.displayLabel).toBe('MacBook · one');
     expect(result.get('b')?.displayLabel).toBe('macbook · two');
     const onlyOneVisible = buildHomeProjectMachineIdentities({
       projects: [project('a', 'one', 'MacBook')], deviceFilters, selectedDeviceId: null,
-    });
+    }, connected);
     expect(onlyOneVisible.get('a')?.displayLabel).toBe('MacBook');
   });
 
@@ -46,24 +53,62 @@ describe('project machine identity parity with Desktop', () => {
     const result = buildHomeProjectMachineIdentities({
       projects: [project('a', 'mac', 'MacBook')],
       deviceFilters: [device('mac', 'MacBook', false)], selectedDeviceId: 'mac',
-    });
+    }, { ...connected, getPresenceAvailability: () => false });
     expect(result.get('a')).toEqual({ displayLabel: 'MacBook', disconnected: true, hideLabel: true });
   });
 
-  it('reflects a failed connection and a later recovery without hiding the machine label', () => {
+  // Regression: reopening a task list first paints cached tasks without its local
+  // device roster. Unit coverage previously equated that unknown/failed list state
+  // with disconnection; exercise the production icon projection across the gap.
+  it('keeps the project connected across roster loading, stale offline rows and refreshed rows', () => {
+    const home = {
+      projects: [project('a', 'mac', 'MacBook')],
+      selectedDeviceId: null,
+    };
+    for (const deviceFilters of [
+      [],
+      [{ ...device('mac', 'MacBook', false), state: 'unknown' as const }],
+      [device('mac', 'MacBook', false)],
+      [device('mac', 'MacBook')],
+    ]) {
+      expect(buildHomeProjectMachineIdentities({ ...home, deviceFilters }, connected).get('a'))
+        .toEqual({ displayLabel: 'MacBook', disconnected: false, hideLabel: false });
+    }
+  });
+
+  it.each([
+    ['unknown presence', { getPresenceAvailability: (): boolean | null => null }, false],
+    ['offline or remote disabled', { getPresenceAvailability: (): boolean | null => false }, true],
+    ['relay reconnecting', { status: 'connecting' as const }, true],
+    ['relay stopped', { status: 'stopped' as const }, true],
+    ['unresponsive host', { unresponsiveDevices: new Set(['mac']) }, true],
+    ['revoked host', { revokedDevices: new Set(['mac']) }, true],
+  ] as const)('uses shared evidence for %s even while the roster says ready', (_label, evidence, disconnected) => {
     const home = {
       projects: [project('a', 'mac', 'MacBook')],
       deviceFilters: [device('mac', 'MacBook')], selectedDeviceId: null,
     };
-    expect(buildHomeProjectMachineIdentities(home, { mac: 'failed' }).get('a')?.disconnected).toBe(true);
-    expect(buildHomeProjectMachineIdentities(home, { mac: 'idle' }).get('a')?.disconnected).toBe(false);
+    expect(buildHomeProjectMachineIdentities(home, { ...connected, ...evidence }).get('a')?.disconnected).toBe(disconnected);
+    expect(buildHomeProjectMachineIdentities(home, connected).get('a')?.disconnected).toBe(false);
+  });
+
+  it('keeps failures scoped to their computer and reads current presence with unchanged list inputs', () => {
+    const home = {
+      projects: [project('a', 'mac', 'MacBook'), project('b', 'win', 'Windows')],
+      deviceFilters: [], selectedDeviceId: null,
+    };
+    let macAvailable = false;
+    const evidence = { ...connected, getPresenceAvailability: (id: string) => id !== 'mac' || macAvailable };
+    expect([...buildHomeProjectMachineIdentities(home, evidence).values()].map(row => row.disconnected)).toEqual([true, false]);
+    macAvailable = true;
+    expect([...buildHomeProjectMachineIdentities(home, evidence).values()].map(row => row.disconnected)).toEqual([false, false]);
   });
 
   it('uses the current device name, falls back to ID for empty names, and skips unowned folders', () => {
     const result = buildHomeProjectMachineIdentities({
       projects: [project('a', 'mac', 'Old name'), project('b', 'win', ''), project('c', null, '')],
       deviceFilters: [device('mac', 'Renamed Mac'), device('win', '  ')], selectedDeviceId: null,
-    });
+    }, connected);
     expect(result.get('a')?.displayLabel).toBe('Renamed Mac');
     expect(result.get('b')?.displayLabel).toBe('win');
     expect(result.has('c')).toBe(false);

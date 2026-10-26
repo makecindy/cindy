@@ -1,6 +1,8 @@
 /**
  * Value: production tool admission + queued dispatch guards, no real account or network.
- * Regression: task actions added owner consent checks after the normal runtime permission flow.
+ * Regression: task actions added owner consent checks after the normal runtime permission flow;
+ * later (#6699) any live mode admitted a teammate's own wake-ups as if the owner had asked.
+ * Rule: teammate-authority.md — the Host decides the turn's principal before the permission mode.
  * Gap: workbench tests cover visibility; SDK approval tests cannot prove Host consent.
  * Minimum input: non-owner provenance + runtime change; live execution modes do not review twice.
  * Tier: unit. This file isolates the process-local authorization lifetime from SQLite/IPC.
@@ -13,6 +15,7 @@ import { createOrcaMcpServer } from '../../../../../../packages/lizi-mcps/src/or
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   approvedTaskDelegation,
+  assertTaskActionCurrent,
   bindTaskActionInput,
   createTaskActionAuthorizer,
   taskActionInputGuard,
@@ -207,6 +210,7 @@ vi.mock('../../routines/service.js', () => ({
 }));
 import { botDelegations, orcaTeams } from '../../localDb/schema.js';
 import { createDesktopTaskActionAuthorizer } from '../taskActionHost.js';
+import { beginChannelToolScope } from '../../im/shared/channelToolScope.js';
 import {
   registerGroupToolAuthority,
   GroupToolAuthorizationError,
@@ -272,21 +276,24 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     orcaSenderSessionId: undefined as string | undefined,
     key: 'owner-request',
     ownerInput: kind === 'private',
+    ownerContinuation: false,
     automatic: kind !== 'private',
     boundary: 'runtime-1',
   };
   const confirm = vi.fn(async () => true);
   const runtime = {
+    instanceId: 'instance-1',
     stablePermissionModeState: { mode: 'auto' as PermissionMode, generation: 1 },
     stablePlanModeState: { enabled: false, generation: 1 },
     getCurrentTurnOrigin: (): SendOrigin | null => null,
     reviewHostPermissionAction: vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'allow' })),
   };
   const getSession = vi.fn((): typeof runtime | undefined => runtime);
+  const entrusted = vi.fn(async () => false);
   const authorize = createDesktopTaskActionAuthorizer({
-    input: () => ({ ...activeInput }), confirm, getSession,
+    input: () => ({ ...activeInput }), confirm, getSession, isEntrustedTask: entrusted,
   });
-  return { authorize, confirm, activeInput, caller, rows, runtime, getSession };
+  return { authorize, confirm, activeInput, caller, rows, runtime, getSession, entrusted };
 }
 const ownerWrites = [
   ['cindy_helper', 'start_session_task'],
@@ -429,11 +436,11 @@ describe('Owner-delegated scheduled task actions', () => {
 });
 
 describe('Desktop owner input task actions', () => {
-  // Runtime permission decisions must survive missing owner provenance (including resumed turns).
-  // Exercise admission and the downstream queue receipt, not only a mode predicate.
+  // Owner requests use the live permission flow once; exercise admission and the
+  // downstream queue receipt, not only a mode predicate.
   it.each(['bypassPermissions', 'auto', 'ask', 'default', 'acceptEdits'])(
     'honors the live %s permission flow for helper and Orca without another confirmation', async permissionMode => {
-      const h = desktopFixture('automatic');
+      const h = desktopFixture('private');
       h.activeInput.permission = {
         permissionMode, planModeEnabled: false, isCurrent: () => true,
       };
@@ -472,7 +479,7 @@ describe('Desktop owner input task actions', () => {
 
   it.each(['bypassPermissions', 'auto', 'ask'])(
     'revokes the %s admission before execution and delayed delivery when live permissions change', async permissionMode => {
-      const h = desktopFixture('automatic');
+      const h = desktopFixture('private');
       let current = true;
       h.activeInput.permission = {
         permissionMode, planModeEnabled: false, isCurrent: () => current,
@@ -508,7 +515,8 @@ describe('Desktop owner input task actions', () => {
         updateWorkerQueuedMessage: unused, cancelWorkerQueuedMessage: unused,
         mergeWorkerQueuedMessages: unused, steerWorkerQueuedMessage: unused,
         moveWorkerQueuedMessage: unused, idleWorker: unused, endTeam: unused,
-        archiveWorker: unused, listAvailableModels: unused, getWorkspaceInfo: unused,
+        archiveWorker: unused, updateWorker: unused, listAvailableModels: unused,
+        getWorkspaceInfo: unused,
         getWorkerStatus: unused, readWorker: unused,
       },
       { sessionId: 'companion', agentKind: 'codex', workingDir: '/tmp/test' },
@@ -735,5 +743,200 @@ describe('Existing execution authority', () => {
     });
     expect(write).not.toHaveBeenCalled();
     expect(h.confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('teammate turn principal', () => {
+  const live = (h: ReturnType<typeof desktopFixture>, permissionMode = 'bypassPermissions') => {
+    h.activeInput.permission = { permissionMode, planModeEnabled: false, isCurrent: () => true };
+  };
+  const helper = (tool: string, args: Record<string, unknown>) => ({
+    sessionId: 'companion', server: 'cindy_helper' as const, tool, args,
+  });
+  const ownerTaskWrites = [
+    helper('send_to_session', { target_session_id: 'owner-task', message: 'Add a requirement' }),
+    helper('steer_session', { session_id: 'owner-task', message: 'Change course' }),
+    helper('stop_session_turn', { session_id: 'owner-task' }),
+    helper('set_session_runtime', { session_id: 'owner-task', model: 'other' }),
+    helper('start_session_task', { message: 'New work' }),
+    helper('archive_sessions', { session_ids: ['owner-task'] }),
+    helper('set_workbench_task_responsibility', { task_id: 'owner-task', responsible: true }),
+  ];
+
+  // The 2026-10-22 behavior: Full Access admitted a follow-up wake-up as the owner.
+  it.each(['bypassPermissions', 'auto', 'ask'])('rejects an autonomous turn acting on the owner\'s tasks under %s', async mode => {
+    const h = desktopFixture('automatic');
+    live(h, mode);
+    for (const request of [...ownerTaskWrites, { ...call('create_worker'), server: 'cindy_orca' as const }]) {
+      const effect = vi.fn(async () => 'changed');
+      const result = await withToolCallAuthority(h.authorize, request, effect);
+      expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+      expect(effect).not.toHaveBeenCalled();
+    }
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('keeps the teammate\'s own scope on its own initiative', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const admitted = async (request: ReturnType<typeof helper>) =>
+      withToolCallAuthority(h.authorize, request, async () => 'changed');
+    expect(await admitted(helper('send_to_agent', { target_id: 'other', message: 'hi' }))).toBe('changed');
+    expect(await admitted(helper('continue_workbench_task', { task_id: 'handed', message: 'Carry on' }))).toBe('changed');
+    expect(await admitted(helper('set_workbench_task_responsibility', { task_id: 'handed', responsible: false }))).toBe('changed');
+    expect(await admitted(helper('set_session_runtime', { model: 'self' }))).toBe('changed');
+    h.entrusted.mockResolvedValue(true);
+    expect(await admitted(helper('set_session_runtime', { session_id: 'handed', model: 'next' }))).toBe('changed');
+    expect(h.entrusted).toHaveBeenCalledWith('companion', 'handed');
+    h.rows.delegation = { status: 'completed', runSequence: 1, permissionSnapshotJson: '{}' };
+    expect(await admitted(helper('message_session_task', { task_id: 'own', message: 'Fill the gap' }))).toBe('changed');
+    expect(await admitted(helper('message_session_task', { task_id: 'own', answers: { q: 'a' } }))).toBe('changed');
+    expect(await admitted(helper('stop_session_task', { task_id: 'own' }))).toBe('changed');
+    expect(await admitted(helper('send_to_session', { target_session_id: 'own-child', message: 'Fix it' }))).toBe('changed');
+    // Permission decisions and resuming a pause stay with the owner, even on its own task.
+    for (const args of [{ task_id: 'own', decision: 'approve' }, { task_id: 'own', mode: 'resume' }])
+      expect(JSON.stringify(await admitted(helper('message_session_task', args)))).toContain('NEEDS_OWNER_REQUEST');
+  });
+
+  it('continues its own Orca team from a Worker report, but cannot start a team', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.activeInput.orcaSenderSessionId = 'worker-session';
+    h.rows.team = { id: 'team' };
+    const orca = (tool: string) => ({ ...call(tool), server: 'cindy_orca' as const });
+    expect(await withToolCallAuthority(h.authorize, orca('send_to_worker'), async () => 'changed')).toBe('changed');
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, orca('start_team'), async () => 'changed')))
+      .toContain('NEEDS_OWNER_REQUEST');
+  });
+
+  it.each([
+    ['routine-user-weekly', true],
+    ['routine-builtin-follow-up-bot', false],
+    ['routine-builtin-todo-check-bot', false],
+  ] as const)('treats routine %s as entrusted=%s', async (scheduleId, entrusted) => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', scheduleId, runId: 'run' });
+    const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed');
+    if (entrusted) expect(result).toBe('changed');
+    else expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+  });
+
+  it.each([true, false])('lets the IM lane requester decide (owner=%s)', async requesterIsOwner => {
+    const h = desktopFixture('automatic');
+    live(h);
+    // A desktop-looking active input cannot override the lane's per-turn requester.
+    h.activeInput.ownerInput = !requesterIsOwner;
+    releases.push(beginChannelToolScope({
+      sessionId: 'companion', sessionInstanceId: 'instance-1',
+      scope: { channel: 'wecom', botId: 'bot', laneUserId: 'user', chatId: 'chat', chatKind: 'group', requesterIsOwner, companion: true },
+    }));
+    const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed');
+    if (requesterIsOwner) expect(result).toBe('changed');
+    else expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+  });
+
+  // A teammate must not create or fire an owner routine on its own: the next run would be
+  // entrusted, turning its own initiative into a standing grant.
+  it.each(['routine_save', 'routine_run_now', 'routine_delete', 'schedule_set_pre_run_hook'])(
+    'reserves %s for owner or entrusted turns', async tool => {
+      const h = desktopFixture('automatic');
+      live(h);
+      const request = helper(tool, { name: 'r', prompt: 'Message the owner\'s task', enabled: true });
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, async () => 'saved')))
+        .toContain('NEEDS_OWNER_REQUEST');
+      h.activeInput.ownerInput = true;
+      expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
+      expect(await withToolCallAuthority(h.authorize, helper('routine_list', {}), async () => 'listed')).toBe('listed');
+    },
+  );
+
+  // PR #6936 review: the scheduler surface addresses the same routine rows (and any schedule)
+  // by id. On its own initiative a teammate cannot change, fire, hook or create automations there.
+  it.each(['schedule_update', 'schedule_delete', 'schedule_run_now', 'schedule_set_pre_run_hook',
+    'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete'])(
+    'reserves cindy_scheduler %s for owner or entrusted turns', async tool => {
+      const h = desktopFixture('automatic');
+      live(h);
+      const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool,
+        args: { id: 'routine-owner-weekly', scheduleId: 'routine-owner-weekly', prompt: 'Merge everything' } };
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, async () => 'changed')))
+        .toContain('NEEDS_OWNER_REQUEST');
+      h.activeInput.ownerInput = true;
+      expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
+    },
+  );
+
+  it.each(['schedule_list', 'schedule_get', 'schedule_list_runs', 'schedule_notify_current_run', 'routine_list'])(
+    'keeps cindy_scheduler %s available on its own initiative', async tool => {
+      const h = desktopFixture('automatic');
+      live(h);
+      const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool, args: {} };
+      expect(await withToolCallAuthority(h.authorize, request, async () => 'read')).toBe('read');
+    },
+  );
+
+  it('keeps the owner principal through an automatic resume of the owner\'s input', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.activeInput.ownerContinuation = true;
+    expect(await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed')).toBe('changed');
+  });
+});
+
+// A bare allow must not reuse an outer action's authority, even through the
+// in-process MCP path. Existing Desktop fixtures called the gate at top level.
+// Production Desktop admission + guards; unit tier, in-memory Host facts.
+describe('independent Desktop tool invocation', () => {
+  it('rechecks an ordinary call without inheriting stale authorization or forcing its queue', async () => {
+    const outer = fixture(true);
+    const h = desktopFixture('private');
+    h.caller.botId = null;
+    h.caller.source = 'desktop';
+    await withToolCallAuthority(outer.authorize, call('start_session_task'), async () => {
+      outer.revoke();
+      const result = await withToolCallAuthority(h.authorize, {
+        ...call('send_to_session'), sessionId: 'ordinary-task',
+      }, async () => {
+        await assertTaskActionCurrent();
+        expect(hasTaskActionAuthorization()).toBe(false);
+        expect(approvedTaskDelegation('companion')).toBeUndefined();
+        return 'sent';
+      });
+      expect(result).toBe('sent');
+      // Isolation must not clear the outer scope or its revocation checks.
+      await expect(assertTaskActionCurrent()).rejects.toThrow('revoked');
+    });
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('keeps concurrent admitted callers separate across awaits', async () => {
+    const h = desktopFixture('private');
+    let release!: () => void;
+    const bothEntered = new Promise<void>((resolve) => { release = resolve; });
+    let entered = 0;
+    await Promise.all(['first-task', 'second-task'].map((sessionId) =>
+      withToolCallAuthority(h.authorize, { ...call('send_to_session'), sessionId }, async () => {
+        if (++entered === 2) release();
+        await bothEntered;
+        await assertTaskActionCurrent();
+        expect(hasTaskActionAuthorization(sessionId)).toBe(true);
+        expect(hasTaskActionAuthorization(sessionId === 'first-task' ? 'second-task' : 'first-task')).toBe(false);
+      }),
+    ));
+    expect(entered).toBe(2);
+    expect(hasTaskActionAuthorization()).toBe(false);
+  });
+
+  it('does not use a valid outer grant to bypass rejection of the current caller', async () => {
+    const outer = fixture(true);
+    const h = desktopFixture('automatic');
+    const effect = vi.fn(async () => 'sent');
+    await withToolCallAuthority(outer.authorize, call('start_session_task'), async () => {
+      const result = await withToolCallAuthority(h.authorize, call('send_to_session'), effect);
+      expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+      expect(effect).not.toHaveBeenCalled();
+      expect(approvedTaskDelegation('companion')).toBeDefined();
+    });
   });
 });

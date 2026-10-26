@@ -9,6 +9,8 @@ import type { AgentRuntimeConfig } from '@cindy/maker-core';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { codexPackagePathPrepends } from '../agent-binaries/codex-cli-launcher.js';
 
 import {
   isModelDisabled,
@@ -24,6 +26,7 @@ import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
@@ -39,7 +42,7 @@ import {
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, skillSourcePrecedencePrompt, agentSpecific]
+  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');
@@ -315,7 +318,12 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter
   // 在 env-builder 每次 codex spawn 时求值(结果已 memoize)。
   get pathPrepends() {
-    return [bundledRipgrepDir()];
+    return [
+      bundledRipgrepDir(),
+      ...(process.platform === 'win32'
+        ? codexPackagePathPrepends(getCachedBinaryStatus('codex').binaryPath, process.platform)
+        : []),
+    ];
   },
   userDataPath: app.getPath('userData'),
   get memoryEnabled() {

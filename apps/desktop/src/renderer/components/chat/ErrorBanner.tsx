@@ -13,7 +13,7 @@ import { useProviders } from '@/hooks/useProviders';
  * - Retry：只使用上层传入的 retryText。这里不能从 messages[] 里猜最后一条
  *          user，因为排队发送时 messages[] 里的 user 已经发给 agent 了；
  *          猜错会把已发送内容再次塞回队列。
- *          找不到安全 retryText 时隐藏 Retry。
+ *          没有 retryText 时可由上层提供隐藏续跑入口，不猜测或重发旧消息。
  * - Cancel：调用 onCancel()，让上层把 error 状态清掉（仅关掉横幅，不撤回任何东西）。
  * - 远端 codex 401 / Missing bearer:识别为 auth.json 缺失,换上"同步登录态"按钮 +
  *   友好文案。点击同步成功后 Retry 按钮重新出现,用户自行点击重发。
@@ -27,6 +27,7 @@ import {
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   parseAgentErrorCode,
+  requiresAgentErrorConfigurationChange,
 } from '@cindy/maker-shared/error-redaction';
 import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
 import { AlertCircle, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
@@ -73,6 +74,8 @@ interface ErrorBannerProps {
   toolLoop?: ToolLoopErrorDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
+  /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
+  onContinueAfterError?: () => Promise<void>;
   onCancel?: () => void;
   /** 仅当前可见且拥有键盘操作权的任务启用。 */
   dismissOnEscape?: boolean;
@@ -137,6 +140,7 @@ export function ErrorBanner({
   toolLoop,
   retryText,
   onRetry,
+  onContinueAfterError,
   onCancel,
   dismissOnEscape = false,
   onSilentStopContinue,
@@ -359,6 +363,7 @@ export function ErrorBanner({
         ? t(errorReasonI18nKey)
         : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
+  const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteErrorKey = remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
@@ -395,9 +400,7 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
-  // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
-  // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
-  // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
+  // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -420,6 +423,29 @@ export function ErrorBanner({
     openAiReconnectRequired ||
     isCodexLocalOAuthAuthMissing;
   const safeRetryText = !hideRetry && retryText ? retryText : null;
+  const retryAction = safeRetryText
+    ? () => onRetry(safeRetryText)
+    : !hideRetry && !isRecoverable && !requiresAgentErrorConfigurationChange(error)
+      ? onContinueAfterError : undefined;
+  const retryInFlight = useRef(false);
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    if (!retryAction || retryInFlight.current) return;
+    if (safeRetryText) {
+      onRetry(safeRetryText);
+      return;
+    }
+    retryInFlight.current = true;
+    setRetrying(true);
+    try {
+      await retryAction();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  };
   const [switchingClaudeSubscription, setSwitchingClaudeSubscription] = useState(false);
   useEffect(() => {
     setSwitchingClaudeSubscription(false);
@@ -523,12 +549,12 @@ export function ErrorBanner({
           attempt: overloadRetryProgress.attempt,
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
-      : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
+      : t(retryAction ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
   } else if (isStreamInterrupted) {
     // LiteLLM / Responses 流中途空壳 500。协议客户端会写成 OpenAI API error,
     // 对非 OpenAI 模型是误导。只改展示,不自动续跑。
     displayError = t(
-      safeRetryText
+      retryAction
         ? 'chat.errorBanner.streamInterrupted'
         : 'chat.errorBanner.streamInterruptedNoRetry',
     );
@@ -545,7 +571,7 @@ export function ErrorBanner({
           })
         : t('chat.errorBanner.networkAutoRetrying')
       : t(
-          safeRetryText
+          retryAction
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
@@ -675,11 +701,13 @@ export function ErrorBanner({
       ref={bannerRef}
       className={cn('mx-auto', className)}
       style={style}
-      message={displayError}
+      message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : displayError}
       description={
-        (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
-          ? t('chat.errorBanner.readableHistoryRecoveryDescription')
-          : undefined
+        isAttachmentAccessDenied
+          ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
+          : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
+            ? t('chat.errorBanner.readableHistoryRecoveryDescription')
+            : undefined
       }
       details={canShowErrorDetails ? error : undefined}
       onDiagnose={
@@ -817,12 +845,13 @@ export function ErrorBanner({
               {t('chat.errorBanner.usageLimitAutoContinueCancel')}
             </Button>
           )}
-          {safeRetryText && (
+          {retryAction && (
             <Button
               size="sm"
               compact
               disabled={forkStripEncryptedRunning}
-              onClick={() => onRetry(safeRetryText)}
+              loading={retrying}
+              onClick={() => void handleRetry()}
               title={t('chat.errorBanner.retryTitle')}
             >
               <RotateCcw size={12} />

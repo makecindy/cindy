@@ -191,18 +191,25 @@ describe('RemoteFileBrowserManager', () => {
     await mgr.disposeAll();
   });
 
-  it('stale bundle (schema compatible) → reinstalls then serves', async () => {
-    // schema 相等但 bundle 落后:daemon 行为修复只 bump bundle 版本,必须触发重推。
+  it('upgrades the pre-natural-sort daemon and returns naturally ordered entries', async () => {
+    // #7064, unit: the previous generic stale-version fixture did not catch a
+    // missing bundle bump. 0.2.6 is the released daemon with lexical sorting.
+    await fsWriteFile(path.join(workdir, '3.md'), 'three');
+    await fsWriteFile(path.join(workdir, '10.md'), 'ten');
     const { deps, calls } = makeDeps({
       probeResults: [
-        { ...READY_PROBE, bundleVersion: '0.0.0-stale' },
+        { ...READY_PROBE, bundleVersion: '0.2.6' },
         READY_PROBE,
       ],
     });
     const mgr = new RemoteFileBrowserManager(deps);
-    await mgr.request('h1', 'stat', { workdir, relPath: 'hello.txt' });
-    expect(calls.install).toBe(1);
-    await mgr.disposeAll();
+    try {
+      const { entries } = await mgr.request('h1', 'listDir', { workdir });
+      expect(calls.install).toBe(1);
+      expect(entries.map(entry => entry.name)).toEqual(['3.md', '10.md', 'hello.txt']);
+    } finally {
+      await mgr.disposeAll();
+    }
   });
 
   it('node missing → NODE_MISSING error, nothing spawned', async () => {

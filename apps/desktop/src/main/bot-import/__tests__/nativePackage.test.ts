@@ -26,6 +26,9 @@ it('loads all ten immutable recipes with complete skills, knowledge, portraits, 
     // The detail-page bubble is authored per language and travels with the catalog entry.
     expect(pkg.entry.bubble).toBe(manifest.presentation.bubbleZh);
     for (const [locale, copy] of Object.entries(pkg.entry.locales)) expect(copy.bubble, `${id}: ${locale}`).toBe(manifest.presentation.i18n[locale].bubble);
+    // Chinese is the base copy and every language carries its own authored name.
+    expect(pkg.entry.name).toBe(manifest.presentation.displayNameZh);
+    for (const [locale, copy] of Object.entries(pkg.entry.locales)) expect(copy.name, `${id}: ${locale}`).toBe(manifest.presentation.i18n[locale].displayName);
     expect(pkg.entry.avatar.startsWith('data:image/webp;base64,')).toBe(true);
     expect(pkg.entry.capabilities).toHaveLength(3);
     expect(pkg.entry.welcome).toBe(manifest.firstUse.welcome);
@@ -36,13 +39,12 @@ it('loads all ten immutable recipes with complete skills, knowledge, portraits, 
     // Every import entry has a display name, so a partial save can say which item failed.
     for (const item of pkg.snapshot.items) expect(pkg.entry.itemNames[item.view.id]).toBeTruthy();
     expect(pkg.snapshot.items.filter(item => item.automation).every(item => pkg.entry.itemNames[item.view.id] === item.view.name)).toBe(true);
-    // The opening shows the Skill's own starter list; the Skill replies to the user's pick, checking connections only then.
+    // The opening shows the Skill's own starter list, so the Skill must list the same options the host shows.
     const onboarding = await fs.readFile(path.join(root, id, version, 'skills', `${id}-getting-started`, 'SKILL.md'), 'utf8');
     const options = pkg.snapshot.nativePackage?.opening?.starterOptions ?? [];
     expect(options.length).toBeGreaterThanOrEqual(3);
     expect(options.length).toBeLessThanOrEqual(4);
     for (const option of options) expect(onboarding).toContain(`- ${option}`);
-    expect(onboarding.indexOf('## 起步选项')).toBeLessThan(onboarding.indexOf('## 连接（用户选定后）'));
     expect(pkg.snapshot.source.kind).toBe('cindy');
     expect(pkg.snapshot.items.some(item => item.role === 'user' || item.role === 'instructions' || item.env || item.credential)).toBe(false);
     for (const item of pkg.snapshot.items) {
@@ -110,21 +112,24 @@ it('rejects an onboarding Skill reference that the package does not ship', async
   await expect(readNativeBotPackage(dir, 'engineer-bot')).rejects.toThrow('INVALID_PACKAGE');
 });
 it('reads the detail page fields from the authored detailZh copy, not from Skill or routine text', async () => {
+  const manifest = JSON.parse(await fs.readFile(path.join(root, 'cooper', version, 'manifest.json'), 'utf8'));
+  const detail = manifest.presentation.detailZh;
+  type Titled = { title: string; summary: string };
   const cooper = (await readNativeBotPackage(root, 'cooper')).entry;
   // The onboarding Skill is the host's opening pipeline (the greeting bubble), so the page lists only the other Skills.
-  expect(cooper.skills).toEqual([
-    { name: '研究简报', description: '围绕你选定的主题和来源，整理带出处的简报，并按你定的门槛提醒' },
-    { name: '来源去重', description: '按网址合并重复来源，避免同一条消息反复提醒你' }]);
-  expect(cooper.knowledge).toEqual([{ title: '信号判断方法', summary: '区分「新出现」与「重要」，注明发布时间和来源覆盖，不把热度当事实' }]);
-  expect(cooper.remembers).toEqual(['关注的主题', '必看的来源', '要盯的公司', '提醒门槛', '简报时间', '时区']);
-  expect(cooper.tools).toEqual([{ id: 'cindy-web-search', purpose: '检索公开主题与来源' }]);
+  expect(cooper.skills).toEqual(detail.skills.map(({ title, summary }: Titled) => ({ name: title, description: summary })));
+  expect(cooper.knowledge).toEqual(detail.memory.knowledge.map(({ title, summary }: Titled) => ({ title, summary })));
+  expect(cooper.remembers).toEqual(detail.memory.remembers);
+  expect(cooper.tools).toEqual(detail.tools.map(({ ref, purpose }: { ref: string; purpose: string }) => ({ id: ref, purpose })));
+  expect(cooper.routines.map(({ name, summary }) => ({ name, summary }))).toEqual(detail.routines.map(({ title, summary }: Titled) => ({ name: title, summary })));
   expect(cooper.routines.map(routine => routine.cron)).toEqual(['0 8 * * *', '0 13 * * 1-5', '0 16 * * 1-5']);
-  expect(cooper.routines[0]).toEqual({ name: '每日研究简报', summary: '汇总选定主题的新动态，附出处', cron: '0 8 * * *' });
   expect((await readNativeBotPackage(root, 'engineer-bot')).entry.routines[0]!.cron).toBe('0,30 * * * *');
 });
 it('ships authored copy within the field limits for all ten packages, with public-market plugins only', async () => {
   const wording = /配方|本包|离线示例|UTC|原作者|USER\.md|脚本|\.py\b|水位|游标|字段名/;
-  const publicPlugins = new Set(['cindy-web-search', 'cindy-gitlab', 'google-gmail', 'google-sheets', 'cindy-art', 'opendesign-trial']);
+  // Public-market plugins only (never organisation-only xd-* ones); the page lists representative ones, teammates use whatever the user has.
+  const publicPlugins = new Set(['cindy-github', 'cindy-gitlab', 'cindy-notion', 'google-sheets', 'google-gmail', 'outlook-mail', 'google-drive',
+    'cindy-web-search', 'x-manager', 'cindy-art', 'opendesign-trial', 'baguette-simulator']);
   const shape: Record<string, number[]> = {};
   for (const id of BOT_PACKAGE_IDS) {
     const manifest = JSON.parse(await fs.readFile(path.join(root, id, version, 'manifest.json'), 'utf8'));
@@ -153,9 +158,9 @@ it('ships authored copy within the field limits for all ten packages, with publi
   }
   // [skills, knowledge, remembers, tools, routines] per package.
   expect(shape).toEqual({
-    'cooper': [2, 1, 6, 1, 3], 'engineer-bot': [2, 1, 7, 1, 1], 'nightly-audit-engineer': [2, 1, 6, 1, 1], 'proto-bot': [2, 1, 5, 2, 2],
-    'seo-aeo-desk': [2, 1, 8, 1, 3], 'startup-qa-bot': [2, 1, 7, 0, 1], 'video-editor': [2, 1, 7, 1, 0],
-    'ad-spend-watch': [2, 1, 8, 2, 3], 'apple-search-ads-review': [2, 1, 8, 2, 2], 'sable-game-art': [2, 1, 8, 2, 2],
+    'cooper': [2, 1, 6, 2, 3], 'engineer-bot': [2, 1, 7, 3, 1], 'nightly-audit-engineer': [2, 1, 6, 2, 1], 'proto-bot': [2, 1, 5, 4, 2],
+    'seo-aeo-desk': [2, 1, 8, 3, 3], 'startup-qa-bot': [2, 1, 7, 3, 1], 'video-editor': [2, 1, 7, 2, 0],
+    'ad-spend-watch': [2, 1, 8, 3, 3], 'apple-search-ads-review': [2, 1, 8, 3, 2], 'sable-game-art': [2, 1, 8, 4, 2],
   });
 });
 interface Detail { skills: Array<{ ref: string; title: string; summary: string }>; memory: { knowledge: unknown[]; remembers: string[] };
@@ -289,14 +294,6 @@ it('carries authored copy in en, ja, ko and zh-TW for every package, mirroring t
     }
   }
 });
-it('keeps Chinese as the base and carries the authored name of every language', async () => {
-  const { entry } = await readNativeBotPackage(root, 'cooper');
-  expect(entry.name).toBe('研究信号伙伴');
-  expect(entry.locales.en.name).toBe('Signal Research Teammate');
-  expect(entry.locales.ja.name).toBe('情報収集の仲間');
-  expect(entry.locales.ko.name).toBe('리서치 시그널 동료');
-  expect(entry.locales['zh-TW'].name).toBe('研究訊號夥伴');
-});
 it.each([
   ['a language the host does not know', (m: Manifest) => { m.presentation.i18n.fr = m.presentation.i18n.en!; }],
   ['a Skill ref that differs from detailZh', (m: Manifest) => { m.presentation.i18n.ja!.detail.skills[0]!.ref = 'engineer-bot-evidence'; }],
@@ -312,16 +309,18 @@ it.each([
 });
 it('shapes the import snapshot for the invite language and leaves it alone without one', async () => {
   const base = await readNativeBotPackage(root, 'engineer-bot');
+  const authored = (JSON.parse(await fs.readFile(path.join(root, 'engineer-bot', version, 'manifest.json'), 'utf8')) as Manifest).presentation.i18n;
+  const routineTitle = (locale: string) => (authored[locale]!.detail.routines[0] as unknown as { title: string }).title;
   const ja = await readNativeBotPackage(root, 'engineer-bot');
   applyNativeLocale(ja, 'ja');
-  expect(ja.snapshot.source.name).toBe('開発デリバリーの仲間');
-  expect(ja.snapshot.nativePackage!.description).toBe('任された開発作業を追い、コミット・チェック・納品の根拠をひとつにつなげます。');
-  expect(ja.snapshot.nativePackage!.opening).toMatchObject({ welcome: expect.stringContaining('こんにちは'), capabilities: ['コードの進み具合を追う', 'チェック結果を確認', '納品の根拠を整理'],
-    onboardingSkill: 'engineer-bot-getting-started', starterOptions: ['進行中のPR/MRを追う', '要件をレビューしやすい変更に分ける', 'このブランチを出せるか確認する', '直近の納品の根拠をまとめる'] });
+  expect(ja.snapshot.source.name).toBe(authored.ja!.displayName);
+  expect(ja.snapshot.nativePackage!.description).toBe(authored.ja!.valueDescription);
+  expect(ja.snapshot.nativePackage!.opening).toMatchObject({ welcome: authored.ja!.welcome, capabilities: authored.ja!.capabilities,
+    onboardingSkill: 'engineer-bot-getting-started', starterOptions: authored.ja!.starterOptions });
   const routine = ja.snapshot.items.find(item => item.automation)!;
-  expect(routine.view.name).toBe('PR/MR状況のフォロー');
-  expect(routine.automation!.input!.name).toBe('PR/MR状況のフォロー');
-  expect(ja.snapshot.items.find(item => item.view.id === 'package-identity')!.view.name).toBe('開発デリバリーの仲間');
+  expect(routine.view.name).toBe(routineTitle('ja'));
+  expect(routine.automation!.input!.name).toBe(routineTitle('ja'));
+  expect(ja.snapshot.items.find(item => item.view.id === 'package-identity')!.view.name).toBe(authored.ja!.displayName);
   // Package identity and the routine fingerprints (receipt identity) do not depend on the language.
   expect(ja.identity).toEqual(base.identity);
   expect(routine.automation!.fingerprint).toBe(base.snapshot.items.find(item => item.automation)!.automation!.fingerprint);
@@ -333,8 +332,8 @@ it('shapes the import snapshot for the invite language and leaves it alone witho
   }
   const unknown = await readNativeBotPackage(root, 'engineer-bot');
   applyNativeLocale(unknown, 'fr');
-  expect(unknown.snapshot.source.name).toBe('Engineering Delivery Teammate');
+  expect(unknown.snapshot.source.name).toBe(authored.en!.displayName);
   const traditional = await readNativeBotPackage(root, 'engineer-bot');
   applyNativeLocale(traditional, 'zh-Hant-TW');
-  expect(traditional.snapshot.source.name).toBe('工程交付夥伴');
+  expect(traditional.snapshot.source.name).toBe(authored['zh-TW']!.displayName);
 });

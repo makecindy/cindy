@@ -23,8 +23,8 @@ const SCREEN = 'app/sessions/[sessionId].tsx';
 
 describe('mobile optimistic composer while session is not ready', () => {
   it('uses the shared unsent proof to cancel locally before requiring a remote receipt', () => {
-    const source = readSource(SCREEN);
-    const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('const outboxDisplayItems ='));
+    const source = readSource('src/session/usePendingSendActions.ts');
+    const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('return { findDurableOutboxRecord'));
     expect(remove).toContain('if (isDurableOutboxUnsent(record))');
     expect(remove).toContain("cleanupOutcome: 'cancelled'");
     expect(remove).toContain("else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' })");
@@ -129,10 +129,12 @@ describe('mobile optimistic composer while session is not ready', () => {
 
   it('lets the app owner obtain authoritative parameters before dispatch, independently of the page', () => {
     const bridge = readSource('src/session/MobileOutboxBridge.tsx');
-    expect(bridge).toContain('getNewSessionCreationTask(r.item.sessionId) === null');
-    expect(bridge).toContain('!isDurableOutboxCreationHeld(r.item.sessionId)');
-    // Preparation reads the Host's row; the policy check of the same message may share that read.
-    expect(bridge).toContain('const read = maker(r).getSession(r.item.sessionId)');
+    // Ownership/creation guards and shared reads run through the production
+    // adapter in cindyMakeOutboxBridge.test.ts; retain the app-owner wiring here.
+    expect(bridge).toContain('= createOutboxSessionAccess({');
+    expect(bridge).toContain('hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null');
+    expect(bridge).toContain('isCreationHeld: isDurableOutboxCreationHeld');
+    expect(bridge).toContain('readSession: (record) => maker(record).getSession(record.item.sessionId)');
     expect(bridge).toContain('const session = await readSessionOnce(r)');
     expect(bridge).toContain('if (!session?.workingDir)');
     expect(bridge).toContain('}, [link.status, link.connectionEpoch])');
@@ -236,7 +238,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     const bridge = readSource('src/session/MobileOutboxBridge.tsx');
     const delivery = readSource('src/session/durableOutboxDelivery.ts');
     expect(source).not.toContain('const dispatchOutboxItem =');
-    expect(bridge).toContain('preSend: guardRecord');
+    // The transport must use the record-scoped adapter, whose delayed pre-send
+    // invalidation is exercised by cindyMakeOutboxBridge.test.ts.
+    expect(bridge).toContain('invoke: invokeOwned(r),');
     expect(delivery).toMatch(/await update\(\{\s*state: ["']sending["'],\s*enqueueStarted: true,\s*error: undefined\s*\}\)/);
     expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
     expect(delivery).not.toContain('createOutboxClientId');

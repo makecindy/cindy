@@ -2,6 +2,8 @@
  * 本机窗口的组命令入口；同账号远程管理由专用命令转交组所在电脑。
  */
 import { ipcMain } from 'electron';
+import { supportsSubscriptionFastPolicy } from '@cindy/model-providers';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 
@@ -40,10 +42,14 @@ import {
 import { listProviderGroups, readProviderGroup, writeProviderGroup } from './store.js';
 import { invokeProviderManagement } from './managementClient.js';
 import { captureProviderManagementScope } from './managementScope.js';
+import { groupFastPolicyPending, syncGroupFastPolicy } from './fastPolicyRuntime.js';
+import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.js';
 
 const log = createLogger('provider-group');
 
 export interface ProviderGroupCommandDeps {
+  syncFastPolicy?(providerId: string): Promise<void>;
+  fastPolicyPending?(providerId: string): boolean;
   router: ProviderGroupRouter;
   directory: ProviderGroupDirectory;
   readGroup(providerId: string): ProviderGroupConfig | null;
@@ -77,6 +83,7 @@ export interface ProviderGroupCommandDeps {
 
 /** 本机自己的组：分享来的组内电脑补上转分享的结果(只给本机设置页，不经设备互联发出)。 */
 function withReshare(deps: ProviderGroupCommandDeps, view: ProviderGroupView): ProviderGroupView {
+  if (deps.fastPolicyPending?.(view.providerId)) view = { ...view, fastPolicyPending: true };
   const reshare = deps.reshare;
   if (!reshare || !view.config) return view;
   reshare.refreshIfStale();
@@ -242,9 +249,16 @@ async function runProviderGroupCommand(
       if (command.action === 'delete-if-current') await deps.writeGroup(providerId, null, command.expectedConfig);
       else await deps.writeGroup(providerId, null);
       assertCurrent();
-      await deps.pruneBindings(providerId, null);
-      assertCurrent();
-      deps.changed(providerId);
+      try {
+        await deps.syncFastPolicy?.(providerId);
+      } finally {
+        // The setting is already committed. Publish it even when a native
+        // engine is busy, so views show the restriction and pending status.
+        assertCurrent();
+        await deps.pruneBindings(providerId, null);
+        assertCurrent();
+        deps.changed(providerId);
+      }
       return deps.router.view(providerId, { includeGuestSupport: true });
     case 'save':
     case 'save-if-current': {
@@ -288,9 +302,14 @@ async function runProviderGroupCommand(
         ? await deps.writeGroup(providerId, next, command.expectedConfig)
         : await deps.writeGroup(providerId, next);
       assertCurrent();
-      await deps.pruneBindings(providerId, written ? new Set(written.members.map((m) => m.key)) : null);
-      assertCurrent();
-      deps.changed(providerId);
+      try {
+        await deps.syncFastPolicy?.(providerId);
+      } finally {
+        assertCurrent();
+        await deps.pruneBindings(providerId, written ? new Set(written.members.map((m) => m.key)) : null);
+        assertCurrent();
+        deps.changed(providerId);
+      }
       const view = await deps.router.view(providerId, { includeGuestSupport: true });
       assertCurrent();
       return withReshare(deps, view);
@@ -313,6 +332,8 @@ export function createProviderGroupCommandDeps(
 ): ProviderGroupCommandDeps {
   const reshare = options.reshare;
   return {
+    syncFastPolicy: syncGroupFastPolicy,
+    fastPolicyPending: groupFastPolicyPending,
     router: getProviderGroupRouter(),
     directory: getProviderGroupDirectory(),
     readGroup: readProviderGroup,
@@ -329,8 +350,14 @@ export function createProviderGroupCommandDeps(
       // 组里的电脑变了：重新报转分享(加进来的分享来的电脑要请它的主人同意，移出的不再列着)。
       reshare?.kick('group');
       options.onGroupChanged?.(providerId);
+      if (supportsSubscriptionFastPolicy(getActiveCatalog().providers.find(provider => provider.id === providerId))) {
+        notifyProviderShareCatalogChanged(providerId);
+      }
       try {
         broadcast(PROVIDER_GROUP_IPC.CHANGED, { providerId });
+        if (supportsSubscriptionFastPolicy(getActiveCatalog().providers.find(provider => provider.id === providerId))) {
+          broadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
         // 同账号其他电脑的模型列表按本机目录里的组摘要收起组内电脑：组变化后让它们重读目录。
         tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
       } catch (error) {

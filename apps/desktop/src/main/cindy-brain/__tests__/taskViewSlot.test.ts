@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import { broadcastTaskViewOpen, GhostTaskViewSlot, type TaskViewSlotDeps } from '../taskViewSlot';
+import { GhostErrandSlot } from '../errandSlot';
 
 function taskGhost(options: { taskView?: boolean; enabled?: boolean; instanceKey?: string } = {}): InstalledGhost {
   return {
@@ -35,12 +36,75 @@ function makeSlot(overrides: Partial<TaskViewSlotDeps> = {}) {
       return true;
     }),
     focusedSessionId: () => 'focused-session',
+    consumeUserGesture: () => true,
     ...overrides,
   };
   return { slot: new GhostTaskViewSlot(deps), pushes };
 }
 
 describe('taskViewSlot', () => {
+  // PR #6939 discussion_r4357789335：focus 不能把插件自报布尔值当作真实点击。
+  // unit：复用派活手势账本，最小输入为无手势/过期/其他实例/已消费票据。
+  it('requires a fresh, one-shot host gesture for the requesting plugin instance', () => {
+    let now = 0;
+    const gestures = new GhostErrandSlot({ getGhost: () => taskGhost(), now: () => now });
+    const consumeUserGesture = vi.fn((id: string) => gestures.consumeUserGesture(id));
+    const { slot, pushes } = makeSlot({ consumeUserGesture });
+    const reveal = vi.fn();
+    slot.setRevealSession(reveal);
+    const denied = { ok: false, errorCode: 'PERMISSION_DENIED' };
+    expect(slot.handleRequest('sim', { focus: true })).toMatchObject(denied);
+    gestures.noteUserGesture('other');
+    expect(slot.handleRequest('sim', { focus: true })).toMatchObject(denied);
+    gestures.noteUserGesture('sim');
+    now = 3_000;
+    expect(slot.handleRequest('sim', { focus: true })).toMatchObject(denied);
+    expect(pushes).toEqual([]);
+    expect(reveal).not.toHaveBeenCalled();
+    gestures.noteUserGesture('sim');
+    const consumed = consumeUserGesture.mock.calls.length;
+    slot.handleRequest('sim', { peek: true, focus: true });
+    slot.handleRequest('sim', { focus: false });
+    expect(consumeUserGesture).toHaveBeenCalledTimes(consumed);
+    expect(slot.handleRequest('sim', { focus: true })).toMatchObject({ ok: true, focusRequested: true });
+    expect(slot.handleRequest('sim', { focus: true })).toMatchObject(denied);
+    expect(reveal).toHaveBeenCalledExactlyOnceWith('focused-session');
+  });
+
+  // 主视图的显式跳转须同时导航任务与打开页签；原测试只覆盖后台开页。
+  // 最小输入：focus:true；unit，缺省/peek 不抢前台，投递失败不导航。
+  it('focus explicitly reveals the same task, while old requests and peek remain passive', () => {
+    const { slot, pushes } = makeSlot();
+    const reveal = vi.fn();
+    expect(slot.handleRequest('sim', { sessionId: 'task-1', focus: true })).toMatchObject({
+      ok: false,
+      errorCode: 'HOST_NOT_READY',
+    });
+    slot.setRevealSession(reveal);
+    for (const request of [{}, { focus: false }, { peek: true, focus: true }])
+      slot.handleRequest('sim', request);
+    expect(reveal).not.toHaveBeenCalled();
+    expect(slot.handleRequest('sim', { sessionId: 'task-1', focus: true })).toEqual({
+      ok: true,
+      sessionId: 'task-1',
+      focusRequested: true,
+    });
+    expect(reveal).toHaveBeenCalledExactlyOnceWith('task-1');
+    expect(pushes.at(-1)).toEqual({ instanceId: 'sim', sessionId: 'task-1', focus: true });
+    expect(slot.handleRequest('sim', { focus: 'true' })).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_REQUEST',
+    });
+    const failed = makeSlot({ broadcast: () => false }).slot;
+    const failedReveal = vi.fn();
+    failed.setRevealSession(failedReveal);
+    expect(failed.handleRequest('sim', { focus: true })).toMatchObject({
+      ok: false,
+      errorCode: 'HOST_NOT_READY',
+    });
+    expect(failedReveal).not.toHaveBeenCalled();
+  });
+
   // PR #6861 discussion_r4353708280：原有 broadcast=false 用例绕过了真实选窗适配器。
   // 最小失败输入：只有隐藏沙箱，或主窗正在重载；unit，验证回执及实际投递目标。
   it.each(['absent', 'loading', 'destroyed-contents', 'crashed', 'closed', 'send-failed', 'ready'] as const)(

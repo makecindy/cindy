@@ -13,7 +13,13 @@ const binary = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
 
 describe.skipIf(!existsSync(binary))('Pi cache learning over real HTTP and native RPC', () => {
-  it.each(['normal', 'api.openai.com', 'retry-failure'])('rebuilds with a learned fix and preserves one active input: %s', async (suffix) => {
+  it.each(['normal', 'api.openai.com', 'retry-failure'].flatMap(suffix => [
+    { suffix, errorFormat: 'omitted param', rejection: { message: 'Validation: Unsupported parameter(s): prompt_cache_key', type: 'invalid_request_error' } },
+    ...['prompt_cache_key', 'prompt_cache_retention'].map(field => ({
+      suffix, errorFormat: `null param (${field})`,
+      rejection: { error: { code: null, message: `Validation: Unsupported parameter(s): \`${field}\``, param: null, type: 'invalid_request_error' } },
+    })),
+  ]))('rebuilds with a learned fix and preserves one active input: $suffix / $errorFormat', async ({ suffix, rejection }) => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-cache-integration-'));
     const received: Array<Record<string, unknown>> = [];
     let rejectCacheFields = true;
@@ -24,7 +30,7 @@ describe.skipIf(!existsSync(binary))('Pi cache learning over real HTTP and nativ
       received.push(data);
       if (rejectCacheFields && (data.prompt_cache_key !== undefined || data.prompt_cache_retention !== undefined)) {
         res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ message: 'Validation: Unsupported parameter(s): prompt_cache_key', type: 'invalid_request_error' }));
+        res.end(JSON.stringify(rejection));
         return;
       }
       if (suffix === 'retry-failure' && received.length === 2) {
@@ -83,6 +89,10 @@ describe.skipIf(!existsSync(binary))('Pi cache learning over real HTTP and nativ
         onTranscriptUserEntry: async id => { userEntry = id; },
       });
       expect(userEntry).not.toBe(originalUserEntry);
+      expect(received).toHaveLength(2);
+      expect(received[1]).not.toHaveProperty('prompt_cache_key');
+      expect(received[1]).not.toHaveProperty('prompt_cache_retention');
+      expect((received[1].messages as Array<{ role: string }>).filter((m) => m.role === 'user')).toHaveLength(1);
       if (suffix === 'retry-failure') {
         expect(succeeded.some(event => event.type === 'error')).toBe(true);
         const manual = await run({ retryTranscriptUserEntryId: userEntry });
@@ -93,10 +103,6 @@ describe.skipIf(!existsSync(binary))('Pi cache learning over real HTTP and nativ
       }
       expect(succeeded.some((event) => event.type === 'error')).toBe(false);
       expect(succeeded.find((event) => event.type === 'done')?.data).toMatchObject({ result: 'OK' });
-      expect(received).toHaveLength(2);
-      expect(received[1]).not.toHaveProperty('prompt_cache_key');
-      expect(received[1]).not.toHaveProperty('prompt_cache_retention');
-      expect((received[1].messages as Array<{ role: string }>).filter((m) => m.role === 'user')).toHaveLength(1);
       await handle.close();
       handle = await agent.startSession({ ...opts, sessionId: 'new-task' });
       expect((await run({})).some((event) => event.type === 'error')).toBe(false);

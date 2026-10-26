@@ -237,7 +237,6 @@ function readStringList(value: unknown): string[] {
 /** Explicit navigation overrides are separate from legacy device/display preferences.
  * Identity is account + host + resource, never a cached canonical Session or a name.
  */
-export type HomeMode = 'tasks' | 'teammates';
 export interface LastTeammateIdentity {
   deviceId: string;
   collectionId: string;
@@ -245,8 +244,10 @@ export interface LastTeammateIdentity {
   resourceId: string;
 }
 export interface HomeNavigationPreferences {
-  mode?: HomeMode;
+  /** Preselects the computer when creating another teammate; launch never reopens it. */
   lastTeammate?: LastTeammateIdentity;
+  /** The task home's teammate section: rows (false/absent) or the avatar strip (true). */
+  teammatesCollapsed?: boolean;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';
 
@@ -257,8 +258,9 @@ export function normalizeHomeNavigationPreferences(value: unknown): HomeNavigati
   const identityFields = ['deviceId', 'collectionId', 'resourceId'] as const;
   const validLast = last?.resourceKind === 'bot' && identityFields.every((field) =>
     typeof last[field] === 'string' && last[field].trim().length > 0 && last[field].length <= 256);
+  // The retired tasks/teammates `mode` is dropped here, so the next write clears it.
   return {
-    ...(record.mode === 'tasks' || record.mode === 'teammates' ? { mode: record.mode } : {}),
+    ...(typeof record.teammatesCollapsed === 'boolean' ? { teammatesCollapsed: record.teammatesCollapsed } : {}),
     ...(validLast ? { lastTeammate: {
       deviceId: last!.deviceId as string,
       collectionId: last!.collectionId as string,
@@ -278,7 +280,7 @@ export async function readHomeNavigationPreferences(owner: string): Promise<Home
 
 export function saveHomeNavigationPreferences(
   owner: string,
-  patch: { mode?: HomeMode; lastTeammate?: LastTeammateIdentity | null },
+  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean },
 ): Promise<void> {
   if (!owner) return Promise.resolve();
   // Share the existing serialized writer; each operation captures its own owner.

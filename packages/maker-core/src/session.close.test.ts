@@ -198,6 +198,19 @@ describe('Session close lifecycle', () => {
     expect(seen.at(-1)?.data).toMatchObject({ result: 'delivered' });
   });
 
+  it('keeps the executor open while a host-initiated RPC operation is in flight', async () => {
+    const { session, handle } = liveTurn();
+    let hostOperationInFlight = true;
+    handle.hasPendingHostOperation = () => hostOperationInFlight;
+
+    await expect(session.closeIfIdle()).resolves.toBe(false);
+    expect(handle.close).not.toHaveBeenCalled();
+
+    hostOperationInFlight = false;
+    await expect(session.closeIfIdle()).resolves.toBe(true);
+    expect(handle.close).toHaveBeenCalledOnce();
+  });
+
   it('rejects a non-Host send while a retiring silent-stop claim is live', async () => {
     const { session, handle, queue, seen, idle } = liveTurn();
     await session.send('work');

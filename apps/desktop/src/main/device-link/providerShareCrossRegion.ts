@@ -56,6 +56,7 @@ const MARKER_FILE = 'provider-share-regions.json';
 
 export interface CrossRegionEvents {
   changed(): void;
+  catalogChanged?(agentDeviceId: string): void;
 }
 
 interface RegionState {
@@ -286,6 +287,15 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
       error: (...args) => log.error(...args),
     },
     timing: { pingIntervalMs: 15_000 },
+  });
+  client.onFrame?.(frame => {
+    if (!current(rt) || frame.kind !== 'push' || !frame.src) return;
+    const peer = parseProviderSharePeer(frame.src);
+    const payload = frame.payload as { channel?: unknown };
+    if (peer?.role !== 'host' || payload?.channel !== 'maker:provider:changed') return;
+    if (state.shares.some(share => share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId && share.status === 'active')) {
+      rt.events.catalogChanged?.(`share:${peer.shareId}`);
+    }
   });
   client.start();
   return client;

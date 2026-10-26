@@ -116,7 +116,7 @@ describe('orcaSessionIdentity', () => {
     expect(api.localDb.orcaWorkflows.getByWorkerSession).not.toHaveBeenCalled();
   });
 
-  it('opens a Bot chat on its Bot page and keeps a background task on the ordinary route', async () => {
+  it('keeps the main Bot chat entry and opens every other task on the ordinary route', async () => {
     bots.profiles = [{
       id: 'bot-a',
       sessions: [
@@ -128,10 +128,10 @@ describe('orcaSessionIdentity', () => {
       ],
     }];
     await expect(resolveSessionRoute('bot-main', { orcaRole: null, source: 'bot' })).resolves.toBe('/bots/bot-a');
-    await expect(resolveSessionRoute('bot-old', { orcaRole: null })).resolves.toBe('/bots/bot-a/history/bot-old');
+    await expect(resolveSessionRoute('bot-old', { orcaRole: null })).resolves.toBe('/cc-agent/bot-old');
     await expect(resolveSessionRoute('bot-task', { orcaRole: null, source: 'desktop' })).resolves.toBe('/cc-agent/bot-task');
-    await expect(resolveSessionRoute('bot-lane', { orcaRole: null })).resolves.toBe('/bots/groups/group%2F1');
-    await expect(resolveSessionRoute('bot-legacy-lane', { orcaRole: null })).resolves.toBe('/bots/bot-a');
+    await expect(resolveSessionRoute('bot-lane', { orcaRole: null })).resolves.toBe('/cc-agent/bot-lane');
+    await expect(resolveSessionRoute('bot-legacy-lane', { orcaRole: null })).resolves.toBe('/cc-agent/bot-legacy-lane');
     await expect(resolveSessionRoute('plain-3', { orcaRole: null })).resolves.toBe('/cc-agent/plain-3');
   });
 
@@ -139,6 +139,12 @@ describe('orcaSessionIdentity', () => {
     bots.loaded = false;
     bots.profiles = [{ id: 'bot-a', sessions: [{ id: 'bot-main', role: 'canonical', kind: 'chat' }] }];
     await expect(resolveSessionRoute('bot-main', { orcaRole: null })).resolves.toBe('/cc-agent/bot-main');
+  });
+
+  it('does not redirect an explicitly remote task to a same-id local Bot', async () => {
+    bots.profiles = [{ id: 'local', sessions: [{ id: 'same', role: 'canonical', kind: 'chat' }] }];
+    await expect(resolveSessionRoute('same', { orcaRole: null }, { remote: true })).resolves.toBe('/cc-agent/same');
+    await expect(resolveSessionRoute('same', { orcaRole: null })).resolves.toBe('/bots/local');
   });
 
   it('routes orphaned Orca workers back through the index fallback', async () => {

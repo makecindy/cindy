@@ -51,6 +51,8 @@ import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaIns
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
+import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
+import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { SpeechModelChoices } from './SpeechModelChoices';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 
@@ -81,6 +83,8 @@ export type WizardEntry =
   { kind: 'builtin'; providerId: string } | { kind: 'preset'; presetId: string; speechOnly?: boolean };
 
 interface AddProviderWizardProps {
+  detected?: DetectedProviderDraft;
+  onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
@@ -358,6 +362,8 @@ function hasRetainedBuiltinConnection(provider: ProviderView): boolean {
 }
 
 export function AddProviderWizard({
+  detected,
+  onReturnCustom,
   providers,
   entry,
   onOpenCustomForm: openCustomForm,
@@ -384,14 +390,15 @@ export function AddProviderWizard({
   const entryProvider =
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
   const [sel, setSel] = useState<Selection | null>(() => {
+    if (detected) return { kind: 'preset', preset: detected.preset };
     if (!entryProvider) return null;
     return entryProvider.auth?.method === 'apiKey'
       ? { kind: 'builtinApiKey', provider: entryProvider }
       : { kind: 'oauth', provider: entryProvider };
   });
   // 预设表单态
-  const [name, setName] = useState('');
-  const [apiKey, setApiKey] = useState('');
+  const [name, setName] = useState(detected?.config.name || (detected ? presetDisplayName(detected.preset, i18n.language) : ''));
+  const [apiKey, setApiKey] = useState(detected?.apiKey ?? '');
   const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -418,7 +425,7 @@ export function AddProviderWizard({
     browserLoginRef: accountLoginRef,
   });
   // Step 3 拉取态
-  const [step, setStep] = useState<1 | 2 | 3>(entryProvider ? 2 : 1);
+  const [step, setStep] = useState<1 | 2 | 3>(entryProvider || detected ? 2 : 1);
   const [fetchState, setFetchState] = useState<
     | { status: 'idle' }
     | { status: 'fetching' }
@@ -1038,7 +1045,19 @@ export function AddProviderWizard({
           recommended: model.defaultEnabled !== false, agents: [speechTarget.agent], speechReference: true });
       }
     }
-    setPicks(initial);
+    if (detected) {
+      const selectedIds = new Set(agents.flatMap(agent => detected.config.runtimes[agent]?.models.map(m => m.id) ?? []));
+      for (const [id, value] of initial) initial.set(id, { ...value, checked: selectedIds.has(id), recommended: false });
+      for (const agent of agents) for (const m of detected.config.runtimes[agent]?.models ?? []) {
+        const existing = initial.get(m.id);
+        initial.set(m.id, { ...existing, name: m.name, checked: true, recommended: false,
+          agents: [...new Set([...(existing?.agents ?? []), agent])],
+          discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: m.discoveredMetadata },
+          ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
+        });
+      }
+    }
+    setPicks(previous => detected && previous.size ? previous : initial);
     setStep(3);
     setFetchState({ status: 'fetching' });
     const seq = ++fetchSeqRef.current;
@@ -1103,7 +1122,11 @@ export function AddProviderWizard({
         ];
         return sources.map(async (source) => {
           try {
-            const r = await window.electronAPI.maker.fetchProviderModels({
+            const reuseDetection = detected?.catalog?.ok && agent === detected.agent
+              && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
+              && !source.route && !source.modelsUrl?.includes('client_version=');
+            const r = reuseDetection ? detected!.catalog! : await window.electronAPI.maker.fetchProviderModels({
+              ...(detected ? { redirect: 'error' as const } : {}),
               agent,
               baseUrl: source.baseUrl,
               authMethod: preset.authMethod ?? 'apiKey',
@@ -1159,7 +1182,8 @@ export function AddProviderWizard({
       const complete = results.filter(result => result.ok && result.completeInventory);
       if (complete.length === results.length && results.length === agents.length) {
         const available = new Set(complete.flatMap(result => result.models.map(model => model.id)));
-        for (const [id] of next) if (!available.has(id)) next.delete(id);
+        const userModels = new Set(Object.values(detected?.config.runtimes ?? {}).flatMap(runtime => runtime?.models.map(model => model.id) ?? []));
+        for (const [id] of next) if (!available.has(id) && !userModels.has(id)) next.delete(id);
       }
       for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
@@ -1245,7 +1269,7 @@ export function AddProviderWizard({
       failed: !results.some((r) => r.ok),
       empty: !results.some((r) => r.models.length > 0),
     });
-  }, [sel, apiKey, presetBaseUrls, entry]);
+  }, [sel, apiKey, presetBaseUrls, detected, entry]);
 
   /**
    * 零推荐模型的本机代理（例如 LiteLLM）若 `/models` 不可用或返回空清单，仍允许用户
@@ -1341,18 +1365,18 @@ export function AddProviderWizard({
     try {
       const existing = new Set(providers.map((p) => p.id));
       const id = oauthDraft?.id ?? (
-        preset.id === 'lmstudio'
+        preset.id === 'lmstudio' && !detected
           ? MANAGED_LMSTUDIO_PROVIDER_ID
           : uniqueCustomProviderId(
               name.trim() || presetDisplayName(preset, i18n.language),
               existing,
             ));
-      if (preset.id === 'lmstudio' && existing.has(MANAGED_LMSTUDIO_PROVIDER_ID)) {
+      if (!detected && preset.id === 'lmstudio' && existing.has(MANAGED_LMSTUDIO_PROVIDER_ID)) {
         onDone(MANAGED_LMSTUDIO_PROVIDER_ID);
         return;
       }
-      const runtimes: CustomProviderConfig['runtimes'] = {};
-      const keys: RuntimeKeys = {};
+      const runtimes: CustomProviderConfig['runtimes'] = { ...detected?.config.runtimes };
+      const keys: RuntimeKeys = { ...detected?.keys };
       for (const agent of configuredPresetAgents(preset)) {
         const originalRuntime = preset.runtimes[agent];
         const rt = originalRuntime ? bindProviderPresetRuntime(originalRuntime, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)) : undefined;
@@ -1365,7 +1389,12 @@ export function AddProviderWizard({
             const presetModel = rt.models.find((candidate) => candidate.id === m.id);
             // Only interface facts belong to discovery. Preset defaults follow a live reference.
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
+            // Current picks own visibility; an old disabled draft must not override
+            // a checked row. Leave checked models on the existing default contract.
+            const { defaultEnabled: _oldEnabled, ...draftModel } =
+              detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
+              ...draftModel,
               id: m.id,
               name: m.name,
               // Selecting a model follows native-engine defaults; it is not an
@@ -1386,8 +1415,19 @@ export function AddProviderWizard({
         if (agentModels.length === 0) continue;
         runtimes[agent] = {
           ...presetConnectionRuntime(preset, agent, agentModels, rt.baseUrl),
+          ...(detected?.config.runtimes[agent]?.imageApi ? { imageApi: detected.config.runtimes[agent]!.imageApi } : {}),
+          ...(detected?.config.runtimes[agent]?.videoApi ? { videoApi: detected.config.runtimes[agent]!.videoApi } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
         };
+        if (detected) runtimes[agent]!.models = runtimes[agent]!.models.map(model => {
+          const original = detected.config.runtimes[agent]?.models.find(m => m.id === model.id);
+          if (!original) return model;
+          // These are user fields from the custom draft, not imported preset defaults.
+          const { defaultEnabled: _enabled, discoveredMetadata: _metadata, discoveredCost: _cost, ...explicit } = original;
+          const preserved = { ...model, ...explicit };
+          return rt.baseUrl === detected.preset.runtimes[agent]?.baseUrl ? preserved
+            : modelsAfterProviderEndpointEdit([preserved], detected.config.runtimes[agent]?.baseUrl, rt.baseUrl)[0];
+        });
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
           if (k) keys[agent] = k;
@@ -1421,7 +1461,7 @@ export function AddProviderWizard({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
+  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language, detected]);
 
   // ── 步骤指示 ─────────────────────────────────────────────────────────
   // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
@@ -1489,7 +1529,8 @@ export function AddProviderWizard({
   const presetCanContinue =
     sel?.kind === 'preset' &&
     presetBaseUrlsValid &&
-    (!presetNeedsApiKey || apiKey.trim().length > 0);
+    (!presetNeedsApiKey || apiKey.trim().length > 0 || (detected?.catalog?.ok === true && apiKey === detected.apiKey
+      && presetRuntimeBaseUrl(sel.preset, detected.agent, presetBaseUrls) === detected.preset.runtimes[detected.agent]?.baseUrl));
 
   const wizardTitle = sel
               ? t('settings.providers.wizard.titleWith', {
@@ -1526,7 +1567,7 @@ export function AddProviderWizard({
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
           <Dialog.Title asChild><h3
-            className="min-w-0 truncate text-16 font-medium"
+            className="min-w-0 break-words text-16 font-medium"
             title={wizardTitle}
             style={{ color: 'var(--settings-section-title)' }}
           >
@@ -2250,6 +2291,45 @@ export function AddProviderWizard({
             type="button"
             onClick={() => {
               if (savingRef.current) return;
+              if (step === 2 && detected && onReturnCustom && sel?.kind === 'preset') {
+                fetchSeqRef.current += 1;
+                const agent = detected.agent;
+                const editedBase = presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls);
+                const previous = detected.config.runtimes[agent]!;
+                const baseUrl = editedBase === detected.preset.runtimes[agent]?.baseUrl ? previous.baseUrl : editedBase;
+                const runtimes = { ...detected.config.runtimes };
+                const keys = { ...detected.keys };
+                for (const target of Object.keys(runtimes) as AgentKind[]) {
+                  const original = runtimes[target]!;
+                  const followsAddress = original.baseUrl === previous.baseUrl;
+                  const bound = sel.preset.runtimes[target];
+                  // Excluded engines are independent drafts, even if a field matches.
+                  if (!bound) continue;
+                  const targetInput = bound ? presetRuntimeBaseUrl(sel.preset, target, presetBaseUrls) : undefined;
+                  const targetBase = targetInput && targetInput !== bound?.baseUrl ? targetInput
+                    : followsAddress ? baseUrl : original.baseUrl;
+                  const models = bound && picks.size ? [...picks]
+                    .filter(([, model]) => model.checked && model.agents.includes(target))
+                    .map(([id, model]) => {
+                      const saved = original.models.find(row => row.id === id);
+                      // Only checked rows return to the custom form. Do not
+                      // resurrect an older disabled flag on this second save path.
+                      const { defaultEnabled: _oldEnabled, ...selectedModel } = saved ?? {};
+                      return { ...selectedModel, id, name: model.name,
+                        discoveredMetadata: model.discoveredMetadata?.[target] ?? saved?.discoveredMetadata,
+                        ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
+                      };
+                    }) : original.models;
+                  runtimes[target] = { ...original, baseUrl: targetBase,
+                    models: modelsAfterProviderEndpointEdit(models, original.baseUrl, targetBase),
+                  };
+                  if (target === agent || keys[target] === detected.apiKey) keys[target] = apiKey;
+                }
+                onReturnCustom({ ...detected, apiKey,
+                  catalog: apiKey === detected.apiKey && editedBase === detected.preset.runtimes[agent]?.baseUrl ? detected.catalog : undefined,
+                  keys, config: { ...detected.config, name, runtimes } });
+                return;
+              }
               if (step === 3) {
                 if (oauthDraftRef.current && sel?.kind === 'preset') {
                   pickPreset(presets.find(p => p.id === sel.preset.id) ?? sel.preset);

@@ -248,6 +248,14 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 计划模式一级开关(runtime-only, 持久化经 dispatch persistRemoteSetting 回流)。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
+  // 任务级工作上下文窗口档位(会话级设置, 无本机 shell/UI 副作用; 控制端 DB 是被控端那份,
+  // 写本机不生效)。被控端落库并应用到活实例。老被控端无 handler → CHANNEL_NOT_ALLOWED
+  // → 控制端提示「该设备版本不支持」并保留原档位。
+  'maker:set-context-window-budget',
+  // 任务级窗口边界的只读查询(路由默认/物理上限/该路由模型级上限):控制端打开远程档位
+  // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
+  // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
+  'maker:get-context-window-bounds',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
@@ -291,6 +299,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // → CHANNEL_NOT_ALLOWED → 控制端吞掉,回退本机/按时间。
   'sidebar-settings:get-project-order',
   'sidebar-settings:apply-project-order',
+  // Host-owned project names are read-only on controllers. Local overrides and write channels stay local.
+  'sidebar-settings:get-project-aliases',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
@@ -337,6 +347,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 控制端吞错,仅靠已加载消息 + 实时 turn-cost 推送呈现部分值。
   'local-db:messages:estimatedSessionValue',
   'local-db:recent-workdirs:list',
+  // Host-owned project display names. No remote mutation of viewer preferences.
+  'local-db:project-aliases:list',
   // 窄口径写:从被控端「最近项目」列表移除一条(专用 handler,path 归一后按主键删,
   // 幂等,不动 sessions / 磁盘)。控制端项目选择器的删除入口与本机语义对等;
   // 老被控端无此 handler → CHANNEL_NOT_ALLOWED → 控制端隐藏/忽略删除能力即可。
@@ -437,6 +449,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:worker:idle',
   'maker:worker:acknowledge-done',
   'maker:worker:archive',
+  'maker:worker:update',
   'maker:team:end',
   'maker:session:enable-orca',
   'maker:session:disable-orca',
@@ -675,6 +688,10 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无这些 channel → CHANNEL_NOT_ALLOWED → 控制端按对应能力降级。
   'worktree:detect-cwd',
   'worktree:list-branches',
+  // Sync status is local-only; sync mutates only by explicit fetch + fast-forward.
+  // sync-branch baseRepo also passes dispatch PATH_GUARDED_CHANNELS.
+  'worktree:branch-sync-status',
+  'worktree:sync-branch',
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
@@ -811,6 +828,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:session:error-persisted',
   // 被控端项目手动顺序变化:控制端 / 手机首页按被控端正本重排。
   'sidebar-settings:project-order-changed',
+  'local-db:project-aliases:changed',
   // 被控端「当前 New Maker 草稿」全量变更:被控端草稿 effort/fast/选中 等任意变化时广播,
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。
@@ -859,6 +877,8 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 被控端 worktree:create 含 git worktree add(--no-checkout)+ 白名单文件选择性
   // checkout + .claude/.sivi 拷贝;大仓库 / 慢盘上可能超默认 30s,给足执行预算 + 回程余量。
   'worktree:create': 60_000,
+  // User-triggered fetch (30s) plus local probes and process cleanup. Never replay.
+  'worktree:sync-branch': 90_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
   'worktree:cancel-precreated': 60_000,

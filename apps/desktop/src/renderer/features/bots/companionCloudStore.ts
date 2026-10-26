@@ -43,15 +43,20 @@ function ensureOwner(): void {
   snapshot = EMPTY_COMPANION_CLOUD_SNAPSHOT;
 }
 
-export function refreshCompanionCloud(): void {
+/** Re-reads the snapshot; resolves once the answer is applied (or dropped as superseded), never rejects. */
+export function refreshCompanionCloudSettled(): Promise<void> {
   ensureOwner();
   const api = companionCloudApi();
-  if (!api) return;
+  if (!api) return Promise.resolve();
   const requestOwner = owner;
   const requestPushes = pushes;
-  void Promise.resolve().then(() => api.getCompanionCloudState()).then((next) => {
+  return Promise.resolve().then(() => api.getCompanionCloudState()).then((next) => {
     if (isDataOwnerGenerationCurrent(requestOwner) && pushes === requestPushes && next) apply(next);
   }).catch(() => undefined);
+}
+
+export function refreshCompanionCloud(): void {
+  void refreshCompanionCloudSettled();
 }
 
 function start(): () => void {

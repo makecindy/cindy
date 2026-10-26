@@ -284,6 +284,102 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     },
   );
 
+  it('defers the history-view mirror write out of the publish stack', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'first', 'first', '2026-06-15T00:00:00Z')]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    const leave = makerChatStore.enterView(s);
+    let off = () => {};
+    let offView = () => {};
+    try {
+      makerChatStore.ensureInitialMessages(s);
+      await flush();
+      const view = getRemoteHistoryView(s)!;
+      expect(view.getSnapshot().ready).toBe(true);
+      const notify = vi.fn();
+      const publishNotified: boolean[] = [];
+      off = makerChatStore.subscribe(s, notify);
+      offView = view.subscribe(() => publishNotified.push(notify.mock.calls.length > 0));
+      host.seedSession(s, {}, [
+        dbMessage(s, 'first', 'first', '2026-06-15T00:00:00Z'),
+        dbMessage(s, 'second', 'second', '2026-06-15T00:00:01Z'),
+      ]);
+      const read = view.refresh();
+      expect(notify).not.toHaveBeenCalled();
+      await read;
+      expect(publishNotified.length).toBeGreaterThanOrEqual(2);
+      expect(publishNotified.every((notified) => notified === false)).toBe(true);
+      expect(notify).toHaveBeenCalled();
+      expect(makerChatStore.getSnapshot(s).messages.map((message) => message.clientId))
+        .toEqual(['client-first', 'client-second']);
+      notify.mockClear();
+      await view.refresh();
+      await flush();
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      offView();
+      off();
+      leave();
+    }
+  });
+
+  it('keeps the pending-error leave cleanup when a mirror was already queued', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'question', 'question', '2026-06-15T00:00:00Z', 'user')]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    const leave = makerChatStore.enterView(s);
+    try {
+      makerChatStore.ensureInitialMessages(s);
+      await flush();
+      expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(true);
+      host.push('maker:input:projection', { ...emptyProjection(s), error: 'remote failure' });
+      host.push('maker:event', {
+        sessionId: s,
+        persistId: 'err-1',
+        event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'remote failure' } },
+      });
+      host.push('local-db:session:error-persisted', { sessionId: s, persistId: 'err-1' });
+      expect(makerChatStore.getSnapshot(s).error).toBe('remote failure');
+      leave();
+      await flush();
+      expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(false);
+      expect(makerChatStore.getSnapshot(s).error).toBeNull();
+    } finally {
+      makerChatStore.purgeSession(s);
+    }
+  });
+
+  it('releases the raw pagination lock when the history view falls back', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    const rows = Array.from({ length: 30 }, (_, index) => dbMessage(s, String(index), 'visible',
+      new Date(1_750_000_000_000 + index * 1000).toISOString(), 'user'));
+    host.seedSession(s, {}, rows);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const view = getRemoteHistoryView(s)!;
+    expect(view.getSnapshot().hasMore).toBe(true);
+    const invoke = host.invoke.getMockImplementation()!;
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel === 'local-db:messages:view' && (args[1] as { before?: string })?.before) {
+        throw new Error('[UNSUPPORTED_CAPABILITY] History view scan budget exceeded');
+      }
+      return invoke(device, channel, args);
+    });
+    try {
+      await makerChatStore.loadOlderMessages(s).catch(() => false);
+      await flush();
+      expect(getRemoteHistoryView(s)).not.toBe(view);
+      expect(makerChatStore.getSnapshot(s).isLoadingMore).toBe(false);
+    } finally {
+      host.invoke.mockImplementation(invoke);
+      makerChatStore.purgeSession(s);
+    }
+  });
+
   // A durable push both invalidates the view (page read at +500 ms) and arms the
   // lost-push repair (+1.5 s). The repair must only read when nothing read the
   // latest page after the push: a running turn used to cost two page reads plus an

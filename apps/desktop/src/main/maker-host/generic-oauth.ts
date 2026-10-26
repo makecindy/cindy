@@ -849,9 +849,10 @@ export async function discoverGenericOAuthModels(
   oauth: OAuthProviderDescriptor,
   discoveryUrl?: string,
   agent?: AgentKind,
+  isCurrent: () => boolean = () => true,
 ): Promise<DiscoveredModel[] | null> {
   const url = discoveryUrl ?? oauth.modelsDiscoveryUrl;
-  if (!url) return null;
+  if (!url || !isCurrent()) return null;
   const token = readCachedGenericOAuthAccessToken(providerId, oauth);
   if (!token) return null;
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };
@@ -872,14 +873,19 @@ export async function discoverGenericOAuthModels(
   } catch {
     return null;
   }
+  if (!isCurrent()) return null;
   const pageDeadline = Date.now() + 30_000;
-  return collectModelDiscoveryPages(json, url, async nextUrl => {
+  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+    // Login cancellation/account changes must stop pagination and the optional
+    // speech query before either can reuse the captured Bearer credential.
+    if (!isCurrent()) throw new Error('catalog operation is no longer current');
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
     const page = await io.fetchImpl(nextUrl, { headers, redirect: 'error',
       signal: AbortSignal.timeout(Math.max(1, Math.min(REFRESH_FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return page.json();
   });
+  return isCurrent() ? models : null;
 }
 
 

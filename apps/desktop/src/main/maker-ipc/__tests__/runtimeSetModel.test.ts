@@ -1355,6 +1355,46 @@ describe('applyRuntimeSetModelChange', () => {
     },
   );
 
+  it('passes the target budget to the Pi preview, same as the setModel call', async () => {
+    // 预演决定要不要重建，而 switchModel 会先把预算写成新值再预演。外层预演拿旧预算
+    // 就会判「可热切」，内层按新预算发现保留量不匹配便抛错 —— 首次发送必失败。
+    const sessionId = rememberSession('runtime-set-model-pi-preview-budget');
+    setSessionProvider(sessionId, 'xai');
+    const previewModelSwitch = vi.fn(async () => ({ action: 'hot' as const,
+      targetContextWindow: 1_000_000, windowVerified: true }));
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'grok-4.6',
+        setModel,
+        previewModelSwitch,
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'grok-4.5',
+      providerId: 'xai',
+      contextWindowBudget: 500_000,
+    });
+
+    expect(previewModelSwitch).toHaveBeenCalledWith('grok-4.5', {
+      providerId: 'xai',
+      contextWindowBudget: 500_000,
+    });
+    expect(setModel).toHaveBeenCalledWith('grok-4.5', {
+      providerId: 'xai',
+      contextWindowBudget: 500_000,
+    });
+  });
+
   it('hot-switches idle Pi inside the same proxy identity without closing', async () => {
     const sessionId = rememberSession('runtime-set-model-pi-same-xai');
     setSessionProvider(sessionId, 'xai');

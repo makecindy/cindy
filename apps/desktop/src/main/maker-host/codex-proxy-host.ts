@@ -2,6 +2,7 @@ import { captureUsagePricing, createUsagePricingObserver } from './model-usage-p
 import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
+import { restrictSubscriptionRequest, withSubscriptionFastRequestPolicy } from './subscription-fast-request-policy.js';
 import {
   resolveConversationSessionHeaders,
   withChatBridgeUserAgent,
@@ -9,6 +10,11 @@ import {
 } from '@cindy/responses-chat-bridge';
 import {
   isCustomRoutedProvider,
+  availableModelInterfaces,
+  modelWithInterface,
+  resolveModelMetadata,
+  BUNDLED_CATALOG,
+  type ModelInterfaceSnapshot,
   isCodexGatewayWireModel,
   providerCatalogId,
   providerModelRecord,
@@ -42,6 +48,7 @@ import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './s
 
 import {
   createAnthropicCompatProxy,
+  recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
@@ -376,6 +383,12 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
 // 放宽到 128MB 恢复与原生 codex 的对等;仍保留上限防内存被打爆(body 会整段
 // 缓冲 + JSON.parse,该值同时是单请求的内存 / 解析停顿预算)。
 const CODEX_PROXY_MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+
+// ChatGPT 订阅后端的 WebSocket 单条消息上限约 16 MiB(2026-10 实测:12 MiB 通过,16 MiB 起
+// 回 1009 Message Too Big;HTTP 无此限制)。连接回收后 Codex 要整段重发历史,图片多的会话会
+// 每次被拒、退到 HTTP 慢传。超过时先把最早的内联附件外置为本地文件,压到目标值再发。
+const CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES = 15 * 1024 * 1024;
+const CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES = 12 * 1024 * 1024;
 
 export type CodexProxyAuthInjection = 'oauth-bearer' | 'env-key' | 'provider-oauth';
 
@@ -1011,23 +1024,6 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
   }
 }
 
-const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
-/** Kimi Code (coding plan) official endpoint DNS boundary. */
-const KIMI_CODING_CHAT_HOST = 'api.kimi.com';
-/** Model ids on the Kimi Code Codex (openai-chat) route verified for image input. */
-const KIMI_CODING_IMAGE_CHAT_MODELS = new Set([
-  'k3',
-  'k3-256k',
-  'kimi-for-coding',
-  'kimi-for-coding-highspeed',
-]);
-/** Moonshot 开放平台上官方文档确认支持图片输入的 model id。 */
-const MOONSHOT_IMAGE_CHAT_MODELS = new Set([
-  'kimi-k3',
-  'kimi-k2.7-code',
-  'kimi-k2.7-code-highspeed',
-  'kimi-k2.6',
-]);
 /** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
 const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
 /** 阿里云百炼 Coding Plan / Token Plan / 按量付费官方 DNS 边界。 */
@@ -1127,12 +1123,15 @@ export function chatBridgeCapabilitiesForRoute(
   upstream: string,
   realModel: string,
   fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+  selected?: ModelInterfaceSnapshot,
 ): ChatBridgeCapabilities {
   let capabilities = fallback;
   if (isDeepSeekReasoningHistoryRoute(upstream, realModel)) {
     capabilities = { ...capabilities, reasoningHistoryField: 'reasoning_content' };
   }
-  if (isVerifiedImageChatRoute(upstream, realModel)) {
+  if (selected ? selected.api === 'openai-completions' && selected.compatibility.includes('chat-image-v1') &&
+      selected.defaults.supportsImageInput === true && selected.route.baseUrl.replace(/\/+$/, '') === upstream.replace(/\/+$/, '')
+    : isVerifiedImageChatRoute(upstream, realModel)) {
     capabilities = { ...capabilities, imageInput: 'image_url' };
   }
   return capabilities;
@@ -1170,8 +1169,18 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
   }
   if (url.protocol !== 'https:') return false;
   const host = url.hostname.toLowerCase();
-  if (MOONSHOT_IMAGE_CHAT_MODELS.has(realModel)) return MOONSHOT_CHAT_HOSTS.has(host);
-  if (KIMI_CODING_IMAGE_CHAT_MODELS.has(realModel)) return host === KIMI_CODING_CHAT_HOST;
+  // Legacy callers and auxiliary requests use the same catalog bindings, without
+  // restoring a parallel model allowlist. Pre-V6 servers cannot declare bindings;
+  // V6 remains authoritative, including empty or retired declarations.
+  const activeRegistry = getActiveCatalog().modelRegistry;
+  const registry = activeRegistry && activeRegistry.schemaVersion >= 6
+    ? activeRegistry : BUNDLED_CATALOG.modelRegistry;
+  for (const providerId of new Set((registry?.interfaceProfiles ?? []).map(p => p.providerId))) {
+    const declared = availableModelInterfaces(registry, providerId, realModel, upstream, 'codex')
+      .find(p => p.api === 'openai-completions' && p.compatibility.includes('chat-image-v1'));
+    if (declared && resolveModelMetadata(registry, providerId, realModel, undefined, undefined,
+      'codex', undefined, undefined, undefined, declared.defaults).supportsImageInput === true) return true;
+  }
   if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
   if (isQwenImageChatModel(realModel)) return DASHSCOPE_CODING_CHAT_HOSTS.has(host);
   return false;
@@ -1189,11 +1198,12 @@ function createChatBridgeDecision(
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route) return null;
-  const nativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+  const catalogNativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+  const nativeModel = catalogNativeModel && modelWithInterface(catalogNativeModel, route.routing.modelInterface);
   if (route.routing.wireProtocol !== 'openai-chat' && !nativeModel?.api) return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
-  const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
+  const realModel = route.routing.modelInterface?.wireModelId ?? rewriteChatBridgeModel(wireModel, stripPrefix);
   // localHandler 绕过 proxy 的 responseObserver,自定义(user/organization)供应商的上游错误不会被
   // createProviderUpstreamErrorObserver 看到。这里显式把非 2xx 上游错误喂回同一广播通道,
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
@@ -1217,6 +1227,7 @@ function createChatBridgeDecision(
     route.routing.upstream,
     realModel,
     baseCapabilities,
+    route.routing.modelInterface,
   );
   const systemMessagePolicy = chatBridgeSystemMessagePolicyForRoute(
     route.providerId,
@@ -1234,7 +1245,7 @@ function createChatBridgeDecision(
     upstreamBase: route.routing.upstream,
     ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
     buildHeaders: async () => headers,
-    rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
+    rewriteModel: (model: string) => route.routing.modelInterface?.wireModelId ?? rewriteChatBridgeModel(model, stripPrefix),
     capabilities,
     ...(onUpstreamError ? { onUpstreamError } : {}),
     // localHandler 分支的上游请求由 chat bridge 自己发,绕开了 compat-proxy 转发层的
@@ -1255,9 +1266,10 @@ function createChatBridgeDecision(
       // 只把入站头快照交给 bridge 解析稳定会话 ID(→ x-opencode-session,#4073);bridge 不透传
       // 这些头,凭证与 Codex 账号头仍由 buildLocalHandlerHeaders 的隔离边界管。
       // ctx 在生产路径恒有;既有测试与旧调用方可能省略,按「无入站头」处理即不附加会话头。
-      const actualModel = isPlainObject(body) && typeof body.model === 'string'
-        ? rewriteChatBridgeModel(body.model, stripPrefix) : realModel;
-      const selected = getActiveCatalog().providers.find(p => p.id === providerId)?.models.codex?.find(m => m.id === actualModel);
+      const actualModel = route.routing.modelInterface?.wireModelId ?? (isPlainObject(body) && typeof body.model === 'string'
+        ? rewriteChatBridgeModel(body.model, stripPrefix) : realModel);
+      const catalogSelected = getActiveCatalog().providers.find(p => p.id === providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+      const selected = catalogSelected && modelWithInterface(catalogSelected, route.routing.modelInterface);
       const standard = selected?.api ? invocationModelRecord(selected, route.routing.upstream) : !route.routing.requestPath
         ? providerModelRecord(actualModel, route.routing.upstream, 'openai-chat') : undefined;
       if (standard && isPlainObject(body)) {
@@ -1587,7 +1599,8 @@ function createLocalBridgeDecision(
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route) return null;
-  const nativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+  const catalogNativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+  const nativeModel = catalogNativeModel && modelWithInterface(catalogNativeModel, route.routing.modelInterface);
   if (route.routing.wireProtocol === 'openai-chat' || (nativeModel?.api && (nativeModel.api !== 'openai-responses' || requiresNativeProviderAuth(invocationModelRecord(nativeModel, route.routing.upstream))))) {
     const decision = createChatBridgeDecision(
       route,
@@ -3022,7 +3035,8 @@ export function createModelRoutingTransform(
       : sessionId
         ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
         : null;
-    const selectedModel = getActiveCatalog().providers.find(p => p.id === explicitProviderId)?.models.codex?.find(m => m.id === model);
+    const catalogSelectedModel = getActiveCatalog().providers.find(p => p.id === explicitProviderId)?.models.codex?.find(m => m.id === model);
+    const selectedModel = catalogSelectedModel && modelWithInterface(catalogSelectedModel, selectedRouting?.modelInterface);
     const selectedUsesLocalBridge =
       ctx.method === 'POST'
       && Boolean(model)
@@ -3422,6 +3436,15 @@ async function createCodexProxyHandle(
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
+      const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+      const context = providerContextForRequest(ctx.headers, model);
+      const customPath = parseCodexCustomProviderPath(ctx.url);
+      const customProviderId = customPath.kind === 'route' ? customProviderRouteSnapshot(customPath.routeId, frozenCustomProviderRoutes)?.providerId : null;
+      decision = withSubscriptionFastRequestPolicy(decision, {
+        sessionId: context.sessionId ?? guestSessionId,
+        providerId: customProviderId ?? gatewayProviderIdForRewrittenModel(model) ?? context.providerId ?? guestProviderId
+          ?? (gatewayProviderIdForRewrittenModel(model) ? null : (frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null),
+      }, ctx);
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
         || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
       // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
@@ -3430,6 +3453,30 @@ async function createCodexProxyHandle(
     };
     const decision = route(body, ctx);
     return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
+  };
+  const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
+  const fitWebSocketRequest = async (
+    request: Buffer,
+    ctx: { url: string; headers: Readonly<Record<string, string>> },
+    signal: AbortSignal,
+  ): Promise<Buffer> => {
+    const recover = attachmentRecovery({ reqId: 0, method: 'POST', url: ctx.url, headers: ctx.headers });
+    let recovered: Buffer | null = null;
+    try {
+      recovered = recover
+        ? await recoverOversizedMessage(request, CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES, body => recover(body, CODEX_WEBSOCKET_MESSAGE_TARGET_BYTES), signal)
+        : null;
+    } catch {
+      // Same as HTTP recovery: never log paths or payloads.
+    }
+    if (!recovered) {
+      log.warn('oversized websocket request forwarded unchanged', { bytes: request.length });
+      return request;
+    }
+    log.info('oversized websocket attachments preserved outside request', {
+      originalBytes: request.length, recoveredBytes: recovered.length,
+    });
+    return recovered;
   };
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
@@ -3461,7 +3508,13 @@ async function createCodexProxyHandle(
     },
     requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase),
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
-    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true),
+    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
+      const body: unknown = JSON.parse(message.toString('utf8'));
+      const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
+      const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
+      const request = next ? Buffer.from(JSON.stringify(next)) : message;
+      return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
+    }),
     transformResponse: (ctx) => {
       const response = {
         contentType: ctx.responseHeaders['content-type'] ?? '',
@@ -3502,7 +3555,7 @@ async function createCodexProxyHandle(
       }),
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
-    oversizedRequestRecovery: createAttachmentRecovery(sessionIdFromHeaders),
+    oversizedRequestRecovery: attachmentRecovery,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,

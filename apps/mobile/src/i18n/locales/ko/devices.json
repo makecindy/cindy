@@ -330,6 +330,7 @@
       "openAutomationLatest": "자동화 작업 {{title}}의 최근 세션 열기",
       "automationTask": "자동화 작업 {{title}}",
       "openConversation": "세션 {{title}} 열기",
+      "followedBy": ", 담당: {{names}}",
       "collapse": "{{title}} 접기",
       "expand": "{{title}} 펼치기",
       "taskError": "작업 오류",
@@ -588,9 +589,12 @@
     "viewAllRuns": "실행 {{count}}회 모두 보기"
   },
   "companions": {
+    "section": {
+      "showAll": "모두 보기",
+      "showAllA11y": "모두 보기 ({{count}})",
+      "showLess": "접기"
+    },
     "noCreateHosts": "사용 가능한 호환 컴퓨터가 없습니다. 컴퓨터에서 Cindy를 열고 같은 계정으로 로그인하면 팀원을 새로 만들 수 있습니다.",
-    "taskAttentionCount": "확인이 필요한 작업: {{count}}",
-    "unreadChatCount": "읽지 않은 채팅: {{count}}",
     "messageSent": "백그라운드 작업에 메시지를 보냈습니다",
     "sentTo": "{{name}}에게 메시지를 보냄",
     "receivedFrom": "{{name}}의 메시지",
@@ -629,19 +633,13 @@
       "unknown": "알 수 없는 상태"
     },
     "title": "팀원",
-    "tasks": "세션",
     "search": "팀원 검색",
-    "emptyTitle": "아직 팀원이 없습니다",
-    "emptyCopy": "컴퓨터의 Cindy에서 팀원을 만드세요.",
-    "noResults": "일치하는 팀원이 없습니다",
     "startChat": "대화 시작하기",
-    "preferenceSaveFailed": "보기 설정을 저장하지 못했습니다. 보기를 다시 전환하세요.",
     "automation": {
       "unsavedTitle": "변경 사항을 버릴까요?",
       "unsavedBody": "변경 사항이 아직 저장되지 않았습니다.",
       "discard": "변경 사항 버리기"
     },
-    "openNavigation": "탐색 메뉴 열기",
     "openProfile": "{{name}} 프로필 보기",
     "switchCompanion": "팀원 전환",
     "activity": {
@@ -688,9 +686,7 @@
     "errorDetails": "오류 정보",
     "createTeammate": "새 동료",
     "createMenu": "새로 만들기",
-    "searchWithGroups": "동료와 그룹 검색",
     "awaiting": "확인 필요",
-    "emptyCopyCreate": "동료는 나눈 이야기를 기억하고 컴퓨터에서 일도 도와줘요.",
     "taskResult": "작업 결과",
     "collapseResult": "결과 접기"
   },
@@ -764,7 +760,18 @@
     "home": "주 컴퓨터",
     "chat": "채팅",
     "showReplyTarget": "답장 대상 메시지 표시",
-    "showReplyTargetHint": "팀원 답장 위에 어떤 메시지에 대한 답장인지 표시합니다. 모든 팀원에게 적용되며, 이전 답장에는 표시되지 않습니다."
+    "showReplyTargetHint": "팀원 답장 위에 어떤 메시지에 대한 답장인지 표시합니다. 모든 팀원에게 적용되며, 이전 답장에는 표시되지 않습니다.",
+    "channels": "메시지 플랫폼",
+    "channelsEmpty": "연결된 메시지 플랫폼이 없습니다",
+    "channelTasksEmpty": "아직 작업 기록이 없습니다",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "동료 가져오기",

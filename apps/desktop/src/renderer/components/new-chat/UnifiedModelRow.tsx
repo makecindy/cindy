@@ -126,7 +126,8 @@ export function UnifiedModelRow({
     'data-state': active ? 'open' : selected ? 'checked' : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (interactionDisabled || paymentRequired) return;
+      // 不出配置浮层的行(远程收藏 / 最近行 / 设置类入口)不抢原生右键菜单。
+      if (interactionDisabled || paymentRequired || !customizable) return;
       event.preventDefault();
       openConfig(event.currentTarget);
     },

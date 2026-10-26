@@ -146,7 +146,7 @@ export function resetBotReadStateForTests(): void {
 
 /** Group replies use the same owner-scoped, monotonic local read positions. */
 export const botGroupReadKey = (groupId: string) => `group:${groupId}`;
-type GroupReadSummary = Pick<BotGroupSummary, 'id' | 'lastReplyAt'> & Partial<Pick<BotGroupSummary, 'lastMessage'>> & {
+type GroupReadSummary = Pick<BotGroupSummary, 'id' | 'lastReplyAt'> & Partial<Pick<BotGroupSummary, 'lastMessage' | 'serverUnread'>> & {
   /**
    * ISO times of the group's latest (up to 99) messages from others — Bots and other humans,
    * never the reader's own or notices — oldest first. Older hosts omit it.
@@ -166,6 +166,7 @@ function latestGroupReplyAt(group: GroupReadSummary): number {
  * most 99); a host without the list only says whether anything is new (1).
  */
 export function botGroupUnreadCount(group: GroupReadSummary): number {
+  if (group.serverUnread) return group.serverUnread.count;
   const readAt = getBotLastReadAt(botGroupReadKey(group.id));
   if (readAt === null) return 0;
   const latestUnread = latestGroupReplyAt(group) > readAt ? 1 : 0;

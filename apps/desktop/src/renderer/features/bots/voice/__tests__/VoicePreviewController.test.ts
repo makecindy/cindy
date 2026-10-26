@@ -1,15 +1,17 @@
 import { expect, it, vi } from 'vitest';
 import { VoicePreviewController } from '../VoicePreviewController';
+import type { VoiceConversationApi } from '@/../shared/voiceConversation';
+import type { SpeechPlayer } from '../PcmSpeechPlayer';
 
 function fixture() {
   const api = {
-    preview: vi.fn(async () => ({ sampleRate: 24000 })),
+    preview: vi.fn<VoiceConversationApi['preview']>(async () => ({ sampleRate: 24000 })),
     readPreview: vi.fn(async () => ({ pcm: new ArrayBuffer(2), done: true })),
     stopPreview: vi.fn<(id: string) => Promise<void>>(async () => {}),
   };
   const player = {
-    play: vi.fn(async (read: () => Promise<unknown>) => {
-      await read();
+    play: vi.fn<SpeechPlayer['play']>(async (read, audio) => {
+      if (typeof audio === 'number') await read();
     }),
     pause: vi.fn(),
     resume: vi.fn(),
@@ -31,8 +33,12 @@ const choice = {
   voice: 'voice-id',
 };
 
-it('previews through the selected model and closes playback after draining', async () => {
+// Unit: preview must preserve the host-selected encoded format as well as PCM;
+// otherwise a successful MiniMax request still fails at the preview player.
+it.each(['pcm', 'mp3'] as const)('previews %s through the selected model and closes playback after draining', async format => {
   const { controller, api, player } = fixture();
+  const encoded = { format: 'mp3' as const, data: new Uint8Array([1]).buffer };
+  if (format === 'mp3') api.preview.mockResolvedValue(encoded);
   await controller.start(choice, 'sample');
   expect(api.preview).toHaveBeenCalledWith({
     ...choice,
@@ -41,8 +47,8 @@ it('previews through the selected model and closes playback after draining', asy
     previewId: expect.any(String),
     text: 'sample',
   });
-  expect(api.readPreview).toHaveBeenCalledOnce();
-  expect(player.play).toHaveBeenCalledWith(expect.any(Function), 24000);
+  expect(api.readPreview).toHaveBeenCalledTimes(format === 'mp3' ? 0 : 1);
+  expect(player.play).toHaveBeenCalledWith(expect.any(Function), format === 'mp3' ? encoded : 24000);
   expect(player.close).toHaveBeenCalled();
   expect(api.stopPreview).toHaveBeenCalled();
   expect(controller.getSnapshot()).toBe('complete');

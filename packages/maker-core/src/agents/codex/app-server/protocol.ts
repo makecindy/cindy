@@ -1182,6 +1182,12 @@ export interface GuardianWarningServerNotification {
   params: GuardianWarningNotification;
 }
 
+/** User-facing warning (v2 WarningNotification); threadId is set when it targets a thread. */
+export interface WarningNotification {
+  method: 'warning';
+  params: { message: string; threadId?: string | null };
+}
+
 /**
  * v2 ThreadItem 的 envelope — 至少有 id / type, 余字段按 type narrow。
  * 完整 union 在 v2.rs ThreadItem (太大, 不在 Phase 1 全列)。translator 用
@@ -1213,6 +1219,7 @@ export type ServerNotification =
   | ItemGuardianApprovalReviewStartedServerNotification
   | ItemGuardianApprovalReviewCompletedServerNotification
   | GuardianWarningServerNotification
+  | WarningNotification
   | ErrorNotification;
 
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────

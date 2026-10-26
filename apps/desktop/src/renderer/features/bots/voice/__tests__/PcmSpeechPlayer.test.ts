@@ -38,6 +38,7 @@ class TestAudioContext {
     this.state = 'closed';
   });
   createBuffer = vi.fn(() => ({ copyToChannel: vi.fn() }));
+  decodeAudioData = vi.fn<(data: ArrayBuffer) => Promise<AudioBuffer>>();
   createBufferSource() {
     const source = createTestSource();
     this.sources.push(source);
@@ -134,4 +135,57 @@ it('holds a synthesis response that arrives during noise and cancels a suspended
   player.resume();
   await vi.advanceTimersByTimeAsync(0);
   expect(TestAudioContext.latest.state).toBe('closed');
+});
+
+// Unit regression: transport can now deliver a complete MP3. Old coverage only
+// supplied PCM; compressed bytes must decode at their actual rate and never play
+// after cancellation, including a late browser decoder result.
+function decodedAudio() {
+  return {
+    duration: 0.1, length: 4800, sampleRate: 48000, numberOfChannels: 2,
+    getChannelData: (channel: number) => new Float32Array(4800).fill(channel ? 0.6 : 0.2),
+  } as AudioBuffer;
+}
+it('decodes MP3 with the browser rate and downmixes stereo without reading PCM', async () => {
+  const player = new PcmSpeechPlayer(vi.fn());
+  const context = TestAudioContext.latest;
+  context.decodeAudioData.mockResolvedValue(decodedAudio());
+  const read = vi.fn();
+  const started = vi.fn();
+  const data = new Uint8Array([0xff, 0xfb, 1]).buffer;
+  const playing = player.play(read, { format: 'mp3', data }, started);
+  await vi.advanceTimersByTimeAsync(200);
+  await playing;
+  expect(context.decodeAudioData).toHaveBeenCalledWith(data);
+  expect(context.createBuffer).toHaveBeenCalledWith(1, 4800, 48000);
+  const samples = context.createBuffer.mock.results[0].value.copyToChannel.mock.calls[0][0];
+  expect(samples[0]).toBeCloseTo(0.4);
+  expect(read).not.toHaveBeenCalled();
+  expect(started).toHaveBeenCalledOnce();
+  player.close();
+});
+
+it.each(['cancel', 'close'] as const)('discards a decoder result arriving after %s', async action => {
+  const player = new PcmSpeechPlayer(vi.fn());
+  const context = TestAudioContext.latest;
+  let finish!: (audio: AudioBuffer) => void;
+  context.decodeAudioData.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const playing = player.play(vi.fn(), { format: 'mp3', data: new Uint8Array([1]).buffer });
+  const rejected = expect(playing).rejects.toThrow('Playback interrupted');
+  await vi.advanceTimersByTimeAsync(0);
+  player[action]();
+  finish(decodedAudio());
+  await rejected;
+  expect(context.sources).toHaveLength(0);
+  player.close();
+});
+
+it('fails corrupt MP3 without scheduling noise or falling back to another request', async () => {
+  const player = new PcmSpeechPlayer(vi.fn());
+  TestAudioContext.latest.decodeAudioData.mockRejectedValue(new Error('corrupt audio'));
+  const read = vi.fn();
+  await expect(player.play(read, { format: 'mp3', data: new Uint8Array([1]).buffer })).rejects.toThrow('corrupt audio');
+  expect(TestAudioContext.latest.sources).toHaveLength(0);
+  expect(read).not.toHaveBeenCalled();
+  player.close();
 });

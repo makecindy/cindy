@@ -1231,7 +1231,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (behavior.emojiReactions === 'off') return null;
       if (this.ambientTriggerIds.has(messageId)) return null; // ambient 全静默
       let effective = emoji;
-      if (emoji === '👨‍💻') {
+      if (emoji === '🤔') {
         // 每次开始处理选择一次，不随进度反复切换；排队 👀 保持固定。
         effective = pickExpressiveReaction(PROCESSING_REACTION_POOL);
       } else if (behavior.emojiReactions === 'expressive') {

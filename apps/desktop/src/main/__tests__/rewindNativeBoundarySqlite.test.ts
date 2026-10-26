@@ -22,6 +22,11 @@ vi.mock('../device-link/index.js', () => ({
   remoteBackgroundInvoke: () => { throw new Error('unexpected remote invocation in local rewind'); },
 }));
 
+// Local SQL rewind reuses fork helpers without initializing the device-link host.
+vi.mock('../device-link/index.js', () => ({
+  remoteBackgroundInvoke: () => { throw new Error('unexpected remote invocation in local rewind'); },
+}));
+
 const commitRewindFilesMock = vi.fn();
 const isTurnRunningMock = vi.fn(() => false);
 const {

@@ -1038,8 +1038,6 @@ export function VoiceInputSection() {
     setMuteSystemAudio,
     setPlayInteractionSound,
     setFastActivationEnabled,
-    setComposerLongPressEnabled,
-    resetComposerLongPressEnabled,
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
@@ -2693,36 +2691,6 @@ export function VoiceInputSection() {
             onCheckedChange={setFastActivationEnabled}
             aria-label={t('settings.voiceInput.fastActivation.ariaLabel')}
           />
-        </div>
-
-        <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-voiceInput-composerLongPress-label"
-              className="text-13 font-medium text-[var(--settings-section-title)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t('settings.voiceInput.composerLongPress.label')}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.voiceInput.composerLongPress.hint')}
-            </p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <DefaultOverrideControls
-              isCustomized={settings.composerLongPressEnabledOverride != null}
-              onReset={() => {
-                void resetComposerLongPressEnabled().then((ok) => {
-                  if (ok) toast.success(t('settings.defaults.restored'));
-                });
-              }}
-            />
-            <Switch
-              checked={settings.composerLongPressEnabled}
-              onCheckedChange={setComposerLongPressEnabled}
-              aria-label={t('settings.voiceInput.composerLongPress.ariaLabel')}
-            />
-          </div>
         </div>
 
         <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">

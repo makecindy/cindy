@@ -17,6 +17,11 @@ const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 const modelAccess = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
+const fastPolicy = vi.hoisted(() => ({ allows: vi.fn(), set: vi.fn(), changed: vi.fn(), publish: vi.fn() }));
+const localBroadcast = vi.hoisted(() => vi.fn());
+vi.mock('../index.js', () => ({ broadcast: localBroadcast }));
+vi.mock('../../maker-host/provider-fast-policy-store.js', () => ({ providerFastPolicy: fastPolicy }));
+vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscriptionFastPolicyChanged: fastPolicy.changed }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: modelAccess }));
 vi.mock('../providerShareVisibility.js', () => ({ providerShareVisibility: visibility }));
 vi.mock('../providerShareMemberNotes.js', () => ({ providerShareMemberNotes: memberNotes }));
@@ -52,6 +57,7 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareLinkFor: () => 'https://cindy.app/s#test-link',
 }));
 vi.mock('../dispatch.js', () => ({
+  notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
   revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(), setProviderShareAccess: vi.fn(),
 }));
@@ -113,6 +119,9 @@ beforeEach(() => {
   memberNotes.set.mockResolvedValue(undefined);
   modelAccess.read.mockReturnValue({ models: null, providerModels: null });
   modelAccess.set.mockImplementation(async (_provider, _models, _member, assertCurrent) => { assertCurrent(); });
+  fastPolicy.allows.mockReturnValue(true);
+  fastPolicy.set.mockImplementation(async (_provider, allowed, assertCurrent) => { assertCurrent(); fastPolicy.allows.mockReturnValue(allowed); });
+  fastPolicy.changed.mockResolvedValue(undefined);
   host.snapshot.mockReturnValue([{ requests: [{ requestId: 'r1' }], members: [{ memberId: 'm1' }] }]);
   usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [] }, relays: [] });
   usageStores.memberHistory.mockReturnValue([]);
@@ -423,5 +432,44 @@ describe('share visibility management and guest query', () => {
       change.startsWith('old-') ? 'UNSUPPORTED_CAPABILITY' : change === 'owner' ? 'PRECONDITION_FAILED' : 'PERMISSION_DENIED');
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('share:s', 'provider-share:insights:v1', [{ version: 1, includeUsage: false }], expect.any(Object));
+  });
+});
+
+describe('subscription Fast management through the owner command', () => {
+  const command = { action: 'set-fast-policy', providerId: 'openai', allowFast: false } as const;
+  const subscription = { id: 'openai', auth: { method: 'oauth', native: 'codex' } };
+
+  it('refreshes local catalogs even when the user has not started device-link sharing', async () => {
+    stopProviderShareRuntime();
+    listProviders.mockResolvedValue([subscription]);
+    await expect(executeProviderShareManagementCommand(command)).resolves.toEqual({ supported: true, allowFast: false });
+    expect(localBroadcast).toHaveBeenCalledWith('maker:provider:changed', {});
+  });
+
+  it('persists a subscription restriction and publishes the catalog before awaiting the native update', async () => {
+    listProviders.mockResolvedValue([subscription]);
+    fastPolicy.changed.mockImplementation(async () => {
+      expect(fastPolicy.allows('openai')).toBe(false);
+      expect(fastPolicy.publish).toHaveBeenCalledWith('openai');
+      throw Error('native still busy');
+    });
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('native still busy');
+    expect(fastPolicy.set).toHaveBeenCalledWith('openai', false, expect.any(Function));
+    fastPolicy.changed.mockResolvedValue(undefined);
+    await expect(executeProviderShareManagementCommand(command)).resolves.toEqual({ supported: true, allowFast: false });
+  });
+
+  it('rejects a custom API named openai and requires a real boolean', async () => {
+    listProviders.mockResolvedValue([{ ...subscription, auth: { method: 'apiKey' } }]);
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('INVALID_PARAMS');
+    expect(fastPolicy.set).not.toHaveBeenCalled();
+    expect(() => parseProviderShareCommand({ ...command, allowFast: 'false' })).toThrow('INVALID_PARAMS');
+  });
+
+  it('does not persist after the owner changes during catalog lookup', async () => {
+    listProviders.mockImplementation(async () => { state.owner = 'owner-b'; return [subscription]; });
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('PRECONDITION_FAILED');
+    expect(fastPolicy.set).not.toHaveBeenCalled();
+    expect(fastPolicy.publish).not.toHaveBeenCalled();
   });
 });

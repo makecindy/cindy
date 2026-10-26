@@ -1436,6 +1436,9 @@ const mergedSessionById = new Map<string, RemoteSession>();
 // live usage. Usage pushes must not rebuild Home's grouping/localization tree.
 let homeSessions: RemoteSession[] = [];
 const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+// These fields cannot change shard ownership, visibility or retention. Timestamps
+// still update this task's live-row anchor; titles still reconcile local previews.
+const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
 const homeSessionProjectionCache = new Map<string, {
   source: RemoteSession;
   projected: RemoteSession;
@@ -3727,6 +3730,26 @@ export const remoteSessionStore = {
             return updated;
           });
           reconcileVisibleSessions();
+        }
+        emit();
+        return;
+      }
+      if (Object.keys(patch).every((key) => SESSION_METADATA_FIELDS.has(key))) {
+        const previous = mergedSessionById.get(sessionId);
+        if (previous && sessionDeviceIndex.get(sessionId) === deviceId) {
+          const updated = applyPendingTitlePreview({ ...patched, canonicalDeviceId: previous.canonicalDeviceId });
+          if (!remoteSessionEqual(previous, updated)) {
+            mergedSessions = mergedSessions.map((session) => session.id === sessionId ? updated : session);
+            mergedSessionById.set(sessionId, updated);
+            pendingMessagePreviewSessionIds.add(sessionId);
+            reconcileVisibleSessions();
+            reconcileHomeSessions();
+          }
+          bindPendingHostAnchorSendAt(sessionId, updated.userSendAt);
+          if (reanchorPendingLiveAssistantRows(sessionId,
+            updated.userSendAt ?? updated.updatedAt ?? updated.createdAt, { consumePending: false })) {
+            bumpMessageVersion();
+          }
         }
         emit();
         return;
@@ -6285,6 +6308,26 @@ function usePausableRemoteSessionStoreSnapshot<T>(
 
 export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
+}
+
+/** Link chips observe only their visible targets, not every task's activity. */
+export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
+  const read = useCallback(() => {
+    if (ids.length === 0) return undefined;
+    const sessions = remoteSessionStore.getVisibleSessions();
+    const titles: Record<string, string> = {};
+    for (const id of ids) {
+      const title = sessions.find((session) => session.id === id)?.title?.trim();
+      if (title) titles[id] = title;
+    }
+    return Object.keys(titles).length > 0 ? JSON.stringify(titles) : undefined;
+  }, [ids]);
+  // A primitive snapshot stays equal on unrelated pushes. Reuse the route's
+  // subscription gate so covered conversations remain frozen until resumed.
+  const json = usePausableRemoteSessionStoreSnapshot(
+    read, read, ids.length > 0 ? remoteSessionStore.subscribe : NOOP_SUBSCRIBE,
+  );
+  return useMemo(() => json === undefined ? undefined : JSON.parse(json) as Record<string, string>, [json]);
 }
 
 /** A hidden child can be opened without making it an ordinary Home list row. */

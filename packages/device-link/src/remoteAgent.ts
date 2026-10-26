@@ -89,6 +89,9 @@ export const REMOTE_AGENT_ERROR_CODES = [
   'REMOTE_AGENT_PROVIDER_NOT_ALLOWED',
   // 供应商组转来的受邀者任务：这台电脑的主人没有同意这个受邀者经组使用(只回给打开时带了 reshareKey 的组所在电脑)。
   'REMOTE_AGENT_RESHARE_NOT_ALLOWED',
+  // 那台电脑上的 Agent 分叉原生历史失败(电脑本身在线)。只回给分叉请求带了 acceptsForkFailed 的控制端，
+  // 旧控制端照旧收到 REMOTE_AGENT_UNAVAILABLE。
+  'REMOTE_AGENT_FORK_FAILED',
 ] as const;
 export type RemoteAgentErrorCode = (typeof REMOTE_AGENT_ERROR_CODES)[number];
 
@@ -149,6 +152,8 @@ export const REMOTE_AGENT_MAX_PUSH_CHARS = 3 * 1024 * 1024;
 
 export type RemoteAgentRequest =
   | { op: 'caps' }
+  /** Authenticated group owner updates only its own task speed constraints, never model grants. */
+  | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
   /** Native image recovery is scoped to the caller's task; never accepts file paths. */
   | { op: 'images'; sessionId: string; relay?: string; action: 'list'; offset: number }
@@ -182,6 +187,14 @@ export type RemoteAgentRequest =
    * reshareBatch，分片在最后一片到达前不会替换审批名单。
    */
   | { op: 'reshare'; entries: RemoteAgentReshareEntry[]; batch?: RemoteAgentReshareBatch };
+
+export interface RemoteAgentFastPolicy {
+  group: string;
+  revision: number;
+  allowFast: boolean;
+  /** Registration precedes opening the task; omitted for a group policy update. */
+  binding?: { sessionId: string; controllerDeviceId?: string; relay?: string };
+}
 
 /** 供应商组为受邀者取的不透明键(组所在电脑按受邀者派生，不含身份信息)；「需要换一台」凭证同一格式。 */
 export const REMOTE_AGENT_RELAY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
@@ -244,6 +257,8 @@ export interface RemoteAgentForkRequest {
   forkAtTimestampMs?: number;
   relay?: string;
   reshareKey?: string;
+  /** 控制端认识 REMOTE_AGENT_FORK_FAILED。组所在电脑转发时原样带上受邀者的声明；旧被控端忽略。 */
+  acceptsForkFailed?: true;
 }
 
 export interface RemoteAgentForkResult {
@@ -254,6 +269,7 @@ export interface RemoteAgentForkResult {
 }
 
 export interface RemoteAgentCaps {
+  subscriptionFastPolicy?: true;
   nativeFork?: boolean;
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
@@ -425,6 +441,23 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
   switch (v.op) {
     case 'caps':
       return { op: 'caps' };
+    case 'fast-policy': {
+      if (typeof v.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(v.group)
+        || typeof v.allowFast !== 'boolean') invalid();
+      let binding: RemoteAgentFastPolicy['binding'];
+      if (v.binding !== undefined) {
+        const b = record(v.binding);
+        if (typeof b.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(b.sessionId)) invalid();
+        if (b.controllerDeviceId !== undefined && (typeof b.controllerDeviceId !== 'string'
+          || !/^[A-Za-z0-9_.-]{1,128}$/.test(b.controllerDeviceId))) invalid();
+        if (b.relay !== undefined && (typeof b.relay !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(b.relay))) invalid();
+        binding = { sessionId: b.sessionId as string,
+          ...(typeof b.controllerDeviceId === 'string' ? { controllerDeviceId: b.controllerDeviceId } : {}),
+          ...(typeof b.relay === 'string' ? { relay: b.relay } : {}) };
+      }
+      return { op: 'fast-policy', group: v.group as string, allowFast: v.allowFast as boolean,
+        revision: count(v.revision, Number.MAX_SAFE_INTEGER), ...(binding ? { binding } : {}) };
+    }
     case 'fork': {
       const text = (value: unknown, max = 4096): string => {
         if (typeof value !== 'string' || !value.length || value.length > max || value.includes('\0')) invalid();
@@ -455,6 +488,7 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       }
       if (v.tailTurnsToDrop !== undefined) result.tailTurnsToDrop = count(v.tailTurnsToDrop, Number.MAX_SAFE_INTEGER);
       if (v.forkAtTimestampMs !== undefined) result.forkAtTimestampMs = count(v.forkAtTimestampMs, Number.MAX_SAFE_INTEGER);
+      if (v.acceptsForkFailed === true) result.acceptsForkFailed = true;
       if (result.sourceSessionId === result.newSessionId) invalid();
       return { op: 'fork', ...result };
     }
@@ -638,6 +672,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(Number.isSafeInteger(v.idleReclaimMinutes) && (v.idleReclaimMinutes as number) >= 0
       && (v.idleReclaimMinutes as number) <= REMOTE_AGENT_IDLE_RECLAIM_MAX_MINUTES
       ? { idleReclaimMinutes: v.idleReclaimMinutes as number } : {}),
+    ...(v.subscriptionFastPolicy === true ? { subscriptionFastPolicy: true as const } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;

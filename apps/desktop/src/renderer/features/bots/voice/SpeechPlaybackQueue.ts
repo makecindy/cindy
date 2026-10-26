@@ -113,7 +113,7 @@ export class SpeechPlaybackQueue {
       if ('error' in result) throw result.error;
       await this.deps.player.play(
         () => this.deps.api.readSpeech(this.deps.callId, segment.requestId),
-        result.sampleRate,
+        'format' in result ? result : result.sampleRate,
         () => {
           if (this.cancelled) return;
           this.deps.diagnostic('playback scheduled', {

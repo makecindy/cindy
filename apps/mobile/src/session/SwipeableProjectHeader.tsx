@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import Animated, {
   interpolate,
@@ -27,6 +27,7 @@ const ACTION_SIZE = 56;
 const GAP = spacing.md;
 const LEADING_WIDTH = ACTION_SIZE * 2 + GAP * 3;
 const TRAILING_WIDTH = ACTION_SIZE + GAP * 2;
+const EDGE_HIT_SLOP = { left: -spacing.xl };
 
 interface Props {
   projectKey: string;
@@ -66,6 +67,27 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
     },
     [close, registry, rowKey],
   );
+  // Keep RNGH's worklet graph registered across list updates and rotation.
+  // Release actions read the current committed project and full-swipe width.
+  const gestureInputs = useRef({ registry, rowKey, width, run, onNewTask });
+  useLayoutEffect(() => {
+    gestureInputs.current = { registry, rowKey, width, run, onNewTask };
+  });
+  const handleOpenStartDrag = useCallback(() => {
+    const { registry, rowKey } = gestureInputs.current;
+    registry.onRowOpen(rowKey, close);
+  }, [close]);
+  const handleClose = useCallback(() => {
+    const { registry, rowKey } = gestureInputs.current;
+    registry.onRowClose(rowKey);
+  }, []);
+  const handleWillOpen = useCallback((direction: (typeof SwipeDirection)[keyof typeof SwipeDirection]) => {
+    const { width, run, onNewTask } = gestureInputs.current;
+    // Release only. Right swipes always require an explicit action tap.
+    if (direction === SwipeDirection.LEFT && -(translation.current?.value ?? 0) >= width * 0.55) {
+      run(onNewTask);
+    }
+  }, []);
 
   return (
     <ReanimatedSwipeable
@@ -74,19 +96,11 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
       containerStyle={styles.surface}
       childrenContainerStyle={styles.surface}
       // Leave the screen edge available to native back navigation.
-      hitSlop={{ left: -spacing.xl }}
+      hitSlop={EDGE_HIT_SLOP}
       overshootLeft={false}
-      onSwipeableOpenStartDrag={() => registry.onRowOpen(rowKey, close)}
-      onSwipeableClose={() => registry.onRowClose(rowKey)}
-      onSwipeableWillOpen={(direction) => {
-        // Release only. Right swipes always require an explicit action tap.
-        if (
-          direction === SwipeDirection.LEFT &&
-          -(translation.current?.value ?? 0) >= width * 0.55
-        ) {
-          run(onNewTask);
-        }
-      }}
+      onSwipeableOpenStartDrag={handleOpenStartDrag}
+      onSwipeableClose={handleClose}
+      onSwipeableWillOpen={handleWillOpen}
       renderLeftActions={(_progress, offset) => {
         translation.current = offset;
         return (

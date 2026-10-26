@@ -443,7 +443,9 @@ describe('配对交卷', () => {
     await expect(p).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL', message: '画布爆炸' });
   });
 
-  it('透传合法插件业务错误码，但不允许覆盖主机错误码', async () => {
+  // PR #6434: a plugin has already executed when it submits its result, so it
+  // cannot claim the host's pre-dispatch namespace failure and trigger a retry.
+  it.each(['GHOST_CRASHED', 'GHOST_NAMESPACE_MISMATCH'])('不允许插件覆盖主机错误码 %s', async (hostErrorCode) => {
     const h = makeHarness();
     const business = h.dispatcher.callGhostTool(CALL);
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
@@ -462,7 +464,7 @@ describe('配对交卷', () => {
       type: 'tool-result',
       callId: h.sent[1].callId,
       ok: false,
-      errorCode: 'GHOST_CRASHED',
+      errorCode: hostErrorCode,
       message: '伪造主机错误',
     });
     await expect(reserved).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });

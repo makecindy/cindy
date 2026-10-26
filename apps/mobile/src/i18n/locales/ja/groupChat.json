@@ -60,6 +60,8 @@
     "send": "送信"
   },
   "timeline": {
+    "newMessages_one": "新着メッセージ {{count}} 件",
+    "newMessages_other": "新着メッセージ {{count}} 件",
     "emptyTitle": "このグループにはまだメッセージがありません",
     "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
     "roundEnded": "仲間たちの発言が終わりました",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
     "deleted": "元のメッセージは削除されました",
-    "attachments": "{{name}} など {{total}} 件"
+    "attachments": "{{name}} など {{total}} 件",
+    "unavailable": "このメッセージは見つかりません。"
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",
@@ -113,6 +116,7 @@
     "start": "開始する",
     "dismiss": "今回はやめる",
     "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoNote": "ステップが終わると自動で次へ進みます。",
     "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
     "superseded": "更新済み",
     "dismissed": "見送りました",
@@ -171,6 +175,7 @@
     "replyModeAll": "誰でも返信できる",
     "replyModeMentioned": "@ された仲間だけ返信",
     "replyModeNote": "付け加えることがない仲間は発言しません。1 ラウンドは最大 3 周・10 件までで、その後は「議論を続ける」を押すまで待ちます。",
+    "replyModeNoteQueue": "仲間が順番に一人ずつ答え、最初の 5 人は自動で続きます。仲間のメッセージを引用したり、そのスレッドに返信したりしても呼び出せます。",
     "replyModeSaveFailed": "返信の設定を保存できませんでした。もう一度お試しください",
     "delete": "グループチャットを削除",
     "deleteNote": "削除されるのはこのグループチャットとそのメッセージだけです。仲間本人、その記憶、個別のチャットには影響しません。",

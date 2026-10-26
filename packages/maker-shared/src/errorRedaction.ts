@@ -224,6 +224,7 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'DEVICE_LINK_BUSY',
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+  'DEVICE_LINK_MEDIA_ACCESS_DENIED',
   'AUTO_REVIEW_UNAVAILABLE',
   'AUTO_REVIEW_CONFIRM_UNDELIVERED',
   'MCP_APPROVAL_AUTO_BLOCKED',
@@ -241,4 +242,13 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
     return null;
   }
   return { code: match[1], fallback: match[2] || message };
+}
+
+/** Resending unchanged content cannot fix these explicit configuration failures. */
+export function requiresAgentErrorConfigurationChange(message: string): boolean {
+  const code = parseAgentErrorCode(message)?.code;
+  return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
+    || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
+    || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
+    || code === 'DEVICE_LINK_CONTROL_DISABLED';
 }

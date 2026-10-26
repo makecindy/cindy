@@ -179,6 +179,11 @@ export function createCompanionMirror(deps: {
   latestRows: (sessionId: string, limit: number) => Promise<CompanionMirrorRow[]>;
   /** Uploads the owner's attachments so other devices can open them; absent keeps name placeholders. */
   uploadMedia?: CompanionMediaUpload;
+  /**
+   * The files a companion reply refers to (generated media, files in its work folder) that go to
+   * the room with it; given the reply's visible text. Absent keeps replies text only.
+   */
+  replyAttachments?: (botId: string, sessionId: string, row: CompanionMirrorRow, text: string) => Promise<CompanionMirrorAttachment[]>;
   log?: CompanionLog;
 }) {
   async function ensureRoom(botId: string, actorId: string, name: string): Promise<string> {
@@ -213,7 +218,13 @@ export function createCompanionMirror(deps: {
       // address form) keeps its name in the text, as before.
       const media: Array<{ type: string; mediaId?: string; caption?: string }> = [];
       const uploaded: string[] = [];
-      for (const file of deps.uploadMedia ? mirrorAttachments(row) : []) {
+      // A reply's files are found from what it says; a failure to look is not a reason to stop mirroring.
+      const replyFiles = row.role === 'assistant' && deps.uploadMedia && deps.replyAttachments
+        ? await deps.replyAttachments(botId, sessionId, row, mirrorMessageText(row, { placeholders: false }) ?? '').catch((error: unknown) => {
+          deps.log?.warn('Companion reply files could not be listed', { code: errorCode(error) });
+          return [];
+        }) : [];
+      for (const file of deps.uploadMedia ? [...mirrorAttachments(row), ...replyFiles] : []) {
         if (file.size > MIRROR_ATTACHMENT_MAX_BYTES) continue;
         try { media.push(...await deps.uploadMedia!(roomId, sourceId, [file], authorId)); uploaded.push(file.name); }
         catch (error) {

@@ -791,6 +791,22 @@ describe('Bot settings unified autosave', () => {
       capabilities: expect.objectContaining({ memory: true }),
     });
   });
+
+  it('edits what the teammate knows about its owner on the memory page and saves it as userContextSource', async () => {
+    vi.useFakeTimers();
+    Object.assign(window.electronAPI, {
+      localDb: { ...window.electronAPI.localDb, bots: { memory: { list: vi.fn(async () => []) } } },
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.memory.aboutMe' }), {
+      target: { value: 'Prefers tea' },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toEqual({ userContextSource: 'Prefers tea' });
+  });
 });
 
 

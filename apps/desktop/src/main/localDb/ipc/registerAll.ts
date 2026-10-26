@@ -2,6 +2,7 @@ import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
 import { registerRoutineRemoteResources } from '../../routines/remote.js';
 import { registerRoutinesIpc } from '../../routines/service.js';
+import { registerNightlyLearningIpc } from '../../routines/nightlyLearningIpc.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -11,7 +12,8 @@ import { registerRoutinesIpc } from '../../routines/service.js';
  * lifecycle 统一编排（避免与 feishuBot.dispose 等其它清理 race）。
  */
 
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
+import path from 'node:path';
 
 import { closeDb, ensureReady, getCurrentUserId } from '../index';
 import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
@@ -45,6 +47,9 @@ import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/s
 import { reconcileGeneratedImageRecovery } from '../../cindy-media/generatedImageRecovery';
 import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock';
+import { LOCAL_DATA_OWNER_ID } from '../../appSessionState';
+import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
+import { isUiMockDataEnabled, seedUiMockData } from '../uiMockSeed';
 
 const log = createLogger('registerAll');
 const MEDIA_REF_COMPENSATION_BUSY_RETRY_MS = 12_000;
@@ -97,6 +102,8 @@ export interface RegisterLocalDbIpcOpts {
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /** Apply a persisted task-level context window budget to the live runtime. */
+  applyContextWindowBudget?: RegisterSessionIpcOpts['applyContextWindowBudget'];
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
   withSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /**
@@ -140,6 +147,22 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
         tryGetDbClient() === client &&
         getCurrentDbClientUserId() === userId &&
         (opts.isOwnerCurrent?.(userId) ?? true);
+      if (isUiMockDataEnabled() && userId === LOCAL_DATA_OWNER_ID) {
+        // Dev `--mock` sandbox: seed before the renderer lists tasks. Never block startup.
+        try {
+          const added = await seedUiMockData({
+            db: client.drizzle,
+            projectRoot: path.join(app.getPath('userData'), 'ui-mock', 'projects'),
+            dialogueDir: ensureDialogueWorkspaceDir,
+          });
+          log.info('ui mock data seeded', { added });
+        } catch (error) {
+          log.warn('ui mock data seed failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (!isReadyOwnerCurrent()) return;
+      }
       // Resume saved invitations after the database and account boundary are ready.
       await recoverActiveTeammateInvitations();
       if (!isReadyOwnerCurrent()) return;
@@ -237,6 +260,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerSessionIpc(getCurrentDbClientUserId, {
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
+    applyContextWindowBudget: opts.applyContextWindowBudget,
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
@@ -244,6 +268,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerBotIpc();
   registerCompanionImport();
   registerRoutinesIpc();
+  registerNightlyLearningIpc();
   registerRoutineRemoteResources(botRemoteManagement);
   registerBotRemoteResourceProvider(botRemoteManagement);
   registerSessionImportIpc();

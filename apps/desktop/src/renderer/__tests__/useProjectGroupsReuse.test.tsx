@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 import { memo } from 'react';
+import type { ProjectAliasesByDevice } from '@cindy/maker-shared/project-alias-sync';
 import { cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import { useProjectGroups } from '@/features/cc-agent/hooks/useProjectGroups';
 import { sessionCardVisualCases } from '@/features/cc-agent/sidebar/__fixtures__/sessionCardVisualCases';
 
-const state = vi.hoisted(() => ({ hosts: [] as unknown[], bots: [] as unknown[] }));
+const state = vi.hoisted(() => ({ hosts: [] as unknown[], bots: [] as unknown[], aliases: new Map() as ProjectAliasesByDevice }));
 vi.mock('@/hooks/useRemoteSshHosts', () => ({ useRemoteSshHosts: () => state.hosts }));
 vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => state.bots }));
-afterEach(cleanup);
+vi.mock('@/features/device-link/remoteProjectAliases', () => ({ remoteProjectAliases: {
+  subscribe: () => () => {}, getSnapshot: () => state.aliases,
+} }));
+afterEach(() => { cleanup(); state.aliases = new Map(); });
 const sessions = Array.from({ length: 1000 }, (_, i) => ({
   ...sessionCardVisualCases[0].session,
   id: `task-${i}`,
@@ -18,6 +22,21 @@ const sessions = Array.from({ length: 1000 }, (_, i) => ({
 }));
 
 describe('project grouping hook references', () => {
+  it('keeps the complete alias identity across filtered hook projections', () => {
+    state.aliases = new Map([['device', { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Host alias' }] }]]);
+    const local = { ...sessions[0], id: 'local', deviceLinkDeviceId: 'device', workingDir: '/repo', remoteHostId: null };
+    const ssh = { ...local, id: 'ssh', remoteHostId: 'ssh-a' };
+    const visible = [local];
+    const { result, rerender } = renderHook(({ members }) => useProjectGroups(visible, undefined, false, undefined, '', undefined, members), {
+      initialProps: { members: [local, ssh] },
+    });
+    expect(result.current.projects[0].displayName).toBe('repo');
+    expect(result.current.projects[0].sessions).toEqual(visible);
+    rerender({ members: [local] });
+    expect(result.current.projects[0].displayName).toBe('Host alias');
+    expect(result.current.projects[0].sessions).toEqual(visible);
+  });
+
   it('updates one project and one row on a timestamp patch; selection updates two rows', () => {
     let rowRenders = 0;
     const Row = memo(({ session, active }: { session: Session; active: boolean }) => {

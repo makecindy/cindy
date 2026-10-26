@@ -10,7 +10,7 @@
 >
 > 〔wave4 段历史部分作废（2026-07-24 目录整编标注）〕：本段原钉死的画布落码方案——页面底消费 `var(--surface)`、两层 `#F70121` 渐变代码复现、`--login-window-border-outer/-inner` token——已被后续实现与实机走查推翻。**现行结论**：画布底走 `--login-bg-base` 双态（亮 `#F2F2ED` / 暗 `#181818`，2026-10-01 起与 CINDY 皮肤页底同值；此前为 `#EDEDED` / `#1F1F1E`）,两模式**纯平**,`--login-bg-gradient-radial/-linear` 仅保留 override 锚、值恒 `none`,window-border token 已删除。现行权威 = `DESIGN.md §16.1 / §16.5` 与 `apps/desktop/src/renderer/themes/colors.ts`;本段与本表任何段落均**不再**对冲突拥有优先级,冲突一律以 `DESIGN.md §16` 为准。
 >
-> **⚠ wave5 增补（2026-07-24,组件库更新,权威 = `figma-component-spec §11`）**：(a) **hover 统一「叠白变亮」口径**——全按钮族 hover = normal 底叠 `rgba(255,255,255,0.08/0.1)`（深底 8% / 浅底 10%;唯一例外 `back` 亮色 hover 维持既有白 70%）,旧「白底钮 hover 叠黑」方向作废;pressed 叠黑分档含例外：深底强调钮 50%（`log_in_button`、`light_button_highlight`,不论尺寸）/ `Dark_button_Normal` 20% / 浅底钮 10% / 行类 8%——**落码逐组件对拍 `figma-component-spec §11.1`,不按类别名推断**;hover / pressed 叠层统一由 `--login-overlay-*` 二态 token 组承载（`DESIGN.md §16.5` 已采纳）,禁止新增字面 rgba 叠层;〔落码状态〕本口径当前仅文档层生效,as-built 组件仍消费改判前旧叠层值,同步随暗色实现 PR 的 overlay token 化落地（`DESIGN.md §16.5(1)`）。(b) 新组件 **radiobutton**（协议勾选）与**双色模式小按钮**（服务条款弹窗）带来的新色值决策已补入 §3 表尾;对应 token 建议随游客登录 / 协议 UI 实现 PR 注册,不提前占位。
+> **⚠ wave5 增补（2026-07-24,组件库更新,权威 = `DESIGN.md §16.5` 状态矩阵；原 `figma-component-spec §11` 已于 2026-10-23 移除，其现行内容已迁入该矩阵，追史见提交 `70b32d7578`）**：(a) **hover 统一「叠白变亮」口径**——全按钮族 hover = normal 底叠 `rgba(255,255,255,0.08/0.1)`（深底 8% / 浅底 10%;唯一例外 `back` 亮色 hover 维持既有白 70%）,旧「白底钮 hover 叠黑」方向作废;pressed 叠黑分档含例外：深底强调钮 50%（`log_in_button`、`light_button_highlight`,不论尺寸）/ `Dark_button_Normal` 20% / 浅底钮 10% / 行类 8%——**落码逐组件对拍 `DESIGN.md §16.5` 状态矩阵,不按类别名推断**;hover / pressed 叠层统一由 `--login-overlay-*` 二态 token 组承载（`DESIGN.md §16.5` 已采纳）,禁止新增字面 rgba 叠层;〔落码状态〕本口径当前仅文档层生效,as-built 组件仍消费改判前旧叠层值,同步随暗色实现 PR 的 overlay token 化落地（`DESIGN.md §16.5(1)`）。(b) 新组件 **radiobutton**（协议勾选）与**双色模式小按钮**（服务条款弹窗）带来的新色值决策已补入 §3 表尾;对应 token 建议随游客登录 / 协议 UI 实现 PR 注册,不提前占位。
 
 ## 1. 现有主题体系结论〔2026-07 决策时点快照,现状以 `colors.ts` 为准〕
 
@@ -42,7 +42,7 @@
 | `#2a2828` | 主按钮 / 社交按钮背景、active 边框、Dark 回调页面底、Dark CTA 文本 | 新增别名分语义 | `login-primary-button-bg`、`login-control-border-active`、`login-inverted-button-text`、`login-result-page-bg` dark、`login-link-text` | `#2a2828`，HSL `0 2.4% 16.1%` | 全主题保持；CINDY dark `surface` 同值但语义不同 |
 | `#434343` | 主按钮 / 社交按钮边框、Dark 回调卡片边框 | 新增 | `login-primary-button-border`、`login-panel-border` dark | `#434343`，HSL `0 0% 26.3%` | 全主题保持；可由 CINDY dark `border-default` 提供但 login alias 更稳 |
 | `#252222` | 标题、输入已填文本 | 新增 | `login-title-text`、`login-control-text` | `#252222`，HSL `0 4.2% 13.9%` | 全主题保持；不复用 `text-primary`，因为 default light 是 `#262626`、CINDY light 是 `#3c3f43` |
-| `#6f6f6f` | 副标题、回调正文、**「跳过登录」文字按钮**（2026-07-27 新增消费点） | 新增 | `login-secondary-text` | `#6f6f6f`，HSL `0 0% 43.5%`；light / dark **同值** | 全主题保持；CINDY dark `text-secondary` 同值，light 不同。**「跳过登录」文字按钮走本 token、不走 `login-link-*` 族**（文字按钮 ≠ 文字链接：不做 hover / pressed 变色），故本次改版**零新增颜色 token** |
+| `#6f6f6f` | 副标题、回调正文、**「跳过登录」文字按钮**（2026-07-27 新增消费点） | 新增 | `login-secondary-text` | `#6f6f6f`，HSL `0 0% 43.5%`；light / dark **同值** | 〔2026-10-23 改判：Desktop 改为墨水次要档 黑 56% / 白 55%，与主界面 `text-secondary` 同值，见 `DESIGN.md §16.1`；Mobile 暂保留 `#6f6f6f`〕。**「跳过登录」文字按钮走本 token、不走 `login-link-*` 族**（文字按钮 ≠ 文字链接：不做 hover / pressed 变色），故本次改版**零新增颜色 token** |
 | `#ffffff` | Global 文字、返回按钮边框、Dark 回调按钮边框、状态栏变量 | 语义豁免或 alias | `login-inverted-button-border`；Global text 可用 `login-inverted-button-border` 或 dedicated constant | `#ffffff`，HSL `0 0% 100%` | 白色在这些场景是设计稿固定高对比值；不走 `surface-elevated`，避免主题污染 |
 | `#d91f37` | 错误原因文字 | 复用现有名并改默认 / override | `login-error-text` / existing component alias | 建议把旧 `login-error-text` 从 `error-flat(#ef4444)` 调整为 `#d91f37`，HSL `352.3 75% 48.6%` | 全主题保持；错误色是登录设计稿专用，不应和通用 destructive 混同 |
 | `#b4b4b4` | disabled 按钮边框 | 新增 | `login-control-border-disabled` / component alias | `#b4b4b4`，HSL `0 0% 70.6%` | 全主题保持 |
@@ -54,8 +54,8 @@
 | `#f1f0f1` | radiobutton 浅色圈底 / 暗模式选中底（wave5,`600:626`/`602:1093`）;亦为 wave4 帧底色 | 新增（随协议 UI 实现 PR 注册） | 建议 `login-radio-bg` / component alias（light `#f1f0f1`,dark 槽按 §16.1 口径核验后填） | `#f1f0f1` | 全主题保持；帧底色语义已由 `--login-bg-base` 承载,不复用本 token |
 | `#434141` | 暗色模式普通小按钮底（wave5,`602:1294`） | 新增（随协议弹窗 / 小按钮 PR 注册） | 建议 `login-dialog-secondary-bg` dark 槽 / component alias | dark `#434141`（light 槽 `#eeeeee` 对应 `light_button_Normal`） | 全主题保持 |
 | `#565454` | 暗色模式普通小按钮描边（wave5,`602:1294`） | 新增（随协议弹窗 / 小按钮 PR 注册） | 建议 `login-dialog-secondary-border` dark 槽 / component alias | dark `#565454`（light 槽 `#ffffff`） | 全主题保持 |
-| `rgba(255,255,255,0.08)` / `rgba(255,255,255,0.1)` | hover 变亮叠层：深底 8% / 浅底 10%（wave5 统一口径,含 white_button 由黑 5% 改判;例外：`back` 亮色 hover 维持既有 `rgba(255,255,255,0.7)`,沿 `247:1637`） | 新增 | `--login-overlay-hover-*` 二态 token 组（`DESIGN.md §16.5` 已采纳命名族） | 逐组件对拍 `figma-component-spec §11.1`,不按深浅归纳直取 | 全主题保持；组件内禁止字面 rgba |
-| `rgba(0,0,0,0.08/0.1/0.2/0.5)` | pressed 叠层四档：行类 8% / 浅底钮 10% / `Dark_button_Normal` 20% / 深底强调钮 50%（`log_in_button`、`light_button_highlight`,不论尺寸） | 新增 | `--login-overlay-pressed-*` 二态 token 组 | 逐组件对拍 `figma-component-spec §11.1` 档位表 | 全主题保持 |
+| `rgba(255,255,255,0.08)` / `rgba(255,255,255,0.1)` | hover 变亮叠层：深底 8% / 浅底 10%（wave5 统一口径,含 white_button 由黑 5% 改判;例外：`back` 亮色 hover 维持既有 `rgba(255,255,255,0.7)`,沿 `247:1637`） | 新增 | `--login-overlay-hover-*` 二态 token 组（`DESIGN.md §16.5` 已采纳命名族） | 逐组件对拍 `DESIGN.md §16.5` 状态矩阵,不按深浅归纳直取 | 全主题保持；组件内禁止字面 rgba |
+| `rgba(0,0,0,0.08/0.1/0.2/0.5)` | pressed 叠层四档：行类 8% / 浅底钮 10% / `Dark_button_Normal` 20% / 深底强调钮 50%（`log_in_button`、`light_button_highlight`,不论尺寸） | 新增 | `--login-overlay-pressed-*` 二态 token 组 | 逐组件对拍 `DESIGN.md §16.5` 状态矩阵的档位 | 全主题保持 |
 
 ## 4. 尺寸决策表
 
@@ -160,7 +160,7 @@ export const loginColors = {
 - 国际区移动 `347:2857` 当前占位文案是手机号 + 国家区号，和桌面国际区邮箱登录不一致。实现前需要设计确认是节点误配还是国际区移动确实走手机号。
 - 回调页 dark/white 是浏览器页面自身主题，不一定等于 app 当前主题；实现时要保留强制 preview 能力。
 - disabled 按钮的 `rgba(255,255,255,0.7)` 需要 token 化，否则会违反「不硬编码 rgba」规则。
-- ~~如果后续新增 hover / pressed Figma 状态，应优先复用 `login-brand-bg-pressed` / `login-primary-button-bg`，不要把 hover 写成临时 hex。~~〔已关闭(wave5 2026-07-24)：hover / pressed 状态已全量补齐并统一为「hover 叠白变亮 / pressed 叠黑」，叠层走 `--login-overlay-*` 二态 token 组，见 §3 表尾与 `figma-component-spec §11.1`；`login-brand-bg-pressed` 仅保留品牌红 accent 按压语义，不作 hover 兜底。〕
+- ~~如果后续新增 hover / pressed Figma 状态，应优先复用 `login-brand-bg-pressed` / `login-primary-button-bg`，不要把 hover 写成临时 hex。~~〔已关闭(wave5 2026-07-24)：hover / pressed 状态已全量补齐并统一为「hover 叠白变亮 / pressed 叠黑」，叠层走 `--login-overlay-*` 二态 token 组，见 §3 表尾与 `DESIGN.md §16.5` 状态矩阵；`login-brand-bg-pressed` 仅保留品牌红 accent 按压语义，不作 hover 兜底。〕
 
 ## 9. 2026-08 Cindy 皮肤色阶改版(暖象牙 + 中性近黑)
 

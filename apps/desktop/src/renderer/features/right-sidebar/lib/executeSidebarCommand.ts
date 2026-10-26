@@ -30,7 +30,9 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     return;
   }
   if (command.type === 'open-plugin-task') {
-    await openPluginTaskTab(command.sessionId, command.instanceId, { userInitiated: false });
+    await openPluginTaskTab(command.sessionId, command.instanceId, {
+      userInitiated: command.userInitiated === true,
+    });
     return;
   }
   if (command.type === 'open-routines-tab') {

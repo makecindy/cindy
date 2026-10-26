@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendedMessageKeys,
   buildMessageActionBarPresentation,
   countMessageRenderItemDiffs,
   isToolErrorLike,
@@ -19,6 +20,23 @@ import type {
   MessageRenderToolGroupItem,
   MessageRenderWorkGroupItem,
 } from '../messageRender';
+
+// Message entrance timing regression: visible arrivals, not the reply's creation timestamp,
+// decide motion. Existing presentation tests did not cover history/acknowledgement transitions.
+// Unit: the same classifier is consumed by Desktop and Mobile's real message lists.
+describe('appendedMessageKeys', () => {
+  it.each([
+    [undefined, ['recent-history'], []],
+    [[], ['first-send'], ['first-send']],
+    [['user'], ['user', 'slow-final-reply'], ['slow-final-reply']],
+    [['pending'], ['pending'], []],
+    [['user', 'reply'], ['older', 'user', 'reply'], []],
+    [['user', 'reply'], ['older', 'user', 'reply', 'next'], ['next']],
+    [['user', 'reply'], ['another-window'], []],
+  ] as const)('keeps history and stable identities still (%j → %j)', (before, after, expected) => {
+    expect([...appendedMessageKeys(before, after)]).toEqual(expected);
+  });
+});
 
 type TestMessage = MessageRenderNormalizedMessage<MessageRenderSourceMessageLike> & {
   diff?: unknown;

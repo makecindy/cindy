@@ -21,6 +21,7 @@ import {
   clampFontSize,
   clampUiFontSize,
   DEFAULT_CODE_FONT_SIZE,
+  DEFAULT_TERMINAL_FONT_SIZE,
   DEFAULT_UI_FONT_SIZE,
   useFontSettings,
 } from '@/hooks/useFontSettings';
@@ -46,6 +47,11 @@ import {
   SETTINGS_SECTION_TITLE_CLASS,
 } from './settingsRowClasses';
 import { WallpaperSection } from './WallpaperSection';
+import {
+  APPEARANCE_LIMITS,
+  clampAppearanceTerminalSize,
+  DEFAULT_TERMINAL_FONT_FAMILY,
+} from '../../../shared/appearanceSettings';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -86,6 +92,19 @@ const CODE_FONT_PRESETS: FontPreset[] = [
   {
     id: 'default',
     labelKey: 'settings.appearance.font.presetsCode.default',
+    family: '',
+  },
+  {
+    id: 'jetbrainsMono',
+    labelKey: 'settings.appearance.font.presetsCode.jetbrainsMono',
+    family: '"JetBrains Mono Variable", "JetBrains Mono"',
+  },
+];
+
+const TERMINAL_FONT_PRESETS: FontPreset[] = [
+  {
+    id: 'default',
+    labelKey: 'settings.appearance.font.presetsTerminal.default',
     family: '',
   },
   {
@@ -403,14 +422,20 @@ export function AppearanceSection() {
     codeFamily,
     uiSize,
     codeSize,
+    terminalFamily,
+    terminalSize,
     setUiFamily,
     setCodeFamily,
     setUiSize,
     setCodeSize,
+    setTerminalFamily,
+    setTerminalSize,
     resetUiFamily,
     resetCodeFamily,
     resetUiSize,
     resetCodeSize,
+    resetTerminalFamily,
+    resetTerminalSize,
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
@@ -418,6 +443,7 @@ export function AppearanceSection() {
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
   const [codeSizeInput, setCodeSizeInput] = useState(String(codeSize));
+  const [terminalSizeInput, setTerminalSizeInput] = useState(String(terminalSize));
   const families = useMemo(() => getThemeFamilies(), [localThemesVersion]);
   const selectedFamily = families.find((f) => f.id === familyId) ?? families[0];
 
@@ -432,6 +458,10 @@ export function AppearanceSection() {
   useEffect(() => {
     setCodeSizeInput(String(codeSize));
   }, [codeSize]);
+
+  useEffect(() => {
+    setTerminalSizeInput(String(terminalSize));
+  }, [terminalSize]);
 
   useEffect(
     () =>
@@ -561,6 +591,18 @@ export function AppearanceSection() {
     }
     setCodeSizeInput(String(codeSize));
   }, [codeSize, codeSizeInput, setCodeSize]);
+
+  const commitTerminalSizeInput = useCallback(() => {
+    const trimmed = terminalSizeInput.trim();
+    const next = Number(terminalSizeInput);
+    if (trimmed !== '' && Number.isFinite(next)) {
+      const normalized = clampAppearanceTerminalSize(next);
+      setTerminalSize(normalized);
+      setTerminalSizeInput(String(normalized));
+      return;
+    }
+    setTerminalSizeInput(String(terminalSize));
+  }, [terminalSize, terminalSizeInput, setTerminalSize]);
 
   const commitUiSizeInput = useCallback(() => {
     const trimmed = uiSizeInput.trim();
@@ -889,6 +931,91 @@ export function AppearanceSection() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       commitCodeSizeInput();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  className={cn(
+                    'h-9 w-[72px] rounded-xl border px-3 text-right text-13 outline-none',
+                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+                    'font-mono text-[var(--settings-input-text)]',
+                    'focus:border-[var(--settings-input-border-focus)]',
+                  )}
+                />
+              </div>
+            </div>
+
+            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+
+            <div
+              id="settings-search-settings-appearance-font-terminalFamily-label"
+              className="px-4 py-4"
+            >
+              <FontFamilyPicker
+                label={t('settings.appearance.font.terminalFamily.label')}
+                description={t('settings.appearance.font.terminalFamily.description')}
+                ariaLabel={t('settings.appearance.font.terminalFamily.aria')}
+                value={terminalFamily}
+                presets={TERMINAL_FONT_PRESETS}
+                previewSample={t('settings.appearance.font.previewSamples.terminal')}
+                previewFallbackFamily={DEFAULT_TERMINAL_FONT_FAMILY}
+                onChange={setTerminalFamily}
+                onReset={resetTerminalFamily}
+              />
+            </div>
+
+            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+
+            <div className="flex flex-col gap-3 px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p
+                    id="settings-search-settings-appearance-font-terminalSize-label"
+                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+                    style={{ letterSpacing: '0.12px' }}
+                  >
+                    {t('settings.appearance.font.terminalSize.label')}
+                  </p>
+                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
+                    {t('settings.appearance.font.terminalSize.description')}
+                  </p>
+                </div>
+                <Tip text={t('settings.appearance.font.reset')}>
+                  <Button
+                    variant="secondary"
+                    className="w-8 px-0"
+                    type="button"
+                    aria-label={t('settings.appearance.font.reset')}
+                    onClick={resetTerminalSize}
+                    disabled={terminalSize === DEFAULT_TERMINAL_FONT_SIZE}
+                  >
+                    <RotateCcw size={14} />
+                  </Button>
+                </Tip>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <Slider
+                  min={APPEARANCE_LIMITS.terminalSize.min}
+                  max={APPEARANCE_LIMITS.terminalSize.max}
+                  step={1}
+                  value={[terminalSize]}
+                  onValueChange={([next]) => {
+                    if (typeof next === 'number') setTerminalSize(next);
+                  }}
+                  aria-label={t('settings.appearance.font.terminalSize.aria')}
+                />
+                <input
+                  type="number"
+                  aria-label={t('settings.appearance.font.terminalSize.label')}
+                  min={APPEARANCE_LIMITS.terminalSize.min}
+                  max={APPEARANCE_LIMITS.terminalSize.max}
+                  step={1}
+                  value={terminalSizeInput}
+                  onChange={(e) => setTerminalSizeInput(e.target.value)}
+                  onBlur={commitTerminalSizeInput}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      commitTerminalSizeInput();
                       e.currentTarget.blur();
                     }
                   }}

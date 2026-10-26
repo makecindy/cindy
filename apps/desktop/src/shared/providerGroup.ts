@@ -58,6 +58,8 @@ export interface ProviderGroupMember {
 }
 
 export interface ProviderGroupConfig {
+  /** Subscription-only speed policy. Absent preserves the existing allowed default. */
+  allowFast?: boolean;
   strategy: ProviderGroupStrategy;
   /** 组内电脑失败时自动换一台继续，默认开启。 */
   autoSwitch: boolean;
@@ -190,6 +192,8 @@ export interface ProviderGroupReshareSummary {
 }
 
 export interface ProviderGroupView {
+  /** Some executors have not confirmed this group's subscription speed policy yet. */
+  fastPolicyPending?: boolean;
   providerId: string;
   /** null = 还没有组。 */
   config: ProviderGroupConfig | null;
@@ -383,7 +387,8 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
     members.push(member);
   }
   if (members.length === 0) return null;
-  return { strategy, autoSwitch: value.autoSwitch !== false, members };
+  return { strategy, autoSwitch: value.autoSwitch !== false, members,
+    ...(typeof value.allowFast === 'boolean' ? { allowFast: value.allowFast } : {}) };
 }
 
 // ─── 同账号电脑之间(`maker:provider:list` 的 `group` 字段与 `provider-group:remote` 通道) ─────
@@ -393,6 +398,7 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
  * 组员的坐标是组所在电脑视角(`local` = 组所在电脑自己)。并发上限与权重只在组所在电脑上生效，不外发。
  */
 export interface ProviderGroupWireSummary {
+  allowFast?: boolean;
   strategy: ProviderGroupStrategy;
   autoSwitch: boolean;
   members: Array<Pick<ProviderGroupMember,
@@ -401,6 +407,7 @@ export interface ProviderGroupWireSummary {
 
 export function providerGroupSummaryForWire(config: ProviderGroupConfig): ProviderGroupWireSummary {
   return {
+    ...(config.allowFast !== undefined ? { allowFast: config.allowFast } : {}),
     strategy: config.strategy,
     autoSwitch: config.autoSwitch,
     members: config.members.map((m) => ({
@@ -754,5 +761,6 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       ...(fiveHourTight ? { fiveHourTight: true as const } : {}),
     }];
   });
-  return { providerId: groupProviderId, config, members, ...(model ? { model } : {}) };
+  return { providerId: groupProviderId, config, members, ...(model ? { model } : {}),
+    ...(value.fastPolicyPending === true ? { fastPolicyPending: true } : {}) };
 }

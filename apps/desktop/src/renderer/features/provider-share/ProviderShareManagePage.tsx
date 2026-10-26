@@ -1,4 +1,5 @@
 import { ProviderShareVisibilitySection } from './ProviderShareVisibilitySection';
+import { SubscriptionFastSetting } from './SubscriptionFastSetting';
 import { RemoteModelAccessSection, RemoteModelAccessDialog } from './RemoteModelAccessSection';
 import { RemoteAgentLimitsSection } from './RemoteAgentLimitsSection';
 /**
@@ -506,10 +507,12 @@ export function ProviderShareManagePage({
         </section>
       )}
 
+      {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}
       <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <ProviderGroupSection
         providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}
+        fastPolicySupported={Boolean(providerForApproval?.subscriptionFastPolicy)}
         initialConfig={initialGroup} remoteProvider={remoteProvider} onConfigChange={setRemoteGroup}
       />
 

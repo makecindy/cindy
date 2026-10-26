@@ -193,6 +193,8 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   'learn:event',
   // 被控端项目手动顺序变化:无 sessionId,并入 sessions topic 随设备列表订阅到达。
   'sidebar-settings:project-order-changed',
+  // Project aliases invalidate a device-level display snapshot, without a sessionId.
+  'local-db:project-aliases:changed',
   // Claude 订阅账号余量快照(账号级,无 sessionId):控制端打开远程订阅会话时 chip
   // 据此实时刷新;并入 sessions topic 随设备列表订阅到达,低频(签名去抖 + 节流)。
   'usage:claude-subscription-changed',

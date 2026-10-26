@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 
@@ -39,7 +39,7 @@ describe('useAskUserDictation', () => {
     vi.unstubAllGlobals();
   });
 
-  it('writes the submitted transcript into the answer and applies an unedited refinement', async () => {
+  it.each(['done', 'error'] as const)('keeps the final text and reports terminal %s to the submitter', async (terminal) => {
     let onEvent: ((event: VoiceInputRendererEvent) => void) | undefined;
     let text = '已有';
     const setText = vi.fn((value: string) => { text = value; });
@@ -71,32 +71,45 @@ describe('useAskUserDictation', () => {
       focus: () => undefined,
     }));
 
-    expect(hook.result.current.start()).toBe(true);
+    act(() => expect(hook.result.current.start()).toBe(true));
     await waitFor(() => expect(onEvent).toBeTypeOf('function'));
-    onEvent?.({
+    act(() => onEvent?.({
       type: 'draft',
       runId: 'run-1',
       text: '补充',
       source: 'partial',
       segment: { id: 'seg-1', text: '补充', source: 'partial', status: 'partial', updatedAt: 1 },
-    } as unknown as VoiceInputRendererEvent);
+    } as unknown as VoiceInputRendererEvent));
     await waitFor(() => expect(hook.result.current.liveText).toBe('已有补充'));
 
-    onEvent?.({
+    act(() => onEvent?.({
       type: 'submitted',
       runId: 'run-1',
       text: '补充',
       segment: { id: 'seg-1', text: '补充', basedOnText: '补充', source: 'stable', status: 'final', updatedAt: 2 },
-    } as unknown as VoiceInputRendererEvent);
+    } as unknown as VoiceInputRendererEvent));
     await waitFor(() => expect(setText).toHaveBeenCalledWith('已有补充'));
 
-    onEvent?.({
+    // #6785, unit: an IPC acknowledgement alone is not a completed answer.
+    // The final refinement may arrive later; submit must await the terminal event.
+    let completed = false;
+    let stopping!: Promise<boolean>;
+    await act(async () => {
+      stopping = hook.result.current.stop().then((ok) => { completed = true; return ok; });
+    });
+    expect(completed).toBe(false);
+
+    act(() => onEvent?.({
       type: 'refined',
       runId: 'run-1',
       text: '补充说明',
       segment: { id: 'seg-1', text: '补充说明', basedOnText: '补充', source: 'stable', status: 'final', updatedAt: 3 },
       range: { segmentIds: ['seg-1'], start: 2, end: 4 },
-    } as unknown as VoiceInputRendererEvent);
+    } as unknown as VoiceInputRendererEvent));
     await waitFor(() => expect(text).toBe('已有补充说明'));
+    expect(completed).toBe(false);
+    act(() => onEvent?.({ type: 'state', runId: 'run-1', state: terminal } as VoiceInputRendererEvent));
+    await expect(stopping).resolves.toBe(terminal === 'done');
+    expect(text).toBe('已有补充说明');
   });
 });

@@ -9,6 +9,7 @@ import {
   clampAppearanceWallpaperVisibility,
   clampAppearanceWallpaperBlur,
   clampAppearanceCodeSize,
+  clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
   type AppearanceOverrides,
@@ -184,6 +185,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'codeFamily',
     'uiSize',
     'codeSize',
+    'terminalFamily',
+    'terminalSize',
     'windowZoom',
     'wallpaperId',
     'wallpaperOverlay',
@@ -197,6 +200,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
   const patch: AppearanceOverrides = {};
   if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
   if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
+  if ('terminalFamily' in raw)
+    patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)
     patch.uiSize = parseNumber(
       raw.uiSize,
@@ -210,6 +215,13 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
       'codeSize',
       clampAppearanceCodeSize,
       APPEARANCE_LIMITS.codeSize,
+    );
+  if ('terminalSize' in raw)
+    patch.terminalSize = parseNumber(
+      raw.terminalSize,
+      'terminalSize',
+      clampAppearanceTerminalSize,
+      APPEARANCE_LIMITS.terminalSize,
     );
   if ('windowZoom' in raw) {
     patch.windowZoom = parseNumber(

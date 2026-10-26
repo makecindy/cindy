@@ -398,6 +398,24 @@ describe('isAutoReviewUnavailableNotice', () => {
   });
 });
 
+describe('host evidence guard', () => {
+  // A risk-first reviewer would call an unseen patch "low risk"; the Host blocks it first.
+  it('blocks a file change without concrete paths before asking the model', async () => {
+    const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const decision = await resolveAutoReviewDecision({
+      agentKind: 'codex', model: 'm', userIntent: '修复当前项目的类型错误。', workspaceRoots: roots, platform: 'linux',
+      action: toolAutoReviewAction('file_change', { grantRoot: null, reason: 'edit files' }),
+    }, delegate);
+    expect(decision).toMatchObject({ verdict: 'block' });
+    expect(delegate).not.toHaveBeenCalled();
+    const withPaths = await resolveAutoReviewDecision({
+      agentKind: 'codex', model: 'm', userIntent: '修复当前项目的类型错误。', workspaceRoots: roots, platform: 'linux',
+      action: toolAutoReviewAction('file_change', { grantRoot: null, changes: [{ path: '/repo/src/a.ts', kind: { type: 'update' } }] }),
+    }, delegate);
+    expect(withPaths).toMatchObject({ verdict: 'allow' });
+  });
+});
+
 describe('annotatePermissionRequestForUnavailableReview', () => {
   it('marks the confirmation card as an auto-review handoff without re-reviewing', () => {
     const annotated = annotatePermissionRequestForUnavailableReview({

@@ -144,6 +144,45 @@ export function resolveBotGroupMentions(
   return { all, botIds };
 }
 
+export interface BotGroupRelayStep {
+  botId: string;
+  task: string;
+}
+
+/** Words that join one step to the next (「，然后 @B」); they belong to neither step's task. */
+const STEP_CONNECTOR = /(?:然后|接着|随后|之后|最后|再由|再|\b(?:and then|then|next))\s*$/i;
+/** A later step starts on a new line or after sentence / list punctuation. */
+const STEP_BOUNDARY = /(?:^|[\n，,。.;；、→>：:])\s*$/;
+const STEP_EDGE = /^[\s，,。.;；、→>：:\-]+|[\s，,。.;；、→>：:\-]+$/g;
+
+/**
+ * Steps written out in a 分工 request: every `@name` names one teammate and the words after it,
+ * up to the next step, are its task (「@A 出方案，@B 按方案实现，然后 @C 测一遍」).
+ * Returns null unless the whole text reads that way, so anything else goes to the organizer:
+ * a mention inside a sentence (「@A 和 @B 一起做」), an empty task, @所有人 or an ambiguous name
+ * (bot-group-chat.md §7.0). Text before the first step is shared context, not a step.
+ */
+export function splitBotGroupRelaySteps(
+  text: string,
+  input: { members: readonly BotGroupMentionMember[]; allLabels: readonly string[] },
+): BotGroupRelayStep[] | null {
+  const tokens = scanMentionTokens(text, buildLabelEntries(input.members, input.allLabels, []));
+  if (!tokens.length) return null;
+  // An @ that is not a teammate (renamed since it was picked) would drop or garble a step.
+  if (/@\S/.test(text.slice(0, tokens[0]!.start))) return null;
+  const steps: BotGroupRelayStep[] = [];
+  for (const [index, token] of tokens.entries()) {
+    if (token.entry.all || token.entry.botIds.length !== 1) return null;
+    if (index > 0 && !STEP_BOUNDARY.test(text.slice(tokens[index - 1]!.end, token.start).replace(STEP_CONNECTOR, ''))) return null;
+    // A connector only leads into the next step; the last step keeps its words.
+    const span = text.slice(token.end, tokens[index + 1]?.start ?? text.length);
+    const task = (index + 1 < tokens.length ? span.replace(STEP_CONNECTOR, '') : span).replace(STEP_EDGE, '');
+    if (!task || /@\S/.test(task)) return null;
+    steps.push({ botId: token.entry.botIds[0]!, task });
+  }
+  return steps;
+}
+
 /** Move intact picked tokens with a text edit; forget tokens the edit replaces. */
 export function retainBotGroupTrackedMentions(
   previousText: string,

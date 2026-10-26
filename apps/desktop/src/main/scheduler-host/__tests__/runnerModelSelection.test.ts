@@ -545,11 +545,11 @@ describe('MakerScheduleRunner model selection', () => {
       Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });
       const selectedEfforts = effort === 'none' ? [] : ['medium', 'high'];
       const providers = [{
-        id: 'selected', name: 'Selected', connected: true, agents: ['pi'],
+        id: 'selected', name: 'Selected', connected: true, agents: ['pi'], routing: { pi: {} },
         models: { pi: [{ id: 'shared-model', name: 'Shared', efforts: selectedEfforts,
           defaultEffort: effort === 'none' ? null : 'high', supportsFastMode: false }] },
       }, {
-        id: 'other', name: 'Other', connected: true, agents: ['pi'],
+        id: 'other', name: 'Other', connected: true, agents: ['pi'], routing: { pi: {} },
         models: { pi: [{ id: 'shared-model', name: 'Shared', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] },
       }] as unknown as ProviderView[];
       const resolveModelSelection = vi.fn(async (choice) => resolveScheduledModelSelection(choice, providers));
@@ -597,7 +597,7 @@ describe('MakerScheduleRunner model selection', () => {
     it.each(['resolved', 'unavailable'] as const)('creates a fresh remote-agent task on its computer (%s)', async (outcome) => {
       const h = createSessionHarness();
       const remoteProviders = [{
-        id: 'remote-sub', name: 'Remote', connected: true, agents: ['claude-code'],
+        id: 'remote-sub', name: 'Remote', connected: true, agents: ['claude-code'], routing: { 'claude-code': {} },
         models: { 'claude-code': [{ id: 'claude-opus-5-5', name: 'Opus', efforts: ['high'], defaultEffort: 'high' }] },
       }] as unknown as ProviderView[];
       const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0],

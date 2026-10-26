@@ -37,6 +37,7 @@ import {
   parseRemoteAgentReply,
   parseRemoteAgentRequest,
   parseRemoteAgentForkResult,
+  remoteAgentErrorCode,
   type RemoteAgentForkResult,
   type RemoteAgentCaps,
   type RemoteAgentErrorInfo,
@@ -94,6 +95,8 @@ import {
   type RemoteAgentControllerTrust,
 } from './guestIsolation';
 import { createRunTunnel, type RunTunnel, type TunnelHttpRequest, type TunnelHttpResponse } from './tunnel';
+import { hostSessionIdFor } from './sessionIdentity.js';
+export { hostSessionIdFor } from './sessionIdentity.js';
 
 const gunzipAsync = promisify(gunzip);
 
@@ -131,6 +134,7 @@ const STATE_INTERVAL_MS = 2_000;
 const MAX_REMEMBERED_CALLS = 256;
 
 export interface HostedStartInput {
+  groupProviderId?: string;
   kind: RemoteAgentKind;
   /** 本机侧的任务 id(由控制端与任务 id 派生，恢复同一任务时不变)。 */
   hostSessionId: string;
@@ -180,6 +184,7 @@ export interface OwnerProviderRouteBinding {
 }
 
 export interface RemoteAgentHostDeps {
+  fastPolicy?(controller: string, command: import('@cindy/device-link').RemoteAgentFastPolicy): Promise<unknown>;
   /** Prepare native bytes; retain recovery ownership only for receipted controllers. */
   prepareImageEvent?(hostSessionId: string, event: AgentEvent, upstream: GeneratedImageUpstream | undefined, retainForRecovery: boolean): Promise<AgentEvent>;
   imageArtifacts?(hostSessionId: string, request: Extract<RemoteAgentRequest, { op: 'images' }>): Promise<unknown>;
@@ -299,6 +304,7 @@ export type GroupRelayPlan =
   | { kind: 'unavailable' };
 
 export interface RemoteAgentGroupRelayDeps {
+  bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; relay?: string }): Promise<void>;
   /**
    * 受邀者的新任务该交给谁；这个供应商没有组返回 null(照常在本机运行)。`reserve`：选中的同一步就计入那台的负载
    * (返回的 `load`)，同时来的几个任务不会全落到同一台；只是问问有没有能接的电脑时不预占。
@@ -369,6 +375,7 @@ interface PendingReverse {
 }
 
 interface Run {
+  groupProviderId?: string;
   id: string;
   controller: string;
   trust: RemoteAgentControllerTrust;
@@ -507,10 +514,6 @@ export function remoteAgentErrorInfo(error: unknown): RemoteAgentErrorInfo {
 }
 
 /** 本机侧的任务 id：控制端设备 + 控制端任务 id 派生，避免与本机自己的任务撞 id。 */
-export function hostSessionIdFor(controller: string, sessionId: string): string {
-  const hex = createHash('sha256').update(`${controller}\0${sessionId}`).digest('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
 
 function safeCall<T>(fn: (() => T) | undefined): T | undefined {
   if (!fn) return undefined;
@@ -1319,6 +1322,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           : undefined);
       }
       const handle = await deps.startHosted({
+        ...(run.groupProviderId ? { groupProviderId: run.groupProviderId } : {}),
         kind: run.kind,
         hostSessionId,
         shadowDir,
@@ -1808,6 +1812,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (run.hostSessionId) await recordRelayDevice(run.controller, run.hostSessionId, current.agentDeviceId);
         if (run.closing) return;
         openSent = true;
+        await deps.groupRelay?.bindFastPolicy?.({ group: groupProviderId, deviceId: current.agentDeviceId,
+          sessionId: relaySessionIdFor(run.controller, payload.sessionId), relay: relayKeyFor(run.controller) });
+        if (run.closing) return;
         const started = await backend.client.open(run.kind, relayedOpenPayload(run, payload, current));
         if (run.closing) {
           await backend.client.close('close', 'navigation').catch(() => undefined);
@@ -2338,6 +2345,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const request = parseRemoteAgentRequest(raw);
     if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
     switch (request.op) {
+      case 'fast-policy':
+        if (!deps.fastPolicy) fail('REMOTE_AGENT_UNSUPPORTED', 'subscription Fast policy is not supported');
+        return deps.fastPolicy!(controller, request);
       case 'fork': {
         const owner = deps.captureOwner();
         const controllerTrust = trustOf(controller);
@@ -2386,29 +2396,54 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               reshareKey: reshareKeyForGuest(controller),
             }]));
           } catch (error) {
+            // 受邀者只看到中性错误；原始原因只记在本机，组主人排查时才有据可查。
+            deps.log?.warn('remote agent: a computer in the provider group could not fork the shared task', {
+              to: member.agentDeviceId,
+              error: remoteAgentErrorInfo(error),
+            });
             const safe = relayErrorForGuest(relayErrorInfoFrom(error)) ?? RELAY_UNAVAILABLE_ERROR;
             fail(safe.code, safe.message);
           }
         } else {
-          if (!deps.forkHosted || !deps.isAgentAvailable(request.agentKind)) {
+          if (!deps.forkHosted) {
             fail('REMOTE_AGENT_PEER_TOO_OLD', 'update Cindy on the computer running this task to fork it');
+          }
+          if (!deps.isAgentAvailable(request.agentKind)) {
+            // 经供应商组转来的受邀者看不到组内电脑，也装不了它的 Agent：回位置类错误，组所在电脑(含旧版)统一成「暂时不可用」。
+            if (request.relay) fail('REMOTE_AGENT_UNAVAILABLE', 'the computer running this task is not available right now');
+            fail('REMOTE_AGENT_UNSUPPORTED', 'this agent is not available on the computer running this task');
           }
           const workingDir = path.join(shadowSessionRoot(controller, hostSessionId), 'fs', 'workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
           // Idle runs may have released their shadow workspace; native history is retained.
           const native = await withShadowLock(hostSessionId, async () => {
             await fsp.mkdir(workingDir, { recursive: true });
             assertProvider();
-            return deps.forkHosted!(request.agentKind, {
-              sourceSdkSessionId: request.sourceSdkSessionId,
-              model: request.model,
-              providerId: providerId ?? request.providerId,
-              upToMessageId: request.upToMessageId,
-              lastTurnId: request.lastTurnId,
-              tailTurnsToDrop: request.tailTurnsToDrop,
-              forkAtTimestampMs: request.forkAtTimestampMs,
-              workingDir,
-              ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
-            });
+            try {
+              return await deps.forkHosted!(request.agentKind, {
+                sourceSdkSessionId: request.sourceSdkSessionId,
+                model: request.model,
+                providerId: providerId ?? request.providerId,
+                upToMessageId: request.upToMessageId,
+                lastTurnId: request.lastTurnId,
+                tailTurnsToDrop: request.tailTurnsToDrop,
+                forkAtTimestampMs: request.forkAtTimestampMs,
+                workingDir,
+                ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
+              });
+            } catch (error) {
+              if (error instanceof Error && /^\[REMOTE_AGENT_[A-Z_]+\]/.test(error.message)) throw error;
+              // Agent 自己的分叉失败不是「电脑连不上」：给专门的码，组转发也不会把它换成「暂时不可用」。
+              // 原始报错可能带本机路径，只记本机日志。
+              deps.log?.warn('remote agent: native fork failed', {
+                agentKind: request.agentKind,
+                error: remoteAgentErrorInfo(error),
+              });
+              // 包在 Agent 报错里的远程 Agent 码(如 CodexForkError 的 cause)保留下来，正文换成中性说明。
+              // 新错误码只回给声明认识它的控制端(provider-groups.md §14)，旧控制端照旧收到 UNAVAILABLE。
+              const nested = error instanceof Error ? remoteAgentErrorCode(error.message) : null;
+              fail(nested ?? (request.acceptsForkFailed ? 'REMOTE_AGENT_FORK_FAILED' : 'REMOTE_AGENT_UNAVAILABLE'),
+                'the conversation could not be forked on the computer running this task');
+            }
           });
           result = {
             newSdkSessionId: native.newSdkSessionId,
@@ -2435,6 +2470,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const guest = trustOf(controller) === 'guest';
         const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
         const caps: RemoteAgentCaps = {
+          ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const } : {}),
           version: REMOTE_AGENT_VERSION,
           agents: (['claude-code', 'codex', 'pi'] as const).map((kind) => ({
             kind,
@@ -2601,6 +2637,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           throw error;
         }
         const run: Run = {
+          // Routing hints prevent group loops; they are not permission to skip
+          // this executor's policy. Direct and relayed guests inherit its local
+          // group restriction even when the caller says it was already assigned.
+          ...(trust === 'guest' && deps.groupRelay && providerId ? { groupProviderId: providerId } : {}),
           id: request.runId,
           authorizedModel: payload.options.model,
           acceptsImageDeliveryReceipts: payload.acceptsImageDeliveryReceipts === true,

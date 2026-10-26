@@ -128,10 +128,23 @@ const group = (
   childItems,
 });
 
+function containerPreview() {
+  return document.querySelector('[data-live-work-preview]')?.parentElement?.parentElement;
+}
+
 function clickGroup(label: string) {
   const button = screen.getByText(label).closest('button');
   if (!button) throw new Error(`Missing work-group button: ${label}`);
   fireEvent.click(button);
+  // The outgoing preview now retains its rows until its height transition ends.
+  // Finish that real production lifecycle event instead of counting both the
+  // exiting preview and expanded details, or waiting on a wall-clock fallback.
+  for (const preview of document.querySelectorAll('[data-live-work-preview]')) {
+    const body = preview.parentElement;
+    if (body?.getAttribute('aria-hidden') === 'true') {
+      fireEvent.transitionEnd(body.parentElement!, { propertyName: 'height' });
+    }
+  }
 }
 
 // #6351: production grouping feeds the real disclosure/Collapse/state store.
@@ -191,24 +204,30 @@ describe('failed sampling work-group disclosure (#6351)', () => {
         message('intro', 'assistant', 'Accepted introduction'),
         message('final', 'assistant', 'Successful welcome', { turnCompleted: true })];
       view.rerender(samplingTimeline(completed, false));
-      // The same failed group retains its explicit audit expansion. Accepted
-      // multi-message prose is outside it and remains visible when it closes.
-      expect(screen.getByTestId('work-f1').textContent).toContain('First failed welcome');
-      expect(screen.getByTestId('work-f1').textContent).not.toContain('Successful welcome');
-      fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      // Explicit commentary joins the completed summary; the inner failed group
+      // retains its audit expansion when that new outer summary is opened.
+      const completedWork = screen.getByTestId(ending === 'same-turn success' ? 'work-summary-f1' : 'work-f1');
+      if (ending === 'same-turn success') fireEvent.click(completedWork.querySelector('button')!);
+      expect(completedWork.textContent).toContain('First failed welcome');
+      expect(completedWork.textContent).not.toContain('Successful welcome');
+      fireEvent.click(completedWork.querySelector('button')!);
       expect(screen.queryByText('First failed welcome')).toBeNull();
       expect(screen.queryByText('Second failed welcome')).toBeNull();
-      expect(screen.getByText('Accepted commentary')).toBeTruthy();
+      expect(screen.queryByText('Accepted commentary')).toBeNull();
       expect(screen.getByText('Accepted introduction')).toBeTruthy();
       expect(screen.getByText('Successful welcome')).toBeTruthy();
       if (ending === 'stopped then manual recovery') {
         expect(screen.getByText('Reply stopped')).toBeTruthy();
         expect(screen.getByText('Continue')).toBeTruthy();
       }
-      fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      fireEvent.click(completedWork.querySelector('button')!);
       expect(screen.getByText('First failed welcome')).toBeTruthy();
       expect(screen.getByText('Second failed welcome')).toBeTruthy();
       expect(screen.getByText('Successful welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        fireEvent.click(screen.getByTestId('work-summary-commentary').querySelector('button')!);
+      }
+      expect(screen.getByText('Accepted commentary')).toBeTruthy();
     });
 
   it('keeps equal failed prose on each side of steering independently auditable', () => {
@@ -222,15 +241,18 @@ describe('failed sampling work-group disclosure (#6351)', () => {
     ], false));
     expect(screen.queryAllByText('Repeated failed welcome')).toHaveLength(0);
     expect(screen.getByText('Include the new direction')).toBeTruthy();
-    expect(screen.getByText('Accepted commentary')).toBeTruthy();
+    expect(screen.queryByText('Accepted commentary')).toBeNull();
     expect(screen.getByText('Successful steered welcome')).toBeTruthy();
     const first = screen.getByTestId('work-f1');
-    const second = screen.getByTestId('work-f2');
+    const second = screen.getByTestId('work-summary-f2');
+    fireEvent.click(second.querySelector('button')!);
+    expect(screen.getByText('Accepted commentary')).toBeTruthy();
     fireEvent.click(first.querySelector('button')!);
     expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
     expect(first.textContent).toContain('Repeated failed welcome');
     expect(second.textContent).not.toContain('Repeated failed welcome');
-    fireEvent.click(second.querySelector('button')!);
+    // The summary's second disclosure is the independently retained failed sample.
+    fireEvent.click(second.querySelectorAll('button')[1]);
     expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(2);
     fireEvent.click(first.querySelector('button')!);
     expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
@@ -480,6 +502,8 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     const doneButton = screen.getByText('chat.workGroup.worked:12s').closest('button');
     expect(doneButton?.hasAttribute('disabled')).toBe(false);
     expect(doneButton?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
+    const outgoing = containerPreview();
+    if (outgoing) fireEvent.transitionEnd(outgoing, { propertyName: 'height' });
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:12s');
     expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
@@ -792,14 +816,17 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     expect(screen.queryByTestId('assistant-progress')).toBeNull();
     // The detail body is already open, so the handoff below swaps rows without replaying its expansion.
-    const body = container.querySelector('.grid');
+    const body = container.querySelector('[data-live-work-preview]')?.parentElement?.parentElement?.nextElementSibling;
     expect(body).not.toBeNull();
 
     rerender(createElement(WorkGroupBlock, {
       ...props, deferred: { ...deferred(lines), awaitingDetails: false },
     }));
+    const exiting = containerPreview();
+    if (exiting) fireEvent.transitionEnd(exiting, { propertyName: 'height' });
     expect(container.querySelector('[data-live-work-preview]')).toBeNull();
-    expect(container.querySelector('.grid')).toBe(body);
+    expect(body?.isConnected).toBe(true);
+    expect(body?.contains(screen.getByTestId('assistant-progress'))).toBe(true);
     expect(screen.getByTestId('assistant-progress').textContent).toBe('Every detail row');
   });
 

@@ -4,15 +4,25 @@
  */
 
 let currentId: string | null = null;
+// Retain the last submitted draft's placement until the next draft replaces it.
+// A list response can still contain its pre-send row after navigation completes.
+// This is only a grouping hint, never an editable-draft identity or a sent receipt.
+let projectId: string | null = null;
 const listeners = new Set<() => void>();
 
 export function getProvisionalDraftTaskId(): string | null {
   return currentId;
 }
 
-export function setProvisionalDraftTaskId(id: string | null): void {
-  if (currentId === id) return;
+export function getProvisionalDraftProjectTaskId(): string | null {
+  return projectId;
+}
+
+export function setProvisionalDraftTaskId(id: string | null, keepProjectPlacement = false): void {
+  const nextProjectId = keepProjectPlacement ? projectId : id;
+  if (currentId === id && projectId === nextProjectId) return;
   currentId = id;
+  projectId = nextProjectId;
   for (const listener of listeners) listener();
 }
 

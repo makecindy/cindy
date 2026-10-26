@@ -436,8 +436,9 @@ function normalizeRemoteCollectionItem(
   const display = normalizeRemoteDisplay(item?.display);
   const revision = boundedString(item?.revision, 1_024);
   if (!item || !ref || ref.collectionId !== collectionId || !display || !revision) return null;
+  // A teammate row carries a link per open task it follows (the desktop sends at most 200).
   const links = Array.isArray(item.links)
-    ? item.links.slice(0, 64).flatMap((link) => {
+    ? item.links.slice(0, 256).flatMap((link) => {
         const normalized = normalizeRemoteLink(link);
         return normalized ? [normalized] : [];
       })
@@ -474,6 +475,7 @@ export interface HostedRemoteCollectionItem {
   item: RemoteCollectionItem;
   /** Local direct Chat Server projection; never changes the device-link wire display. */
   lastReplySequence?: string;
+  chatUnread?: { count: number; mentioned: boolean; threadCount: number; threadMentioned: boolean };
   /** Authorized server identities for direct group rows; display only, never cached as permissions. */
   groupMembers?: readonly Pick<BotGroupMemberView, 'botId' | 'name' | 'avatar' | 'avatarUrl' | 'avatarColor'>[];
 }

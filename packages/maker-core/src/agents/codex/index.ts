@@ -114,7 +114,7 @@ import {
 } from '../shared/review-read-scope.js';
 import { REVIEW_READ_TOOLS, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
 import {
-  annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewConfirmUndeliveredNotice,
@@ -1263,6 +1263,13 @@ const CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
  * deadline，不会因为后续的 `2/5`、`3/5` 提示重新计时。
  */
 const CODEX_RECONNECT_STALL_TIMEOUT_MS = RETRY_ESCALATION_MAX_ELAPSED_MS;
+
+/**
+ * WebSocket 重试用尽后 Codex 改走 HTTPS 时推的 `warning`。之后要先上传完整历史才有事件,
+ * 慢网下可达数分钟,不再属于重连序列:清掉重连 deadline,由 Codex 自身 HTTP 超时与
+ * upstream-idle 看门狗兜底。
+ */
+const CODEX_HTTPS_FALLBACK_WARNING_PREFIX = 'Falling back from WebSockets to HTTPS transport';
 
 /** 只含空白、格式字符或控制字符的 text delta 不算重连已经恢复。 */
 const CODEX_INVISIBLE_TEXT_PATTERN = /[\s\p{Cf}\p{Cc}]/gu;
@@ -3784,13 +3791,18 @@ assertRouteCurrent();
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
-    const liveUsageSnapshot = () => attachLiveGeneration(usageTracker.snapshot(), {
-      tokenSpeed: translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined,
-      outputTokens: usageTracker.getTurnUsage().output,
-      durationMs: translatorRt.generationOutputDurationMs,
-      openStartedAt: translatorRt.generationStartedAt,
-      reliable: translatorRt.generationTimingReliable,
-    });
+    const liveUsageSnapshot = () => {
+      const speed = translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined;
+      return attachLiveGeneration(usageTracker.snapshot(), {
+        tokenSpeed: speed,
+        // Legacy clients use these fields: they must share the speed snapshot's
+        // measured numerator/denominator, never the billing ledger's lifetime.
+        outputTokens: speed?.tokens ?? translatorRt.generationOutputTokens,
+        durationMs: speed?.elapsedMs ?? 0,
+        openStartedAt: translatorRt.generationStartedAt,
+        reliable: speed !== undefined,
+      });
+    };
     /**
      * 本 turn 用于**目录查找**的模型 id, 在构造 turnParams 时快照(取 mutableCatalogModel,
      * 不是送上游的 wire 值 —— 见该变量注释)。
@@ -3802,6 +3814,15 @@ assertRouteCurrent();
      */
     let activeTurnModel: string | undefined = opts.model;
     let activeTurnContextLimit = this.deps.resolveModelContextLimit?.(opts.providerId, opts.model) ?? null;
+    /**
+     * 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+     * 优先于模型级上限/目录默认；host 在预算变化时直接触发重建，不走热切。
+     */
+    let mutableContextWindowBudget: number | null =
+      typeof opts.contextWindowBudget === 'number' && Number.isSafeInteger(opts.contextWindowBudget)
+      && opts.contextWindowBudget > 0
+        ? opts.contextWindowBudget
+        : null;
     /**
      * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
      *
@@ -5037,8 +5058,17 @@ assertRouteCurrent();
     // plan_review requestId 去重序号 (同一 turn 理论上只有一个 plan item, 防御性加序号)。
     let planReviewSeq = 0;
     // Undefined preserves app-server defaults; null selects standard; strings select a speed tier.
-    let mutableServiceTier: ServiceTier | null | undefined =
+    let requestedServiceTier: ServiceTier | null | undefined =
       opts.fastMode === undefined ? undefined : opts.fastMode === 'ultrafast' ? 'ultrafast' : opts.fastMode ? 'fast' : null;
+    // Read at every native request boundary, including resume, retries and autonomous continuations.
+    const serviceTierState = {
+      get value(): ServiceTier | null | undefined {
+        return opts.fastModePolicy?.isAllowed() === false ? null : requestedServiceTier;
+      },
+      set value(tier: ServiceTier | null | undefined) {
+        requestedServiceTier = opts.fastModePolicy?.isAllowed() === false ? null : tier;
+      },
+    };
     // Older async thread start/resume responses must not overwrite a newer
     // Fast mode choice made while the request was in flight.
     let serviceTierMutationGeneration = 0;
@@ -5068,7 +5098,7 @@ assertRouteCurrent();
       ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     let initialCustomContextWindow = !reviewMode
-      ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      ? mutableContextWindowBudget ?? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const customContextCatalogIdentity = (
       model: string,
@@ -5086,14 +5116,17 @@ assertRouteCurrent();
     let usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
     const resolveModelSwitchCatalogIdentity = async (
       newModel: string,
-      setOpts?: { providerId?: string | null },
+      setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
     ): Promise<string | null> => {
       const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : mutableProviderId;
+      const nextBudget = setOpts?.contextWindowBudget !== undefined
+        ? setOpts.contextWindowBudget
+        : mutableContextWindowBudget;
       const contextWindow = reviewMode
         ? null
-        : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
+        : nextBudget ?? await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
       return customContextCatalogIdentity(newModel, contextWindow);
     };
     const modelSwitchRequiresRebuild = async (
@@ -6020,6 +6053,10 @@ assertRouteCurrent();
       if (descendantThreadId === threadId || descendantMcpThreadIds.has(descendantThreadId)) return;
       descendantMcpThreadIds.add(descendantThreadId);
       registerCodexMcpContext(descendantThreadId, 'descendant');
+      if (opts.fastModePolicy?.isAllowed() === false) {
+        void host.request(Method.ThreadSettingsUpdate, { threadId: descendantThreadId, serviceTier: null })
+          .catch(error => log.warn('descendant standard-mode update failed', { error: String(error) }));
+      }
     };
     const unregisterDescendantCodexMcpContexts = (): void => {
       for (const descendantThreadId of descendantMcpThreadIds) {
@@ -6500,6 +6537,8 @@ assertRouteCurrent();
 
     let customProviderThreadConfig: Record<string, unknown> = {};
     const currentContextLimit = (): number | null => {
+      // 任务级预算优先：本任务的工作窗口由用户显式选定，host 已收敛到目录上限内。
+      if (mutableContextWindowBudget !== null) return mutableContextWindowBudget;
       const limit = this.deps.resolveModelContextLimit?.(mutableProviderId, mutableCatalogModel ?? mutableModel);
       return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
     };
@@ -7162,7 +7201,7 @@ assertRouteCurrent();
         ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-        ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+        ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
         ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
       };
       acquireHostBindingLeaseIfNeeded();
@@ -7179,7 +7218,7 @@ assertRouteCurrent();
         });
       assertCurrentHost('thread/start');
       if (Object.hasOwn(resp, 'serviceTier')) {
-        mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+        serviceTierState.value = normalizeServiceTier(resp.serviceTier) ?? null;
       }
       if (mutableModel === 'gpt-5' && resp.model) {
         mutableModel = resp.model;
@@ -7205,7 +7244,7 @@ assertRouteCurrent();
         threadId,
         model: resp.model,
         modelProvider: codexThreadModelProviderId ?? null,
-        serviceTier: mutableServiceTier ?? null,
+        serviceTier: serviceTierState.value ?? null,
       });
     };
 
@@ -7228,25 +7267,25 @@ assertRouteCurrent();
      * 返回入队任务的 promise (链已 catch, 永不 reject), 调用方可 await 到本次发送完成。
      */
     let settingsUpdateChain: Promise<void> = Promise.resolve();
-    const pushThreadSettings = (patch: Omit<ThreadSettingsUpdateParams, 'threadId'>): Promise<void> => {
+    const pushThreadSettings = (patch: Omit<ThreadSettingsUpdateParams, 'threadId'>, requireApplied = false): Promise<void> => {
       if (!threadId || closed) return Promise.resolve();
       const run = settingsUpdateChain.then(async () => {
         if (!threadId || closed) return; // 排到队头时再校验一次 (期间可能已 close)
         if (skipIfStaleHost('thread/settings/update')) return;
         try {
-          await host.request<ThreadSettingsUpdateResponse>(Method.ThreadSettingsUpdate, {
-            threadId,
-            ...patch,
-          });
+          const effectivePatch = opts.fastModePolicy?.isAllowed() === false ? { ...patch, serviceTier: null } : patch;
+          await Promise.all([threadId, ...(requireApplied ? descendantMcpThreadIds : [])].map(id =>
+            host.request<ThreadSettingsUpdateResponse>(Method.ThreadSettingsUpdate, { threadId: id, ...effectivePatch })));
         } catch (e) {
           log.warn('thread/settings/update failed (turn/start carry remains fallback)', {
             threadId,
             patchKeys: Object.keys(patch),
             error: e instanceof Error ? e.message : String(e),
           });
+          if (requireApplied) throw e;
         }
       });
-      settingsUpdateChain = run;
+      settingsUpdateChain = run.catch(() => undefined);
       return run;
     };
     if (hosted && hostedEnvironmentId) {
@@ -7295,7 +7334,7 @@ assertRouteCurrent();
         ...currentThreadWorkspaceConfig(),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-        ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+        ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
         ...(shouldSendNativeDeveloperInstructions
           ? { developerInstructions }
           : {}),
@@ -7337,7 +7376,7 @@ assertRouteCurrent();
         }
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
-          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+          serviceTierState.value = normalizeServiceTier(resp.serviceTier) ?? null;
         }
         if (mutableModel === 'gpt-5' && resp.model) {
           mutableModel = resp.model;
@@ -7404,7 +7443,7 @@ assertRouteCurrent();
           threadId,
           model: resp.model,
           modelProvider: codexThreadModelProviderId ?? null,
-          serviceTier: mutableServiceTier ?? null,
+          serviceTier: serviceTierState.value ?? null,
         });
       } catch (e) {
         if (!startup.threadDispatched && (e instanceof CodexRouteSelectionChangedError || startup.signal.aborted)) throw e;
@@ -7613,7 +7652,7 @@ assertRouteCurrent();
             ...(!retainHistory && sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
             ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-            ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+            ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
             ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
           }, options)),
           onLateResolve: async (lateResp) => {
@@ -7644,7 +7683,7 @@ assertRouteCurrent();
           Object.hasOwn(resp, 'serviceTier') &&
           replacementServiceTierGeneration === serviceTierMutationGeneration
         ) {
-          mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+          serviceTierState.value = normalizeServiceTier(resp.serviceTier) ?? null;
         }
         if (retainHistory && resp.modelProvider !== localSummaryProvider) {
           await unsubscribeDetachedThread(nextThreadId, 'summary fallback identity mismatch', false);
@@ -7684,7 +7723,7 @@ assertRouteCurrent();
             // setFastMode() updated the old thread while thread/start was
             // pending. turn/start still carries the current value; reapply the
             // sticky thread setting without blocking dispatch.
-            void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+            void pushThreadSettings({ serviceTier: serviceTierState.value ?? null });
           }
         }
         if (hostUsesCodexProxy) {
@@ -7754,7 +7793,7 @@ assertRouteCurrent();
                 ...resumeThreadWorkspaceConfig,
                 ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+                ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
               }, options),
             });
           } catch (e) {
@@ -7769,9 +7808,9 @@ assertRouteCurrent();
             Object.hasOwn(resp, 'serviceTier') &&
             resumeServiceTierGeneration === serviceTierMutationGeneration
           ) {
-            mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+            serviceTierState.value = normalizeServiceTier(resp.serviceTier) ?? null;
           } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
-            void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+            void pushThreadSettings({ serviceTier: serviceTierState.value ?? null });
           }
           codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
           workspacePermissionProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
@@ -7811,7 +7850,7 @@ assertRouteCurrent();
                 ...workspaceConfig,
                 ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+                ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
                 ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
               }, options),
               onLateResolve: async () => {
@@ -8302,9 +8341,9 @@ assertRouteCurrent();
             if (decision.unavailable) {
               autoReviewUnavailableNotice.notify();
               unavailableHandoff = true;
-              if (approvalRequest.kind === 'permission') {
-                approvalRequest = annotatePermissionRequestForUnavailableReview(approvalRequest);
-              }
+            }
+            if (approvalRequest.kind === 'permission') {
+              approvalRequest = annotatePermissionRequestForAutoReview(approvalRequest, decision);
             }
             forcePrompt = true;
           }
@@ -8717,7 +8756,7 @@ assertRouteCurrent();
         }
       }
 
-      resetCodexGenerationTiming(translatorRt);
+      resetCodexGenerationTiming(translatorRt, true);
       turnDiffSnapshots.clear();
       translatorRt.samplingSegments.clear();
       proposedPlanText = null;
@@ -8891,7 +8930,7 @@ assertRouteCurrent();
         const stalledTurnGeneration = reconnectStallTurnGeneration;
         const allowPendingTurnStart = !isTurnInFlight;
         const stalledMessage =
-          `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+          `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
           'without making progress; the turn was interrupted automatically. ' +
           'You can send the next message to continue.';
         const emitStalled = (reason: string, message: string): void => {
@@ -11176,7 +11215,8 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
-      const generationDurationMs = codexGenerationDurationMs(translatorRt);
+      const generationDurationMs = translatorRt.tokenSpeed.isSegmentComplete()
+        ? codexGenerationDurationMs(translatorRt) : undefined;
       const codexDoneUsage = {
         promptTokens: realTurnUsage.input,
         completionTokens: realTurnUsage.output,
@@ -11218,8 +11258,8 @@ assertRouteCurrent();
         startedAt: turn.startedAt ?? null,
         completedAt: turn.completedAt ?? null,
         durationMs: turn.durationMs ?? null,
-        serviceTier: mutableServiceTier ?? null,
-        fastMode: fastModeFromServiceTier(mutableServiceTier),
+        serviceTier: serviceTierState.value ?? null,
+        fastMode: fastModeFromServiceTier(serviceTierState.value),
         // 本 turn 增量 (来自最近一次 thread/tokenUsage/updated 的 last)
         inputTokens: lastTurnTokenUsage?.inputTokens ?? null,
         cachedInputTokens: lastTurnTokenUsage?.cachedInputTokens ?? null,
@@ -11401,13 +11441,7 @@ assertRouteCurrent();
           type: 'status',
           data: {
             status: 'Done',
-            ...attachLiveGeneration(endSnap, {
-              tokenSpeed: translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined,
-              outputTokens: realTurnUsage.output,
-              durationMs: translatorRt.generationOutputDurationMs,
-              openStartedAt: null,
-              reliable: translatorRt.generationTimingReliable,
-            }),
+            ...liveUsageSnapshot(),
             isRunning: false,
           },
           source: 'codex',
@@ -12394,8 +12428,8 @@ assertRouteCurrent();
           model: mutableModel,
           effort: mutableEffort,
           permissionMode: mutablePermissionMode,
-          serviceTier: mutableServiceTier ?? null,
-          fastMode: fastModeFromServiceTier(mutableServiceTier),
+          serviceTier: serviceTierState.value ?? null,
+          fastMode: fastModeFromServiceTier(serviceTierState.value),
         });
       },
       tokenUsageUpdated: (params) => {
@@ -12455,22 +12489,23 @@ assertRouteCurrent();
               inputTokens: totalInput,
               outputTokens: last.outputTokens ?? 0,
               cacheReadTokens: cached,
-            }) ?? ((turnServiceTier !== undefined ? turnServiceTier : mutableServiceTier) === 'ultrafast'
+            }) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
               ? 'ultrafast'
-              : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : mutableServiceTier)
+              : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value)
                 ? 'priority'
                 : 'standard'),
           });
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
           if (last.outputTokens > 0) {
+            translatorRt.generationOutputTokens += last.outputTokens;
             translatorRt.generationOutputDurationMs = sampleGenerationDuration(
               translatorRt.generationDurationMs,
               translatorRt.generationStartedAt,
             );
             if (translatorRt.generationTimingReliable) {
               translatorRt.tokenSpeed.recordUsage(
-                usageTracker.getTurnUsage().output,
+                translatorRt.generationOutputTokens,
                 translatorRt.generationOutputDurationMs,
               );
             } else {
@@ -12830,9 +12865,9 @@ assertRouteCurrent();
         // 时 server 会把它降级, 这里第一时间感知, getFastMode() 立刻反映正确值, 不必等
         // 某个 turn 的响应推断。通知恒带完整 ThreadSettings, 故 serviceTier 总是 present。
         const s = params.threadSettings;
-        const before = mutableServiceTier ?? null;
+        const before = serviceTierState.value ?? null;
         const beforeModel = mutableModel;
-        mutableServiceTier = normalizeServiceTier(s.serviceTier) ?? null;
+        serviceTierState.value = normalizeServiceTier(s.serviceTier) ?? null;
         // 只对齐 wire 值: server 会把请求 id 规范化(`gpt-5.4` → `gpt-5.4-codex`),那个变体
         // 目录里没有。**刻意不动 mutableCatalogModel** —— 否则窗口上限会因为查不到目录条目
         // 而停止收敛(见该变量注释)。
@@ -12843,12 +12878,12 @@ assertRouteCurrent();
         // ReasoningEffort 的 'none' 不属于 Effort; 排除后其余值都是合法 Effort, 无需 cast。
         // A server default must not replace an explicit no-effort session choice.
         if (mutableEffort && s.effort && s.effort !== 'none') mutableEffort = s.effort;
-        if (before !== (mutableServiceTier ?? null)) {
+        if (before !== (serviceTierState.value ?? null)) {
           log.debug('thread/settings/updated reconciled serviceTier', {
             threadId: params.threadId,
             from: before,
-            to: mutableServiceTier ?? null,
-            fastMode: fastModeFromServiceTier(mutableServiceTier),
+            to: serviceTierState.value ?? null,
+            fastMode: fastModeFromServiceTier(serviceTierState.value),
           });
         }
       },
@@ -12871,6 +12906,12 @@ assertRouteCurrent();
         // The completed review carries the actionable denial/timeout details. Keep the
         // warning for diagnostics to avoid rendering a duplicate error card.
         log.warn('Codex Guardian warning', { threadId: params.threadId, message: params.message });
+      },
+      warning: (params) => {
+        if (params.message.startsWith(CODEX_HTTPS_FALLBACK_WARNING_PREFIX)) {
+          log.info('codex fell back to HTTPS transport; reconnect deadline cleared', { threadId });
+          clearReconnectStall();
+        }
       },
       error: (params) => {
         // buffered turn 的 error (含终态) 同样进队列等对账 (greptile R11 P1 +
@@ -13315,12 +13356,13 @@ assertRouteCurrent();
         // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
         const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
+        if (!isContinuation) translatorRt.tokenSpeed.reset();
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
           model: mutableModel,
           effort: mutableEffort,
           permissionMode: mutablePermissionMode,
-          serviceTier: mutableServiceTier ?? null,
+          serviceTier: serviceTierState.value ?? null,
           threadId,
           logTitle: sendOpts?.logTitle,
         });
@@ -13459,7 +13501,7 @@ assertRouteCurrent();
           // (v2.rs:5801-5803 turn/start 的 summary 会 override server config)
           summary: 'auto',
           ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-          ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+          ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
@@ -13596,11 +13638,11 @@ assertRouteCurrent();
               if (startEntry) startEntry.serviceTier = acceptedServiceTier;
               const origin = turnOriginByTurnId.get(resp.turn.id);
               if (origin) origin.serviceTier = acceptedServiceTier;
-              mutableServiceTier = acceptedServiceTier;
+              serviceTierState.value = acceptedServiceTier;
               log.debug('turn/start response serviceTier', {
                 turnId: resp.turn.id,
-                serviceTier: mutableServiceTier,
-                fastMode: fastModeFromServiceTier(mutableServiceTier),
+                serviceTier: serviceTierState.value,
+                fastMode: fastModeFromServiceTier(serviceTierState.value),
                 note: 'serviceTier calibrated before buffered turn replay',
               });
             }
@@ -13866,7 +13908,7 @@ assertRouteCurrent();
                 ...turnThreadWorkspaceConfig,
                 ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
                 ...(resumeModel && resumeModel !== 'gpt-5' ? { model: resumeModel } : {}),
-                ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+                ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
                 ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
               };
               const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams, {
@@ -13883,9 +13925,9 @@ assertRouteCurrent();
                 Object.hasOwn(resumeResp, 'serviceTier') &&
                 resumeServiceTierGeneration === serviceTierMutationGeneration
               ) {
-                mutableServiceTier = normalizeServiceTier(resumeResp.serviceTier) ?? null;
+                serviceTierState.value = normalizeServiceTier(resumeResp.serviceTier) ?? null;
               } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
-                void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
+                void pushThreadSettings({ serviceTier: serviceTierState.value ?? null });
               }
               turnParams.effort = clampEffortForCodex(mutableModel, mutableEffort);
               if (mutableModel && mutableModel !== 'gpt-5') {
@@ -13898,8 +13940,8 @@ assertRouteCurrent();
               activeTurnModel = mutableCatalogModel;
               activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
               activeTurnProviderId = mutableProviderId;
-              if (mutableServiceTier !== undefined) {
-                turnParams.serviceTier = mutableServiceTier ?? null;
+              if (serviceTierState.value !== undefined) {
+                turnParams.serviceTier = serviceTierState.value ?? null;
               } else {
                 delete turnParams.serviceTier;
               }
@@ -14409,8 +14451,14 @@ assertRouteCurrent();
       requiresModelSwitchRebuild: modelSwitchRequiresRebuild,
 
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
-      async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
+      async setModel(
+        newModel: string,
+        setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
+      ) {
         if (reviewMode) return;
+        if (setOpts?.contextWindowBudget !== undefined) {
+          mutableContextWindowBudget = setOpts.contextWindowBudget;
+        }
         if (await modelSwitchRequiresRebuild(newModel, setOpts)) {
           const error = new Error(
             'Codex model switch requires rebuilding the current session handle',
@@ -14640,18 +14688,19 @@ assertRouteCurrent();
       },
 
       async setFastMode(enabled: boolean | 'ultrafast') {
-        if (reviewMode) return;
+        if (reviewMode && opts.fastModePolicy?.isAllowed() !== false) return;
+        if (opts.fastModePolicy?.isAllowed() === false) enabled = false;
         // Compare exact tiers; undefined/null/default all mean standard.
-        if (fastModeFromServiceTier(mutableServiceTier) === enabled) return;
+        if (opts.fastModePolicy?.isAllowed() !== false && fastModeFromServiceTier(serviceTierState.value) === enabled) return;
         const next: ServiceTier | null = enabled === 'ultrafast' ? 'ultrafast' : enabled ? 'fast' : null;
-        log.debug('setFastMode', { from: mutableServiceTier ?? null, to: next });
+        log.debug('setFastMode', { from: serviceTierState.value ?? null, to: next });
         serviceTierMutationGeneration += 1;
-        mutableServiceTier = next;
+        serviceTierState.value = next;
         // thread 已启动 → 立即经 thread/settings/update 生效 (serviceTier 双 Option:
         // 'fast'=开 / null=清空 standard); 未启动则由首个 thread/start 携带。server 端
         // 若因模型不支持 fast 而降级, 会经 thread/settings/updated 通知回带, handlers
-        // 里把 mutableServiceTier 对齐到权威值。失败时 turn/start 透传仍是兜底。
-        await pushThreadSettings({ serviceTier: next });
+        // 里把 serviceTierState.value 对齐到权威值。失败时 turn/start 透传仍是兜底。
+        await pushThreadSettings({ serviceTier: next }, opts.fastModePolicy?.isAllowed() === false);
       },
 
       async setVendorOptions(patch: Record<string, unknown>) {
@@ -14668,7 +14717,7 @@ assertRouteCurrent();
       },
 
       getFastMode() {
-        return fastModeFromServiceTier(mutableServiceTier);
+        return fastModeFromServiceTier(serviceTierState.value);
       },
 
       async previewRewindFiles() {
@@ -15084,6 +15133,8 @@ assertRouteCurrent();
     });
     try {
       const guestCodexHome = opts.hostedGuestHome ? path.join(opts.hostedGuestHome, 'codex') : undefined;
+      // 受邀者的 fork 只能走分享的供应商：没有供应商时不退回成普通 host(那会用上本机用户的登录)。
+      if (guestCodexHome && !opts.providerId) throw new Error('shared-provider Codex fork requires the shared provider');
       const forkStorage = guestCodexHome
         ? { historyHome: guestCodexHome, sqliteHome: guestCodexHome }
         : await this.deps.resolveCodexThreadStorage?.(opts.sourceSdkSessionId);
@@ -15117,7 +15168,14 @@ assertRouteCurrent();
               ...(forkAccountId ? { providerId: forkAccountId } : {}),
               ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
               ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
-              ...(guestCodexHome && opts.providerId ? { deviceHostedGuestProviderId: opts.providerId } : {}),
+              // 受邀者的 fork 同样要有独占的、按会话收窄的 proxy。fork 只做 thread/fork 与 rollback、
+              // 不跑 turn：会话 id 用这次 fork 独有、不登记的 key，受邀者守门因此拒绝它经分享供应商发出的
+              // 任何请求，不会借到源任务或其他受邀者的授权。
+              ...(guestCodexHome && opts.providerId ? {
+                deviceHostedGuestProviderId: opts.providerId,
+                deviceHostedGuestSessionId: forkBaseHostKey,
+                deviceHostedGuestModelIds: opts.model ? [opts.model] : [],
+              } : {}),
               routeIsCurrent: selection.isCurrent,
               routeSignal: forkRouteSignal,
               ...(selection.policy === 'isolated' ? { localAuthPolicy: selection.policy } : {}),

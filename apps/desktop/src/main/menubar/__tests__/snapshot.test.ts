@@ -103,17 +103,21 @@ describe('buildMenubarView', () => {
     expect(view.sources[0].fill).toBeCloseTo(0.6);
   });
 
-  it('shows an organization quota with its reset and sends it to Settings', () => {
+  // Unit: the public view builder must keep monthly quota while hiding disabled
+  // daily limits; undefined is the pre-switch gateway contract.
+  it.each([true, false, undefined])('shows quota details for dailyLimitEnabled=%s', (dailyLimitEnabled) => {
     const quota: MenubarSourceInput = {
       kind: 'balance', id: 'cindy', logoSvg: MENUBAR_CINDY_LOGO, available: 19_996.38, fullAmount: 20_000,
-      burnPerDay: null, observedAtMs: NOW, currency: 'USD', quota: { resetsAtMs: NOW + 20 * DAY + 3 * HOUR, todaySpend: 3.62 },
+      burnPerDay: null, observedAtMs: NOW, currency: 'USD', quota: { resetsAtMs: NOW + 20 * DAY + 3 * HOUR, todaySpend: 3.62, dailyLimitEnabled },
     };
     const view = buildMenubarView(input([quota], { locale: 'zh-CN' }));
     expect(view.sources[0]).toMatchObject({ when: '20天3时后重置' });
     expect(view.sources[0].fill).toBeCloseTo(0.9998);
     expect(view.headlinePrimary).toBe('Cindy 本期配额还能用。');
     expect(view.details.cindy).toMatchObject({ title: 'Cindy 本期配额', action: { kind: 'open-settings' } });
-    expect(view.details.cindy.facts).toContainEqual({ label: '今日已用', value: '$3.62', sub: '每日建议 $3,000 以内' });
+    const dailyFact = view.details.cindy.facts.find(fact => fact.label === '今日已用');
+    if (dailyLimitEnabled === false) expect(dailyFact).toBeUndefined();
+    else expect(dailyFact).toEqual({ label: '今日已用', value: '$3.62', sub: '每日建议 $3,000 以内' });
   });
 
   it('splits a wallet into its pools and names the gift that expires first', () => {

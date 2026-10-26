@@ -1,5 +1,50 @@
+diff --git a/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java b/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
+index 80c68034b193a47bedb56ca527352de9548e8ac6..441585ae45b4ec1d9bf42ae21753a5d5f944042f 100644
+--- a/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
++++ b/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
+@@ -2,6 +2,8 @@ package com.reactnativecommunity.webview;
+ 
+ import android.annotation.SuppressLint;
+ import android.graphics.Rect;
++import android.content.Context;
++import android.view.inputmethod.InputMethodManager;
+ import android.net.Uri;
+ import android.text.TextUtils;
+ import android.view.ActionMode;
+@@ -49,6 +51,18 @@ import java.util.Map;
+ import java.util.Set;
+ 
+ public class RNCWebView extends WebView implements LifecycleEventListener {
++    /** Explicit editor focus must attach the IME, not just focus the wrapper view. */
++    public void requestFocusForKeyboard() {
++        requestFocus();
++        // Run after the preceding DOM focus command. Never open an input method
++        // for an ordinary page or a field that was blurred while crossing the bridge.
++        evaluateJavascript("(function(){var e=document.activeElement;return !!e && (e.isContentEditable || ((e.tagName==='INPUT' || e.tagName==='TEXTAREA') && !e.disabled && !e.readOnly));})()", value -> {
++            if (!"true".equals(value) || !hasFocus() || !isAttachedToWindow()) return;
++            InputMethodManager input = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
++            if (input != null) input.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
++        });
++    }
++
+     protected @Nullable
+     String injectedJS;
+     protected @Nullable
+diff --git a/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt b/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
+index f83033b3597a425da159555233bacce250ccfce0..8e91d2a419b8b94e397a24989cad13a3669362af 100644
+--- a/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
++++ b/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
+@@ -344,7 +344,7 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
+           webView.progressChangedFilter.setWaitingForCommandLoadUrl(false)
+           webView.loadUrl(url)
+         }
+-        "requestFocus" -> webView.requestFocus()
++        "requestFocus" -> webView.requestFocusForKeyboard()
+         "clearFormData" -> webView.clearFormData()
+         "clearCache" -> {
+           val includeDiskFiles = args != null && args.getBoolean(0)
 diff --git a/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java b/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
-index 4709e2822499067cef3a4ce571991b96f844e085..11bc92ed798f5830e0abfa3f65a4bc2098248df2 100644
+index 4709e2822499067cef3a4ce571991b96f844e085..8cc2b3bf2a954c95f1612d0ac31d9deff6691b77 100644
 --- a/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
 +++ b/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
 @@ -369,6 +369,10 @@ public class RNCWebViewManager extends ViewGroupManager<RNCWebViewWrapper>
@@ -13,6 +58,15 @@ index 4709e2822499067cef3a4ce571991b96f844e085..11bc92ed798f5830e0abfa3f65a4bc20
      @Override
      public void setContentInsetAdjustmentBehavior(RNCWebViewWrapper view, @Nullable String value) {}
  
+@@ -463,7 +467,7 @@ public class RNCWebViewManager extends ViewGroupManager<RNCWebViewWrapper>
+ 
+   @Override
+   public void requestFocus(RNCWebViewWrapper view) {
+-      view.requestFocus();
++      view.getWebView().requestFocusForKeyboard();
+   }
+ 
+   @Override
 diff --git a/apple/RNCWebView.mm b/apple/RNCWebView.mm
 index c0816b6320820a8586f3735b7971790cac8704fa..544752a537fd57e3bb76d44d13ce8bbf6706ee74 100644
 --- a/apple/RNCWebView.mm

@@ -50,6 +50,7 @@ const DEFAULT_WORKDIR_WINDOW_DAYS = 180;
 const DEFAULT_WORKDIR_WINDOW_MS = DEFAULT_WORKDIR_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
 const DESCRIPTION = [
+  'sessions 元数据中的 sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
   'Cross-device read-only history accepts exactly one session_id in the form deviceId::sessionId.',
   'The source device must be online with an active authorized device-link; remote ids cannot be mixed with local or other remote ids.',
   'Remote reads preserve the same filters, ordering, and cursor pagination. If a payload is too large, retry with a smaller limit.',
@@ -245,13 +246,14 @@ export function registerGetChatHistoryTool(
       // 改成顶层 sessions map (sessionId -> meta), message 行只留 sessionId 引用。
       // 同时对 toolUseId / agentMeta / rewindAt 这三个"默认场景几乎永远 null"
       // 的字段做 omit-when-null, 进一步压响应体。
-      const sessionsMap: Record<string, { workingDir: string | null; agentKind: string; title: string }> = {};
+      const sessionsMap: Record<string, { workingDir: string | null; agentKind: string; title: string; sessionUrl?: string }> = {};
       const messagesOut = page.items.map((m) => {
         if (!sessionsMap[m.sessionId]) {
           sessionsMap[m.sessionId] = {
             workingDir: m.sessionWorkingDir,
             agentKind: m.sessionAgentKind,
             title: m.sessionTitle,
+            ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(m.sessionId) } : {}),
           };
         }
         const out: Record<string, unknown> = {

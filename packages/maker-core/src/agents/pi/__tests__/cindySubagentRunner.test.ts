@@ -633,7 +633,12 @@ describe('Cindy durable PI Subagent runner', () => {
     const files = ['result.json', 'transcript.jsonl', 'config.json'];
     const before = await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file))));
     await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
-    await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(true);
+    // #6928 Windows CI: a cold OS inventory can exhaust its 8s budget even after
+    // the real runner exits. That probe must fail closed; this test verifies
+    // receipt recovery, not first-probe latency. Keep the production deadline
+    // and wait for positive OS evidence, as the live-orphan case below does.
+    await waitFor(async () => await stopForAccountBoundary(fixture.root, { timeoutMs: 0 }) ? true : null,
+      undefined, 'the independent process inventory to confirm the completed runner exited');
     expect(await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file)))))
       .toEqual(before);
   });

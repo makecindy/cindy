@@ -221,7 +221,7 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
 }
 
 /** Use the same SDK, model identity and destination as chat, with a bounded probe. */
-export async function probePiProvider(options: PiProviderTransportOptions, signal: AbortSignal): Promise<AssistantMessage> {
+export async function probePiProvider(options: PiProviderTransportOptions, signal: AbortSignal, maxTokens?: number): Promise<AssistantMessage> {
   const model = nativeInvocationModel(options, options.row.id);
   const adapter = adapters[model.api];
   if (!adapter) throw new Error('Native API is not supported by the bundled Pi adapter');
@@ -232,7 +232,8 @@ export async function probePiProvider(options: PiProviderTransportOptions, signa
     headers: cloudflare ? cloudflareGatewayHeaders(options.apiKey, options.headers) : options.headers,
     ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
       ? { fetch: options.fetchImpl } : {}),
-    signal, maxRetries: 0, maxTokens: Math.min(16, model.maxTokens),
+    signal, maxRetries: 0, maxTokens: Math.min(maxTokens ?? 16, model.maxTokens),
+    ...(maxTokens !== undefined ? { reasoning: nativeThinkingLevel(undefined, options.row, model) } : {}),
   }).result();
 }
 

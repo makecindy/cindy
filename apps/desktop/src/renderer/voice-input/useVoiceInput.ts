@@ -44,6 +44,7 @@ import {
   isSelectedMicrophoneUnavailableError,
   prewarmVoiceInputBenchmarkFixture,
   prewarmVoiceInputMicrophoneWithAutomaticFallback,
+  prepareVoiceInputMicrophone,
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { prewarmVoiceInputAudio } from './audioContextPool';
@@ -145,6 +146,7 @@ export type UseVoiceInputResult = {
   getLastRefinement: () => VoiceInputRefinementSnapshot | null;
   /** 同步读取当前状态，不经过 React 渲染。长按手势靠它判断是否占用了录音。 */
   getState: () => VoiceInputState;
+  prepare: () => (() => void) | void;
   /** 同步 claim 录音后立刻返回是否占用；启动流程（授权确认、采集、连接）在后台继续。 */
   start: (options?: VoiceInputStartOptions) => boolean;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
@@ -196,6 +198,7 @@ export function useVoiceInput(
   const [state, setState] = useState<VoiceInputState>('idle');
   const [captureReady, setCaptureReady] = useState(false);
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
+  const microphonePreparationRef = useRef<(() => void) | null>(null);
   const [draftText, setDraftText] = useState('');
   const [draftSource, setDraftSource] = useState<VoiceInputDraftSource | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
@@ -1236,6 +1239,34 @@ export function useVoiceInput(
     voiceInputSettings.microphoneDeviceId,
   ]);
 
+  const prepare = useCallback(() => {
+    if (disabledRef.current || !editorRef.current || editorRef.current.isDestroyed) return;
+    if (!['idle', 'done', 'error'].includes(stateRef.current)) return;
+    void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
+    void window.electronAPI.voiceInput.prewarm({
+      sourceLanguage: voiceInputSettings.language,
+      refinementEnabled: voiceInputSettings.refinementEnabled,
+    }).catch(() => undefined);
+    // Ordinary clicks must not trigger a new microphone permission prompt.
+    if (!window.electronAPI.voiceInput.getMicrophonePermissionCached().ok) return;
+    microphonePreparationRef.current?.();
+    const release = prepareVoiceInputMicrophone({
+      workletUrl,
+      deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
+      ...createVoiceInputAudioProfile(voiceInputSettings.fastActivationEnabled),
+    });
+    if (!release) return;
+    const cleanup = () => {
+      if (microphonePreparationRef.current === cleanup) microphonePreparationRef.current = null;
+      release();
+    };
+    microphonePreparationRef.current = cleanup;
+    return cleanup;
+  }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled,
+    voiceInputSettings.microphoneDeviceId, voiceInputSettings.fastActivationEnabled]);
+
+  useEffect(() => () => { microphonePreparationRef.current?.(); }, []);
+
   const start = useCallback((startOptions?: VoiceInputStartOptions): boolean => {
     const currentState = stateRef.current;
     if (
@@ -1280,7 +1311,8 @@ export function useVoiceInput(
       label: '',
       workletUrl,
       deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
-      fastActivationEnabled: voiceInputSettings.fastActivationEnabled,
+      fastActivationEnabled: voiceInputSettings.fastActivationEnabled || !!microphonePreparationRef.current,
+      temporaryMicrophone: !voiceInputSettings.fastActivationEnabled && !!microphonePreparationRef.current,
       getRunId: () => runIdRef.current,
       setEngine: (engine) => {
         engineRef.current = engine;
@@ -1789,6 +1821,7 @@ export function useVoiceInput(
     getLastSubmittedText: () => lastSubmittedTextRef.current,
     getLastRefinement: () => lastRefinementRef.current,
     getState,
+    prepare,
     start,
     stop: stopWithGate,
     cancel,

@@ -46,7 +46,9 @@ const STORAGE_KEY = 'xdt:providerModelMemory:v2';
 /** 历史单槽版本 key —— 冷启动迁移源(只读,不再写)。 */
 const LEGACY_STORAGE_KEY_V1 = 'xdt:providerModelMemory:v1';
 /** v2 schema 内的保留来源 id:同一 agent 下跨真实 provider 共享的模型级预设槽。 */
-export const MODEL_PRESET_SLOT_ID = '*';
+// 定义在 modelConfigCopy(配置副本的归一化要拒绝它),这里 re-export 给既有消费方。
+import { MODEL_PRESET_SLOT_ID } from './modelConfigCopy';
+export { MODEL_PRESET_SLOT_ID };
 
 let activeDataOwnerId: string | null = null;
 

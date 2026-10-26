@@ -142,7 +142,7 @@ import {
   type PiSubagentRunStatus,
 } from './pi-subagent-runs.js';
 import {
-  annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
@@ -2164,6 +2164,8 @@ export class PiAgent extends BaseAgent {
       fileOps?: PiRemoteFileOps;
       contextWindow?: number;
       workingContextWindow?: number;
+      /** 任务预算：workingContextWindow 缺席时兜底进顶层保留量，不得依赖调用方预折叠。 */
+      sessionContextWindowBudget?: number | null;
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
       disabledSkills?: DisabledSkillLaunchSnapshot;
@@ -2174,7 +2176,7 @@ export class PiAgent extends BaseAgent {
       opts.contextWindow,
       opts.piCompactionPct,
       opts.packages,
-      opts.workingContextWindow,
+      opts.workingContextWindow ?? opts.sessionContextWindowBudget ?? undefined,
     );
     if (opts.compactionModelOverrides) {
       const settings = JSON.parse(built);
@@ -2229,6 +2231,7 @@ export class PiAgent extends BaseAgent {
       fileOps?: PiRemoteFileOps;
       contextWindow?: number;
       workingContextWindow?: number;
+      sessionContextWindowBudget?: number | null;
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
       disabledSkills?: DisabledSkillLaunchSnapshot;
@@ -2266,6 +2269,13 @@ export class PiAgent extends BaseAgent {
       /** Current model context window used to translate the Pi percentage setting. */
       contextWindow?: number;
       workingContextWindow?: number;
+      /**
+       * 本任务的工作上下文预算(优先于每个模型自己的上限)。非空时**为全部可选模型**
+       * 生成按该预算的 compaction.modelOverrides —— 官方 Pi 1.0 在切模时按
+       * modelOverrides 选保留量，预算只落在顶层 reserveTokens 会被同模型的 override
+       * 盖掉。写成这样之后，同预算下切到别的模型命中同保留量，保持热切。
+       */
+      sessionContextWindowBudget?: number | null;
       /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
       piCompactionPct?: number;
       /** Local Pi binary frozen for this session; scopes learned native windows. */
@@ -2521,7 +2531,10 @@ export class PiAgent extends BaseAgent {
     // SDK retries can swallow quota errors before the agent sees them).
     const compactionModelOverrides: Record<string, { reserveTokens: number }> = {};
     const addBudget = (provider: string, id: string, window: number, workingWindow?: number) => {
-      const settings = JSON.parse(buildPiSettingsJsonContent(window, opts.piCompactionPct, [], workingWindow));
+      // 任务级预算优先:预算存在时**每个**可选模型都按预算生成保留量(与预演、切后写盘
+      // 同一口径)，否则顶层 reserveTokens 会被同模型的 model-level override 盖掉。
+      const effectiveWorkingWindow = opts.sessionContextWindowBudget ?? workingWindow;
+      const settings = JSON.parse(buildPiSettingsJsonContent(window, opts.piCompactionPct, [], effectiveWorkingWindow));
       compactionModelOverrides[`${provider}/${id}`] = { reserveTokens: settings.compaction?.reserveTokens ?? 16_384 };
     };
     for (const model of models) addBudget(PI_PROVIDER_ID, model.id, model.contextWindow,
@@ -2702,8 +2715,11 @@ export class PiAgent extends BaseAgent {
     const guestOmitsGateway = guestProviderId !== undefined && !piGuestUsesGateway(guestProviderId);
     const sessionNativeProviderResolver = (): AgentDeps['resolvePiNativeProviders'] => {
       const resolve = this.deps.resolvePiNativeProviders;
-      if (!resolve || !guestProviderId) return resolve?.bind(this.deps);
-      return async (input) => restrictPiGuestNativeProviders(await resolve.call(this.deps, input), guestProviderId, hosted?.guestProvider?.modelIds);
+      if (!resolve) return undefined;
+      return async (input) => {
+        const result = await resolve.call(this.deps, { ...input, sessionId: opts.sessionId });
+        return guestProviderId ? restrictPiGuestNativeProviders(result, guestProviderId, hosted?.guestProvider?.modelIds) : result;
+      };
     };
     const resolvePiNativeProviders = sessionNativeProviderResolver();
     const sessionPiAutoCompactPct = this.deps.runtimeConfig.piAutoCompactThresholdPct;
@@ -2889,7 +2905,28 @@ export class PiAgent extends BaseAgent {
         });
       }
     }
-    const startupWorkingContextWindow = this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ?? undefined;
+    // 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+    // 优先于模型级上限/目录默认；变化时 host 直接触发重建，热切路径也带新值。
+    let sessionContextWindowBudget: number | null =
+      typeof opts.contextWindowBudget === 'number' && Number.isSafeInteger(opts.contextWindowBudget)
+      && opts.contextWindowBudget > 0
+        ? opts.contextWindowBudget
+        : null;
+    /**
+     * 有效工作窗口的唯一口径:任务级预算优先于模型级上限。
+     *
+     * 启动快照(顶层 reserveTokens + 每个模型的 modelOverrides)、切模预演、切后写盘与
+     * requiresModelSwitchRebuild 都必须走它 —— 任何一处漏掉预算，就会出现「预演算不出
+     * 保留量差异 → 预算静默失效」或「同预算切模被误判成需要重建」两种分叉。
+     */
+    const effectiveWorkingContextWindow = (
+      source: string | null | undefined,
+      model: string,
+    ): number | undefined =>
+      sessionContextWindowBudget
+      ?? this.deps.resolveModelContextLimit?.(source, model)
+      ?? undefined;
+    const startupWorkingContextWindow = effectiveWorkingContextWindow(authProviderId, opts.model);
     const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
       .find((model) => (model.wireId ?? model.id) === initialWireModel);
     const learnedNativeContextWindow = !remote && sessionRuntimeBinaryPath && nativeModel?.contextWindow === undefined
@@ -3296,6 +3333,7 @@ export class PiAgent extends BaseAgent {
         preview: true,
         contextWindow: startupContextWindow,
         workingContextWindow: startupWorkingContextWindow,
+        sessionContextWindowBudget,
         piCompactionPct: sessionPiAutoCompactPct,
         runtimeBinaryPath: sessionRuntimeBinaryPath,
       });
@@ -3313,6 +3351,7 @@ export class PiAgent extends BaseAgent {
       {
         remote, fileOps, contextWindow: startupContextWindow,
         workingContextWindow: startupWorkingContextWindow,
+        sessionContextWindowBudget,
         piCompactionPct: sessionPiAutoCompactPct,
         runtimeBinaryPath: sessionRuntimeBinaryPath,
         ...(guestOmitsGateway ? { omitGatewayModels: true } : {}),
@@ -4747,7 +4786,7 @@ export class PiAgent extends BaseAgent {
         }
       })();
       const requestUserDecision = async (
-        options: { forcePrompt: boolean; unavailableHandoff?: boolean },
+        options: { forcePrompt: boolean; unavailableHandoff?: boolean; autoReviewReason?: string },
       ): Promise<PiPermissionResolution | null> => {
         if (
           permissionMode === 'bypassPermissions'
@@ -4795,9 +4834,10 @@ export class PiAgent extends BaseAgent {
             },
           };
           Promise.resolve().then(() => interactionResolver!(
-            options.unavailableHandoff
-              ? annotatePermissionRequestForUnavailableReview(permissionRequest)
-              : permissionRequest,
+            annotatePermissionRequestForAutoReview(permissionRequest, {
+              unavailable: options.unavailableHandoff,
+              reason: options.autoReviewReason,
+            }),
           )).then((decision) => {
             if (decision.kind !== 'permission') {
               if (options.unavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
@@ -4912,7 +4952,7 @@ export class PiAgent extends BaseAgent {
           if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return requestUserDecision({
             forcePrompt: true,
-            ...(decision.unavailable ? { unavailableHandoff: true } : {}),
+            ...(decision.unavailable ? { unavailableHandoff: true } : { autoReviewReason: decision.reason }),
           });
         } catch (error) {
           this.deps.logger.warn('PI Subagent auto-review failed; denying', {
@@ -5121,10 +5161,17 @@ export class PiAgent extends BaseAgent {
     const waitForSessionRpcIdle = async (): Promise<void> => {
       await sessionRpcChain.catch(() => undefined);
     };
+    /**
+     * 宿主发起的独占 RPC 操作(手动压缩 / rewind / 切模等)不预约 turn、也不置
+     * `ctx.isStreaming`；用计数器把它们暴露给 `hasPendingHostOperation()`，
+     * 空闲回收据此拒绝关闭正在执行这类操作的会话。
+     */
+    let hostOperationsInFlight = 0;
     const runExclusivePiRpc = <T>(fn: () => Promise<T>): Promise<T> => {
+      hostOperationsInFlight += 1;
       const run = sessionRpcChain.then(fn);
       sessionRpcChain = run.then(() => undefined, () => undefined);
-      return run;
+      return run.finally(() => { hostOperationsInFlight -= 1; });
     };
     const requestPiCompact = async (instructions?: string): Promise<ManualCompactResult> => {
       const command: Record<string, unknown> = { type: 'compact' };
@@ -5665,6 +5712,7 @@ export class PiAgent extends BaseAgent {
             pid,
             kind: 'pi',
             role: 'task-host',
+            sessionId: opts.sessionId ?? null,
           });
         },
         opts.remoteHostId,
@@ -6648,15 +6696,27 @@ export class PiAgent extends BaseAgent {
         providerRefreshStages.delete(nonce);
       }
     };
-    const reserveForWindow = (window: number, source: string | null | undefined, model: string): number => {
+    const reserveForWindow = (
+      window: number,
+      source: string | null | undefined,
+      model: string,
+      budget: number | null = sessionContextWindowBudget,
+    ): number => {
       const settings = JSON.parse(buildPiSettingsJsonContent(window, sessionPiAutoCompactPct, [],
-        this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
+        budget ?? this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
       return settings.compaction?.reserveTokens ?? 16_384;
     };
     const previewPiModelSwitch = async (
       model: string,
-      target?: { providerId?: string | null },
+      target?: { providerId?: string | null; contextWindowBudget?: number | null },
     ): Promise<PiModelSwitchPreview> => {
+      // 预算必须在预演里就用**目标**值：外层预演决定要不要重建，而 setModel 会先把预算
+      // 写成新值再预演。两者用不同预算时，外层判「可热切」、内层发现保留量不匹配便抛错，
+      // 宿主此时已错过重建分支 —— 第一次发送必失败（Greptile P1）。
+      // 预演只读：不写 sessionContextWindowBudget，只把它当本次预算输入。
+      const previewBudget = target && Object.hasOwn(target, 'contextWindowBudget')
+        ? target.contextWindowBudget ?? null
+        : sessionContextWindowBudget;
       const requestedProviderId = target && Object.hasOwn(target, 'providerId')
         ? target.providerId
         : mutableProviderId;
@@ -6784,7 +6844,8 @@ export class PiAgent extends BaseAgent {
         { remote, fileOps, preview: true,
           allowedModelIds: hosted?.guestProvider?.modelIds,
           contextWindow: targetContextWindow ?? ctx.contextWindow ?? startupContextWindow,
-          workingContextWindow: this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
+          workingContextWindow: previewBudget ?? this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
+          sessionContextWindowBudget: previewBudget,
           piCompactionPct: sessionPiAutoCompactPct,
           runtimeBinaryPath: sessionRuntimeBinaryPath,
           packages: nativePackagePaths, disabledSkills: disabledSkillLaunch,
@@ -6823,7 +6884,7 @@ export class PiAgent extends BaseAgent {
       const targetModel = nativeModel?.wireId ?? nativeModel?.id ?? model;
       if (targetContextWindow && targetProvider &&
           resolvePiNativeReserve(liveRuntimeSettings, targetProvider, targetModel) !==
-            reserveForWindow(targetContextWindow, sourceId, model)) {
+            reserveForWindow(targetContextWindow, sourceId, model, previewBudget)) {
         return { action: 'rebuild', targetContextWindow, windowVerified: false,
           reason: 'Pi must load the changed native compaction settings before selecting this model' };
       }
@@ -6924,8 +6985,10 @@ export class PiAgent extends BaseAgent {
           nextGateway ? requestedProviderId : authProviderId,
           { remote, fileOps, contextWindow: nextDescriptor?.contextWindow ?? ctx.contextWindow,
             allowedModelIds: hosted?.guestProvider?.modelIds,
-            workingContextWindow: this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
-            piCompactionPct: sessionPiAutoCompactPct, runtimeBinaryPath: sessionRuntimeBinaryPath,
+            workingContextWindow: effectiveWorkingContextWindow(sourceId, model),
+            sessionContextWindowBudget,
+            piCompactionPct: sessionPiAutoCompactPct,
+            runtimeBinaryPath: sessionRuntimeBinaryPath,
             packages: nativePackagePaths,
             disabledSkills: disabledSkillLaunch,
             ...(guestOmitsGateway ? { omitGatewayModels: true } : {}) },
@@ -7090,8 +7153,13 @@ export class PiAgent extends BaseAgent {
     };
     const switchModel = async (
       model: string,
-      setOpts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean },
+      setOpts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
     ): Promise<void> => {
+      const requestedContextWindowBudget = setOpts?.contextWindowBudget;
+      // 任务级预算变化必须走完整重写 + switch_session 重载，不能命中同路由 no-op。
+      if (requestedContextWindowBudget !== undefined) {
+        sessionContextWindowBudget = requestedContextWindowBudget ?? null;
+      }
       const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : undefined;
@@ -7102,6 +7170,12 @@ export class PiAgent extends BaseAgent {
       if (preview.action === 'rebuild') {
         throw new Error(preview.reason ?? 'Pi model route needs a new process startup input');
       }
+      // 保留量（compaction reserveTokens）只在启动快照里生效，运行期改写文件不代表
+      // Pi 已更新设置。**不得**在这里探测或调用 `set_compaction_reserve_tokens`：它不是
+      // 官方 RPC，上游已连同 `refresh_models` 一起删除调用与配套补丁（见
+      // docs/research/pi-native-model-refresh.md 与 docs/dev-rules/pi-harness.md
+      // 「只适配官方 Pi」）。任务级窗口预算因此不走热改：预算变化由宿主判定有效窗口变化后
+      // 重启引擎（createOpts 重新注入），或在预演里判定需要重建后走既有恢复分支。
       if (preview.action === 'refresh') await refreshLiveCatalog(model, effectiveProviderId);
       // Never let a requested native source silently fall through to Cindy's
       // gateway when a provider disappeared or a model was removed.
@@ -7272,12 +7346,17 @@ export class PiAgent extends BaseAgent {
         }
         await this.writePiRuntimeSettings(configHome, {
           fileOps, contextWindow: verifiedWindow,
-          workingContextWindow: this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined,
+          workingContextWindow: effectiveWorkingContextWindow(effectiveProviderId, model),
+          // 任务预算随切后写盘显式下发（zqchris review）：顶层保留量的预算来源
+          // 不再依赖调用方把它预折叠进 workingContextWindow；其它模型的按预算
+          // modelOverrides 由下方保留分支原样保住（「连切两次仍热切」用例守着）。
+          sessionContextWindowBudget,
           piCompactionPct: sessionPiAutoCompactPct, packages: nativePackagePaths,
           disabledSkills: disabledSkillLaunch,
         });
         ctx.contextWindow = verifiedWindow;
-        ctx.workingContextWindow = this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined;
+        // 任务预算不能在这里被模型级上限顶掉:下一次预演要按同一个口径算保留量。
+        ctx.workingContextWindow = effectiveWorkingContextWindow(effectiveProviderId, model);
       } catch (error) {
         await terminateUnconfirmedCatalogReload(error);
       }
@@ -8037,6 +8116,10 @@ export class PiAgent extends BaseAgent {
           }));
       },
 
+      hasPendingHostOperation() {
+        return hostOperationsInFlight > 0;
+      },
+
       async requestGracefulStop(): Promise<void> {
         if (closed || piProcessExited || rpcDisconnected) throw new Error('No active Pi turn to stop');
         const hostAbortToken = markPiHostAbortRequested(ctx);
@@ -8184,11 +8267,13 @@ export class PiAgent extends BaseAgent {
         const contextSource = (id: string | null | undefined) =>
           id == null || id === 'xd' || id === PI_PROVIDER_ID ? PI_PROVIDER_ID : id;
         if (model !== mutableModel || contextSource(provider) !== contextSource(mutableProviderId)) return false;
-        const window = deps.resolveModelContextLimit?.(provider, model);
-        return (window ?? undefined) !== ctx.workingContextWindow;
+        return effectiveWorkingContextWindow(provider, model) !== ctx.workingContextWindow;
       },
 
-      async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean }): Promise<void> {
+      async setModel(
+        model: string,
+        setOpts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
+      ): Promise<void> {
         if (reviewMode) return;
         // 会话级串行闸:整段"写待切换快照 → set_model RPC → 落定/回滚"必须是一个临界区。
         // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的
@@ -8204,7 +8289,8 @@ export class PiAgent extends BaseAgent {
       },
 
       async setFastMode(enabled: boolean | 'ultrafast'): Promise<void> {
-        if (reviewMode) return;
+        if (reviewMode && opts.fastModePolicy?.isAllowed() !== false) return;
+        if (opts.fastModePolicy?.isAllowed() === false) enabled = false;
         if (enabled === 'ultrafast') throw new Error('Ultrafast requires the Codex runtime');
         updateRequestPrefs(enabled);
       },
@@ -9113,13 +9199,10 @@ export class PiAgent extends BaseAgent {
             });
             Promise.resolve()
               .then(() =>
-                context.resolver!(autoDecision?.unavailable
-                  ? annotatePermissionRequestForUnavailableReview({
-                    kind: 'permission', requestId: `${id}:pi-extension-mutation`,
-                    toolName, input: toolInput,
-                  })
-                  : { kind: 'permission', requestId: `${id}:pi-extension-mutation`,
-                    toolName, input: toolInput }),
+                context.resolver!(annotatePermissionRequestForAutoReview(
+                  { kind: 'permission', requestId: `${id}:pi-extension-mutation`, toolName, input: toolInput },
+                  autoDecision?.verdict === 'ask' ? autoDecision : undefined,
+                )),
               )
               .then((decision) => {
                 if (settled) return;
@@ -9395,7 +9478,7 @@ export class PiAgent extends BaseAgent {
        * 不能把用户的明确拒绝也一并翻转。
        */
       const requestUserDecision = async (
-        opts: { forcePrompt: boolean; unavailableHandoff?: boolean },
+        opts: { forcePrompt: boolean; unavailableHandoff?: boolean; autoReviewReason?: string },
       ): Promise<{ decided: boolean; resolution: PiPermissionResolution }> => {
         if (!resolver) {
           this.deps.logger.warn('pi permission request has no interaction resolver', { toolName });
@@ -9436,9 +9519,10 @@ export class PiAgent extends BaseAgent {
             input,
           };
           Promise.resolve().then(() => resolver(
-            opts.unavailableHandoff
-              ? annotatePermissionRequestForUnavailableReview(permissionRequest)
-              : permissionRequest,
+            annotatePermissionRequestForAutoReview(permissionRequest, {
+              unavailable: opts.unavailableHandoff,
+              reason: opts.autoReviewReason,
+            }),
           )).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
@@ -9486,6 +9570,7 @@ export class PiAgent extends BaseAgent {
         opts?: {
           forcePrompt?: boolean;
           unavailableHandoff?: boolean;
+          autoReviewReason?: string;
           requireExplicitDecision?: boolean;
         },
       ): Promise<PiPermissionResolution> => {
@@ -9496,6 +9581,7 @@ export class PiAgent extends BaseAgent {
         const outcome = await requestUserDecision({
           forcePrompt: opts?.requireExplicitDecision === true,
           ...(opts?.unavailableHandoff ? { unavailableHandoff: true } : {}),
+          ...(opts?.autoReviewReason ? { autoReviewReason: opts.autoReviewReason } : {}),
         });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
         if (outcome.decided) return outcome.resolution;
@@ -9601,6 +9687,7 @@ export class PiAgent extends BaseAgent {
             sendPermissionResolution(await requestUserConfirmation({
               forcePrompt: true,
               unavailableHandoff: decision.unavailable === true,
+              ...(decision.verdict === 'ask' ? { autoReviewReason: decision.reason } : {}),
             }));
             return;
           }

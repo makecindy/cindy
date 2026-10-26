@@ -156,6 +156,8 @@ export interface BotGroupMessageView {
   reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   id: string;
   sequence: number;
+  /** Stable decimal server position; presentation indices can change when history is loaded. */
+  serverSequence?: string;
   kind: BotGroupMessageKind;
   authorKind: BotGroupAuthorKind;
   authorBotId: string | null;
@@ -386,6 +388,11 @@ export interface BotGroupPlanView {
   canManage?: boolean;
   /** Server groups: what the viewer sends without naming anyone goes to the step under way (creator, or a human owner/admin). */
   canAdd?: boolean;
+  /**
+   * Server 分工: this computer starts the next step once one is done, instead of waiting for 继续.
+   * A choice of the computer that made it, not shared chat state; absent where unsupported.
+   */
+  autoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -439,7 +446,11 @@ export interface BotGroupRoundView {
 }
 
 export interface BotGroupSummary {
+  /** Explicit direct-message landing; group management remains unavailable. */
+  conversationKind?: 'direct' | 'group';
   serverBacked?: boolean;
+  /** Authoritative unread window for this account, including followed thread replies. */
+  serverUnread?: { count: number; mentioned: boolean };
   /** Explicit server capabilities; absent on old servers/hosts. */
   supportsDissolve?: boolean;
   /** Upgraded host forwards leave explicitly; absent on old compatibility hosts. */
@@ -454,9 +465,11 @@ export interface BotGroupSummary {
   canStopAll?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
-   * and arranges turns itself; no reply/speaking modes and no 安排分工 entry (bot-group-chat.md §4).
+   * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
    */
   singleSpeaker?: boolean;
+  /** A single-speaker group whose computer arranges 「安排分工」 (older computers answered it as a queue). */
+  supportsDivision?: boolean;
   selfActorId?: string;
   topic?: string;
   description?: string;
@@ -470,6 +483,11 @@ export interface BotGroupSummary {
   organizerBotId: string | null;
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
+  /**
+   * Server groups: 分工 you start here go on to the next step by themselves instead of waiting
+   * for 继续 (§7.4). Kept on this computer like the project folder; absent where unsupported.
+   */
+  autoContinue?: boolean;
   lastMessage: BotGroupLastMessage | null;
   /** Latest visible incoming message (Bot or another human), excluding self and runtime activity. Older hosts omit it. */
   lastReplyAt?: number;
@@ -570,6 +588,8 @@ export interface BotGroupUpdateInput {
   organizerBotId?: string | null;
   /** Absolute existing local directory; null uses the group's own folder. */
   projectDir?: string | null;
+  /** Server groups: whether 分工 you start go on by themselves (kept on this computer). */
+  autoContinue?: boolean;
 }
 
 export interface BotGroupSetMembersInput {
@@ -581,6 +601,7 @@ export interface BotGroupSetMembersInput {
 }
 
 export interface BotGroupSendInput {
+  conversationKind?: 'direct';
   groupId: string;
   text: string;
   mentions: BotGroupMention;
@@ -609,6 +630,7 @@ export interface BotGroupPlanEditInput extends BotGroupPlanActionInput {
 }
 
 export interface BotGroupGetOptions {
+  conversationKind?: 'direct';
   /** Load messages with a smaller sequence (older page). */
   beforeSequence?: number;
   limit?: number;
@@ -661,6 +683,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
  */
 export type BotGroupRemoteActionId =
   | 'create'
+  | 'read'
   | 'send'
   | 'continue'
   | 'stop'
@@ -684,6 +707,8 @@ export type BotGroupRemoteActionId =
  */
 export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
+  /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
+  supportsReadReceipts?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would
    * drop them). Attachment `path`s are always null here.
@@ -780,6 +805,7 @@ export interface ChatInvitePreview {
   reusable?: boolean;
 }
 export type ChatGroupAction =
+  | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }

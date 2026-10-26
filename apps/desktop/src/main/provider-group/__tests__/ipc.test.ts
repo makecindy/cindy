@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
+vi.mock('../fastPolicyRuntime.js', () => ({ groupFastPolicyPending: vi.fn(() => false), syncGroupFastPolicy: vi.fn(async () => {}) }));
+vi.mock('../../device-link/dispatch.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
 vi.mock('../runtime.js', () => ({
   getProviderGroupDirectory: vi.fn(),
   getProviderGroupRouter: vi.fn(),
@@ -35,6 +37,7 @@ import {
   markMembersUnreachableHere,
   parseProviderGroupCommand,
   registerProviderGroupIpc,
+  createProviderGroupCommandDeps,
   PROVIDER_GROUP_REACHABILITY_CHECK_TIMEOUT_MS,
   type ProviderGroupCommandDeps,
 } from '../ipc';
@@ -45,6 +48,7 @@ import { getProviderGroupDirectory, getProviderGroupRouter } from '../runtime';
 import { invokeProviderManagement } from '../managementClient';
 import { pruneProviderGroupBindings } from '../bindings';
 import { readProviderGroup, writeProviderGroup } from '../store';
+import { broadcast } from '../../device-link/index';
 
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
@@ -363,6 +367,36 @@ describe('provider group IPC remote management', () => {
 });
 
 describe('executeProviderGroupCommand save', () => {
+  it.each(['save-if-current', 'delete-if-current'] as const)(
+    'does not publish or prune %s under a new owner after Fast synchronization fails',
+    async (action) => {
+      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+      const d = deps([], config);
+      d.syncFastPolicy = vi.fn(async () => { d.switchOwner('owner-b'); throw Error('native busy'); });
+      await expect(executeProviderGroupCommand(d, {
+        action, providerId: 'anthropic', expectedConfig: config, config: { ...config, allowFast: false },
+      })).rejects.toThrow('PRECONDITION_FAILED');
+      expect(d.pruneBindings).not.toHaveBeenCalled();
+      expect(d.changed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['save-if-current', 'delete-if-current'] as const)(
+    'publishes the committed %s and prunes bindings even if native Fast synchronization fails',
+    async (action) => {
+      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+      const d = deps([], config);
+      d.syncFastPolicy = vi.fn(async () => { throw Error('native busy'); });
+      await expect(executeProviderGroupCommand(d, {
+        action, providerId: 'anthropic', expectedConfig: config,
+        config: { ...config, allowFast: false },
+      })).rejects.toThrow('native busy');
+      expect(d.pruneBindings).toHaveBeenCalledWith('anthropic', action === 'delete-if-current' ? null : new Set(['local']));
+      expect(d.changed).toHaveBeenCalledWith('anthropic');
+      expect(d.readGroup('anthropic')).toEqual(action === 'delete-if-current' ? null : { ...config, allowFast: false });
+    },
+  );
+
   it.each(['save-if-current', 'delete-if-current'] as const)('refuses %s before any work while the old owner is being torn down', async (action) => {
     const d = deps([]);
     vi.mocked(isAppSessionBoundaryPending).mockReturnValue(true);
@@ -551,6 +585,14 @@ describe('executeProviderGroupCommand save', () => {
 });
 
 describe('provider management receiver account boundary', () => {
+  it('invalidates the local model catalog when a subscription group changes', () => {
+    vi.mocked(broadcast).mockClear();
+    createProviderGroupCommandDeps().changed('openai');
+    expect(broadcast).toHaveBeenCalledWith('maker:provider:changed', {});
+    vi.mocked(broadcast).mockClear();
+    createProviderGroupCommandDeps().changed('xai');
+    expect(broadcast).not.toHaveBeenCalledWith('maker:provider:changed', {});
+  });
   it('refreshes reshare coordination after a remote group edit without adding local-only consent details to the reply', async () => {
     const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
     const d = deps([], config);

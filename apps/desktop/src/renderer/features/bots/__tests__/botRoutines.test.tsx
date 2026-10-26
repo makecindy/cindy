@@ -280,3 +280,23 @@ it('shows the host-owned follow-up as a pause-only built-in row that never opens
   expect(api.remove).not.toHaveBeenCalled();
   expect(screen.getByText('Daily report')).toBeTruthy();
 });
+
+// Production list switches: previously only built-ins could pause without opening
+// the editor. Unit tier; the existing save test only covered the editor.
+it('pauses from the list, preserves configuration, and keeps the switch on after a failed save', async () => {
+  const api = setup();
+  render(<BotRoutines botId="bot" />);
+  const toggle = await screen.findByRole('switch', { name: 'Daily report' });
+  api.save.mockRejectedValueOnce(new Error('disk full'));
+  fireEvent.click(toggle);
+  await screen.findByRole('alert');
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+  expect(screen.getByText('routines.paused')).toBeTruthy();
+  expect(screen.queryByLabelText('routines.instructions')).toBeNull();
+  expect(api.save).toHaveBeenLastCalledWith('bot', {
+    name: existing.name, prompt: existing.prompt, enabled: false, triggers: existing.triggers,
+  }, existing.id);
+  expect(api.runNow).not.toHaveBeenCalled();
+});

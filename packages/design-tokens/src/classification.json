@@ -1254,16 +1254,16 @@
       "id": "login-callback-title",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-callback-body",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1350,32 +1350,32 @@
       "id": "login-control-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-placeholder",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-title-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {

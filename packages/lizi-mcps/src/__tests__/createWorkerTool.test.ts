@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
-import { registerCreateWorkerTool } from '../xdt-helper/create_worker.js';
+import { registerCreateWorkerTool, type CreateWorkerDeps } from '../xdt-helper/create_worker.js';
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;
@@ -18,7 +18,7 @@ function parse(result: XdtHelperToolResult) {
 }
 
 function setup() {
-  const createWorker = vi.fn(async () => ({
+  const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
     ok: true as const,
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',

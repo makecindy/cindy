@@ -4,6 +4,7 @@ import { alibabaSystemVoices } from '../../../src/shared/alibabaSpeechVoices';
 import { gatewayReferenceSpeechVoices } from '../../../src/shared/speechVoices';
 import type {
   SpeechProtocol,
+  SpeechModelSelection,
   VoiceConversationPreference,
   VoiceConversationSelection,
 } from '../../../src/shared/voiceConversation';
@@ -38,6 +39,7 @@ mountPage({
     ctx.data.previewRequests = previews;
     ctx.data.previewStops = stops;
     ctx.data.savedVoice = initialVoice;
+    ctx.data.saveCount = 0;
     let preference: VoiceConversationPreference = {
       selection: {
         providerId,
@@ -65,7 +67,7 @@ mountPage({
                   ...(ctx.data.hidden ? { pickerVisible: false } : {}),
                   name: modelId,
                   providerId,
-                  providerName: ctx.data.gatewayReference
+                  providerName: ctx.data.openRouter ? 'OpenRouter' : ctx.data.gatewayReference
                     ? 'XD Gateway'
                     : protocol === 'elevenlabs'
                       ? 'ElevenLabs'
@@ -77,13 +79,29 @@ mountPage({
                   agent,
                   protocol: ctx.data.custom ? undefined : protocol,
                   protocolLocked: !ctx.data.custom,
-                  defaultVoice: referenceVoice,
+                  defaultVoice: ctx.data.openRouter ? '' : referenceVoice,
+                  ...(ctx.data.openRouter ? { speedRange: null } : {}),
                 },
+                ...(ctx.data.autoVoice ? [{
+                  id: String(ctx.data.nextModelId),
+                  name: String(ctx.data.nextModelId),
+                  providerId,
+                  providerName: ctx.data.openRouter ? 'OpenRouter' : 'MiniMax',
+                  agent,
+                  protocol,
+                  protocolLocked: true,
+                  defaultVoice: '',
+                  ...(ctx.data.openRouter ? { speedRange: null } : {}),
+                }] : []),
                 ...(ctx.data.hidden ? [{ id: 'unchecked', name: 'Unchecked speech', providerId: 'fixture', agent: 'codex' as const, pickerVisible: false }] : []),
                 ...(ctx.data.hidden && !ctx.data.noPreference ? [{ id: 'visible', name: 'Visible speech', providerId: 'fixture', agent: 'codex' as const, protocol, protocolLocked: true, defaultVoice: 'river' }] : []),
               ],
-        voices: async () =>
-          ctx.data.gatewayReference
+        voices: async (route: SpeechModelSelection) =>
+          ctx.data.autoVoice && route.modelId === ctx.data.nextModelId
+            ? { source: 'provider', voices: ctx.data.nextVoices }
+            : ctx.data.openRouter
+            ? { source: 'provider', voices: ['sarah', 'george'].map(id => ({ id, name: id })) }
+            : ctx.data.gatewayReference
             ? { source: 'reference', voices: gatewayVoices.map((voice) => ({ ...voice })) }
             : ctx.data.systemCatalog
               ? {
@@ -133,6 +151,8 @@ mountPage({
                 : (sentencePlayback ?? true),
           };
           ctx.data.savedVoice = preference.selection?.voice;
+          ctx.data.savedModelId = preference.selection?.modelId;
+          ctx.data.saveCount = Number(ctx.data.saveCount) + 1;
           return preference;
         },
         // Controlled synthesis boundary: never contacts a provider or emits audio.

@@ -31,7 +31,7 @@ import {
   withWorktreeRestoreMutation,
 } from './restoreLock';
 import { copyClaudeSiviDirs } from './WorktreeManager';
-import { restoreRecordedWorktree } from './restoreRecovery';
+import { hasRecordedRecovery, restoreRecordedWorktree } from './restoreRecovery';
 import { readRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { withWorktreeResourceLock } from './resourceLock';
 import * as store from './worktreeStore';
@@ -371,7 +371,7 @@ async function getWorktreeRestorePlan(sessionId: string): Promise<WorktreeRestor
     && await pathExists(worktreePath)) {
     return { status: { state: 'present', worktreePath, hasSnapshot: false }, parsed };
   }
-  if (recovery?.snapshot && recovery.archive && ['removed', 'removing', 'restoring'].includes(recovery.phase)) {
+  if (hasRecordedRecovery(recovery) && ['removed', 'removing', 'restoring'].includes(recovery.phase)) {
     return { status: { state: 'restorable', worktreePath, hasSnapshot: true }, parsed };
   }
 

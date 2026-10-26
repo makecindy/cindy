@@ -1,6 +1,7 @@
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from '../status/CodexResetCredits';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
@@ -93,6 +94,7 @@ import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
+import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
   OwnRemoteProviderDetail,
@@ -868,6 +870,7 @@ function DetailHeader({
         className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [&>*]:shrink-0"
       >
         {detail && <div className="px-5 pb-4">{detail}</div>}
+        {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
         {assetModule ??
           (subscription && (
             <div
@@ -2498,11 +2501,11 @@ export function ProvidersSection() {
   }>({ dataOwnerId, ids: new Set<string>() });
   // 向导:null = 关;{ entry } = 打开(entry 指定直达的供应商,来自检测建议)。
   const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null } | null>(null);
-  const [wizard, setWizard] = useState<null | { entry?: WizardEntry }>(null);
+  const [wizard, setWizard] = useState<null | { entry?: WizardEntry; detected?: DetectedProviderDraft }>(null);
   // 自定义供应商完整表单(编辑,或从向导「自定义端点」进入新建)。
   const [dialog, setDialog] = useState<
     | null
-    | { mode: 'create' }
+    | { mode: 'create'; draft?: DetectedProviderDraft }
     | {
         mode: 'edit';
         config: CustomProviderConfig;
@@ -2611,6 +2614,8 @@ export function ProvidersSection() {
           p.id === MANAGED_LLAMACPP_PROVIDER_ID ||
           p.id === MANAGED_LMSTUDIO_PROVIDER_ID ||
           providerHasModels(p) ||
+          // Suspension gates actions, not the empty connection's enable entry.
+          !!providerSpeechSetup({ ...p, suspended: false }) ||
           (p.auth.method === 'oauth' && (!!p.auth.oauth || !!p.auth.native)))
       ) {
         rows.push(p);
@@ -2915,8 +2920,8 @@ export function ProvidersSection() {
 
   /**
    * 自定义供应商「刷新模型」:读回各 runtime 密钥 → fetchProviderModels →
-   * additions-only 合并进配置。新增模型默认隐藏,避免刷新扩大用户当前可用模型范围;
-   * 已有模型及其显式可见性不变。
+   * additions-only 合并进配置;已确认的 API Key 连接缺少语音型号时补一个参考。
+   * 已有型号及其显式可见性不变;后台自动刷新不补参考型号。
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
@@ -2924,7 +2929,7 @@ export function ProvidersSection() {
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
-        let anyOk = false;
+        const refreshedAgents = new Set<AgentKind>();
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
@@ -2948,7 +2953,7 @@ export function ProvidersSection() {
             refetch();
             return;
           }
-          anyOk = true;
+          refreshedAgents.add(agent);
           const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
@@ -2960,12 +2965,25 @@ export function ProvidersSection() {
           rt.models = merged.models;
           added += merged.addedIds.length;
         }
-        if (!anyOk) {
+        if (!refreshedAgents.size) {
           toast.error(t('settings.providers.models.refreshFailed'));
           return;
         }
-        await updateCustomProvider(config, {});
-        if (added > 0) {
+        // Main owns the active Registry and classifies the complete discovery
+        // result in the same save, without freezing defaults into user overrides.
+        let speechReferenceAdded = false;
+        const saved = await confirmProviderChange(async (options) => {
+          const result = await updateCustomProvider(config, {}, {
+            ...options,
+            ...(providerSpeechSetup(p) ? { speechReferenceRefreshAgents: [...refreshedAgents] } : {}),
+          });
+          speechReferenceAdded = result.ok && result.speechReferenceAdded === true;
+          return result;
+        });
+        if (!saved) return;
+        if (speechReferenceAdded) {
+          toast.success(t('settings.providers.models.refreshSpeechAdded'));
+        } else if (added > 0) {
           toast.success(t('settings.providers.models.refreshAdded', { count: added }));
         } else {
           toast.success(t('settings.providers.models.refreshNoNew'));
@@ -2977,7 +2995,7 @@ export function ProvidersSection() {
         finishProviderRefresh(p.id);
       }
     },
-    [beginProviderRefresh, finishProviderRefresh, refetch, t],
+    [beginProviderRefresh, confirmProviderChange, finishProviderRefresh, refetch, t],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
@@ -3412,9 +3430,7 @@ export function ProvidersSection() {
                         <UnifiedModelList
                           provider={effectiveSelected}
                           onAddSpeechModels={providerSpeechSetup(effectiveSelected) ? () => {
-                            const setup = providerSpeechSetup(effectiveSelected)!;
-                            if (setup.needsApiKey) setWizard({ entry: { kind: 'preset', presetId: setup.presetId, speechOnly: true } });
-                            else setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration });
+                            setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration });
                           } : undefined}
                           focusModelId={
                             focusedModel?.providerId === effectiveSelected.id
@@ -3526,6 +3542,8 @@ export function ProvidersSection() {
         <AddProviderWizard
           providers={providers}
           entry={wizard.entry}
+          detected={wizard.detected}
+          onReturnCustom={(draft) => { setWizard(null); setDialog({ mode: 'create', draft }); }}
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });
@@ -3541,6 +3559,8 @@ export function ProvidersSection() {
 
       {dialog && (
         <ProviderConnectionDialog
+          draft={dialog.mode === 'create' ? dialog.draft : undefined}
+          onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}

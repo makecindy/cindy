@@ -19,6 +19,8 @@ import {
   type PooledRemoteConnection,
 } from '../controller/connectionPool';
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
+import { ExecServerRelay } from '../controller/execServerRelay';
+import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 
@@ -613,6 +615,60 @@ afterEach(async () => {
 });
 
 describe('remote connection pool with a real host', () => {
+  // #6921 unit: startRemoteAgentSession must attempt every local cleanup and keep
+  // its failure for repeated teardown. Existing pool cases only failed remote close.
+  // Minimal input: one live run, with each local disposer failing after releasing
+  // its real resource. Reuses the loopback host harness without a real Agent process.
+  it('attempts every local disposer and retains all failures across account-boundary teardown', async () => {
+    const pool = newPool();
+    const failures = ['pool', 'relay', 'mcp', 'executor'].map((name) => new Error(`${name} cleanup failed`));
+    const remove = vi.fn();
+    const add = pool.add.bind(pool);
+    const addSpy = vi.spyOn(pool, 'add').mockImplementation((member) => {
+      const leave = add(member);
+      return () => { leave(); remove(); throw failures[0]; };
+    });
+    const closeRelay = ExecServerRelay.prototype.close;
+    const relaySpy = vi.spyOn(ExecServerRelay.prototype, 'close').mockImplementation(function (this: ExecServerRelay) {
+      closeRelay.call(this);
+      throw failures[1];
+    });
+    const closeExecutor = RemoteExecutor.prototype.close;
+    const executorSpy = vi.spyOn(RemoteExecutor.prototype, 'close').mockImplementation(async function (this: RemoteExecutor) {
+      await closeExecutor.call(this);
+      throw failures[3];
+    });
+    const disposeMcp = vi.fn(() => { throw failures[2]; });
+    try {
+      const handle = await startRemoteAgentSession('codex', {
+        sessionId: randomUUID(), workingDir: project, model: 'm1',
+      }, {
+        ...deps(pool),
+        // The fake Agent does not open exec-server; no Codex process is launched.
+        codexPath: () => path.join(root, 'unused-codex'),
+        prepareMcp: async () => ({ servers: new Map(), dispose: disposeMcp }),
+      });
+      opened.push(handle);
+      const first = await Promise.allSettled([handle.close({ reason: 'account-boundary' })]);
+      expect(first[0].status).toBe('rejected');
+      if (first[0].status !== 'rejected') throw new Error('Local cleanup failure must reach the owner');
+      expect(first[0].reason).toBeInstanceOf(AggregateError);
+      expect((first[0].reason as AggregateError).errors).toEqual(failures);
+      const repeated = await Promise.allSettled([handle.detach!({ reason: 'account-boundary' })]);
+      expect(repeated[0].status).toBe('rejected');
+      if (repeated[0].status === 'rejected') expect(repeated[0].reason).toBe(first[0].reason);
+      expect(remove).toHaveBeenCalledOnce();
+      expect(relaySpy).toHaveBeenCalledOnce();
+      expect(disposeMcp).toHaveBeenCalledOnce();
+      expect(executorSpy).toHaveBeenCalledOnce();
+      expect(pool.size).toBe(0);
+    } finally {
+      addSpy.mockRestore();
+      relaySpy.mockRestore();
+      executorSpy.mockRestore();
+    }
+  });
+
   // 回归：重启恢复遇到 1.5s 建连超时就失败；原用例只覆盖已连上的打开/连回。
   // 生产入口 startRemoteAgentSession，最小输入为 caps 连续两次 NOT_CONNECTED；
   // unit，假计时器验证等待期间另一控制端仍可请求，且恢复后只打开一个 run。

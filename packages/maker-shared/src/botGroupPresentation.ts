@@ -60,6 +60,19 @@ export function botGroupPreviewLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+/** New arrivals below a reader's viewport, excluding history pages and repeat snapshots. */
+export function botGroupNewMessageCount(messages: readonly BotGroupMessageView[], seenThrough: number | string | null, threadRootId?: string): number {
+  if (seenThrough === null) return 0;
+  const incoming = new Set<string>();
+  for (const message of messages) {
+    if (BigInt(message.serverSequence ?? message.sequence) <= BigInt(seenThrough) || message.deleted || (message.threadRootId ?? undefined) !== threadRootId || message.isSelf === true
+      || (message.kind !== 'message' && message.kind !== 'plan')
+      || (message.authorKind !== 'bot' && message.isSelf !== false) || message.authorKind === 'system') continue;
+    incoming.add(message.id);
+  }
+  return incoming.size;
+}
+
 /**
  * The only round-end that may offer 「继续讨论」: the newest one, and only while
  * the host says the round can be continued.

@@ -29,7 +29,7 @@ let stored: CustomProviderConfig = {
   },
 };
 function view(): ProviderView {
-  const provider = buildUserProvider(stored);
+  const provider = buildUserProvider(stored, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
   return { ...provider, connected: true, availableMediaModelIds: provider.audioModels?.map(model => model.id) ?? [] };
 }
 function VisibilityEvidence() {
@@ -74,17 +74,8 @@ function Fixture({ scenario }: { scenario: string }) {
         {visibilityReady && <UnifiedModelList
           provider={provider}
           focusModelId={scenario === 'speech-visibility' ? 'speech-2.8-hd' : undefined}
-          onAddSpeechModels={
-            setup
-              ? () => {
-                  if (setup.needsApiKey)
-                    setWizard({
-                      entry: { kind: 'preset', presetId: setup.presetId, speechOnly: true },
-                    });
-                  else setSpeech(true);
-                }
-              : undefined
-          }
+          onRefresh={forbid('manualRefresh: covered by ProvidersSection regression tests')}
+          onAddSpeechModels={setup ? () => setSpeech(true) : undefined}
         />}
       </div>
       {scenario === 'speech-visibility' && visibilityReady && <VisibilityEvidence />}
@@ -129,6 +120,7 @@ function Fixture({ scenario }: { scenario: string }) {
 }
 void mountPage({
   host: (ctx) => {
+    if (ctx.case === 'empty') stored.runtimes.codex!.models = [];
     if (ctx.case === 'speech-visibility')
       stored.runtimes.codex!.models.push({ id: 'speech-2.8-hd', name: 'MiniMax Speech 2.8 HD', mode: 'audio_speech', defaultEnabled: false });
     if (ctx.case === 'token-plan-existing')

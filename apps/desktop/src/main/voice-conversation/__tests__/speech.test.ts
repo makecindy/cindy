@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SpeechSynthesisSession } from '../speech.js';
+import { MAX_ENCODED_SPEECH_BYTES } from '../../../shared/voiceConversation.js';
 
 const make = (
   fetcher: typeof fetch = vi.fn(
@@ -21,6 +22,102 @@ const make = (
   return { speech, fetcher, assertCurrent, diagnostic };
 };
 const input = { requestId: 'one', modelId: 'speech-model', voice: 'alloy', text: 'hello' };
+
+// Unit regression: OpenRouter MiniMax rejects PCM (HTTP 400). Existing native
+// MiniMax/PCM cases cannot catch this route-specific format or prefetch contract.
+it('prefetches a complete OpenRouter MiniMax MP3 without treating compressed bytes as PCM', async () => {
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { body = controller; },
+  }), { headers: { 'Content-Type': 'audio/mpeg' } }));
+  const speech = new SpeechSynthesisSession({
+    connection: () => ({ baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai', headers: {} }),
+    assertCurrent: () => {},
+    fetch: fetcher,
+  });
+  let ready = false;
+  const starting = speech.start({ ...input, modelId: 'minimax/speech-2.8-turbo' })
+    .then(result => { ready = true; return result; });
+  void starting.catch(() => {});
+  expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({
+    model: 'minimax/speech-2.8-turbo', response_format: 'mp3',
+  });
+  body.enqueue(new Uint8Array([0xff, 0xfb]));
+  await Promise.resolve();
+  expect(ready).toBe(false);
+  body.enqueue(new Uint8Array([1]));
+  body.close();
+  expect(await starting).toEqual({ format: 'mp3', data: new Uint8Array([0xff, 0xfb, 1]).buffer });
+  await expect(speech.read(input.requestId)).rejects.toThrow('cancelled');
+});
+
+function openRouterSession(fetcher: typeof fetch, baseUrl = 'https://openrouter.ai/api/v1') {
+  const assertCurrent = vi.fn();
+  const speech = new SpeechSynthesisSession({
+    connection: () => ({ baseUrl, protocol: 'openai', headers: {} }),
+    assertCurrent, fetch: fetcher,
+  });
+  return { speech, assertCurrent };
+}
+const miniInput = { ...input, modelId: 'minimax/speech-2.8-turbo' };
+
+it.each([
+  ['https://gateway.test/v1', 'minimax/speech-2.8-turbo'],
+  ['https://openrouter.ai/custom', 'minimax/speech-2.8-turbo'],
+  ['https://openrouter.ai.evil.test/api/v1', 'minimax/speech-2.8-turbo'],
+  ['https://openrouter.ai/api/v1', 'elevenlabs/eleven-v3'],
+])('retains streaming PCM on %s for %s', async (baseUrl, modelId) => {
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2]), {
+    headers: { 'Content-Type': 'audio/pcm' },
+  }));
+  const { speech } = openRouterSession(fetcher, baseUrl);
+  expect(await speech.start({ ...input, modelId })).toEqual({ sampleRate: 24000 });
+  expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).response_format).toBe('pcm');
+  expect((await speech.read(input.requestId)).pcm.byteLength).toBe(2);
+  speech.cancel();
+});
+
+it.each(['empty', 'oversize', 'wrong-format'] as const)(
+  'rejects %s MP3 responses before returning audio to the player', async kind => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(body) {
+        if (kind === 'empty') body.close();
+        else if (kind === 'oversize') body.enqueue(new Uint8Array(MAX_ENCODED_SPEECH_BYTES + 1));
+        else body.enqueue(new TextEncoder().encode('private upstream error'));
+      }, cancel,
+    }), { headers: { 'Content-Type': kind === 'wrong-format' ? 'application/json' : 'audio/mpeg' } });
+    const { speech } = openRouterSession(vi.fn(async () => response));
+    await expect(speech.start(miniInput)).rejects.toThrow('format');
+    if (kind !== 'empty') expect(cancel).toHaveBeenCalled();
+  },
+);
+
+it.each(['interrupt', 'owner-change', 'timeout'] as const)(
+  'revokes an MP3 prefetch on %s without returning late encoded audio', async reason => {
+    vi.useFakeTimers();
+    try {
+      let body!: ReadableStreamDefaultController<Uint8Array>;
+      const cancel = vi.fn();
+      const { speech, assertCurrent } = openRouterSession(vi.fn(async () => new Response(
+        new ReadableStream<Uint8Array>({ start(controller) { body = controller; }, cancel }),
+        { headers: { 'Content-Type': 'audio/mpeg' } },
+      )));
+      const pending = speech.start(miniInput);
+      const rejected = expect(pending).rejects.toThrow(reason === 'timeout' ? 'timeout' : reason === 'interrupt' ? 'cancelled' : 'request');
+      body.enqueue(new Uint8Array([0xff, 0xfb]));
+      await vi.advanceTimersByTimeAsync(0);
+      if (reason === 'interrupt') speech.cancel();
+      else if (reason === 'owner-change') {
+        assertCurrent.mockImplementation(() => { throw new Error('owner changed'); });
+        body.enqueue(new Uint8Array([1]));
+      } else await vi.advanceTimersByTimeAsync(15_001);
+      await rejected;
+      expect(cancel).toHaveBeenCalled();
+      await expect(speech.read(input.requestId)).rejects.toThrow();
+    } finally { vi.useRealTimers(); }
+  },
+);
 
 describe('speech transport', () => {
   it('preserves the server-provided endpoint prefix, sends the selected model, and pulls binary PCM', async () => {
@@ -175,6 +272,9 @@ it.each([
 
 it.each([
   ['openai', 'tts', 4.1],
+  // Live Gateway rejects these speeds; transport must guard direct callers too.
+  ['openai', 'qwen/qwen-audio-3.1-tts-plus', 0.25],
+  ['openai', 'qwen/qwen-audio-3.1-tts-plus', 4],
   ['elevenlabs', 'eleven_flash_v2_5', 1.25],
   ['elevenlabs', 'eleven_v3', 1],
   ['minimax', 'speech-02-hd', 0.4],
