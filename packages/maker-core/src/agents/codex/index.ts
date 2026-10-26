@@ -8036,19 +8036,31 @@ assertRouteCurrent();
       let denialReason = formatPermissionDenial('system', 'Approval was cancelled or became stale.');
       const decision = await withCodexGenerationPaused<ApprovalDecision>(requestThreadId, turnId, timingPauseId, async () => {
         // Native Codex currently flattens MCP declines to "user rejected" and
-        // discards response content/_meta on that path. Preserve the cause in
-        // Cindy's diagnostic/UI channel; this notice is NOT model context.
-        const reportMcpDenial = (source: 'auto-review' | 'system' | 'user', reason?: string, visible = true) => {
+        // discards response content/_meta on that path (codex-rs
+        // core/src/mcp_tool_call.rs: ElicitationAction::Decline =>
+        // ReviewDecision::denied("user rejected MCP tool call")). The model
+        // facing text is owned by the app-server, so the real cause can only be
+        // preserved in Cindy's diagnostic/UI channel; this notice is NOT model
+        // context. Keep it truthful: it must never claim a user rejection that
+        // did not happen, and it must say why the call never reached the user.
+        const reportMcpDenial = (
+          source: 'auto-review' | 'system' | 'user',
+          reason?: string,
+          visible = true,
+          policyCause?: string,
+        ) => {
           if (kind !== 'mcpServerElicitation') return;
           const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
             (reason === 'timeout' || reason?.endsWith('_timeout'));
           const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
             : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
           // IDs and a closed set of causes only: no arguments, credentials, or
-          // free-text reviewer output may enter the diagnostic log.
+          // free-text reviewer output may enter the diagnostic log. Cindy's own
+          // policy reasons are fixed copy without user data and may be carried.
           log.info('MCP approval denied', {
             threadId: requestThreadId, turnId, requestId, itemId: opts?.itemId,
             source, cause: source === 'user' ? 'user-denied' : code,
+            ...(policyCause ? { causeDetail: policyCause } : {}),
           });
           if (source === 'user' || !visible) return;
           const text = source === 'auto-review'
@@ -8056,8 +8068,15 @@ assertRouteCurrent();
             : timedOut
               ? 'The permission request timed out without a confirmed decision. This does not establish whether the user clicked a button.'
               : 'The permission confirmation could not be completed. No user rejection was received.';
-          emitAutoReviewRuntimeNotice(`[${code}] ${text}`);
+          emitAutoReviewRuntimeNotice(`[${code}] ${text}${policyCause ? ` ${policyCause}` : ''}`);
         };
+        /**
+         * Cindy 自己的确定性判定原因（动作文本超限、证据不足、授权范围变化）。
+         * 这些是固定文案，不含用户数据，可以原样进诊断/UI 通道；审阅模型的自由
+         * 文本可能含参数、路径、片段，一律不进（policyReason 缺省即视为模型文本）。
+         */
+        const policyReason = (decision: AutoReviewDecision): string | undefined =>
+          decision.policyReason === true ? decision.reason : undefined;
         const turnPolicyForcePrompt = req.kind === 'permission'
           && forceTurnConfirmation(req.toolName, req.input);
         let forcePrompt = opts?.forcePrompt === true || turnPolicyForcePrompt;
@@ -8136,7 +8155,10 @@ assertRouteCurrent();
           } else if (reviewPermissionMode === 'auto' && decision.verdict === 'block') {
             denialReason = formatPermissionDenial('auto', decision.reason);
             // Keep the denial, but distinguish it from a user decision in Cindy.
-            reportMcpDenial('auto-review');
+            // Carry Cindy's own reason (oversized action text, missing evidence)
+            // so the banner says why the call never reached the user. Model
+            // free text stays out of the diagnostic channel.
+            reportMcpDenial('auto-review', undefined, true, policyReason(decision));
             return 'decline';
           } else {
             // AI ask decisions reach the user and cannot be remembered.
@@ -9296,6 +9318,26 @@ assertRouteCurrent();
       return input;
     }
 
+    /**
+     * MCP 调用的审阅证据必须是**原始调用**，不是确认卡的渲染结果。
+     *
+     * codex 会把同一份 tool_params 再渲染一份 tool_params_display 一起发给客户端
+     * （codex-rs core/src/mcp_tool_call.rs 的 build_mcp_tool_approval_display_params：
+     * 同一对象的逐字段副本，不是截断版）。两份都进证据等于把同一个动作数两遍 ——
+     * 动作文本长度按 4096 字符预算计量（MAX_AUTO_REVIEW_ACTION_TEXT_CHARS），
+     * 参数里带一段几 KB 指令的普通调用就会凭空超预算被静默拦截：用户从没被问过，
+     * Agent 还被告知「用户拒绝」（#7254）。
+     *
+     * 这里只去掉**重复的那一份**：原始参数一字不删地保留，审阅模型看到的动作内容
+     * 与之前完全一致，变的只是同一份内容不再被计两次。上下文（elicitation 的
+     * message）本来就在 input 里，也不再重复一份。
+     */
+    function mcpToolReviewAction(toolName: string, input: Record<string, unknown>): ReviewableAction {
+      const rawInput: Record<string, unknown> = { ...input };
+      delete rawInput.toolParamsDisplay;
+      return { kind: 'other', description: JSON.stringify({ toolName, input: rawInput }) };
+    }
+
     function mcpToolApprovalContext(params: McpServerElicitationRequestParams) {
       const meta = mcpElicitationMeta(params);
       let toolName = stringFromMeta(meta, 'tool_name');
@@ -9507,9 +9549,12 @@ assertRouteCurrent();
           // Display text is not execution evidence. An absent argument payload
           // must hit the shared missing-evidence denial, never reach AI as a
           // seemingly complete action made only of server/title/message fields.
-          ...(policyPermissionInput.toolParams === undefined
-            ? { autoReviewAction: { kind: 'other' as const, description: undefined } }
-            : {}),
+          // Present arguments are reviewed as the raw call: the confirmation
+          // card's rendering of the same arguments must not be counted twice
+          // against the review budget (see mcpToolReviewAction).
+          autoReviewAction: policyPermissionInput.toolParams === undefined
+            ? { kind: 'other' as const, description: undefined }
+            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );

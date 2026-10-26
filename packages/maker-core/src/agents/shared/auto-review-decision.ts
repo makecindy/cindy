@@ -15,6 +15,14 @@ export type AutoReviewDecision = {
   verdict: 'allow' | 'block' | 'ask';
   reason?: string;
   /**
+   * `true` = `reason` 是 Cindy 自己的确定性文案 —— 动作文本超限、证据不足、审阅器
+   * 故障、授权范围变化。内容是固定句式，不含用户数据，可以原样进 UI / 日志 / 诊断通道。
+   *
+   * 缺省即视为**模型自由文本**：可能含参数、路径、片段等用户内容，一律不得外泄。
+   * 只有显式标成 policy 的 reason 才允许进诊断通道（见 codex 的 MCP 拦截通知）。
+   */
+  policyReason?: true;
+  /**
    * `true` = 这个 `ask` 来自**审阅器没跑起来**（delegate 缺失 / 超时 / 抛错 / 返回非法），
    * 不是模型判定动作危险。
    *
@@ -312,19 +320,32 @@ export async function withAutoReviewContext(
 ): Promise<AutoReviewDecision> {
   try {
     const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
-    if (prepared.authorizationError) return { verdict: 'block', reason: prepared.authorizationError };
+    if (prepared.authorizationError) {
+      // Host-authored text: not a fixed policy sentence, so it stays out of
+      // diagnostics like model free text does.
+      return { verdict: 'block', reason: prepared.authorizationError };
+    }
     const fingerprint = JSON.stringify(prepared);
     const decision = await evaluate(prepared);
     if (delegate?.prepareRequest) {
       const current = await delegate.prepareRequest(request);
       if (current.authorizationError || JSON.stringify(current) !== fingerprint) {
-        return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+        return {
+          verdict: 'block',
+          reason: 'Delegated authorization changed; retry against the current scope.',
+          policyReason: true,
+        };
       }
     }
     // No await after the live runtime fence: Host lookup may outlive accepted input.
     return finalize(decision);
   } catch {
-    return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
+    return {
+      verdict: 'ask',
+      unavailable: true,
+      reason: 'Host could not verify the current authorization; this action needs your confirmation.',
+      policyReason: true,
+    };
   }
 }
 
@@ -534,7 +555,7 @@ export async function resolveAutoReviewDecision(
   // Beyond the complete model-review budget, retain the existing confirmation path.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
   if (oversizedEvidenceReason) {
-    return { verdict: 'ask', reason: oversizedEvidenceReason };
+    return { verdict: 'ask', reason: oversizedEvidenceReason, policyReason: true };
   }
   const localTier = classifyLocalAutoReviewTier(request);
   // The registered task can constrain reads as well as writes. No delegated
@@ -547,12 +568,14 @@ export async function resolveAutoReviewDecision(
     return {
       verdict: 'block',
       reason: missingEvidenceReason,
+      policyReason: true,
     };
   }
   if (!delegate) {
     return {
       verdict: 'ask',
       reason: 'Automatic review is unavailable, so this action needs your confirmation.',
+      policyReason: true,
       unavailable: true,
     };
   }
@@ -586,6 +609,8 @@ export async function resolveAutoReviewDecision(
       return {
         verdict: decision.verdict,
         ...(reason ? { reason } : {}),
+        // The delegate is the model boundary: anything it returns is model free
+        // text and must stay out of diagnostics (no policyReason marker).
       };
     }
   } catch {
@@ -598,6 +623,7 @@ export async function resolveAutoReviewDecision(
   return {
     verdict: 'ask',
     reason: 'Automatic review could not complete, so this action needs your confirmation.',
+    policyReason: true,
     unavailable: true,
   };
 }
