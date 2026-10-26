@@ -116,7 +116,9 @@ describe('setActiveAccount / touchAccount / updateIdentity', () => {
   });
 
   it('refuses an identity update that duplicates another account', () => {
-    let { state, account } = addAccount(emptyRegistry(NOW), { label: 'Work', identity: { email: 'w@example.com' } }, deps);
+    const added = addAccount(emptyRegistry(NOW), { label: 'Work', identity: { email: 'w@example.com' } }, deps);
+    const { account } = added;
+    let { state } = added;
     expect(errorCode(() => updateIdentity(state, MASTER_ACCOUNT_ID, { email: 'W@example.com' }))).toBe(
       'duplicate_identity',
     );

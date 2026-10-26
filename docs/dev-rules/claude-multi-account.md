@@ -185,15 +185,17 @@ already exists in `capability-routing.ts`).
   - quota.
 - **Handoff preview** ("Preview pickup"): shows the snapshot, the brief and both token estimates
   for the current task without switching.
-- **Smoke script** `scripts/claude-accounts-smoke.mjs`. It runs on the real file system in a temp
-  dir and checks:
+- **Real file system suite** `claude-accounts/__tests__/profileLinker.test.ts`. It runs on real
+  junctions and hard links in a temp dir and checks:
   - linking works;
   - a write through the profile reaches the master;
   - a broken hard link is repaired with the conflict copy kept;
-  - removal keeps the master intact;
+  - mirror mode syncs back, including during removal;
+  - removal keeps the master intact and refuses leftover links;
   - `.credentials.json` is never linked.
-
-  It exits non-zero on any failure.
+- **Measured on a real transcript** (this branch's own working session, Windows):
+  1,457 lines parsed in 11.6 ms. Full resume ≈ 325,500 context tokens vs a Mission Brief of
+  ≈ 1,089 tokens.
 - Structured logs under the `claude-accounts` logger. Paths are logged; file contents and
   credentials never are.
 

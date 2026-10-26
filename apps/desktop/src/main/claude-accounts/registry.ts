@@ -150,8 +150,9 @@ export function updateIdentity(
   const cleaned = cleanIdentity(identity);
   assertUniqueIdentity(state, cleaned, id);
   return replaceAccount(state, id, (a) => {
-    const { identity: _old, ...rest } = a;
-    return cleaned ? { ...rest, identity: cleaned } : rest;
+    const next: ClaudeAccount = { ...a };
+    delete next.identity;
+    return cleaned ? { ...next, identity: cleaned } : next;
   });
 }
 
