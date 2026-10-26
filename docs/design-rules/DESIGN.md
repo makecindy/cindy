@@ -1185,7 +1185,8 @@ Known but deliberately-deferred cleanups are tracked in the decision log's backl
 
 Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc. **Not** ordinary single-line editors in Settings — there Enter must not submit.
 
-- **Enter = submit**, **Shift+Enter = newline**.
+- **Default: Enter = submit**, **Shift+Enter = newline**.
+- The Desktop chat composer follows its configured send shortcut. With Cmd/Ctrl+Enter to send, bare Enter is a newline. Newline keys continue a non-empty list item or exit an empty item, while send keys retain their send behavior. Implementation: [ChatInput.tsx](../../apps/desktop/src/renderer/components/new-chat/ChatInput.tsx); keyboard regressions: [chatInputModelLoading.test.tsx](../../apps/desktop/src/renderer/components/new-chat/__tests__/chatInputModelLoading.test.tsx).
 - **Enter during IME composition must not submit** — check `event.nativeEvent.isComposing` (a CJK user confirming a candidate must not accidentally send).
 - Centralize this logic in code; do not re-implement it per field and let behavior drift (per "code-first determinism" in `docs/dev-rules/maker-core-and-agent-behavior.md`).
 

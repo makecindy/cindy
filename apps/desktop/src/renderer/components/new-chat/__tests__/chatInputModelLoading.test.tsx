@@ -13,6 +13,10 @@ import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
+  _resetComposerSendShortcutPreferenceForTests,
+  COMPOSER_SEND_SHORTCUT_STORAGE_KEY,
+} from '@/hooks/useComposerSendShortcutPreference';
+import {
   __testing as promptRecommendations,
   beginPromptRecommendationPrediction,
   clearPromptRecommendationSession,
@@ -194,6 +198,128 @@ const queueShortcuts = [
   { platform: 'darwin', metaKey: true, ctrlKey: false },
   { platform: 'win32', metaKey: false, ctrlKey: true },
 ];
+
+// #7227: exercise the real ChatInput keydown, list document, and outgoing
+// Markdown. Helper-only list tests miss the send-preference routing. The minimal
+// failing input is one non-empty list item + bare Enter in modifier-enter mode.
+// Reuse this unit/jsdom harness rather than importing ChatInput in another file.
+afterEach(() => {
+  localStorage.removeItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY);
+  _resetComposerSendShortcutPreferenceForTests();
+});
+
+it.each([
+  { tag: 'ul', markdown: '- First\n- Second', platform: 'darwin', metaKey: true, ctrlKey: false },
+  { tag: 'ol', markdown: '1. First\n2. Second', platform: 'win32', metaKey: false, ctrlKey: true },
+])('continues $tag with Enter and sends with the configured modifier on $platform', async scenario => {
+  h.platform = scenario.platform;
+  localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+  _resetComposerSendShortcutPreferenceForTests();
+  h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(<ChatInput {...queueShortcutProps} pendingQueue={[]} onSend={onSend} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent(`<${scenario.tag}><li><p>First</p></li></${scenario.tag}>`);
+    h.editor!.commands.focus('end');
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter' });
+  });
+  expect(h.editor!.view.dom.querySelectorAll('li')).toHaveLength(2);
+  expect(onSend).not.toHaveBeenCalled();
+  await act(async () => {
+    h.editor!.commands.insertContent('Second');
+    fireEvent.keyDown(h.editor!.view.dom, {
+      key: 'Enter', code: 'Enter', metaKey: scenario.metaKey, ctrlKey: scenario.ctrlKey,
+    });
+  });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][0]).toBe(scenario.markdown);
+});
+
+// #7231 review: list-looking code must survive newline and send unchanged.
+// Cover native paragraph breaks and existing soft-break drafts in this harness.
+it.each([
+  { fence: '```', marker: '- value', softBreak: false },
+  { fence: '~~~', marker: '1. value', softBreak: true },
+])('keeps code literal across Enter with $fence (softBreak=$softBreak)', async scenario => {
+  localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+  _resetComposerSendShortcutPreferenceForTests();
+  h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(<ChatInput {...queueShortcutProps} pendingQueue={[]} onSend={onSend} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    const lines = [scenario.fence, scenario.marker];
+    h.editor!.commands.setContent({
+      type: 'doc',
+      content: scenario.softBreak
+        ? [{ type: 'paragraph', content: [
+            { type: 'text', text: lines[0] }, { type: 'hardBreak' }, { type: 'text', text: lines[1] },
+          ] }]
+        : lines.map(text => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
+    });
+    h.editor!.commands.focus('end');
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter' });
+  });
+  const doc = h.editor!.state.doc;
+  expect(doc.textBetween(0, doc.content.size, '\n', '\n')).toBe(`${scenario.fence}\n${scenario.marker}\n`);
+  expect(onSend).not.toHaveBeenCalled();
+  await act(async () => {
+    h.editor!.commands.insertContent(scenario.fence);
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter', metaKey: true });
+  });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][0]).toBe(`${scenario.fence}\n${scenario.marker}\n${scenario.fence}`);
+});
+
+it('resumes plain list continuation after a fence closes within the current paragraph', async () => {
+  localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+  _resetComposerSendShortcutPreferenceForTests();
+  render(<ChatInput {...queueShortcutProps} pendingQueue={[]} onSend={vi.fn()} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent({ type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: '```' }] },
+      { type: 'paragraph', content: [
+        { type: 'text', text: 'code' }, { type: 'hardBreak' },
+        { type: 'text', text: '```' }, { type: 'hardBreak' }, { type: 'text', text: '- First' },
+      ] },
+    ] });
+    h.editor!.commands.focus('end');
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter' });
+  });
+  const doc = h.editor!.state.doc;
+  expect(doc.textBetween(0, doc.content.size, '\n', '\n')).toBe('```\ncode\n```\n- First\n- ');
+});
+
+it('exits an empty list item with Enter in modifier-enter mode', async () => {
+  localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+  _resetComposerSendShortcutPreferenceForTests();
+  render(<ChatInput {...queueShortcutProps} pendingQueue={[]} onSend={vi.fn()} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent('<ul><li><p>First</p></li><li><p></p></li></ul>');
+    h.editor!.commands.focus('end');
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter' });
+  });
+  expect(h.editor!.view.dom.querySelectorAll('li')).toHaveLength(1);
+  expect(h.editor!.state.doc.lastChild?.type.name).toBe('paragraph');
+  expect(h.editor!.state.doc.lastChild?.textContent).toBe('');
+});
+
+it('still sends a list with bare Enter in the default send mode', async () => {
+  h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(<ChatInput {...queueShortcutProps} pendingQueue={[]} onSend={onSend} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent('<ul><li><p>First</p></li></ul>');
+    h.editor!.commands.focus('end');
+    fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter' });
+  });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][0]).toBe('- First');
+});
 
 it.each(queueShortcuts)('steers the sole queued message from the empty focused composer on $platform', async shortcut => {
   h.platform = shortcut.platform;

@@ -80,6 +80,15 @@ function documentFenceStateBefore(doc: PMNode, position: number): FenceState | n
   return fence;
 }
 
+/** Share the input rules' fence semantics with plain-text newline handling. */
+export function isComposerCaretInsideCodeFence(view: EditorView): boolean {
+  const { $from } = view.state.selection;
+  if ($from.depth === 0 || !$from.parent.isTextblock) return false;
+  const precedingFence = documentFenceStateBefore(view.state.doc, $from.before(1));
+  const textBeforeCaret = $from.parent.textBetween(0, $from.parentOffset, '\n', '\n');
+  return scanFenceState(textBeforeCaret, precedingFence) !== null;
+}
+
 function plainListParagraphMarker(text: string): PlainListParagraphMarker | null {
   const bullet = text.match(/^([-+*•])([ \t]+)/);
   if (bullet) {

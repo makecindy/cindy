@@ -4,8 +4,8 @@ import type { ResolvedPos } from '@tiptap/pm/model';
 /**
  * Composer 纯文本 Markdown 列表的兼容接续。结构化 bullet / ordered list
  * 由编辑器 schema 处理；本模块继续覆盖粘贴或旧草稿中的文本前缀，以及尚未
- * 结构化的待办和引用前缀。Shift/Alt+Enter 接续或退出当前项，普通 Enter
- * 始终保持发送语义。
+ * 结构化的待办和引用前缀。调用方按当前快捷键配置决定换行或发送，并在
+ * 代码围栏内跳过续项；本模块只执行已确认的列表前缀接续。
  */
 
 export type ListContinuation =
