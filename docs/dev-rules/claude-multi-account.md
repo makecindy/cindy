@@ -3,7 +3,8 @@
 > Status:
 > - Phase 1 (core modules): done.
 > - Phase 2 (runtime): done, except Orca per-Worker account pinning (§4.5).
-> - Phase 3 (UI): not started.
+> - Phase 3 (UI): accounts panel, IPC and handoff dialog done. Real in-app check with two signed-in
+>   subscriptions pending.
 > Branch: `feat/claude-multi-account`. Owner: CODER7657 fork.
 
 ## 1. Goal
@@ -207,6 +208,33 @@ test in phase 3.
   ≈ 1,089 tokens.
 - Structured logs under the `claude-accounts` logger. Paths are logged; file contents and
   credentials never are.
+
+## 5a. UI and IPC (phase 3)
+- **Channels** `maker:claude-accounts:{list,add,cancel-add,switch,remove,health,handoff-preview}`
+  (`claude-accounts/ipc.ts`, registered in `ipcRegistration.ts`):
+  - every handler checks the sender first and validates its payload;
+  - results carry no paths and no raw errors;
+  - add and switch refuse while no data owner is active.
+- **Local only:** the channels are deliberately **not** in the device-link allowlist. Sign-in
+  happens in this computer's browser, and phones and remote control have no need to manage
+  accounts.
+- **Settings → Providers → Claude Code** (`ClaudeAccountsPanel.tsx`, shown only while the
+  subscription is connected):
+  - every account with Master and Active badges;
+  - Switch;
+  - Add (name, then one official CLI sign-in; cancellable);
+  - Remove (confirmation; master never);
+  - Check accounts (read-only health);
+  - the ownership notice.
+- **Session menu → "Continue on another Claude account…"** (`ClaudeHandoffMenuItem.tsx`, local
+  Claude Code sessions only). It opens the shared three-way confirm dialog with an account picker
+  and the two options with their token estimates:
+  - **Resume here** switches the account. The same session continues there on the next message.
+  - **New session from brief** switches the account and opens a new-session draft in the same
+    working folder, prefilled with the brief.
+
+  Token counts use the UI language's number format, not the OS locale.
+- **Strings** are in the top-level `claudeAccounts` i18n group, in all five locales.
 
 ## 6. Failure modes
 

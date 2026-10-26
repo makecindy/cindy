@@ -71,6 +71,7 @@ import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
+import { ClaudeHandoffMenuItem } from '../claude-accounts/ClaudeHandoffMenuItem';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
@@ -743,6 +744,7 @@ export function SessionContentHeader({
                 {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
               </DropdownMenuItem>
             }
+            handoff={<ClaudeHandoffMenuItem session={session} className={MENU_ITEM_CLASS} />}
             exportShare={
               canExportShare && (
                 <DropdownMenuItem

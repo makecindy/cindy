@@ -53,6 +53,8 @@ interface Props {
   tags: ReactNode;
   copy: ReactNode;
   exportShare: ReactNode;
+  /** Optional "Continue on another Claude account…" item; only the session header passes it. */
+  handoff?: ReactNode;
 }
 
 type SharingDialog =
@@ -85,6 +87,7 @@ function ActiveSessionTaskMenu({
   tags,
   copy,
   exportShare,
+  handoff,
   dialog,
   setDialog,
 }: Props & {
@@ -293,6 +296,7 @@ function ActiveSessionTaskMenu({
               />
             )}
             {exportShare}
+            {!archived && !empty && handoff}
             {!archived && !empty && (
               <>
                 {separator}
