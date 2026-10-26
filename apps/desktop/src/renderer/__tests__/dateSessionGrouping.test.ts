@@ -77,6 +77,23 @@ describe('groupSessionsByActivityDate', () => {
     ]);
   });
 
+  it('keeps yesterday distinct across the 23-hour DST start day', () => {
+    const previousTZ = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      // 最小失败输入：2026-03-09 查看前一天活动；两个本地午夜实际只相差 23 小时。
+      const groups = groupSessionsByActivityDate(
+        [s({ id: 'dst-yesterday', userSendAt: '2026-03-08T12:00:00' })],
+        new Date(2026, 2, 9, 12),
+      );
+      expect(groups).toHaveLength(1);
+      expect(groups[0].kind).toBe('yesterday');
+    } finally {
+      if (previousTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTZ;
+    }
+  });
+
   it('uses updatedAt when userSendAt is missing', () => {
     const now = new Date('2026-05-17T12:00:00');
     const groups = groupSessionsByActivityDate(
