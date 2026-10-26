@@ -82,6 +82,10 @@ describe('groupSessionsByActivityDate', () => {
     process.env.TZ = 'America/Los_Angeles';
     try {
       // 最小失败输入：2026-03-09 查看前一天活动；两个本地午夜实际只相差 23 小时。
+      // The file runs in a fork: changing TZ in a worker thread can silently leave Date in UTC.
+      // Assert the real DST boundary so an ineffective timezone setup cannot pass this regression.
+      expect(new Date(2026, 2, 9).getTime() - new Date(2026, 2, 8).getTime())
+        .toBe(23 * 60 * 60 * 1000);
       const groups = groupSessionsByActivityDate(
         [s({ id: 'dst-yesterday', userSendAt: '2026-03-08T12:00:00' })],
         new Date(2026, 2, 9, 12),

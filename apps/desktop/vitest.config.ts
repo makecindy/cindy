@@ -108,6 +108,10 @@ export default defineConfig({
           name: 'standard',
           include: desktopTestInclude,
           exclude: [...gitIntegrationTestInclude, ...cliTestExclude],
+          // Native Date observes TZ changes in a process, not a worker thread.
+          // Keep this file isolated even when the workspace runner passes --pool=threads.
+          // Vitest 3 applies that CLI flag over project.pool, so use its per-file override.
+          poolMatchGlobs: [['**/src/renderer/__tests__/dateSessionGrouping.test.ts', 'forks']],
         },
       },
       {
