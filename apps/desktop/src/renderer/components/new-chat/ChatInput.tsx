@@ -41,7 +41,7 @@ import {
   ComposerListItem,
   ComposerOrderedList,
   handleStructuredListBackspace,
-  handleStructuredListBreak,
+  handleComposerListEnter,
   hasTrailingPlainListParagraph,
   isTopLevelBlockSelection,
   isTrailingEmptyTopLevelParagraph,
@@ -299,7 +299,7 @@ import {
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
 import { countUserExtraDirs, MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
-import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
+import { applyListBackspace } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
 import { getNextPermissionMode } from '@/lib/permissionModeCycle';
@@ -2838,21 +2838,11 @@ export function ChatInput({
           return true;
         }
 
-        // Shift/Alt+Enter — split or exit a structured item. The plain-text
-        // fallback remains for old drafts and pasted Markdown that has not
-        // gone through an input rule.
-        if (
-          event.key === 'Enter' &&
-          (event.shiftKey || event.altKey) &&
-          !event.metaKey &&
-          !event.ctrlKey &&
-          !event.isComposing
-        ) {
-          if (handleStructuredListBreak(view) || applyListContinuation(view)) {
-            event.preventDefault();
-            return true;
-          }
-          return false;
+        // Newline keys follow the send preference for both structured lists
+        // and plain Markdown restored from old drafts or pasted text.
+        if (handleComposerListEnter(view, event, getComposerSendShortcutPreference())) {
+          event.preventDefault();
+          return true;
         }
 
         // Resolve the configurable send shortcut after structured list handling.

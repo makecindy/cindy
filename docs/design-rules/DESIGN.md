@@ -1181,7 +1181,8 @@ Known but deliberately-deferred cleanups are tracked in the decision log's backl
 
 Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc. **Not** ordinary single-line editors in Settings — there Enter must not submit.
 
-- **Enter = submit**, **Shift+Enter = newline**.
+- By default, **Enter = submit**, **Shift+Enter = newline**. The desktop chat composer also supports the existing **Cmd/Ctrl+Enter = submit** preference; when enabled, **Enter = newline**.
+- Composer list continuation follows newline intent: Enter in that preference, as well as Shift/Alt+Enter, continues a list or exits an empty item. Send shortcuts and IME confirmation must not edit lists; fenced code keeps native newline behavior. The shared key handler is `handleComposerListEnter` in `apps/desktop/src/renderer/components/new-chat/ComposerListNodes.ts`, covered by `apps/desktop/src/renderer/lib/__tests__/composerListContinuationEditor.test.ts`.
 - **Enter during IME composition must not submit** — check `event.nativeEvent.isComposing` (a CJK user confirming a candidate must not accidentally send).
 - Centralize this logic in code; do not re-implement it per field and let behavior drift (per "code-first determinism" in `docs/dev-rules/maker-core-and-agent-behavior.md`).
 
