@@ -393,6 +393,47 @@ afterEach(async () => {
 });
 
 describe('upstream-response-idle watchdog suspend awareness', () => {
+  // #6574: exercise beginNewTurn through the real handle, including abort
+  // without a result. Translator-only fixtures cannot cover this send boundary.
+  it.each(['completed', 'aborted'] as const)('clears response identity on send after an %s turn', async (ending) => {
+    const { handle, stream, events, collected } = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'first synthetic request' });
+      stream.emit({ type: 'assistant', message: { id: 'reused-reply', content: [
+        { type: 'text', text: 'Completed answer.' },
+      ] } });
+      await pumpUntil(() => events.some(e => e.type === 'text'), 'first answer delivered');
+      if (ending === 'completed') {
+        stream.emit({ ...successResult(), result: 'Completed answer.' });
+        await pumpUntil(() => events.some(e => e.type === 'done'), 'first turn done');
+      } else {
+        await handle.abort();
+      }
+      events.length = 0;
+      await handle.send({ type: 'user', content: 'next synthetic request' });
+      // An abort without a result keeps the interrupt latch until its late
+      // acknowledgement arrives. That stale result must not reset the new turn.
+      if (ending === 'aborted') stream.emit({ type: 'result', is_error: true,
+        subtype: 'error_during_execution', errors: ['Interrupted'] });
+      stream.emit({ type: 'stream_event', event: { type: 'message_start', message: {
+        id: 'reused-reply', model: 'claude-opus-4-6', usage: { input_tokens: 1000 },
+      } } });
+      stream.emit({ type: 'assistant', message: { id: 'reused-reply', content: [
+        { type: 'redacted_thinking', data: 'opaque' },
+      ] } });
+      stream.emit({ ...successResult(), result: '', usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => events.some(e => e.type === 'done'), 'next turn done');
+      const done = events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(true);
+    } finally {
+      stream.end();
+      await handle.close();
+      await collected;
+      vi.useRealTimers();
+    }
+  });
+
   it('清醒静默满阈值 → 开火;系统挂起 8 小时 → 不开火,随后清醒走满仍开火', async () => {
     // 150s = 60s + 60s + 30s 三个分片,覆盖"满片消耗"与"尾片短于片长"两种形态。
     process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '150000';

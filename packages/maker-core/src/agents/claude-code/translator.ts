@@ -120,7 +120,8 @@ export interface TurnState {
   interruptGeneration: number;
   /**
    * 最近一条主代理 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
-   * thinking / redacted_thinking 不算)。逐条 assistant 消息覆盖写,turn end
+   * thinking / redacted_thinking 不算)。SDK 可将同一 message.id 拆成多个块事件，
+   * 同 ID 累计实质内容；新 ID 或无 ID 时按新消息覆盖。turn end
    * 时留下的即"最后一条 assistant 消息"的判定,是 silent-stop 观测的核心依据:
    * 上游偶发用一条空内容消息收尾整个 turn(空 thinking + end_turn,或 SSE 流被
    * 静默中断后 stop_reason 缺失;社区同型报告 anthropics/claude-code#50597 /
@@ -128,6 +129,8 @@ export interface TurnState {
    * 见过 assistant 消息时不参与判定)。
    */
   lastAssistantMsgHadSubstance: boolean;
+  /** Root response identity for block-envelope aggregation; never an SDK envelope UUID. */
+  lastAssistantMessageId?: string;
   /**
    * The price variant captured when the current turn's next provider request
    * was accepted. The SDK may deliver message_start after a runtime Fast-mode
@@ -368,6 +371,7 @@ function resetTurnState(turn: TurnState): void {
   turn.pendingApiError = null;
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
+  turn.lastAssistantMessageId = undefined;
   turn.lastAssistantRequestId = undefined;
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
@@ -1545,9 +1549,16 @@ function handleAssistant(
   const content = msg.message?.content ?? [];
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
-  // 逐条覆盖写, turn end 时留下的就是最后一条 assistant 消息的判定(见 TurnState 字段注释)。
+  // 同一回复的正文与 thinking 可分成不同 envelope，不能让尾随块抹掉已输出的正文。
+  // 无有效 message.id 时仍保留逐 envelope 判定，不能把较早回复的正文借给新空回复。
   if (!parentToolUseId) {
-    ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
+    const messageId = typeof assistantMeta.requestId === 'string' && assistantMeta.requestId.length > 0
+      ? assistantMeta.requestId
+      : undefined;
+    const sameMessage = messageId !== undefined && messageId === ctx.turn.lastAssistantMessageId;
+    ctx.turn.lastAssistantMsgHadSubstance =
+      (sameMessage && ctx.turn.lastAssistantMsgHadSubstance) || content.some(assistantBlockHasSubstance);
+    ctx.turn.lastAssistantMessageId = messageId;
   }
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };

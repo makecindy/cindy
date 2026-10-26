@@ -96,6 +96,100 @@ function pushEmptyThinkingMessage(queue: ReturnType<typeof createAsyncQueue<Agen
 const NON_EMPTY_USAGE = { input_tokens: 1000, output_tokens: 2 };
 
 describe('Claude Code translator silent-stop observation (log only)', () => {
+  // #6574: translateSdkMessage must group block envelopes by response identity.
+  // Existing tests only cover envelopes without IDs, so a trailing thinking block
+  // could erase a completed answer and cause Host to send an extra continuation.
+  // Unit tier: one tool event + text + thinking is the minimum failing input.
+  it.each([
+    ['same response, redacted thinking', 'reply-A', 'redacted_thinking', false],
+    ['same response, visible thinking', 'reply-A', 'thinking', false],
+    ['new response, thinking only', 'reply-B', 'redacted_thinking', true],
+    ['missing response identity', undefined, 'redacted_thinking', true],
+    ['empty response identity', '', 'redacted_thinking', true],
+  ] as const)('%s preserves the correct continuation decision', async (_name, tailId, blockType, expected) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushToolUseMessage(queue, ctx);
+    translateSdkMessage({
+      type: 'assistant', uuid: 'text-envelope',
+      message: { id: 'reply-A', content: [{ type: 'text', text: 'Completed answer.' }] },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'assistant', uuid: 'thinking-envelope',
+      message: { id: tailId, content: [blockType === 'thinking'
+        ? { type: 'thinking', thinking: 'Reasoning', signature: 'sig' }
+        : { type: 'redacted_thinking', data: 'opaque' }] },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'result', stop_reason: 'end_turn', result: '',
+      total_cost_usd: 0.1, usage: NON_EMPTY_USAGE,
+    }, queue, ctx);
+
+    const events = await drain(queue);
+    expect(doneSilentStopFlag(events) === true).toBe(expected);
+    expect(events.filter((event) => event.type === 'text')
+      .map((event) => (event.data as { text: string }).text)).toEqual(['Completed answer.']);
+  });
+
+  it('does not inherit response substance across product turns that reuse an ID', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushToolUseMessage(queue, ctx);
+    translateSdkMessage({
+      type: 'assistant', message: { id: 'reply-A', content: [{ type: 'text', text: 'Done.' }] },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE,
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-fable-5' } },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'assistant', message: { id: 'reply-A', content: [{ type: 'redacted_thinking', data: 'opaque' }] },
+    }, queue, ctx);
+    translateSdkMessage({
+      type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.2,
+      usage: { input_tokens: 2000, output_tokens: 4 },
+    }, queue, ctx);
+
+    const events = await drain(queue);
+    expect(events.filter((event) => event.type === 'done')
+      .map((event) => (event.data as { silentStop?: boolean }).silentStop === true)).toEqual([false, true]);
+  });
+
+  it.each([true, false])('isolates child response envelopes when root has substance=%s', async (rootHasText) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushToolUseMessage(queue, ctx);
+    translateSdkMessage({ type: 'assistant', message: { id: 'reply-A', content: [
+      rootHasText ? { type: 'text', text: 'Root answer.' } : { type: 'thinking', thinking: 'Reasoning' },
+    ] } }, queue, ctx);
+    translateSdkMessage({ type: 'assistant', parent_tool_use_id: 'child-tool', message: {
+      id: 'reply-A', content: [rootHasText ? { type: 'redacted_thinking', data: 'opaque' }
+        : { type: 'text', text: 'Child answer.' }],
+    } }, queue, ctx);
+    translateSdkMessage({ type: 'assistant', message: { id: 'reply-A', content: [
+      { type: 'redacted_thinking', data: 'opaque' },
+    ] } }, queue, ctx);
+    translateSdkMessage({ type: 'result', stop_reason: 'end_turn', result: '',
+      total_cost_usd: 0.1, usage: NON_EMPTY_USAGE }, queue, ctx);
+    expect(doneSilentStopFlag(await drain(queue)) === true).toBe(!rootHasText);
+  });
+
+  it('does not recover a compact boundary with a thinking-only final response', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushToolUseMessage(queue, ctx);
+    translateSdkMessage({ type: 'system', subtype: 'compact_boundary',
+      compact_metadata: { trigger: 'auto', pre_tokens: 1000 } }, queue, ctx);
+    translateSdkMessage({ type: 'assistant', message: { id: 'compact-reply', content: [
+      { type: 'redacted_thinking', data: 'opaque' },
+    ] } }, queue, ctx);
+    translateSdkMessage({ type: 'result', stop_reason: 'end_turn', result: '',
+      total_cost_usd: 0.1, usage: NON_EMPTY_USAGE }, queue, ctx);
+    expect(doneSilentStopFlag(await drain(queue))).not.toBe(true);
+  });
+
   it('logs a silent-stop WARN when a mid-task turn ends with an empty assistant message (stop_reason missing)', async () => {
     // #38905 形态: SSE 静默中断, result 无 stop_reason、无兜底文本。
     const tracker = new UsageTracker();

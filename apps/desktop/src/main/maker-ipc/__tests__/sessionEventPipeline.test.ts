@@ -2,6 +2,9 @@ import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { UsageTracker } from '../../../../../../packages/maker-core/src/agents/shared/usage-tracker.js';
+import { newRuntimeState, translateSdkMessage, type TurnState } from '../../../../../../packages/maker-core/src/agents/claude-code/translator.js';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
@@ -986,6 +989,60 @@ describe('production Session event pipeline', () => {
       expect(effects.fn('recordTurnUsageOnMessage')).not.toHaveBeenCalled();
     }
     await h.dispose();
+  });
+
+  // #6574: feed real translator output through the Host event entry. Existing
+  // fixtures inject done.silentStop directly and cannot catch false recovery.
+  // Unit tier: a synthetic tool event and a split final answer; no provider IO.
+  it.each([
+    ['thinking', 'reply-A', false],
+    ['redacted_thinking', 'reply-A', false],
+    ['redacted_thinking', 'reply-B', true],
+  ] as const)('routes %s tail for %s to the correct Host continuation decision', async (type, id, shouldResume) => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'claude-code' });
+    const queue = createAsyncQueue<AgentEvent>();
+    const turn: TurnState = {
+      text: '', toolUses: 0, apiCalls: 0, sawCompactBoundary: false,
+      hasEmittedText: false, uiEmittedText: '', pendingApiError: null,
+      interruptRequested: false, generation: 0, interruptGeneration: 0,
+      lastAssistantMsgHadSubstance: true,
+    };
+    const ctx = {
+      rt: newRuntimeState(), turn, tracker: new UsageTracker(), log: h.deps.log,
+      getModel: () => 'claude-fable-5', getEffort: () => 'high' as const,
+      getPermissionMode: () => 'auto' as const, onSessionId: vi.fn(),
+      getSdkSessionId: () => undefined, getLogTitle: () => undefined,
+      getModelContextWindow: () => 1_000_000,
+    };
+    try {
+      for (const message of [
+        { type: 'stream_event', event: { type: 'message_start', message: {
+          model: 'claude-fable-5', usage: { input_tokens: 1000 },
+        } } },
+        { type: 'assistant', message: { id: 'tool-reply', content: [
+          { type: 'tool_use', id: 'tool-1', name: 'Read', input: {} },
+        ] } },
+        { type: 'assistant', uuid: 'text-envelope', message: { id: 'reply-A', content: [
+          { type: 'text', text: 'Completed answer.' },
+        ] } },
+        { type: 'assistant', uuid: 'tail-envelope', message: { id, content: [
+          type === 'thinking' ? { type, thinking: 'Reasoning', signature: 'sig' }
+            : { type, data: 'opaque' },
+        ] } },
+        { type: 'result', stop_reason: 'end_turn', result: '', total_cost_usd: 0.1,
+          usage: { input_tokens: 1000, output_tokens: 2 } },
+      ]) translateSdkMessage(message, queue, ctx);
+      queue.end();
+      for await (const translated of queue) h.emit(translated);
+      await vi.advanceTimersByTimeAsync(1500);
+      // This is the production Host boundary that can dispatch hidden 继续.
+      // Full register.ts dispatch and real-provider acceptance are outside this fixture.
+      expect(h.deps.handleSilentStopTurnEnd).toHaveBeenCalledTimes(shouldResume ? 1 : 0);
+      expect(h.activity.isSessionInTurn('task')).toBe(shouldResume);
+      expect(h.deps.notifyGoalIdleAfterTurnSettled).toHaveBeenCalledTimes(shouldResume ? 0 : 1);
+      expect(h.handle.send).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
   });
 
   it('keeps the silent-stop decision window running and rejects an unowned late terminal', async () => {

@@ -27,6 +27,7 @@ import type { ChannelIM } from '@cindy/im';
 import { setMainLocale } from '../../../i18n';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
+import { claudeResponseEnvelopeEvents } from '../../../../test/fixtures/claudeResponseEnvelope.js';
 
 const mocks = vi.hoisted(() => ({
   logger: {
@@ -3220,6 +3221,45 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     } finally {
       fakeAdapter.output = previousOutput;
     }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：`createTurnRunner({ channel: 'telegram' })` 真实个人 bot
+  //   收口；同 ID 尾随思考的轮正常 finalize，不同 / 缺失 / 空 ID 仍停在续跑守卫上。
+  // - Bug / 规则依据：#6574 误续跑，PR #6599 review 要求记录并验证两侧 bot 收尾行为。
+  // - 现有覆盖缺口：已有 silentStop 用例直接注入标记，无法发现 translator 误判带来的
+  //   多余续跑或早退。
+  // - 最小失败输入：tool_use + 正文 + 同 `message.id` 的 thinking 尾随块 + result。
+  // - tier：unit；合成 translator 事件 + fake adapter，无 provider I/O。
+  it.each([
+    ['thinking', 'reply-A', false],
+    ['redacted_thinking', 'reply-A', false],
+    ['redacted_thinking', 'reply-B', true],
+    ['redacted_thinking', undefined, true],
+    ['redacted_thinking', '', true],
+  ] as const)('personal Telegram routes %s tail with ID %s (wait=%s)', async (tailType, id, shouldWait) => {
+    const handle = { messageId: 'telegram-envelope', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    runner = createTurnRunner({ ...fakeAdapter, channel: 'telegram' }, fakeRepo, fakeCards);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+    for (const event of await claudeResponseEnvelopeEvents(tailType, id)) h.emit(event);
+    if (shouldWait) {
+      await flushMicrotasks();
+      expect(onTurnComplete).not.toHaveBeenCalled();
+      expect(handle.finalize).not.toHaveBeenCalled();
+      expect(mocks.onSilentStopSettled).toHaveBeenCalledOnce();
+      h.emit({ type: 'text', source: 'claude-code', data: { text: 'Recovered answer.', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+    }
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledOnce();
+      expect(handle.finalize).toHaveBeenCalledOnce();
+    });
+    const finalText = handle.finalize.mock.calls[0][0] as string;
+    expect(finalText).toBe(shouldWait ? 'Recovered answer.' : 'Completed answer.');
+    // 同 ID 尾随思考不得悬挂本轮；不同 / 缺失 / 空 ID 仍交给共享续跑守卫。
+    expect(mocks.onSilentStopSettled).toHaveBeenCalledTimes(shouldWait ? 1 : 0);
   });
 
   it('holds the turn open on silentStop done and finalizes only when the guard settles without resume', async () => {

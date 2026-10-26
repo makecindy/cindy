@@ -24,6 +24,7 @@ import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import { claudeResponseEnvelopeEvents } from '../../../test/fixtures/claudeResponseEnvelope.js';
 
 const h = vi.hoisted(() => {
   /** 跨模块调用顺序记录: 'touch:<id>' / 'created:<id>' */
@@ -88,6 +89,7 @@ const h = vi.hoisted(() => {
     headlessDuringSend: [] as boolean[],
     headlessAfterAccepted: [] as boolean[],
     installDesktopInteractionListener: vi.fn(),
+    onSilentStopSettled: vi.fn(() => () => {}),
     withRehydrateCloseSuppressed: vi.fn(async (_sessionId: string, fn: () => Promise<unknown>) =>
       fn(),
     ),
@@ -164,7 +166,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   isSessionInTurn: () => false,
   installDesktopInteractionListener: h.installDesktopInteractionListener,
   noteSilentStopUserSend: vi.fn(),
-  onSilentStopSettled: vi.fn(() => () => {}),
+  onSilentStopSettled: h.onSilentStopSettled,
 }));
 vi.mock('../../im/shared/channelDefaultRouteSync.js', () => ({
   createDefaultRouteFollower: (policy: unknown) => { h.followPolicy(policy); return { syncUnderLock: h.syncDefaultRoute }; },
@@ -1622,6 +1624,59 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(outcome.status).toBe('ok');
     expect(h.calls).toContain('created:sess-new');
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('touchUserSend failed'));
+  });
+});
+
+describe('official Telegram response-envelope finalization (#6574)', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：`createMakerHookSessionRunner` 真实收口；同 ID 尾随思考的
+  //   Telegram 轮正常结束，不同 / 缺失 / 空 ID 仍停留在隐藏续跑守卫上。
+  // - Bug / 规则依据：#6574 误续跑，PR #6599 review 要求记录并验证两侧 bot 收尾行为。
+  // - 现有覆盖缺口：translator 与 Host 入口已覆盖判定本身，但都直接注入
+  //   `done.silentStop`，不经过官方 bot 的 observer 收口路径。
+  // - 最小失败输入：tool_use + 正文 + 同 `message.id` 的 thinking 尾随块 + result。
+  // - tier：unit；内存 fake session 与合成 translator 事件，无 provider I/O。
+  const drainMicrotasks = async (): Promise<void> => {
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  };
+
+  it.each([
+    ['thinking', 'reply-A', false],
+    ['redacted_thinking', 'reply-A', false],
+    ['redacted_thinking', 'reply-B', true],
+    ['redacted_thinking', undefined, true],
+    ['redacted_thinking', '', true],
+  ] as const)('routes %s tail with ID %s (wait=%s)', async (tailType, id, shouldWait) => {
+    const events = await claudeResponseEnvelopeEvents(tailType, id);
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => {
+      const session = makeFakeSession(opts.id ?? 'sess-x');
+      session.send.mockImplementation(async (_message, options) => {
+        await options.onAccepted?.();
+        return { accepted: true };
+      });
+      return session;
+    });
+    const runner = createMakerHookSessionRunner({ log });
+    const onEnd = vi.fn();
+    const pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    void pending.then(onEnd);
+    await vi.waitFor(() => expect(h.eventCbs.has('sess-new')).toBe(true));
+    const emit = h.eventCbs.get('sess-new')!;
+    for (const event of events) emit(event);
+    if (shouldWait) {
+      await drainMicrotasks();
+      expect(onEnd).not.toHaveBeenCalled();
+      expect(h.onSilentStopSettled).toHaveBeenCalledOnce();
+      emit({ type: 'text', source: 'claude-code', data: { text: 'Recovered answer.', isFinal: true } });
+      emit({ type: 'done', data: {} });
+    }
+    const result = await pending;
+    expect(result.status).toBe('ok');
+    // 官方侧恢复轮以新一段正文收口，和个人侧一致地只保留恢复后的回答。
+    expect(result.finalText).toBe(shouldWait ? 'Recovered answer.' : 'Completed answer.');
+    // 同 ID 尾随思考不得悬挂本轮；不同 / 缺失 / 空 ID 仍交给共享续跑守卫。
+    expect(h.onSilentStopSettled).toHaveBeenCalledTimes(shouldWait ? 1 : 0);
+    expect(h.eventCbs.has('sess-new')).toBe(false);
   });
 });
 
