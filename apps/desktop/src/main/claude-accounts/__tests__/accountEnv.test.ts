@@ -41,12 +41,15 @@ describe('resolveClaudeAccountEnv', () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  it('prepares the profile and sets CLAUDE_CONFIG_DIR for an extra account', async () => {
+  // Protocol with the CLI: ENABLE_CLAUDEAI_MCP_SERVERS=false stops an extra account from
+  // auto-loading the connectors linked to that account on claude.ai (§4.7). If it is lost,
+  // another person's cloud tools would show up in the user's sessions.
+  it('prepares the profile, sets CLAUDE_CONFIG_DIR and turns off that account’s claude.ai connectors', async () => {
     const prepare = vi.fn(async (o: { profileDir: string }) => okReport(o.profileDir));
     const result = await resolveClaudeAccountEnv({ account: work, accountsRoot, masterDir, prepare });
     const profileDir = path.join(accountsRoot, 'acct_work0001');
     expect(prepare).toHaveBeenCalledWith({ profileDir, masterDir, accountsRoot });
-    expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: profileDir });
+    expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: profileDir, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
     expect(result.accountId).toBe('acct_work0001');
     expect(result.report?.mode).toBe('linked');
   });

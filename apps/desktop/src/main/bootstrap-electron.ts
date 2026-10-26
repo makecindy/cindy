@@ -865,6 +865,7 @@ import {
   runClaudeCliLogin,
 } from './maker-host/claude-native-cli.js';
 import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
+import { installClaudeAccounts } from './claude-accounts/index.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
 import {
@@ -5276,6 +5277,9 @@ const registerIpcHandlers = () => {
     // 登出清空清单;登录(含在终端里登录)后主动读一次;直接换号先清旧账号再读。
     syncAnthropicModelsWithClaudeLogin(status);
   });
+  // 多账号:CLI 的登录态 / 登录 / 余量与订阅会话都跟随活动 Claude 账号(主账号 = 默认目录)。
+  // 必须早于下面第一次登录态读取。docs/dev-rules/claude-multi-account.md
+  installClaudeAccounts();
   // 启动时后台读一次(不阻塞):已连接的用户由 provider 目录加载等这次结果;
   // 从未连接的用户据此自动沿用本机登录。明确断开过的用户不再读。
   if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();

@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import type { ClaudeCliLoginResult } from '../maker-host/claude-native-cli.js';
 import type { ClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
-import { profileDirFor, resolveClaudeAccountEnv } from './accountEnv.js';
+import { extraAccountEnv, profileDirFor, resolveClaudeAccountEnv } from './accountEnv.js';
 import { inspectProfile, prepareProfile, removeProfile, type ProfileHealth } from './profileLinker.js';
 import {
   ClaudeAccountRegistryError,
@@ -164,7 +164,7 @@ export function createClaudeAccountsService(deps: ClaudeAccountsServiceDeps) {
         await discardProfile(profileDir);
         return { ok: false, reason: 'profile_unavailable' };
       }
-      const login = await deps.cli.login({ CLAUDE_CONFIG_DIR: profileDir }, signal);
+      const login = await deps.cli.login(extraAccountEnv(profileDir), signal);
       if (!login.ok) {
         await discardProfile(profileDir);
         return { ok: false, reason: login.reason };
@@ -236,7 +236,7 @@ export function createClaudeAccountsService(deps: ClaudeAccountsServiceDeps) {
       const profileDir = account.kind === 'extra' ? path.join(deps.accountsRoot, account.id) : null;
       let login: AccountHealth['login'];
       try {
-        login = await deps.cli.probe(profileDir ? { CLAUDE_CONFIG_DIR: profileDir } : {});
+        login = await deps.cli.probe(profileDir ? extraAccountEnv(profileDir) : {});
       } catch (err) {
         login = { loggedIn: false, error: err instanceof Error ? err.message : String(err) };
       }

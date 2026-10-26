@@ -26,6 +26,15 @@ const h = vi.hoisted(() => ({
   retainPresentation: vi.fn(),
   readLoginCalls: [] as Array<{ maxAgeMs?: number } | undefined>,
   legacyMigrations: 0,
+  accountEnv: {} as Record<string, string>,
+  accountError: null as Error | null,
+}));
+
+vi.mock('../../claude-accounts/index.js', () => ({
+  activeClaudeAccountEnv: async () => {
+    if (h.accountError) throw h.accountError;
+    return { ...h.accountEnv };
+  },
 }));
 
 vi.mock('../provider-presentation-store.js', () => ({
@@ -148,6 +157,8 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
     h.retainPresentation.mockReset();
     h.readLoginCalls = [];
     h.legacyMigrations = 0;
+    h.accountEnv = {};
+    h.accountError = null;
   });
 
   it('keeps the owner-scoped BYOK key readable when Cindy gateway access is disabled', async () => {
@@ -189,6 +200,29 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
       expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
     }
     expect(h.legacyMigrations).toBe(optionsList.length);
+  });
+
+  // 测试价值:活动账号是额外账号时,只有交给本机登录的路由(oauth-bearer、无网关 key 的隐式来源)
+  // 带它的 CLAUDE_CONFIG_DIR;API key / provider 路由不受影响;账号目录坏了时订阅路由拒绝启动,
+  // 不回落主账号。规则:docs/dev-rules/claude-multi-account.md §2、§4.2。tier:unit。
+  it('多账号:只有订阅路由带活动账号的配置目录,目录坏了拒绝而不回落主账号', async () => {
+    h.accountEnv = { CLAUDE_CONFIG_DIR: 'C:\\cindy\\claude-accounts\\acct_work0001' };
+    const adapter = await makeAdapter();
+    expect((await adapter.getAuthEnv({ credentialMode: 'oauth-bearer' })).CLAUDE_CONFIG_DIR).toBe(
+      'C:\\cindy\\claude-accounts\\acct_work0001',
+    );
+    expect((await adapter.getAuthEnv({ credentialMode: 'gateway-key' })).CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect((await adapter.getAuthEnv({ credentialMode: 'provider-oauth' })).CLAUDE_CONFIG_DIR).toBeUndefined();
+    // 隐式来源:有网关 key 走网关(不带目录);没有网关 key 交给本机登录(带目录)。
+    expect((await adapter.getAuthEnv(undefined)).CLAUDE_CONFIG_DIR).toBeUndefined();
+    h.gatewayKey = null;
+    expect((await adapter.getAuthEnv(undefined)).CLAUDE_CONFIG_DIR).toBe('C:\\cindy\\claude-accounts\\acct_work0001');
+    // 非 Anthropic 模型经 proxy 隐式桥,不是订阅,不带目录。
+    expect((await adapter.getAuthEnv({ model: 'gpt-5' })).CLAUDE_CONFIG_DIR).toBeUndefined();
+
+    h.accountError = Object.assign(new Error('Claude account "Work" is not ready'), { code: 'profile_unavailable' });
+    await expect(adapter.getAuthEnv({ credentialMode: 'oauth-bearer' })).rejects.toThrow('not ready');
+    await expect(adapter.getAuthEnv({ credentialMode: 'gateway-key' })).resolves.toBeDefined();
   });
 
   it('订阅会话:未连接(CLI 未登录或 Cindy 未获许可)→ no_oauth', async () => {

@@ -59,6 +59,11 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   Cindy 不读取、不复制、不刷新它。CLI 按配置目录区分凭证库，所以本机 CLI 的会话（任何来源）
   与登录检查都不得设 `CLAUDE_CONFIG_DIR`（dev 多实例也用默认目录），否则会看不到本机已有的
   Claude Code 登录；SSH 远端的配置目录由远端 cc-manager 自己管理，不在此列。
+  唯一例外是用户显式添加并切换到的**额外 Claude 账号**：它就是一个独立的 CLI 配置目录，
+  登录仍是该目录里的 `claude auth login --claudeai`，凭证仍由 CLI 自管，Cindy 不读不拷
+  `.credentials.json`；只在订阅路由（oauth-bearer、无网关 key 的隐式来源）带该目录，目录
+  不可用时拒绝启动、不回落主账号。主账号保持默认目录。见
+  [claude-multi-account.md](claude-multi-account.md)。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，

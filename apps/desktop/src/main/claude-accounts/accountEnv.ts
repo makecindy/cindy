@@ -31,6 +31,17 @@ export function profileDirFor(accountsRoot: string, accountId: string): string {
   return path.join(accountsRoot, accountId);
 }
 
+/**
+ * CLI env for an extra account, built in one place:
+ * - `CLAUDE_CONFIG_DIR`: its own config dir (login, credentials, account state);
+ * - `ENABLE_CLAUDEAI_MCP_SERVERS=false`: do not auto-load the connectors linked to that
+ *   account on claude.ai (an official CLI switch, see `disableClaudeAiConnectors`). The user's
+ *   own MCP servers from settings and projects still load.
+ */
+export function extraAccountEnv(profileDir: string): Record<string, string> {
+  return { CLAUDE_CONFIG_DIR: profileDir, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
+}
+
 export interface ResolvedAccountEnv {
   env: Record<string, string>;
   accountId: string;
@@ -60,5 +71,5 @@ export async function resolveClaudeAccountEnv(options: {
       `Claude account "${account.label}" is not ready: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  return { env: { CLAUDE_CONFIG_DIR: profileDir }, accountId: account.id, report };
+  return { env: extraAccountEnv(profileDir), accountId: account.id, report };
 }

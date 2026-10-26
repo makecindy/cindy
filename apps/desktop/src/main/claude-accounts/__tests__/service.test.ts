@@ -97,7 +97,10 @@ describe('createClaudeAccountsService', () => {
     const result = await service.addAccount({ label: 'Second' }, new AbortController().signal);
     expect(result).toMatchObject({ ok: true, account: { id: 'acct_svc00001', label: 'Second' } });
     const profileDir = path.join(accountsRoot, 'acct_svc00001');
-    expect(cli.login).toHaveBeenCalledWith({ CLAUDE_CONFIG_DIR: profileDir }, expect.any(AbortSignal));
+    expect(cli.login).toHaveBeenCalledWith(
+      { CLAUDE_CONFIG_DIR: profileDir, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+      expect.any(AbortSignal),
+    );
     // The profile already sees the master's history before the first session.
     expect(await readFile(path.join(profileDir, 'projects', 'p', 's.jsonl'), 'utf8')).toBe('history');
     const listed = await makeService().service.listAccounts();
@@ -148,7 +151,10 @@ describe('createClaudeAccountsService', () => {
     expect(cli.login).not.toHaveBeenCalled();
     expect(onActiveAccountChanged).toHaveBeenCalledOnce();
     expect(onActiveAccountChanged).toHaveBeenCalledWith({ previousId: MASTER_ACCOUNT_ID, nextId: 'acct_svc00001' });
-    expect(await service.activeAccountEnv()).toEqual({ CLAUDE_CONFIG_DIR: path.join(accountsRoot, 'acct_svc00001') });
+    expect(await service.activeAccountEnv()).toEqual({
+      CLAUDE_CONFIG_DIR: path.join(accountsRoot, 'acct_svc00001'),
+      ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
+    });
     // Persisted: a fresh service (app restart) keeps the choice.
     expect((await makeService().service.listAccounts()).activeAccountId).toBe('acct_svc00001');
     // Switching to the account that is already active is a no-op.

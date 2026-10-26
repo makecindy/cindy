@@ -91,6 +91,7 @@ import {
 } from './codex-gateway-config.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
+import { activeClaudeAccountEnv } from '../claude-accounts/index.js';
 import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
 import { claudeCliNetworkEnv } from './claude-native-cli.js';
 import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
@@ -724,19 +725,24 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
     } else if (options?.credentialMode === 'oauth-bearer') {
       // Claude 订阅:不递凭证,CLI 读自己的登录;只补系统代理(CLI 不读系统代理设置)。
-      Object.assign(env, await claudeCliNetworkEnv());
+      // 活动账号是额外账号时补它的 CLAUDE_CONFIG_DIR(凭证仍由 CLI 在该目录自管)。
+      Object.assign(env, await claudeCliNetworkEnv(), await activeClaudeAccountEnv());
     } else {
       // 未指定来源:与 getState 同序 —— 有网关 key 走网关;否则 Anthropic 模型交给本机
       // Claude Code 登录,其它模型经 proxy 隐式桥(只带占位 key,真实凭证由 proxy 注入)。
       const apiKey = readClaudeApiKey();
       if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
       else if (hasClaudeNativeLogin()) {
-        if (claudeSubscriptionServesModel(options?.model)) Object.assign(env, await claudeCliNetworkEnv());
-        else env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+        if (claudeSubscriptionServesModel(options?.model)) {
+          Object.assign(env, await claudeCliNetworkEnv(), await activeClaudeAccountEnv());
+        } else env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
       }
     }
-    // 所有来源都用 CLI 默认配置目录(dev 多实例与正式版一致,不设 CLAUDE_CONFIG_DIR):
-    // 订阅会话的凭证库按配置目录区分,隔离会看不到本机已有的 Claude Code 登录。
+    // 主账号与所有非订阅来源都用 CLI 默认配置目录(dev 多实例与正式版一致,不设
+    // CLAUDE_CONFIG_DIR):订阅会话的凭证库按配置目录区分,隔离会看不到本机已有的
+    // Claude Code 登录。唯一例外是用户显式添加并切换到的额外 Claude 账号(上面的
+    // activeClaudeAccountEnv,docs/dev-rules/claude-multi-account.md);它的目录不可用时
+    // 直接抛错拒绝启动,不回落主账号。
     // 旧版 dev 隔离在 <userData>/claude-home 的转录,拉起 CLI 前补拷到默认目录供 resume。
     await ensureLegacyClaudeConfigMigrated();
     return env;

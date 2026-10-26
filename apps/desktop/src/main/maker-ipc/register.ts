@@ -135,7 +135,9 @@ import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
 import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
-import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
+import { isClaudeSubscriptionProviderId, subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
+import { setClaudeAccountSwitchHandler } from '../claude-accounts/index.js';
+import { rebuildSessionsForAccountSwitch } from '../claude-accounts/sessionRebind.js';
 import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
@@ -6661,6 +6663,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       reconcileSessionContextWindowBudgetUnderLock(sessionId, change.previous)
     ));
   };
+  // 多账号：切换 Claude 账号后，本机订阅会话按新账号重建并 resume 同一会话
+  // （docs/dev-rules/claude-multi-account.md §4.5）。与上面的预算对账同一套路：锁内已有凭证
+  // pending 就只补 forceSessionRebuild；否则以 live 路由走一次强制重建（空闲立即关、下次发送
+  // resume；回合中登记 pending，turn 结束再重建）。正在跑的 turn 始终在原账号上收尾。
+  setClaudeAccountSwitchHandler(async (change) => {
+    const activeMaker = getMakerIfReady();
+    if (!activeMaker) return;
+    const result = await rebuildSessionsForAccountSwitch({
+      listLiveSessions: () => activeMaker.listActiveSessions().map((session) => ({
+        id: session.id,
+        agentKind: session.agentKind,
+        remoteHostId: session.remoteHostId ?? null,
+        providerId: getSessionProvider(session.id) ?? null,
+      })),
+      // 隐式来源有网关 key 时走网关，不受账号影响；显式来源只认本机 Claude 订阅。
+      isSubscriptionRoute: (session) => (session.providerId === null
+        ? !readClaudeApiKey()
+        : isClaudeSubscriptionProviderId(session.providerId)),
+      rebuild: (sessionId) => withSendToSessionLock(sessionId, async () => {
+        const live = activeMaker.getSession(sessionId);
+        // 已关的实例下次启动自然拿到新账号的 env。
+        if (!live) return 'applied' as const;
+        const pendingTarget = getPendingCredentialSwitchTarget(sessionId);
+        if (pendingTarget) {
+          await registerPendingCredentialSwitchForSession(sessionId, { ...pendingTarget, forceSessionRebuild: true });
+          return 'deferred' as const;
+        }
+        const applied = await applyRuntimeSetModelChange({
+          ...runtimeMutationDeps(),
+          sessionId,
+          model: live.model,
+          providerId: getSessionProvider(sessionId),
+          forceSessionRebuild: true,
+        });
+        return applied.status === 'applied' ? 'applied' as const : 'deferred' as const;
+      }),
+      log,
+    });
+    log.info('claude account switched; live sessions rebuilt', { ...change, ...result });
+  });
   /**
    * 预算重放（**锁内**，调用方持 send 锁）：只在有未完成意图时跑一次对账。
    *

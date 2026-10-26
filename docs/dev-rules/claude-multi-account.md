@@ -1,6 +1,9 @@
 # Claude multi-account (profiles) — design
 
-> Status: design + phase 1 implementation (core modules, no behaviour change yet).
+> Status:
+> - Phase 1 (core modules): done.
+> - Phase 2 (runtime): done, except Orca per-Worker account pinning (§4.5).
+> - Phase 3 (UI): not started.
 > Branch: `feat/claude-multi-account`. Owner: CODER7657 fork.
 
 ## 1. Goal
@@ -166,10 +169,16 @@ of each option. It is built **only from local data** and uses **no model tokens*
   always chooses. Nothing is sent anywhere until they confirm.
 
 ### 4.7 claude.ai connectors (phase 2)
-Extra accounts must not load MCP connectors from that account's claude.ai cloud. To verify against
-the real CLI during phase 2: does it honour a documented switch for claude.ai MCP servers? If not,
-deny the reported `claude.ai *` servers via flag-settings `deniedMcpServers` (that mechanism
-already exists in `capability-routing.ts`).
+Extra accounts must not load MCP connectors from that account's claude.ai cloud. The bundled CLI
+(2.1.296) has an official switch for this: the `ENABLE_CLAUDEAI_MCP_SERVERS` env var or the
+`disableClaudeAiConnectors` setting. Its own message reads "Automatic loading of claude.ai
+connectors is disabled in this Claude Code session".
+
+`extraAccountEnv()` therefore always sets `ENABLE_CLAUDEAI_MCP_SERVERS=false` next to
+`CLAUDE_CONFIG_DIR`. The user's own MCP servers (settings, projects) still load.
+
+Not yet verified with a second real subscription logged in. That check is part of the in-app
+test in phase 3.
 
 ### 4.8 Usage and limits (phase 2)
 - Plan usage is read per account (`get_usage` with that account's env) and shown per account.
