@@ -159,7 +159,7 @@ it.each(['timeout', 'load'])('bounds %s failure without recreating a process', a
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('denies app display/legacy capture while preserving physical microphone and camera', () => {
+it('allows app fullscreen and physical media while denying display/legacy capture', () => {
   const ses = {
     setDisplayMediaRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
@@ -185,20 +185,34 @@ it('denies app display/legacy capture while preserving physical microphone and c
   expect(reply).toHaveBeenLastCalledWith(true);
   request(voice, 'media', reply, { ...details, mediaTypes: ['audio'] });
   expect(reply).toHaveBeenLastCalledWith(true);
-  for (const permission of ['notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
+  // Native video controls request fullscreen; automatic fullscreen stays denied.
+  expect(check(owner, 'fullscreen', '', details)).toBe(true);
+  request(owner, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(true);
+  // The voice overlay's microphone exemption must not grant app fullscreen.
+  expect(check(voice, 'fullscreen', '', details)).toBe(false);
+  request(voice, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(false);
+  for (const permission of ['automatic-fullscreen', 'notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
     expect(check(owner, permission, '', details)).toBe(false);
     request(owner, permission, reply, details);
     expect(reply).toHaveBeenLastCalledWith(false);
   }
   for (const [candidate, requestDetails] of [
     [null, details],
+    [{ ...owner, isDestroyed: () => true }, details],
     [{ ...owner, kind: 'foreign' }, details],
     [owner, { ...details, isMainFrame: false }],
+    [owner, { isMainFrame: true }],
     [owner, { ...details, requestingUrl: 'https://evil.example/' }],
+    [{ ...owner, mainFrame: { url: 'https://evil.example/' } }, { ...details, requestingUrl: 'https://evil.example/' }],
     [{ ...voice, mainFrame: { url: 'https://evil.example/' } }, details],
   ]) {
     expect(check(candidate, 'media', '', { ...requestDetails, mediaType: 'audio' })).toBe(false);
     request(candidate, 'media', reply, { ...requestDetails, mediaTypes: ['audio'] });
+    expect(reply).toHaveBeenLastCalledWith(false);
+    expect(check(candidate, 'fullscreen', '', requestDetails)).toBe(false);
+    request(candidate, 'fullscreen', reply, requestDetails);
     expect(reply).toHaveBeenLastCalledWith(false);
   }
   expect(check(owner, 'clipboard-sanitized-write', '', details)).toBe(true);
