@@ -235,13 +235,17 @@ const segmenter =
     : null;
 
 /**
- * 切词结果 LRU 缓存（容量 500）：增长尾部重解析时仍会反复遇到相同文本节点，
+ * 切词结果 LRU 缓存（最多 500 条及 2 MiB 估算载荷）：增长尾部重解析时仍会反复遇到相同文本节点，
  * 而 Intl.Segmenter 对 CJK 分词相对昂贵。Map 的
  * 插入序即访问序近似(命中即删再插,超限逐出最老),对"稳定前文 + 生长尾部"
  * 的访问模式命中率接近 100%。
  */
-const splitCache = new Map<string, string[]>();
+const splitCache = new Map<string, { words: string[]; bytes: number }>();
 const SPLIT_CACHE_MAX = 500;
+// Count UTF-16 source + word payload and array slots. This bounds retained
+// content, not total engine heap (string/object overhead is runtime-dependent).
+const SPLIT_CACHE_MAX_BYTES = 2 * 1024 * 1024;
+let splitCacheBytes = 0;
 
 function splitWordsUncached(text: string): string[] {
   const out: string[] = [];
@@ -268,13 +272,19 @@ export function splitWords(text: string): string[] {
     // 命中即重排到队尾(近似 LRU),稳定前文不会被生长尾部逐出。
     splitCache.delete(text);
     splitCache.set(text, hit);
-    return hit;
+    return hit.words;
   }
   const words = splitWordsUncached(text);
-  splitCache.set(text, words);
-  if (splitCache.size > SPLIT_CACHE_MAX) {
+  const bytes = text.length * 2 + words.reduce((sum, word) => sum + word.length * 2 + 8, 0);
+  // One oversized growing tail must not displace every reusable short prefix.
+  if (bytes > SPLIT_CACHE_MAX_BYTES) return words;
+  splitCache.set(text, { words, bytes });
+  splitCacheBytes += bytes;
+  while (splitCache.size > SPLIT_CACHE_MAX || splitCacheBytes > SPLIT_CACHE_MAX_BYTES) {
     const oldest = splitCache.keys().next().value;
-    if (oldest !== undefined) splitCache.delete(oldest);
+    if (oldest === undefined) break;
+    splitCacheBytes -= splitCache.get(oldest)!.bytes;
+    splitCache.delete(oldest);
   }
   return words;
 }

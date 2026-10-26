@@ -1,11 +1,12 @@
 /**
- * 伙伴工作台与任务摘要的只读会话读取:有界摘录与「最后一问 / 最后一句」。
+ * 伙伴工作台与任务摘要的只读会话读取:有界摘录与最近用户消息 / 助手回复。
  *
  * 2026-10-17 放弃「项目」后,不再扫描本机 Claude Code / Codex / Pi 转录目录,也不再为项目
  * 现算摘要;只读 Cindy 自己库里的任务,两条有界查询,输出统一去掉 `<system-reminder>` 之类的
  * 指令块。不写库、不导入。
  */
 import { and, desc, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
@@ -18,7 +19,7 @@ import {
 export const WORKBENCH_TRANSCRIPT_MAX_CHARS = 4_000;
 const PER_MESSAGE_MAX_CHARS = 1_200;
 const SESSION_MESSAGE_ROWS = 60;
-/** 找「最后一问 / 最后一句」时最多往回看的消息条数。 */
+/** 找最近用户消息 / 助手回复时最多往回看的消息条数。 */
 const LAST_EXCHANGE_ROWS = 20;
 
 function cleanText(raw: string): string {
@@ -112,13 +113,16 @@ export function lastExchange(items: readonly Pick<WorkbenchTranscriptItem, 'role
   for (let index = items.length - 1; index >= 0 && (!lastUserAsk || !lastAssistantLine); index -= 1) {
     const text = cleanText(items[index].text);
     if (!text) continue;
-    if (items[index].role === 'user') lastUserAsk ??= text;
-    else lastAssistantLine ??= text.split('\n').filter(Boolean).pop() ?? text;
+    if (items[index].role === 'user') {
+      // Shared with remote history: coordination and recovery inputs carry the
+      // same durable marker and must not replace the user's actual request.
+      if (!isSyntheticTriggerText(text)) lastUserAsk ??= text;
+    } else lastAssistantLine ??= text;
   }
   return { lastUserAsk, lastAssistantLine };
 }
 
-/** 本机任务的「最后一问 / 最后一句」:一条有界查询。 */
+/** 本机任务的最近用户消息 / 助手回复:一条有界查询。 */
 export async function readSessionLastExchange(sessionId: string) {
   const { db, where } = await sessionMessageWhere(sessionId);
   const rows = await db

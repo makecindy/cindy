@@ -42,7 +42,16 @@ import {
   type Topic,
   decodeModelSpeedPayload,
 } from '@cindy/device-link';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { PROJECT_ALIASES_GET_CHANNEL, PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
+import {
+  acceptRemoteProjectAliasesChanged,
+  refreshRemoteProjectAliases,
+  removeRemoteProjectAliases,
+  setRemoteProjectAliasesAccount,
+  suspendRemoteProjectAliases,
+  suspendRemoteProjectAliasesForReleasedTopics,
+} from '@/session/remoteProjectAliases';
 import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
@@ -261,6 +270,11 @@ export function subscribeRemoteTaskTagsChanged(
   };
 }
 const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
+const remoteProjectAliasesChangedListeners = new Set<(deviceId: string) => void>();
+export function subscribeRemoteProjectAliasesChanged(listener: (deviceId: string) => void): () => void {
+  remoteProjectAliasesChangedListeners.add(listener);
+  return () => { remoteProjectAliasesChangedListeners.delete(listener); };
+}
 export function subscribeRemoteFavoritesChanged(listener: (deviceId: string) => void): () => void {
   remoteFavoritesChangedListeners.add(listener);
   return () => { remoteFavoritesChangedListeners.delete(listener); };
@@ -391,6 +405,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const sharedTaskApi = useSharedTaskApi();
   const currentDataOwnerIdRef = useRef<string | null>(auth.user?.id ?? null);
   currentDataOwnerIdRef.current = auth.user?.id ?? null;
+  useLayoutEffect(() => {
+    setRemoteProjectAliasesAccount(auth.isAuthenticated ? auth.user?.id ?? null : null, auth.accountGeneration);
+  }, [auth.accountGeneration, auth.isAuthenticated, auth.user?.id]);
   const clientRef = useRef<DeviceLinkClient | null>(null);
   const registryRef = useRef(new DeviceLinkTopicRegistry());
   const [subscriptionVersion, setSubscriptionVersion] = useState(0);
@@ -588,6 +605,32 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     }
   }, [sendOpenLinkOnce]);
 
+  const refreshProjectAliasesForClient = useCallback((
+    client: DeviceLinkClient,
+    deviceId: string,
+    invalidated = false,
+    ownerStamp?: unknown,
+  ): void => {
+    const epoch = connectionEpochRef.current;
+    const isCurrent = () => clientRef.current === client
+      && client.getStatus() === 'online'
+      && connectionEpochRef.current === epoch
+      && remoteSubscribedTopicsRef.current.get(deviceId)?.has('sessions') === true
+      && registryRef.current.hasTopic(deviceId, 'sessions')
+      && !backgroundReleaseInFlightRef.current
+      && !revokedDevicesStore.has(deviceId)
+      && presenceAvailableByDeviceRef.current.get(deviceId) !== false;
+    // A delayed push from a suspended peer must not restore its previous owner watermark.
+    if (!isCurrent() || (invalidated && !acceptRemoteProjectAliasesChanged(deviceId, ownerStamp, isCurrent))) return;
+    void refreshRemoteProjectAliases(deviceId, () => sendInvokeWithAccessHandling(
+      client, deviceId, PROJECT_ALIASES_GET_CHANNEL, [], {
+        preSend: () => {
+          if (!isCurrent()) throw new DeviceLinkError('NOT_CONNECTED', 'project alias read superseded');
+        },
+      },
+    ), isCurrent, invalidated);
+  }, []);
+
   const sendTrackedSubscribe = useCallback(async (
     client: DeviceLinkClient,
     deviceId: string,
@@ -620,7 +663,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         mobileDebugLog('debug', 'recovery', 'subscription acknowledged', { topicCount: held.length });
       },
     });
-  }, []);
+    if (topics.includes('sessions')) refreshProjectAliasesForClient(client, deviceId);
+  }, [refreshProjectAliasesForClient]);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
   // 再发一条真正穿过被控端 runInvoke → dispatchLocalInvoke → local-db 的最小读,
@@ -793,6 +837,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         wipeUnavailableDeviceMirror(deviceId);
       },
       onDeviceUnavailable: (deviceId) => {
+        suspendRemoteProjectAliases(deviceId);
         if (isSharedTaskPeer(deviceId)) {
           // Logical peers have no same-account presence entry. Preserve the
           // existing bounded peer retry instead of waiting for an impossible
@@ -1079,6 +1124,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;
       setConnectionEpoch(connectionEpochRef.current);
       resetRemoteProjectOrderPushFence();
+      suspendRemoteProjectAliases();
       restorePendingReplyLinks(client);
       void rehydrate();
       // A new controller receives only presence deltas. Read the roster once so
@@ -1089,6 +1135,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 这是本地 ACK 超时，不是对端可达证据：只失效该 peer 的建链缓存和
       // 订阅 ACK，再排该 peer 恢复；presence、其它 peer 与共享 WSS 均不动。
       resetRemoteProjectOrderPushFence(deviceId);
+      suspendRemoteProjectAliases(deviceId);
       const shouldRecover = requestForcedPeerRecovery(client, deviceId);
       invalidatePeerLinkState(
         deviceId,
@@ -1114,6 +1161,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         presenceUnavailableVerdictsRef.current.delete(snap.deviceId);
       } else {
         // Relay presence 是权威 availability verdict,普通目标应答不能推翻。
+        suspendRemoteProjectAliases(snap.deviceId);
         presenceUnavailableVerdictsRef.current.set(snap.deviceId, {
           kind: snap.online && !snap.remoteControlEnabled ? 'disabled' : 'presence',
           responseEvidenceEpoch: capturePresenceAvailabilityEpoch(
@@ -1192,6 +1240,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
         if (isSharedTaskPeer(deviceId)) setPresenceVersion((version) => version + 1);
         catalogRefresh.cancel(deviceId);
+        removeRemoteProjectAliases(deviceId);
         remoteSubscribedTopicsRef.current.delete(deviceId);
         forcedPeerRecoveryIntentRef.current.cancel(deviceId);
         peerRecoverySchedulerRef.current?.cancel(deviceId);
@@ -1201,6 +1250,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         if (isSharedTaskPeer(deviceId)) setPresenceVersion((version) => version + 1);
         catalogRefresh.cancel(deviceId);
         resetRemoteProjectOrderPushFence(deviceId);
+        suspendRemoteProjectAliases(deviceId);
         updateRehydrateSuppressionOnLinkClose(
           rehydrateSuppressedDeviceIds,
           deviceId,
@@ -1247,6 +1297,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           forcedPeerRecoveryIntentRef.current.cancel(deviceId);
         }
       },
+      onProjectAliasesChanged: (deviceId, ownerStamp) => refreshProjectAliasesForClient(client, deviceId, true, ownerStamp),
       onProviderChanged: (deviceId) => {
         catalogRefresh.notify(deviceId);
       },
@@ -1392,6 +1443,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         diagnostics.background();
         backgroundReleaseInFlightRef.current = true;
         backgroundReleaseGenerationRef.current += 1;
+        suspendRemoteProjectAliases();
         // App 生命周期暂停全部恢复执行，但各 peer 状态仍彼此独立；回前台统一
         // 重新排队，旧代请求的迟到结果不会创建重试。
         peerRecoverySchedulerRef.current?.pause();
@@ -1505,6 +1557,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     restorePendingReplyLinks,
     requestForcedPeerRecovery,
     readDeviceList,
+    refreshProjectAliasesForClient,
   ]);
 
   const openLink = useCallback(
@@ -1551,7 +1604,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     };
     preSend();
     const client = requireClient(clientRef.current);
-    return invokeWithHistoryViewCapability(
+    const result = await invokeWithHistoryViewCapability(
       channel,
       async () => {
         // Reuse the existing peer-scoped handshake cache and its invalidation.
@@ -1576,7 +1629,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background });
       },
     );
-  }, [sendOpenLinkOnce]);
+    // Existing list refreshes also reconcile optional project display names. This read
+    // is single-flight and never changes task-list success or connection recovery.
+    if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);
+    return result;
+  }, [refreshProjectAliasesForClient, sendOpenLinkOnce]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
     topics = sharedTaskTopics(deviceId, topics);
@@ -1603,6 +1660,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isDeviceLinkTopic(topic) && !releasedSet.has(topic) && !registryRef.current.hasTopic(deviceId, topic));
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
     markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
+    suspendRemoteProjectAliasesForReleasedTopics(deviceId, toSend);
     noteSessionLiveStreamsInterrupted(toSend);
     if (toSend.length === 0 || presenceAvailableByDeviceRef.current.get(deviceId) === false) return;
     await sendUnsubscribe(
@@ -1686,6 +1744,7 @@ type RouteFrameHandlers = {
   onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
   onAgentsChanged?: (deviceId: string) => void;
+  onProjectAliasesChanged?: (deviceId: string, ownerStamp: unknown) => void;
 };
 
 /** routeFrame plus per-channel push handling time while local diagnostics record. */
@@ -1729,6 +1788,11 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   }
   if (push.channel === 'maker:model-favorites:changed') {
     for (const listener of remoteFavoritesChangedListeners) listener(env.src);
+    return;
+  }
+  if (push.channel === PROJECT_ALIASES_CHANGED_CHANNEL) {
+    handlers.onProjectAliasesChanged?.(env.src, push.ownerStamp);
+    for (const listener of remoteProjectAliasesChangedListeners) listener(env.src);
     return;
   }
   if (push.channel === 'maker:provider:changed') {
@@ -2286,6 +2350,7 @@ function markOfflineDeviceMirrors(deviceIds: readonly string[]): void {
 function wipeUnavailableDeviceMirror(deviceId: string): void {
   evictTaskTagCatalog(deviceId);
   resetRemoteProjectOrderPushFence(deviceId);
+  removeRemoteProjectAliases(deviceId);
   invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);

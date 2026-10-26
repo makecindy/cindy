@@ -115,6 +115,19 @@ describe('capabilities data source', () => {
 });
 
 describe('get_capabilities tool', () => {
+  // Unit protocol regression: the public MCP schema must forward the page/filter
+  // rather than silently stripping them and returning the same oversized page.
+  it('forwards runtime tool search and pagination through the actual MCP entry', async () => {
+    const read = vi.fn(async (_ctx: unknown, query: unknown) => ({ ok: true, query, tools: [{ name: 'matching_tool' }] }));
+    const h = await connect(createXdtHelperMcpServer({ logger: makeLogger(), runtimeCapabilities: read }, sessionCtx));
+    try {
+      const result = parsePayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { scope: 'runtime', server: 'codex_apps', toolQuery: 'github', offset: 50 },
+      } }));
+      expect(result).toMatchObject({ ok: true, query: { server: 'codex_apps', toolQuery: 'github', offset: 50 }, tools: [{ name: 'matching_tool' }] });
+    } finally { await h.cleanup(); }
+  });
+
   it('不传 key 时返回包含 about-cindy 的索引', async () => {
     const h = await connect(createXdtHelperMcpServer({ logger: makeLogger() }, sessionCtx));
     try {

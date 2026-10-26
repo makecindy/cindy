@@ -228,6 +228,7 @@ async function syncBotProfileFolder(
 }
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
 import { coordinateBotCanonicalReplacement } from '../../maker-ipc/botCanonicalReplacementCoordinator.js';
+import { coordinateBotModelSelection } from '../../maker-ipc/botModelSelectionCoordinator.js';
 import { searchConversations } from '../conversationSearch.js';
 import { registerBotAutonomyIpc } from '../../bot-autonomy/ipc.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
@@ -1001,18 +1002,24 @@ function canonicalReplyVisibility() {
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parent_tool_use_id') IS NULL)`,
     // A completed reply remains visible even when the same turn continues with tools.
     // Only unsealed pre-tool narration is hidden by the companion transcript.
-    // Bound the lookup to this user turn so a later task cannot hide an old reply.
+    // Only the nearest live tool matters: if a new user turn precedes it, every
+    // later tool is also outside this reply's turn. Stop the indexed tool scan at
+    // that first row, then bound the input scan by its time. Searching for the next
+    // input first would rescan the entire tail for each narration in a long turn.
     sql`(${canonicalReplyCompleted()} OR NOT EXISTS (
-      SELECT 1 FROM messages AS subsequent_tool
-      WHERE subsequent_tool.session_id = ${messages.sessionId}
-        AND subsequent_tool.created_at > ${messages.createdAt}
-        AND subsequent_tool.rewind_at IS NULL
-        AND subsequent_tool.role IN ('tool_use', 'tool_result', 'thinking')
-        AND NOT EXISTS (SELECT 1 FROM messages AS next_input
+      SELECT 1 FROM (
+        SELECT subsequent_tool.created_at FROM messages AS subsequent_tool
+        WHERE subsequent_tool.session_id = ${messages.sessionId}
+          AND subsequent_tool.created_at > ${messages.createdAt}
+          AND subsequent_tool.rewind_at IS NULL
+          AND subsequent_tool.role IN ('tool_use', 'tool_result', 'thinking')
+        ORDER BY subsequent_tool.created_at LIMIT 1
+      ) AS first_tool
+      WHERE NOT EXISTS (SELECT 1 FROM messages AS next_input
           WHERE next_input.session_id = ${messages.sessionId}
             AND next_input.role = 'user' AND next_input.rewind_at IS NULL
             AND next_input.created_at > ${messages.createdAt}
-            AND next_input.created_at < subsequent_tool.created_at
+            AND next_input.created_at < first_tool.created_at
             AND (next_input.agent_meta IS NULL OR json_extract(next_input.agent_meta, '$.autoResume') IS NOT 1)
             AND (next_input.agent_meta IS NULL OR json_extract(next_input.agent_meta, '$.delivery') IS NOT 'steer'))
     ))`,
@@ -1290,8 +1297,15 @@ async function readProfile(
       mcpServers: Array.isArray(config.mcpServers)
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
+      ...(config.mcpServerNames && typeof config.mcpServerNames === 'object' && !Array.isArray(config.mcpServerNames)
+        ? { mcpServerNames: Object.fromEntries(Object.entries(config.mcpServerNames as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
       memory: config.memory !== false,
       permissions: config.permissions === 'trusted' || config.permissions === 'auto' ? config.permissions : 'ask',
+      // Stored and enforced elsewhere (input handoff policy, scheduler follow); the settings page reads them
+      // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
+      ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
+      ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -1342,6 +1356,11 @@ async function readProfile(
       ];
     }),
   };
+}
+
+/** Full profile read for the teammate settings pages (the remote Desktop projects it before sending). */
+export async function readBotSettingsProfile(botId: string) {
+  return readProfile(getDbClient(), botId);
 }
 
 /**
@@ -1422,6 +1441,46 @@ export interface BotRemoteResourceSource {
   activityAt: number;
   currentVersion: number;
   updatedAt: number;
+  /** Open tasks this Bot looks after, for the follow mark on remote task rows. Absent = none. */
+  followingSessionIds?: string[];
+}
+
+const MAX_FOLLOWED_TASK_LINKS = 200;
+
+/**
+ * The tasks the desktop sidebar marks as followed by this Bot (`useSessionFollowers`):
+ * active, local, ordinary tasks only, so archived history never grows the roster.
+ */
+async function readFollowedTaskIds(
+  db: ReturnType<typeof getDbClient>['drizzle'],
+  userDataDir: string,
+  botId: string,
+): Promise<string[]> {
+  let ids: string[];
+  try {
+    ids = (await readBotResponsibilityScope(userDataDir, botId)).sessionIds;
+  } catch {
+    // A damaged store may hold releases: show no mark rather than guess (collectTaskResponsibilityScopes).
+    return [];
+  }
+  const followed: Array<{ id: string; updatedAt: number }> = [];
+  for (let start = 0; start < ids.length; start += 500) {
+    const rows = await db.select({ id: sessions.id, updatedAt: sessions.updatedAt }).from(sessions).where(and(
+      inArray(sessions.id, ids.slice(start, start + 500)),
+      eq(sessions.status, 'active'),
+      isNull(sessions.remoteHostId),
+      // isWorkbenchTaskSource: ordinary tasks only, never a Bot's own or a channel conversation.
+      inArray(sessions.source, ['desktop', 'plugin']),
+      or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker')),
+    ));
+    followed.push(...rows);
+  }
+  // Keep the roster row small: the most recently active tasks, in a stable order.
+  return followed
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_FOLLOWED_TASK_LINKS)
+    .map((row) => row.id)
+    .sort();
 }
 
 async function readBotRemoteResourceSource(
@@ -1442,6 +1501,8 @@ async function readBotRemoteResourceSource(
     .from(botProfileVersions).where(and(eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, profile.currentVersion))).limit(1);
   const invitation = botInvitationProgress(parseJson(version?.capabilitiesJson ?? '{}').invitation);
   const reply = latest.role === 'assistant' ? latest : await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null, true);
+  // Paused or archived companions show no mark, as on the desktop sidebar.
+  const followingSessionIds = profile.status === 'active' ? await readFollowedTaskIds(db, owner.userDataDir, botId) : [];
   owner.assertCurrent();
   return {
     ...(invitation ? { invitation } : {}),
@@ -1464,6 +1525,7 @@ async function readBotRemoteResourceSource(
     activityAt: Math.max(profile.createdAt, latest.createdAt ?? 0, canonical?.updatedAt ?? 0),
     currentVersion: profile.currentVersion,
     updatedAt: profile.updatedAt,
+    followingSessionIds,
   };
 }
 
@@ -1701,8 +1763,15 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
     return profile;
 }
 
+/**
+ * Trusted, main-only inputs of a companion restored from the cloud (cloud-companions.md §3.1):
+ * the preset it was made from, and whether the cloud profile replaces a copy whose first meeting
+ * never finished. Never reachable from a renderer or model body.
+ */
+export interface RestoredBotOrigin { templateId?: unknown; replacesUnfinishedMeeting?: true }
+
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
-export async function createBotProfile(raw: unknown) {
+export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const draftEntry = body.creationDraftToken ? readBotCreationDraft(body.creationDraftToken) : undefined;
@@ -1775,6 +1844,7 @@ export async function createBotProfile(raw: unknown) {
   delete persistedCapabilities.invitation;
   delete persistedCapabilities.templateId;
   if (templateId) persistedCapabilities.templateId = templateId;
+  else if (isBotTemplatePresetId(restored?.templateId)) persistedCapabilities.templateId = restored.templateId;
   if (prepareInvitation) persistedCapabilities.invitation = {
     id: randomUUID(), stage: 'skills', locale: readBotInvitationLocale(body.locale),
     avatarRequested: body.generateAvatar === true && !avatarImage,
@@ -1879,7 +1949,7 @@ export async function prepareImportedBotInvitation(botId: string, requestId: str
 
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
 export async function updateBotProfile(raw: unknown, expectedVersion?: number,
-  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>) {
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -1955,7 +2025,9 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const previous = parseJson(version?.capabilitiesJson ?? '{}');
   const preparation = botInvitationProgress(previous.invitation);
   const retryingPortrait = preparation?.stage === 'avatar' && current.canonicalSessionId;
-  if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
+  // A take-over replaces this copy with the cloud profile: its own meeting no longer means anything.
+  const droppingMeeting = restored?.replacesUnfinishedMeeting === true && !!preparation && preparation.stage !== 'ready';
+  if (preparation && preparation.stage !== 'ready' && !retryingPortrait && !droppingMeeting && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
     throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面，请完成准备后再编辑资料');
   }
   const nextConfig = mergeBotProfileCapabilities({
@@ -1971,11 +2043,14 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     capabilityBaseline: body.capabilityBaseline,
   });
   // Template identity survives renames and cannot be replaced through settings.
-  const retainedTemplate = typeof previous.templateId === 'string' ? previous.templateId : inferBotTemplatePresetId(version?.identitySource ?? '');
+  const retainedTemplate = typeof previous.templateId === 'string' ? previous.templateId
+    : isBotTemplatePresetId(restored?.templateId) ? restored.templateId
+      : inferBotTemplatePresetId(version?.identitySource ?? '');
   if (retainedTemplate) nextConfig.templateId = retainedTemplate;
   else delete nextConfig.templateId;
-  // Keep preparation checkpoints outside caller-editable capabilities.
-  if (previous.invitation) nextConfig.invitation = previous.invitation;
+  // Keep preparation checkpoints outside caller-editable capabilities. Dropping the record also
+  // stops a running or recovered invitation (it ends as INVITATION_REPLACED) from greeting again.
+  if (previous.invitation && !droppingMeeting) nextConfig.invitation = previous.invitation;
   else delete nextConfig.invitation;
   if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
     nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
@@ -1990,7 +2065,8 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   // Legacy chain-only profiles gain mirrored fields during normalization.
   // Compare the same representation so unrelated edits do not validate stale routes.
-  if (botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig)) {
+  const modelSelectionChanged = botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig);
+  if (modelSelectionChanged) {
     const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
     owner.assertCurrent();
     if (!primary || !await validateTaskModel(primary)) {
@@ -2024,27 +2100,36 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   owner.assertCurrent();
   const changesPermissions = body.capabilities != null && typeof body.capabilities === 'object'
     && Object.prototype.hasOwnProperty.call(body.capabilities, 'permissions');
+  const modelFollowers = modelSelectionChanged ? await db.select({ sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks).where(and(eq(botSessionLinks.botId, id),
+      inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread']),
+      isNull(botSessionLinks.archivedAt))) : [];
   const commitProfile = async () => {
-    owner.assertCurrent();
-    await client.tx('bots.updateProfile', {
-      id,
-      ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
-      ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
-      ...(patch.description !== undefined ? { description: patch.description } : {}),
-      ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
-      ...(patch.avatarColor !== undefined ? { avatarColor: patch.avatarColor } : {}),
-      ...(patch.status !== undefined ? { status: patch.status } : {}),
-      ...(hiddenAt !== undefined ? { hiddenAt } : {}),
-      ...(pinnedAt !== undefined ? { pinnedAt } : {}),
-      identitySource: nextIdentitySource,
-      capabilitiesJson: safeJson(normalizedNextConfig),
-      profileContentChanged,
-      expectedCurrentVersion: current.currentVersion,
-      clearBotAvatarRefs:
-        patch.avatar !== undefined &&
-        isManagedBotAvatarUrl(current.avatar) &&
-        !isManagedBotAvatarUrl(patch.avatar),
-      now,
+    await coordinateBotModelSelection(modelFollowers.map((link) => link.sessionId), async () => {
+      // Hold send locks only through persistence/invalidation, not runtime
+      // permission refresh, which may wait for the current turn to finish.
+      owner.assertCurrent();
+      await client.tx('bots.updateProfile', {
+        id,
+        ...(modelSelectionChanged ? { clearScheduledModelBaseline: true } : {}),
+        ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
+        ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+        ...(patch.description !== undefined ? { description: patch.description } : {}),
+        ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
+        ...(patch.avatarColor !== undefined ? { avatarColor: patch.avatarColor } : {}),
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(hiddenAt !== undefined ? { hiddenAt } : {}),
+        ...(pinnedAt !== undefined ? { pinnedAt } : {}),
+        identitySource: nextIdentitySource,
+        capabilitiesJson: safeJson(normalizedNextConfig),
+        profileContentChanged,
+        expectedCurrentVersion: current.currentVersion,
+        clearBotAvatarRefs:
+          patch.avatar !== undefined &&
+          isManagedBotAvatarUrl(current.avatar) &&
+          !isManagedBotAvatarUrl(patch.avatar),
+        now,
+      });
     });
     owner.assertCurrent();
     if (changesPermissions) {
@@ -2113,7 +2198,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     .limit(1);
     owner.assertCurrent();
     if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
-      botProfileModelSelectionChanged(previous, normalizedNextConfig) ? 'model' : 'profile');
+      modelSelectionChanged ? 'model' : 'profile');
   }
   const profile = await readProfile(client, id);
   owner.assertCurrent();
@@ -2125,6 +2210,42 @@ async function findExistingCindy(client: ReturnType<typeof getDbClient>) {
   const rows = await client.drizzle.select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
   const existing = rows.find(row => parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy');
   return existing ? readProfile(client, existing.id) : null;
+}
+
+/** Teammate history search; the local settings IPC and the remote settings host share it. */
+export async function searchBotHistory(botId: string, query: string, limit: number) {
+  const db = getDbClient().drizzle;
+  const [profile] = await db
+    .select({ id: botProfiles.id })
+    .from(botProfiles)
+    .where(eq(botProfiles.id, botId))
+    .limit(1);
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
+  // Group / IM channel lanes only hold hidden channel turns; the group chat or
+  // the IM conversation itself is the user's record.
+  const links = await db
+    .select({ sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks)
+    .where(and(
+      eq(botSessionLinks.botId, botId),
+      ne(botSessionLinks.role, 'group'),
+      ne(botSessionLinks.role, 'channel'),
+    ));
+  return searchConversations(
+    {
+      query,
+      limit,
+      semanticMode: 'hybrid',
+      filters: {
+        status: 'all',
+        sessionIds: links.map((row) => row.sessionId),
+      },
+    },
+    // The Bot-owned Session id set above is authoritative. Passing null here
+    // allows migrated IM history to retain its original source while keeping
+    // the renderer unable to widen the search scope.
+    { sessionSources: null },
+  );
 }
 
 export function registerBotIpc(): void {
@@ -2296,38 +2417,7 @@ export function registerBotIpc(): void {
       typeof body.limit === 'number' && Number.isFinite(body.limit)
         ? Math.max(1, Math.min(50, Math.floor(body.limit)))
         : 20;
-    const db = getDbClient().drizzle;
-    const [profile] = await db
-      .select({ id: botProfiles.id })
-      .from(botProfiles)
-      .where(eq(botProfiles.id, botId))
-      .limit(1);
-    if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    // Group / IM channel lanes only hold hidden channel turns; the group chat or
-    // the IM conversation itself is the user's record.
-    const links = await db
-      .select({ sessionId: botSessionLinks.sessionId })
-      .from(botSessionLinks)
-      .where(and(
-        eq(botSessionLinks.botId, botId),
-        ne(botSessionLinks.role, 'group'),
-        ne(botSessionLinks.role, 'channel'),
-      ));
-    return searchConversations(
-      {
-        query,
-        limit,
-        semanticMode: 'hybrid',
-        filters: {
-          status: 'all',
-          sessionIds: links.map((row) => row.sessionId),
-        },
-      },
-      // The Bot-owned Session id set above is authoritative. Passing null here
-      // allows migrated IM history to retain its original source while keeping
-      // the renderer unable to widen the search scope.
-      { sessionSources: null },
-    );
+    return searchBotHistory(botId, query, limit);
   });
 
   ipcMain.handle('local-db:bots:create', async (event, raw: unknown) => {

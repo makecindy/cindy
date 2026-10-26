@@ -205,7 +205,8 @@ function setup(options: {
   miniCapable?: boolean;
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
-  mini?: { failStart?: boolean; endImmediately?: boolean };
+  mini?: { failStart?: boolean; endImmediately?: boolean;
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
@@ -448,6 +449,18 @@ describe('provider group relay for shared users', () => {
     expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(child.newSdkSessionId);
     expect(env.relay.plan).toHaveBeenCalledTimes(1);
     await resumed.client.close('close', 'navigation');
+  });
+  // The guest cannot see or fix the member computer: a member whose agent went away
+  // before the fork must surface as the neutral unavailable error, not "install it there".
+  it('masks a member whose agent became unavailable before a guest fork', async () => {
+    let available = true;
+    const env = setup({ mini: { isAgentAvailable: () => available } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    await first.client.close('close', 'navigation');
+    available = false;
+    await expect(env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION, newSessionId: 'child-task',
+      agentKind: 'claude-code', sourceSdkSessionId: first.started.id, model: 'claude-opus', upToMessageId: 'old',
+      acceptsForkFailed: true })).rejects.toThrow(/^\[REMOTE_AGENT_UNAVAILABLE\]/);
   });
   it('hands a shared user’s new task to the chosen computer, which runs it isolated as a shared user', async () => {
     const env = setup();

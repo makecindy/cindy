@@ -332,11 +332,12 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
           { value: 'all', label: t('groupChat.settings.replyModeAll') },
           { value: 'mentioned', label: t('groupChat.settings.replyModeMentioned') },
         ])}
-        <Text style={styles.note}>{t('groupChat.settings.replyModeNote')}</Text>
+        <Text style={styles.note}>{t(group.singleSpeaker ? 'groupChat.settings.replyModeNoteQueue' : 'groupChat.settings.replyModeNote')}</Text>
         {error('replyMode')}
       </View>
 
-      <View style={styles.section}>
+      {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
+      {group.singleSpeaker ? null : <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('groupChat.settings.speakingMode')}</Text>
         {segmented<BotGroupSpeakingMode>('speakingMode', group.speakingMode, [
           { value: 'auto', label: t('groupChat.settings.speakingModeAuto') },
@@ -346,7 +347,7 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
           ? 'groupChat.settings.speakingModeSequentialNote'
           : 'groupChat.settings.speakingModeAutoNote')}</Text>
         {error('speakingMode')}
-      </View>
+      </View>}
 
       </View>
       {(!group.serverBacked || (canManageBotGroup(group) && !leavesGroup && !group.dissolvedAt)) && <View style={[styles.section, (readOnly || !online) && styles.inheritedInactive]}>

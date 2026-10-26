@@ -200,7 +200,7 @@ export function ThinkingCard({
             />
           </button>
 
-          <Collapse open={expanded}>
+          <Collapse open={expanded} animateResize>
             <BodyRail>
               {content ? (
                 <p className="whitespace-pre-wrap italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
@@ -260,7 +260,7 @@ export function ThinkingCard({
           />
         </button>
 
-        <Collapse open={expanded}>
+        <Collapse open={expanded} animateResize>
           <BodyRail>
             {content ? (
               <p className="whitespace-pre-wrap italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">

@@ -36,6 +36,47 @@ const URL_B = 'xdt-image://cache/b.png';
 const URL_C = 'xdt-image://cache/c.png';
 
 describe('remoteMediaDiskCache', () => {
+  // Unit regression: new video copies need pressure cleanup without changing
+  // manual image retention or removing a file still held by a native player.
+  it('reclaims only idle videos under pressure and protects mounted players across cache handles', async () => {
+    const h = memoryIO();
+    let capacity = 10_000;
+    const options = { reserveBytes: 500,
+      availableBytes: () => capacity - [...h.files.values()].reduce((sum, n) => sum + n, 0),
+      canEvict: (mime: string) => mime.startsWith('video/') };
+    const cache = createRemoteMediaDiskCache(h.io, options);
+    await cache.store(URL_A, 'https://image', 'image/png', 1000);
+    await cache.store(URL_B, 'https://playing', 'video/mp4', 1000);
+    await cache.store(URL_C, 'https://idle', 'video/mp4', 1000);
+    const release = cache.protect(URL_B);
+    const releaseSecondPlayer = cache.protect(URL_B);
+    const reopened = createRemoteMediaDiskCache(h.io, options);
+    capacity = 3500;
+    expect(await reopened.prune(1000)).toBe(true);
+    expect(await reopened.lookup(URL_A)).not.toBeNull();
+    expect(await reopened.lookup(URL_B)).not.toBeNull();
+    expect(await reopened.lookup(URL_C)).toBeNull();
+    expect(await reopened.prune(2000)).toBe(false);
+    release(); release(); // one consumer cannot release the other consumer's lease
+    expect(await reopened.prune(2000)).toBe(false);
+    releaseSecondPlayer();
+    expect(await reopened.prune(2000)).toBe(true);
+    expect(await reopened.lookup(URL_B)).toBeNull();
+    expect(await reopened.lookup(URL_A)).not.toBeNull();
+  });
+  // Unit regression: a downloaded MP4 retained as .img is rejected by AVPlayer.
+  // Exercise the real cache write/lookup, not the MIME table in isolation.
+  it.each([['video/mp4', 'mp4'], ['video/quicktime', 'mov'], ['video/webm', 'webm']])(
+    'retains playable filenames for %s through history reopen', async (mimeType, ext) => {
+      const { io } = memoryIO();
+      const cache = createRemoteMediaDiskCache(io);
+      await cache.store('video-history', 'file:///staging/video', mimeType, 1000);
+      const reopened = createRemoteMediaDiskCache(io);
+      const hit = await reopened.lookup('video-history');
+      expect(hit?.uri.endsWith(`.${ext}`)).toBe(true);
+      expect(hit).toMatchObject({ mimeType, size: 1000 });
+    },
+  );
   it('preserves the previous version when replacement storage is unavailable', async () => {
     const h = memoryIO();
     let available = 10_000;

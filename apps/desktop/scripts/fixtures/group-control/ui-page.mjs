@@ -59,9 +59,23 @@ export default {
       about: 'Seven teammates: the first five answered by themselves, the card folds to three turns around Quill, who waits for 继续',
       data: { ...base, members: QUEUE_CROWD, arrangement: 'long' },
     },
+    'division-waiting': {
+      about: 'A 分工 you started stopped after step 1: the card footer switch is off and 下一步 · 继续 waits',
+      viewport: { width: 1000, height: 760 },
+      data: { ...base, division: 'waiting' },
+    },
+    'division-auto': {
+      about: 'The same 分工 with 做完一步自动交给下一位 on: Nova started step 2 by itself, no 继续 row',
+      viewport: { width: 1000, height: 760 },
+      data: { ...base, division: 'auto' },
+    },
     settings: {
-      about: 'Single-speaker group settings: reply mode remains independent; no speaking mode, organizer or project folder',
+      about: 'Single-speaker group settings: reply mode, organizer, project folder and 分工交接 (off) as before; no speaking mode',
       data: { ...base, arrangement: 'running', settings: true },
+    },
+    division: {
+      about: 'Single-speaker group: 「+」→ 安排分工 is offered again; tagged, the composer says steps may be written out',
+      data: { ...base, arrangement: 'done' },
     },
     'thread-unread': {
       about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
@@ -121,8 +135,26 @@ export default {
       await replyMode.click();
       await page.getByRole('option', { name: await ui.t('bots.groupChat.settings.replyModeMentioned'), exact: true }).click();
       assert.equal(await replyMode.innerText(), await ui.t('bots.groupChat.settings.replyModeMentioned'));
-      for (const key of ['bots.groupChat.settings.speakingMode', 'bots.groupChat.organizer', 'bots.groupChat.settings.projectDir'])
-        assert.equal(await drawer.getByText(await ui.t(key), { exact: true }).count(), 0, key);
+      // Reply mode and the 分工 settings stay; one teammate at a time leaves no speaking mode (bot-group-chat.md §4.0).
+      assert.equal(await drawer.getByText(await ui.t('bots.groupChat.settings.speakingMode'), { exact: true }).count(), 0, 'speakingMode');
+      for (const key of ['bots.groupChat.organizer', 'bots.groupChat.settings.projectDir', 'bots.groupChat.settings.handoff'])
+        assert.ok(await drawer.getByText(await ui.t(key), { exact: true }).count() > 0, key);
+      return;
+    }
+    if (ui.case === 'division-waiting' || ui.case === 'division-auto') {
+      // You started this 分工: its card footer switches 做完一步自动交给下一位 (bot-group-chat.md §7.4).
+      const auto = ui.case === 'division-auto';
+      const toggle = page.getByTestId('bot-group-plan-auto');
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-checked'), String(auto));
+      assert.equal(await page.getByTestId('bot-group-plan-follow-up').count(), auto ? 0 : 1, '下一步 · 继续');
+      return;
+    }
+    if (ui.case === 'division') {
+      await page.getByRole('button', { name: '更多操作' }).click();
+      await page.getByRole('menuitem', { name: /安排分工/ }).click();
+      await page.waitForFunction(() => document.querySelector('textarea')?.getAttribute('placeholder')?.startsWith('写好谁做什么'));
+      await ui.capture('tagged');
       return;
     }
     if (ui.case === 'work-mentioned') {
@@ -300,6 +332,17 @@ export default {
     }
 
     if (ui.case === 'long-thread') {
+      // Browser integration: presentation translation must not enlarge the
+      // native range, which onScroll would mistake for the reader leaving tail.
+      const translatedRange = await scroller.evaluate(el => {
+        const content = el.querySelector('[data-bot-group-message-id]').parentElement;
+        const before = el.scrollHeight;
+        content.style.transform = 'translateY(100px)';
+        const after = el.scrollHeight;
+        content.style.transform = '';
+        return { before, after };
+      });
+      assert.equal(translatedRange.after, translatedRange.before, 'follow movement cannot add scrollable overflow');
       const bottomGap = () =>
         scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
       await page.waitForFunction(() => {

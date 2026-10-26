@@ -97,6 +97,17 @@ describe('Make result dots at the real message ingress', () => {
     await Promise.resolve();
     expect(openPluginTaskTab).toHaveBeenCalledTimes(role === 'primary' ? 1 : 0);
     expect(openUrlInSidebarBrowser).toHaveBeenCalledTimes(role === 'primary' ? 1 : 0);
+    if (role === 'primary')
+      expect(openPluginTaskTab).toHaveBeenLastCalledWith(sessionId, 'sim', {
+        userInitiated: false,
+      });
+    taskView({ instanceId: 'sim', sessionId, focus: true });
+    await Promise.resolve();
+    expect(openPluginTaskTab).toHaveBeenCalledTimes(role === 'primary' ? 2 : 0);
+    if (role === 'primary')
+      expect(openPluginTaskTab).toHaveBeenLastCalledWith(sessionId, 'sim', {
+        userInitiated: true,
+      });
   });
   it.each(['local', 'remote'])(
     'updates %s dots without mounting the card or running an Agent',

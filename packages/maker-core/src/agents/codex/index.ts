@@ -114,7 +114,7 @@ import {
 } from '../shared/review-read-scope.js';
 import { REVIEW_READ_TOOLS, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
 import {
-  annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewConfirmUndeliveredNotice,
@@ -1263,6 +1263,13 @@ const CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
  * deadline，不会因为后续的 `2/5`、`3/5` 提示重新计时。
  */
 const CODEX_RECONNECT_STALL_TIMEOUT_MS = RETRY_ESCALATION_MAX_ELAPSED_MS;
+
+/**
+ * WebSocket 重试用尽后 Codex 改走 HTTPS 时推的 `warning`。之后要先上传完整历史才有事件,
+ * 慢网下可达数分钟,不再属于重连序列:清掉重连 deadline,由 Codex 自身 HTTP 超时与
+ * upstream-idle 看门狗兜底。
+ */
+const CODEX_HTTPS_FALLBACK_WARNING_PREFIX = 'Falling back from WebSockets to HTTPS transport';
 
 /** 只含空白、格式字符或控制字符的 text delta 不算重连已经恢复。 */
 const CODEX_INVISIBLE_TEXT_PATTERN = /[\s\p{Cf}\p{Cc}]/gu;
@@ -3784,13 +3791,18 @@ assertRouteCurrent();
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
-    const liveUsageSnapshot = () => attachLiveGeneration(usageTracker.snapshot(), {
-      tokenSpeed: translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined,
-      outputTokens: usageTracker.getTurnUsage().output,
-      durationMs: translatorRt.generationOutputDurationMs,
-      openStartedAt: translatorRt.generationStartedAt,
-      reliable: translatorRt.generationTimingReliable,
-    });
+    const liveUsageSnapshot = () => {
+      const speed = translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined;
+      return attachLiveGeneration(usageTracker.snapshot(), {
+        tokenSpeed: speed,
+        // Legacy clients use these fields: they must share the speed snapshot's
+        // measured numerator/denominator, never the billing ledger's lifetime.
+        outputTokens: speed?.tokens ?? translatorRt.generationOutputTokens,
+        durationMs: speed?.elapsedMs ?? 0,
+        openStartedAt: translatorRt.generationStartedAt,
+        reliable: speed !== undefined,
+      });
+    };
     /**
      * 本 turn 用于**目录查找**的模型 id, 在构造 turnParams 时快照(取 mutableCatalogModel,
      * 不是送上游的 wire 值 —— 见该变量注释)。
@@ -3802,6 +3814,15 @@ assertRouteCurrent();
      */
     let activeTurnModel: string | undefined = opts.model;
     let activeTurnContextLimit = this.deps.resolveModelContextLimit?.(opts.providerId, opts.model) ?? null;
+    /**
+     * 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+     * 优先于模型级上限/目录默认；host 在预算变化时直接触发重建，不走热切。
+     */
+    let mutableContextWindowBudget: number | null =
+      typeof opts.contextWindowBudget === 'number' && Number.isSafeInteger(opts.contextWindowBudget)
+      && opts.contextWindowBudget > 0
+        ? opts.contextWindowBudget
+        : null;
     /**
      * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
      *
@@ -5077,7 +5098,7 @@ assertRouteCurrent();
       ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     let initialCustomContextWindow = !reviewMode
-      ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      ? mutableContextWindowBudget ?? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const customContextCatalogIdentity = (
       model: string,
@@ -5095,14 +5116,17 @@ assertRouteCurrent();
     let usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
     const resolveModelSwitchCatalogIdentity = async (
       newModel: string,
-      setOpts?: { providerId?: string | null },
+      setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
     ): Promise<string | null> => {
       const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : mutableProviderId;
+      const nextBudget = setOpts?.contextWindowBudget !== undefined
+        ? setOpts.contextWindowBudget
+        : mutableContextWindowBudget;
       const contextWindow = reviewMode
         ? null
-        : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
+        : nextBudget ?? await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
       return customContextCatalogIdentity(newModel, contextWindow);
     };
     const modelSwitchRequiresRebuild = async (
@@ -6513,6 +6537,8 @@ assertRouteCurrent();
 
     let customProviderThreadConfig: Record<string, unknown> = {};
     const currentContextLimit = (): number | null => {
+      // 任务级预算优先：本任务的工作窗口由用户显式选定，host 已收敛到目录上限内。
+      if (mutableContextWindowBudget !== null) return mutableContextWindowBudget;
       const limit = this.deps.resolveModelContextLimit?.(mutableProviderId, mutableCatalogModel ?? mutableModel);
       return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
     };
@@ -8315,9 +8341,9 @@ assertRouteCurrent();
             if (decision.unavailable) {
               autoReviewUnavailableNotice.notify();
               unavailableHandoff = true;
-              if (approvalRequest.kind === 'permission') {
-                approvalRequest = annotatePermissionRequestForUnavailableReview(approvalRequest);
-              }
+            }
+            if (approvalRequest.kind === 'permission') {
+              approvalRequest = annotatePermissionRequestForAutoReview(approvalRequest, decision);
             }
             forcePrompt = true;
           }
@@ -8730,7 +8756,7 @@ assertRouteCurrent();
         }
       }
 
-      resetCodexGenerationTiming(translatorRt);
+      resetCodexGenerationTiming(translatorRt, true);
       turnDiffSnapshots.clear();
       translatorRt.samplingSegments.clear();
       proposedPlanText = null;
@@ -8904,7 +8930,7 @@ assertRouteCurrent();
         const stalledTurnGeneration = reconnectStallTurnGeneration;
         const allowPendingTurnStart = !isTurnInFlight;
         const stalledMessage =
-          `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+          `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
           'without making progress; the turn was interrupted automatically. ' +
           'You can send the next message to continue.';
         const emitStalled = (reason: string, message: string): void => {
@@ -11189,7 +11215,8 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
-      const generationDurationMs = codexGenerationDurationMs(translatorRt);
+      const generationDurationMs = translatorRt.tokenSpeed.isSegmentComplete()
+        ? codexGenerationDurationMs(translatorRt) : undefined;
       const codexDoneUsage = {
         promptTokens: realTurnUsage.input,
         completionTokens: realTurnUsage.output,
@@ -11414,13 +11441,7 @@ assertRouteCurrent();
           type: 'status',
           data: {
             status: 'Done',
-            ...attachLiveGeneration(endSnap, {
-              tokenSpeed: translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined,
-              outputTokens: realTurnUsage.output,
-              durationMs: translatorRt.generationOutputDurationMs,
-              openStartedAt: null,
-              reliable: translatorRt.generationTimingReliable,
-            }),
+            ...liveUsageSnapshot(),
             isRunning: false,
           },
           source: 'codex',
@@ -12477,13 +12498,14 @@ assertRouteCurrent();
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
           if (last.outputTokens > 0) {
+            translatorRt.generationOutputTokens += last.outputTokens;
             translatorRt.generationOutputDurationMs = sampleGenerationDuration(
               translatorRt.generationDurationMs,
               translatorRt.generationStartedAt,
             );
             if (translatorRt.generationTimingReliable) {
               translatorRt.tokenSpeed.recordUsage(
-                usageTracker.getTurnUsage().output,
+                translatorRt.generationOutputTokens,
                 translatorRt.generationOutputDurationMs,
               );
             } else {
@@ -12884,6 +12906,12 @@ assertRouteCurrent();
         // The completed review carries the actionable denial/timeout details. Keep the
         // warning for diagnostics to avoid rendering a duplicate error card.
         log.warn('Codex Guardian warning', { threadId: params.threadId, message: params.message });
+      },
+      warning: (params) => {
+        if (params.message.startsWith(CODEX_HTTPS_FALLBACK_WARNING_PREFIX)) {
+          log.info('codex fell back to HTTPS transport; reconnect deadline cleared', { threadId });
+          clearReconnectStall();
+        }
       },
       error: (params) => {
         // buffered turn 的 error (含终态) 同样进队列等对账 (greptile R11 P1 +
@@ -13328,6 +13356,7 @@ assertRouteCurrent();
         // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
         const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
+        if (!isContinuation) translatorRt.tokenSpeed.reset();
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
           model: mutableModel,
@@ -14422,8 +14451,14 @@ assertRouteCurrent();
       requiresModelSwitchRebuild: modelSwitchRequiresRebuild,
 
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
-      async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
+      async setModel(
+        newModel: string,
+        setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
+      ) {
         if (reviewMode) return;
+        if (setOpts?.contextWindowBudget !== undefined) {
+          mutableContextWindowBudget = setOpts.contextWindowBudget;
+        }
         if (await modelSwitchRequiresRebuild(newModel, setOpts)) {
           const error = new Error(
             'Codex model switch requires rebuilding the current session handle',
@@ -15098,6 +15133,8 @@ assertRouteCurrent();
     });
     try {
       const guestCodexHome = opts.hostedGuestHome ? path.join(opts.hostedGuestHome, 'codex') : undefined;
+      // 受邀者的 fork 只能走分享的供应商：没有供应商时不退回成普通 host(那会用上本机用户的登录)。
+      if (guestCodexHome && !opts.providerId) throw new Error('shared-provider Codex fork requires the shared provider');
       const forkStorage = guestCodexHome
         ? { historyHome: guestCodexHome, sqliteHome: guestCodexHome }
         : await this.deps.resolveCodexThreadStorage?.(opts.sourceSdkSessionId);
@@ -15131,7 +15168,14 @@ assertRouteCurrent();
               ...(forkAccountId ? { providerId: forkAccountId } : {}),
               ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
               ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
-              ...(guestCodexHome && opts.providerId ? { deviceHostedGuestProviderId: opts.providerId } : {}),
+              // 受邀者的 fork 同样要有独占的、按会话收窄的 proxy。fork 只做 thread/fork 与 rollback、
+              // 不跑 turn：会话 id 用这次 fork 独有、不登记的 key，受邀者守门因此拒绝它经分享供应商发出的
+              // 任何请求，不会借到源任务或其他受邀者的授权。
+              ...(guestCodexHome && opts.providerId ? {
+                deviceHostedGuestProviderId: opts.providerId,
+                deviceHostedGuestSessionId: forkBaseHostKey,
+                deviceHostedGuestModelIds: opts.model ? [opts.model] : [],
+              } : {}),
               routeIsCurrent: selection.isCurrent,
               routeSignal: forkRouteSignal,
               ...(selection.policy === 'isolated' ? { localAuthPolicy: selection.policy } : {}),

@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { translateResponsesRequest } from '@cindy/responses-chat-bridge';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 type Registry = {
@@ -147,6 +148,16 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
         get size() { return map.size; },
       };
     },
+  };
+});
+
+// Media-store persistence is covered by oversized-attachment-recovery.test.ts; keep the
+// real request rewrite and replace only where the preserved file is published.
+vi.mock('../oversized-attachment-recovery.js', async () => {
+  const { recoverInlineAttachments } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  return {
+    createAttachmentRecovery: () => () => (body: Parameters<typeof recoverInlineAttachments>[0], target: number) =>
+      recoverInlineAttachments(body, target, { prepare: async () => '/tmp/preserved.png', commit: async () => {} }),
   };
 });
 
@@ -880,13 +891,57 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ['https://api.moonshot.ai/v1', 'kimi-k2.7-code'],
     ['https://api.moonshot.cn/v1', 'kimi-k2.7-code-highspeed'],
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
-  ])('enables image_url for Kimi on official Moonshot host: %s / %s', async (upstream, model) => {
+    ['https://api.moonshot.cn/v1', 'kimi-k3.1-pro'],
+    ['https://api.moonshot.ai/v1', 'kimi-k3.1-pro-highspeed'],
+    ['https://api.kimi.com/coding/v1', 'k3.1-pro'],
+    ['https://api.kimi.com/coding/v1', 'k3.1-pro-highspeed'],
+    ['https://api.kimi.com/coding/v1', 'k3'],
+    ['https://api.kimi.com/coding/v1', 'kimi-for-coding'],
+  ])('translates image input for Kimi on its official route: %s / %s', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
-    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const imageUrl = 'data:image/png;base64,eA==';
+    try {
+      // V5 servers cannot send interface bindings; existing image routes must survive negotiation.
+      for (const modelRegistry of [BUNDLED_CATALOG.modelRegistry, {
+        schemaVersion: 5 as const, updatedAt: BUNDLED_CATALOG.modelRegistry!.updatedAt, models: [],
+      }]) {
+        setActiveCatalog({ ...BUNDLED_CATALOG, modelRegistry });
+        const capabilities = chatBridgeCapabilitiesForRoute(upstream, model);
+        const translated = translateResponsesRequest({ model, input: [{ type: 'message', role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        }] }, { capabilities });
+        expect(translated.messages).toEqual([{ role: 'user', content: [{ type: 'image_url', image_url: { url: imageUrl } }] }]);
+      }
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it.each(['empty', 'retired'] as const)('honors %s V6 declarations instead of restoring bundled image support', async (state) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const registry = catalog.modelRegistry!;
+    registry.interfaceProfiles = state === 'empty' ? [] : registry.interfaceProfiles!.map(profile => ({ ...profile, retired: true }));
+    try {
+      setActiveCatalog(catalog);
+      const capabilities = chatBridgeCapabilitiesForRoute('https://api.kimi.com/coding/v1', 'k3.1-pro');
+      expect(capabilities.imageInput).toBeUndefined();
+      expect(() => translateResponsesRequest({ model: 'k3.1-pro', input: [{ type: 'message', role: 'user',
+        content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+      }] }, { capabilities })).toThrow(/input_image/);
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.5'],
+    ['https://api.kimi.com.evil.example/coding/v1', 'k3.1-pro'],
+    ['https://api.deepseek.com/v1', 'kimi-k3.1-pro'],
     // Kimi Code: non-HTTPS, spoofed subdomain, and models without verified image support stay closed.
     ['http://api.kimi.com/coding/v1', 'k3'],
     ['https://api.kimi.com.evil.example/coding/v1', 'k3'],
@@ -2772,6 +2827,46 @@ describe('codex proxy host', () => {
     const body = { model: 'gpt-5', input: [] };
     strip(body, { url: '/responses' });
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
+  });
+
+  // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
+  // whole image-heavy history, so every retry was rejected until the turn timed out.
+  it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      webSocketTransforms: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => { outbound: Transform };
+    };
+    const { createWebSocketMessageTransform } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const send = async (input: unknown[]): Promise<Buffer> => {
+      const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-5.4', input }));
+      const header = Buffer.alloc(14);
+      header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
+      const { outbound } = proxyOpts.webSocketTransforms({ url: '/backend-api/codex/responses', headers: {} });
+      const forwarded: Buffer[] = [];
+      outbound.on('data', chunk => forwarded.push(chunk));
+      const ended = once(outbound, 'end');
+      outbound.end(Buffer.concat([header, payload])); // zero mask
+      await ended;
+      let message: Buffer = Buffer.alloc(0);
+      const reader = createWebSocketMessageTransform(true, decoded => { message = decoded; return decoded; });
+      reader.resume(); const read = once(reader, 'end'); reader.end(Buffer.concat(forwarded)); await read;
+      return message;
+    };
+    const image = { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(3 << 20, 1).toString('base64')}` };
+
+    const ordinary = await send([image, image]);
+    expect(JSON.parse(ordinary.toString()).input).toEqual([image, image]);
+
+    const oversized = await send([image, image, image, image, image]);
+    expect(oversized.length).toBeLessThanOrEqual(12 << 20);
+    const input = JSON.parse(oversized.toString()).input;
+    expect(input[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining('/tmp/preserved.png') });
+    expect(input.at(-1)).toEqual(image);
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {

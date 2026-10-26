@@ -26,7 +26,7 @@
  *   - 上下文窗口 / content 解析复用 mapper.ts 的 messageToCamel(走 drizzle 驼峰行)。
  */
 
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import type {
   SearchChatHistoryArgs,
@@ -37,6 +37,7 @@ import type {
   HistoryRole,
 } from '@cindy/mcps';
 
+import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion';
 import { getDbClient } from './client/current';
 import { messages as messagesTable, sessions as sessionsTable } from './schema';
 import { messageToCamel } from './mapper';
@@ -332,7 +333,9 @@ async function runVectorArm(
   const { clause, params } = buildFilterClause(args, workdirCandidates);
   // The availability probe and KNN must see the same eligible rows. Probing the
   // full vector table would expose hidden data through vector_used/skip_reason.
-  const eligibleRowids = args.remoteVisibleOnly
+  // Local teammate/source filters also need preselection so other conversations
+  // cannot fill the KNN candidate pool before the requested scope is applied.
+  const eligibleRowids = args.remoteVisibleOnly || args.teammateId || args.source
     ? `rowid IN (
         SELECT j.rowid FROM embedding_jobs j
         JOIN messages m ON m.id = j.source_id
@@ -345,7 +348,7 @@ async function runVectorArm(
   try {
     const probe = await getDbClient().queryOne<{ rowid: number }>(
       `SELECT rowid FROM "${CHAT_VEC_TABLE}" ${eligibleRowids ? `WHERE ${eligibleRowids}` : ''} LIMIT 1`,
-      args.remoteVisibleOnly ? params : [],
+      eligibleRowids ? params : [],
     );
     if (!probe) {
       return {
@@ -390,9 +393,9 @@ async function runVectorArm(
   // float32 必须以 Buffer(little-endian)绑定为 BLOB(better-sqlite3 不接受裸 Float32Array)。
   const f32 = Buffer.from(Float32Array.from(queryVec).buffer);
   const vectorPoolLimit = clampInternalPoolLimit(args.vectorPoolLimit, ARM_POOL);
-  // vec0 supports rowid IN within its KNN cursor. Apply the remote scope before
-  // its candidate limit: filtering only outside the CTE lets hidden rows starve
-  // visible semantic hits. Reuse the arm predicate; local search stays unchanged.
+  // vec0 supports rowid IN within its KNN cursor. Apply the requested scope before
+  // its candidate limit: filtering only outside the CTE lets unrelated rows starve
+  // eligible semantic hits. Reuse the arm predicate for both probe and retrieval.
   const sql = `
     WITH knn AS (
       SELECT rowid, distance
@@ -423,7 +426,7 @@ async function runVectorArm(
       distance: number;
     }>(sql, [
       f32,
-      ...(args.remoteVisibleOnly ? params : []),
+      ...(eligibleRowids ? params : []),
       vectorPoolLimit * VEC_OVERFETCH,
       ...params,
       vectorPoolLimit,
@@ -454,6 +457,14 @@ function buildFilterClause(
   const conds: string[] = ['m.rewind_at IS NULL'];
   if (args.remoteVisibleOnly) conds.push(remoteVisibleSessionSql('s'));
   const params: unknown[] = [];
+  if (args.teammateId) {
+    conds.push('EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)');
+    params.push(args.teammateId);
+  }
+  if (args.source) {
+    conds.push('s.source = ?');
+    params.push(args.source);
+  }
   if (args.sessionIds && args.sessionIds.length > 0) {
     conds.push(`m.session_id IN (${args.sessionIds.map(() => '?').join(',')})`);
     params.push(...args.sessionIds);
@@ -605,12 +616,14 @@ async function fetchSessionsMeta(
       workingDir: sessionsTable.workingDir,
       agentKind: sessionsTable.agentKind,
       title: sessionsTable.title,
+      source: sessionsTable.source,
+      companionJson: historyCompanionJson(sql`${sessionsTable.id}`),
     })
     .from(sessionsTable)
     .where(inArray(sessionsTable.id, uniq));
   const out: Record<string, SearchChatHistorySessionMeta> = {};
   for (const r of rows) {
-    out[r.id] = { workingDir: r.workingDir, agentKind: r.agentKind, title: r.title };
+    out[r.id] = { workingDir: r.workingDir, agentKind: r.agentKind, title: r.title, source: r.source, companion: parseHistoryCompanion(r.companionJson) };
   }
   return out;
 }

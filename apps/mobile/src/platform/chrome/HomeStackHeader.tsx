@@ -4,7 +4,7 @@ import { Stack } from 'expo-router';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useTheme } from '@/theme';
 import { navigationChrome, spacing } from '@/theme/tokens';
-import { homeMenuArtworkSize, homeMenuAttentionIcon, homeMenuIcon } from './homeMenuIcon';
+import { homeMenuArtworkSize, homeMenuIcon } from './homeMenuIcon';
 
 /**
  * Widest title view UIKit keeps centered on the bar: mirrored side margins sized for the
@@ -18,7 +18,7 @@ export function centeredHomeTitleWidth(barWidth: number, trailingItems: number):
 
 /**
  * Shared iOS home chrome. Callers own title content and business actions, not bar geometry.
- * The bar's blur is drawn once by HomeModePanes, outside the sliding panes.
+ * The bar's blur is drawn once by the home route, behind the bar.
  */
 export const HomeStackHeader = memo(function HomeStackHeader({
   title,
@@ -26,7 +26,6 @@ export const HomeStackHeader = memo(function HomeStackHeader({
   menuTestID,
   onOpenMenu,
   keepMenuTopLeft = false,
-  attention = false,
   children,
 }: {
   title: ReactNode;
@@ -34,12 +33,10 @@ export const HomeStackHeader = memo(function HomeStackHeader({
   menuTestID: string;
   onOpenMenu(): void;
   keepMenuTopLeft?: boolean;
-  attention?: boolean;
   /** Route-owned native toolbars; keep items inside their Stack.Toolbar container. */
   children?: ReactNode;
 }) {
   const { colors } = useTheme();
-  const artwork = attention ? homeMenuAttentionIcon : homeMenuIcon;
   return <>
     <Stack.Screen options={{
       headerBackVisible: false, headerShadowVisible: false, headerShown: true,
@@ -53,12 +50,12 @@ export const HomeStackHeader = memo(function HomeStackHeader({
         <Stack.Toolbar.View hidesSharedBackground>
           <View style={styles.menu}>
             <HomeHeaderGlassButton accessibilityLabel={menuA11y} onPress={onOpenMenu} testID={menuTestID} artworkSize={homeMenuArtworkSize}>
-              <Image source={artwork} tintColor={colors.textPrimary} style={styles.artwork} />
+              <Image source={homeMenuIcon} tintColor={colors.textPrimary} style={styles.artwork} />
             </HomeHeaderGlassButton>
           </View>
         </Stack.Toolbar.View>
       ) : (
-        <Stack.Toolbar.Button icon={artwork} iconRenderingMode="template" accessibilityLabel={menuA11y} onPress={onOpenMenu} />
+        <Stack.Toolbar.Button icon={homeMenuIcon} iconRenderingMode="template" accessibilityLabel={menuA11y} onPress={onOpenMenu} />
       )}
     </Stack.Toolbar>
     {children}

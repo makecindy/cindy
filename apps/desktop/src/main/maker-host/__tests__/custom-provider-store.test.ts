@@ -863,6 +863,21 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.headers).toBeUndefined();
   });
 
+  it('persists automatic and explicit interface choices without derived API snapshots', async () => {
+    mountDb();
+    await createCustomProvider({ ...valid, runtimes: { codex: { ...valid.runtimes.codex!, models: [
+      { id: 'automatic', name: 'Automatic', interfaceId: 'auto' },
+      { id: 'explicit', name: 'Explicit', interfaceId: 'vendor-responses' },
+    ] } } });
+    const stored = await getCustomProvider(valid.id);
+    expect(stored?.runtimes.codex?.models).toEqual([
+      { id: 'automatic', name: 'Automatic', interfaceId: 'auto' },
+      { id: 'explicit', name: 'Explicit', interfaceId: 'vendor-responses' },
+    ]);
+    await updateCustomProvider(valid.id, { ...stored!, name: 'Renamed' });
+    expect((await getCustomProvider(valid.id))?.runtimes).toEqual(stored?.runtimes);
+  });
+
   it('round-trips explicit true and false Pi image-input capabilities', async () => {
     mountDb();
     await createCustomProvider({

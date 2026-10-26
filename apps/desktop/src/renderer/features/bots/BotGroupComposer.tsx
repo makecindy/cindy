@@ -189,12 +189,13 @@ const NO_ATTACHMENTS: BotGroupComposerAttachments = {
 export function BotGroupComposer({
   groupId,
   mode = 'group',
+  conversationKind,
   draftKey,
   members,
   running,
   disabled = false,
   planState = null,
-  divisionAvailable = true,
+  divisionSteps = false,
   attachments: attachmentState = NO_ATTACHMENTS,
   attachmentScope = '',
   dragOver = false,
@@ -208,6 +209,7 @@ export function BotGroupComposer({
   footerStart,
 }: {
   groupId: string;
+  conversationKind?: 'direct';
   /** `thread`: a 话题's reply box (attachments, but no division or quotes). */
   mode?: 'group' | 'thread';
   /** Where the unsent text is kept (the group's attachment scope, or the 话题's own key). */
@@ -218,8 +220,8 @@ export function BotGroupComposer({
   disabled?: boolean;
   /** The group's open plan, for placeholders and the 「安排分工」 gate. */
   planState?: BotGroupComposerPlanState | null;
-  /** False when the server arranges turns itself: the lead splits work when asked (§7). */
-  divisionAvailable?: boolean;
+  /** Server groups: a 分工 that writes out who does what starts as written; otherwise the organizer arranges it (§7.0). */
+  divisionSteps?: boolean;
   attachments?: BotGroupComposerAttachments;
   /** Scope for writing annotated images before send (see botGroupAttachmentScope). */
   attachmentScope?: string;
@@ -382,10 +384,10 @@ export function BotGroupComposer({
     const owner = getDataOwnerGeneration();
     const fail = (message: string) => {
       onSendSettled?.(attempt.clientId, { ok: false });
+      if (!isDraftDiscardTokenCurrent(discardTokenRef.current)) return;
       // A reply may fail after its panel closed. Recover only that thread's draft,
       // without overwriting anything written since or reviving a discarded draft.
       if (!mountedRef.current) {
-        if (!isDraftDiscardTokenCurrent(discardTokenRef.current)) return;
         const existing = getDraft(draftKey);
         const ids = new Set(files.map(file => file.id));
         saveDraft(draftKey, { ...existing, text: existing?.text ?? (draft ? botGroupDraftDoc(draft) : null),
@@ -401,7 +403,7 @@ export function BotGroupComposer({
       // Keep the same burned-in bytes on retry, as the main-group outbox does.
       if (!attempt.prepared) attempt.prepared = files.length
         ? await materializeAnnotatedAttachmentsForSend(files, attachmentScope, { burnFailure: 'abort' }) ?? [] : [];
-      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(discardTokenRef.current)) return;
       const result = await sendReply({ text: attempt.text, clientId: attempt.clientId, mentions,
         ...(attempt.prepared.length ? { attachments: toBotGroupAttachmentInputs(attempt.prepared) } : {}) });
       if (!isDataOwnerGenerationCurrent(owner)) return;
@@ -468,6 +470,7 @@ export function BotGroupComposer({
     const sentQuote = quoteRef.current;
     const fields = {
       groupId,
+      ...(conversationKind ? { conversationKind } : {}),
       text: trimmed,
       mentions,
       ...(division ? { division: true } : {}),
@@ -564,7 +567,7 @@ export function BotGroupComposer({
     : !hasMembers
     ? t('bots.groupChat.composer.noMembers')
     : division
-      ? t('bots.groupChat.composer.placeholderDivision')
+      ? t(divisionSteps ? 'bots.groupChat.composer.placeholderDivisionSteps' : 'bots.groupChat.composer.placeholderDivision')
       : planState?.kind === 'proposed'
         ? t('bots.groupChat.composer.placeholderPlanProposed')
         : planState?.kind === 'running' && planState.botName
@@ -727,7 +730,7 @@ export function BotGroupComposer({
                       {t('extraDirs.addFiles')}
                     </span>
                   </DropdownMenuItem>
-                  {!thread && divisionAvailable ? <DropdownMenuItem
+                  {!thread && conversationKind !== 'direct' && <DropdownMenuItem
                     disabled={divisionBlocked}
                     className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}
                     onSelect={() => {
@@ -744,11 +747,11 @@ export function BotGroupComposer({
                         {t(
                           divisionBlocked
                             ? 'bots.groupChat.composer.divisionBusy'
-                            : 'bots.groupChat.composer.divisionDescription',
+                            : divisionSteps ? 'bots.groupChat.composer.divisionDescriptionSteps' : 'bots.groupChat.composer.divisionDescription',
                         )}
                       </span>
                     </span>
-                  </DropdownMenuItem> : null}
+                  </DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}

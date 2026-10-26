@@ -67,7 +67,7 @@ export function useAskUserDictation(
   liveText: string | null;
   lastError: string | null;
   start: () => boolean;
-  stop: () => Promise<void>;
+  stop: () => Promise<boolean>;
 } {
   const { t } = useTranslation();
   const [state, setState] = useState<VoiceInputState>('idle');
@@ -81,7 +81,9 @@ export function useAskUserDictation(
   const engineRef = useRef<WebMicAudioEngine | null>(null);
   const anchorRef = useRef<Anchor | null>(null);
   const submittedRef = useRef<SubmittedSpan | null>(null);
-  const stopInFlightRef = useRef<Promise<void> | null>(null);
+  const stopInFlightRef = useRef<Promise<boolean> | null>(null);
+  const completionRef = useRef<{ promise: Promise<boolean>; resolve: (ok: boolean) => void } | null>(null);
+  const draftTextRef = useRef<string | null>(null);
   const startReadyRef = useRef<Promise<void>>(Promise.resolve());
   const mutedRef = useRef(false);
   const pendingMuteRef = useRef<Promise<void> | null>(null);
@@ -89,8 +91,15 @@ export function useAskUserDictation(
   optionsRef.current = options;
 
   const setVoiceState = useCallback((next: VoiceInputState) => {
+    if (next === 'error' && !submittedRef.current && draftTextRef.current !== null) {
+      targetRef.current.setText(draftTextRef.current);
+      draftTextRef.current = null;
+    }
     stateRef.current = next;
     setState(next);
+    if (next === 'done' || next === 'error' || next === 'idle') {
+      completionRef.current?.resolve(next === 'done');
+    }
   }, []);
 
   const formatError = useCallback((message: string, code?: VoiceInputErrorCode) => {
@@ -162,7 +171,9 @@ export function useAskUserDictation(
       if (event.type === 'draft') {
         const anchor = anchorRef.current;
         if (!anchor) return;
-        setLiveText(spliceText(anchor.text, anchor.range, event.text).value);
+        const value = spliceText(anchor.text, anchor.range, event.text).value;
+        draftTextRef.current = value;
+        setLiveText(value);
         return;
       }
       if (event.type === 'submitted') {
@@ -249,6 +260,10 @@ export function useAskUserDictation(
     const selection = targetRef.current.getSelection();
     anchorRef.current = { text: targetRef.current.getText(), range: selection };
     submittedRef.current = null;
+    draftTextRef.current = null;
+    let resolveCompletion!: (ok: boolean) => void;
+    const completion = new Promise<boolean>((resolve) => { resolveCompletion = resolve; });
+    completionRef.current = { promise: completion, resolve: resolveCompletion };
     runIdRef.current = null;
     setLastError(null);
     setLiveText(null);
@@ -380,33 +395,44 @@ export function useAskUserDictation(
   const stop = useCallback(async () => {
     if (stopInFlightRef.current) return stopInFlightRef.current;
     const stopping = (async () => {
-      await startReadyRef.current;
-      const settings = getVoiceInputSettings();
-      if (settings.playInteractionSound) playVoiceInputEndCue();
-      await stopEngine();
-      if (!runIdRef.current) {
-        await restoreMute();
-        targetRef.current.focus();
-        return;
-      }
       try {
-        const result = await window.electronAPI.voiceInput.stop();
-        if (!result.ok) reportError(formatError(result.error));
+        // Capture may already be live while the service is connecting. Stop it
+        // before awaiting startup so post-press speech is not included.
+        await stopEngine();
+        await startReadyRef.current;
+        const completion = completionRef.current;
+        const settings = getVoiceInputSettings();
+        if (settings.playInteractionSound) playVoiceInputEndCue();
+        // Also release an engine whose startup finished after the first stop.
+        await stopEngine();
+        if (runIdRef.current) {
+          if (stateRef.current === 'listening') setVoiceState('submitting');
+          const result = await window.electronAPI.voiceInput.stop();
+          if (!result.ok) {
+            await fail(formatError(result.error));
+            return false;
+          }
+        }
+        // IPC acknowledgement and final transcript events are separate. Only
+        // the terminal event proves that setText has received the final text.
+        return completion ? await completion.promise : false;
       } catch (error) {
-        reportError(formatError(error instanceof Error ? error.message : String(error)));
+        await fail(formatError(error instanceof Error ? error.message : String(error)));
+        return false;
       } finally {
         await restoreMute();
+        targetRef.current.focus();
       }
-      targetRef.current.focus();
     })();
     stopInFlightRef.current = stopping.finally(() => {
       stopInFlightRef.current = null;
     });
     return stopInFlightRef.current;
-  }, [formatError, reportError, restoreMute, stopEngine]);
+  }, [fail, formatError, restoreMute, setVoiceState, stopEngine]);
 
   useEffect(() => () => {
     attemptRef.current += 1;
+    completionRef.current?.resolve(false);
     const runId = runIdRef.current;
     runIdRef.current = null;
     void stopEngine();

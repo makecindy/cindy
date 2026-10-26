@@ -1438,6 +1438,15 @@ export class Session {
   }
 
   /**
+   * 宿主发起的独占 RPC 操作(手动压缩 / rewind / 切模等)在途。这类操作不预约
+   * turn,关闭会把它们拦腰截断；空闲回收据此拒绝关闭。会话已关闭 → false。
+   */
+  hasPendingHostOperation(): boolean {
+    if (this.status === 'closed' || this.status === 'error') return false;
+    return this.handle.hasPendingHostOperation?.() ?? false;
+  }
+
+  /**
    * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */
@@ -1563,13 +1572,15 @@ export class Session {
   }
 
   /**
-   * Close only when no send reservation or agent turn is active. The check and
-   * close reservation are synchronous, so a concurrent send either wins first
-   * and keeps the session open, or observes closePromise and is rejected.
+   * Close only when no send reservation, agent turn, or host-initiated exclusive
+   * RPC operation (manual compact / rewind / model switch) is active. The check
+   * and close reservation are synchronous, so a concurrent send either wins
+   * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
-      || this.retirementContinuationGeneration === this.turnGeneration) {
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
       return Promise.resolve(false);
     }
     return this.close().then(() => true);
@@ -1875,7 +1886,10 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(model: string, opts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean }): Promise<void> {
+  async setModel(
+    model: string,
+    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
+  ): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }
@@ -1887,7 +1901,7 @@ export class Session {
 
   async previewModelSwitch(
     model: string,
-    opts?: { providerId?: string | null },
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
   ): Promise<PiModelSwitchPreview | undefined> {
     return this.handle.previewModelSwitch?.(model, opts);
   }

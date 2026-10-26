@@ -40,9 +40,11 @@ describe('mobile session header desktop-first surface', () => {
 
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const layout = readTextLf(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
     const gate = readTextLf(resolve(process.cwd(), 'src/session/CindyMakeSessionGate.tsx'), 'utf8');
 
-    expect(source).toMatch(/<CindyMakeSessionGate\b[^>]*\bownsSessionSubscription[\s>]/);
+    expect(source).toContain('<SessionTaskLayout>');
+    expect(layout).toMatch(/<CindyMakeSessionGate\b[^>]*\bownsSessionSubscription[\s>]/);
     expect(gate).toContain('useEffect(() => () => {');
     expect(gate).toContain('if (!ownsSessionSubscription || !deviceId || !sessionId) return;');
     expect(gate).toMatch(
@@ -94,7 +96,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}");
     // 输入区同理:安卓整块经根浮层盖在消息层上,外框高度取键盘避让容器的实测高度。
     expect(source).toContain("const androidFrostedComposer = Platform.OS === 'android' && !companionChat;");
-    expect(source).toContain('bottomInset={androidFrostedComposer ? 0 : bottomOverlayHeight}');
+    expect(source).toContain('bottomInset={androidFrostedComposer || androidComposerClearance ? 0 : bottomOverlayHeight}');
     expect(source).toContain('height={keyboardAreaHeight ?? windowDimensions.height}');
     expect(source).toContain('<View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />');
     expect(source).toContain('testID="session.composerFrost"');
@@ -126,6 +128,7 @@ describe('mobile session header desktop-first surface', () => {
 
   it('keeps narrow navigation back-only and the persistent Home column', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const layout = readTextLf(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
 
     // 窄窗口仅保留返回；主页列仅在宽窗口常驻。
     expect(source).toContain('onOpenSessionList={!paneLayout.persistent && wideSessionNav.enabled ? openSessionListDrawer : undefined}');
@@ -163,7 +166,8 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
     expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
     expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (!sessionListDrawerOverlayMounted) return;\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
-    expect(source).toContain('if (targetSession.id === sessionId && !focusClientId) {\n      closeSessionListDrawer();');
+    // Same-task selection versus search navigation is exercised through the actual
+    // layout callback in sideChatTaskBoundary.test.tsx, rather than a source literal.
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
     expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
@@ -183,9 +187,11 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}");
     // 退场期间旋转/折叠/收窄不能直接卸载 Drawer:保留到 onClosed,三类 pending 导航
     // 才都能执行;宽屏 layout 失效后 drawerWidth=0,退场继续用最后有效宽度。
-    expect(source).toContain('persistent={paneLayout.persistent && !sessionListDrawerOverlayMounted}');
+    expect(layout).toContain('persistent={paneLayout.persistent}');
+    expect(source).toContain('{!paneLayout.persistent || sessionListDrawerOverlayMounted ? (');
     expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
-    expect(source).toContain('width={paneLayout.persistent && !sessionListDrawerOverlayMounted ? paneLayout.sidebarWidth : sessionListDrawerWidthRef.current}');
+    expect(layout).toContain('width={paneLayout.sidebarWidth}');
+    expect(source).toContain('width={sessionListDrawerWidthRef.current}');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
   });

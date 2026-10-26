@@ -30,6 +30,10 @@ pnpm install
 自动补下载，仍无法准备才会中止 dev 启动并给出明确错误。
 正常情况下无需手动安装二进制。
 
+macOS/Linux 的 `apps/codex-package-bin/<平台>/codex-path/codex` 由上述检查流程在
+完整包校验通过后补入，并更新目录清单；运行中的开发版不改包目录。脚本转发到同包的
+`bin/codex`，使任务里的 shell 使用与任务相同的版本；已有的非 Cindy 脚本不会被覆盖。
+
 postinstall 最后还会按 Electron `install.js` 的语义复核 `node_modules/electron/dist`，
 缺失或版本不符就补装（`node scripts/ensure-deps.mjs --electron-binary`；设置了
 `ELECTRON_SKIP_BINARY_DOWNLOAD` 或 `ELECTRON_OVERRIDE_DIST_PATH` 时跳过）。原因：pnpm 的
@@ -41,6 +45,12 @@ correctly`。`pnpm test:unit` 等 workspace 测试开跑前也会只读检查一
 新 worktree 不共享 `node_modules`。确认 checkout 已完成且根 `package.json` 存在后，
 在该 worktree 内重新运行 `pnpm install`；不要加 `--ignore-scripts`，上述补装都在安装
 脚本里完成。
+
+Mobile 的 Global / CN 开发与打包只需仓内公开端点清单，不要求本机存在
+`config/endpoint.dev.json`。Metro 在这两个区域将私有 dev 清单排除出依赖图；不能靠从
+另一个 checkout 复制私有配置来修复新 worktree。只有显式选择 `--region=dev` 时才需要
+按 `config/endpoint.dev.json.example` 准备该文件，缺失时保持明确失败，不切换区域或端点。
+模拟器与运行源码身份检查使用 [Mobile 开发入口](mobile-development.md#日常模拟器入口)。
 
 Cindy Make 的设置入口和指令前置弹窗共用源码准备流程：切到 `cindy-personal` 后，
 按锁文件预热包含开发依赖的 pnpm store 缓存，成功后才标记源码就绪。预热使用

@@ -12,7 +12,7 @@ import { createLogger } from '@/lib/logger';
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, remoteAgentErrorCode } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import { addTab, closeTab, ensureHydrated, getBucket, setActiveTab, subscribe } from '../store';
 import { mergeSidebarWindowBack } from './mergeSidebarWindowBack';
@@ -132,7 +132,7 @@ export function watchSideChatTabs(sessionId: string): () => void {
 /** Open an independent follow-up on the parent's execution host. */
 export async function openSideChatTab(
   sessionId: string,
-  options: { prompt?: string; attachments?: AttachedFile[]; quote?: string; placement?: SideChatTabPlacement; onOpen?: (sessionId: string, deviceId: string | null) => void } = {},
+  options: { prompt?: string; attachments?: AttachedFile[]; quote?: string; placement?: SideChatTabPlacement } = {},
 ): Promise<boolean> {
   try {
     if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
@@ -169,12 +169,6 @@ export async function openSideChatTab(
       clearDraft(child.id);
       throw error;
     }
-    // Keep the parent's tabs as resumable entries; the child uses the full task route.
-    if (options.onOpen) {
-      requestRightSidebarVisibility('close', { sessionId: child.id, animate: false });
-      options.onOpen(child.id, deviceId);
-      return true;
-    }
     // Menus in other groups or popout windows already own their visible host.
     if (!options.placement?.onOptimisticAdd && (!options.placement?.groupId || options.placement.groupId === 'right')) {
       requestRightSidebarVisibility('open', { sessionId, userInitiated: true });
@@ -182,11 +176,14 @@ export async function openSideChatTab(
     return true;
   } catch (error) {
     const code = extractIpcError(error)?.code;
-    log.warn('open failed', { code });
+    const remoteCode = remoteAgentErrorCode(error instanceof Error ? error.message : String(error));
+    log.warn('open failed', { code, remoteCode });
     const key = code === 'NO_PRIOR_ASSISTANT' ? 'notReady'
       : code === 'UNSUPPORTED_CAPABILITY' ? 'unsupported'
       : code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' ? 'updateHost' : 'failed';
-    toast.error(i18n.t(`chat.sideChat.${key}`));
+    toast.error(key === 'failed' && remoteCode
+      ? i18n.t(`chat.remoteError.${remoteCode}`, { defaultValue: i18n.t('chat.sideChat.failed') })
+      : i18n.t(`chat.sideChat.${key}`));
     return false;
   }
 }

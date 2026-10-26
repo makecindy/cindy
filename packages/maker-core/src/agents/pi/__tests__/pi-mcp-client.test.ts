@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +15,9 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
   ).outputText;
   const context: Record<string, any> = {
     fetch: fetchImpl, URL, Headers, AbortController, TextDecoder, process: { env: {} },
-    setTimeout, clearTimeout,
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    setTimeout, clearTimeout, createHash,
   };
   runInNewContext(compiled, context);
   const client = new context.Client({ name: 'cindy', url: 'http://127.0.0.1/mcp' }, 'fake-token');

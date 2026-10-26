@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  collectInTurnSessionIds,
   isSessionTurnDispatchBoundaryBusy,
   SessionTurnActivityTracker,
 } from '../sessionTurnActivityTracker';
@@ -115,5 +116,19 @@ describe('SessionTurnActivityTracker per-session change listener', () => {
     });
     t.setSessionInTurn('s', true);
     expect(t.isSessionInTurn('s')).toBe(true);
+  });
+});
+
+
+describe('collectInTurnSessionIds', () => {
+  it('includes tracker turns and live turns that are not latched yet, once each', () => {
+    const tracker = new SessionTurnActivityTracker();
+    tracker.setSessionInTurn('tracked', true);
+    tracker.setSessionInTurn('idle', false);
+    expect(collectInTurnSessionIds(tracker, [
+      { id: 'tracked', isTurnRunning: () => true },
+      { id: 'live', isTurnRunning: () => true },
+      { id: 'stopped', isTurnRunning: () => false },
+    ])).toEqual(['tracked', 'live']);
   });
 });

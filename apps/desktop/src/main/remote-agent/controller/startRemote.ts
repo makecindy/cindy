@@ -491,19 +491,22 @@ async function prepareAndStartRemoteAgentSession(
   };
   const leavePool = deps.pool?.add(member);
 
-  let disposed = false;
-  const disposeLocal = async () => {
-    if (disposed) return;
-    disposed = true;
+  let localDisposal: Promise<void> | null = null;
+  const disposeLocal = (): Promise<void> => {
+    if (localDisposal) return localDisposal;
     linkState = 'closed';
-    leavePool?.();
-    relay?.close();
-    try {
-      mcp.dispose();
-    } catch (error) {
-      deps.log?.warn('remote agent: MCP dispose failed', { error: String(error) });
-    }
-    await executor.close();
+    // Attempt every cleanup even if one fails. Preserve the settled result so
+    // a second close cannot mistake an unfinished/failed cleanup for success.
+    localDisposal = Promise.allSettled([
+      Promise.resolve().then(() => leavePool?.()),
+      Promise.resolve().then(() => relay?.close()),
+      Promise.resolve().then(() => mcp.dispose()),
+      Promise.resolve().then(() => executor.close()),
+    ]).then((results) => {
+      const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+      if (failures.length) throw new AggregateError(failures, 'Remote agent local resource cleanup failed');
+    });
+    return localDisposal;
   };
 
   const poller = deps.poller ?? new RemoteAgentPoller(deps.invoke, deps.log);
@@ -927,6 +930,7 @@ async function prepareAndStartRemoteAgentSession(
           autoReviewFallback = true;
         },
         dispose: disposeLocal,
+        log: deps.log,
       });
     });
   } catch (error) {

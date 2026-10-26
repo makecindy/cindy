@@ -1,4 +1,5 @@
 import { botLearningTracker } from './botLearningTracker.js';
+import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
 import type { BotDelegationService } from './botDelegationService.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
@@ -646,6 +647,11 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
+      // 夜间学习只在这里计一次数（不调用模型）；非伙伴、自动输入与重放的终态由计数模块自己排除。
+      if (turnBoundaryAssistantPersistId && !session.remoteHostId) {
+        void countNightlyLearningTurn(session.id, turnBoundaryAssistantPersistId).catch(() =>
+          deps.log.warn('Nightly learning turn count did not complete'));
+      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>

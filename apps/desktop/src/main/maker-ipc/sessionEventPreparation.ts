@@ -185,7 +185,6 @@ export function prepareSessionEvent(
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
   if (event.type === 'text' && event.standaloneText === true) {
-    if (taskCoordination && !event.runtimeRecovery) return;
     if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
     // Deliver through the existing persisted-row channel only. Sending a text
     // event as well would let older renderers adopt the notice as their active
@@ -226,7 +225,9 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          botPrivateReply: isBotPrivateInput(activeInputId) || (taskCoordination && !event.runtimeRecovery),
+          // Coordination hides the incoming report, not the teammate's reply.
+          botPrivateReply: isBotPrivateInput(activeInputId),
+          // Retain provenance for the existing quiet completion notification policy.
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // The user input this turn answers; companion chats can show it above the reply
           // (cindy-bots-runtime.md「回复对应的消息」). Hidden trigger inputs are skipped on display.
@@ -603,7 +604,6 @@ export function prepareSessionEvent(
     attributedEvent,
     botTaskResultInputIds,
     groupLaneInputClientId,
-    taskCoordination,
     broadcastEvent,
     eventAgentMeta,
     pendingContextSnapshot,

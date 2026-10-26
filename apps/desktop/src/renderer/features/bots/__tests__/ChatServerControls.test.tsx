@@ -7,7 +7,7 @@ import { ChatInviteButton, ChatMessageActions } from '../ChatServerControls';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { botGroupDraftText, botGroupThreadDraftKey } from '../botGroupAttachments';
-import { clearDraft, getDraft } from '@/lib/composerDraftStore';
+import { clearDraft, discardDraftScope, getDraft } from '@/lib/composerDraftStore';
 import { flashThreadTarget } from '../BotGroupThreadViews';
 import { chatErrorKey } from '../chatError';
 import type { BotGroupDetail, BotGroupMessageView } from '../../../../shared/botGroupChat';
@@ -663,6 +663,30 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[1][0].text).toBe(newerText || original.text);
     if (!newerText) expect(mocks.reply.mock.calls[1][0]).toEqual(original);
     clearDraft(botGroupThreadDraftKey(group.id, 'other'));
+  });
+
+  // #6930 review, unit: real panel drop must feed its own composer, and parent
+  // discard while a reply is pending must fence late recovery (not covered by reopen tests).
+  it.each(['drop', 'picker'])('attaches a Thread file via %s and does not resurrect it after discarding the group', async entry => {
+    Object.assign(window.electronAPI, { getFilePath: (file: File) => '/test/' + file.name, getFileThumbnail: vi.fn(async () => null) });
+    let settle!: (value: { ok: false; errorCode: string }) => void;
+    mocks.reply.mockReturnValueOnce(new Promise(resolve => { settle = resolve; }));
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const panel = (await screen.findByText('Root message')).closest('aside')!;
+    const file = new File(['log'], 'dropped.txt', { type: 'text/plain' });
+    const dataTransfer = { getData: () => '', types: ['Files'], files: [file], items: [{ kind: 'file', getAsFile: () => file }] };
+    if (entry === 'drop') {
+      fireEvent.dragEnter(panel, { dataTransfer });
+      fireEvent.drop(panel, { dataTransfer });
+    } else fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    await screen.findByText('dropped.txt');
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    expect(mocks.reply.mock.calls[0][0]).toMatchObject({ groupId: group.id, rootId: 'root', text: '', attachments: [{ name: 'dropped.txt' }] });
+    act(() => discardDraftScope('bot-group:' + group.id));
+    view.unmount();
+    await act(async () => settle({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
+    expect(getDraft(botGroupThreadDraftKey(group.id, 'root'))).toBeUndefined();
   });
 
   it('keeps a failed reply draft and reuses its operation id; IME confirmation does not send', async () => {

@@ -392,6 +392,24 @@ describe('local companion call ownership', () => {
     await expect(service.readSpeech(1, selection.callId, 'three')).rejects.toThrow();
   });
 
+  // Unit regression: MP3 completes during start/prefetch rather than readSpeech.
+  // Retaining those slots would make the third sentence fail as a full queue.
+  it('releases completed MP3 prefetch slots without requiring a PCM read', async () => {
+    const { service, deps } = fixture();
+    const modelId = 'minimax/speech-2.8-turbo';
+    deps.models.mockReturnValue([{ id: modelId, name: 'MiniMax speech' }]);
+    deps.connection.mockReturnValue({ baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai', headers: {} });
+    deps.fetch.mockImplementation(async () => new Response(new Uint8Array([0xff, 0xfb, 1]), {
+      headers: { 'Content-Type': 'audio/mpeg' },
+    }));
+    await service.start(1, { ...selection, modelId });
+    const ready = await Promise.all(['one', 'two'].map(id => service.speak(1, selection.callId, id, id, true)));
+    expect(ready).toEqual(Array.from({ length: 2 }, () => ({ format: 'mp3', data: new Uint8Array([0xff, 0xfb, 1]).buffer })));
+    await expect(service.speak(1, selection.callId, 'three', 'three', true)).resolves.toHaveProperty('format', 'mp3');
+    expect(deps.fetch).toHaveBeenCalledTimes(3);
+    await expect(service.readSpeech(1, selection.callId, 'three')).rejects.toThrow('cancelled');
+  });
+
   it('cancels pending lookahead headers and prevents their late audio from joining a new reply', async () => {
     const { service, deps } = fixture();
     let headers!: (response: Response) => void;

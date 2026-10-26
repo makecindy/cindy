@@ -2674,12 +2674,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 全新/刚归一化的 kimi 会话,请求体可能还没有任何铸造形态 id(历史缺席),
     // 但模型仍会铸 minted id —— 用请求体 model 判定 kimi,确保首 fresh id 也
     // 被接管记录(codex-connector review: Cache first streamed Kimi tool IDs)。
-    // 覆盖 moonshot-kimi-code provider 的 `k3` 模型 id(Kimi K3,catalog 里
-    // claude-code runtime 的 model id 就是裸 `k3`,不带 kimi 前缀;codex-connector
-    // review: Treat Kimi Code k3 as a Kimi stream)。
+    // Coding Plan 的 k3 / k3.1-pro 等 ID 不带 kimi 前缀，小数版本也必须命中。
     const isKimiRequest =
-      isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string'
-        ? /(^|[/_-])(kimi|k3)([/_-]|$)/i.test(parsedForRewrite.model)
+      decision?.compatibilityProfiles !== undefined
+        ? decision.compatibilityProfiles.includes('kimi-tool-ids-v1')
+        : isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string'
+        ? /(^|[/_-])(kimi|k3(?:\.\d+)?)([/_-]|$)/i.test(parsedForRewrite.model)
         : false;
 
     // per-thread 已见 id 缓存(跨请求并入 usedIds):rewind / 中断 / CLI 压缩会让

@@ -78,7 +78,6 @@ vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colo
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => driver.reduceMotion }));
 // The drawer tests navigation/animation; plugin polling belongs to its own boundary.
 vi.mock('@/plugins/PluginMenuUnreadDot', () => ({ PluginMenuUnreadDot: () => null }));
-vi.mock('@/session/HomeModeSwitch', () => ({ HomeModeSwitch: () => null }));
 
 describe('home navigation drawer', () => {
   let root: Root;

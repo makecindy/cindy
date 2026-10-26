@@ -32,6 +32,14 @@
   包内页面、不接收网址,所以没有 preview 那样的白名单与限速。错误码:
   `PERMISSION_DENIED`(未声明 taskView 或未启用)/ `INVALID_REQUEST` /
   `HOST_NOT_READY`(当前没有任务,或没有宿主窗口);
+- 用户点击主视图里的任务跳转按钮时，可调用 `cindy.taskView({ sessionId, focus: true })`：
+  打开该任务的插件页签，并通过宿主既有任务导航切到该任务；已分离的侧栏也按主动打开处理。
+  缺省或 `focus: false` 仍只开页签、不抢前台，后台工具调用不应传 `focus: true`。
+  Host 须观察到该插件实例最近 3 秒内的真实鼠标/键盘点击，且一次手势只能消费一次
+  （与派活共用）；无手势、已过期或已消费均回 `PERMISSION_DENIED`，不开页也不导航。
+  成功回执额外带 `focusRequested: true`，表示导航请求已投递，不表示目标任务一定存在；
+  不存在的任务沿用任务导航的错误处理。旧宿主可能忽略 `focus`，缺该回执字段时应提示更新，
+  不能声称已跳转。`peek: true` 始终只查询，即使同时传 `focus: true` 也不导航。
 - `cindy.taskView({ peek: true })` 只问"现在打开会落到哪个任务",不开页签:有台前任务
   回 `{ ok: true, sessionId }`,没有则 `HOST_NOT_READY`。用它决定自己的界面(如 mainView
   管理页)要不要出现"在当前任务中打开"一类入口——整页主视图里通常没有台前任务;

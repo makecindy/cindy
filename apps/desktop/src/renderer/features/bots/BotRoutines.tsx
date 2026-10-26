@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Clock3, Check, CircleAlert, Pause, Plus } from 'lucide-react';
+import { Clock3, Check, ChevronRight, CircleAlert, Pause, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cronToHuman } from '@/features/scheduler/lib/cronToHuman';
 import { configToCron, cronToConfig } from '@/features/scheduler/lib/cronCodexPreset';
@@ -15,6 +15,7 @@ import { Input, Textarea } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -24,6 +25,8 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
+import type { NightlyLearningView } from '../../../shared/botNightlyLearning';
+import { BotNightlyLearning, useNightlyLearningView } from './BotNightlyLearning';
 
 const menuClass = 'p-2';
 const fieldClass = 'block space-y-2';
@@ -46,6 +49,8 @@ export function BotRoutines({
   backRef?: { current: (() => Promise<boolean>) | null };
 }) {
   const { confirm } = useConfirmDialog();
+  const settingsTarget = useBotSettingsTarget();
+  const routinesApi = settingsTarget.routines;
   const inFlight = useRef(false);
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
@@ -58,10 +63,15 @@ export function BotRoutines({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
+  const [nightlyOpen, setNightlyOpen] = useState(false);
+  // The nightly review is read and run on this computer; a remote teammate's lives on its own one.
+  const nightlyLocal = settingsTarget.kind === 'local';
+  const nightly = useNightlyLearningView(botId, nightlyLocal);
+  useEffect(() => setNightlyOpen(false), [botId]);
   const refresh = useCallback(async () => {
     const [items, available] = await Promise.all([
-      window.electronAPI.routines.list(botId),
-      window.electronAPI.routines.sources(),
+      routinesApi.list(botId),
+      routinesApi.sources(),
     ]);
     setRoutines(items);
     setSources(available);
@@ -72,8 +82,8 @@ export function BotRoutines({
     const load = () => {
       const current = ++request;
       void Promise.all([
-        window.electronAPI.routines.list(botId),
-        window.electronAPI.routines.sources(),
+        routinesApi.list(botId),
+        routinesApi.sources(),
       ])
         .then(([items, available]) => {
           if (alive && current === request) {
@@ -92,7 +102,7 @@ export function BotRoutines({
     };
     setLoading(true);
     load();
-    const unsubscribe = window.electronAPI.routines.onChanged(load);
+    const unsubscribe = routinesApi.onChanged(load);
     return () => {
       alive = false;
       unsubscribe();
@@ -105,7 +115,7 @@ export function BotRoutines({
       return;
     }
     const load = () => {
-      void window.electronAPI.routines
+      void routinesApi
         .history(botId, selected)
         .then((runs) => {
           if (alive) setHistory(runs);
@@ -115,7 +125,7 @@ export function BotRoutines({
         });
     };
     load();
-    const unsubscribe = window.electronAPI.routines.onChanged(load);
+    const unsubscribe = routinesApi.onChanged(load);
     return () => {
       alive = false;
       unsubscribe();
@@ -163,6 +173,10 @@ export function BotRoutines({
   useEffect(() => {
     if (!backRef) return;
     backRef.current = async () => {
+      if (nightlyOpen) {
+        setNightlyOpen(false);
+        return true;
+      }
       if (!draft) return false;
       if (!inFlight.current) await closeDraft();
       return true;
@@ -170,7 +184,7 @@ export function BotRoutines({
     return () => {
       backRef.current = null;
     };
-  }, [backRef, draft, closeDraft]);
+  }, [backRef, draft, closeDraft, nightlyOpen]);
   const editorRef = useRef<HTMLFieldSetElement>(null);
   // A number field the user left invalid is not silently replaced by the old
   // value on save: point at it instead.
@@ -205,12 +219,25 @@ export function BotRoutines({
     if (trigger.kind === 'interval')
       return t('routines.everyMinutes', { count: trigger.intervalMs / 60_000 });
     if (trigger.kind === 'cron')
-      return `${trigger.expression === '0 * * * *' ? t('routines.hourly') : cronToHuman(trigger.expression, t, i18n.language)} · ${trigger.timezone}`;
+      return `${cronToHuman(trigger.expression, t, i18n.language)} · ${trigger.timezone}`;
     const source = sources.find((item) => item.id === trigger.sourceId);
     const event = source?.events.find((item) => item.type === trigger.eventType);
-    return `${source?.name ?? trigger.sourceId} · ${event?.name ?? trigger.eventType}`;
+    return t('routines.onEvent', { source: source?.name ?? trigger.sourceId, event: event?.name ?? trigger.eventType });
   };
   const running = history.some((run) => run.status === 'running' || run.status === 'queued');
+  if (nightlyOpen && !draft) {
+    return (
+      <section className={embedded ? 'py-3 text-13 text-[var(--text-primary)]' : 'app-wallpaper-surface h-full overflow-y-auto bg-[var(--surface)] p-4 text-13 text-[var(--text-primary)]'}>
+        {!backRef ? (
+          <div className="mb-5">
+            <Button variant="secondary" onClick={() => setNightlyOpen(false)}>{t('routines.back')}</Button>
+          </div>
+        ) : null}
+        <h3 className="mb-3 text-14 font-medium text-[var(--text-primary)]">{t('routines.builtinNightlyLearning.title')}</h3>
+        <BotNightlyLearning botId={botId} />
+      </section>
+    );
+  }
   return (
     <section
       className={
@@ -271,39 +298,50 @@ export function BotRoutines({
               key={routine.id}
               routine={routine}
               disabled={busy}
+              hint={routine.builtin === 'nightly-learning' && nightly.view?.frequency === 'weekly'
+                ? t('routines.builtinNightlyLearning.hintWeekly') : undefined}
+              extra={routine.builtin === 'nightly-learning' && nightlyLocal
+                ? <NightlyLearningStatus routine={routine} view={nightly.view} onOpen={() => setNightlyOpen(true)} />
+                : null}
               onEnabledChange={(enabled) =>
                 void act(() =>
                   // 每天查待办与近况开关同一个入口：恢复时按当前模板重建，并通知近况。
-                  routine.builtin === 'todo-check'
+                  // 远程伙伴还没有这个入口，按普通例行任务在伙伴所在的电脑上切换。
+                  routine.builtin === 'todo-check' && settingsTarget.kind === 'local'
                     ? window.electronAPI.localDb.bots.todos.dailyCheck(botId, enabled)
-                    : window.electronAPI.routines.save(botId, routineInput({ ...routine, enabled }), routine.id),
+                    : routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
                 )
               }
             />
           ) : (
-            <button
-              key={routine.id}
-              type="button"
-              className="flex min-h-12 w-full items-start gap-3 rounded-lg px-3 py-3 text-left hover:bg-[var(--surface-hover)]"
-              onClick={() => {
-                setSelected(routine.id);
-                setDraft(structuredClone(routine));
-              }}
-            >
-              {routine.activity ? (
-                <Spinner size={16} className="mt-1 shrink-0" />
-              ) : routine.enabled ? (
-                <Clock3 size={16} className="mt-1 shrink-0" />
-              ) : (
-                <Pause size={16} className="mt-1 shrink-0" />
-              )}
-              <span className="min-w-0">
-                <span className="block truncate">{routine.name}</span>
-                <span className="block truncate text-12 text-[var(--text-secondary)]">
-                  {routine.triggers.map(triggerSummary).join(' · ')}
-                </span>
-              </span>
-            </button>
+            <div key={routine.id} className="border-b border-[var(--border-default)] py-4 last:border-b-0">
+              <div className="flex items-start gap-3">
+                <button
+                  type="button"
+                  className="min-h-6 min-w-0 flex-1 rounded-lg text-left outline-none hover:text-[var(--text-secondary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  onClick={() => {
+                    setSelected(routine.id);
+                    setDraft(structuredClone(routine));
+                  }}
+                >
+                  <span className="flex items-start gap-2 text-13 font-medium leading-5">
+                    <span className="min-w-0 break-words">{routine.name}</span>
+                    <ChevronRight size={14} className="mt-1 shrink-0" aria-hidden="true" />
+                  </span>
+                </button>
+                <Switch
+                  aria-label={routine.name}
+                  className="mt-0.5 shrink-0"
+                  checked={routine.enabled}
+                  disabled={busy}
+                  onCheckedChange={(enabled) => void act(() =>
+                    routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
+                  )}
+                />
+              </div>
+              <RoutineState routine={routine} />
+              <RoutineSchedule summaries={routine.triggers.map(triggerSummary)} />
+            </div>
           ))}
         </div>
       ) : null}
@@ -330,9 +368,9 @@ export function BotRoutines({
                 onClick={() => {
                   if (revealInvalidField()) return;
                   void act(async () => {
-                    const saved = await window.electronAPI.routines.save(botId, draft, selected!);
+                    const saved = await routinesApi.save(botId, draft, selected!);
                     setDraft(structuredClone(saved));
-                    await window.electronAPI.routines.runNow(botId, saved.id);
+                    await routinesApi.runNow(botId, saved.id);
                   });
                 }}
               >
@@ -499,7 +537,7 @@ export function BotRoutines({
               onClick={() => {
                 if (revealInvalidField()) return;
                 void act(async () => {
-                  const saved = await window.electronAPI.routines.save(
+                  const saved = await routinesApi.save(
                     botId,
                     draft,
                     selected === 'new' ? undefined : selected!,
@@ -523,7 +561,7 @@ export function BotRoutines({
                   disabled={busy}
                   onClick={() =>
                     void act(async () => {
-                      await window.electronAPI.routines.remove(botId, selected!);
+                      await routinesApi.remove(botId, selected!);
                       setDraft(null);
                       setSelected(null);
                       setDeletePending(false);
@@ -546,7 +584,7 @@ export function BotRoutines({
                   <time dateTime={new Date(run.createdAt).toISOString()}>
                     {new Date(run.createdAt).toLocaleString(i18n.language)}
                   </time>
-                  <span aria-label={t(`routines.status.${run.status}`)}>
+                  <span className={`inline-flex shrink-0 items-center gap-2 ${run.status === 'failed' || run.status === 'interrupted' ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]'}`}>
                     {run.status === 'running' || run.status === 'queued' ? (
                       <Spinner size={15} />
                     ) : run.status === 'success' || run.status === 'skipped' ? (
@@ -556,11 +594,9 @@ export function BotRoutines({
                     ) : (
                       <Pause size={15} />
                     )}
+                    {t(`routines.status.${run.status}`)}
                   </span>
                 </summary>
-                <p className="mt-2 text-[var(--text-secondary)]">
-                  {t(`routines.status.${run.status}`)}
-                </p>
                 {run.resultText && (
                   <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
                     {run.resultText}
@@ -866,35 +902,92 @@ function routineInput(routine: Routine): RoutineInput {
 /**
  * 宿主内置的「跟进」：指令与触发条件由宿主维护，这里不进编辑器、不能删，只能暂停或恢复。
  */
-/** 内置例行任务（跟进、每天查待办）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
-const BUILTIN_COPY = { 'follow-up': 'routines.builtinFollowUp', 'todo-check': 'routines.builtinTodoCheck' } as const;
+/** 内置例行任务（跟进、每天查待办、夜间学习）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
+const BUILTIN_COPY = {
+  'follow-up': 'routines.builtinFollowUp',
+  'todo-check': 'routines.builtinTodoCheck',
+  'nightly-learning': 'routines.builtinNightlyLearning',
+} as const;
+
+/** 夜间学习行下方的两行状态（待整理、上次结果）与进入学习记录的入口。 */
+function NightlyLearningStatus({
+  routine,
+  view,
+  onOpen,
+}: {
+  routine: Routine;
+  view: NightlyLearningView | null;
+  onOpen: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const last = view?.lastRun ?? null;
+  const when = (at: number) => new Intl.DateTimeFormat(i18n.language, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(at);
+  const lastText = !last
+    ? t('routines.nightly.lastNever')
+    : `${when(last.at)} · ${last.outcome === 'failed'
+      ? t('routines.nightly.lastFailed')
+      : last.items.length
+        ? t('routines.nightly.lastLearned', { count: last.items.length })
+        : t('routines.nightly.nothing')}`;
+  return (
+    <>
+      {view ? (
+        <span className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {!routine.enabled ? (
+            <span className="col-span-2">{t('routines.nightly.paused')}</span>
+          ) : view.running ? (
+            <span className="col-span-2">{t('routines.nightly.running')}</span>
+          ) : (
+            <>
+              {!view.memoryEnabled ? <span className="col-span-2">{t('routines.nightly.memoryOff')}</span> : null}
+              <span className="text-[var(--text-tertiary)]">{t('routines.nightly.pending')}</span>
+              <span className="tabular-nums">
+                {view.pendingTurns > 0 ? t('routines.nightly.pendingTurns', { count: view.pendingTurns }) : t('routines.nightly.pendingNone')}
+              </span>
+              <span className="text-[var(--text-tertiary)]">{t('routines.nightly.last')}</span>
+              <span className="tabular-nums">{lastText}</span>
+            </>
+          )}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        className="-ml-1.5 mt-1.5 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-12 leading-[1.5] text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-instant)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        onClick={onOpen}
+      >
+        {t('routines.nightly.viewHistory')}
+        <ChevronRight size={14} aria-hidden="true" />
+      </button>
+    </>
+  );
+}
 
 function BuiltinRoutineRow({
   routine,
   disabled,
   onEnabledChange,
+  hint,
+  extra,
 }: {
   routine: Routine;
   disabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
+  hint?: string;
+  extra?: ReactNode;
 }) {
   const { t } = useTranslation();
   const copy = BUILTIN_COPY[routine.builtin ?? 'follow-up'];
   const name = t(`${copy}.name`);
   return (
-    <div className="flex min-h-12 w-full items-start gap-3 rounded-lg px-3 py-3">
-      {routine.activity ? (
-        <Spinner size={16} className="mt-1 shrink-0" />
-      ) : routine.enabled ? (
-        <Clock3 size={16} className="mt-1 shrink-0" />
-      ) : (
-        <Pause size={16} className="mt-1 shrink-0" />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate">{name}</span>
-        {/* 触发条件由宿主维护、条数多且来源重复，这里只写一句白话，不逐条列出。 */}
-        <span className="block text-12 text-[var(--text-secondary)]">{t(`${copy}.hint`)}</span>
-      </span>
+    <div className="flex w-full items-start gap-3 border-b border-[var(--border-default)] py-4 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <p className="break-words text-13 font-medium leading-5">{name}</p>
+        <RoutineState routine={routine} />
+        <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{hint ?? t(`${copy}.hint`)}</p>
+        {extra}
+      </div>
       <Switch
         aria-label={name}
         className="mt-0.5 shrink-0"
@@ -903,5 +996,32 @@ function BuiltinRoutineRow({
         onCheckedChange={(enabled) => onEnabledChange(enabled === true)}
       />
     </div>
+  );
+}
+
+/** Enabling a rule and a run being active are separate facts. */
+function RoutineState({ routine }: { routine: Routine }) {
+  const { t } = useTranslation();
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-x-2 text-12 leading-5 text-[var(--text-secondary)]">
+      <span>{t(routine.enabled ? 'routines.enabled' : 'routines.paused')}</span>
+      {routine.activity ? <span className="inline-flex items-center gap-1.5"><Spinner size={12} />{t(`routines.status.${routine.activity}`)}</span> : null}
+    </p>
+  );
+}
+
+function RoutineSchedule({ summaries }: { summaries: string[] }) {
+  const { t } = useTranslation();
+  if (!summaries.length) return <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t('routines.noTriggers')}</p>;
+  if (summaries.length === 1 && summaries[0].length <= 90) {
+    return <p className="mt-1 break-words text-12 leading-5 text-[var(--text-secondary)]">{summaries[0]}</p>;
+  }
+  return (
+    <details className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+      <summary className="min-h-6 cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">{t('routines.triggerDetails', { count: summaries.length })}</summary>
+      <ul className="mt-1 space-y-1">
+        {summaries.map((text, index) => <li key={index} className="break-words">{text}</li>)}
+      </ul>
+    </details>
   );
 }

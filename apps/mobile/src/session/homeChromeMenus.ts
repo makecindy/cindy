@@ -70,33 +70,18 @@ function checkable(
 
 export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
 
-export function openHomeRemoteCollection({
-  collection,
-  teammateCollectionId,
-  embedded,
-  dismissKeyboard,
-  setMode,
-  push,
-  onModeChange,
-}: {
-  collection: RemoteHomeCollection;
-  teammateCollectionId: string;
-  embedded: boolean;
-  dismissKeyboard(): void;
-  setMode(mode: "teammates"): void | Promise<void>;
-  push(href: string | { pathname: string; params: Record<string, string> }): void;
-  onModeChange?: (mode: "teammates") => void;
-}) {
-  if (collection.id === teammateCollectionId) {
-    dismissKeyboard();
-    if (embedded) {
-      void setMode("teammates");
-      push("/devices");
-    } else {
-      onModeChange?.("teammates");
-    }
-    return;
-  }
+/**
+ * Collections the home scope menus offer. Teammates are the section at the top of the home, as on
+ * desktop, so their collection is never a scope to switch to.
+ */
+export function homeScopeCollections<T extends { id: string }>(collections: readonly T[], teammateCollectionId: string): T[] {
+  return collections.filter((collection) => collection.id !== teammateCollectionId);
+}
+
+export function openHomeRemoteCollection(
+  collection: RemoteHomeCollection,
+  push: (href: { pathname: string; params: Record<string, string> }) => void,
+) {
   push({
     pathname: "/resources/[collectionId]",
     params: {

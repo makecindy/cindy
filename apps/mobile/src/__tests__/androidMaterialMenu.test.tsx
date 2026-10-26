@@ -53,7 +53,7 @@ vi.mock("@expo/ui/jetpack-compose", () => {
         {children}
       </button>
     ),
-    { Text: Slot, TrailingIcon: Slot },
+    { Text: Slot, TrailingIcon: Slot, LeadingIcon: Slot },
   );
   return {
     Box: () => null,
@@ -79,6 +79,8 @@ vi.mock("@/components/AppText", () => ({
 }));
 vi.mock("@/theme", () => ({
   fontWeight: {},
+  iconSize: {},
+  iconStroke: {},
   lineHeight: {},
   spacing: {},
   typeScale: {},
@@ -127,7 +129,9 @@ it("keeps groups, check states, disabled choices and repeated selections in the 
             ],
           },
           { id: "locked", title: "Locked", disabled: true },
-          { id: "delete", title: "Delete", destructive: true },
+          // 2026-10-23 排队菜单要求动作配图标；由真实菜单入口验证原生图标槽。
+          { id: "delete", title: "Delete", destructive: true,
+            icon: React.forwardRef(() => <i data-icon="delete" />) },
         ]}
       >
         <span>Open</span>
@@ -136,6 +140,7 @@ it("keeps groups, check states, disabled choices and repeated selections in the 
   );
   click("Open");
   expect(container.textContent).toContain("Order");
+  expect(container.querySelector('[data-icon="delete"]')).not.toBeNull();
   click("Time✓");
   click("Time✓");
   click("Locked");
@@ -291,3 +296,33 @@ it.each(["light", "dark"])(
     ).toBe(mode);
   },
 );
+// Companion bubbles: the caller opens the menu on its own long press, so the content
+// (quote, links, tables) must keep its taps instead of sitting under pointer-events none.
+it("keeps the content interactive when the caller controls opening", () => {
+  const choose = vi.fn();
+  const openChange = vi.fn();
+  const contentPress = vi.fn();
+  const render = (open: boolean) =>
+    act(() =>
+      root.render(
+        <AnchoredPullDownMenu
+          actions={[{ id: "reply", title: "Reply" }]}
+          onAction={choose}
+          onOpenChange={openChange}
+          open={open}
+        >
+          <button onClick={contentPress}>Quote</button>
+        </AnchoredPullDownMenu>,
+      ),
+    );
+  render(false);
+  const content = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Quote");
+  expect(content?.closest('[data-pointer-events="none"]')).toBeNull();
+  click("Quote");
+  expect(contentPress).toHaveBeenCalledTimes(1);
+  expect(container.querySelector("section")).toBeNull();
+  render(true);
+  click("Reply");
+  expect(choose).toHaveBeenCalledWith("reply");
+  expect(openChange).toHaveBeenLastCalledWith(false);
+});

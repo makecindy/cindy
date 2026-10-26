@@ -9,7 +9,7 @@ import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 
 // Execute the exact staged extension, including its filesystem mailbox and
 // lifecycle handlers. Export helpers only in this test's in-memory module.
-const compiled = ts.transpileModule(CINDY_SUBAGENT_EXTENSION_SOURCE + '\nexport { parentContextSnapshot, createResultDelivery, resolveTaskModelRoutes, normalizeInvocation, modelProviderMap };', {
+const compiled = ts.transpileModule(CINDY_SUBAGENT_EXTENSION_SOURCE + '\nexport { parentContextSnapshot, createResultDelivery, resolveTaskModelRoutes, normalizeInvocation, modelProviderMap, singleTaskDisplayModel };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const nativeRequire = createRequire(import.meta.url);
@@ -358,6 +358,29 @@ describe('Pi subagent provider selection', () => {
       routeProvider: 'parent',
       routeModel: 'parent-model',
     });
+  });
+
+  // 前台卡片的模型 chip 只吃进度帧里的这个值:报父会话模型会让委派给别的模型的子代理
+  // 在卡片上显示成父模型(右栏面板读 status.json 的 displayModel,两边同屏矛盾)。
+  it('reports the child task model on a card frame, never the parent model', () => {
+    const cardModel = (tasks: Array<{ model?: string; provider?: string }>) => {
+      const routed = tasks.map(task => ({ ...task }));
+      extension.resolveTaskModelRoutes(routed, runtime);
+      return extension.singleTaskDisplayModel(routed, runtime);
+    };
+    expect(cardModel([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }])).toBe('glm-5.3-flash');
+    // 未指定模型:继承父会话模型(路由解析同样把 routeModel 落成父模型)。
+    expect(cardModel([{}])).toBe('parent-model');
+    // 批次内模型一致:仍然显示。
+    expect(cardModel([
+      { model: 'glm-5.3-flash', provider: 'glm-coding-plan' },
+      { model: 'glm-5.3-flash', provider: 'opencode-go' },
+    ])).toBe('glm-5.3-flash');
+    // 批次内模型不同:不猜(宿主读状态文件时对这种情况发 model: null)。
+    expect(cardModel([
+      { model: 'glm-5.3-flash', provider: 'glm-coding-plan' },
+      { model: 'gateway-model', provider: 'commandcode' },
+    ])).toBeUndefined();
   });
 
   it('rejects a provider that does not offer the model and lists the ones that do', () => {

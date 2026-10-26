@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'media-test' } }) }));
+afterEach(cleanup);
 
 vi.mock('../ChatVideoView', () => ({
   ChatVideoView: ({
@@ -31,6 +34,50 @@ vi.mock('../ChatSessionFileContext', async (importOriginal) => ({
 
 import { parseRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+
+// Production entry: cindy-ui audio must reach the audio-only handler, while
+// video retains xdt-file's streaming/Range support. The previous Markdown-only
+// cases never exercised rich media; a local .mp3 produced an unplayable URL.
+// Minimal regression: an audio node with src="试听.mp3" (unit/DOM tier).
+describe('MarkdownRenderer rich local media', () => {
+  const richMedia = (kind: string, src: string) => '```cindy-ui\n' + JSON.stringify({
+    version: 1, seq: 1, op: 'create', id: 'media', kind, props: { src },
+  }) + '\n```';
+
+  it.each([
+    ['试听 100%20.mp3', 'C:/workspace/试听 100%20.mp3'],
+    ['C:\\音乐\\主城 A.mp3', 'C:\\音乐\\主城 A.mp3'],
+    ['file:///C:/music/a%2520.mp3', 'C:/music/a%20.mp3'],
+    ['xdt-file://local/?path=C%3A%2Fmusic%2Fa.mp3', 'C:/music/a.mp3'],
+  ])('routes local audio %s through xdt-audio', (src, expectedPath) => {
+    const view = render(<MarkdownRenderer workingDir="C:/workspace" content={richMedia('audio', src)} renderRichAnswers />);
+    const audio = view.container.querySelector('audio');
+    expect(audio?.getAttribute('src')).toBe(`xdt-audio://local/?path=${encodeURIComponent(expectedPath)}`);
+  });
+
+  it.each(['xdt-audio://local/?path=%2Fmusic%2Fa.mp3', 'cindy-media://blobs/a.mp3', 'https://example.com/a.mp3'])('preserves playable audio URL %s', src => {
+    const view = render(<MarkdownRenderer workingDir="/workspace" content={richMedia('audio', src)} renderRichAnswers />);
+    expect(view.container.querySelector('audio')?.getAttribute('src')).toBe(src);
+  });
+
+  it('rewrites the corrected audio URL to its source device', () => {
+    const view = render(<MarkdownRenderer workingDir="/remote/proj" currentSessionId="s1" content={richMedia('audio', '试听.mp3')} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(view.container.querySelector('audio')?.getAttribute('src') ?? '')).toEqual({
+      origin: { kind: 'device', deviceId: 'dev-1' },
+      origUrl: `xdt-audio://local/?path=${encodeURIComponent('/remote/proj/试听.mp3')}`,
+    });
+  });
+
+  it('keeps local video on the streaming file protocol', () => {
+    render(<MarkdownRenderer workingDir="/workspace" content={richMedia('video', 'clip.mp4')} renderRichAnswers />);
+    expect(screen.getByTestId('markdown-video').getAttribute('data-src')).toBe('xdt-file://local/?path=%2Fworkspace%2Fclip.mp4');
+  });
+
+  it('does not expose privileged audio in untrusted previews', () => {
+    const view = render(<MarkdownRenderer workingDir="/workspace" content={richMedia('audio', '/music/a.mp3')} renderRichAnswers allowPrivilegedLinks={false} />);
+    expect(view.container.querySelector('audio')).toBeNull();
+  });
+});
 
 describe('MarkdownRenderer managed video targets', () => {
   it.each([

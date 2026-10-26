@@ -3,7 +3,7 @@ import { act, createElement, useLayoutEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
-  MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible,
+  MessageListVisibility, MessageListVisibilityContext, ScrollViewMessageVisibility, useMessageListItemVisible,
 } from '@/session/messageListVisibility';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -90,4 +90,27 @@ it('removes subscriptions and clears visibility absent from the current list sna
   expect(listener).toHaveBeenCalledTimes(1);
   store.update([{ key: 'a', isViewable: false }]);
   expect(store.isVisible('a')).toBe(false);
+});
+
+// PR #7145: native ScrollView layout/scroll events must gate mounted history rows.
+// Existing LegendList tests only published visibility directly, without geometry.
+it('tracks ScrollView intersections through scroll, resize, history prepend and removal', () => {
+  const scroll = new ScrollViewMessageVisibility();
+  scroll.setLayout('a', { y: 0, height: 200 });
+  scroll.setLayout('b', { y: 800, height: 200 });
+  expect(scroll.isVisible('a')).toBe(false); // no measured viewport yet
+  scroll.setViewport(0, 500);
+  expect(scroll.isVisible('a')).toBe(true);
+  expect(scroll.isVisible('b')).toBe(false);
+  scroll.setViewport(500, 300); // b is exactly outside the bottom edge
+  expect(scroll.isVisible('a')).toBe(false);
+  expect(scroll.isVisible('b')).toBe(false);
+  scroll.setHeight(301);
+  expect(scroll.isVisible('b')).toBe(true);
+  scroll.setLayout('b', { y: 1200, height: 200 }); // prepended history moves content
+  expect(scroll.isVisible('b')).toBe(false);
+  scroll.setViewport(1200, 500);
+  expect(scroll.isVisible('b')).toBe(true);
+  scroll.retain(['a']);
+  expect(scroll.isVisible('b')).toBe(false);
 });

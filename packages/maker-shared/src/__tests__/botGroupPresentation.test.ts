@@ -10,8 +10,28 @@ import {
   projectBotGroupExecutionFailures,
   botGroupExecutionFailureBatches,
   chatGroupMembership,
+  botGroupNewMessageCount,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupPlanView } from '../botGroupChat.js';
+
+// Unit: history browsing needs an actionable count; old-page loads and repeated pushes are not arrivals.
+it('counts only new messages from other people and companions below the observed tail', () => {
+  const message = { id: 'new', sequence: 11, kind: 'message', authorKind: 'bot' } as BotGroupMessageView;
+  const messages = [message, message, { ...message, id: 'human', isSelf: false, authorKind: 'user' as const },
+    { ...message, id: 'history', sequence: 2 }, { ...message, id: 'mine', isSelf: true },
+    { ...message, id: 'removed', deleted: true }, { ...message, id: 'thread', threadRootId: 'root' },
+    { ...message, id: 'system', authorKind: 'system' as const }];
+  expect(botGroupNewMessageCount(messages, null)).toBe(0);
+  expect(botGroupNewMessageCount(messages, 10)).toBe(2);
+  expect(botGroupNewMessageCount(messages, 11)).toBe(0);
+  expect(botGroupNewMessageCount(messages, 10, 'root')).toBe(1);
+  // Mobile presentation indices shift when history is prepended; server positions do not.
+  expect(botGroupNewMessageCount([
+    { ...message, id: 'history', sequence: 1, serverSequence: '9007199254740991' },
+    { ...message, id: 'read', sequence: 2, serverSequence: '9007199254740992' },
+    { ...message, id: 'arrival', sequence: 3, serverSequence: '9007199254740993' },
+  ], '9007199254740992')).toBe(1);
+});
 
 describe('server group membership affordances', () => {
   const self = { actorId: 'self', isSelf: true, isOwned: true, role: 'member' } as BotGroupMemberView;

@@ -26,6 +26,8 @@ export interface ApiFetchOptions {
   assertCurrent?: () => void;
   /** Extra request headers (e.g. Chat Server's X-Chat-Actor); never overrides auth or content type. */
   headers?: Record<string, string>;
+  /** Cancels this request, including body parsing, without terminating account auth. */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_API_TIMEOUT_MS = 20_000;
@@ -51,6 +53,7 @@ export async function apiFetchRaw<T>(
   opts: ApiFetchOptions,
 ): Promise<T> {
   opts.assertCurrent?.();
+  if (opts.signal?.aborted) throw requestAborted();
   const headers: Record<string, string> = { ...opts.headers, 'Content-Type': 'application/json' };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.cache === 'no-store') {
@@ -64,19 +67,25 @@ export async function apiFetchRaw<T>(
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
   const controller = timeoutMs > 0 ? new AbortController() : null;
+  let cancelRequest: (() => void) | undefined;
   try {
+    const cancellation = opts.signal ? new Promise<never>((_resolve, reject) => {
+      cancelRequest = () => { controller?.abort(); reject(requestAborted()); };
+      opts.signal!.addEventListener('abort', cancelRequest, { once: true });
+    }) : null;
     const requestPromise = (async (): Promise<{ response: Response; data: unknown }> => {
       const nextResponse = await fetch(opts.baseUrl + path, {
         method: opts.method ?? 'GET',
         headers,
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-        signal: controller?.signal,
+        signal: controller?.signal ?? opts.signal,
         ...(opts.cache ? { cache: opts.cache } : {}),
       });
       let nextData: unknown = null;
       try {
         nextData = await nextResponse.json();
       } catch (error) {
+        if (opts.signal?.aborted) throw requestAborted();
         if (nextResponse.status === 204 || nextResponse.status === 205) {
           return { response: nextResponse, data: null };
         }
@@ -90,21 +99,21 @@ export async function apiFetchRaw<T>(
       }
       return { response: nextResponse, data: nextData };
     })();
-    const result = timeoutMs > 0
-      ? await Promise.race([
-        requestPromise,
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            void requestPromise.catch(() => undefined);
-            reject(new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout')));
-            controller?.abort();
-          }, timeoutMs);
-        }),
-      ])
-      : await requestPromise;
+    const pending = [requestPromise];
+    if (cancellation) pending.push(cancellation);
+    if (timeoutMs > 0) pending.push(new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        void requestPromise.catch(() => undefined);
+        reject(new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout')));
+        controller?.abort();
+      }, timeoutMs);
+    }));
+    const result = await Promise.race(pending);
     response = result.response;
     data = result.data;
   } catch (err) {
+    // Explicit cancellation is not a timeout, network failure, or auth boundary.
+    if (opts.signal?.aborted) throw requestAborted();
     if (!(err instanceof ApiError) || err.code === 'REQUEST_TIMEOUT') {
       mobileDebugLog('warn', 'network', 'request failed', err);
     }
@@ -124,10 +133,12 @@ export async function apiFetchRaw<T>(
     throw err;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+    if (cancelRequest) opts.signal?.removeEventListener('abort', cancelRequest);
   }
 
   // A late old-account response must not terminate the newly active account.
   opts.assertCurrent?.();
+  if (opts.signal?.aborted) throw requestAborted();
   if (!response.ok) {
     const error = readError(data);
     const code = error.code ?? `HTTP_${response.status}`;
@@ -142,6 +153,10 @@ export async function apiFetchRaw<T>(
   }
 
   return data as T;
+}
+
+function requestAborted(): Error {
+  return Object.assign(new Error('Request cancelled'), { name: 'AbortError' });
 }
 
 function isAbortError(err: unknown): boolean {

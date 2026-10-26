@@ -1447,11 +1447,16 @@ describe('BotGroupChatView', () => {
     it('keeps the header with a retry when the first read fails', async () => {
       await listGroups([detail()]);
       mocks.getBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' });
-      renderView();
-      expect(await screen.findByText('bots.groupChat.loadFailedTitle')).toBeTruthy();
-      expect(screen.getByTestId('content-header').textContent).toContain('周末出游');
-      fireEvent.click(screen.getByRole('button', { name: /bots.retry/ }));
-      expect(await screen.findByText('周六 8:10 有票')).toBeTruthy();
+      vi.useFakeTimers();
+      try {
+        await act(async () => { renderView(); });
+        expect(screen.getByText('bots.groupChat.loadFailedTitle')).toBeTruthy();
+        expect(screen.getByTestId('content-header').textContent).toContain('周末出游');
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        expect(mocks.getBotGroup).toHaveBeenCalledTimes(1);
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: /bots.retry/ })); });
+        expect(screen.getByText('周六 8:10 有票')).toBeTruthy();
+      } finally { cleanup(); vi.useRealTimers(); }
     });
 
     it('shows no header for a group that is no longer listed, then the unavailable state', async () => {
@@ -1473,6 +1478,94 @@ describe('BotGroupChatView', () => {
     await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
     act(() => mocks.pushes.forEach((push) => push({ groupId: 'g1', change: 'deleted' })));
     expect(await screen.findByText('bots.groupChat.unavailableTitle')).toBeTruthy();
+  });
+
+  describe('failed timeline read recovery', () => {
+    afterEach(() => {
+      cleanup();
+      vi.useRealTimers();
+      mocks.ownerGeneration = { dataOwnerId: 'account-a', generation: 1 };
+    });
+
+    // The completion push is already consumed: no later event can rescue the stale page.
+    // Exercise the real timeline component, including its single-flight read queue.
+    it.each(['response', 'exception'] as const)('recovers completed work without another push after a failed %s', async (failure) => {
+      const running = plan({ status: 'running', currentStep: 0,
+        steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!] });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running) });
+      renderView();
+      await screen.findByText('bots.groupChat.header.stepRunning:咪咪');
+      vi.useFakeTimers();
+      if (failure === 'response') mocks.getBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' });
+      else mocks.getBotGroup.mockRejectedValueOnce(new Error('read failed'));
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(plan({ status: 'done' }),
+        [msg({ id: 'result', sequence: 11, content: '分工结果已就绪' })]) });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'plan' })); });
+      expect(screen.getByText('bots.groupChat.header.stepRunning:咪咪')).toBeTruthy();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(screen.getByText('分工结果已就绪')).toBeTruthy();
+      expect(screen.queryByText('bots.groupChat.header.stepRunning:咪咪')).toBeNull();
+      const reads = mocks.getBotGroup.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
+    });
+
+    it('keeps recovery reads serialized and lets a newer push cancel the pending retry', async () => {
+      renderView();
+      await screen.findByText('周六 8:10 有票');
+      vi.useFakeTimers();
+      mocks.getBotGroup.mockResolvedValue({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+      let finish!: (value: { ok: true; group: BotGroupDetail }) => void;
+      mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(3);
+      await act(async () => { finish({ ok: true, group: detail() }); });
+      mocks.getBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'SERVICE_ERROR', message: '' });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ content: '推送已恢复' })] }) });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+      expect(screen.getByText('推送已恢复')).toBeTruthy();
+      const reads = mocks.getBotGroup.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
+    });
+
+    it('recovers a failed queued refresh before the initial snapshot has rendered', async () => {
+      let first!: (value: { ok: true; group: BotGroupDetail }) => void;
+      mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { first = resolve; }));
+      mocks.getBotGroup.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' });
+      renderView();
+      vi.useFakeTimers();
+      await act(async () => {
+        mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'plan' }));
+        first({ ok: true, group: detail() });
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ content: '排队读取已恢复' })] }) });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(screen.getByText('排队读取已恢复')).toBeTruthy();
+    });
+
+    it.each(['unmount', 'delete', 'owner', 'not-found'] as const)('stops pending recovery after %s', async (boundary) => {
+      const view = renderView();
+      await screen.findByText('周六 8:10 有票');
+      vi.useFakeTimers();
+      mocks.getBotGroup.mockResolvedValue({ ok: false, errorCode: 'REQUEST_TIMEOUT', message: '' });
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+      if (boundary === 'unmount') view.unmount();
+      else if (boundary === 'delete') act(() => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'deleted' })); });
+      else if (boundary === 'owner') mocks.ownerGeneration = { dataOwnerId: 'account-b', generation: 2 };
+      else {
+        mocks.getBotGroup.mockResolvedValue({ ok: false, errorCode: 'NOT_FOUND', message: '' });
+        await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+        expect(screen.getByText('bots.groupChat.unavailableTitle')).toBeTruthy();
+      }
+      const reads = mocks.getBotGroup.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(reads);
+    });
   });
 
   describe('乐观显示', () => {
@@ -2937,11 +3030,13 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     const scroll = view.container.querySelector('.overflow-y-auto.px-5') as HTMLElement;
     Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
     scroll.scrollTop = 0; fireEvent.scroll(scroll);
-    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', ...incoming, content: 'New reply', createdAt: 1200 })] }) });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', sequence: 3, ...incoming, content: 'New reply', createdAt: 1200 })] }) });
     act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
     await screen.findByText('New reply');
     act(() => window.dispatchEvent(new Event('focus')));
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(scroll.scrollTop).toBe(0);
+    expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' })).toBeTruthy();
     scroll.scrollTop = 900; fireEvent.scroll(scroll);
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
@@ -3181,7 +3276,8 @@ describe('Telegram / Slack-grade timeline', () => {
       expect(strip.textContent).not.toContain('NO_REPLY');
       mocks.activity = { compactDetail: '正在读 README.md', startedAtMs: Date.now() - 5_000, phase: 'running' };
       fireEvent.click(within(strip).getByRole('button', { name: 'bots.groupChat.progress.viewProcess' }));
-      await waitFor(() => expect(screen.getByTestId('bot-group-progress').textContent).toContain('正在读 README.md'));
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/plan-mimi');
+      expect(mocks.stopBotGroupRound).not.toHaveBeenCalled();
     } finally {
       mocks.activity = null;
     }

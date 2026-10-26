@@ -24,6 +24,11 @@ import { tx as runDbTransaction } from '../../worker/opHandlers/tx';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 import { isWorktreeMoveBlockedError } from '../../../../shared/worktreeMoveGuardError';
+import {
+  isSessionContextWindowBudgetCustomized,
+  readSessionContextWindowBudget,
+  writeSessionContextWindowBudget,
+} from '../../../maker-host/session-context-budget-store.js';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -174,6 +179,11 @@ vi.mock('../../../turn-change-set/store.js', () => ({
 vi.mock('../../../cindy-brain/index.js', () => ({
   notifyGhostSessionEvent: vi.fn(),
 }));
+// 偏好文件不可读时 store 会拒绝写（保留坏文件给人工修）：个别用例需要让它抛错。
+vi.mock('../../../maker-host/session-context-budget-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../maker-host/session-context-budget-store.js')>();
+  return { ...actual, writeSessionContextWindowBudget: vi.fn(actual.writeSessionContextWindowBudget) };
+});
 
 import {
   applyAgentSwitchToSessionRow,
@@ -883,6 +893,76 @@ describe('local-db:sessions:update handler wiring', () => {
       effort: 'high',
       fast_mode: 0,
     });
+  });
+
+  it('rejects an out-of-range task context window budget instead of silently clearing it', async () => {
+    // 与隧道入口同口径：<1000 会被 normalize 变成 null（等于静默清掉用户预算），
+    // 超大值会被静默夹到上限；调用方却收到成功回包。宁可显式拒绝。
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 999 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 300_000.5 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 100_000_001 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+  });
+
+  it('persists null and an in-range task context window budget', async () => {
+    // 任务窗口预算不是会话列（没有 context_window_budget 列），而是 main 侧偏好文件里的
+    // 条目：这里读写它自己的 store（路径由 electron 的 userData mock 指到临时目录）。
+    await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('cc-local')).toBe(300_000);
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(true);
+
+    await invokeUpdate('cc-local', { contextWindowBudget: null });
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(false);
+  });
+
+  it('keeps the row update when the budget store refuses to write', async () => {
+    // 偏好文件不可读时 store 拒绝写（保留坏文件给人工修）。行更新与广播都已提交，
+    // 预算失败不能带走同一个 patch 里的其它字段，也不能让 IPC 抛错盖掉已生效的改名
+    // （GLM-5.3 独立审查，2026-10-24）。
+    vi.mocked(writeSessionContextWindowBudget).mockImplementationOnce(() => {
+      throw new Error('session context budget settings file is unreadable');
+    });
+    await expect(invokeUpdate('cc-local', {
+      contextWindowBudget: 300_000,
+      title: 'renamed-despite-budget-failure',
+    })).resolves.toBeDefined();
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+  });
+
+  it('fails a budget-only update when the budget store refuses to write', async () => {
+    // 纯预算请求只有这一个意图：吞掉错误就是「看着成功、实际还是旧窗口」，
+    // 用户想靠缩小窗口省钱时会被骗（Greptile P1，2026-10-24）。
+    vi.mocked(writeSessionContextWindowBudget).mockImplementationOnce(() => {
+      throw new Error('session context budget settings file is unreadable');
+    });
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 300_000 })).rejects.toThrow(
+      /unreadable/,
+    );
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+  });
+
+  it('does not mirror a remote budget into the next account after an owner change', async () => {
+    // 远程镜像落库（persistSessionFields）同样是 await 之后才写偏好文件：保存期间切账号，
+    // 这条过期更新不得把预算写进新账号的文件（Greptile P1，2026-10-24）。
+    h.captureOwnerScope = true;
+    h.ownerCurrent = false;
+    await persistSessionFields('pi-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('pi-local')).toBeNull();
+  });
+
+  it('does not write the context window budget into the next account after an owner change', async () => {
+    // 偏好文件按「当前」账号的 userData 解析，而 DB 更新是 await 出来的：保存期间切账号
+    // 时，过期请求不得把原任务的预算写进新账号的文件（Greptile P1，2026-10-24）。
+    h.captureOwnerScope = true;
+    h.ownerCurrent = false;
+    await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
   });
 
   it.each(['model', 'harness'])('projects the saved owner choice during an automatic %s switch', async (kind) => {

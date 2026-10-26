@@ -65,7 +65,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
         modifiers={[tint(colors.inputCaret)]} testID="companionProfile.showReplyTarget" />
     </Section>
     {p.data?.panels.filter(item => item.id === 'projects' || item.id === 'followUp').flatMap(item => item.entries ?? [])?.map(entry => <Section key={entry.id}>{action(label(entry.title), () => p.onEditor(entry.resourceId), !p.online)}</Section>)}
-    <Section>{row('artifacts', 'doc.text')}{p.onSearch ? row('search', 'magnifyingglass', p.onSearch) : null}{row('permissions', 'hand.raised')}</Section>
+    <Section>{row('channels', 'bubble.left.and.bubble.right')}{row('artifacts', 'doc.text')}{p.onSearch ? row('search', 'magnifyingglass', p.onSearch) : null}{row('permissions', 'hand.raised')}</Section>
     {p.onHome ? <Section>{row('home', 'desktopcomputer', p.onHome)}</Section> : null}
     <Section>{p.data?.panels.filter(item => ['restart', 'resume', 'delete'].includes(item.id) && item.action).map(item => <Button key={item.id} onPress={() => p.onConfirm(item)} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }), disabled(p.busy || !p.online), frame({ minHeight: 44 }), ...(item.id === 'delete' ? [foregroundStyle(colors.destructive)] : [])]}><HStack modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Text>{label(item.action!.label)}</Text><Spacer /></HStack></Button>)}</Section>
     {/* Same as Android: a host without the settings forms asks for a Cindy update on that computer. */}
@@ -87,6 +87,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
       : p.page === 'models' ? <>{p.panel?.action ? <Section><CompanionNativeContent>{p.models}</CompanionNativeContent></Section> : null}{p.panel?.action ? <Section>{action(tr('save'), () => p.onSubmit(p.panel!), !p.dirty || !p.online || p.conflict)}</Section> : note(p.panel?.text || tr('hostUpgrade'))}</>
       : p.page === 'settings' ? <Section>{row('permissions', 'hand.raised')}</Section>
       : p.page === 'skills' ? <>{p.data?.panels.find(item => item.id === 'skills')?.entries?.length ? <Section>{row('personalSkills', 'sparkles')}</Section> : note(p.data?.panels.find(item => item.id === 'skills')?.text || tr('skillsEmpty'))}{p.data?.panels.find(item => item.id === 'connections')?.entries?.length ? <Section>{row('connections', 'link')}</Section> : note(p.data?.panels.find(item => item.id === 'connections')?.text || tr('emptyEditor'))}</>
+      : p.page === 'channels' ? <Section><CompanionNativeContent>{p.channels}</CompanionNativeContent></Section>
       : p.page === 'artifacts' ? <Section><CompanionNativeContent>{p.artifacts}</CompanionNativeContent></Section> : p.page === 'memoryEntries' ? p.memoryPage
       : <>{p.page === 'profile' && p.data?.panels.find(item => item.id === 'avatar')?.entries?.length ? <Section>{row('avatar', 'person.crop.circle')}</Section> : null}{panel(p.panel)}
         {(p.page === 'profile' || p.page === 'memory') && p.panel && !p.panel.action ? note(tr('largeProfileRecovery')) : null}

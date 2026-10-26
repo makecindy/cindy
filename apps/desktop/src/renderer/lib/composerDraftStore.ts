@@ -383,10 +383,10 @@ export function getDraft(sessionId: string): ComposerDraft | undefined {
 /** Capture the current process-local discard generation for async draft work. */
 export function captureDraftDiscardToken(sessionId: string): ComposerDraftDiscardToken {
   const ownerScopedKey = draftKey(sessionId);
-  return {
-    ownerScopedKey,
-    generation: draftDiscardGenerations.get(ownerScopedKey) ?? 0,
-  };
+  const generation = draftDiscardGenerations.get(ownerScopedKey) ?? 0;
+  // Register empty in-flight drafts too, so deleting their parent scope fences them.
+  draftDiscardGenerations.set(ownerScopedKey, generation);
+  return { ownerScopedKey, generation };
 }
 
 /** Whether a captured draft scope has not been explicitly discarded. */
@@ -515,6 +515,18 @@ export function discardDraft(sessionId: string): void {
   // recreate the discarded draft, while late async files are fenced by the
   // generation above and recycled by their owner.
   clearDraftAndNotify(sessionId);
+}
+
+/** Discard a parent composer and its colon-delimited child scopes for this owner. */
+export function discardDraftScope(sessionId: string): void {
+  const key = draftKey(sessionId);
+  const keys = new Set([...drafts.keys(), ...draftDiscardGenerations.keys(), ...listeners.keys()]);
+  keys.add(key);
+  for (const candidate of keys) {
+    if (candidate === key || candidate.startsWith(key + ':')) {
+      discardDraft(candidate.slice(ownerPrefix().length));
+    }
+  }
 }
 
 /**

@@ -8,11 +8,12 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { readWorkingPhase } from '@cindy/maker-shared';
 import type { BotGroupSpeakerActivity } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { useThemedStyles, type ThemeColors } from '@/theme';
@@ -40,6 +41,7 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   onError(message: string | null): void;
 }) {
   const { t } = useTranslation();
+  const router = useRouter();
   const styles = useThemedStyles(makeStyles);
   const { invoke, subscribe, unsubscribe } = useDeviceLink();
   const lane = sessionId ?? '';
@@ -80,6 +82,7 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
         <ThinkingDots />
         <WorkingStatusText key={`${lane}:${activity}`} text={label} style={styles.statusText} />
       </View> : null}
+      {sessionId ? <MainWindowActionButton action={{ label: t('devices.companions.openTask'), onPress: () => router.push({ pathname: '/sessions/[sessionId]', params: { sessionId, deviceId } }) }} /> : null}
       {pending.length > 0 && lane ? <InteractionPanel embedded companion
         companionIdentity={{ name: identity.name, avatar: <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /> }}
         deviceId={deviceId} sessionId={lane} interactions={pending} onError={onError} />

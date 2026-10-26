@@ -1634,7 +1634,7 @@ describe('TelegramIM', () => {
     try {
       for (const [index, emoji] of PROCESSING_REACTION_POOL.entries()) {
         random.mockReturnValue((index + 0.5) / PROCESSING_REACTION_POOL.length);
-        expect(await im.reactToMessage('111|5', '👨‍💻')).toBe(emoji);
+        expect(await im.reactToMessage('111|5', '🤔')).toBe(emoji);
         const sent = api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!;
         expect(sent.params.reaction).toEqual([{ type: 'emoji', emoji }]);
         expect(sent.params.is_big).toBeUndefined();
@@ -1657,12 +1657,12 @@ describe('TelegramIM', () => {
         'setMessageReaction',
         new TelegramApiError('setMessageReaction', 400, 'REACTION_INVALID'),
       );
-      expect(await im.reactToMessage('111|5', '👨‍💻')).toBe('👨‍💻');
+      expect(await im.reactToMessage('111|5', '🤔')).toBe('🤔');
       expect(
         api.calls
           .filter((call) => call.method === 'setMessageReaction')
           .map((call) => call.params.reaction),
-      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '👨‍💻' }]]);
+      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '🤔' }]]);
     } finally {
       random.mockRestore();
     }
@@ -1680,7 +1680,7 @@ describe('TelegramIM', () => {
     await connect();
     // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
     expect(await im.reactToMessage('111|5', '👍')).toBeNull();
-    expect(await im.reactToMessage('111|5', '👨‍💻')).toBeNull();
+    expect(await im.reactToMessage('111|5', '🤔')).toBeNull();
     expect(await im.reactToMessage('111|5', '👀')).toBeNull();
     expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
     // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂

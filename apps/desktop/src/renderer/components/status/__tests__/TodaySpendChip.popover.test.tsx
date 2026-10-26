@@ -312,6 +312,28 @@ describe('TodaySpendChip credit snapshot time', () => {
     return screen.getByTestId('quota-hover-card');
   }
 
+  // Unit regression: the rendered chip and card must distinguish a disabled
+  // enterprise daily limit from a failed daily read; omitted flags retain legacy behavior.
+  it.each([
+    { dailyLimitEnabled: true, todaySpend: 3, daily: true, warning: false },
+    { dailyLimitEnabled: true, todaySpend: null, daily: false, warning: true },
+    { dailyLimitEnabled: false, todaySpend: null, daily: false, warning: false },
+    { dailyLimitEnabled: false, todaySpend: 3, daily: false, warning: false },
+    { dailyLimitEnabled: undefined, todaySpend: 3, daily: true, warning: false },
+    { dailyLimitEnabled: undefined, todaySpend: null, daily: false, warning: true },
+  ])('respects the daily limit state %j', ({ dailyLimitEnabled, todaySpend, daily, warning }) => {
+    mocks.gatewaySnapshot = {
+      spend: 40, maxBudget: 100, currency: 'CNY', fetchedAt: Date.now(),
+      todaySpend, ...(dailyLimitEnabled === undefined ? {} : { dailyLimitEnabled }),
+    };
+    render(gatewayChip());
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent?.includes('todaySpend.dailyLimitLabel')).toBe(daily);
+    const card = openUsageCard();
+    expect(Boolean(within(card).queryByText('quotaCard.dailyLabel'))).toBe(daily);
+    expect(Boolean(within(card).queryByText('todaySpend.tooltip.dailyUnavailable'))).toBe(warning);
+    expect(within(card).getByText('quotaCard.monthlyLabel')).toBeTruthy();
+  });
+
   it('shows the retained balance observation time and clears it after a fresh snapshot', () => {
     mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
     const view = render(gatewayChip());

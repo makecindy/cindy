@@ -330,6 +330,7 @@
       "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
       "automationTask": "自動化タスク {{title}}",
       "openConversation": "セッション {{title}} を開く",
+      "followedBy": "、担当: {{names}}",
       "collapse": "{{title}} を折りたたむ",
       "expand": "{{title}} を展開",
       "taskError": "タスクでエラー",
@@ -588,9 +589,12 @@
     "viewAllRuns": "すべての実行 {{count}} 回を表示"
   },
   "companions": {
+    "section": {
+      "showAll": "すべて表示",
+      "showAllA11y": "すべて表示（{{count}}）",
+      "showLess": "閉じる"
+    },
     "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインするとチームメイトを新規作成できます。",
-    "taskAttentionCount": "確認が必要なタスク：{{count}}",
-    "unreadChatCount": "未読のチャット：{{count}}",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",
@@ -629,19 +633,13 @@
       "unknown": "状態不明"
     },
     "title": "チームメイト",
-    "tasks": "セッション",
     "search": "チームメイトを検索",
-    "emptyTitle": "チームメイトはまだいません",
-    "emptyCopy": "パソコンの Cindy でチームメイトを作成してください。",
-    "noResults": "一致するチームメイトがいません",
     "startChat": "会話を始める",
-    "preferenceSaveFailed": "表示設定を保存できませんでした。もう一度表示を切り替えてください。",
     "automation": {
       "unsavedTitle": "変更を破棄しますか？",
       "unsavedBody": "変更はまだ保存されていません。",
       "discard": "変更を破棄"
     },
-    "openNavigation": "ナビゲーションを開く",
     "openProfile": "{{name}}のプロフィールを表示",
     "switchCompanion": "チームメイトを切り替える",
     "activity": {
@@ -688,9 +686,7 @@
     "errorDetails": "エラー詳細",
     "createTeammate": "新しい仲間",
     "createMenu": "新規作成",
-    "searchWithGroups": "仲間とグループを検索",
     "awaiting": "確認待ち",
-    "emptyCopyCreate": "仲間は話した内容を覚えていて、パソコンで作業も手伝えます。",
     "taskResult": "タスクの結果",
     "collapseResult": "結果を閉じる"
   },
@@ -764,7 +760,18 @@
     "home": "メインのパソコン",
     "chat": "チャット",
     "showReplyTarget": "返信の対象メッセージを表示",
-    "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。すべてのチームメイトに適用されます。以前の返信には表示されません。"
+    "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。すべてのチームメイトに適用されます。以前の返信には表示されません。",
+    "channels": "メッセージサービス",
+    "channelsEmpty": "接続されたサービスはありません",
+    "channelTasksEmpty": "タスクはまだありません",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "仲間をインポート",

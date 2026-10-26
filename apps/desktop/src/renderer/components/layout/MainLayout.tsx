@@ -553,14 +553,16 @@ export function MainLayout() {
   const currentPathRef = useRef(`${location.pathname}${location.search}`);
   currentPathRef.current = `${location.pathname}${location.search}`;
   const navigateToOrdinarySession = useCallback(
-    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true) => {
+    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string) => {
+      if (deviceId) remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
       // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get
       // 会 miss → 远程 Orca lead/worker 被当普通会话路由,CCAgentSessionView 再
       // redirect 到 orca 路由时会丢 searchJump 锚点。传入远程镜像的 session 对象,
       // 让 Orca 路由一步到位(Codex review P2,与 SessionLinkChip 同款处理)。
       const remoteSession =
-        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) => s.id === sessionId) ?? null;
-      void resolveSessionRoute(sessionId, remoteSession).then((target) => {
+        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
+          s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
+      void resolveSessionRoute(sessionId, remoteSession, { remote: !!deviceId }).then((target) => {
         if (!isLatest()) return;
         const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);
         if (messageClientId) {
@@ -600,6 +602,7 @@ export function MainLayout() {
   // One navigator for the layout's lifetime: its sequence must span re-renders so a
   // late lookup for an earlier notification cannot override a newer click.
   const [navigateToSession] = useState(() => createSessionEntryNavigator({
+    isRemoteDevice: async (deviceId) => deviceId !== await window.electronAPI.getDeviceId(),
     readKnownBotRoute: (sessionId) => botRouteForOwnedSession(getBotProfiles(), sessionId)
       ?? remoteBotRouteForSession(readRemoteBots(), sessionId),
     resolveBotRoute: (sessionId) => resolveBotRouteForSessionEntry(sessionId, {
@@ -620,8 +623,8 @@ export function MainLayout() {
     // 群专线没有可处置报错的横幅:目标地址提交后请 main
     // 处置这次点击的那张卡(main 只认最近一次点击与当时的卡片身份,见 BotSessionEntryTarget)。
     consumeAlert: requestIslandEntryAlertDisposal,
-    openOrdinary: (sessionId, messageClientId, isLatest) =>
-      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest),
+    openOrdinary: (sessionId, messageClientId, isLatest, deviceId) =>
+      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest, deviceId),
   }));
   navigateToSessionRef.current = navigateToSession;
   // 已提交的地址交给入口导航器:灵动岛卡片的处置等到目标地址真正提交后才发。
@@ -698,7 +701,8 @@ export function MainLayout() {
   const handleDeepLinkPayload = useCallback(
     (
       payload:
-        | { type: 'session'; id: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
@@ -707,8 +711,15 @@ export function MainLayout() {
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing'; connect?: string; intent?: 'topup' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => {
+      if (payload.type === 'chat-message') {
+        const search = new URLSearchParams({ messageId: payload.messageId });
+        if (payload.threadRootId) search.set('threadRootId', payload.threadRootId);
+        if (payload.conversationKind === 'direct') search.set('conversationKind', 'direct');
+        navigate(`/bots/groups/${encodeURIComponent(payload.groupId)}?${search}`);
+        return;
+      }
       if (payload.type === 'chat-invite') {
         requestChatInvite(payload.token);
         return;
@@ -726,7 +737,7 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'session') {
-        navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId);
+        navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId, payload.deviceId);
         return;
       }
       if (payload.type === 'project') {

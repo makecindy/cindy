@@ -1503,6 +1503,197 @@ it('sets up Sub2API from one site address and retains discovered capabilities in
   }
 });
 
+// Scheme-2 handoff must keep connection ownership and user choices; the managed-local
+// entry tests above do not cover an independently addressed LM Studio deployment.
+describe('identified provider handoff', () => {
+  const model = { id: 'private-alias', name: 'My model', contextWindow: 4096, route: { baseUrl: 'https://relay.example/team/v1', wireProtocol: 'openai-chat' as const } };
+  const detected = {
+    agent: 'pi' as const, apiKey: 'fake-key', keys: { pi: 'fake-key' },
+    preset: { id: 'lmstudio', name: 'LM Studio', runtimes: { pi: {
+      baseUrl: 'https://relay.example/team/v1', baseUrlEditable: true, wireProtocol: 'openai-chat' as const,
+      headers: { 'X-Project': 'test' }, models: [],
+    } } },
+    config: { id: 'draft', name: 'My remote server', runtimes: { pi: { baseUrl: 'https://relay.example/team/v1', models: [model] } } },
+    catalog: { ok: true, models: [{ id: 'private-alias', name: 'Upstream name' }, { id: 'unselected', name: 'Another' }] },
+  };
+  it.each([false, true])('saves an independent connection and retains overrides on its edited endpoint: %s', async edited => {
+    const managed = { ...anthropicProvider, id: 'cindy-local-lmstudio', name: 'LM Studio', source: 'user' } as ProviderView;
+    render(<AddProviderWizard providers={[managed]} detected={detected} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    const baseUrl = edited ? 'https://new-relay.example/team/v1' : detected.config.runtimes.pi.baseUrl;
+    if (edited) vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(detected.catalog);
+    if (edited) fireEvent.change(await screen.findByDisplayValue(detected.config.runtimes.pi.baseUrl), { target: { value: baseUrl } });
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (!edited) expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.id).not.toBe('cindy-local-lmstudio');
+    expect(config.runtimes.pi).toMatchObject({ baseUrl, wireProtocol: 'openai-chat', headers: { 'X-Project': 'test' } });
+    expect(config.runtimes.pi!.models.find(m => m.id === 'private-alias')).toMatchObject({ ...model, route: { ...model.route, baseUrl } });
+    expect(config.runtimes.pi!.models.find(m => m.id === 'unselected')?.defaultEnabled).toBe(false);
+    expect(keys).toEqual({ pi: 'fake-key' });
+  });
+  it.each([true, false])('current checkbox overrides an old disabled draft: checked=%s', async checked => {
+    const handoff = { ...detected, config: { ...detected.config, runtimes: { pi: {
+      ...detected.config.runtimes.pi, models: [{ ...model, defaultEnabled: false }, { id: 'keep', name: 'Keep' }],
+    } } } };
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (!checked) fireEvent.click(screen.getByText('Upstream name'));
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models.find(m => m.id === model.id)!;
+    expect(saved.defaultEnabled).toBe(checked ? undefined : false);
+    expect(saved).toMatchObject({ contextWindow: model.contextWindow, route: model.route });
+  });
+  it.each([true, false])('returns the current selection without reviving disabled flags: %s', async checked => {
+    const handoff = { ...detected, config: { ...detected.config, runtimes: { pi: {
+      ...detected.config.runtimes.pi, models: [{ ...model, defaultEnabled: false }, { id: 'keep', name: 'Keep' }],
+    } } } };
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (!checked) fireEvent.click(screen.getByText('Upstream name'));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    const models = onReturnCustom.mock.calls[0][0].config.runtimes.pi.models;
+    const returned = models.find((m: { id: string }) => m.id === model.id);
+    if (checked) {
+      expect(returned.defaultEnabled).toBeUndefined();
+      expect(returned).toMatchObject({ contextWindow: model.contextWindow, route: model.route });
+    } else expect(returned).toBeUndefined();
+    expect(models.some((m: { id: string }) => m.id === 'keep')).toBe(true);
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+  it('saves the explicit native image option carried by a Codex handoff', async () => {
+    const runtime = { ...detected.preset.runtimes.pi, wireProtocol: 'openai-responses' as const, supportsImageGeneration: true };
+    const handoff = { ...detected, agent: 'codex' as const, keys: { codex: 'fake-key' },
+      preset: { ...detected.preset, runtimes: { codex: runtime } },
+      config: { ...detected.config, runtimes: { codex: { ...runtime, models: [{ id: 'private-alias', name: 'Model' }] } } },
+    };
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({ supportsImageGeneration: true, wireProtocol: 'openai-responses' });
+  });
+  it('retains a hand-entered model when OpenRouter returns a complete public catalog', async () => {
+    const baseUrl = 'https://openrouter.ai/api/v1';
+    const handoff = { ...detected,
+      preset: { ...detected.preset, id: 'openrouter', name: 'OpenRouter', runtimes: { pi: { ...detected.preset.runtimes.pi, baseUrl } } },
+      config: { ...detected.config, runtimes: { pi: { baseUrl, models: [{ ...model, route: { ...model.route, baseUrl } }] } } },
+      catalog: { ok: true, models: [{ id: 'public-only', name: 'Public' }] },
+    };
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    expect(screen.getByText('My model')).toBeTruthy();
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models.find(m => m.id === model.id)).toMatchObject({ id: model.id, contextWindow: 4096 });
+  });
+  it('preserves hand-entered models for every inherited engine and never fetches an independent draft', async () => {
+    const runtime = detected.preset.runtimes.pi;
+    const own = { baseUrl: 'https://independent.example/anthropic', models: [{ id: 'own-only', name: 'Own' }] };
+    const handoff = { ...detected,
+      preset: { ...detected.preset, runtimes: { pi: runtime, codex: { ...runtime } } },
+      keys: { pi: 'fake-key', codex: 'fake-key', 'claude-code': 'own-key' },
+      config: { ...detected.config, runtimes: { pi: detected.config.runtimes.pi, codex: { ...detected.config.runtimes.pi }, 'claude-code': own } },
+    };
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'directory-only', name: 'Directory' }] });
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes.codex!.models.some(m => m.id === 'private-alias')).toBe(true);
+    expect(config.runtimes['claude-code']).toEqual(own);
+    expect(keys['claude-code']).toBe('own-key');
+    expect(vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls.every(([request]) => request.baseUrl !== own.baseUrl)).toBe(true);
+  });
+  it('returns selected models only to their own engine with its discovery metadata', async () => {
+    const onReturnCustom = vi.fn();
+    const runtime = detected.preset.runtimes.pi;
+    const handoff = { ...detected, preset: { ...detected.preset, runtimes: { pi: runtime, codex: { ...runtime } } },
+      config: { ...detected.config, runtimes: { pi: detected.config.runtimes.pi, codex: { ...detected.config.runtimes.pi } } },
+    };
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [
+      { id: 'codex-exclusive', name: 'Only Codex', discoveredMetadata: { contextWindow: 50000 } },
+    ] });
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    fireEvent.click(await screen.findByText('Only Codex'));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    const runtimes = onReturnCustom.mock.calls[0][0].config.runtimes;
+    expect(runtimes.pi.models.some((m: { id: string }) => m.id === 'codex-exclusive')).toBe(false);
+    expect(runtimes.codex.models.find((m: { id: string }) => m.id === 'codex-exclusive')).toMatchObject({ discoveredMetadata: { contextWindow: 50000 } });
+  });
+  it('retains a non-active engine URL edited inside the identified wizard when returning', async () => {
+    const onReturnCustom = vi.fn();
+    const codexUrl = 'https://relay.example/codex/v1';
+    const handoff = { ...detected, preset: { ...detected.preset, runtimes: { ...detected.preset.runtimes,
+      codex: { ...detected.preset.runtimes.pi, baseUrl: codexUrl },
+    } }, config: { ...detected.config, runtimes: { ...detected.config.runtimes, codex: { ...detected.config.runtimes.pi } } } };
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByDisplayValue(codexUrl), { target: { value: 'https://edited.example/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(onReturnCustom.mock.calls[0][0].config.runtimes.codex.baseUrl).toBe('https://edited.example/v1');
+    expect(onReturnCustom.mock.calls[0][0].config.runtimes.pi.baseUrl).toBe(detected.config.runtimes.pi.baseUrl);
+  });
+  it('returns shared URL/key edits without replacing an independent engine draft', async () => {
+    const onReturnCustom = vi.fn();
+    const shared = detected.config.runtimes.pi;
+    const handoff = { ...detected, preset: { ...detected.preset, runtimes: { ...detected.preset.runtimes, codex: { ...detected.preset.runtimes.pi, baseUrl: 'https://relay.example/codex/v1' } } }, keys: { pi: 'fake-key', codex: 'fake-key', 'claude-code': 'independent-key' },
+      config: { ...detected.config, runtimes: { pi: shared, codex: { ...shared },
+        'claude-code': { baseUrl: 'https://independent.example/anthropic', models: [{ id: 'own-model', name: 'Own' }] },
+      } },
+    };
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'edited-fake-key' } });
+    fireEvent.change(screen.getByDisplayValue(shared.baseUrl), { target: { value: 'https://new-relay.example/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    const returned = onReturnCustom.mock.calls[0][0];
+    expect(returned.keys).toEqual({ pi: 'edited-fake-key', codex: 'edited-fake-key', 'claude-code': 'independent-key' });
+    expect(returned.config.runtimes.codex.baseUrl).toBe('https://new-relay.example/v1');
+    expect(returned.config.runtimes['claude-code']).toEqual(handoff.config.runtimes['claude-code']);
+    expect(returned.catalog).toBeUndefined();
+  });
+  it.each([true, false])('keeps an excluded runtime unchanged even when its key and address overlap: %s', async sameAddress => {
+    const own = { ...detected.config.runtimes.pi,
+      baseUrl: sameAddress ? detected.config.runtimes.pi.baseUrl : 'https://independent.example/v1',
+      requestPath: '/independent/messages',
+    };
+    const handoff = { ...detected, keys: { pi: 'fake-key', 'claude-code': 'fake-key' },
+      config: { ...detected.config, runtimes: { ...detected.config.runtimes, 'claude-code': own } } };
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'new-shared-key' } });
+    fireEvent.change(screen.getByDisplayValue(detected.config.runtimes.pi.baseUrl), { target: { value: 'https://new.example/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(onReturnCustom.mock.calls[0][0].keys['claude-code']).toBe('fake-key');
+    expect(onReturnCustom.mock.calls[0][0].config.runtimes['claude-code']).toEqual(own);
+  });
+  it('returns the draft instead of navigating to the provider gallery, keeping edited credentials', async () => {
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={detected} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'edited-fake-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(onReturnCustom).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'edited-fake-key', config: expect.objectContaining({ name: 'My remote server' }) }));
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+});
 describe('speech models in the existing provider wizard', () => {
   // PR #6768 unit regression: speech choices must be reached before a long chat
   // catalog. Existing setup tests checked membership/defaults, never reading order.

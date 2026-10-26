@@ -1621,7 +1621,7 @@ export class Scheduler extends EventEmitter {
 
   private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
     const schedule = await this.storage.get(id);
-    if (schedule?.source === 'bot' && !opts?.internalRoutine)
+    if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
     // 先中断 in-flight,等它们 settle,再删 schedule 行。否则被删 schedule 名下的
     // in-flight run 会继续跑到底(原行为),用户点删除后看到的是"还在跑"。

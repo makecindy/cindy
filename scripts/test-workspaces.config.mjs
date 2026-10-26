@@ -97,6 +97,8 @@ const makerPiManagerIntegrationInclude = [
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+  // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
+  'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
 ];
 const mobileGuardInclude = [
   // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.
@@ -149,12 +151,16 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Cross-file host/engine prompt ownership and remote-authorization isolation.
+  'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
   'src/renderer/__tests__/voiceInputEnterToSend.test.ts',
   'src/renderer/__tests__/sessionAgentSwitchRemoteRouting.contract.test.ts',
   'src/main/__tests__/deviceLinkVoiceCredentialBootstrap.test.ts',
   'src/main/__tests__/discordExternalization.test.ts',
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
+  // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
+  'src/main/maker-ipc/__tests__/orcaDeliveryWiring.contract.test.ts',
   'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',

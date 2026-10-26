@@ -1,8 +1,9 @@
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { setMainLocale } from '../../i18n.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { captureAgentRequest } from '../forwardedRequest.js';
-import { formatForwardedRequest, matchesForwardedRequest } from '../../../shared/forwardedRequest.js';
+import { captureAgentRequest, ownerChannelInputEvidence } from '../forwardedRequest.js';
+import { beginChannelToolScope, readChannelToolScope } from '../../im/shared/channelToolScope.js';
+import { formatForwardedRequest, matchesForwardedRequest, readForwardedRequestSource, verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 
 // unit: the cross-task authorship contract was previously only model-written text.
@@ -68,6 +69,44 @@ describe('host-owned forwarded request', () => {
     expect(restoreAutoReviewUserIntent([stored])).toBe('');
     expect(matchesForwardedRequest(first.autoReviewUserText.request!, first.message)).toBe(true);
     expect(matchesForwardedRequest({ ...first.autoReviewUserText.request!, userText: '发布' }, first.message)).toBe(false);
+  });
+
+  // Incident 2026-10-23: a relayed "可以提交 pr" reached the task with no verifiable owner
+  // authority. Only a relay admitted in a verified owner turn becomes the receiver's intent,
+  // and the mark never travels with the receipt into a later, unverified relay.
+  it('marks only a host-verified owner relay, without changing the wire body', async () => {
+    const verified = await captureAgentRequest('owner-chat', 'background', { clientId: 'u1', authoredText: '可以提交 pr' }, async () => [], true, true);
+    const plain = await captureAgentRequest('owner-chat', 'background', { clientId: 'u1', authoredText: '可以提交 pr' }, async () => [], true, false);
+    expect(verified.message).toBe(plain.message);
+    expect(verifiedOwnerRequestText(verified.autoReviewUserText)).toBe('可以提交 pr');
+    expect(verifiedOwnerRequestText(plain.autoReviewUserText)).toBeUndefined();
+    // Same-account peers parse the optional mark; anything but `true` is ignored.
+    expect(readForwardedRequestSource(JSON.parse(JSON.stringify(verified.autoReviewUserText.request)))?.ownerVerified).toBe(true);
+    expect(readForwardedRequestSource({ ...plain.autoReviewUserText.request, ownerVerified: 'yes' })?.ownerVerified).toBeUndefined();
+    const carried = await captureAgentRequest('child', 'more', { clientId: 'c1', delegatedRequest: verified.autoReviewUserText.request }, async () => [], true, false);
+    expect(carried.autoReviewUserText.request?.userText).toBe('可以提交 pr');
+    expect(verifiedOwnerRequestText(carried.autoReviewUserText)).toBeUndefined();
+    const missing = await captureAgentRequest('caller', 'analysis', null, async () => [], true, true);
+    expect(missing.autoReviewUserText.request).toEqual({ userText: null });
+  });
+
+  // PR #6936 review: IM turns bypass the input coordinator and persist no receipt, so a verified
+  // owner relay from IM carried no original words. The IM runner's per-turn lease names the row.
+  it.each([true, false])('captures the persisted IM input of the turn requester (owner=%s)', async requesterIsOwner => {
+    const release = beginChannelToolScope({ sessionId: 'lane', sessionInstanceId: 'instance', scope: {
+      channel: 'wecom', botId: 'bot', laneUserId: 'u', chatId: 'c', chatKind: 'direct', requesterIsOwner, companion: true,
+      inputClientId: 'im-row' } });
+    try {
+      const read = vi.fn(async (clientId: string) => clientId === 'im-row' ? '可以提交 pr' : null);
+      const evidence = await ownerChannelInputEvidence(readChannelToolScope({ sessionId: 'lane', sessionInstanceId: 'instance' }), read);
+      const result = await captureAgentRequest('lane', 'background', evidence, async () => [], true, true);
+      if (requesterIsOwner) {
+        expect(result.autoReviewUserText.request).toEqual({ userText: '可以提交 pr', sessionId: 'lane', clientId: 'im-row', ownerVerified: true });
+      } else {
+        expect(read).not.toHaveBeenCalled();
+        expect(result.autoReviewUserText.request).toEqual({ userText: null });
+      }
+    } finally { release(); }
   });
 
   it.each([

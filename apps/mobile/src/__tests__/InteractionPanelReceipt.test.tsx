@@ -13,6 +13,12 @@ import { ChatFilePathContext, type ChatFilePathContextValue } from '@/session/ch
 import { QuestionReferenceText } from '@/session/QuestionReferenceText';
 import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import { i18n } from '@/i18n';
+import { AskCardAuthContext } from '@/session/askCardAuth';
+import { darkColors, lightColors } from '@/theme/tokens';
+
+const voiceStarter = vi.hoisted(() => ({ start: vi.fn() }));
+const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
+vi.mock('@/session/askCardVoiceStart', () => ({ startAskCardDictation: voiceStarter.start }));
 
 const evidence = vi.hoisted(() => ({ openURL: vi.fn() }));
 // As in LegendList, setters are inert outside a list item. The composer card
@@ -44,39 +50,43 @@ vi.mock('@/inputHandoff/InputHandoffCard', () => ({ InputHandoffCard: () => null
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
-  const view = (tag: string) => ({ children, onPress, disabled, testID }: {
-    children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string;
-  }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID }, children);
+  const view = (tag: string) => ({ children, onPress, disabled, testID, accessibilityState, accessibilityLabel, style }: {
+    children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string; accessibilityState?: { busy?: boolean }; accessibilityLabel?: string; style?: unknown;
+  }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID, 'data-native-style': JSON.stringify(style), 'aria-busy': accessibilityState?.busy, 'aria-label': accessibilityLabel }, children);
   // Text keeps its onTextLayout so a test can report how many lines a label took.
   const Text = ({ children, onTextLayout, onPress, testID }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void; onPress?: () => void; testID?: string }) => {
     if (onTextLayout) textLayouts.set(String(children), onTextLayout);
     return createElement('span', { onClick: onPress, 'data-testid': testID }, children);
   };
   return { View: view('div'), Text, Pressable: view('button'), Linking: { openURL: evidence.openURL },
-    ScrollView: view('div'), Image: () => null,
+    ScrollView: view('div'), Image: () => null, ActivityIndicator: () => null,
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => {
   const { createElement } = await import('react');
   return { Text: (await import('react-native')).Text,
-    TextInput: ({ value, onChangeText, testID, multiline }: {
-      value: string; onChangeText: (value: string) => void; testID: string; multiline?: boolean;
+    TextInput: ({ value, onChangeText, testID, multiline, editable }: {
+      value: string; onChangeText: (value: string) => void; testID: string; multiline?: boolean; editable?: boolean;
     }) => createElement(multiline ? 'textarea' : 'input', { value, 'data-testid': testID,
       onInput: (event: { currentTarget: HTMLInputElement }) => onChangeText(event.currentTarget.value),
-      readOnly: true }),
+      readOnly: editable === false }),
   };
 });
-vi.mock('lucide-react-native', () => ({ ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
-  Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: () => null, Pencil: () => null, Plus: () => null }));
+vi.mock('lucide-react-native', async () => {
+  const { createElement } = await import('react');
+  return { ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
+    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Pencil: () => null, Plus: () => null };
+});
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
-  return { ...tokens, monoFont: 'monospace', useTheme: () => ({ colors: tokens.lightColors }),
-    useThemedStyles: (make: (colors: typeof tokens.lightColors) => unknown) => make(tokens.lightColors) };
+  const colors = () => theme.mode === 'dark' ? tokens.darkColors : tokens.lightColors;
+  return { ...tokens, monoFont: 'monospace', useTheme: () => ({ colors: colors() }),
+    useThemedStyles: (make: (colors: typeof tokens.lightColors) => unknown) => make(colors()) };
 });
 
 let root: Root;
@@ -96,6 +106,7 @@ function CollapsibleHarness() {
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.resetAllMocks();
+  theme.mode = 'light';
   _clearRemotePathVerdictCache();
   evidence.openURL.mockResolvedValue(undefined);
   routeParams.deviceId = 'd1'; routeParams.sessionId = 's1';
@@ -119,6 +130,281 @@ async function type(id: string, value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+// #6778, unit: render the real card/hook and start/stop dictation. Earlier tests
+// only checked labels and clicks, missing the invisible inverse-colour mic.
+// Preserve the existing unfilled control; only startup replaces the mic.
+// Minimal input: one question in each answer layout, in either theme.
+it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answer layouts', async (mode) => {
+  theme.mode = mode;
+  const colors = mode === 'dark' ? darkColors : lightColors;
+  const stop = vi.fn(async () => undefined);
+  let onListening!: () => void;
+  voiceStarter.start.mockImplementation(async (input) => {
+    onListening = input.onListening;
+    return { stop, cancel: vi.fn(async () => undefined) };
+  });
+  const button = () => host.querySelector<HTMLButtonElement>('[data-testid="interaction.ask.voice"]')!;
+  const style = () => Object.assign({}, ...[JSON.parse(button().getAttribute('data-native-style')!)].flat(Infinity));
+  const micColor = () => button().querySelector('[data-mic-color]')!.getAttribute('data-mic-color');
+  for (const layout of ['free', 'custom-closed', 'custom-open']) {
+    await act(async () => remoteSessionStore.setPendingInteractions('s1', [{ request: {
+      kind: 'ask_user_question', requestId: requestId + ':' + layout,
+      questions: [{ question: 'Answer?', ...(layout === 'free' ? {} : { options: [{ label: 'A' }] }) }],
+    } }]));
+    await act(async () => root.render(<AskCardAuthContext.Provider value={{
+      getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+    }}><Harness /></AskCardAuthContext.Provider>));
+    if (layout === 'custom-open') await click('interaction.ask.showCustomButton');
+    const idleStyle = style();
+    expect(micColor()).toBe(colors.textSecondary);
+    expect(idleStyle.backgroundColor).toBeUndefined();
+    await click('interaction.ask.voice');
+    expect(button().getAttribute('aria-busy')).toBe('true');
+    expect(button().querySelector('[data-mic-color]')).toBeNull();
+    expect(style()).toEqual(idleStyle);
+    await act(async () => onListening());
+    expect(button().getAttribute('aria-label')).toBe('session.common.voiceStopRecording');
+    expect(button().getAttribute('aria-busy')).toBe('false');
+    expect(style()).toEqual(idleStyle);
+    expect(micColor()).toBe(colors.textSecondary);
+    await click('interaction.ask.voice');
+    expect(button().getAttribute('aria-label')).toBe('session.screen.voiceStartInput');
+    expect(style()).toEqual(idleStyle);
+    expect(micColor()).toBe(colors.textSecondary);
+  }
+  expect(stop).toHaveBeenCalledTimes(3);
+  expect(resolveInteraction).not.toHaveBeenCalled();
+});
+
+// #6785, unit: real card + hook; only native/cloud startup is faked.
+// Existing cases never submitted while listening. The final text arrives at stop.
+it.each([
+  { multiSelect: false, connecting: false },
+  { multiSelect: true, connecting: false },
+  { multiSelect: false, connecting: true },
+])('waits for voice finalization and submits once (%o)', async ({ multiSelect, connecting }) => {
+  let finish!: () => void;
+  const stop = vi.fn();
+  voiceStarter.start.mockImplementation(async (input) => {
+    const run = { stop: () => stop(), cancel: vi.fn(async () => undefined) };
+    let ready: (() => void) | undefined;
+    stop.mockImplementation(() => new Promise<void>((resolve) => { finish = () => { input.setText('完整回答'); ready?.(); resolve(); }; }));
+    input.onRunCreated(run);
+    input.onListening();
+    return connecting ? new Promise((resolve) => { ready = () => resolve(run); }) : run;
+  });
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [{ question: 'Answer?', multiSelect }],
+  } }]);
+  await act(async () => root.render(<AskCardAuthContext.Provider value={{
+    getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+  }}><Harness /></AskCardAuthContext.Provider>));
+  await click('interaction.ask.voice');
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="interaction.ask.submitButton"]')!.disabled).toBe(false);
+  await click('interaction.ask.submitButton');
+  await click('interaction.ask.submitButton');
+  expect(stop).toHaveBeenCalledOnce();
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await act(async () => finish());
+  expect(resolveInteraction).toHaveBeenCalledOnce();
+  expect(JSON.stringify(resolveInteraction.mock.calls[0])).toContain('完整回答');
+});
+
+it('queues a submit before the voice handle exists without pretending to record', async () => {
+  let publish!: () => void;
+  let finish!: () => void;
+  const stop = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+  voiceStarter.start.mockImplementation((input) => new Promise((resolve) => {
+    const run = { stop: async () => { await stop(); input.setText('最终回答'); }, cancel: vi.fn(async () => undefined) };
+    publish = () => { input.onRunCreated(run); resolve(run); };
+  }));
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [{ question: 'Answer?' }],
+  } }]);
+  await act(async () => root.render(<AskCardAuthContext.Provider value={{
+    getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+  }}><Harness /></AskCardAuthContext.Provider>));
+  await type('interaction.ask.textInput', '已有文字');
+  await click('interaction.ask.voice');
+  const mic = host.querySelector('[data-testid="interaction.ask.voice"]')!;
+  expect(mic.getAttribute('aria-busy')).toBe('true');
+  expect(mic.getAttribute('aria-label')).toBe('session.common.voiceStopRecording');
+  await click('interaction.ask.submitButton');
+  const submit = host.querySelector('[data-testid="interaction.ask.submitButton"]')!;
+  expect(submit.getAttribute('aria-busy')).toBe('true');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await act(async () => publish());
+  expect(stop).toHaveBeenCalledOnce();
+  await act(async () => finish());
+  expect(resolveInteraction).toHaveBeenCalledOnce();
+  expect(JSON.stringify(resolveInteraction.mock.calls[0])).toContain('最终回答');
+});
+
+it.each(['stop', 'live'] as const)('retains text and permits manual correction after a %s failure', async (failure) => {
+  let fail!: () => void;
+  voiceStarter.start.mockImplementation(async (input) => {
+    const run = { stop: async () => { input.setText('保留文字'); throw new Error('识别失败'); }, cancel: async () => undefined };
+    fail = () => { input.setText('保留文字'); input.onError('识别失败'); };
+    input.onRunCreated(run);
+    input.onListening();
+    return run;
+  });
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [{ question: 'Answer?' }],
+  } }]);
+  await act(async () => root.render(<AskCardAuthContext.Provider value={{
+    getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+  }}><Harness /></AskCardAuthContext.Provider>));
+  await click('interaction.ask.voice');
+  if (failure === 'stop') await click('interaction.ask.submitButton');
+  else await act(async () => fail());
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  expect(host.querySelector<HTMLInputElement>('[data-testid="interaction.ask.textInput"]')!.value).toBe('保留文字');
+  expect(host.querySelector('[data-testid="interaction.ask.voiceError"]')!.textContent).toBe('识别失败');
+  await type('interaction.ask.textInput', '修改后的回答');
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction).toHaveBeenCalledOnce();
+  expect(JSON.stringify(resolveInteraction.mock.calls[0])).toContain('修改后的回答');
+});
+
+// Unit regression: the real card/hook disabled submit during recording. Existing
+// voice coverage only exercised signed-out errors, never final text or failures.
+it.each(['free', 'custom', 'multi', 'failed', 'removed', 'connecting', 'connecting-failed', 'connecting-removed', 'connecting-cancelled'])(
+  'submits final voice text once and preserves failed/cancelled answers: %s', async (mode) => {
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    let connect!: () => void;
+    let failConnection!: (error: Error) => void;
+    let signal: AbortSignal | undefined;
+    const stop = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    voiceStarter.start.mockImplementation(async (input: { signal?: AbortSignal; onListening: () => void; setText: (text: string) => void }) => {
+      signal = input.signal;
+      stop.mockImplementation(() => new Promise<void>((resolve, reject) => {
+        finish = () => { input.setText('Final answer'); resolve(); };
+        fail = reject;
+      }));
+      const run = { stop, cancel };
+      // PR #7017 review: listening can precede the ASR handshake. The previous
+      // fixture always resolved startup immediately and missed lost recordings.
+      if (mode.startsWith('connecting')) {
+        await new Promise<void>((resolve, reject) => { connect = resolve; failConnection = reject; });
+      }
+      input.onListening();
+      return run;
+    });
+    remoteSessionStore.setPendingInteractions('s1', [{ request: {
+      kind: 'ask_user_question', requestId, questions: [{ question: 'Question?',
+        ...(mode === 'custom' || mode === 'multi' ? { options: [{ label: 'A' }] } : {}),
+        multiSelect: mode === 'multi',
+      }],
+    } }]);
+    resolveInteraction.mockResolvedValue({ accepted: true });
+    await act(async () => root.render(
+      <AskCardAuthContext.Provider value={{ getAccessToken: async () => 'test', refreshAccessToken: async () => 'test', apiFetch: async () => ({}) }}>
+        <Harness />
+      </AskCardAuthContext.Provider>,
+    ));
+    if (mode === 'multi') await click('interaction.ask.option.1');
+    if (mode === 'failed' || mode === 'connecting-failed') await type('interaction.ask.textInput', 'Saved draft');
+    await click('interaction.ask.voice');
+    const send = host.querySelector<HTMLButtonElement>('[data-testid="interaction.ask.submitButton"]')!;
+    expect(send.disabled).toBe(false);
+    if (mode === 'connecting-cancelled') {
+      expect(host.querySelector('[data-testid="interaction.ask.voice"]')!.getAttribute('aria-label')).toBe('session.common.voiceStopRecording');
+      await click('interaction.ask.voice');
+      expect(signal?.aborted).toBe(true);
+      expect(host.querySelector('[data-testid="interaction.ask.voice"]')!.getAttribute('aria-label')).toBe('session.screen.voiceStartInput');
+      await act(async () => connect());
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(stop).not.toHaveBeenCalled();
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      return;
+    }
+    await click('interaction.ask.submitButton');
+    await click('interaction.ask.submitButton');
+    if (mode.startsWith('connecting')) {
+      expect(signal?.aborted).toBe(false);
+      expect(stop).not.toHaveBeenCalled();
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      if (mode === 'connecting-removed') {
+        await act(async () => remoteSessionStore.setPendingInteractions('s1', []));
+        expect(signal?.aborted).toBe(true);
+      }
+      await act(async () => mode === 'connecting-failed' ? failConnection(new Error('Connection failed')) : connect());
+      if (mode !== 'connecting') {
+        expect(resolveInteraction).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+        if (mode === 'connecting-failed') expect(readAskUserDraft(requestId)?.customInput).toBe('Saved draft');
+        else expect(cancel).toHaveBeenCalledOnce();
+        return;
+      }
+    }
+    expect(stop).toHaveBeenCalledOnce();
+    expect(resolveInteraction).not.toHaveBeenCalled();
+    if (mode === 'removed') await act(async () => remoteSessionStore.setPendingInteractions('s1', []));
+    await act(async () => mode === 'failed' ? fail(new Error('Voice failed')) : finish());
+    if (mode === 'failed' || mode === 'removed') {
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      if (mode === 'failed') expect(readAskUserDraft(requestId)?.customInput).toBe('Saved draft');
+    } else {
+      expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, {
+        kind: 'ask_user_question', answers: { 'Question?': mode === 'multi' ? '["A","Final answer"]' : 'Final answer' },
+      });
+    }
+  },
+);
+
+// PR #7017 review: no PCM has arrived yet, so the old hook left editing and
+// navigation enabled while Send awaited startup. Exercise actual card actions,
+// then resolve startup and verify the original answer/question is submitted.
+it.each(['options', 'previous'])('protects the answer while submitting before the first audio chunk: %s', async (action) => {
+  let connect!: () => void;
+  const stop = vi.fn();
+  voiceStarter.start.mockImplementation(async (input: { setText: (text: string) => void }) => {
+    stop.mockImplementation(async () => input.setText('Final answer'));
+    await new Promise<void>((resolve) => { connect = resolve; });
+    return { stop, cancel: vi.fn(async () => undefined) };
+  });
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [
+      ...(action === 'previous' ? [{ question: 'First?', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] }] : []),
+      { question: 'Current?', multiSelect: true, options: [{ label: 'A' }, { label: 'B' }] },
+    ],
+  } }]);
+  resolveInteraction.mockResolvedValue({ accepted: true });
+  await act(async () => root.render(
+    <AskCardAuthContext.Provider value={{ getAccessToken: async () => 'test', refreshAccessToken: async () => 'test', apiFetch: async () => ({}) }}>
+      <Harness />
+    </AskCardAuthContext.Provider>,
+  ));
+  if (action === 'previous') {
+    await click('interaction.ask.option.1');
+    await click('interaction.ask.submitButton');
+  }
+  await click('interaction.ask.option.1');
+  await click('interaction.ask.voice');
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+  expect(host.querySelector<HTMLInputElement>('[data-testid="interaction.ask.customInput"]')!.readOnly).toBe(true);
+  for (const id of ['interaction.ask.option.2', 'interaction.ask.skipButton',
+    ...(action === 'previous' ? ['interaction.ask.previousButton'] : [])]) {
+    expect(host.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!.disabled).toBe(true);
+    await click(id);
+  }
+  expect(host.querySelector('[data-testid="interaction.ask.question"]')!.textContent).toBe('Current?');
+  expect(readAskUserDraft(requestId)?.selectedLabels).toEqual(['A']);
+  await act(async () => connect());
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, {
+    kind: 'ask_user_question', answers: {
+      ...(action === 'previous' ? { 'First?': '["X"]' } : {}),
+      'Current?': '["A","Final answer"]',
+    },
+  });
+
+});
 
 // Unit regression for PR #6306 review: a signed-out microphone tap used to
 // render hardcoded Chinese. Existing receipt tests never tapped this entry.

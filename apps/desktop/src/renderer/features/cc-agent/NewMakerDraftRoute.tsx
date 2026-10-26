@@ -138,8 +138,8 @@ import {
   plainTextToTiptapDoc,
   restoreRemoteOptimisticDraft,
   saveDraft as saveComposerDraft,
-  subscribeDraftContent as subscribeComposerDraftContent,
 } from '@/lib/composerDraftStore';
+import { useProvisionalDraftEmptyCleanup } from './hooks/useProvisionalDraftEmptyCleanup';
 import {
   canOpenProvisionalDraftTask,
   composerDocPlainText,
@@ -2129,16 +2129,11 @@ export function NewMakerDraftRoute() {
         : null,
     );
   }, []);
-  const provisionalEmptyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 输入一直是空的(清空了,或开始语音后什么都没说)就删掉未发送任务。 */
-  const armProvisionalEmptyCheck = useCallback((delayMs: number) => {
-    if (provisionalEmptyTimerRef.current) clearTimeout(provisionalEmptyTimerRef.current);
-    provisionalEmptyTimerRef.current = setTimeout(() => {
-      provisionalEmptyTimerRef.current = null;
-      if (!provisionalDraftTaskId() || getComposerDraftPresence(NEW_MAKER_DRAFT_KEY)) return;
-      void discardProvisionalDraftTask();
-    }, delayMs);
-  }, []);
+  const {
+    armEmptyCheck: armProvisionalEmptyCheck,
+    onVoiceBusyChange: onProvisionalVoiceBusyChange,
+    onVoiceDetached: onProvisionalVoiceDetached,
+  } = useProvisionalDraftEmptyCleanup(NEW_MAKER_DRAFT_KEY, refreshProvisionalTitle);
   /** 已为哪一次建出来的未发送任务做过一次性的初始化(按 key 区分重建)。 */
   const provisionalSeededKeyRef = useRef<string | null>(null);
   const openProvisionalDraftTask = useCallback(() => {
@@ -2173,29 +2168,6 @@ export function NewMakerDraftRoute() {
       // 粘贴图片 / 开始语音时输入框可能还是空的:给语音留出时间,之后仍为空再删掉。
       if (!getComposerDraftPresence(NEW_MAKER_DRAFT_KEY)) armProvisionalEmptyCheck(60_000);
     });
-  }, [armProvisionalEmptyCheck, refreshProvisionalTitle]);
-  useEffect(() => {
-    const unsubscribe = subscribeComposerDraftContent(NEW_MAKER_DRAFT_KEY, () => {
-      if (!provisionalDraftTaskId()) return;
-      refreshProvisionalTitle();
-      if (getComposerDraftPresence(NEW_MAKER_DRAFT_KEY)) {
-        if (provisionalEmptyTimerRef.current) clearTimeout(provisionalEmptyTimerRef.current);
-        provisionalEmptyTimerRef.current = null;
-      } else {
-        armProvisionalEmptyCheck(1_000);
-      }
-    });
-    return () => {
-      unsubscribe();
-      const pendingEmptyCheck = provisionalEmptyTimerRef.current;
-      if (pendingEmptyCheck) clearTimeout(pendingEmptyCheck);
-      provisionalEmptyTimerRef.current = null;
-      // Leaving the page while an empty-input delete is still pending: nothing will notify us
-      // again, so finish it now rather than leave an empty task behind.
-      if (pendingEmptyCheck && provisionalDraftTaskId() && !getComposerDraftPresence(NEW_MAKER_DRAFT_KEY)) {
-        void discardProvisionalDraftTask();
-      }
-    };
   }, [armProvisionalEmptyCheck, refreshProvisionalTitle]);
   // 草稿里影响任务本身的设置变了:按新设置重建(不再适合提前建任务就删掉)。
   const provisionalDraftKey = provisionalDraftArgs ? provisionalDraftArgsKey(provisionalDraftArgs) : null;
@@ -5894,6 +5866,8 @@ export function NewMakerDraftRoute() {
                   <ChatInput
                     onSend={handleSend}
                     onComposerTyping={openProvisionalDraftTask}
+                    onComposerVoiceBusyChange={onProvisionalVoiceBusyChange}
+                    onComposerVoiceDetached={onProvisionalVoiceDetached}
                     // 创建在途期间锁住输入框:handleSend 立刻返回、真正的创建在后台跑,远程要经
                     // 几次隧道往返。锁定态即时告诉用户「已发出、处理中」,也免得这段时间补写的
                     // 内容在交接成功清空草稿时被一并丢掉;失败解锁后原文仍在。

@@ -26,6 +26,7 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import { LEGACY_SIMULATOR_ID, SIMULATOR_ID, isSimulatorMigrationTarget, isLegacySimulatorListing } from '../../shared/simulatorIdentityMigration.js';
 import type {
   MarketSourceConfig,
   MarketSourceSummary,
@@ -251,27 +252,39 @@ async function yieldMarketReconciliation(owner: ActiveAppSession): Promise<void>
 }
 
 function installedGhostMatchingMarketPlugin(
-  plugin: { ghostId: string; namespace?: string | null },
+  plugin: { ghostId: string; namespace?: string | null; scope?: string },
   ghosts: readonly InstalledGhost[] = listMarketInstallations(),
 ): InstalledGhost | undefined {
   if (!isValidGhostId(plugin.ghostId)) {
     return ghosts.find((ghost) => ghost.manifest.id === plugin.ghostId);
   }
-  return findInstalledGhostByIdentity(
+  const installed = findInstalledGhostByIdentity(
     ghosts,
     createPluginLogicalIdentity(
       hasDeliveryNamespace(plugin) ? plugin.namespace : null,
       plugin.ghostId,
     ),
   );
+  return installed ?? (isSimulatorMigrationTarget(plugin)
+    ? findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, LEGACY_SIMULATOR_ID))
+    : isLegacySimulatorListing(plugin) ? findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, SIMULATOR_ID)) : undefined);
 }
 
 
 function snapshotInstallation(
   local: { installations: Readonly<Record<string, PluginMarketInstallationRecord>> },
-  plugin: { ghostId: string; namespace?: string | null },
+  plugin: { ghostId: string; namespace?: string | null; scope?: string; id?: string },
 ): PluginMarketInstallationRecord | undefined {
-  return local.installations[pluginLedgerRecordKey(plugin)];
+  const current = local.installations[pluginLedgerRecordKey(plugin)];
+  if (current?.installed || !isSimulatorMigrationTarget(plugin)) return current;
+  const previous = Object.values(local.installations).filter(record => record.installed &&
+    record.ghostId === LEGACY_SIMULATOR_ID && record.namespace == null && record.scope === 'public' &&
+    record.pluginId === plugin.id && (record.source === 'market' || record.source === 'legacy-adopted'));
+  return previous.length === 1 ? previous[0] : current;
+}
+
+function serverInstallation(ledger: PluginMarketLedger, plugin: VisiblePluginSummary): PluginMarketInstallationRecord | null {
+  return snapshotInstallation({ installations: ledger.read().installations }, plugin) ?? null;
 }
 
 function removalIdentity(
@@ -292,19 +305,17 @@ function removalIdentity(
 
 function snapshotGhost(
   local: LocalInstallSnapshot,
-  plugin: { ghostId: string; namespace?: string | null },
+  plugin: { ghostId: string; namespace?: string | null; scope?: string },
 ): InstalledGhost | undefined {
-  const ghosts = local.ghostsById.get(plugin.ghostId) ?? [];
+  const ghosts = isSimulatorMigrationTarget(plugin)
+    ? [...(local.ghostsById.get(plugin.ghostId) ?? []), ...(local.ghostsById.get(LEGACY_SIMULATOR_ID) ?? [])]
+    : isLegacySimulatorListing(plugin)
+      ? [...(local.ghostsById.get(plugin.ghostId) ?? []), ...(local.ghostsById.get(SIMULATOR_ID) ?? [])]
+    : local.ghostsById.get(plugin.ghostId) ?? [];
   if (!isValidGhostId(plugin.ghostId)) {
     return ghosts[0];
   }
-  return findInstalledGhostByIdentity(
-    ghosts,
-    createPluginLogicalIdentity(
-      hasDeliveryNamespace(plugin) ? plugin.namespace : null,
-      plugin.ghostId,
-    ),
-  );
+  return installedGhostMatchingMarketPlugin(plugin, ghosts);
 }
 
 function snapshotManifestIdentity(
@@ -731,6 +742,18 @@ function serverRecordMatchesInstalledGhost(
   );
 }
 
+function serverRecordMatchesDelivery(
+  plugin: VisiblePluginSummary, ghost: InstalledGhost, record: PluginMarketInstallationRecord | null,
+  identity = readInstalledMarketManifestIdentity(ghost.dir),
+): boolean {
+  if (!serverRecordMatchesInstalledGhost(plugin.id, ghost, record, identity)) return false;
+  if (!isSimulatorMigrationTarget(plugin) || ghost.manifest.id !== LEGACY_SIMULATOR_ID) return true;
+  if (ghost.approval.state !== 'approved' || !record || !serverRecordMatchesSummaryRoute(plugin, record)) return false;
+  const evidence = getGhostManager().approvedInstallEvidence(installedGhostPhysicalRelId(ghost));
+  return Boolean(evidence && (evidence.packageSha256 === record.sha256 ||
+    (evidence.packageSha256 === null && evidence.legacyMigrated)));
+}
+
 /** 账本是否仍指向当前服务端目录项；release 变化是升级，不属于路由漂移。 */
 function serverRecordMatchesSummaryRoute(
   plugin: VisiblePluginSummary,
@@ -739,7 +762,7 @@ function serverRecordMatchesSummaryRoute(
   return Boolean(
     record &&
     record.pluginId === plugin.id &&
-    record.ghostId === plugin.ghostId &&
+    (record.ghostId === plugin.ghostId || (isSimulatorMigrationTarget(plugin) && record.ghostId === LEGACY_SIMULATOR_ID)) &&
     record.scope === plugin.scope &&
     record.organizationId === plugin.organizationId &&
     !knownDeliveryNamespacesDiffer(record, plugin),
@@ -1191,7 +1214,9 @@ export class PluginMarketService {
       requireSameMarketOwner(owner);
       const ledger = this.ledgerForOwner(owner);
       await this.ledgerMutation;
-      if (!options.discoveryOnly) await this.backfillInstalledManifestIdentities(ledger, owner, refresh);
+      if (!options.discoveryOnly) {
+        await this.backfillInstalledManifestIdentities(ledger, owner, refresh);
+      }
       const reconcileCustomUpdates = async (): Promise<'completed' | 'failed'> => {
         const completed = await this.applyAutomaticUpgrades(
           [],
@@ -2483,7 +2508,10 @@ export class PluginMarketService {
       throwIpcError(brokerPortError.code, brokerPortError.reason);
     }
     const existing = snapshotGhost(local, plugin);
-    const currentRecord = ledger.installationForPlugin(plugin);
+    const currentRecord = serverInstallation(ledger, plugin);
+    if (isLegacySimulatorListing(plugin) && existing?.manifest.id === SIMULATOR_ID) {
+      throwIpcError('PRECONDITION_FAILED', 'The migrated simulator cannot be replaced by a legacy-ID package');
+    }
     const sourceReplacementMode = options.sourceReplacementMode ?? 'preserve-existing-source';
     if (
       sourceReplacementMode === 'organization-default-takeover' &&
@@ -2496,7 +2524,7 @@ export class PluginMarketService {
     if (
       existing &&
       sourceReplacementMode === 'preserve-existing-source' &&
-      !serverRecordMatchesInstalledGhost(plugin.id, existing, currentRecord, snapshotManifestIdentity(local, existing))
+      !serverRecordMatchesDelivery(plugin, existing, currentRecord, snapshotManifestIdentity(local, existing))
     ) {
       throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
     }
@@ -2634,7 +2662,10 @@ export class PluginMarketService {
   ): Promise<InstalledGhost> {
     return withPluginDeliveryInstallLock(plugin, async () => {
       const installedNow = installedGhostMatchingMarketPlugin(plugin);
-      const currentRecordNow = ledger.installationForPlugin(plugin);
+      const currentRecordNow = serverInstallation(ledger, plugin);
+      if (isLegacySimulatorListing(plugin) && installedNow?.manifest.id === SIMULATOR_ID) {
+        throwIpcError('PRECONDITION_FAILED', 'The migrated simulator cannot be replaced by a legacy-ID package');
+      }
       if (Boolean(installedNow) !== options.expectedInstalled) {
         if (options.sourceReplacementMode === 'organization-default-takeover') {
           throw new SilentOrganizationDefaultTakeoverSupersededError(
@@ -2651,7 +2682,7 @@ export class PluginMarketService {
       if (
         installedNow &&
         options.sourceReplacementMode === 'preserve-existing-source' &&
-        !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow)
+        !serverRecordMatchesDelivery(plugin, installedNow, currentRecordNow)
       ) {
         throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
       }
@@ -2681,8 +2712,12 @@ export class PluginMarketService {
         installedNow &&
         (options.sourceReplacementMode === 'user-requested-source-change' ||
           options.sourceReplacementMode === 'organization-default-takeover') &&
-        !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
+        !serverRecordMatchesDelivery(plugin, installedNow, currentRecordNow),
       );
+      const simulatorMigration = installedNow?.manifest.id === LEGACY_SIMULATOR_ID && isSimulatorMigrationTarget(plugin);
+      if (simulatorMigration && (!currentRecordNow || sourceChanged)) {
+        throwIpcError('PRECONDITION_FAILED', 'Simulator migration requires its original market source');
+      }
       const replacingSource = sourceChanged &&
         options.sourceReplacementMode === 'user-requested-source-change' &&
         currentRecordNow?.installed === true;
@@ -2702,6 +2737,10 @@ export class PluginMarketService {
       };
       const installed = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
+        ...(simulatorMigration && currentRecordNow
+          ? { simulatorPreviousRelId: installedGhostPhysicalRelId(installedNow),
+              simulatorMarketRelease: { pluginId: plugin.id, releaseId: plugin.currentRelease.id,
+                previousPackageSha256: currentRecordNow.sha256 } } : {}),
         pluginId: plugin.id,
         version: plugin.currentRelease.version,
         consent: options.consent,
@@ -2735,12 +2774,17 @@ export class PluginMarketService {
           // 包已落位且仍持原 owner mutation lease；即使切号终止等待超时推进了
           // 当前 generation，也必须把来源写进操作开始时捕获的旧 owner 账本。
           await this.withCapturedLedgerMutation(ledger, () => {
-            ledger.upsertInstallation({ ...recordFrom(plugin, 'market', {
+            const next = { ...recordFrom(plugin, 'market', {
               manifest: evidence.canonicalManifest,
               rawManifestSha256: evidence.rawManifestSha256,
               legacyManifestDigest: evidence.legacyManifestDigest,
               legacyManifestDigests: [],
-            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}) });
+            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}) };
+            if (simulatorMigration) {
+              if (!currentRecordNow || !ledger.migrateSimulatorInstallation(currentRecordNow, next)) {
+                throwIpcError('PRECONDITION_FAILED', 'Simulator market route changed during migration');
+              }
+            } else ledger.upsertInstallation(next);
           });
         },
       }).catch((error) => {
@@ -2774,7 +2818,7 @@ export class PluginMarketService {
     const identity = snapshotManifestIdentity(local, ghost);
     const matchesUpdateRoute = Boolean(
       ghost
-      && serverRecordMatchesInstalledGhost(plugin.id, ghost, record ?? null, identity)
+      && serverRecordMatchesDelivery(plugin, ghost, record ?? null, identity)
       && serverRecordMatchesSummaryRoute(plugin, record ?? null),
     );
     const conflict = Boolean((ghost && !matchesUpdateRoute) ||
@@ -2854,7 +2898,9 @@ export class PluginMarketService {
     owner: ActiveAppSession,
     refresh: PluginMarketRefreshContext,
   ): Promise<void> {
-    const candidates = Object.values(ledger.read().installations).filter(
+    const installations = ledger.read().installations;
+    await this.recoverSimulatorInstallation(ledger, owner, installations);
+    const candidates = Object.values(installations).filter(
       (record) => record.installed && record.rawManifestSha256 === undefined,
     );
     if (candidates.length === 0) return;
@@ -2887,6 +2933,36 @@ export class PluginMarketService {
         }),
       );
     }
+  }
+
+  /** Finish only a Host-committed rename. No catalog claim can manufacture this receipt evidence. */
+  private async recoverSimulatorInstallation(ledger: PluginMarketLedger, owner: ActiveAppSession,
+    installations: Readonly<Record<string, PluginMarketInstallationRecord>>): Promise<void> {
+    const previous = Object.values(installations).filter(record => record.installed &&
+      record.ghostId === LEGACY_SIMULATOR_ID && record.namespace == null && record.scope === 'public' &&
+      (record.source === 'market' || record.source === 'legacy-adopted'));
+    if (previous.length !== 1) return;
+    const record = previous[0]!;
+    await this.withMutation(record.pluginId, () => withGhostInstallLock('cindy-simulator', () =>
+      withGhostInstallLock(LEGACY_SIMULATOR_ID, async () => {
+        requireSameMarketOwner(owner);
+        const manager = getGhostManager();
+        const installed = findInstalledGhostByIdentity(manager.list(), createPluginLogicalIdentity(null, 'cindy-simulator'));
+        if (!installed || installed.approval.state !== 'approved') return;
+        const evidence = manager.approvedInstallEvidence(installedGhostPhysicalRelId(installed));
+        const migration = evidence?.simulatorMarketRelease;
+        if (!migration || !evidence?.packageSha256 || migration.pluginId !== record.pluginId ||
+            migration.previousPackageSha256 !== record.sha256) return;
+        const identity = readInstalledMarketManifestIdentity(installed.dir);
+        if (!identity || !installedIdentityMatchesManifest(identity, evidence.approvedManifest)) return;
+        await this.withLedgerMutation(owner, () => ledger.migrateSimulatorInstallation(record, {
+          ...record, ghostId: 'cindy-simulator', namespace: null,
+          releaseId: migration.releaseId, version: evidence.approvedManifest.version,
+          sha256: evidence.packageSha256!, source: 'market',
+          manifestDigest: identity.legacyManifestDigest, rawManifestSha256: identity.rawManifestSha256,
+          updatedAt: new Date().toISOString(),
+        }));
+      })));
   }
 
   private manifestIdentityForBackfill(
@@ -3748,7 +3824,8 @@ export class PluginMarketService {
   ): LocalInstallSnapshot {
     const ghosts = listMarketInstallations();
     return this.projectLocalInstallSnapshot(ghosts, installations, new Map(
-        ghosts.filter((ghost) => ghostId === undefined || ghost.manifest.id === ghostId).map((ghost) => [
+        ghosts.filter((ghost) => ghostId === undefined || ghost.manifest.id === ghostId ||
+          (ghostId === 'cindy-simulator' && ghost.manifest.id === LEGACY_SIMULATOR_ID)).map((ghost) => [
           installedGhostStoragePart(ghost),
           readInstalledMarketManifestIdentity(ghost.dir),
         ]),

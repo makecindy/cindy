@@ -349,6 +349,7 @@ export function parseHelperMessage(input: unknown): MenubarHelperMessage | null 
     case 'refresh':
     case 'open-app':
     case 'open-provider-settings':
+    case 'open-remote-control-settings':
       return { type: value.type };
     case 'error':
       return { type: 'error', message: typeof value.message === 'string' ? value.message.slice(0, 500) : '' };

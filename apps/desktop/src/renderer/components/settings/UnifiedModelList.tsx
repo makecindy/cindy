@@ -117,6 +117,7 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'stt',
   'realtime',
   'embedding',
+  'decision',
   'compression',
   'other',
 ]);
@@ -1095,9 +1096,6 @@ export function UnifiedModelList({
                 )}
               </p>
             </div>
-            {onAddSpeechModels && <Button variant="secondary" onClick={onAddSpeechModels}>
-              {t('settings.providers.speechSetup.add')}
-            </Button>}
             {onRefresh && (
               <button
                 type="button"
@@ -1115,7 +1113,7 @@ export function UnifiedModelList({
                 <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
               </button>
             )}
-            {unionRows.length > 0 && (
+            {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
@@ -1124,44 +1122,54 @@ export function UnifiedModelList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.arrange')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={managementView}
-                    onValueChange={(value) => {
-                      if (value === 'brand' || value === 'model') setManagementView(value);
-                    }}
-                  >
-                    <DropdownMenuRadioItem value="brand">
-                      {t('settings.providers.models.manage.byBrand')}
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="model">
-                      {t('settings.providers.models.manage.byName')}
-                    </DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.selection')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
-                    onSelect={() => handleBulk('show')}
-                  >
-                    {t('settings.providers.models.manage.showAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === 0}
-                    onSelect={() => handleBulk('hide')}
-                  >
-                    {t('settings.providers.models.manage.hideAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable}
-                    onSelect={() => handleBulk('reset')}
-                  >
-                    {t('settings.providers.models.manage.reset')}
-                  </DropdownMenuItem>
+                  {onAddSpeechModels && (
+                    <DropdownMenuItem onSelect={onAddSpeechModels}>
+                      {t('settings.providers.speechSetup.add')}
+                    </DropdownMenuItem>
+                  )}
+                  {unionRows.length > 0 && (
+                    <>
+                      {onAddSpeechModels && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.arrange')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={managementView}
+                        onValueChange={(value) => {
+                          if (value === 'brand' || value === 'model') setManagementView(value);
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="brand">
+                          {t('settings.providers.models.manage.byBrand')}
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="model">
+                          {t('settings.providers.models.manage.byName')}
+                        </DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.selection')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
+                        onSelect={() => handleBulk('show')}
+                      >
+                        {t('settings.providers.models.manage.showAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === 0}
+                        onSelect={() => handleBulk('hide')}
+                      >
+                        {t('settings.providers.models.manage.hideAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable}
+                        onSelect={() => handleBulk('reset')}
+                      >
+                        {t('settings.providers.models.manage.reset')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

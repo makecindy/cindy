@@ -2,9 +2,9 @@ import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
 /**
- * - ordinary / visible:正常可见;hidden:伙伴隐藏,任何远端读写都按不存在处理;
- * - background:插件后台隐藏任务,只从列表类结果(任务列表、运行中列表)中排除,单任务读取
- *   与操作照常,手机插件页可深链打开(未结束提示只回 id,已在源查询排除);missing:不存在。
+ * ordinary / visible: listed tasks; background: owner-readable tasks omitted from
+ * default lists (including hidden companion and plugin tasks). hidden: denied by
+ * the current owner scope; missing: no record. Account/device authorization is upstream.
  */
 export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'background' | 'missing';
 
@@ -182,18 +182,19 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     const row = record(value);
     if (!row || !Array.isArray(row.results)) return value;
-    // Search pages can wait in the transport cache while a companion is hidden.
-    // Re-check personal ownership before returning snippets or identity metadata.
+    // Recheck exact records at delivery; a companion's sidebar visibility is not
+    // permission to read this owner's task. The device/account boundary is upstream.
     const ids = [...new Set(row.results.flatMap(item => {
-      const id = record(record(record(item)?.session)?.companion)?.id;
+      const id = record(record(item)?.session)?.id;
       return typeof id === 'string' ? [id] : [];
     }))];
     const access = batchLookup
-      ? await batchLookup(ids, 'bot')
-      : new Map(await Promise.all(ids.map(async id => [id, await lookup!(id, 'bot')] as const)));
+      ? await batchLookup(ids, 'session')
+      : new Map(await Promise.all(ids.map(async id => [id, await lookup!(id, 'session')] as const)));
     const results = row.results.filter(item => {
-      const id = record(record(record(item)?.session)?.companion)?.id;
-      return typeof id !== 'string' || access.get(id) === 'visible';
+      const id = record(record(item)?.session)?.id;
+      const status = typeof id === 'string' ? access.get(id) : undefined;
+      return status === 'ordinary' || status === 'visible' || status === 'background';
     });
     return { ...row, results };
   }

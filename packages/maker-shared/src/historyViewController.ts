@@ -1,6 +1,6 @@
 import {
   nextHistoryCacheReceipt, type HistoryCacheReceipt,
-  readHistoryWorkDetails, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
+  readHistoryWorkDetails, readContinuousHistoryPage, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
   type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkSummary,
 } from './historyView.js';
 
@@ -210,7 +210,10 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const page = await this.transport.page(before);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       if (!this.active || generation !== this.generation) return;
-      const retained = older ? page : retainHistoryViewPrefix(page, this.state);
+      const continuous = older ? page : await readContinuousHistoryPage(page, this.state,
+        (cursor) => this.transport.page(cursor), () => this.active && generation === this.generation);
+      if (!continuous) return;
+      const retained = older ? continuous : retainHistoryViewPrefix(continuous, this.state);
       let items = retained.items;
       if (older) {
         const keys = new Set(items.map((item) => item.key));

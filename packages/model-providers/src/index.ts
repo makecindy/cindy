@@ -1,4 +1,5 @@
-export { parseModelDisplayPricing, type ModelDisplayPricing } from './modelDisplayPricing.js';
+export { parseModelDisplayPricing, type ModelDisplayPricing, type ModelDisplayPricingSummary, type SummaryQuote } from './modelDisplayPricing.js';
+export { providerProtocolCandidates, type ProviderProtocolCandidate } from './providerProtocolProbe.js';
 export { remoteInvocationModels } from './remoteModels.js';
 /**
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
@@ -26,6 +27,7 @@ export type {
 
 export type {
   AgentKind,
+  ModelInterfaceSnapshot,
   ProviderWireProtocol,
   CodexCompatibilityWireProtocol,
   Effort,
@@ -193,6 +195,7 @@ export {
   defaultEffortForCapabilities,
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
@@ -336,3 +339,6 @@ export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+
+export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
+export * from './providerDetection.js';

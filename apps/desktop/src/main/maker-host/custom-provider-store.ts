@@ -273,6 +273,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
+    if (mm.interfaceId !== undefined && (typeof mm.interfaceId !== 'string' || !mm.interfaceId.trim() || mm.interfaceId.length > 256)) return invalid(`runtime '${agent}' model.interfaceId invalid`);
     if (mm.api !== undefined && !isPiModelApi(mm.api)) return invalid(`runtime '${agent}' model.api invalid`);
     if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
       return invalid(`runtime '${agent}' model.piApi invalid`);
@@ -601,6 +602,7 @@ function normalizeRuntime(
         ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
       ...(m.discoveredCost ? { discoveredCost: m.discoveredCost } : {}),
       ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
+      ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
       ...(m.api ? { api: m.api } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.route
@@ -841,6 +843,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               id: String(m.id),
               name: String(m.name ?? ''),
               ...pickModelMetadata(m),
+              ...(typeof m.interfaceId === 'string' && m.interfaceId.trim() && m.interfaceId.length <= 256 ? { interfaceId: m.interfaceId } : {}),
               ...(isPiModelApi(m.api) ? { api: m.api } : {}),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),

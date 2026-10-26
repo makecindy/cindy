@@ -7,6 +7,7 @@ import {
   resolveBotGroupMentions,
   retainBotGroupTrackedMentions,
   splitBotGroupMentionSegments,
+  splitBotGroupRelaySteps,
 } from '../botGroupMentions';
 import {
   continuableRoundEndId,
@@ -176,6 +177,36 @@ describe('mention picker helpers', () => {
       { text: '@小满', mention: true },
       { text: ' 帮我查余票', mention: false },
     ]);
+  });
+});
+
+// bot-group-chat.md §7.0: a 分工 request that writes out its steps becomes the card as written;
+// anything else must stay with the organizer, so a mention inside a sentence never splits work.
+describe('splitBotGroupRelaySteps', () => {
+  const split = (text: string) => splitBotGroupRelaySteps(text, { members, allLabels: ['所有人'] });
+
+  it.each([
+    ['one line per step', '@阿布 出方案\n@小满 按方案实现', [['abu', '出方案'], ['xiaoman', '按方案实现']]],
+    ['punctuation and connectors', '做登录页：@阿布 出方案，然后 @小满 实现；最后 @咪咪 测一遍。',
+      [['abu', '出方案'], ['xiaoman', '实现'], ['mimi', '测一遍']]],
+    ['one teammate', '@Ann review the diff', [['ann', 'review the diff']]],
+    // A connector only leads into the next step: the last step keeps it, and words merely ending in one keep theirs.
+    ['a last step ending like a connector', '@阿布 出方案，then @Ann decide what to do next', [['abu', '出方案'], ['ann', 'decide what to do next']]],
+    ['a word ending like a connector', '@Ann add context\n@阿布 实现', [['ann', 'add context'], ['abu', '实现']]],
+  ] as const)('reads %s', (_label, text, expected) => {
+    expect(split(text)).toEqual(expected.map(([botId, task]) => ({ botId, task })));
+  });
+
+  it.each([
+    ['a mention inside a sentence', '@阿布 和 @小满 一起做登录页'],
+    ['a step without a task', '@阿布，@小满 实现'],
+    ['everyone', '@所有人 出方案，@小满 实现'],
+    ['no mention', '做一个登录页'],
+    // A teammate renamed after being picked no longer reads as one: its step must not vanish.
+    ['an @ that is no longer a teammate', '@Old 出方案，@小满 实现，@阿布 测一遍'],
+    ['an @ inside a task', '@小满 实现，@Old 测一遍'],
+  ])('leaves %s to the organizer', (_label, text) => {
+    expect(split(text)).toBeNull();
   });
 });
 

@@ -50,10 +50,20 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
 /** A confirmed new delegation may advance only its own live execution. */
 export const DELEGATED_TASK_ACTIONS = ['message_session_task', 'stop_session_task'] as const;
 
+/**
+ * Who a teammate turn speaks for, decided by the Host before any permission mode applies.
+ * - owner: the owner typed this turn (or a verified owner request in a group / IM lane);
+ * - entrusted: a standing owner grant (an owner-created routine, the teammate's own Orca team);
+ * - autonomous: anything else (follow-up wake-ups, teammate messages, non-owner speakers).
+ * Ordinary (non-teammate) callers carry no principal and keep the normal permission flow.
+ */
+export type TaskActionPrincipal = 'owner' | 'entrusted' | 'autonomous';
+
 export interface TaskActionScope {
   /** Host identity/active-input generation, captured before the confirmation. */
   key: string;
   ownerInput: boolean;
+  principal?: TaskActionPrincipal;
   /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
   delegated: boolean;
   /** Rechecked at mutation/delivery; includes account, target and delegation revocation. */
@@ -67,6 +77,7 @@ interface ActionContext {
   sessionId: string;
   tool: string;
   fingerprint: string;
+  principal?: TaskActionPrincipal;
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
@@ -86,8 +97,16 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
   ok: false,
   errorCode,
   message:
-    'This action needs the owner’s authorization for this task and exact action. Prepare the target, action and content for the owner; host events, task responsibility and permission modes do not grant consent.',
+    'The host could not admit this action for the current turn. Prepare the target, action and content for the owner instead of retrying.',
 });
+
+/** A teammate acting on its own initiative must not act as the owner on the owner's tasks. */
+export const NEEDS_OWNER_REQUEST: Decision = {
+  ok: false,
+  errorCode: 'NEEDS_OWNER_REQUEST',
+  message:
+    'The owner did not ask for this in the current turn (host-verified). On your own initiative you may read, keep Todos, notify the owner, message teammates, manage background tasks you started and continue tasks already handed to you; changing the owner’s other tasks needs the owner’s request. Do not retry: record a Todo or notify the owner with the concrete task, action and reason so they can ask you to do it.',
+};
 
 export function taskActionFingerprint(call: Pick<Call, 'tool' | 'args'>): string {
   return createHash('sha256')
@@ -146,6 +165,7 @@ export async function admitTaskAction(
           sessionId: call.sessionId!,
           tool: call.tool,
           fingerprint,
+          principal: scope.principal,
           assertCurrent: scope.assertCurrent,
           assertCurrentSync: scope.assertCurrentSync,
           assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
@@ -166,8 +186,36 @@ export function approvedTaskDelegation(
     : undefined;
 }
 
+/** Host-decided principal of the admitted call, for receipts. Tool arguments cannot set it. */
+export function taskActionPrincipal(callerSessionId: string): TaskActionPrincipal | undefined {
+  const current = actionContext.getStore();
+  return current?.sessionId === callerSessionId ? current.principal : undefined;
+}
+
 export async function assertTaskActionCurrent(): Promise<void> {
   await actionContext.getStore()?.assertCurrent();
+}
+
+/** An independent inbound request must not inherit the action that lazily started
+ * its shared transport. This clears only task-action evidence, not MCP routing;
+ * the request still passes the normal token, caller and per-tool authorization. */
+export function runTaskActionRequest<T>(operation: () => Promise<T>): Promise<T> {
+  return actionContext.exit(operation);
+}
+
+/** Cover in-process callers too: authorize this invocation without ambient evidence,
+ * then execute under only the returned admission. A bare allow intentionally keeps
+ * ordinary-task semantics (no Bot delegation evidence or forced queue). */
+export function isolateTaskActionAuthorizer(authorize: ToolCallAuthorizer): ToolCallAuthorizer {
+  return (call) => runTaskActionRequest(async () => {
+    const decision = await authorize(call);
+    if (!decision.ok) return decision;
+    return {
+      ok: true,
+      run: <T>(operation: () => Promise<T>) => runTaskActionRequest(() =>
+        decision.run ? decision.run(operation) : operation()),
+    };
+  });
 }
 
 /** Host lifecycle only: durable completion delivery is not another invocation

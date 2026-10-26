@@ -617,6 +617,18 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete', args: { id: 'does-not-exist' } },
+    });
+    const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
+    expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    if (env.ok) throw new Error('unreachable');
+    expect(env.message).toMatch(/not found/i);
+    await h.cleanup();
+  });
+
   // ── script 模式(仅运行脚本,executionMode='script')────────────────────────
 
   const scriptCreate = {

@@ -5,7 +5,7 @@ import { AUTO_REVIEW_CONTINUATION_POLICY } from "../shared/continuation-policy.j
 import { nativeAutoReviewContinuationConfig } from "./native-auto-review-policy.js";
 
 describe("native auto-review continuation configuration", () => {
-  it.each(['0.153.4', '0.156.0'])("uses %s's verified complete policy", (version) => {
+  it.each(['0.153.4', '0.156.0', '0.159.2'])("uses %s's verified complete policy", (version) => {
     expect(nativeAutoReviewContinuationConfig(`cindy/${version} (macOS)`, {})["auto_review.policy"])
       .toBe(`${currentPolicy.trim()}\n\n## Scoped continuation of authorized work\n${AUTO_REVIEW_CONTINUATION_POLICY}`);
   });

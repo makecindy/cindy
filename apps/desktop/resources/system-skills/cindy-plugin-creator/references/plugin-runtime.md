@@ -48,7 +48,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
   note: "干完了"
 }});
 // 失败交卷：errorCode 是可选的插件业务错误码；主机保留码
-// (GHOST_NOT_FOUND / GHOST_ASLEEP / GHOST_CRASHED / TIMEOUT / INTERNAL 等)不可由插件写入。
+// (GHOST_NOT_FOUND / GHOST_NAMESPACE_MISMATCH / GHOST_ASLEEP / GHOST_CRASHED / TIMEOUT / INTERNAL 等)
+// 不可由插件写入；GHOST_NAMESPACE_MISMATCH 只由主机在派发前产生，插件交卷时已执行，不能冒用。
 // message 必须包含用户可执行的恢复指引；不要把失败对象 JSON.stringify 到 message。
 cindy.send({
   type: 'tool-result',

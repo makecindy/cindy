@@ -56,6 +56,7 @@ import {
   type UtilityReasoningMode,
   type UtilityRequestStep,
 } from './utilityReasoningPlan.js';
+import { resolveDirectTextRoute, usesDirectTextRoute } from './directTextRoute.js';
 import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
@@ -419,12 +420,15 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
     reasoningEffort: undefined,
   },
   {
-    id: 'chatgpt-nano',
+    // Codex's own Auto-review model. ChatGPT accounts can call it although it is not a
+    // selectable catalog model (gpt-5.4-nano is listed but rejected for ChatGPT accounts).
+    id: 'chatgpt-auto-review',
     providerId: 'openai',
     agentKind: 'codex',
-    model: 'gpt-5.4-nano',
+    model: 'codex-auto-review',
     transport: 'codex-responses',
     reasoningEffort: 'low',
+    catalogExempt: true,
   },
   {
     id: 'chatgpt-luna',
@@ -441,6 +445,8 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
   model: string;
   transport: UtilityModelTransport;
   reasoningEffort: 'low' | undefined;
+  /** Review-only model that is reachable without being a selectable catalog entry. */
+  catalogExempt?: boolean;
 }>);
 
 export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDATES)[number];
@@ -624,7 +630,7 @@ export async function requestDedicatedAutoReviewCandidateText(
   ) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
   }
-  if (!configured.some((model) => model.id === candidate.model)) {
+  if (!('catalogExempt' in candidate && candidate.catalogExempt) && !configured.some((model) => model.id === candidate.model)) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'model_unavailable')] };
   }
   if (isProviderModelRouteDisabled(candidate.providerId, candidate.model)) {
@@ -898,12 +904,18 @@ async function requestExplicitProviderText(
   // which would silently turn a Claude request into a Codex request.
   const model = requestedModel || configuredModels.find((item) =>
     isModelSelectableForNewRoute(item, { userProvider: provider?.source === 'user' }))?.id || '';
+  const catalogModel = configuredModels.find((item) => item.id === model);
   // 预设身份随模型投影带出：从 OpenCode Go 预设创建后再改地址/复制连接时，运行时 id 与
   // URL 都可能对不上，补会话头仍要认得出来（见 opencode-go-session.ts 的三路识别）。
-  const catalogPresetId = configuredModels.find((item) => item.id === model)?.catalogPresetId;
-  const selectedRouting = agentKind ? provider?.routing[agentKind] : undefined;
+  const catalogPresetId = catalogModel?.catalogPresetId;
+  const selectedRouting = provider && agentKind
+    ? usesDirectTextRoute(provider)
+      ? resolveDirectTextRoute(provider, agentKind, catalogModel)
+      : provider.routing[agentKind]
+    : undefined;
   const transport: UtilityModelTransport =
-    agentKind === 'codex' && selectedRouting?.wireProtocol !== 'openai-chat'
+    selectedRouting?.wireProtocol === 'openai-responses'
+      || (agentKind === 'codex' && selectedRouting?.wireProtocol === undefined)
       ? 'codex-responses'
       : 'litellm-chat-completions';
 
@@ -966,6 +978,9 @@ async function requestExplicitProviderText(
   // 见 requestBuiltinProviderText 开头)。Codex 2026-08-06。
   const routeSnapshot = stableSnapshot({
     routing: selectedRouting,
+    configuredRouting: provider.routing[agentKind],
+    modelRoute: catalogModel?.route,
+    modelApi: catalogModel?.api ?? catalogModel?.piApi,
     auth: provider.auth,
     source: provider.source,
   });
@@ -981,13 +996,17 @@ async function requestExplicitProviderText(
       !isModelSelectableForNewRoute(currentModel, { userProvider: currentProvider.source === 'user' })
     ) return false;
     return stableSnapshot({
-      routing: currentProvider.routing[agentKind],
+      routing: usesDirectTextRoute(currentProvider)
+        ? resolveDirectTextRoute(currentProvider, agentKind, currentModel)
+        : currentProvider.routing[agentKind],
+      configuredRouting: currentProvider.routing[agentKind],
+      modelRoute: currentModel.route,
+      modelApi: currentModel.api ?? currentModel.piApi,
       auth: currentProvider.auth,
       source: currentProvider.source,
     }) === routeSnapshot;
   };
 
-  const catalogModel = provider.models[agentKind]?.find((m) => m.id === model);
   if (opts.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
     opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
   }
@@ -1012,8 +1031,8 @@ async function requestExplicitProviderText(
     });
   }
 
-  const routing = provider.routing[agentKind];
-  if (routing?.disabled) {
+  const routing = selectedRouting;
+  if (!routing || routing.disabled) {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -1148,6 +1167,7 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   if (!provider) return undefined;
   if (provider.agents.includes('codex')) return 'codex';
   if (provider.agents.includes('claude-code')) return 'claude-code';
+  if (provider.agents.includes('pi')) return 'pi';
   return undefined;
 }
 
@@ -2322,7 +2342,8 @@ async function requestCustomProviderText(input: {
     'Content-Type': 'application/json',
   };
   const wire: ProviderWire =
-    input.agentKind === 'claude-code' || input.wireProtocol === 'anthropic-messages'
+    input.wireProtocol === 'anthropic-messages'
+      || (input.wireProtocol === undefined && input.agentKind === 'claude-code')
       ? 'anthropic-messages'
       : input.wireProtocol === 'openai-chat'
         ? 'chat-completions'

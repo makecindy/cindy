@@ -88,7 +88,7 @@ export function useRemoteSessionBackgroundTasks(
     EMPTY_STATE,
   );
   const [stoppingViewKey, setStoppingViewKey] = useState<string | null>(null);
-  // 读取序号:定时器不等上一轮返回,慢的旧读取只能被更新的结果取代,不能反过来覆盖;
+  // 读取序号:同一视图不叠加轮询,切换视图后的旧读取也不能覆盖新结果;
   // 停止成功时把已发出的读取整体作废,避免在途旧快照重新点亮已熄灭的提示。
   const issuedSeqRef = useRef(0);
   const appliedSeqRef = useRef(0);
@@ -100,22 +100,29 @@ export function useRemoteSessionBackgroundTasks(
       return;
     }
     let disposed = false;
+    let inFlight = false;
     const read = () => {
+      if (inFlight) return;
+      inFlight = true;
       const seq = ++issuedSeqRef.current;
       void Promise.all([
         sessionBackgroundActivityFor(sessionId),
         listSessionBackgroundTasksFor(sessionId),
-      ]).then(([activity, list]) => {
-        if (disposed || seq <= appliedSeqRef.current) return;
-        appliedSeqRef.current = seq;
-        const next = {
-          active: activity?.active === true,
-          tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
-        };
-        setSnapshot((prev) =>
-          prev.viewKey === viewKey && sameState(prev, next) ? prev : { ...next, viewKey },
-        );
-      });
+      ])
+        .then(([activity, list]) => {
+          if (disposed || seq <= appliedSeqRef.current) return;
+          appliedSeqRef.current = seq;
+          const next = {
+            active: activity?.active === true,
+            tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
+          };
+          setSnapshot((prev) =>
+            prev.viewKey === viewKey && sameState(prev, next) ? prev : { ...next, viewKey },
+          );
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
     read();
     const timer = setInterval(read, POLL_MS);

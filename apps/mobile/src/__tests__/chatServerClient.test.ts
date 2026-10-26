@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard } from '@cindy/maker-shared/botGroupChat';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -13,6 +14,12 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('direct Chat Server client', () => {
+  it('preserves thread identity through projection into the history new-message counter', () => {
+    const view = chatGroupView({ snapshot: snapshot(), before: null, messages: [message(20),
+      { ...message(21), threadRootId: id(20) }, { ...message(22), threadRootId: id(99) }] }, id(11));
+    expect(botGroupNewMessageCount(view.messages, message(20).seq, id(20))).toBe(1);
+    expect(botGroupNewMessageCount(view.messages, message(20).seq)).toBe(0);
+  });
   it('reads a 引用回复 card as the quote, keeps it out of text and previews, and marks a deleted original', () => {
     const card = buildBotGroupQuoteCard({ messageId: id(20), authorName: 'Other member', authorKind: 'user', excerpt: 'original words',
       attachmentCount: 0, attachmentName: null, sequence: 20 });
@@ -28,6 +35,15 @@ describe('direct Chat Server client', () => {
     const deleted = chatGroupView({ ...page, messages: [{ ...message(20), deleted: true, content: [] }, replying] }, id(11));
     expect(deleted.messages).toHaveLength(1);
     expect(deleted.messages[0].quote).toMatchObject({ messageId: id(20), originalDeleted: true });
+  });
+
+  it('opens a direct notification with the peer identity and no group leave control', () => {
+    const source = snapshot();
+    const peer = { ...source.members[0]!, id: id(12), kind: 'human' as const, name: 'Chris', state: 'joined' };
+    const view = chatGroupView({ snapshot: { ...source, room: { ...source.room, kind: 'direct', name: '' }, members: [...source.members, peer] },
+      messages: [message(20)], before: null }, source.members[0]!.id);
+    expect(view).toMatchObject({ conversationKind: 'direct', name: 'Chris', supportsGroupLeave: false });
+    expect(view.messages).toHaveLength(1);
   });
 
   it('names the home computer of my own companions from the account actors, never of other members', () => {
@@ -250,6 +266,45 @@ describe('direct Chat Server client', () => {
       operationId: 'same-operation', content: [{ type: 'text', text: 'hello' }], mentions: [id(3)],
     });
     expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+  });
+  // Product rule: quoting a present companion addresses that companion; a deleted
+  // original must not send a stale quote or silently lose the user's reply.
+  it('sends a fresh quote with the companion recipient and rejects a deleted original', async () => {
+    const original = { ...message(20), authorId: id(12), author: { kind: 'bot', name: 'Before rename' } };
+    const member = { ...snapshot().members[0], id: id(12), kind: 'bot', state: 'joined', name: 'Current name' };
+    const request = vi.fn().mockImplementation(async (path: string, method?: string) => {
+      if (method === 'POST') return { id: id(21) };
+      return path.endsWith('/members') ? [member] : original;
+    });
+    const client = createChatServerClient(request);
+    const input = { clientId: 'quote-reply-operation', text: 'Agreed', mentions: { all: false, botIds: [] }, quote: { messageId: id(20) } };
+    await client.send(id(1), input);
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/messages`, 'POST', expect.objectContaining({
+      mentions: [id(12)], content: [expect.objectContaining({ type: 'card' }), { type: 'text', text: 'Agreed' }],
+    }));
+    original.deleted = true;
+    request.mockClear();
+    await expect(client.send(id(1), input)).rejects.toThrow('QUOTE_UNAVAILABLE');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  });
+  it('retries a lost quoted-send response with the identical posted content', async () => {
+    const original = message(20);
+    let lost = true;
+    const request = vi.fn().mockImplementation(async (path: string, method?: string) => {
+      if (method === 'POST') {
+        if (lost) { lost = false; throw new Error('NETWORK_ERROR'); }
+        return { id: id(21) };
+      }
+      return path.endsWith('/members') ? snapshot().members : original;
+    });
+    const client = createChatServerClient(request);
+    const input = { clientId: 'lost-quote-operation', text: 'Agreed', mentions: { all: false, botIds: [] }, quote: { messageId: id(20) } };
+    await expect(client.send(id(1), input)).rejects.toThrow('NETWORK_ERROR');
+    const posted = request.mock.calls.at(-1);
+    original.deleted = true;
+    await client.send(id(1), input);
+    expect(request.mock.calls.at(-1)).toEqual(posted);
+    expect(request.mock.calls.filter(([, method]) => method !== 'POST')).toHaveLength(2);
   });
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));

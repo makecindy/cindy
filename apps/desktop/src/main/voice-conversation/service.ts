@@ -11,6 +11,7 @@ import {
   type SpeechPreviewStart,
   type SpeechVoiceCatalog,
   type SpeechStartResult,
+  type SpeechAudioResult,
   type VoiceExitDecision,
 } from '../../shared/voiceConversation.js';
 import type {
@@ -99,7 +100,7 @@ export class VoiceConversationService {
   async startPreview(
     sender: number,
     selection: SpeechPreviewStart,
-  ): Promise<{ sampleRate: number }> {
+  ): Promise<SpeechAudioResult> {
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
     if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
       throw new Error('model_unavailable');

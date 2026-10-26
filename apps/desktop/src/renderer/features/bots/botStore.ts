@@ -54,6 +54,8 @@ export interface BotCapabilities {
   toolsets: string[];
   mcpMode: 'inherit' | 'allowlist';
   mcpServers: string[];
+  /** Display names of MCP servers this computer may not have (ids alone mean nothing to a person). */
+  mcpServerNames?: Record<string, string>;
   memory: boolean;
   permissions: 'ask' | 'auto' | 'trusted';
   /** 代输入: may this companion ask the owner to finish an on-screen step. Missing = allowed. */
@@ -559,7 +561,7 @@ function botsApi(): NonNullable<typeof window.electronAPI.localDb>['bots'] | nul
   return window.electronAPI?.localDb?.bots ?? null;
 }
 
-function normalizeDbProfile(value: unknown): BotProfile | null {
+export function normalizeDbProfile(value: unknown): BotProfile | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<BotProfile>;
   if (typeof item.id !== 'string' || typeof item.name !== 'string') return null;
@@ -672,6 +674,9 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
       toolsets,
       mcpMode: normalizeCapabilityMode(rawCapabilities?.mcpMode),
       mcpServers: normalizeStringList(rawCapabilities?.mcpServers),
+      ...(rawCapabilities?.mcpServerNames && typeof rawCapabilities.mcpServerNames === 'object' && !Array.isArray(rawCapabilities.mcpServerNames)
+        ? { mcpServerNames: Object.fromEntries(Object.entries(rawCapabilities.mcpServerNames as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
     },
     canonicalSessionId:
       typeof item.canonicalSessionId === 'string' ? item.canonicalSessionId : undefined,

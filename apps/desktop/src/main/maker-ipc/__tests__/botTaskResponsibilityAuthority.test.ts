@@ -76,6 +76,7 @@ function fixture(role: string) {
   sqlite.prepare("INSERT INTO bot_session_links VALUES ('link', ?, ?, ?, NULL)").run('caller', 'hihi', role);
   const save = vi.fn(async () => {});
   const broadcast = vi.fn();
+  const remoteBroadcast = vi.fn();
   const deps = {
     getDbClient: () => ({ drizzle: drizzle(sqlite) }),
     and, desc, eq, inArray, isNotNull, isNull, botDelegations, botProfiles, botSessionLinks, sessions,
@@ -84,12 +85,13 @@ function fixture(role: string) {
     ownerScopedUserDataPath: () => '/synthetic-owner-home',
     setTaskResponsibility: save,
     broadcastBotWorkbenchChanged: broadcast,
+    broadcastBotRemoteResourceChanged: remoteBroadcast,
   };
   const api = new Function(...Object.keys(deps), js)(...Object.values(deps)) as {
     captureBotCreatedTaskResponsibility(id: string): Promise<null | ((id: string) => Promise<void>)>;
     resolveWorkbenchCaller(id: string): Promise<{ ok: boolean; errorCode?: string }>;
   };
-  return { sqlite, save, broadcast, ...api };
+  return { sqlite, save, broadcast, remoteBroadcast, ...api };
 }
 
 it.each(['canonical', 'thread', 'channel', 'group'])(
@@ -101,6 +103,8 @@ it.each(['canonical', 'thread', 'channel', 'group'])(
       await record!('created');
       expect(f.save).toHaveBeenCalledWith('/synthetic-owner-home', 'hihi', 'created', true, expect.any(Function));
       expect(f.broadcast).toHaveBeenCalledWith('hihi');
+      // Phones re-read the roster's follow links, so the new task shows the teammate's mark there too.
+      expect(f.remoteBroadcast).toHaveBeenCalledWith('hihi');
       // Recognizing a creator must not grant a channel/group conversation workbench access.
       if (role === 'channel' || role === 'group') {
         expect(await f.resolveWorkbenchCaller('caller')).toMatchObject({ ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED' });

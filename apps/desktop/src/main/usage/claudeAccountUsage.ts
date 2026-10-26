@@ -80,6 +80,8 @@ export interface ClaudeAccountUsageSnapshot {
    * 任一可能失败); chip 的 daily 段会因此变 unavailable。
    */
   todaySpend: number | null;
+  /** 企业日额度开关；false 隐藏日额度和读取失败提示，旧网关路径不设置。 */
+  dailyLimitEnabled?: boolean;
   /** 拉取时戳 (Date.now)。 */
   fetchedAt: number;
 }

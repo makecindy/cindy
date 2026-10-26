@@ -16,8 +16,10 @@ export const COMPANION_TODO_PREFIX = 'companion.todo.v1:';
 export const COMPANION_ROUTINE_PREFIX = 'companion.routine.v1:';
 /** Workbench folders (with the computer each is on) and portable judgments. */
 export const COMPANION_WORKBENCH_KEY = 'companion.workbench.v1';
+/** Capability setup that means the same on any computer (capabilities.ts); never the permission level. */
+export const COMPANION_CAPABILITIES_KEY = 'companion.capabilities.v1';
 const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX,
-  COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY];
+  COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY];
 const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
 /** A value over the size limit was not uploaded (thrown only when every value is required). */

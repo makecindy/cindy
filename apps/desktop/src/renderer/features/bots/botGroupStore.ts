@@ -43,6 +43,8 @@ const visibleGroups = (groups: readonly BotGroupSummary[]) => groups.filter(grou
 let inFlight: Promise<void> | null = null;
 let refreshQueued = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let readFailures = 0;
 let syncUsers = 0;
 /** Pushes within this window collapse into one list read. */
 const PUSH_REFRESH_DELAY_MS = 300;
@@ -70,6 +72,8 @@ function ensureOwner(): void {
   inFlight = null;
   refreshQueued = false;
   cancelPushRefresh();
+  cancelRetryRefresh();
+  readFailures = 0;
   snapshot = EMPTY_SNAPSHOT;
   personalList.clear();
 }
@@ -77,6 +81,24 @@ function ensureOwner(): void {
 function cancelPushRefresh(): void {
   if (pushTimer !== null) clearTimeout(pushTimer);
   pushTimer = null;
+}
+
+function cancelRetryRefresh(): void {
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+/** A failed final push must recover even when the room has no more activity. */
+function scheduleRetryRefresh(): void {
+  if (syncUsers === 0 || retryTimer !== null) return;
+  const requestOwner = owner;
+  const requestGeneration = generation;
+  const delay = Math.min(30000, 1000 * 2 ** Math.min(readFailures++, 5));
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (syncUsers === 0 || requestGeneration !== generation || !isDataOwnerGenerationCurrent(requestOwner)) return;
+    refreshBotGroups();
+  }, delay);
 }
 
 /** A push changed something: read the list once the burst has settled. */
@@ -102,6 +124,7 @@ export function refreshBotGroups(): void {
     refreshQueued = true;
     return;
   }
+  cancelRetryRefresh();
   const requestOwner = owner;
   const requestGeneration = generation;
   const isCurrent = () =>
@@ -111,13 +134,18 @@ export function refreshBotGroups(): void {
       // Every change kind re-reads the list, including 'plan' (open-plan status in the row).
       const result = await api.listBotGroups();
       if (!isCurrent()) return;
+      if (result.ok) readFailures = 0;
+      else scheduleRetryRefresh();
       if (result.ok) seedBotGroupReadState(visibleGroups(result.groups));
       // An unchanged list keeps its snapshot: subscribers (sidebar, Dock badge) do not re-render.
       if (result.ok && snapshot.loaded && JSON.stringify(visibleGroups(result.groups)) === JSON.stringify(snapshot.groups)) return;
       // 失败时保留上一份列表：侧栏不因一次读失败把所有群清空。
       applySnapshot(result.ok ? { groups: visibleGroups(result.groups), loaded: true } : { ...snapshot, loaded: true });
     } catch {
-      if (isCurrent()) applySnapshot({ ...snapshot, loaded: true });
+      if (isCurrent()) {
+        scheduleRetryRefresh();
+        applySnapshot({ ...snapshot, loaded: true });
+      }
     }
   })();
   inFlight = request;
@@ -160,6 +188,8 @@ export function startBotGroupSync(): () => void {
       unsubscribePush?.();
       unsubscribePush = null;
       cancelPushRefresh();
+      cancelRetryRefresh();
+      readFailures = 0;
     }
   };
 }
@@ -219,6 +249,13 @@ export async function editBotGroupPlanStep(input: BotGroupPlanEditInput): Promis
   return settlePlanMutation(() => api.editBotGroupPlanStep(input));
 }
 
+/** Whether 分工 you start here go on by themselves; kept on this computer (§7.4). */
+export async function setBotGroupAutoContinue(groupId: string, autoContinue: boolean): Promise<BotGroupMutationResult | null> {
+  const api = botGroupApi();
+  if (!api || typeof api.updateBotGroup !== 'function') return NOT_READY;
+  return settlePlanMutation(() => api.updateBotGroup({ groupId, autoContinue }));
+}
+
 async function settlePlanMutation(
   run: () => Promise<BotGroupMutationResult>,
 ): Promise<BotGroupMutationResult | null> {
@@ -238,6 +275,8 @@ export function resetBotGroupStoreForTests(): void {
   inFlight = null;
   refreshQueued = false;
   cancelPushRefresh();
+  cancelRetryRefresh();
+  readFailures = 0;
   owner = getDataOwnerGeneration();
   snapshot = EMPTY_SNAPSHOT;
   listeners.clear();

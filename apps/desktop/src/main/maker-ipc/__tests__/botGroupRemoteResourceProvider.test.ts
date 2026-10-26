@@ -291,12 +291,18 @@ describe('bot group remote resources', () => {
   it('forwards actions to the group service and reports its error code when refused', async () => {
     const send = await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'send', resourceRef: ref('g1'),
-      input: { text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true },
+      input: { text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true, quote: { messageId: 'm2' } },
     });
     expect(service.sendMessage).toHaveBeenCalledWith({
-      groupId: 'g1', text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true,
+      groupId: 'g1', text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true, quote: { messageId: 'm2' },
     }, { controllerDeviceId: 'phone-1' });
     expect(send.effects).toEqual([{ kind: 'refresh-resource', ref: ref('g1') }]);
+
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true }) });
+    const read = await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'read', resourceRef: ref('g1'), input: { messageId: 'm2' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
+    expect(read.effects).toEqual([]);
 
     await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-continue', resourceRef: ref('g1'),

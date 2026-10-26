@@ -78,6 +78,26 @@ describe('Chat Server membership notices', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.clearAllMocks(); });
 
+  it('records the displayed main message using its exact server position and reflects another device read', async () => {
+    const seq = '9007199254740993';
+    messages = [{ ...joined(), origin: 'human', seq, content: [{ type: 'text', text: '**Hello** [team](https://example.com)' }] } as unknown as ReturnType<typeof joined>];
+    let readSeq = '0';
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/read')) { readSeq = body.readSeq; return { body: { readSeq } }; }
+      const response = original(route, method, body);
+      if (route.endsWith('/snapshot')) response.body.reads = [{ thread_key: 'main', read_seq: readSeq }];
+      return response;
+    });
+    const before = await service.getGroup(roomId);
+    expect(before.ok && before.group.serverUnread).toEqual({ count: 1, mentioned: false });
+    expect(before.ok && before.group.lastMessage?.preview).toBe('Hello team');
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: messages[0]!.id } })).toEqual({ ok: true });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${seq}`, readSeq: seq });
+    const after = await service.getGroup(roomId);
+    expect(after.ok && after.group.serverUnread).toEqual({ count: 0, mentioned: false });
+  });
+
   it('reads a persisted join into the main timeline and sidebar using its name snapshot', async () => {
     const result = await service.getGroup(roomId);
     expect(result.ok && result.group.messages).toEqual([expect.objectContaining({

@@ -119,6 +119,14 @@ export function historyOutlineContentStamp(): SQL<string> {
 
 /** File content/patches never cross the outline query; commands yield only paths on the wire. */
 export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T & Pick<HistoryMessageSource, 'historyArtifacts'> {
+  // SDK routing/usage bookkeeping is repeated on thousands of hidden child rows.
+  // It has no grouping meaning, but used to exhaust the scan's byte budget before
+  // reaching their Agent header. Full bodies and metadata still come from hydrate.
+  if (row.agentMeta) {
+    const { uuid: _uuid, sdkSessionId: _sdkSessionId, requestId: _requestId,
+      replyToClientId: _replyToClientId, usage: _usage, ...agentMeta } = row.agentMeta as Record<string, unknown>;
+    row = { ...row, agentMeta };
+  }
   if (row.role !== 'tool_use') return row;
   const tool = parseMessageToolUse(row);
   const descriptor = describeToolUse(tool.toolName, tool.input);

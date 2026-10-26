@@ -1696,6 +1696,8 @@ private let agentIslandDebugLoggingEnabled =
 private let agentIslandOrange = Color(red: 1.0, green: 0.4, blue: 0.0)
 private let agentIslandBlue = Color(red: 0.0, green: 0.851, blue: 0.773)
 private let agentIslandErrorRed = Color(red: 0.937, green: 0.267, blue: 0.267)
+// 滑动归档沿用手机版 swipeActionArchive 的蓝色（2026-10-24 用户裁决）。
+private let agentIslandArchiveBlue = Color(red: 59.0 / 255, green: 130.0 / 255, blue: 246.0 / 255)
 private let agentIslandUnreadGreen = Color(red: 0.133, green: 0.773, blue: 0.369)
 private let runningAgentGifFileName = "running-agent.gif"
 private let tararaMascotFileName = "tarara.png"
@@ -3555,7 +3557,7 @@ struct CompletedSessionSwipeRow<Content: View>: View {
           .frame(width: reveal, height: geometry.size.height)
           // Lay out the label once behind the card. The opening clips it; it never reflows.
           .frame(width: geometry.size.width, alignment: right ? .leading : .trailing)
-          .background((right ? agentIslandBlue : Color.white.opacity(0.24)).opacity(armed ? 1 : 0.8))
+          .background((right ? agentIslandBlue : agentIslandArchiveBlue).opacity(armed ? 1 : 0.8))
           .mask(alignment: right ? .leading : .trailing) {
             Rectangle().frame(width: abs(offset))
           }

@@ -25,6 +25,7 @@ import { isMainShellWindowUrl } from './scheduleSlot.js';
 export interface GhostTaskViewOpenPush {
   instanceId: string;
   sessionId: string;
+  focus?: true;
 }
 
 /** Electron 投递适配器；保留在槽旁边以便免启动 Electron 验证窗口生命周期。 */
@@ -56,6 +57,8 @@ export interface TaskViewSlotDeps {
   broadcast(payload: GhostTaskViewOpenPush): boolean;
   /** 台前任务快照(请求缺省 sessionId 时的落点;非任务页为 null)。 */
   focusedSessionId(): string | null;
+  /** 消费 Host 观察到的该实例真实点击，不信任插件自报 focus。 */
+  consumeUserGesture(ghostId: string): boolean;
   log?: { info: (msg: string, meta?: Record<string, unknown>) => void };
 }
 
@@ -69,7 +72,13 @@ function fail(
 }
 
 export class GhostTaskViewSlot {
+  private revealSession: ((sessionId: string) => void) | null = null;
+
   constructor(private readonly deps: TaskViewSlotDeps) {}
+
+  setRevealSession(reveal: ((sessionId: string) => void) | null): void {
+    this.revealSession = reveal;
+  }
 
   handleRequest(ghostId: string, payload: unknown): GhostPipeTaskViewResult {
     const ghost = this.deps.getGhost(ghostId);
@@ -88,13 +97,29 @@ export class GhostTaskViewSlot {
     if (request.peek !== undefined && request.peek !== true) {
       return fail('INVALID_REQUEST', 'peek 只接受 true');
     }
+    if (request.focus !== undefined && typeof request.focus !== 'boolean') {
+      return fail('INVALID_REQUEST', 'focus 必须是布尔值');
+    }
     const sessionId =
       typeof request.sessionId === 'string' ? request.sessionId : this.deps.focusedSessionId();
     if (!sessionId) return fail('HOST_NOT_READY', '当前没有任务可承载任务页');
     if (request.peek === true) return { ok: true, sessionId };
-    const delivered = this.deps.broadcast({ instanceId: installedGhostStoragePart(ghost), sessionId });
+    if (request.focus === true && !this.revealSession)
+      return fail('HOST_NOT_READY', '任务导航尚未就绪');
+    if (request.focus === true && !this.deps.consumeUserGesture(ghostId))
+      return fail('PERMISSION_DENIED', '切换任务需要用户当次点击');
+    const delivered = this.deps.broadcast({
+      instanceId: installedGhostStoragePart(ghost),
+      sessionId,
+      ...(request.focus === true ? { focus: true as const } : {}),
+    });
     if (!delivered) return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');
+    if (request.focus === true) this.revealSession!(sessionId);
     this.deps.log?.info('ghost task view open requested', { ghostId, sessionId });
-    return { ok: true, sessionId };
+    return {
+      ok: true,
+      sessionId,
+      ...(request.focus === true ? { focusRequested: true as const } : {}),
+    };
   }
 }

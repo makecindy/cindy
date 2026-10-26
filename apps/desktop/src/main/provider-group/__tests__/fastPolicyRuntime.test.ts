@@ -93,24 +93,45 @@ beforeEach(() => {
 });
 afterAll(() => fs.rmSync(temporary, { recursive: true, force: true }));
 
+function blockCapabilitiesRequest() {
+  let enter!: () => void;
+  let unblock!: () => void;
+  const started = new Promise<void>((resolve) => { enter = resolve; });
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  state.beforeCaps = () => {
+    enter();
+    return blocked;
+  };
+  return {
+    started,
+    release() {
+      state.beforeCaps = undefined;
+      unblock();
+    },
+  };
+}
+
 describe('group owner to executor enforcement handshake', () => {
   it('coalesces repeated sync requests while the same offline revision is in flight', async () => {
-    let release!: () => void;
-    state.beforeCaps = () =>
-      new Promise<void>((resolve) => {
-        release = resolve;
-      });
+    const caps = blockCapabilitiesRequest();
     // Only one remote endpoint makes the blocked request count unambiguous.
     state.config!.members = state.config!.members.slice(0, 1);
     state.offline.add('one');
-    const first = runtime.syncGroupFastPolicy('openai');
-    await expect.poll(() => state.calls.length).toBe(1);
-    const repeats = Array.from({ length: 5 }, () => runtime.syncGroupFastPolicy('openai'));
-    state.beforeCaps = undefined;
-    release();
-    await Promise.all([first, ...repeats]);
-    expect(state.calls).toHaveLength(1);
-    expect(runtime.groupFastPolicyPending('openai')).toBe(true);
+    const pending = [runtime.syncGroupFastPolicy('openai')];
+    try {
+      // The request starts after durable writes and lock release; wait for that
+      // event under the test deadline, without a shorter wall-clock poll.
+      await Promise.race([caps.started, pending[0]]);
+      expect(state.calls).toHaveLength(1);
+      pending.push(...Array.from({ length: 5 }, () => runtime.syncGroupFastPolicy('openai')));
+      caps.release();
+      await Promise.all(pending);
+      expect(state.calls).toHaveLength(1);
+      expect(runtime.groupFastPolicyPending('openai')).toBe(true);
+    } finally {
+      caps.release();
+      await Promise.all(pending);
+    }
   });
 
   it('reports a changed setting as pending before it has been sent to executors', async () => {
@@ -121,25 +142,26 @@ describe('group owner to executor enforcement handshake', () => {
   });
 
   it('still applies a newer setting requested while an earlier revision is in flight', async () => {
-    let release!: () => void;
-    state.beforeCaps = () =>
-      new Promise<void>((resolve) => {
-        release = resolve;
-      });
+    const caps = blockCapabilitiesRequest();
     state.config!.members = state.config!.members.slice(0, 1);
-    const first = runtime.syncGroupFastPolicy('openai');
-    await expect.poll(() => state.calls.length).toBe(1);
-    state.config!.allowFast = true;
-    const changed = runtime.syncGroupFastPolicy('openai');
-    state.beforeCaps = undefined;
-    release();
-    await Promise.all([first, changed]);
-    expect(
-      state.calls
-        .filter(({ command }) => command.op === 'fast-policy')
-        .map(({ command }) => command.allowFast),
-    ).toEqual([false, true]);
-    expect(runtime.groupFastPolicyPending('openai')).toBe(false);
+    const pending = [runtime.syncGroupFastPolicy('openai')];
+    try {
+      await Promise.race([caps.started, pending[0]]);
+      expect(state.calls).toHaveLength(1);
+      state.config!.allowFast = true;
+      pending.push(runtime.syncGroupFastPolicy('openai'));
+      caps.release();
+      await Promise.all(pending);
+      expect(
+        state.calls
+          .filter(({ command }) => command.op === 'fast-policy')
+          .map(({ command }) => command.allowFast),
+      ).toEqual([false, true]);
+      expect(runtime.groupFastPolicyPending('openai')).toBe(false);
+    } finally {
+      caps.release();
+      await Promise.all(pending);
+    }
   });
 
   it('intersects a relay source with the executor local group and releases it even without a local member', async () => {

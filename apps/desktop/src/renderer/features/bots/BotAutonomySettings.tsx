@@ -15,12 +15,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
-import {
-  resetBotAutonomySettings,
-  setBotSchedulerBotId,
-  useBotAutonomySettings,
-  useBotProfiles,
-} from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 
 const TITLE_CLASS = 'text-13 font-medium leading-5 text-[var(--text-primary)]';
 const HINT_CLASS = 'mt-1 text-12 leading-5 text-[var(--text-secondary)]';
@@ -38,8 +33,9 @@ export function BotAutonomySettings({
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const settings = useBotAutonomySettings();
-  const profiles = useBotProfiles();
+  const target = useBotSettingsTarget();
+  const settings = target.autonomy.useSettings();
+  const profiles = target.useRoster();
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
   const currentBot = useRef(botId); currentBot.current = botId;
@@ -75,7 +71,7 @@ export function BotAutonomySettings({
         cancelText: t('bots.autonomy.invitation.notNow'),
       })) return;
       if (!isDataOwnerGenerationCurrent(owner) || currentBot.current !== botId) return;
-      await setBotSchedulerBotId(next ? botId : null);
+      await target.autonomy.setSchedulerBotId(next ? botId : null);
       if (isDataOwnerGenerationCurrent(owner) && currentBot.current === botId) setMovedFrom(next ? previous : null);
     });
   };
@@ -94,7 +90,7 @@ export function BotAutonomySettings({
         <div className="min-w-0 flex-1">
           <p className={TITLE_CLASS}>{t('bots.autonomy.title')}</p>
           <p className={HINT_CLASS} role="status">{status}</p>
-          <p className={HINT_CLASS}>{t('bots.autonomy.consent')}</p>
+          <p className={HINT_CLASS}>{t('bots.autonomy.routineScopeHint')}</p>
           {settings.isCustomized ? (
             <Button
               variant="secondary"
@@ -103,7 +99,7 @@ export function BotAutonomySettings({
               tone="quiet"
               className="-ml-3 mt-1"
               disabled={pending}
-              onClick={() => run(resetBotAutonomySettings, () => setMovedFrom(null))}
+              onClick={() => run(target.autonomy.reset, () => setMovedFrom(null))}
             >
               {t('settings.defaults.restore')}
             </Button>

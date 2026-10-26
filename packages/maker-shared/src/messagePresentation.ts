@@ -19,6 +19,21 @@ import {
   type PresentationLocalizer,
 } from './presentationLocalization';
 
+/** New tail rows only: initial history, prepends and window replacement stay still.
+ * Use visible message identities, not creation times: a final reply may become visible
+ * minutes after its first token. Streaming and delivery acknowledgements retain the key.
+ */
+export function appendedMessageKeys(previous: readonly string[] | undefined, next: readonly string[]): Set<string> {
+  if (!previous) return new Set();
+  const known = new Set(previous);
+  let boundary = -1;
+  for (let index = next.length - 1; index >= 0; index--) {
+    if (known.has(next[index])) { boundary = index; break; }
+  }
+  if (previous.length > 0 && boundary < 0) return new Set();
+  return new Set(next.slice(boundary + 1).filter(key => !known.has(key)));
+}
+
 export type MessageFoldHeaderChevronPosition = 'leading' | 'trailing';
 
 export type MessageFoldHeaderVariant = 'card' | 'plain';

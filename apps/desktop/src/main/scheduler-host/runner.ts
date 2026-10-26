@@ -1,5 +1,6 @@
 import { beginQuietScheduledOutput, hidesScheduledTranscript } from './silent-output.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import { BUILTIN_ROUTINE_SCHEDULE_PREFIX, routineInstructionFromPrompt } from '../../shared/botAutonomy.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -219,6 +220,8 @@ function defaultPermissionModeForSchedule(): PermissionMode {
  * 降级)时回退直发 + 顺延的旧行为。
  */
 export interface SchedulerQueueDeps {
+  /** Host-local human activity, including retries that preserve send-time sorting. */
+  getLastUserActionAt?(sessionId: string): number | null;
   /** 目标会话当前是否忙(turn 运行中 / 队列有积压 / 凭证切换等待中)。 */
   isSessionBusy(sessionId: string): boolean;
   /**
@@ -1045,17 +1048,23 @@ export class MakerScheduleRunner implements ScheduleRunner {
             fastMode: resolvedSelection.fastMode,
           };
         }
-        // B1 活跃礼让:最近有人往这个 session 发过输入(userSendAt 在窗口内)且
+        // B1 活跃礼让:最近有人发送或手动恢复这个 session，且
         // session 正跑 turn → 本轮不抢,顺延。两条件都满足才让:仅"刚发过"
         // 但 turn 已结束属正常 heartbeat 时机;仅"在跑"但非最近有输入多半是上轮
-        // 心跳没跑完,交给 B2 的撞忙顺延。零新增查询(复用已取的 row.userSendAt
-        // + 内存 tracker)。
+        // 心跳没跑完,沿用下方撞忙处理。零新增查询(复用 row.userSendAt
+        // + coordinator 的真人操作时间与 turn tracker)。
         // 注:userSendAt 现在也被 scheduler 自身 fire bump(见 onAccepted),所以窗口内
         // 命中可能来自上一次自动 fire 而非真人。这只会让 B1 更保守——但唯一效果是"正在
         // 跑 turn 时顺延",而正在跑 turn 的 send 本就会被 B2(SESSION_RUNNING)顺延,两者
         // 落点一致,无功能回退,仅 telemetry reason 偏"user-active"。
+        // Retry/Continue preserve userSendAt for list ordering. The coordinator
+        // separately records human takeover; retain the DB fallback for direct sends.
+        const lastUserActionAt = Math.max(
+          row?.userSendAt ?? 0,
+          this.deps.schedulerQueue?.getLastUserActionAt?.(sessionId) ?? 0,
+        );
         const recentlyUserDriven =
-          row?.userSendAt != null && Date.now() - row.userSendAt < ACTIVE_YIELD_WINDOW_MS;
+          lastUserActionAt > 0 && Date.now() - lastUserActionAt < ACTIVE_YIELD_WINDOW_MS;
         if (recentlyUserDriven && isSessionInTurn(sessionId) && this.canDefer(schedule, ctx)) {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
@@ -2000,9 +2009,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ...(schedule.targetSessionId || schedule.source === 'bot'
           ? {
               resolveAutoReviewUserIntent: async () => {
-                const intent = restoreAutoReviewUserIntent(
-                  (await this.deps.readAutoReviewHistory?.(session.id).catch(() => [])) ?? [],
-                );
+                // A teammate routine is judged by the instruction it runs, not by the
+                // owner's unrelated chat history in the teammate's main task.
+                const intent = schedule.source === 'bot'
+                  ? routineInstructionFromPrompt(schedule.prompt)
+                  : restoreAutoReviewUserIntent(
+                    (await this.deps.readAutoReviewHistory?.(session.id).catch(() => [])) ?? [],
+                  );
                 const current = await this.readRoutinePermissions(session.id, session);
                 const expected = routinePermissions ?? heartbeatPermissions;
                 if (
@@ -3813,7 +3826,16 @@ function buildScheduledRunContextInstruction(
     `firedAtUtc: ${new Date(ctx.firedAt).toISOString()}`,
     `firedAtInScheduleTimezone: ${firedAtInScheduleTimezone}`,
     'These timestamps identify when this run was triggered, not when a queued run started processing. Use the task instructions to determine the requested time range.',
+    ...buildTeammateTurnAuthorityLine(schedule),
   ].join('\n');
+}
+
+/** Teammate routines state who the run speaks for; the host enforces the same boundary. */
+function buildTeammateTurnAuthorityLine(schedule: Pick<Schedule, 'id' | 'source'>): string[] {
+  if (schedule.source !== 'bot') return [];
+  return schedule.id.startsWith(BUILTIN_ROUTINE_SCHEDULE_PREFIX)
+    ? ['turnAuthority: autonomous. The host started this run; the owner did not ask for it. You may read, keep Todos, notify the owner and continue or re-route tasks already handed to you. Other changes to the owner\'s tasks need the owner\'s request: propose them in a Todo or notification instead.']
+    : ['turnAuthority: entrusted. This run carries out the standing instructions the owner set for this routine; stay within them.'];
 }
 
 function buildScheduleRefLine(schedule: Pick<Schedule, 'id' | 'name'>): string[] {

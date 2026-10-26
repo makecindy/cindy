@@ -327,7 +327,8 @@ describe('selectVisibleDeviceSessions', () => {
       declarations.join(String.fromCharCode(10)) + '; return { filterCounts, sections };', {
         useMemo: (compute: () => unknown) => compute(), selectVisibleDeviceSessions,
         buildRemoteSessionSections, summarizeRemoteSessionOverview,
-        allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
+        // The real detail sections now also consume alias metadata; worker filtering remains unchanged.
+        projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
         messagePreviewIndex: new Map(), pendingInteractionIndex: new Map(), scheduleIndex: new Map(),
         searchQuery: '', statusFilter: 'all', automationScopeKey: null,
         i18nInstance: i18n, t: i18n.t.bind(i18n),

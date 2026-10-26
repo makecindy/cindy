@@ -53,6 +53,8 @@ export function ErrorMessageCard({
   const remoteKey = parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
+  const isAttachmentAccessDenied = kind === 'reply-error'
+    && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
   const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
@@ -83,7 +85,8 @@ export function ErrorMessageCard({
   return (
     <ErrorNotice
       key={`${reason ?? ''}:${kind}`}
-      message={text}
+      message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
+      description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}
       data-testid="error-message-card"
     />

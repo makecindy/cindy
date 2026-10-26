@@ -5,9 +5,10 @@ export default {
   viewport: { width: 1120, height: 820 },
   real: 'AddProviderWizard, UnifiedModelList toolbar, AddSpeechModelsDialog, SpeechModelChoices, model Registry resolution, translations and themes',
   notCovered:
-    'Live credentials, provider network calls, OS safe storage, Settings owner changes, OAuth login and actual synthesis; host catalog/save responses are scenario data',
+    'Live credentials, manual refresh orchestration (covered by ProvidersSection unit tests), provider network calls, OS safe storage, Settings owner changes, OAuth login and actual synthesis; host catalog/save responses are scenario data',
   cases: {
     default: { about: 'Existing API-key connection adds speech without replacing its chat model' },
+    empty: { about: 'An empty API-key connection keeps manual speech addition in Management' },
     minimax: {
       about:
         'Single add-provider flow: MiniMax API key, grouped chat/speech, recommended speech default',
@@ -23,7 +24,7 @@ export default {
     'token-plan': { about: 'Token Plan recommends Qwen-Audio instead of workspace CosyVoice' },
     'token-plan-existing': { about: 'Existing Token Plan uses the same Qwen-Audio recommendation' },
     'speech-visibility': { about: 'Previously hidden speech can be shown and hidden through model management' },
-    subscription: { about: 'Existing OpenAI subscription creates a separate API-key connection' },
+    subscription: { about: 'Existing OpenAI subscription has no speech-add button or menu item' },
   },
   async ready(page) {
     await page.getByTestId('provider-model-toolbar').waitFor();
@@ -43,14 +44,24 @@ export default {
       await page.getByTestId('speech-visible').filter({ hasText: 'false' }).waitFor({ state: 'attached' });
       return;
     }
-    const existing = ['default', 'bailian-existing', 'token-plan-existing'].includes(ui.case);
+    const existing = ['default', 'empty', 'bailian-existing', 'token-plan-existing'].includes(ui.case);
     if (existing || ui.case === 'subscription') {
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.providers.speechSetup.add'), exact: true }).count(), 0);
+      await ui.capture('toolbar');
       await page
         .getByRole('button', {
-          name: await ui.t('settings.providers.speechSetup.add'),
+          name: await ui.t('settings.providers.models.manage.menu'),
           exact: true,
         })
         .click();
+      await page.getByRole('menu').waitFor();
+      const manual = page.getByRole('menuitem', { name: await ui.t('settings.providers.speechSetup.add'), exact: true });
+      await ui.capture('management');
+      if (ui.case === 'subscription') {
+        assert.equal(await manual.count(), 0);
+        return;
+      }
+      await manual.click();
     } else {
       await page.getByTestId('add-provider').click();
       await ui.capture('single-add-entry');
@@ -64,8 +75,6 @@ export default {
           .click();
     }
     if (!existing) {
-      if (ui.case === 'subscription')
-        await page.getByText(await ui.t('settings.providers.speechSetup.separateKey')).waitFor();
       await page.getByPlaceholder('sk-…').fill('fixture-key');
       await ui.capture('connection');
       await page
@@ -81,9 +90,7 @@ export default {
           ? 'qwen3-tts-flash'
           : ui.case === 'bailian-existing'
             ? 'cosyvoice-v3-flash'
-            : ui.case === 'subscription'
-              ? 'gpt-4o-mini-tts'
-              : 'speech-2.8-turbo';
+            : 'speech-2.8-turbo';
     const recommended = page.getByRole('checkbox', { name: new RegExp(recommendedId) });
     await recommended.waitFor();
     assert.equal(await recommended.getAttribute('aria-checked'), 'true');

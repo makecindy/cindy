@@ -1,8 +1,8 @@
 /**
- * 伙伴页里的群聊行（对照桌面 BotGroupSidebarSection.tsx）：与伙伴行同一个 CompanionListRow，
+ * 首页伙伴段里的群聊行（对照桌面 BotGroupSidebarSection.tsx）：与伙伴行同一个 CompanionListRow，
  * 按最近活动和伙伴混排。成员组合头像收在 44 框内；第二行是电脑给的预览（安排状态或最近一条消息，
  * 已按语言给好，手机不改写）；有伙伴正在说话、安排或做事时，时间位换成转圈、前面的头像呼吸。
- * 只在至少一台电脑支持群聊时出现（旧版桌面没有这个集合）。新建群聊在伙伴页顶栏的「+」菜单里。
+ * 只在至少一台电脑支持群聊时出现（旧版桌面没有这个集合）。新建群聊在伙伴段的「+」菜单里。
  */
 import { useSyncExternalStore } from 'react';
 import { View } from 'react-native';
@@ -30,7 +30,10 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
   const { user } = useAuth();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const display = row.item.display;
-  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt, row.lastReplySequence);
+  const mainUnread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt, row.lastReplySequence);
+  const unreadCount = row.chatUnread ? mainUnread ? row.chatUnread.count : row.chatUnread.threadCount : undefined;
+  const unread = unreadCount !== undefined ? unreadCount > 0 : mainUnread;
+  const mentioned = row.chatUnread && (mainUnread ? row.chatUnread.mentioned : row.chatUnread.threadMentioned);
   const title = resolveRemoteText(display.title, i18n.language);
   const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
     .map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
@@ -53,6 +56,8 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
     preview={offline ? `${offline} · ${summary}` : summary}
     previewTone={offline ? 'tertiary' : 'secondary'}
     unread={unread}
+    unreadCount={unreadCount}
+    mentioned={mentioned}
     unreadLabel={t('devices.companions.unread')}
     disabled={!online}
     last={last}

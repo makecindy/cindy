@@ -116,6 +116,7 @@ import {
   type GhostInstallReceiptReadResult,
 } from './ghostInstallReceipt.js';
 import { parseInstalledGhostManifest } from '../installedGhostManifest.js';
+import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
@@ -237,6 +238,7 @@ export interface GhostManagerLogger {
 }
 
 export interface ApprovedGhostInstallEvidence {
+  simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   /** Immutable package hash when the approval came from a modern install/update. */
   packageSha256: string | null;
   /** Unlocalized manifest frozen in the Host approval receipt. */
@@ -897,6 +899,7 @@ export class GhostManager {
     const receipt = recovery.receipt;
     return {
       ghostId: receipt.id,
+      ...(receipt.simulatorPreviousRelId ? { simulatorPreviousRelId: receipt.simulatorPreviousRelId } : {}),
       hasNamespace: hasDeliveryNamespace(receipt),
       namespace: hasDeliveryNamespace(receipt) ? receipt.namespace ?? null : null,
       revision: receipt.revision,
@@ -1441,6 +1444,9 @@ export class GhostManager {
         continue;
       }
       const marker = markerResult.mutation;
+      if (marker.kind === 'update' && marker.simulatorPreviousRelId) {
+        this.untrustedApprovals.add(this.isolationKey(marker.simulatorPreviousRelId));
+      }
       try {
         if (marker.kind === 'uninstall') {
           // 卸载崩在半途:把批准与内容目录都删净(幂等,顺序无关)。撤批准已在卸载时
@@ -1505,6 +1511,40 @@ export class GhostManager {
                   (marker.oldPackageSha256 !== undefined
                     ? marker.oldPackageSha256 !== marker.packageSha256
                     : marker.phase === 'published'));
+            if (marker.simulatorPreviousRelId) {
+              const previousId = marker.simulatorPreviousRelId;
+              const previousDir = this.contentPath(previousId);
+              const previousKind = this.recoveryEntryKind(previousDir);
+              if (committed) {
+                if (approval.state !== 'approved' || approval.receipt.simulatorPreviousRelId !== previousId ||
+                    previousKind !== 'missing' || (backupKind !== 'missing' && backupKind !== 'directory')) {
+                  throw new Error('Simulator migration commit evidence changed');
+                }
+                this.receiptStore.removeSync(previousId);
+                if (backupKind === 'directory') fs.rmSync(backupPath, { recursive: true, force: true });
+              } else {
+                // A new receipt without its directory, or an unrelated receipt, must not be overwritten.
+                if (approval.state === 'approved') throw new Error('Simulator migration receipt changed');
+                const previousApproval = this.receiptStore.readForRecovery(previousId);
+                if (previousApproval.state !== 'approved' ||
+                    (marker.oldPackageSha256 && previousApproval.receipt.packageSha256 !== marker.oldPackageSha256)) {
+                  throw new Error('Simulator migration original approval changed');
+                }
+                if (backupKind === 'directory' && previousKind === 'missing') {
+                  if (finalKind === 'directory') fs.rmSync(finalDir, { recursive: true, force: true });
+                  else if (finalKind !== 'missing') throw new Error('Simulator migration target is not a directory');
+                  fs.renameSync(backupPath, previousDir);
+                  this.receiptStore.removeSync(id);
+                } else if (!(backupKind === 'missing' && previousKind === 'directory' &&
+                    finalKind === 'missing' && marker.phase === 'prepared')) {
+                  throw new Error('Simulator migration rollback has no unique original directory');
+                }
+              }
+              this.receiptStore.clearPendingMutationSync(id);
+              this.untrustedApprovals.delete(this.isolationKey(id));
+              this.untrustedApprovals.delete(this.isolationKey(previousId));
+              continue;
+            }
             if (marker.sourceStateArchiveId !== undefined) {
               if (!this.options.onArchiveSourceState) throw new Error('source archive recovery callback unavailable');
               if (backupKind !== 'directory' && backupKind !== 'missing') {
@@ -1959,6 +1999,7 @@ export class GhostManager {
       packageSha256:
         packageSha256 && /^[a-f0-9]{64}$/.test(packageSha256) ? packageSha256 : null,
       approvedManifest: approval.receipt.manifest,
+      ...(approval.receipt.simulatorMarketRelease ? { simulatorMarketRelease: approval.receipt.simulatorMarketRelease } : {}),
       legacyMigrated: Boolean(
         migration
         && migration.state !== 'in-progress'
@@ -4120,6 +4161,9 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Host-only official market transition; package authors cannot request this. */
+      simulatorPreviousRelId?: string;
+      simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
@@ -4139,6 +4183,8 @@ export class GhostManager {
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      simulatorPreviousRelId?: string;
+      simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
       /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
@@ -4175,6 +4221,15 @@ export class GhostManager {
     const identity = createPluginLogicalIdentity(opts.namespace ?? null, manifest.id);
     const relId =
       this.resolvePhysicalRelId(pluginNewInstallRelId(identity), true) ?? pluginNewInstallRelId(identity);
+    const previousRelId = opts.simulatorPreviousRelId;
+    const sourceRelId = previousRelId ?? relId;
+    if (previousRelId !== undefined &&
+        (!validSimulatorMigration(previousRelId, manifest.id, opts.namespace) ||
+          opts.sourceStateArchiveId !== undefined || this.recoveryEntryKind(this.contentPath(relId)) !== 'missing' ||
+          findInstanceByContentRelId(this.syncInstanceRegistry(), relId) !== undefined ||
+          this.receiptStore.readForRecovery(relId).state !== 'missing')) {
+      return { rejection: { code: 'state-changed', reason: 'Simulator migration target changed' } };
+    }
     if (this.hasPendingMutationJournal(relId)) {
       this.untrustedApprovals.add(this.isolationKey(relId));
       return { rejection: { code: 'io', reason: '意识正在恢复，请稍后重试' } };
@@ -4187,12 +4242,21 @@ export class GhostManager {
       return { rejection: { code: 'io', reason: 'source state archive identity or callback unavailable' } };
     }
     const finalDir = this.contentPath(relId);
-    if (!this.isRealDirChildRel(relId)) {
+    const sourceDir = this.contentPath(sourceRelId);
+    if (!this.isRealDirChildRel(sourceRelId) || this.hasPendingMutationJournal(sourceRelId)) {
       return {
         rejection: { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` },
       };
     }
-    const approvalResult = this.readApproval(relId);
+    const approvalResult = this.readApproval(sourceRelId);
+    if (previousRelId && (approvalResult.state !== 'approved' || approvalResult.receipt.namespace != null)) {
+      return { rejection: { code: 'state-changed', reason: 'Simulator migration needs an approved root installation' } };
+    }
+    if (previousRelId && opts.simulatorMarketRelease && approvalResult.state === 'approved' &&
+        approvalResult.receipt.packageSha256 &&
+        approvalResult.receipt.packageSha256 !== opts.simulatorMarketRelease.previousPackageSha256) {
+      return { rejection: { code: 'state-changed', reason: 'Simulator migration package provenance changed' } };
+    }
     const actualApproval = approvalTokenFor(approvalResult);
     if (actualApproval !== opts.expectedInstalledApproval) {
       return {
@@ -4205,22 +4269,24 @@ export class GhostManager {
     // 来源描述的是本次明确选择的装入通道，而不是 id 的永久资格。手动更新
     // 不继承旧 Forge 来源，否则新增 OIDC host 可绕过 Forge 的窄确认。
     const installOrigin = opts.installOrigin;
+    const retainedSimulatorRelId = previousRelId ??
+      (approvalResult.state === 'approved' ? approvalResult.receipt.simulatorPreviousRelId : undefined);
     // 延续当前唤醒/沉睡状态。旧安装尚无 receipt 时，重新安装仍采用原
     // `.disabled` 镜像；损坏 receipt 一律保持停用。
     const enabled =
       approvalResult.state === 'approved'
         ? // 读时合并后的有效值:receipt 可能因状态根短暂不可写而停在陈旧的 enabled=true,
           // 用户的停用镜像不能被一次更新静默冲掉。
-          this.effectiveEnabled(finalDir, approvalResult.receipt.enabled)
+          this.effectiveEnabled(sourceDir, approvalResult.receipt.enabled)
         : approvalResult.state === 'legacy-unapproved'
-          ? !this.isDisabledMarkerPresentSync(finalDir)
+          ? !this.isDisabledMarkerPresentSync(sourceDir)
           : false;
 
     // 指令查重同 install,但豁免自己(新版本沿用/改名自己的指令都合法)。
     if (manifest.command !== undefined) {
       const holder = findConflictingGhostCommand(this.list(), manifest.command, {
         incomingNamespace: identity.namespace,
-        exemptPhysicalRelId: relId,
+        exemptPhysicalRelId: sourceRelId,
       });
       if (holder) {
         return {
@@ -4266,6 +4332,7 @@ export class GhostManager {
         backupDirName: path.basename(backupDir),
         receiptRevision,
         phase: 'prepared',
+        ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
         ...(archiveId !== undefined ? { sourceStateArchiveId: archiveId } : {}),
         ...(approvalResult.state === 'approved' && approvalResult.receipt.packageSha256
           ? { oldPackageSha256: approvalResult.receipt.packageSha256 }
@@ -4283,10 +4350,13 @@ export class GhostManager {
     // receipt onto the new finalDir while the new receipt and skill snapshot
     // are still being committed.
     this.untrustedApprovals.add(this.isolationKey(relId));
+    this.untrustedApprovals.add(this.isolationKey(sourceRelId));
     const clearUpdateQuarantineAfterRollback = async (): Promise<void> => {
       try {
+        if (previousRelId) await this.receiptStore.remove(relId);
         await this.receiptStore.clearPendingMutation(relId);
         this.untrustedApprovals.delete(this.isolationKey(relId));
+        this.untrustedApprovals.delete(this.isolationKey(sourceRelId));
       } catch {
         // Keep the in-process quarantine if the journal cannot be cleared;
         // restart recovery must see the marker before authorization resumes.
@@ -4294,7 +4364,7 @@ export class GhostManager {
     };
     // 换目录:旧版先挪去备份位,新版 rename 失败即滚回,保证任何时刻都有一份完整版本在位。
     try {
-      await this.renameManagedDir(finalDir, backupDir, 'update backup', manifest.id);
+      await this.renameManagedDir(sourceDir, backupDir, 'update backup', manifest.id);
     } catch (err) {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
       await clearUpdateQuarantineAfterRollback();
@@ -4312,6 +4382,7 @@ export class GhostManager {
         backupDirName: path.basename(backupDir),
         receiptRevision,
         phase: 'backed-up',
+        ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
         ...(archiveId !== undefined ? { sourceStateArchiveId: archiveId } : {}),
         ...(approvalResult.state === 'approved' && approvalResult.receipt.packageSha256
           ? { oldPackageSha256: approvalResult.receipt.packageSha256 }
@@ -4331,7 +4402,7 @@ export class GhostManager {
       await this.renameManagedDir(stagingDir, finalDir, 'update placement', manifest.id);
     } catch (err) {
       let rolledBack = true;
-      await this.renameManagedDir(backupDir, finalDir, 'update rollback', manifest.id).catch((rollbackErr) => {
+      await this.renameManagedDir(backupDir, sourceDir, 'update rollback', manifest.id).catch((rollbackErr) => {
         rolledBack = false;
         (this.options.log?.error ?? this.options.log?.warn)?.call(
           this.options.log,
@@ -4373,6 +4444,8 @@ export class GhostManager {
       }
       packageCommitPreparation = opts.beforePackageCommit?.() ?? undefined;
       receipt = createGhostInstallReceipt({
+        ...(retainedSimulatorRelId ? { simulatorPreviousRelId: retainedSimulatorRelId } : {}),
+        ...(previousRelId && opts.simulatorMarketRelease ? { simulatorMarketRelease: opts.simulatorMarketRelease } : {}),
         manifest: approvedManifest,
         localeResources,
         enabled,
@@ -4438,7 +4511,7 @@ export class GhostManager {
       if (sideEffectRolledBack) {
         directoryRolledBack = true;
         await fs.promises.rm(finalDir, { recursive: true, force: true }).catch(() => undefined);
-        await this.renameManagedDir(backupDir, finalDir, 'update receipt rollback', manifest.id).catch((rollbackErr) => {
+        await this.renameManagedDir(backupDir, sourceDir, 'update receipt rollback', manifest.id).catch((rollbackErr) => {
           directoryRolledBack = false;
           (this.options.log?.error ?? this.options.log?.warn)?.call(
             this.options.log,
@@ -4475,8 +4548,10 @@ export class GhostManager {
     }
     // receipt 已就位 = 事务提交,清标记后再回收 backup;顺序保证"标记在 ⟺ 可能未提交"。
     try {
+      if (previousRelId) await this.receiptStore.remove(previousRelId);
       await this.receiptStore.clearPendingMutation(relId);
       this.untrustedApprovals.delete(this.isolationKey(relId));
+      this.untrustedApprovals.delete(this.isolationKey(sourceRelId));
     } catch {
       // Keep quarantine while the durable journal remains; recovery retries it.
     }

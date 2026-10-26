@@ -192,6 +192,7 @@ export function resolveModelMetadata(
   providerDefaults?: ModelMetadata,
   declaredDefaultEffort?: ModelMetadata["defaultEffort"],
   generationDefaults?: ModelMetadata,
+  interfaceDefaults?: ModelMetadata,
 ): ResolvedModelMetadata {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
@@ -246,6 +247,8 @@ export function resolveModelMetadata(
     familyDefaults,
     inheritedLiveWindow ? { contextWindow: live?.contextWindow } : undefined,
     defaults,
+    interfaceDefaults,
+    agent && matched ? pickModelMetadata(matched.entry.perAgent?.[agent as keyof NonNullable<typeof matched.entry.perAgent>]) : undefined,
     currentLive,
     // A Harness's suggested default is not a model capability. Keep the shared
     // model intent (including explicit route/Harness exceptions), then adapt it
@@ -261,7 +264,7 @@ export function resolveModelMetadata(
   );
   // Resolve the pair only after all layers: a maximum-only report is a usable
   // fallback, not a verified working-window report. Never replace a known window.
-  const hasOwnWorkingWindow = [defaults, currentLive, matched?.route.forceOverrides, user]
+  const hasOwnWorkingWindow = [defaults, interfaceDefaults, currentLive, matched?.route.forceOverrides, user]
     .some(source => source?.contextWindow !== undefined);
   if (!hasOwnWorkingWindow && currentLive?.contextWindowMax !== undefined) {
     // This model's reported maximum takes precedence over a predecessor's

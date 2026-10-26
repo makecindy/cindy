@@ -89,6 +89,9 @@ export const REMOTE_AGENT_ERROR_CODES = [
   'REMOTE_AGENT_PROVIDER_NOT_ALLOWED',
   // 供应商组转来的受邀者任务：这台电脑的主人没有同意这个受邀者经组使用(只回给打开时带了 reshareKey 的组所在电脑)。
   'REMOTE_AGENT_RESHARE_NOT_ALLOWED',
+  // 那台电脑上的 Agent 分叉原生历史失败(电脑本身在线)。只回给分叉请求带了 acceptsForkFailed 的控制端，
+  // 旧控制端照旧收到 REMOTE_AGENT_UNAVAILABLE。
+  'REMOTE_AGENT_FORK_FAILED',
 ] as const;
 export type RemoteAgentErrorCode = (typeof REMOTE_AGENT_ERROR_CODES)[number];
 
@@ -254,6 +257,8 @@ export interface RemoteAgentForkRequest {
   forkAtTimestampMs?: number;
   relay?: string;
   reshareKey?: string;
+  /** 控制端认识 REMOTE_AGENT_FORK_FAILED。组所在电脑转发时原样带上受邀者的声明；旧被控端忽略。 */
+  acceptsForkFailed?: true;
 }
 
 export interface RemoteAgentForkResult {
@@ -483,6 +488,7 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       }
       if (v.tailTurnsToDrop !== undefined) result.tailTurnsToDrop = count(v.tailTurnsToDrop, Number.MAX_SAFE_INTEGER);
       if (v.forkAtTimestampMs !== undefined) result.forkAtTimestampMs = count(v.forkAtTimestampMs, Number.MAX_SAFE_INTEGER);
+      if (v.acceptsForkFailed === true) result.acceptsForkFailed = true;
       if (result.sourceSessionId === result.newSessionId) invalid();
       return { op: 'fork', ...result };
     }

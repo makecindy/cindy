@@ -1,12 +1,17 @@
 import { randomBytes } from 'node:crypto';
 import { Transform, type TransformCallback } from 'node:stream';
 
-/** Opt-in RFC6455 message filter. Negotiation must exclude compression/extensions. */
+/**
+ * Opt-in RFC6455 message filter. Negotiation must exclude compression/extensions.
+ * An async filter holds back later frames until it settles, so message order is kept;
+ * its signal aborts when the stream is destroyed.
+ */
 export function createWebSocketMessageTransform(
   masked: boolean,
-  filter: (message: Buffer) => Buffer,
+  filter: (message: Buffer, signal: AbortSignal) => Buffer | Promise<Buffer>,
   maxBytes = 128 * 1024 * 1024,
 ): Transform {
+  const abort = new AbortController();
   // Queue incoming chunks: a large frame arriving in small packets must not
   // repeatedly copy its entire accumulated prefix (quadratic in frame size).
   let chunks: Array<Buffer | undefined> = [];
@@ -43,7 +48,7 @@ export function createWebSocketMessageTransform(
   let opcode = 0;
   return new Transform({
     transform(chunk: Buffer, _encoding, callback: TransformCallback) {
-      try {
+      void (async () => {
         if (chunk.length) { chunks.push(chunk); buffered += chunk.length; }
         while (buffered >= 2) {
           const prefix = peek(Math.min(buffered, 10));
@@ -80,7 +85,8 @@ export function createWebSocketMessageTransform(
           fragments.push(payload); originalFrames.push(frame); size += length;
           if (!fin) continue;
           const message = fragments.length === 1 ? fragments[0]! : Buffer.concat(fragments, size);
-          const filtered = filter(message);
+          const result = filter(message, abort.signal);
+          const filtered = Buffer.isBuffer(result) ? result : await result;
           if (filtered.length > maxBytes) throw new Error('Websocket message too large');
           if (filtered === message) for (const original of originalFrames) this.push(original);
           else {
@@ -99,8 +105,11 @@ export function createWebSocketMessageTransform(
           }
           fragments = []; originalFrames = []; size = 0; opcode = 0;
         }
-        callback();
-      } catch (error) { callback(error as Error); }
+      })().then(() => callback(), (error: unknown) => callback(error as Error));
+    },
+    destroy(error, callback) {
+      abort.abort();
+      callback(error);
     },
     flush(callback) {
       callback(buffered || opcode ? new Error('Incomplete websocket message') : undefined);

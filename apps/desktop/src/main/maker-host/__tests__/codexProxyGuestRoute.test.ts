@@ -179,6 +179,17 @@ describe('Codex proxy guard for shared-provider guests', () => {
     expect(await statusOf(guard({ model: 'shared-model' }, ctx('/responses', { 'thread-id': 'owner-thread' })))).toBe(403);
   });
 
+  // A guest Codex fork binds its proxy to the fork host's own key, which is never registered:
+  // thread/fork and rollback need no upstream, so every request must be refused, including
+  // control-plane GETs and headers that name another guest's registered thread.
+  it('refuses everything for a proxy bound to an unregistered guest session', async () => {
+    const guard = createCodexGuestRoutingGuard('shared-a', 'env-key', 'local-fork:00000000-0000-4000-8000-000000000000');
+    expect(await statusOf(guard({ model: 'shared-model' }, ctx('/responses')))).toBe(403);
+    expect(await statusOf(guard(undefined, ctx('/models', {}, 'GET')))).toBe(403);
+    expect(await statusOf(guard({ model: 'shared-model' }, ctx('/responses', { 'thread-id': 'guest-thread' })))).toBe(403);
+    expect(await statusOf(guard({ model: 'other-model' }, ctx(`${CODEX_CUSTOM_PROVIDER_ROUTE_ROOT}/0123456789abcdef0123/responses`)))).toBe(403);
+  });
+
   it('routes an unresolved request straight to the default upstream only when that is the shared provider', async () => {
     const gateway = createCodexGuestRoutingGuard('xd', 'env-key');
     // 模型核对按 xd 的目录：这里的 fixture 没有 xd 模型，所以推理请求被拒；非推理路径只看默认路由。

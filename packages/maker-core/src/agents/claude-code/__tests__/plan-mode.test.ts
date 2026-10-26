@@ -1151,6 +1151,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(resolveRemoteClaudeRoute).toHaveBeenCalledWith({
       providerId: 'custom-provider',
       model: 'custom-model',
+      sessionId: 'session-remote-materialized-route',
     });
     expect(starts).toHaveLength(1);
     const env = starts[0]?.env as Record<string, string> | undefined;

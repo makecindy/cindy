@@ -167,6 +167,7 @@ describe('interactionModel', () => {
 
     expect(presentation).toEqual({
       autoReviewUnavailable: false,
+      autoReviewReason: null,
       canAlwaysAllow: false,
       code: 'pnpm --filter mobile test',
       description: 'Run the requested test command.',
@@ -175,7 +176,7 @@ describe('interactionModel', () => {
         title: '允许后电脑端会继续执行',
         detail: '工具: Bash',
       },
-      title: '允许使用 Shell?',
+      title: '允许运行这条命令？',
       toolName: 'Bash',
     });
   });
@@ -355,7 +356,7 @@ describe('interactionModel', () => {
       canShowAlwaysAllow: false,
       isHighRisk: true,
       riskWarningText: expect.stringContaining('可能修改系统'),
-      title: '允许使用 Bash?',
+      title: '允许运行这条命令？',
     });
     expect(buildMobilePermissionCardState({
       armedDecision: 'allow-once',

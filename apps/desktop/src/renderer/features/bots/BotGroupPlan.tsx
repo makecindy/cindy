@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { toast } from '@/lib/toast';
@@ -291,6 +292,7 @@ export function BotGroupPlanCard({
   onStart,
   onDismiss,
   onEditStep,
+  onAutoContinueChange,
 }: {
   plan: BotGroupPlanView | undefined;
   members: readonly BotGroupMemberView[];
@@ -305,6 +307,8 @@ export function BotGroupPlanCard({
   onStart: () => void;
   onDismiss: () => void;
   onEditStep: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  /** Present for whoever may press 继续 on this open 分工: switch between waiting and going on by itself. */
+  onAutoContinueChange?: (on: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -312,6 +316,7 @@ export function BotGroupPlanCard({
     return <p className="text-12 text-[var(--text-tertiary)]">{t('bots.groupChat.plan.missing')}</p>;
   }
   const muted = plan.status === 'superseded' || plan.status === 'dismissed';
+  const autoContinue = plan.autoContinue;
   const finalNote = FINAL_NOTE_KEYS[plan.status];
   const busy = pending !== null;
   const timing: StepTiming = { runningSince, doneAt, locale };
@@ -404,7 +409,20 @@ export function BotGroupPlanCard({
         ) : !arranged && (actionable || underWay) ? (
           // Card footer: how it runs on the left, what the steps offer on the right.
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-[var(--border-default)] px-3.5 py-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
-            <span className="min-w-0">{t('bots.groupChat.plan.pauseNote')}</span>
+            {onAutoContinueChange ? (
+              // Whoever may press 继续 chooses here, before or during the work (§7.4).
+              <label className="flex min-w-0 cursor-pointer items-center gap-2 text-12 leading-4 text-[var(--text-secondary)]">
+                <Switch
+                  data-testid="bot-group-plan-auto"
+                  checked={autoContinue === true}
+                  disabled={busy}
+                  onCheckedChange={onAutoContinueChange}
+                />
+                <span className="min-w-0">{t('bots.groupChat.plan.autoContinue')}</span>
+              </label>
+            ) : (
+              <span className="min-w-0">{t(autoContinue ? 'bots.groupChat.plan.autoNote' : 'bots.groupChat.plan.pauseNote')}</span>
+            )}
             {actionable || canReassign ? (
               <span className="ml-auto min-w-0 truncate">{t('bots.groupChat.plan.editHint')}</span>
             ) : null}

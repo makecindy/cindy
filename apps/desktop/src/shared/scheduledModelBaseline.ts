@@ -3,6 +3,8 @@ import type { MakerAgentKindWire } from './agentKindConversion';
 /** Only model preferences; native checkpoints and permission settings keep their own lifecycle. */
 export interface ScheduledModelBaseline {
   scopeId: string;
+  /** Permanent profile save not yet accepted by the runtime; survives pause/restart. */
+  pendingBotProfileVersion?: number;
   agentKind: MakerAgentKindWire;
   model: string;
   providerId: string | null;

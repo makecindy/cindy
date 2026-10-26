@@ -167,7 +167,7 @@ import {
   type MobileSessionEventKind,
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
-import { getSessionNotificationBody } from '../sessionNotificationCopy';
+import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
 import { getClientEndpoint } from '../clientEndpointsService';
 import {
   handleContactsDeviceLinkStatusChanged,
@@ -686,6 +686,8 @@ function wsUrl(): string {
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
+  /** Host chrome follows the same controller set as CONTROLLED_STATE. */
+  onControlledStateChanged?: () => void;
 }
 
 let stopNetworkWatch: (() => void) | null = null;
@@ -1016,6 +1018,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 先注册远程活动监听，再接线入站帧；否则首个 subscribe / invoke 可能落在空窗期。
   setControllersChangedListener((controllers, updateRelaunchControllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
+    options.onControlledStateChanged?.();
     updateRelaunchControllersBusy = updateRelaunchControllers.length > 0;
     notifyUpdateRelaunchBusy();
   });
@@ -2158,6 +2161,7 @@ export function sendMobileSessionNotify(payload: {
       selfDeviceId,
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
+      imageFallback: getNotificationImageLabel(),
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
       ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
     }),

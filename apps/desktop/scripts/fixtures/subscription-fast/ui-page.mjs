@@ -53,7 +53,8 @@ export default {
         { name: await ui.t('subscriptionFastPolicy.label'), index, before },
       );
       const box = await control.boundingBox();
-      assert.ok(box && box.x >= 0 && box.x + box.width <= page.viewportSize().width);
+      // Electron windows use the harness viewport; Playwright viewportSize() is null.
+      assert.ok(box && box.x >= 0 && box.x + box.width <= ui.viewport.width);
     }
     if (ui.case === 'pending' || ui.case === 'narrow')
       await page.getByText(await ui.t('subscriptionFastPolicy.pending'), { exact: true }).waitFor();

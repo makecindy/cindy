@@ -1,4 +1,8 @@
 {
+  "paneResize": {
+    "label": "Column width",
+    "hint": "Drag left or right to adjust the column widths"
+  },
   "sideChat": {
     "collapse": "Collapse side chat",
     "resume": "Continue side chat",
@@ -564,6 +568,7 @@
     "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
   },
   "row": {
+    "markRead": "Mark as read",
     "moreOptions": "More options",
     "archiveConversation": "Archive session",
     "closeActionMenu": "Close session actions menu",
@@ -601,6 +606,7 @@
     "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
     "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
     "MCP_APPROVAL_AUTO_BLOCKED": "Auto approve blocked this tool call. No manual rejection was received.",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
@@ -623,6 +629,7 @@
     "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
     "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
+    "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
     "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
     "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue."

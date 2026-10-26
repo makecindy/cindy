@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as Crypto from 'expo-crypto';
+import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import { chatAccessLost, type ChatMessage } from './chatServerClient';
 import { useChatClient } from './useChatServer';
 
@@ -63,6 +64,14 @@ export function useCloudCompanionRoom(actorId: string, name: string, enabled: bo
       if (valid()) setState(old => ({ ...old, loadingOlder: false }));
     } finally { olderPending.current = false; }
   }, [api, identity]);
+  /** The signed address of one attachment, fetched when it is opened (a stale address is simply fetched again). */
+  const media = useCallback(async (mediaId: string): Promise<BotGroupAttachment> => {
+    const current = latest.current;
+    if (current.identity !== identity || !current.roomId) throw new Error('OWNER_CHANGED');
+    const attachment = await api.client.media(current.roomId, mediaId);
+    if (!valid()) throw new Error('OWNER_CHANGED');
+    return attachment;
+  }, [api, identity]);
   const own = state.identity === identity ? state : initial();
-  return { ...own, reload, loadOlder };
+  return { ...own, reload, loadOlder, media };
 }

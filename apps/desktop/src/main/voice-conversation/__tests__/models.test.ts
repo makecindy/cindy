@@ -93,6 +93,27 @@ it('rejects unsupported speed on an official binding before opening a call', () 
   );
 });
 
+// Unit regression: the real Gateway Qwen route rejects OpenAI's wider speed
+// range. Exercise admission and request serialization at the verified boundaries.
+it('uses Qwen Audio 3.1 Plus speed limits on the OpenAI-compatible Gateway', () => {
+  const modelId = 'qwen/qwen-audio-3.1-tts-plus';
+  const d = deps([{ id: 'xd', audioModels: [model(modelId)] }] as Catalog['providers']);
+  const choice = { providerId: 'xd', modelId, voice: 'longanlingxin_v3.1' };
+  for (const speed of [0.5, 2]) {
+    const selected = { ...choice, speed };
+    const connection = resolveSpeechConnection(d, selected);
+    expect(connection.protocol).toBe('openai');
+    expect(JSON.parse(speechRequest(connection, { ...selected, text: 'hello' }).body)).toMatchObject({
+      model: modelId,
+      speed,
+      response_format: 'pcm',
+    });
+  }
+  for (const speed of [0.25, 4]) {
+    expect(() => resolveSpeechConnection(d, { ...choice, speed })).toThrow('invalid_speech_speed');
+  }
+});
+
 it('keeps Gateway entitlement and supported-protocol gates', () => {
   const d = deps([
     {
@@ -115,8 +136,13 @@ it('keeps Gateway entitlement and supported-protocol gates', () => {
 });
 
 // Unit: a new Gateway selection needs a usable reference default, while a saved
-// manual ID remains the request value. Existing OpenAI-only fixtures missed this.
-it.each(['elevenlabs/eleven_multilingual_v2', 'minimax/speech-2.8-hd'])(
+// manual ID remains the request value. Qwen 3.1 Plus was advertised as audio_speech
+// but its chat-family rule excluded it; the earlier vendor cases missed this route.
+it.each([
+  'elevenlabs/eleven_multilingual_v2',
+  'minimax/speech-2.8-hd',
+  'qwen/qwen-audio-3.1-tts-plus',
+])(
   'uses the reference default without restricting manual voices for %s',
   async (modelId) => {
     const d = deps([{ id: 'xd', audioModels: [model(modelId)] }] as Catalog['providers']);
@@ -133,6 +159,27 @@ it.each(['elevenlabs/eleven_multilingual_v2', 'minimax/speech-2.8-hd'])(
       response_format: 'pcm',
     });
     expect(fetcher).not.toHaveBeenCalled();
+  },
+);
+
+// Unit regression: both Registry layers must receive the discovered media mode.
+// Without it, a previously unknown Qwen TTS ID inherits the bundled chat prefix.
+// Exact declarations (including null) remain authoritative over the mode hint.
+it.each(['current', 'bundled'] as const)(
+  'keeps Gateway speech mode when resolving %s Registry protocols',
+  (layer) => {
+    const modelId = 'qwen/qwen-audio-3.1-tts-plus';
+    const media = model(modelId);
+    const d = deps([{ id: 'xd', audioModels: [media] }] as Catalog['providers']);
+    if (layer === 'bundled') d.catalog.modelRegistry = undefined;
+    expect(speechModels(d)).toMatchObject([{ id: modelId, protocol: 'openai' }]);
+    const selected = { providerId: 'xd', modelId, voice: 'longanlingxin_v3.1' };
+    expect(resolveSpeechConnection(d, selected).protocol).toBe('openai');
+    for (const nativeApi of [null, 'openai-completions'] as const) {
+      media.nativeApi = nativeApi;
+      expect(speechModels(d)).toEqual([]);
+      expect(() => resolveSpeechConnection(d, selected)).toThrow('model_unavailable');
+    }
   },
 );
 

@@ -57,7 +57,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
   始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
   input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
-  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。Host 审批、策略与变更捕获仍使用真实
+  未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
+  当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
+  首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的
+  server／tool 并说明重发即可放行（模型补完 `cindy_mcp_list_tools` 后重发即通过，重发那次
+  正常过一次权限）。上下文压缩成功后，bridge 会在下一次运行开始前注入一条一次性的已披露
+  工具清单提醒（display:false 常驻上下文，只列仍存在且指纹仍匹配的工具），避免模型因压缩
+  失忆而重跑 `cindy_mcp_list_tools`；这是提示卫生，不改变门的任何判定。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
   Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
   下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
@@ -427,6 +433,22 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   `/review` 对 SSH 远端会话前置拦截(device-link 同款);无自动重连(用户手动 Retry,
   与 CC/Codex 对齐);版本差 + daemon 活着时 defer 并显示 UpgradeBanner, 用户确认
   后才 kill + 重装(daemon 已死则静默升级磁盘 bundle)。
+
+### 本机普通会话空闲回收(2026-10)
+
+- **动机**：`pi --mode rpc` 每个约 150~300MB，普通会话此前只有退出应用/切换 Agent
+  才回收（Orca 工人另有 `workerIdleReleaseMinutes`，默认关闭），长时间使用进程与内存
+  持续累积（upstream #5830）。
+- **实现**：`apps/desktop/src/main/maker-ipc/piIdleReleaseWatcher.ts`（30min TTL /
+  5min 扫描）。候选只取本机桌面来源、无 Orca 角色、非远程、未隐藏的 pi 会话
+  （归档也纳入——归档不会关运行时）；释放前在发送锁内复查回合/后台任务/silent-stop
+  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；最后由
+  `Session.closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
+  （手动压缩 / rewind / 切模）在途的会话（pi 侧由 `runExclusivePiRpc` 计数，
+  见 `hasPendingHostOperation`）。
+- **重建语义**：释放不影响会话数据；下一次发送走既有 lazy create-session，resume 自
+  `sdk_session_id`，与冷启动一致。闲置后首次发送因此可能多等一次冷启动。
+- **回归**：`apps/desktop/src/main/maker-ipc/__tests__/piIdleReleaseWatcher.test.ts`。
 
 ## 6. 上线门禁
 

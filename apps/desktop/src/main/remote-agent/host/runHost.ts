@@ -37,6 +37,7 @@ import {
   parseRemoteAgentReply,
   parseRemoteAgentRequest,
   parseRemoteAgentForkResult,
+  remoteAgentErrorCode,
   type RemoteAgentForkResult,
   type RemoteAgentCaps,
   type RemoteAgentErrorInfo,
@@ -2395,29 +2396,54 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               reshareKey: reshareKeyForGuest(controller),
             }]));
           } catch (error) {
+            // 受邀者只看到中性错误；原始原因只记在本机，组主人排查时才有据可查。
+            deps.log?.warn('remote agent: a computer in the provider group could not fork the shared task', {
+              to: member.agentDeviceId,
+              error: remoteAgentErrorInfo(error),
+            });
             const safe = relayErrorForGuest(relayErrorInfoFrom(error)) ?? RELAY_UNAVAILABLE_ERROR;
             fail(safe.code, safe.message);
           }
         } else {
-          if (!deps.forkHosted || !deps.isAgentAvailable(request.agentKind)) {
+          if (!deps.forkHosted) {
             fail('REMOTE_AGENT_PEER_TOO_OLD', 'update Cindy on the computer running this task to fork it');
+          }
+          if (!deps.isAgentAvailable(request.agentKind)) {
+            // 经供应商组转来的受邀者看不到组内电脑，也装不了它的 Agent：回位置类错误，组所在电脑(含旧版)统一成「暂时不可用」。
+            if (request.relay) fail('REMOTE_AGENT_UNAVAILABLE', 'the computer running this task is not available right now');
+            fail('REMOTE_AGENT_UNSUPPORTED', 'this agent is not available on the computer running this task');
           }
           const workingDir = path.join(shadowSessionRoot(controller, hostSessionId), 'fs', 'workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
           // Idle runs may have released their shadow workspace; native history is retained.
           const native = await withShadowLock(hostSessionId, async () => {
             await fsp.mkdir(workingDir, { recursive: true });
             assertProvider();
-            return deps.forkHosted!(request.agentKind, {
-              sourceSdkSessionId: request.sourceSdkSessionId,
-              model: request.model,
-              providerId: providerId ?? request.providerId,
-              upToMessageId: request.upToMessageId,
-              lastTurnId: request.lastTurnId,
-              tailTurnsToDrop: request.tailTurnsToDrop,
-              forkAtTimestampMs: request.forkAtTimestampMs,
-              workingDir,
-              ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
-            });
+            try {
+              return await deps.forkHosted!(request.agentKind, {
+                sourceSdkSessionId: request.sourceSdkSessionId,
+                model: request.model,
+                providerId: providerId ?? request.providerId,
+                upToMessageId: request.upToMessageId,
+                lastTurnId: request.lastTurnId,
+                tailTurnsToDrop: request.tailTurnsToDrop,
+                forkAtTimestampMs: request.forkAtTimestampMs,
+                workingDir,
+                ...(guest ? { hostedGuestHome: guestHomeFor(scope) } : {}),
+              });
+            } catch (error) {
+              if (error instanceof Error && /^\[REMOTE_AGENT_[A-Z_]+\]/.test(error.message)) throw error;
+              // Agent 自己的分叉失败不是「电脑连不上」：给专门的码，组转发也不会把它换成「暂时不可用」。
+              // 原始报错可能带本机路径，只记本机日志。
+              deps.log?.warn('remote agent: native fork failed', {
+                agentKind: request.agentKind,
+                error: remoteAgentErrorInfo(error),
+              });
+              // 包在 Agent 报错里的远程 Agent 码(如 CodexForkError 的 cause)保留下来，正文换成中性说明。
+              // 新错误码只回给声明认识它的控制端(provider-groups.md §14)，旧控制端照旧收到 UNAVAILABLE。
+              const nested = error instanceof Error ? remoteAgentErrorCode(error.message) : null;
+              fail(nested ?? (request.acceptsForkFailed ? 'REMOTE_AGENT_FORK_FAILED' : 'REMOTE_AGENT_UNAVAILABLE'),
+                'the conversation could not be forked on the computer running this task');
+            }
           });
           result = {
             newSdkSessionId: native.newSdkSessionId,

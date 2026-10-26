@@ -203,6 +203,7 @@ interface UseCCAgentChatReturn {
   errorIsRecoverable: boolean;
   /** Explicit retry target for ErrorBanner; null means retry is unsafe or unavailable. */
   errorRetryText: string | null;
+  errorCanContinue?: boolean;
   /** live 终态错误绑定的持久化 error 行 clientId;无则没有 persist 续跑依据。 */
   errorPersistId: string | null;
   /** 本视图已处置的 persistId;尾部横幅跳过,避免同一错误再弹。 */
@@ -900,6 +901,7 @@ export function useCCAgentChat(
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,
     errorRetryText: lightState.errorRetryText,
+    errorCanContinue: lightState.errorCanContinue,
     errorPersistId: lightState.errorPersistId,
     disposedErrorPersistId: lightState.disposedErrorPersistId,
     credentialSwitchWait: lightState.credentialSwitchWait,

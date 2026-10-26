@@ -120,6 +120,7 @@ import { handleGhostSecretsRequest } from '../ghostSecretsEndpoint.js';
 import { ownerScopedGhostPartitionForInstalledGhost } from '../../ghostWebviewPartition.js';
 import {
   electronSandboxAdapter,
+  ghostIdForLogicWebContents,
   invokeGhostMobileRelay,
   fetchGhostMobilePage,
   ensureGhostProtocolRegistered,
@@ -769,6 +770,30 @@ describe('electronSandboxAdapter owner partition', () => {
       (harness.browserWindowOptions[0]?.webPreferences as { partition: string }).partition,
     ).not.toMatch(/^persist:/);
     handle.destroy();
+  });
+
+  // 更新重启的 forceQuit 先逐个 destroy 全部 BrowserWindow,before-quit 才 destroyAll;
+  // 已销毁窗口再读 webContents 抛 Object has been destroyed,曾打断整个 destroyAll。
+  it('收尾已被外部销毁的逻辑沙箱时不再访问窗口，且解除管子验身绑定', () => {
+    const handle = electronSandboxAdapter.create(ghost('gone-first'));
+    const win = harness.BrowserWindow.mock.results[0]!.value as {
+      webContents: { id: number };
+      isDestroyed: ReturnType<typeof vi.fn>;
+      destroy: ReturnType<typeof vi.fn>;
+    };
+    const logicId = win.webContents.id;
+    expect(ghostIdForLogicWebContents(logicId)).not.toBeNull();
+
+    win.isDestroyed.mockReturnValue(true);
+    Object.defineProperty(win, 'webContents', {
+      get() {
+        throw new TypeError('Object has been destroyed');
+      },
+    });
+
+    expect(() => handle.destroy()).not.toThrow();
+    expect(win.destroy).not.toHaveBeenCalled();
+    expect(ghostIdForLogicWebContents(logicId)).toBeNull();
   });
 });
 

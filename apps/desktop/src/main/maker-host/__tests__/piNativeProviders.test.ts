@@ -428,6 +428,25 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  // Tier 2: the actual launch builder must carry a user's V6 selection, including
+  // protocol limits, instead of reverting to the connection's Messages default.
+  it.each(['anthropic-messages', 'openai-completions', 'openai-responses'] as const)(
+    'launches Kimi through the selected V6 %s interface', (api) => {
+      const config = { id: 'kimi-v6', name: 'Kimi', runtimes: { pi: {
+        catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding',
+        wireProtocol: 'anthropic-messages' as const,
+        models: [{ id: 'k3.1-pro', name: 'K3.1', interfaceId: `moonshot-kimi-code-${api}` }],
+      } } };
+      const provider = buildUserProvider(config);
+      const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+      const result = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+      const projected = result.providers[0].models[0];
+      expect(projected.api ?? result.providers[0].api).toBe(api);
+      expect(projected.baseUrl ?? result.providers[0].baseUrl).toBe(api === 'anthropic-messages' ? 'https://api.kimi.com/coding' : 'https://api.kimi.com/coding/v1');
+      expect(projected).toMatchObject({ wireId: 'k3.1-pro', contextWindow: 262144, maxTokens: 262144, input: ['text', 'image'] });
+    },
+  );
+
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
     const generatedIds = ['ant-ling', 'baseten', 'cerebras', 'fireworks', 'groq',
       'huggingface', 'nvidia', 'together', 'mistral', 'opencode', 'qwen-token-plan',

@@ -191,8 +191,10 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
           : t('bots.cloud.notEnabled')}
       </DropdownMenuItem>
     );
+  const hereOff = choices.thisComputer === 'REMOTE_CONTROL_OFF'
+    ? <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.hereControlOff')}</DropdownMenuItem> : null;
   if (choices.targets.length === 0)
-    return <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>;
+    return <><DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>{hereOff}</>;
   return (
     <>
       {choices.targets.map((target) => (
@@ -202,6 +204,7 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
           </span>
         </DropdownMenuItem>
       ))}
+      {hereOff}
     </>
   );
 }

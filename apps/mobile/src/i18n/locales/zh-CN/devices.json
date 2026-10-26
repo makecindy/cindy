@@ -330,6 +330,7 @@
       "openAutomationLatest": "打开自动化 {{title}} 的最新任务",
       "automationTask": "自动化 {{title}}",
       "openConversation": "打开任务 {{title}}",
+      "followedBy": "，{{names}}在跟进",
       "collapse": "收起 {{title}}",
       "expand": "展开 {{title}}",
       "taskError": "任务出错",
@@ -588,9 +589,12 @@
     "viewAllRuns": "查看全部 {{count}} 次运行"
   },
   "companions": {
+    "section": {
+      "showAll": "显示全部",
+      "showAllA11y": "显示全部 {{count}} 位",
+      "showLess": "收起"
+    },
     "noCreateHosts": "当前没有可用的兼容电脑。在电脑上打开 Cindy 并登录同一账号后即可新建伙伴。",
-    "taskAttentionCount": "{{count}} 个任务待关注",
-    "unreadChatCount": "{{count}} 段对话未读",
     "messageSent": "已向后台任务发送消息",
     "sentTo": "已发消息给 {{name}}",
     "receivedFrom": "消息来自 {{name}}",
@@ -629,19 +633,13 @@
       "unknown": "状态未知"
     },
     "title": "伙伴",
-    "tasks": "任务",
     "search": "搜索伙伴",
-    "emptyTitle": "还没有伙伴",
-    "emptyCopy": "在电脑上的 Cindy 中创建一个伙伴。",
-    "noResults": "没有找到匹配的伙伴",
     "startChat": "开始对话",
-    "preferenceSaveFailed": "未能保存视图偏好，请重新切换视图。",
     "automation": {
       "unsavedTitle": "放弃更改？",
       "unsavedBody": "你的更改尚未保存。",
       "discard": "放弃更改"
     },
-    "openNavigation": "打开导航",
     "openProfile": "查看 {{name}} 的资料",
     "switchCompanion": "切换伙伴",
     "activity": {
@@ -688,9 +686,7 @@
     "errorDetails": "错误详情",
     "createTeammate": "新建伙伴",
     "createMenu": "新建",
-    "searchWithGroups": "搜索伙伴和群聊",
     "awaiting": "等你确认",
-    "emptyCopyCreate": "伙伴会记得你们聊过的事，也能帮你在电脑上做事。",
     "taskResult": "任务结果",
     "collapseResult": "收起结果"
   },
@@ -764,7 +760,18 @@
     "home": "主力电脑",
     "chat": "对话",
     "showReplyTarget": "显示回复对应的消息",
-    "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。对所有伙伴生效，较早的回复不显示。"
+    "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。对所有伙伴生效，较早的回复不显示。",
+    "channels": "消息平台",
+    "channelsEmpty": "还没有连接消息平台",
+    "channelTasksEmpty": "还没有任务记录",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "飞书",
+      "lark": "Lark",
+      "wecom": "企业微信",
+      "dingtalk": "钉钉",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "导入伙伴",

@@ -21,6 +21,9 @@ import { loadIgnoreMatcher, type Matcher } from './ignore.js';
 
 const log = scopedLogger('file-browser/scanner');
 
+// Reuse the locale-aware comparator across lazy directory expansions.
+const entryNameCollator = new Intl.Collator(undefined, { numeric: true });
+
 /** Hard cap on file size we'll send to the renderer. Anything larger gets
  *  truncated; renderer shows a "file truncated, open in OS to see more"
  *  banner. 2 MiB is enough for any realistic markdown/code file. */
@@ -282,8 +285,7 @@ async function hasDocDescendant(
  * List entries of one directory (single-layer, no recursion). Filtered
  * through an optional presentation matcher. Without a matcher all ordinary
  * files are listed, including hidden files and build outputs. Sort: directories before files,
- * each group case-insensitive lexicographic — same convention as VSCode
- * Explorer / Obsidian.
+ * each group case-insensitive natural order (chapter2 before chapter10).
  */
 export async function listDir(
   workdir: string,
@@ -354,10 +356,13 @@ export async function listDir(
   );
   const out: DirEntry[] = candidates.filter((e): e is DirEntry => e !== null);
 
-  // dirs first (case-insensitive a-z), then files (same)
+  // Directories first, then natural name order within each group.
   out.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-    return a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase());
+    const aName = a.name.toLocaleLowerCase();
+    const bName = b.name.toLocaleLowerCase();
+    // Keep the legacy text order for numeric ties such as 001, 01 and 1.
+    return entryNameCollator.compare(aName, bName) || aName.localeCompare(bName);
   });
 
   return out;

@@ -8,14 +8,11 @@
  *  - retry(同 id 幂等)与 dismiss(返回编辑)收口。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import ts from 'typescript';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { RemoteSerializedAttachment } from '@/session/types';
-import { createDurableOutbox, isDurableOutboxHandedOff, isDurableOutboxSettled, type DurableOutboxRecord } from '@/session/durableOutbox';
-import { buildOutboxItem, outboxItemAttachments } from '@/session/sessionOutbox';
-import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { buildOutboxItem } from '@/session/sessionOutbox';
+import { createOutboxMessageLeases, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
 const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
@@ -86,50 +83,21 @@ const DRAFT: NewSessionDraft = {
   firstMessage: 'hello world',
 };
 
-// Execute the bridge's actual refresh callback with the real session store.
-// This includes hydration, cancellation cleanup and message-work lease release.
-const bridgeSource = ts.createSourceFile('MobileOutboxBridge.tsx', readFileSync(resolve(
-  process.cwd(), 'src/session/MobileOutboxBridge.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let refreshSource = '';
-let reconciliationSource = '';
-let knownSessionSource = '';
-let hiddenSource = '';
-function findRefresh(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && node.name.getText(bridgeSource) === 'knownSession') {
-    knownSessionSource = node.initializer!.getText(bridgeSource);
-  }
-  if (ts.isVariableDeclaration(node) && node.name.getText(bridgeSource) === 'hidden') {
-    hiddenSource = node.initializer!.getText(bridgeSource);
-  }
-  if (ts.isVariableDeclaration(node) && node.name.getText(bridgeSource) === 'refreshLeases') {
-    refreshSource = node.initializer!.getText(bridgeSource);
-  }
-  if (ts.isVariableDeclaration(node) && node.name.getText(bridgeSource) === 'needsReconciliation') {
-    reconciliationSource = node.initializer!.getText(bridgeSource);
-  }
-  ts.forEachChild(node, findRefresh);
-}
-findRefresh(bridgeSource);
-if (!refreshSource) throw new Error('Missing outbox lease refresh callback');
+// Exercise the production lease manager with the real session store, including
+// hydration, cancellation cleanup and message-work lease release.
 function outboxLeaseHarness(initial: DurableOutboxRecord[]) {
   let records = initial;
   const visible = new Set<string>();
-  const leases = new Map<string, ReturnType<typeof remoteSessionStore.acquireSessionMessageWork>>();
-  const bindings = { isCurrent: () => true, mobileDurableOutbox: { getSnapshot: () => records },
-    isDurableOutboxHandedOff, isDurableOutboxSettled, remoteSessionStore, sessionFromCreateResult, outboxItemAttachments,
-    CINDY_MAKE_ENABLED, isCindyMakeSource,
-    findRemoteHistoryView: (_deviceId: string, sessionId: string) => ({ isActive: () => visible.has(sessionId) }),
-    dismissRecoveredPrecreatedSession, restoreNewSessionDurableEdit, leases,
-    leaseKey: (record: DurableOutboxRecord) => JSON.stringify([record.deviceId, record.item.sessionId]) };
-  const compiled = ts.transpileModule(`function create(bindings) {
-    const { ${Object.keys(bindings).join(', ')} } = bindings;
-    const needsReconciliation = ${reconciliationSource};
-    const knownSession = ${knownSessionSource};
-    const hidden = ${hiddenSource};
-    return ${refreshSource};
-  }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const create = new Function(`${compiled}; return create;`)() as (values: typeof bindings) => () => void;
-  return { refresh: create(bindings), leases, visible, setRecords: (next: DurableOutboxRecord[]) => { records = next; } };
+  const manager = createOutboxMessageLeases({
+    isCurrent: () => true,
+    getRecords: () => records,
+    hidden: record => outboxSessionIsHidden(record, remoteSessionStore.getSessions()),
+    needsReconciliation: record => outboxNeedsReconciliation(record, visible.has(record.item.sessionId)),
+    restoreEditable: restoreNewSessionDurableEdit,
+    dismissCancelled: dismissRecoveredPrecreatedSession,
+    store: remoteSessionStore,
+  });
+  return { ...manager, visible, setRecords: (next: DurableOutboxRecord[]) => { records = next; } };
 }
 function recoveryOutboxRecord(sessionId: string): DurableOutboxRecord {
   return { version: 1, accountId: 'owner-a', deviceId: 'dev-1', createdAt: 1, state: 'failed', uploads: [],

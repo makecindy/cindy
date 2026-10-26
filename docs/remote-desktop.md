@@ -1067,9 +1067,12 @@ Every setup step has a fixed code — `stage-write`, `service-create`,
 `authorize-connect` and so on — carrying the OS error number and nothing else:
 no path, account name or other machine content. The elevated child is hidden, so
 its console output never reaches the parent; it returns its step as its exit
-code instead, and the parent reports it as `elevate-child/<step>`. Main logs the
-code under `remote-desktop:windows` and the settings page shows it beside the
-failure, so a report says which step failed rather than only that setup failed.
+code instead, and the parent reports it as `elevate-child/<step>`. A failure in
+the generated bootstrap script itself — a check it refuses or an error it raises
+— is `elevate-child/elevate-bootstrap`, so it cannot be mistaken for a rejected
+argument list. Main logs the code under `remote-desktop:windows` and the
+settings page shows it beside the failure, so a report says which step failed
+rather than only that setup failed.
 `windowsLockScreenSetup.test.ts` covers that path end to end in Main.
 
 The service drops and recreates its listening pipe instance after every accept
@@ -1220,6 +1223,20 @@ position corrections only outside active touchpad movement. Late messages from
 old RTC generations are discarded. Hidden cursors are not drawn. Unsupported
 cursor images fall back to the existing position indicator without killing video.
 Both Light and Dark use the source raster rather than tinting it.
+
+On a portrait half-fold, the upper region shows the desktop and the lower region
+holds the touchpad or keyboard controls. Landscape half-folds use the ordinary
+full-width landscape viewer. The keyboard toolbar remains below the hinge rather
+than moving into the video region when the system keyboard leaves little room.
+The lower touchpad owns relative cursor movement for its entire contact, including
+pauses, regardless of the video surface's touch/pointer preference. Host position
+feedback resumes after a full 200ms grace period measured from lift (or a later
+local input), even when the finger paused before lifting. New contacts preserve
+edge coordinates; only viewport changes request cursor re-entry. Gesture
+cancellation, control loss and leaving the pad clear that ownership. The local
+React Native/WebView bridge carries contact start/end; the remote input protocol
+is unchanged. Regression coverage lives in Mobile's `viewer.test.ts` and
+`screen.test.tsx` under `src/remote-desktop/__tests__/`.
 
 Desktop viewers use the local system pointer instead of drawing this raster.
 An optional `shape` hint selects a bounded standard cursor keyword (text, hand,

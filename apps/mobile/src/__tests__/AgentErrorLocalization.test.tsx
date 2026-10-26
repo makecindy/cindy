@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-import { unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { remoteActionErrorI18nKey, unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
@@ -159,6 +159,16 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(normalized.body).toBe(i18n.t(key));
   });
 
+  // The fork action showed the raw "[IPC_ERROR] [REMOTE_AGENT_FORK_FAILED] …" string; it must use
+  // the localized remote copy, while unknown codes keep the caller's own fallback.
+  it('localizes a remote fork failure in one-shot action errors', async () => {
+    await i18n.changeLanguage(locale);
+    expect(remoteActionErrorI18nKey('[IPC_ERROR] [REMOTE_AGENT_FORK_FAILED] the conversation could not be forked'))
+      .toBe('session.remoteError.REMOTE_AGENT_FORK_FAILED');
+    expect(remoteActionErrorI18nKey('[REMOTE_FUTURE] private diagnostic')).toBeNull();
+    expect(remoteActionErrorI18nKey('[NOT_FOUND] message missing')).toBeNull();
+  });
+
   it('has every desktop bracket-code translation without relying on fallback languages', async () => {
     await i18n.changeLanguage(locale);
     const desktop = JSON.parse(readFileSync(`../desktop/src/renderer/i18n/locales/${locale}/common.json`, 'utf8'));
@@ -175,7 +185,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -228,7 +238,7 @@ it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'REMOTE_COMPAT_MODE_UNSUPPORTED', 'REMOTE
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(true);
   },
 );
-it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'REMOTE_FUTURE'])(
+it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'REMOTE_FUTURE'])(
   'preserves retry for recoverable or unclassified %s', code => {
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(false);
   },

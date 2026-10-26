@@ -46,6 +46,9 @@ describe('remote agent channel', () => {
     const request = { op: 'fork', sourceSessionId: 'g123', newSessionId: otherId,
       agentKind: 'pi', sourceSdkSessionId: '/guest/pi-sessions/source.jsonl', model: 'model' };
     expect(parseRemoteAgentRequest({ ...request, hostedGuestHome: '/owner', workingDir: '/owner' })).toEqual(request);
+    // The FORK_FAILED opt-in survives the group relay hop only as an explicit `true`.
+    expect(parseRemoteAgentRequest({ ...request, acceptsForkFailed: true })).toEqual({ ...request, acceptsForkFailed: true });
+    expect(parseRemoteAgentRequest({ ...request, acceptsForkFailed: 'yes' })).toEqual(request);
     expect(() => parseRemoteAgentRequest({ ...request, sourceSessionId: '../owner' })).toThrow();
     expect(() => parseRemoteAgentRequest({ ...request, tailTurnsToDrop: -1 })).toThrow();
     expect(isRemoteAgentReadInvoke(REMOTE_AGENT_CHANNEL, [request])).toBe(false);

@@ -209,7 +209,7 @@ describe('filterResultsByRequestFilters', () => {
         },
       },
     );
-    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep', 'worker']);
   });
 
   it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {

@@ -335,7 +335,7 @@ function makeDeps(
 function clearAllPrefs(): void {
   // 把测试涉及的目录 × id 全部清一遍(幂等;清空后 store 自动删文件)。
   for (const dir of [WORKDIR, `${WORKDIR} `, '/proj/beta', 'E:/Repo']) {
-    for (const id of ['art', 'other', 'missing', 'sleeping', 'account', 'workflow-guide']) {
+    for (const id of ['art', '_root__art', 'other', 'missing', 'sleeping', 'account', 'workflow-guide']) {
       setGhostDisabledForWorkdir(dir, id, false);
     }
   }
@@ -1369,6 +1369,85 @@ describe('connect_account ordinary task entry', () => {
 });
 
 describe('花名册 / ghost_list 过滤', () => {
+  // PR #6434: list already hides an unavailable owner projection; wrong-address
+  // info/manual/call/setup must preserve that boundary before any side effect.
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    '%s hides namespace recovery targets while the active owner is unavailable', async (agentKind) => {
+      listMock.mockReturnValue([{
+        ...(chipGhost('art', ['tool']) as object),
+        namespace: 'outgoing-owner',
+        dir: path.join(tmpUserData, '_ns', 'outgoing-owner', 'art'),
+      }]);
+      activeSessionAvailableMock.mockReturnValue(false);
+      const deps = makeDeps(agentKind);
+      expect(JSON.parse((await handleGhostList(deps)).content[0].text).ghosts).toEqual([]);
+      const target = { ghost_id: 'art', namespace: null };
+      for (const result of [
+        await handleGhostInfo(deps, target),
+        await handleGhostManual(deps, target),
+        await handleGhostCall(deps, { ...target, tool: 'run', attachments: ['cindy-media://blobs/example.png'] }),
+      ]) {
+        expect(result.isError).toBe(true);
+        expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+        expect((result.content[0] as { text: string }).text).not.toContain('outgoing-owner');
+      }
+      const connection = await deps.connectAccount!({ kind: 'plugin', id: 'art', namespace: null });
+      expect(connection).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+      expect(JSON.stringify(connection)).not.toContain('outgoing-owner');
+      expect(ensureReadyMock).not.toHaveBeenCalled();
+      expect(grantAttachmentsMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // Regression: a listed root was repeatedly addressed with the string "null".
+  // Exercise the real MCP handlers and host resolver with the same session deps;
+  // a rejected address must never reach setup, attachment grants or dispatch.
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    '%s recovers in the same session after correcting a quoted null namespace', async (agentKind) => {
+      listMock.mockReturnValue([{
+        ...(chipGhost('art', ['tool'], {
+          manual: { items: [{ dir: 'docs', name: 'guide', description: 'Usage guide' }] },
+        }) as object),
+        namespace: null,
+        dir: path.join(tmpUserData, '_ns', '_root', 'art'),
+      }]);
+      const deps = makeDeps(agentKind);
+      const listed = JSON.parse((await handleGhostList(deps)).content[0].text).ghosts[0];
+      expect(listed).toMatchObject({ id: 'art', namespace: null });
+      const wrong = { ghost_id: listed.id, namespace: 'null' };
+      const results = [
+        await handleGhostInfo(deps, wrong),
+        await handleGhostManual(deps, wrong),
+        await handleGhostCall(deps, { ...wrong, tool: 'run', attachments: ['cindy-media://blobs/example.png'] }),
+      ];
+      const target = { ghost_id: listed.id, namespace: listed.namespace };
+      for (const result of results) {
+        expect(result.isError).toBe(true);
+        const payload = JSON.parse((result.content[0] as { text: string }).text);
+        expect(payload).toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+        expect(payload.message).toContain(JSON.stringify(target));
+      }
+      await expect(deps.connectAccount!({ kind: 'plugin', id: 'art', namespace: 'null' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+      expect(ensureReadyMock).not.toHaveBeenCalled();
+      expect(grantAttachmentsMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(JSON.parse((await handleGhostInfo(deps, target)).content[0].text))
+        .toMatchObject({ ok: true, ghost: { id: 'art', namespace: null } });
+      expect(JSON.parse((await handleGhostManual(deps, target)).content[0].text))
+        .toMatchObject({ ok: true, manual: [{ name: 'guide' }] });
+      expect(JSON.parse(((await handleGhostCall(deps, { ...target, tool: 'run' })).content[0] as { text: string }).text))
+        .toMatchObject({ ok: true, result: 'done' });
+      expect(dispatchMock).toHaveBeenCalledOnce();
+      expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_root__art' }));
+      setGhostDisabledForWorkdir(WORKDIR, '_root__art', true);
+      expect(JSON.parse(((await handleGhostCall(deps, { ...target, tool: 'run' })).content[0] as { text: string }).text))
+        .toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+      expect(dispatchMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each((['claude-code', 'codex', 'pi'] as const).flatMap(
     (agentKind) => [true, false].map((pending) => ({ agentKind, pending })),
   ))(
@@ -1399,7 +1478,7 @@ describe('花名册 / ghost_list 过滤', () => {
       expect(deps.getRosterItems?.()[0]).not.toHaveProperty('namespace');
       expect(getGhostRosterPrompt({ workingDir: WORKDIR })).not.toContain('"namespace"');
       if (isPending) {
-        await expect(deps.getAwakeGhost('art', null)).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+        await expect(deps.getAwakeGhost('art', null)).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
       }
       expect(dispatchMock).toHaveBeenCalledTimes(2);
     },

@@ -17,6 +17,8 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
+  AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
+  AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
   AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL,
   AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL,
   DEFAULT_AGENT_ISLAND_SOUND_SETTINGS,
@@ -567,6 +569,119 @@ describe('AgentIslandService native publishing', () => {
     // Load after the outer mock setup, outside the first behavior test's budget.
     // Cold Vite transforms can otherwise consume its entire 5-second timeout.
     await import('../service.js');
+  }, 60_000);
+
+  // Old unread has no runtime event after restart. Verify the real IPC -> native -> read
+  // route, including owner fencing and stale-card rejection; existing event tests miss this (unit).
+  it('restores companion chats from the owner snapshot and reads offline chats locally', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const send = vi.fn();
+    const mainWindow = { webContents: { send }, isDestroyed: () => false } as unknown as BrowserWindow;
+    const service = new AgentIslandService({ getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish, suspend: () => undefined } });
+    syncEnabledForTest(service, publish);
+    service.registerDeviceSessionIpc();
+    const sync = registeredIpcHandler(AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL);
+    const chat = { sessionId: 'offline-chat', botId: 'remote-bot', deviceId: 'offline-home',
+      companion: { name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'blue' }, visible: true, unread: true,
+      lastMessageAt: 1, preview: 'Unread reply' };
+    const snapshot = { dataOwnerId: 'test-owner', ownerGeneration: 1, chats: [chat] };
+    sync({ sender: mainWindow.webContents }, { ...snapshot, ownerGeneration: 0 });
+    expect(publish).not.toHaveBeenCalled();
+    sync({ sender: {} }, snapshot);
+    expect(publish).not.toHaveBeenCalled();
+    sync({ sender: mainWindow.webContents }, snapshot);
+    const display = publish.mock.calls.at(-1)![0];
+    expect(display.pillSnapshot.attentionCount).toBe(1);
+    expect(service.getSessionActivitySnapshot(chat.sessionId)).toBeNull();
+    const token = display.sessions[0].completionToken!;
+    await Promise.resolve();
+    mocks.companionAvatarThumbnail.mockResolvedValueOnce('restored-avatar');
+    sync({ sender: mainWindow.webContents }, snapshot);
+    await Promise.resolve();
+    expect(publish.mock.calls.at(-1)![0].sessions[0].companion?.imageJpeg).toBe('restored-avatar');
+    expect(publish.mock.calls.at(-1)![0].sessions[0].completionToken).toBe(token);
+    expect(await service.handleCompletionAction(chat.sessionId, 'archive', token)).toBe(false);
+    expect(await service.handleCompletionAction(chat.sessionId, 'mark-read', token)).toBe(true);
+    expect(send).toHaveBeenCalledWith(AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
+      { ...chat, readThroughAt: chat.lastMessageAt }, { dataOwnerId: 'test-owner', ownerGeneration: 1 });
+    expect(mocks.remoteInvoke).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    sync({ sender: mainWindow.webContents }, { ...snapshot, chats: [{ ...chat, lastMessageAt: 2 }] });
+    expect(await service.handleCompletionAction(chat.sessionId, 'mark-read', token)).toBe(false);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(1);
+    service.resetRuntimeState();
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+  });
+
+  // Unit regression #7134: the earlier test only checked sound after an unread snapshot arrived.
+  it.each([false, true])('keeps fresh completion sounds before chat unread=%s and clears explicit reads', async (unread) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn(() => true);
+    const mainWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false } as unknown as BrowserWindow;
+    const service = new AgentIslandService({ getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish, playSound, suspend: () => undefined } });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: customSound('complete.wav') } });
+    const input = { sessionId: 'local-chat', botId: 'local-bot', deviceId: null,
+      companion: { name: 'Cindy', avatar: '', avatarColor: 'blue' }, visible: true, unread: false,
+      lastMessageAt: 1, preview: '' };
+    service.setCompanionChats([input]);
+    service.handleUserPrompt({ sessionId: input.sessionId }, 'hello');
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: input.sessionId }, doneEvent());
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    if (!unread) {
+      service.setCompanionChats([input]);
+      expect(playSound).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls.at(-1)![0].sessions).toEqual([]);
+      service.resetRuntimeState();
+      return;
+    }
+    const runtimeToken = (service.getSessionActivitySnapshot(input.sessionId) as AgentIslandSessionActivity).completionToken!;
+    service.setCompanionChats([{ ...input, unread: true, lastMessageAt: Date.now(), preview: 'Reply' }]);
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(await service.handleCompletionAction(input.sessionId, 'mark-read', runtimeToken)).toBe(false);
+    const token = publish.mock.calls.at(-1)![0].sessions[0].completionToken!;
+    expect(await service.handleCompletionAction(input.sessionId, 'mark-read', token)).toBe(true);
+    expect(service.getSessionActivitySnapshot(input.sessionId)?.attention ?? false).toBe(false);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    service.resetRuntimeState();
+  });
+
+  // Unit: the menu bar must observe the final chat projection even with the island hidden.
+  it.each([true, false])('publishes shared attention counts with island enabled=%s', async (enabled) => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish: () => true, suspend: () => undefined } });
+    service.setEnabled(enabled);
+    const counts = vi.fn();
+    const unsubscribe = service.subscribeAttentionCount(counts);
+    const chat = { sessionId: 'unread-chat', botId: 'bot', deviceId: 'offline-home',
+      companion: { name: 'Cindy', avatar: '', avatarColor: 'blue' }, visible: true, unread: true,
+      lastMessageAt: 1, preview: 'Unread reply' };
+    service.handleUserPrompt({ sessionId: 'running-task' }, 'work');
+    expect(service.getAttentionCount()).toBe(0);
+    service.setCompanionChats([chat]);
+    expect(service.getAttentionCount()).toBe(1);
+    expect(counts.mock.calls).toEqual([[1]]);
+    service.setCompanionChats([chat]);
+    expect(counts).toHaveBeenCalledTimes(1);
+    service.setCompanionChats([{ ...chat, unread: false }]);
+    expect(counts.mock.calls).toEqual([[1], [0]]);
+    service.setCompanionChats([chat]);
+    service.resetRuntimeState();
+    expect(service.getAttentionCount()).toBe(0);
+    expect(counts.mock.calls).toEqual([[1], [0], [1], [0]]);
+    unsubscribe();
+    service.setEnabled(enabled);
+    service.setCompanionChats([chat]);
+    expect(counts).toHaveBeenCalledTimes(4);
+    service.resetRuntimeState();
   });
 
   it.each([true, false])('waits across status Done → native done for the shared local/remote completion decision (%s)', async handled => {
@@ -7013,7 +7128,7 @@ it('does not sound or mark attention for internal coordination completion, but s
   const meta = { sessionId: 'coordination', agentKind: 'codex' as const };
   service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true } });
   playSound.mockClear();
-  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: true } });
+  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: false } });
   expect(playSound).not.toHaveBeenCalled();
   expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
   service.handleAgentEvent(meta, terminalErrorEvent('User action required'));

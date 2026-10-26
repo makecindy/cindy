@@ -685,6 +685,29 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getHomeSessions()[0].title).toBe('Restored title');
   });
 
+  it('keeps metadata patches on the canonical shard and preserves hidden rows and usage projection', () => {
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'current', name: 'Mac' }]);
+    remoteSessionStore.setDeviceSessions('stale', 'Mac', [session('s1', { title: 'Stale' })]);
+    remoteSessionStore.setDeviceSessions('current', 'Mac', [session('s1'), session('s2')]);
+    const other = remoteSessionStore.getHomeSessions()[1];
+    const before = remoteSessionStore.getSessions()[0];
+    remoteSessionStore.applySessionPatch('stale', 's1', { title: 'Wrong', updatedAt: '2026-02-01T00:00:00Z' });
+    expect(remoteSessionStore.getSessions()[0]).toBe(before);
+    expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current');
+    const finishPreview = remoteSessionStore.beginSessionListRemovalPreview('s1');
+    remoteSessionStore.applySessionPatch('current', 's1', {
+      title: 'Renamed', updatedAt: '2026-02-02T00:00:00Z', totalTokenUsage: 500,
+    });
+    expect(remoteSessionStore.getHomeSessions()).toEqual([other]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({ title: 'Renamed', totalTokenUsage: 500 });
+    finishPreview();
+    expect(remoteSessionStore.getHomeSessions()[0]).toMatchObject({
+      title: 'Renamed', updatedAt: '2026-02-02T00:00:00Z', canonicalDeviceId: 'current',
+    });
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toHaveProperty('totalTokenUsage');
+    expect(remoteSessionStore.getHomeSessions()[1]).toBe(other);
+  });
+
   it('removes archived sessions from the active mirror', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
     remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });

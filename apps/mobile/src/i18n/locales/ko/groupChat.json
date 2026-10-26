@@ -60,6 +60,8 @@
     "send": "보내기"
   },
   "timeline": {
+    "newMessages_one": "새 메시지 {{count}}개",
+    "newMessages_other": "새 메시지 {{count}}개",
     "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
     "emptyDescription": "한마디 하면 동료들이 이어서 대화합니다. @로 동료를 지정하면 그 동료만 답합니다.",
     "roundEnded": "동료들이 말을 마쳤습니다",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "{{name}} 인용: {{summary}}",
     "deleted": "원본 메시지가 삭제되었습니다",
-    "attachments": "{{name}} 등 {{total}}개"
+    "attachments": "{{name}} 등 {{total}}개",
+    "unavailable": "이 메시지를 찾을 수 없습니다."
   },
   "notice": {
     "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
@@ -113,6 +116,7 @@
     "start": "시작하기",
     "dismiss": "필요 없어요",
     "editHint": "담당이나 단계를 바꾸려면 그냥 말해 주세요",
+    "autoNote": "단계가 끝나면 자동으로 다음 단계가 시작됩니다.",
     "pauseNote": "한 단계가 끝날 때마다 멈추고, ‘다음 단계 시작’을 누를 때까지 기다립니다.",
     "superseded": "업데이트됨",
     "dismissed": "사용 안 함",
@@ -171,6 +175,7 @@
     "replyModeAll": "누구나 답할 수 있음",
     "replyModeMentioned": "@된 동료만 답함",
     "replyModeNote": "더 보탤 말이 없는 동료는 말하지 않습니다. 한 라운드는 최대 3바퀴, 메시지 10개까지이며, 그 후에는 ‘토론 계속하기’를 누를 때까지 기다립니다.",
+    "replyModeNoteQueue": "동료들이 한 명씩 차례로 답하고, 처음 5명은 자동으로 이어집니다. 동료의 메시지를 인용하거나 그 스레드에 답장해도 부를 수 있습니다.",
     "replyModeSaveFailed": "답변 방식을 저장하지 못했습니다. 다시 시도하세요",
     "delete": "그룹 채팅 삭제",
     "deleteNote": "이 그룹 채팅과 그 안의 메시지만 삭제됩니다. 동료 자체와 동료의 기억, 개인 대화에는 영향이 없습니다.",

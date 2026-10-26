@@ -18,6 +18,7 @@ import {
 import type { VoicePreviewController } from './VoicePreviewController';
 import { readSpeechVoiceLabel, rememberSpeechVoiceLabel } from './speechVoiceLabelCache';
 import { SpeechVoiceMenu } from './SpeechVoiceMenu';
+import { useBotSettingsTarget } from '../useBotSettingsTarget';
 
 const MANUAL = 'manual';
 const LOADING = 'loading';
@@ -31,6 +32,7 @@ type Props = {
   route: SpeechModelSelection;
   protocol?: SpeechProtocol;
   voice: string;
+  autoSelectFirstVoice: boolean;
   speed?: number;
   children?: ReactNode;
   disabled: boolean;
@@ -44,6 +46,7 @@ export function SpeechVoicePicker({
   route,
   protocol,
   voice,
+  autoSelectFirstVoice,
   speed,
   children,
   disabled,
@@ -52,6 +55,7 @@ export function SpeechVoicePicker({
   onChange,
 }: Props) {
   const { t } = useTranslation();
+  const voiceApi = useBotSettingsTarget().voice;
   const [catalogState, setCatalogState] = useState<CatalogState>();
   const [revision, setRevision] = useState(0);
   const [manualRouteKey, setManualRouteKey] = useState<string>();
@@ -135,7 +139,7 @@ export function SpeechVoicePicker({
       catalog: protocol && current?.routeKey === routeKey ? current.catalog : undefined,
     }));
     if (protocol) {
-      void window.electronAPI.voiceConversation
+      void voiceApi
         .voices(route)
         .then((result) => {
           if (version.current === request && isDataOwnerGenerationCurrent(owner))
@@ -156,6 +160,22 @@ export function SpeechVoicePicker({
     // Include the detected protocol in the refresh key, but send only an explicit
     // user override. Main must resolve inferred protocols against its current catalog.
   }, [routeKey, revision]);
+
+  useEffect(() => {
+    // Reuse only this route's successful catalog. Manual input, including an
+    // intentionally empty draft, always wins over a late catalog response.
+    if (
+      !autoSelectFirstVoice ||
+      voice ||
+      manual ||
+      disabled ||
+      currentCatalog?.phase !== 'ready' ||
+      !isDataOwnerGenerationCurrent(owner)
+    )
+      return;
+    const firstVoice = catalog?.voices[0]?.id;
+    if (firstVoice) onChange(firstVoice, true);
+  }, [autoSelectFirstVoice, voice, manual, disabled, currentCatalog, catalog, owner, onChange]);
 
   useEffect(() => {
     if (currentCatalog?.phase !== 'ready' || !catalog || !voice) return;

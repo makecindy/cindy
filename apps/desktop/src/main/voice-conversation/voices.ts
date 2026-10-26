@@ -7,6 +7,7 @@ import { gatewayReferenceSpeechVoices, referenceSpeechVoices } from '../../share
 import { alibabaSystemVoices } from '../../shared/alibabaSpeechVoices.js';
 import { loadDashscopeVoices } from './dashscopeVoices.js';
 import type { SpeechConnection } from './speech.js';
+import { openRouterSpeechBaseUrl } from './openrouter.js';
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue =>
@@ -59,7 +60,9 @@ export async function loadSpeechVoices(
     if (voices.length)
       return { source: 'reference', voices: voices.map((voice) => ({ ...voice })) };
   }
-  if (connection.protocol === 'openai' || connection.protocol === 'qwen-tts') {
+  const openRouterBase = providerId !== 'xd' && connection.protocol === 'openai'
+    ? openRouterSpeechBaseUrl(connection.baseUrl) : undefined;
+  if ((connection.protocol === 'openai' && !openRouterBase) || connection.protocol === 'qwen-tts') {
     const voices =
       connection.protocol === 'qwen-tts'
         ? alibabaSystemVoices(modelId, connection.protocol, connection.baseUrl)
@@ -95,6 +98,20 @@ export async function loadSpeechVoices(
   };
   try {
     const base = connection.baseUrl.replace(/\/+$/, '');
+    if (openRouterBase) {
+      const json = await request(new URL(`${openRouterBase}/models?output_modalities=speech`));
+      if (!Array.isArray(json.data)) throw new Error('invalid_voice_catalog');
+      const model = json.data.map(record).find(entry => entry.id === modelId);
+      if (!model) throw new Error('voice_catalog_unavailable');
+      if (model.supported_voices == null) return { source: 'manual', voices: [] };
+      if (!Array.isArray(model.supported_voices)) throw new Error('invalid_voice_catalog');
+      const ids = [...new Set(model.supported_voices
+        .map(normalizeSpeechVoiceId).filter((id): id is string => !!id))];
+      return {
+        source: 'provider', voices: ids.slice(0, 1000).map(id => ({ id, name: id })),
+        ...(ids.length > 1000 ? { truncated: true } : {}),
+      };
+    }
     if (connection.protocol === 'dashscope-tts')
       return await loadDashscopeVoices(modelId, base, request, assertCurrent);
     if (connection.protocol === 'minimax') {

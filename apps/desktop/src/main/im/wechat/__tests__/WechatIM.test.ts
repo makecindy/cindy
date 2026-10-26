@@ -317,6 +317,18 @@ describe('WechatIM host boundary', () => {
     });
   });
 
+  it('确认提示显示要执行的具体操作和审核原因', () => {
+    const prompt = __testing.formatWechatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-2',
+      toolName: 'mcp:cindy_browser:call_tool',
+      input: { name: 'browser', args: { action: 'click', selector: '[data-testid="tweetButton"]' } },
+      metadata: { autoReviewReason: '这会公开发帖。' },
+    });
+    expect(prompt).toContain('操作：\nclick {"selector":"[data-testid=\\"tweetButton\\"]"}');
+    expect(prompt).toContain('自动审批需要你决定：这会公开发帖。');
+  });
+
   it('自动审批故障时在微信确认提示里写明原因', () => {
     const ordinary = __testing.formatWechatInteractionPrompt({
       kind: 'permission',
