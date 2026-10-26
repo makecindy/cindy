@@ -1691,6 +1691,16 @@ export function resolvePiCindyGatewayModelApi(
   return resolveBundledPiGatewayModelProfile(modelId)?.api ?? gatewayApi;
 }
 
+// #7296: these exact CindyAI Chat routes accept an empty reasoning_content fallback.
+// Keep this Gateway policy independent of whether a Pi catalog version lists the model.
+const PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS = new Set([
+  'deepseek/deepseek-v4.1-flash',
+  'deepseek/deepseek-flash',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash-vision-exp',
+  'deepseek/deepseek-v4-flash',
+]);
+
 export function resolvePiCindyGatewayModelSpec(
   _selectedProviderId: string | null | undefined,
   modelId: string,
@@ -1708,6 +1718,13 @@ export function resolvePiCindyGatewayModelSpec(
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
   let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  if (
+    api === 'openai-completions' &&
+    PI_GATEWAY_DEEPSEEK_REASONING_REPLAY_MODELS.has(modelId) &&
+    compat?.requiresReasoningContentOnAssistantMessages === undefined
+  ) {
+    compat = { ...compat, requiresReasoningContentOnAssistantMessages: true };
+  }
   if (api === 'anthropic-messages') compat = pruneAnthropicCompatForGateway(compat);
   // Gateway routing needs Pi's native session identity on every Chat/Messages request.
   // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.

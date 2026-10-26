@@ -52,6 +52,7 @@ import {
   pruneAnthropicCompatForGateway,
   type PiBundledModelInfo,
 } from '../pi-host.js';
+import * as gatewayModelCatalog from '../pi-gateway-model-catalog.js';
 import { getActiveCatalog, setActiveCatalog, setCustomProviderConfigs, setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
@@ -252,6 +253,84 @@ describe('ChatGPT image capability authority (#2674)', () => {
       }
     },
   );
+});
+
+describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
+  // Test value: the production Gateway spec must enable Pi's native empty-reasoning fallback.
+  // Existing Gateway coverage omitted Flash/V4.1; the minimal input is either exact Chat ID
+  // with no native compat row. Unit tier: no binary, network or account access.
+  it.each([
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-flash',
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash-vision-exp',
+    'deepseek/deepseek-v4-flash',
+  ])('supplies replay compatibility for %s locally and remotely', (id) => {
+    setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+    for (const remote of [false, true]) {
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote })).toMatchObject({
+        api: 'openai-completions',
+        compat: {
+          requiresReasoningContentOnAssistantMessages: true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+    }
+  });
+
+  it.each([undefined, false, true])('fills only an undeclared replay flag (%s)', (replay) => {
+    const id = 'deepseek/deepseek-v4.1-flash';
+    const compat = {
+      supportsDeveloperRole: false,
+      ...(replay === undefined ? {} : { requiresReasoningContentOnAssistantMessages: replay }),
+    };
+    const profile = { api: 'openai-completions' as const, compat, thinkingLevelMap: { high: 'high' } };
+    const probe = vi.spyOn(gatewayModelCatalog, 'resolveBundledPiGatewayModelProfile').mockReturnValue(profile);
+    try {
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toEqual({
+        ...profile,
+        compat: {
+          ...compat,
+          requiresReasoningContentOnAssistantMessages: replay ?? true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+      expect(compat).not.toHaveProperty('sendSessionAffinityHeaders');
+      expect(compat.requiresReasoningContentOnAssistantMessages).toBe(replay);
+    } finally { probe.mockRestore(); }
+  });
+
+  it.each(['openai-responses', 'anthropic-messages'] as const)(
+    'does not add Chat replay metadata to %s', (api) => {
+      const id = 'deepseek/deepseek-v4.1-flash';
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: {
+          schemaVersion: 3, updatedAt: '2026-10-26T00:00:00.000Z',
+          models: [{ id: 'xd/deepseek-fixture', name: 'DeepSeek fixture', nativeApi: api,
+            routes: [{ providerId: 'xd', modelId: id, agents: ['codex'] }] }],
+        },
+      });
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe(api);
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it.each(['other/deepseek-v4.1-flash', 'deepseek/future-model', 'deepseek-flash'])(
+    'does not infer replay compatibility from the name %s', (id) => {
+      setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe('openai-completions');
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it('does not make an unavailable Gateway model selectable', () => {
+    expect(resolvePiCindyGatewayModelSpec('xd', 'deepseek/deepseek-v4.1-flash')).toBeUndefined();
+  });
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
