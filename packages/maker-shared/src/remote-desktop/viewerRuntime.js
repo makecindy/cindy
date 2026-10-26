@@ -261,9 +261,17 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     followRest = null;
   // Insets guide centering and pan limits without clipping the full-screen
   // video surface or adding an opaque strip beside the Dynamic Island.
-  const viewportLeft = () => (fillHeight ? viewportLeftInset : 0);
+  // Keep the host's requested insets intact: a skin/posture update can arrive
+  // before the WebView grows from its old frame. Bound against the live size
+  // when laying out, so that resize restores the complete reserved region.
+  const insetForSize = (inset, size) => Math.min(inset, Math.max(0, size - 1));
+  const viewportTop = () => insetForSize(viewportTopInset, stage.clientHeight);
+  const viewportBottom = () =>
+    insetForSize(viewportBottomInset, stage.clientHeight);
+  const viewportLeft = () =>
+    fillHeight ? insetForSize(viewportLeftInset, stage.clientWidth) : 0;
   const usableHeight = () =>
-    Math.max(1, stage.clientHeight - viewportTopInset - viewportBottomInset);
+    Math.max(1, stage.clientHeight - viewportTop() - viewportBottom());
   const viewportHeight = () =>
     usesViewportInsets() ? usableHeight() : Math.max(1, stage.clientHeight);
   const viewportWidth = () =>
@@ -271,19 +279,19 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       1,
       stage.clientWidth -
         viewportLeft() -
-        (fillHeight ? viewportRightInset : 0),
+        (fillHeight ? insetForSize(viewportRightInset, stage.clientWidth) : 0),
     );
   // Center between the measured top controls and the keyboard edge (stage bottom).
   // The usable center is (topInset + stageHeight) / 2, so shift by topInset / 2.
   // Keep the fitted size and cap the shift when the desktop is too tall to fit.
   const verticalOffset = (height) =>
-    (usesViewportInsets() ? viewportTopInset : 0) +
+    (usesViewportInsets() ? viewportTop() : 0) +
     (fillHeight
       ? 0
       : Math.min(
           Math.max(
             0,
-            portraitKeyboardTopInset - (usesViewportInsets() ? viewportTopInset : 0),
+            portraitKeyboardTopInset - (usesViewportInsets() ? viewportTop() : 0),
           ) / 2,
           Math.max(0, (viewportHeight() - height) / 2),
         ));
@@ -608,12 +616,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       h = remoteCursor?.height ?? 18;
     const left = viewportLeft(),
       right = left + viewportWidth(),
-      bottom = Math.max(1, stage.clientHeight - viewportBottomInset);
+      bottom = Math.max(1, stage.clientHeight - viewportBottom());
     // Keep the entire cursor, including its hotspot offset, clear of chrome.
     const minX = Math.min(right - 1, left + 8 + hotX),
       minY = Math.min(
         bottom - 1,
-        (usesViewportInsets() ? viewportTopInset : 0) + 8 + hotY,
+        (usesViewportInsets() ? viewportTop() : 0) + 8 + hotY,
       );
     return {
       minX,
@@ -642,7 +650,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (
       zoom > 1 ||
       r.width > viewportWidth() ||
-      r.height > stage.clientHeight - viewportBottomInset
+      r.height > stage.clientHeight - viewportBottom()
     ) {
       place(
         r.x + bounded(x, v.minX, v.maxX) - x,
@@ -2308,28 +2316,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         const offsetChanged = previousOffset !== portraitKeyboardTopInset;
         let sideInsetsChanged = false;
         if (Number.isFinite(message.topInset))
-          viewportTopInset = Math.max(
-            0,
-            Math.min(stage.clientHeight - 1, message.topInset),
-          );
+          viewportTopInset = Math.max(0, message.topInset);
         if (Number.isFinite(message.bottomInset))
-          viewportBottomInset = Math.max(
-            0,
-            Math.min(stage.clientHeight - 1, message.bottomInset),
-          );
+          viewportBottomInset = Math.max(0, message.bottomInset);
         if (Number.isFinite(message.leftInset)) {
-          const inset = Math.max(
-            0,
-            Math.min(stage.clientWidth - 1, message.leftInset),
-          );
+          const inset = Math.max(0, message.leftInset);
           sideInsetsChanged = sideInsetsChanged || inset !== viewportLeftInset;
           viewportLeftInset = inset;
         }
         if (Number.isFinite(message.rightInset)) {
-          const inset = Math.max(
-            0,
-            Math.min(stage.clientWidth - 1, message.rightInset),
-          );
+          const inset = Math.max(0, message.rightInset);
           sideInsetsChanged = sideInsetsChanged || inset !== viewportRightInset;
           viewportRightInset = inset;
         }
@@ -2340,7 +2336,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           const r = layout();
           place(before.x, r.y, r);
         }
-        const keyboardInset = keyboardOpen ? viewportBottomInset : 0;
+        const keyboardInset = keyboardOpen ? viewportBottom() : 0;
         if (keyboardInset !== keyboardViewportInset) {
           const wasOpen = keyboardViewportInset > 0;
           keyboardViewportInset = keyboardInset;
