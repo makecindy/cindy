@@ -338,7 +338,7 @@ describe('createContextOverflowRollover', () => {
       ),
       listMessages: vi.fn(async () => source),
       findLatestUser: vi.fn(async (): Promise<OverflowSourceMessage | null> => null),
-      findLatestRebuildMeta: vi.fn(async () => null),
+      findLatestRebuildMeta: vi.fn<ContextOverflowRolloverDeps['findLatestRebuildMeta']>(async () => null),
       getLiveSession: vi.fn(
         (): {
           instanceId?: string;
@@ -419,6 +419,33 @@ describe('createContextOverflowRollover', () => {
       expect(deps.setPendingHandoff).not.toHaveBeenCalled();
       expect(deps.replayUserMessage).not.toHaveBeenCalled();
     }
+  });
+
+  it.each(['completed', 'truncated'] as const)('does not reuse an old idle checkpoint when %s history is woken twice', async (history) => {
+    const old = Date.now() - 48 * 60 * 60 * 1000;
+    const original = msg('user', 'Keep the original goal', 'old-input', old);
+    const source = [
+      ...(history === 'completed' ? [original] : []),
+      msg('assistant', 'The previous step is complete', 'old-result', old + 1),
+      msg('user', '[UI_ACTION_TRIGGER] Follow up on the pending work', 'wake'),
+    ];
+    const deps = makeDeps(source);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(),
+      source: 'bot', botRole: 'canonical', agentKind: 'codex', contextTokens: 20_000,
+    });
+    deps.findLatestUser.mockResolvedValue(original);
+    deps.findLatestRebuildMeta.mockResolvedValue({ reason: 'idle-gap', sourceUserClientId: original.clientId });
+    const rollover = createContextOverflowRollover(deps);
+    await expect(Promise.all([
+      rollover.prepareUnhealthySession('s1'), rollover.prepareUnhealthySession('s1'),
+    ])).resolves.toEqual([false, false]);
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+    source.push(msg('user', 'The next real request', 'new-input', Date.now()));
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   it('recovers with current-session history when companion recall lookup fails', async () => {

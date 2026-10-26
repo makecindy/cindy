@@ -195,6 +195,7 @@ const NATIVE_RUNTIME_DEPS = [
   // 无需带运行时闭包。注意: 该 runtime 用 CDP 接管用户已装 Chrome, 不需要
   // playwright 自带的浏览器二进制, 故只带 JS 模块即可。
   'playwright-core',
+  '@mixmark-io/domino',
   // node-pty (RSB 终端 tab 的 PTY 后端): macOS/Windows 使用包内 N-API 预编译件，
   // Linux 通过 electron-rebuild 编译；各平台都必须随 packaged app 带,
   // AutoUnpackNativesPlugin 会把 .node 提取到 app.asar.unpacked/。main 进程通过

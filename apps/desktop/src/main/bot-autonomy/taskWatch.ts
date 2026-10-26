@@ -163,6 +163,20 @@ const EMPTY_OWNERSHIP: OwnershipSnapshot = {
   responsibleByBot: new Map(),
 };
 
+function sortedEntries<Value>(entries: ReadonlyMap<string, Value>): Array<[string, Value]> {
+  return [...entries].sort(([left], [right]) => left.localeCompare(right));
+}
+
+function ownershipSnapshotKey(snapshot: OwnershipSnapshot): string {
+  return JSON.stringify([
+    sortedEntries(snapshot.bots).map(([botId, bot]) => [
+      botId, bot.status, bot.allowSchedulerFollow, bot.shadowed ?? false, bot.canonicalSessionId ?? null,
+    ]),
+    sortedEntries(snapshot.creatorBySession),
+    sortedEntries(snapshot.responsibleByBot).map(([botId, sessions]) => [botId, [...sessions].sort()]),
+  ]);
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -185,6 +199,7 @@ export class TaskWatch {
   private readonly pending = new Set<string>();
   private flushing: Promise<void> | null = null;
   private ownership: OwnershipSnapshot = EMPTY_OWNERSHIP;
+  private ownershipKey: string | null = null;
   /** 主任务 id → 所属伙伴（来自伙伴资料 canonical_session_id）。 */
   private canonicalOwners = new Map<string, string>();
   private ownershipAt = 0;
@@ -623,7 +638,11 @@ export class TaskWatch {
       try {
         const next = await this.deps.readOwnership();
         if (this.stopped) return;
-        this.ownership = next;
+        const nextKey = ownershipSnapshotKey(next);
+        if (nextKey !== this.ownershipKey) {
+          this.ownership = { ...next, bots: new Map(next.bots) };
+          this.ownershipKey = nextKey;
+        }
         this.ownershipAt = this.deps.now();
         this.ownershipLoaded = true;
         this.ownershipReadFailures = 0;

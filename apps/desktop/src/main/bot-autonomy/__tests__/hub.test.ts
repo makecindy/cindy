@@ -29,6 +29,7 @@ vi.mock('../hostData.js', () => ({
   readLocalSessionMetas: h.readMetas, readTaskOwnership: h.readOwnership, readBotDirectory: vi.fn(),
 }));
 import { configureBotAutonomyHost, currentFollowUpEvents, getBotAutonomyGlance, setActiveBotAutonomy } from '../hub.js';
+import { TaskWatch, type OwnershipSnapshot } from '../taskWatch.js';
 
 const meta = (id: string, source = 'desktop'): LocalSessionMeta => ({
   id, source, title: 'Completed task', workingDir: null, status: 'active', hiddenAt: null,
@@ -69,6 +70,55 @@ it('defers rather than authorizing a durable read that crossed the account bound
   h.readMetas.mockImplementationOnce(async () => { h.scope = 'b'; return [meta('mine')]; });
   expect(await currentFollowUpEvents('sched', events)).toBeNull();
 });
+
+it.each(['unchanged', 'paused', 'shadowed', 'fallback', 'canonical', 'creator', 'responsibility'] as const)(
+  'revalidates queued follow-up after a %s ownership refresh', async (change) => {
+    const ownership: OwnershipSnapshot = {
+      bots: new Map([
+        ['sched', { status: 'active', allowSchedulerFollow: false }],
+        ['other', { status: 'active', allowSchedulerFollow: false }],
+      ]),
+      creatorBySession: new Map([['delegated', 'sched']]),
+      responsibleByBot: new Map([['sched', new Set(['delegated'])]]),
+    };
+    h.readOwnership.mockImplementation(async () => structuredClone(ownership));
+    const watch = new TaskWatch({
+      now: Date.now,
+      log: { info() {}, warn() {}, debug() {} },
+      getActivitySnapshots: () => [],
+      isToolCallInFlight: () => false,
+      getPendingInteractions: () => [],
+      readLocalSessions: async (ids) => ids.map(id => meta(id)),
+      readInterruptedSessions: async () => [],
+      readOwnership: h.readOwnership,
+      readSchedulerOverride: () => ({ customized: true, schedulerBotId: h.scheduler }),
+      listRemoteDevices: async () => null,
+      invokeRemote: async () => undefined,
+      onChange() {},
+    });
+    try {
+      await watch.start();
+      setActiveBotAutonomy({ scope: 'a', engine: {} as RoutineEngine,
+        runtime: { watch, glance: h.glance } as unknown as BotAutonomyRuntime });
+      const batch = await currentFollowUpEvents('sched', events);
+      expect(batch?.events).toEqual([events[0], events[1]]);
+      expect(batch?.canDispatch()).toBe(true);
+      if (change === 'paused') ownership.bots.get('sched')!.status = 'paused';
+      if (change === 'shadowed') ownership.bots.get('sched')!.shadowed = true;
+      if (change === 'fallback') ownership.bots.get('sched')!.allowSchedulerFollow = true;
+      if (change === 'canonical') ownership.bots.get('sched')!.canonicalSessionId = 'new-main';
+      if (change === 'creator') ownership.creatorBySession.set('delegated', 'other');
+      if (change === 'responsibility') ownership.responsibleByBot.get('sched')!.clear();
+      const scheduler = ownership.bots.get('sched')!;
+      ownership.bots.delete('sched');
+      ownership.bots.set('sched', scheduler);
+      await watch.refreshFollowers();
+      expect(batch?.canDispatch()).toBe(change === 'unchanged');
+    } finally {
+      watch.stop();
+    }
+  },
+);
 
 // #6508: the public glance reader must not report a successful empty workbench
 // before its host/ownership is ready. Existing coverage only exercised follow-up
