@@ -152,6 +152,21 @@ describe('Feishu lifecycle announcements across shared-profile instances', () =>
     expect(host.secrets.write).not.toHaveBeenCalled();
   });
 
+  // 关闭生命周期通知后，停止再重连不应在下一条私聊里补发「我之前离线过」提醒；
+  // 停止时还开着、随后才关闭的情况也一样。
+  it.each([
+    ['disabled before stop', false],
+    ['disabled after stop', true],
+  ] as const)('does not send the offline-history notice once announcements are off (%s)', async (_case, enabledAtStop) => {
+    const host = makeHost('', enabledAtStop);
+    const primary = await connect(host, { ipc: false, shouldAnnounceLifecycle: () => true });
+    await runInScope(primary.scope, () => stop({ reason: 'test-logical-stop' }));
+    if (enabledAtStop) primary.setLifecycleAnnouncement(false);
+    await primary.reconnect();
+    await receive(1, 'om_after_disabled_reconnect');
+    expect(sentTexts()).not.toContain(messages.lifecycle.offlineNotice);
+  });
+
   it('primary still respects a saved disabled announcement preference', async () => {
     const host = makeHost('', false);
     const primary = await connect(host, { ipc: false, shouldAnnounceLifecycle: () => true });

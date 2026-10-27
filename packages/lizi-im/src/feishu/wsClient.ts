@@ -218,6 +218,7 @@ export function getCurrentBotAppId(): string | null {
 
 export function setLifecycleAnnouncement(enabled: boolean): void {
   S().lifecycleAnnouncementEnabled = enabled;
+  if (!enabled) S().pendingOfflineNotice = false;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
@@ -697,12 +698,13 @@ async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
     return;
   }
 
-  if (phase === 'offline') S().pendingOfflineNotice = true;
-
   if (!S().lifecycleAnnouncementEnabled) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: message suppressed by setting`);
     return;
   }
+
+  // 离线补发提醒属于同一类生命周期通知:关闭后不记待发标记(与 Discord 口径一致)。
+  if (phase === 'offline') S().pendingOfflineNotice = true;
 
   const text =
     phase === 'online' ? transportMessages.lifecycle.online : transportMessages.lifecycle.offline;
