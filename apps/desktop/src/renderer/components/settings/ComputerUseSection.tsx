@@ -11,7 +11,7 @@
  *   - mount → 并行拉 plugins.getState('browser', workingDir) (取 browser 开关态)
  *     + browser.status()。注意 browser 是 HOSTED_ELSEWHERE, 不在 plugins.list()
  *     里, 必须按 id 直接读单个状态, 否则 find() 永远 undefined。
- *   - 基础配置到位后渲染;电脑权限与浏览器健康检测独立补齐,不阻塞整页。
+ *   - 基础配置到位后渲染;电脑权限、浏览器可用性与健康检测独立补齐,不阻塞整页。
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
@@ -168,6 +168,8 @@ export function ComputerUseSection({
   const [androidEnabled, setAndroidEnabled] = useState<boolean | null>(null);
   const [computerEnabled, setComputerEnabled] = useState<boolean | null>(null);
   const [availability, setAvailability] = useState<BrowserAvailability | null>(null);
+  const [browserAvailabilityFailed, setBrowserAvailabilityFailed] = useState(false);
+  const [browserProbeAttempt, setBrowserProbeAttempt] = useState(0);
   const [androidStatus, setAndroidStatus] = useState<AndroidStatusSummary | null>(null);
   const [androidConfig, setAndroidConfig] = useState<AndroidAutomationConfigState | null>(null);
   const [androidAdbPathDraft, setAndroidAdbPathDraft] = useState('');
@@ -484,6 +486,25 @@ export function ComputerUseSection({
     };
   }, []);
 
+  // The external backend serializes status behind browser operations. This is
+  // runtime availability, not base configuration: a busy browser must never
+  // hide Settings or the backend switch that can help the user recover.
+  useEffect(() => {
+    let cancelled = false;
+    setAvailability(null);
+    setBrowserAvailabilityFailed(false);
+    void (async () => {
+      try {
+        const result = await window.electronAPI.maker.browser.status();
+        if (!cancelled) setAvailability(result);
+      } catch (error) {
+        log.warn('browser.status failed', error);
+        if (!cancelled) setBrowserAvailabilityFailed(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [browserProbeAttempt]);
+
   useEffect(() => {
     let cancelled = false;
     const backendHealthSeq = ++browserBackendHealthSeqRef.current;
@@ -503,7 +524,7 @@ export function ComputerUseSection({
       }
     })();
     void (async () => {
-      const [browserState, computerState, avail, backendState] = await Promise.all([
+      const [browserState, computerState, backendState] = await Promise.all([
         // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
         // enable state directly by id — list().find() would always be undefined
         // and the toggle would wrongly reset to enabled on every remount.
@@ -514,10 +535,6 @@ export function ComputerUseSection({
         window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID).catch((err) => {
           log.warn('plugins.getState(computer) failed', err);
           return null;
-        }),
-        window.electronAPI.maker.browser.status().catch((err) => {
-          log.warn('browser.status failed', err);
-          return { detected: false, browserKind: null, executablePath: null } as BrowserAvailability;
         }),
         window.electronAPI.browserBackend?.getState?.().catch((err) => {
           log.warn('browserBackend.getState failed', err);
@@ -530,7 +547,6 @@ export function ComputerUseSection({
       setBrowserEnabled(browserState ? browserState.effectiveEnabled : true);
       const effectiveComputerEnabled = computerState ? computerState.effectiveEnabled : false;
       setComputerEnabled(effectiveComputerEnabled);
-      setAvailability(avail);
       // Phase 5: backend kind 拉不到时(老版本 preload / IPC 缺失)安全 fallback
       // 到 'external',保持现有 Chrome 探测 / 登录 UI 可见 — 总比因为 IPC 失败
       // 让卡片整张瘫成内置态强。
@@ -1279,12 +1295,31 @@ export function ComputerUseSection({
 
   const automationViewLoading =
     browserEnabled === null
-    || computerEnabled === null
-    || availability === null;
+    || computerEnabled === null;
 
-  // Only base configuration gates the page; runtime probes update independently.
+  const heading = (
+    <div className="flex flex-col gap-1 min-w-0">
+      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+        {t('settings.computerUse.title')}
+      </h2>
+      <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
+        {t('settings.computerUse.description')}
+      </p>
+    </div>
+  );
+
+  // Show a shell even if a configuration IPC is still pending. Unknown opt-ins
+  // are not rendered as enabled switches while the persisted values load.
   if (automationViewLoading) {
-    return null;
+    return (
+      <div className="flex flex-col gap-[14px]">
+        {heading}
+        <div role="status" className="flex items-center gap-2 text-12 text-[var(--settings-section-desc)]">
+          <Spinner size={16} />
+          {t('settings.computerUse.loading')}
+        </div>
+      </div>
+    );
   }
 
   const computerAccessibilityGranted = isComputerAccessibilityPermissionReady(computerStatus);
@@ -1351,14 +1386,7 @@ export function ComputerUseSection({
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1 min-w-0">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.computerUse.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.computerUse.description')}
-        </p>
-      </div>
+      {heading}
 
       <div
         id="automation-browser"
@@ -1419,35 +1447,49 @@ export function ComputerUseSection({
             backend 用 Electron 自带 Chromium,这些 UI 对它都没有意义。 */}
         {browserBackendKind === 'external' ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-            <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-              {availability.detected
-                ? t('settings.computerUse.browser.detected', {
-                    browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) => c.toUpperCase()),
-                  })
-                : t('settings.computerUse.browser.notDetected')}
-            </p>
-            {availability.detected ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="px-3"
-                type="button"
-                onClick={handleOpenForLogin}
-              >
-                <LogIn size={12} className="shrink-0" />
-                {t('settings.computerUse.browser.openForLogin')}
-              </Button>
+            {availability === null ? (
+              <>
+                <div role={browserAvailabilityFailed ? 'alert' : 'status'} className="flex min-w-0 items-center gap-2 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                  {!browserAvailabilityFailed ? <Spinner size={16} /> : null}
+                  {t(browserAvailabilityFailed
+                    ? 'settings.computerUse.browser.statusFailed'
+                    : 'settings.computerUse.browser.checking')}
+                </div>
+                {browserAvailabilityFailed ? (
+                  <Button variant="secondary" size="sm" className="px-3" type="button"
+                    onClick={() => setBrowserProbeAttempt((attempt) => attempt + 1)}>
+                    <RefreshCw size={12} className="shrink-0" />
+                    {t('commonUi.retry')}
+                  </Button>
+                ) : null}
+              </>
             ) : (
-              <Button variant="secondary" size="sm" className="px-3" type="button" onClick={handleDownload}>
-                <Download size={12} className="shrink-0" />
-                {t('settings.computerUse.browser.download')}
-              </Button>
+              <>
+                <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                  {availability.detected
+                    ? t('settings.computerUse.browser.detected', {
+                        browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) => c.toUpperCase()),
+                      })
+                    : t('settings.computerUse.browser.notDetected')}
+                </p>
+                {availability.detected ? (
+                  <Button variant="secondary" size="sm" className="px-3" type="button" onClick={handleOpenForLogin}>
+                    <LogIn size={12} className="shrink-0" />
+                    {t('settings.computerUse.browser.openForLogin')}
+                  </Button>
+                ) : (
+                  <Button variant="secondary" size="sm" className="px-3" type="button" onClick={handleDownload}>
+                    <Download size={12} className="shrink-0" />
+                    {t('settings.computerUse.browser.download')}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         ) : null}
       </div>
 
-      {browserBackendKind === 'external' && availability.detected ? (
+      {browserBackendKind === 'external' && availability?.detected ? (
         <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.computerUse.browser.openForLoginHint')}
         </p>

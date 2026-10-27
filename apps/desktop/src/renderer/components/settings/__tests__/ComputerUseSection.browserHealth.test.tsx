@@ -129,14 +129,63 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ComputerUseSection browser backend health loading', () => {
+  // Regression: the real settings component must remain usable while the external
+  // browser's serialized status call waits. Existing cases cover health/computer
+  // probes, but not browser availability. Tier: unit; no clock or native process.
+  it('keeps Automation usable while browser availability is pending', async () => {
+    const initialBrowser = deferred<BrowserAvailability>();
+    api.getBrowserStatus.mockReturnValueOnce(initialBrowser.promise);
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.browser.checking')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.download')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.openForLogin')).toBeNull();
+    expect((screen.getByRole('radio', {
+      name: 'settings.computerUse.browserBackend.rsbWebview.title',
+    }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => { initialBrowser.resolve({
+      detected: true, browserKind: 'chrome', executablePath: '/test/chrome',
+    }); });
+    expect(await screen.findByText('settings.computerUse.browser.openForLogin')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.checking')).toBeNull();
+  });
+
+  it('shows a browser probe error and retries without claiming Chrome is missing', async () => {
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    api.getBrowserStatus.mockRejectedValueOnce(new Error('browser status unavailable'));
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(await screen.findByText('settings.computerUse.browser.statusFailed')).toBeTruthy();
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.download')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    expect(await screen.findByText('settings.computerUse.browser.notDetected')).toBeTruthy();
+    expect(api.getBrowserStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a loading shell while base settings are pending', async () => {
+    const config = deferred<{ effectiveEnabled: boolean }>();
+    api.getPluginState.mockImplementation((id: string) =>
+      id === 'browser' ? config.promise : Promise.resolve({ effectiveEnabled: false }));
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(screen.getByText('settings.computerUse.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.loading')).toBeTruthy();
+    await act(async () => { config.resolve({ effectiveEnabled: true }); });
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.loading')).toBeNull();
+  });
+
   it('renders other settings while computer permission detection is pending', async () => {
     const initialComputer = deferred<ComputerDriverStatus>();
     api.getComputerStatus.mockReturnValueOnce(initialComputer.promise);
     const { rerender } = render(<ComputerUseSection workingDir="/tmp/project" />);
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
-    const computerToggle = screen.getByRole('switch', {
+    expect(await screen.findByText('settings.computerUse.android.title')).toBeTruthy();
+    const computerToggle = await screen.findByRole('switch', {
       name: 'settings.computerUse.directControl.toggleAria',
     });
     expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
@@ -162,13 +211,20 @@ describe('ComputerUseSection browser backend health loading', () => {
   });
 
   it('settles a failed computer probe without hiding the settings', async () => {
+    // CI regression: the title is visible in the loading shell before controls.
+    const browserConfig = deferred<{ effectiveEnabled: boolean }>();
+    api.getPluginState.mockImplementation((id: string) => id === 'browser'
+      ? browserConfig.promise : Promise.resolve({ effectiveEnabled: false }));
     api.getComputerStatus.mockRejectedValueOnce(new Error('probe failed'));
     render(<ComputerUseSection workingDir="/tmp/project" />);
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.queryByText('settings.computerUse.directControl.update.readingVersion')).toBeNull();
-    expect((screen.getByRole('switch', {
+    expect(screen.getByText('settings.computerUse.loading')).toBeTruthy();
+    await act(async () => { browserConfig.resolve({ effectiveEnabled: true }); });
+    const toggle = await screen.findByRole('switch', {
       name: 'settings.computerUse.directControl.toggleAria',
-    }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect((toggle as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('settings.computerUse.directControl.update.readingVersion')).toBeNull();
   });
 
   it('preserves a newer native status when the initial probe returns late', async () => {
@@ -192,7 +248,7 @@ describe('ComputerUseSection browser backend health loading', () => {
       updating: false,
     });
     render(<ComputerUseSection workingDir="/tmp/project" />);
-    await screen.findByText('settings.computerUse.title');
+    await screen.findByRole('switch', { name: 'settings.computerUse.directControl.toggleAria' });
     const onStatus = vi.mocked(window.electronAPI.maker.computer.onPermissionGuideStatusChanged)
       .mock.calls.at(-1)![0];
     await act(async () => {
@@ -245,7 +301,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
     expect(
-      screen.getByRole('radio', {
+      await screen.findByRole('radio', {
         name: 'settings.computerUse.browserBackend.rsbWebview.title',
       }),
     ).toBeTruthy();

@@ -5036,10 +5036,13 @@
       }
     },
     "computerUse": {
+      "loading": "Loading automation settings…",
       "title": "Automation",
       "description": "Let agents use your computer and connected devices to get things done for you. Browser automation uses an isolated browser; Android automation uses ADB; computer automation relies on a local driver.",
       "codexRefreshDeferred": "Setting saved, but Codex is busy. Restart the app to apply it to new Codex sessions.",
       "browser": {
+        "checking": "Checking the local browser… Browser actions may need to finish first.",
+        "statusFailed": "Could not check the local browser. Try again; other automation settings are available.",
         "title": "Browser automation",
         "description": "A dedicated browser for agents — separate from your everyday Chrome",
         "toggleAria": "Toggle browser automation",

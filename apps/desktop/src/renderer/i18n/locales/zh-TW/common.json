@@ -5005,10 +5005,13 @@
       }
     },
     "computerUse": {
+      "loading": "正在載入自動操作設定…",
       "title": "自動操作",
       "description": "讓 Agent 使用電腦和已連線裝置替你完成任務。瀏覽器自動化使用獨立瀏覽器；Android 自動化使用 ADB；電腦自動化依賴本機 driver。",
       "codexRefreshDeferred": "設定已儲存，但 Codex 正忙；重啟應用後將對新的 Codex Agent 會話生效",
       "browser": {
+        "checking": "正在檢查本機瀏覽器…可能需要等待瀏覽器操作完成。",
+        "statusFailed": "無法檢查本機瀏覽器。請重試，其他自動操作設定仍可使用。",
         "title": "自動操作瀏覽器",
         "description": "一個 Agent 專用的獨立瀏覽器，與你日常的 Chrome 互不影響",
         "toggleAria": "切換瀏覽器自動化",
