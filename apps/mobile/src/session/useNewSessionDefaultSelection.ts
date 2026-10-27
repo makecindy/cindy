@@ -109,6 +109,9 @@ export function useNewSessionDefaultSelection({
         visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
         flatModels: flatModelsForUnsupportedHost(selectedDeviceId, storedAgentKind, deviceProvidersRef.current.unsupported),
       });
+      const rememberedFast = next.providerId
+        ? draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false
+        : false;
       return {
         model: next.model,
         effort: next.effort,
@@ -119,8 +122,8 @@ export function useNewSessionDefaultSelection({
         // 能力表(codex review P1:此刻闭包里的 capabilities 属于切换前 agent 或
         // 为 null);目标 caps 未就绪 → false,由延迟恢复 effect 就绪后补评。
         fastMode: next.providerId
-          && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, targetAgentHasFast(selectedDeviceId, next.agentKind))
-          ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
+          && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, targetAgentHasFast(selectedDeviceId, next.agentKind), rememberedFast)
+          ? rememberedFast
           : false,
       };
     };

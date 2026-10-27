@@ -140,16 +140,20 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
 ): HistoryViewItem<T>[] {
   const names = new Map<string, string>();
   const visibleResults = new Set<string>();
+  const settledTools = new Set<string>();
   const nestedCalls = new Set<string>();
   for (const row of rows) {
     if (row.role === 'tool_use') {
       const tool = parseMessageToolUse(row);
       if (tool.toolUseId) names.set(tool.toolUseId, tool.toolName);
       if (!preserveMixedSegments && tool.toolUseId && hasFileDelivery(row)) visibleResults.add(tool.toolUseId);
+      if (tool.toolUseId && (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(tool.toolUseId);
       if (tool.toolUseId && (row.agentMeta as { parentUuid?: unknown } | null)?.parentUuid) nestedCalls.add(tool.toolUseId);
     }
-    if (row.role === 'tool_result' && row.toolUseId && hasVisibleHistoryResult(row.content)) {
-      visibleResults.add(row.toolUseId);
+    if (row.role === 'tool_result' && row.toolUseId) {
+      settledTools.add(row.toolUseId);
+      if (hasVisibleHistoryResult(row.content)
+        || (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(row.toolUseId);
     }
   }
   const source: SourceItem<T>[] = rows.map((row) => {
@@ -165,7 +169,12 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
       : !!thought?.text || !!thought?.durationMs || thought?.isRedacted === true);
     const activity = !nested && (visibleThinking || (
       (row.role === 'tool_use' || row.role === 'tool_result')
-      && (isHistoryDetailTool(toolName ?? '') || (!preserveMixedSegments && ['Edit', 'Write', 'MultiEdit', 'edit', 'write'].includes(toolName ?? '')))
+      && (isHistoryDetailTool(toolName ?? '') || (!preserveMixedSegments && (
+        ['Edit', 'Write', 'MultiEdit', 'edit', 'write'].includes(toolName ?? '')
+        // Pending plugin calls may own an interaction. Once settled, ordinary
+        // results fold like other tools; media/cards remain source rows below.
+        || (!!toolId && settledTools.has(toolId) && /(?:^|:|__)ghost_call$/.test(toolName ?? ''))
+      )))
       && !(toolId && visibleResults.has(toolId))
     ));
     const plainAssistant = !nested && row.role === 'assistant' && typeof row.content === 'string'
@@ -262,6 +271,8 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     isAnswer: (item) => item.type === 'source' && item.row.role === 'assistant'
       && typeof item.row.content === 'string' && !!item.row.content.trim(),
     isSealedAnswer: (item) => item.type === 'source' && completesHistoryTurn(item.row),
+    canPrependToAnswer: (item) => item.type !== 'source'
+      || (item.row.agentMeta as Record<string, unknown> | null | undefined)?.assistantPhase !== 'commentary',
     isCompactBoundary: (item) => item.type === 'source' && item.row.role === 'system',
     isActivity: (item): item is SourceItem<T> => item.type === 'source' && item.activity,
     isArchivable: (item): item is SourceItem<T> => item.type === 'source' && item.archivable,

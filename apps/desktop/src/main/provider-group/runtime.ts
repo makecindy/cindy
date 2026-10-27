@@ -12,8 +12,12 @@ import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { readProviderGroupSummary, type ProviderGroupSessionGroup } from '../../shared/providerGroup.js';
-import { getReceivedShares } from '../device-link/providerShareGuest.js';
+import {
+  readProviderGroupSummary,
+  type ProviderGroupRebalanceSuggestion,
+  type ProviderGroupSessionGroup,
+} from '../../shared/providerGroup.js';
+import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
@@ -165,6 +169,7 @@ const directoryFacade: ProviderGroupDirectory = {
 
 const routerFacade: ProviderGroupRouter = {
   pick: (input) => runtimeForActiveOwner().router.pick(input),
+  rebalanceCandidates: (input, resolved) => runtimeForActiveOwner().router.rebalanceCandidates(input, resolved),
   view: async (providerId, options) => {
     const runtime = runtimeForActiveOwner();
     const view = await runtime.router.view(providerId, options);
@@ -209,7 +214,9 @@ let remoteClient: ProviderGroupRemoteClient | null = null;
 
 /** 问其他电脑上的组(无状态，按调用时的账号经设备互联发出)。 */
 export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
-  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke);
+  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke, {
+    captureShareRecovery: captureProviderShareGroupRecovery,
+  });
   return remoteClient;
 }
 
@@ -254,6 +261,38 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
     return await sessionGroupReader(sessionId);
   } catch {
     return null;
+  }
+}
+
+/** register 装配供应商组服务后注入：任务进行中换号的提议与用户的决定(provider-groups.md §6.2「任务进行中换号」)。 */
+export interface ProviderGroupSessionRebalance {
+  suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
+  decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+}
+
+let sessionRebalance: ProviderGroupSessionRebalance | null = null;
+
+export function setProviderGroupSessionRebalance(value: ProviderGroupSessionRebalance | null): void {
+  sessionRebalance = value;
+}
+
+/** 要不要提议换号；还没装配或读不到时不提议(照常发送)。 */
+export async function readProviderGroupRebalanceSuggestion(sessionId: string): Promise<ProviderGroupRebalanceSuggestion> {
+  if (!sessionRebalance) return null;
+  try {
+    return await sessionRebalance.suggest(sessionId);
+  } catch {
+    return null;
+  }
+}
+
+/** 记下用户确认换号；没记上返回 false，这条消息照常发到原来的号。 */
+export async function recordProviderGroupRebalanceDecision(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  try {
+    return await sessionRebalance.decide(sessionId, memberKey, remember, clientId);
+  } catch {
+    return false;
   }
 }
 

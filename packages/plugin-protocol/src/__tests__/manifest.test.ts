@@ -991,6 +991,26 @@ describe('Ghost manifest contract', () => {
     }
   });
 
+  // 跟对话的任务页:v3 直接声明保留;v2 必须与 task-view 槽成对;入口路径与 mainView 同一套安全约束。
+  it('accepts direct v3 taskView, pairs v2 task-view, and rejects unsafe or missing entries', () => {
+    const direct = {
+      schemaVersion: 3,
+      minCindyVersion: '1.2.3',
+      id: 'direct-task-view',
+      name: 'Direct Task View',
+      version: '1.0.0',
+      entry: 'index.js',
+      taskView: { title: 'Simulator', html: 'ui/task.html' },
+    } as const;
+    expect(validateGhostManifest(direct)).toMatchObject({ ok: true, manifest: { taskView: direct.taskView } });
+    expect(validateGhostManifest({ ...direct, taskView: { html: '../task.html' } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...direct, taskView: { title: 'Simulator' } }).ok).toBe(false);
+    const v2 = { ...validManifest, minCindyVersion: '1.2.3', slots: ['task-view'], tools: undefined, taskView: { html: 'task.html' } };
+    expect(validateGhostManifest(JSON.parse(JSON.stringify(v2)))).toMatchObject({ ok: true });
+    expect(validateGhostManifest({ ...v2, slots: [] }).ok).toBe(false);
+    expect(validateGhostManifest({ ...v2, taskView: undefined }).ok).toBe(false);
+  });
+
   it('accepts direct v3 mainView and round-trips v2 main-view compatibility', () => {
     const direct = {
       schemaVersion: 3,
@@ -1926,4 +1946,15 @@ describe('agent.hiddenTasks declaration', () => {
     const visible = validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: false } });
     expect(visible.ok && visible.manifest.agent).toEqual({ tasks: true });
   });
+});
+
+// New target access is not implied by the old plugin-owned tasks declaration.
+it('validates independent target access without dropping the tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'target-test', name: 'Targets', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { tasks: true, targets: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ tasks: true, targets: true });
+  expect(validateGhostManifest({ ...base, agent: { targets: true } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: 'yes' } }).ok).toBe(false);
+  const disabled = validateGhostManifest({ ...base, agent: { tasks: true, targets: false } });
+  expect(disabled.ok && disabled.manifest.agent).toEqual({ tasks: true });
 });

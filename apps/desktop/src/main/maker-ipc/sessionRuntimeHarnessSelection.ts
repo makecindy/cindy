@@ -19,7 +19,7 @@ export function pendingHarnessRuntimeMutation(
       model: intent.model,
       providerId: intent.providerId ?? null,
       effort: (intent.effort ?? null) as Effort | null,
-      fastMode: intent.fastMode === true,
+      fastMode: (intent.fastMode === 'ultrafast' ? 'ultrafast' : intent.fastMode === true),
     },
   };
 }
@@ -55,7 +55,7 @@ export async function setSessionRuntimeHarness(
       model?: string;
       providerId?: string | null;
       effort?: Effort | null;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
     };
   },
 ): Promise<SessionRuntimeSetResult> {
@@ -133,6 +133,7 @@ export async function setSessionRuntimeHarness(
       code === 'NOT_FOUND' ||
       code === 'INVALID_PARAMS' ||
       code === 'UNSUPPORTED_CAPABILITY' ||
+      code === 'SSH_HARNESS_SWITCH_UNSUPPORTED' ||
       code === 'CREDENTIAL_SWITCH_BUSY'
     ) {
       return {

@@ -24,7 +24,7 @@ export function normalizeSessionAgentSwitchIntent(
   // 避免协议演进或旧 host 漏发该字段时把合法 pending intent 静默丢弃。
   if (item.providerId != null && typeof item.providerId !== 'string') return null;
   if (item.effort !== undefined && typeof item.effort !== 'string') return null;
-  if (item.fastMode !== undefined && typeof item.fastMode !== 'boolean') return null;
+  if (item.fastMode !== undefined && (typeof item.fastMode !== 'boolean' && item.fastMode !== 'ultrafast')) return null;
   // 远程 Agent:只在这笔切换同时换 Agent 所在电脑时出现(null = 改回被控电脑本机)。
   // 缺省 = 位置不变;非空 string / null 之外的脏值与其它字段同口径判非法。
   if (
@@ -39,7 +39,7 @@ export function normalizeSessionAgentSwitchIntent(
     ...(typeof item.effort === 'string' && item.effort.length > 0
       ? { effort: item.effort }
       : {}),
-    ...(typeof item.fastMode === 'boolean' ? { fastMode: item.fastMode } : {}),
+    ...((typeof item.fastMode === 'boolean' || item.fastMode === 'ultrafast') ? { fastMode: item.fastMode } : {}),
     ...(item.agentDeviceId !== undefined
       ? { agentDeviceId: item.agentDeviceId as string | null }
       : {}),

@@ -2,8 +2,8 @@
  * 测试价值
  * - 生产入口与可观察结果:get_task_digest 经 registry.call 返回给模型的 JSON(字段、大小、错误码)。
  * - 规则依据:被程序叫醒的伙伴先读 ≤2KB 摘要再决定;每段文字 ≤300 字;只读调用方可读范围内的任务。
- * - 现有覆盖缺口:新工具。
- * - 最小失败输入:每段文字都是长中文(UTF-8 三字节)的摘要;受限历史范围里请求范围外的任务。
+ * - 现有覆盖缺口:长助手回复只截开头,丢掉末尾结果;长链接用例仅检查字节数和身份,漏掉正文与建议路线被清空的退化。
+ * - 最小失败输入:普通摘要加 1600 字符链接后缀,以及正文也需收缩的同类输入;超长模型元数据;受限范围外任务。
  * - tier:unit(纯工具层,宿主回调 mock)。
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -57,7 +57,9 @@ function setup(history: Partial<XdtHelperHistoryDeps>) {
 describe('get_task_digest', () => {
   it('keeps every text field within 300 characters and the whole reply within 2KB', async () => {
     const taskDigest = vi.fn(async () => ({ ok: true as const, digest }));
-    const reg = setup({ taskDigest });
+    const sessionUrl = 'cindy://session/s-9?device=laptop';
+    const buildUrl = vi.fn(() => sessionUrl);
+    const reg = setup({ taskDigest, sessionUrl: buildUrl });
     const { text, json } = parse(await reg.call('get_task_digest', { session_id: 'laptop::s-9' }));
     expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
     expect(json).toMatchObject({ ok: true, session_id: 'laptop::s-9', phase: 'waiting-answer', queued_count: 1, tool_in_flight: true });
@@ -66,11 +68,73 @@ describe('get_task_digest', () => {
       if (value !== null) expect(Array.from(String(value)).length).toBeLessThanOrEqual(300);
     }
     expect(taskDigest).toHaveBeenCalledWith({ sessionId: 'laptop::s-9', callerSessionId: 'bot-main' });
+    expect(json.sessionUrl).toBe(sessionUrl);
+    expect(buildUrl).toHaveBeenCalledWith('laptop::s-9');
   });
 
   it('leaves a short digest untouched', () => {
     const short = { ...digest, title: '修登录', last_user_ask: '先修登录', last_assistant_line: '好', pending_question: null, error: null, pr_status: null };
     expect(boundTaskDigest(short)).toEqual(short);
+  });
+
+  it.each([false, true])('retains the opening and final blocker of a long reply (budget pressure=%s)', async (pressure) => {
+    const opening = '构建进展：';
+    const conclusion = '最终结果：部署失败，需要回滚。';
+    const raw = {
+      ...digest,
+      title: '部署结果',
+      last_user_ask: pressure ? longText : '检查部署结果',
+      last_assistant_line: `${opening}${'正在检查日志与测试结果。'.repeat(80)}\n${conclusion}`,
+      pending_question: pressure ? longText : null,
+      error: pressure ? longText : null,
+      pr_status: pressure ? longText : null,
+    };
+    const reg = setup({ taskDigest: async () => ({ ok: true as const, digest: raw }) });
+    const { text, json } = parse(await reg.call('get_task_digest', { session_id: raw.session_id }));
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
+    const reply = String(json.last_assistant_line);
+    expect(reply.startsWith(opening)).toBe(true);
+    expect(reply.endsWith(conclusion)).toBe(true);
+    expect(Array.from(reply).length).toBeLessThanOrEqual(pressure ? 299 : 300);
+  });
+
+  it.each([false, true])('omits a long optional URL without sacrificing digest content (text pressure=%s)', async (pressure) => {
+    const short = {
+      ...digest,
+      title: '修登录',
+      last_user_ask: '先修登录',
+      last_assistant_line: '登录修复完成，等待部署确认。',
+      pending_question: '是否部署？',
+      error: null,
+      pr_status: '等待审阅',
+    };
+    const raw = pressure ? digest : short;
+    const taskDigest = async () => ({ ok: true as const, digest: raw });
+    const baseline = parse(await setup({ taskDigest }).call('get_task_digest', { session_id: raw.session_id }));
+    const reg = setup({
+      taskDigest,
+      sessionUrl: () => `cindy://session/laptop::s-9?${'x'.repeat(1600)}`,
+    });
+    const result = await reg.call('get_task_digest', { session_id: raw.session_id });
+    const { text, json } = parse(result);
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
+    expect(json).toEqual(baseline.json);
+    if (!pressure) expect(json).toEqual({ ok: true, ...short });
+    expect(json.suggested_route).toEqual(raw.suggested_route);
+    expect(json).not.toHaveProperty('sessionUrl');
+  });
+
+  it('returns a small explicit error when required metadata cannot fit the byte budget', async () => {
+    const raw = {
+      ...digest,
+      current_route: { ...digest.current_route!, model: 'm'.repeat(4096) },
+    };
+    const reg = setup({ taskDigest: async () => ({ ok: true as const, digest: raw }) });
+    const result = await reg.call('get_task_digest', { session_id: raw.session_id });
+    const { text, json } = parse(result);
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(TASK_DIGEST_MAX_BYTES);
+    expect(json).toMatchObject({ ok: false, errorCode: 'DIGEST_TOO_LARGE' });
+    expect(result.isError).toBe(true);
   });
 
   it('refuses a task outside a scoped caller\'s readable history and passes host errors through', async () => {

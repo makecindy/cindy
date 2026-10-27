@@ -1,25 +1,9 @@
-/**
- * ChatVideoView
- * ---------------------------------------------------------------------------
- * 聊天流里视频渲染的统一组件,与 ChatImageView 对位:art video tools
- * (seedance / 未来 kling/luma) 的产物视频都走这里。封面 + 点击播放,大图
- * 走 VideoLightbox。
- *
- * 行为契约:
- *   - 默认显示首帧封面(<video preload="metadata">,chromium 自取首帧),
- *     上盖一个半透明大 Play 按钮;<video> 本身**不挂 controls**——
- *     原位永远是封面而不是迷你播放器。
- *   - 点击 → 打开 VideoLightbox 全屏播放(controls + autoPlay + loop)。
- *   - 失败降级 → ImageMissingPlaceholder 同款样式,文案换"视频不可用"。
- *   - 右键(仅 xdt-video://):复制视频 / 打开视频所在目录。复制走 OS 原生
- *     文件剪贴板(Win/Mac),粘贴出来是文件本体,不是字节流。
- *
- * variant 的尺寸 / 边框沿用与 image 同款,以后调样式只用动一处。
- */
+/** Chat-stream video player. Keep the browser controls, including native video
+ * fullscreen, so its icon, position, keyboard handling and playback stay native. */
 
 import { CHAT_FOCUS_CLASS } from './chatChrome';
-import { useRef, useState } from 'react';
-import { Play, FolderOpen, VideoOff, Copy } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { FolderOpen, VideoOff, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -30,8 +14,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip } from '@/components/ui/tooltip';
-import { VideoLightbox } from './VideoLightbox';
+import { Button } from '@/components/ui/button';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
+import { registerMedia } from '@/lib/mediaPlaybackBus';
+import { useVideoContextMenu } from './useVideoContextMenu';
 
 export type ChatVideoVariant = 'tool-output';
 
@@ -57,22 +43,73 @@ const VARIANT_STYLES: Record<
     // (50vw/40vh 相对窗口,列宽约束只有这档提供);maxHeight 收紧到
     // min(40vh, 420px) 防竖版视频占半屏。与 ChatImageView 保持一致。
     style: { maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' },
-    className:
-      'rounded-xl border border-[var(--msg-tool-card-border)] object-contain',
+    className: 'rounded-xl border border-[var(--msg-tool-card-border)] object-contain',
   },
 };
 
 export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoViewProps) {
   const { t } = useTranslation();
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-  const previewTriggerRef = useRef<HTMLDivElement>(null);
-  const [errored, setErrored] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   // 远程会话改写到 cindy-remote-media://(OSS range 流式);本地原样。下游统一用 displaySrc。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
+  const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(
+    videoRef,
+    displaySrc,
+  );
+  useEffect(() => {
+    setFailedSrc(null);
+  }, [displaySrc]);
 
-  if (errored) {
-    return <VideoMissingPlaceholder filename={filename} />;
+  // Navigation and hidden/recycled rows must not leave an invisible player running.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const unregister = registerMedia(video);
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting && document.fullscreenElement !== video) video.pause();
+    });
+    let wasFullscreen = document.fullscreenElement === video;
+    const onFullscreenChange = () => {
+      const isFullscreen = document.fullscreenElement === video;
+      if (wasFullscreen && !isFullscreen) {
+        // A hidden notification ignored during fullscreen may not repeat on
+        // exit. Resubscribe for a fresh sample of the restored inline bounds.
+        observer.unobserve(video);
+        observer.observe(video);
+      }
+      wasFullscreen = isFullscreen;
+    };
+    const onVisibility = () => {
+      if (document.hidden) video.pause();
+    };
+    observer.observe(video);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      unregister();
+      observer.disconnect();
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('visibilitychange', onVisibility);
+      video.pause();
+    };
+  }, [displaySrc, failedSrc]);
+
+  // A transient failure should recover when the window/network becomes available;
+  // source patches also get a fresh player instead of inheriting an old failure.
+  useEffect(() => {
+    if (failedSrc !== displaySrc) return;
+    const retry = () => setFailedSrc(null);
+    window.addEventListener('online', retry);
+    window.addEventListener('focus', retry);
+    return () => {
+      window.removeEventListener('online', retry);
+      window.removeEventListener('focus', retry);
+    };
+  }, [displaySrc, failedSrc]);
+
+  if (failedSrc === displaySrc) {
+    return <VideoUnavailablePlaceholder filename={filename} onRetry={() => setFailedSrc(null)} />;
   }
 
   const { style, className } = VARIANT_STYLES[variant];
@@ -99,28 +136,9 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
 
   return (
     <>
-      {/* 容器 wraps <video> 以叠加 Play 按钮,本身就是点击区。
-          <video> preload=metadata 让 chromium 自动渲染首帧作为封面,
-          NOT 挂 controls — 用户一点就走 lightbox 大图播放。 */}
       <div
-        ref={previewTriggerRef}
-        // self-start 与 ChatImageView tool-output 同理:防止 MessageStream 的
-        // flex-col 包裹层把容器拉宽到超过 <video> 实际宽度(点击区/边框错位)。
-        className={cn(
-          'relative inline-block self-start rounded-xl cursor-pointer hover:opacity-90 transition-opacity motion-reduce:transition-none',
-          CHAT_FOCUS_CLASS,
-        )}
-        role="button"
-        aria-label={filename}
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            event.currentTarget.click();
-          }
-        }}
+        className="relative inline-block self-start min-w-0 rounded-xl"
         style={{ maxWidth: style.maxWidth, maxHeight: style.maxHeight }}
-        onClick={() => setLightboxOpen(true)}
         onContextMenu={(e) => {
           if (!canRevealInFolder) return;
           e.preventDefault();
@@ -129,39 +147,22 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
         }}
       >
         <video
+          key={displaySrc}
+          ref={videoRef}
           src={displaySrc}
-          // 关键:preload metadata 让 chromium 拉够元信息+首帧,但不预加载整段。
+          aria-label={filename}
+          tabIndex={0}
           preload="metadata"
-          // muted 让浏览器允许在更多策略下自动取首帧(部分自动播放策略
-          // 与 muted 强相关;我们这里没 autoplay,但 muted 让首帧抽取更稳)。
-          muted
-          // playsInline 防止部分场景下被吞成全屏播放器。
+          controls
           playsInline
           style={style}
-          className={cn(className, 'block pointer-events-none')}
-          // 不挂 controls — 原位是封面状态。
-          onError={() => setErrored(true)}
+          className={cn(className, 'block', CHAT_FOCUS_CLASS)}
+          onError={() => setFailedSrc(displaySrc)}
         />
-        {/* 大 Play 按钮浮层 — 居中半透明圆 + lucide play 图标。
-            点击落到外层 div,不需要这层自己处理 click。 */}
-        <div
-          className="absolute inset-0 flex items-center justify-center pointer-events-none"
-          aria-hidden
-        >
-          <div
-            className={cn(
-              'flex items-center justify-center',
-              'w-14 h-14 rounded-full',
-              'bg-black/55 backdrop-blur-sm',
-              'shadow-[var(--shadow-menu)]',
-            )}
-          >
-            <Play className="w-7 h-7 text-white fill-white" />
-          </div>
-        </div>
       </div>
       {canRevealInFolder ? (
         <DropdownMenu
+          modal={!portalContainer}
           open={menuPos !== null}
           onOpenChange={(open) => {
             if (!open) setMenuPos(null);
@@ -181,7 +182,13 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
               }}
             />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={2}>
+          <DropdownMenuContent
+            align="start"
+            sideOffset={2}
+            portalContainer={portalContainer}
+            style={portalContainer ? { pointerEvents: 'auto' } : undefined}
+            onCloseAutoFocus={restoreVideoFocus}
+          >
             <DropdownMenuItem onClick={handleCopyVideo}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyVideo')}
@@ -193,24 +200,16 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-      {lightboxOpen && (
-        <VideoLightbox
-          src={displaySrc}
-          onClose={() => {
-            setLightboxOpen(false);
-            previewTriggerRef.current?.focus({ preventScroll: true });
-          }}
-        />
-      )}
     </>
   );
 }
 
-interface VideoMissingPlaceholderProps {
+interface VideoUnavailablePlaceholderProps {
   filename: string;
+  onRetry: () => void;
 }
 
-function VideoMissingPlaceholder({ filename }: VideoMissingPlaceholderProps) {
+function VideoUnavailablePlaceholder({ filename, onRetry }: VideoUnavailablePlaceholderProps) {
   const { t } = useTranslation();
   return (
     <div
@@ -223,16 +222,17 @@ function VideoMissingPlaceholder({ filename }: VideoMissingPlaceholderProps) {
       )}
       style={{ maxWidth: 280, minHeight: 140 }}
     >
-      <VideoOff className="h-8 w-8 opacity-60" aria-hidden="true" />
+      <VideoOff className="h-8 w-8 text-[var(--text-tertiary)]" aria-hidden="true" />
       <div className="text-xs font-medium">{t('chat.media.videoUnavailable')}</div>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div className="max-w-full truncate text-11 opacity-75">
-            {filename}
-          </div>
+          <div className="max-w-full truncate text-11 text-[var(--text-tertiary)]">{filename}</div>
         </Tooltip.Trigger>
         <Tooltip.Content variant="mono">{filename}</Tooltip.Content>
       </Tooltip.Root>
+      <Button variant="secondary" size="sm" compact onClick={onRetry}>
+        {t('chat.errorBanner.retry')}
+      </Button>
     </div>
   );
 }

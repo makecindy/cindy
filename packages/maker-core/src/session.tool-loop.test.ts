@@ -3,7 +3,7 @@ import { Session, MANUAL_ABORT_RECOVERY_GRACE_MS } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import { createPiTranslateContext, translatePiEvent } from './agents/pi/translator.js';
 import { newCodexRuntimeState, translateItemNotification } from './agents/codex/translator.js';
-import type { AgentSessionHandle } from './agents/base-agent.js';
+import { AUTO_REVIEW_USER_INTENT, type AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionResolver } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
 import type { ToolLoopReviewer } from './agents/shared/tool-loop-review.js';
@@ -14,7 +14,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: ToolLoopReviewer) {
+function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer: ToolLoopReviewer = async () => 'stop') {
   vi.useFakeTimers();
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
@@ -23,6 +23,7 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
     id: 'native-session', agentKind, model: 'test-model',
     events: () => queue,
     send: vi.fn(async () => { running = true; }),
+    steer: vi.fn(async () => {}),
     abort: vi.fn(async () => {
       if (hangAbort) return new Promise<void>(() => {});
       running = false;
@@ -34,7 +35,8 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
   } as unknown as AgentSessionHandle;
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
   const session = new Session({
-    id: 'test-session', agentKind, handle, workDir: '/test', capabilities: {} as never, logger, toolLoopReviewer,
+    id: 'test-session', agentKind, handle, workDir: '/test',
+    capabilities: { sameTurnSteer: { supported: true } } as never, logger, toolLoopReviewer,
   });
   sessions.push(session);
   const seen: AgentEvent[] = [];
@@ -48,7 +50,7 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
     await vi.advanceTimersByTimeAsync(0);
   };
   const errors = () => seen.filter((event) => event.type === 'error');
-  return { queue, session, seen, handle, tool, errors,
+  return { queue, session, seen, handle, tool, errors, logger,
     ask: (delivery?: 'async') => resolveInteraction({ kind: 'ask_user_question', requestId: 'question',
       questions: [{ question: 'Scope?' }], ...(delivery ? { delivery } : {}) }),
     end: async () => {
@@ -85,6 +87,9 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     } });
     for (const i of [2, 0, 4, 1, 3]) t.queue.push({ type: 'tool_result_full', source: agentKind, data: {
       toolUseId: `invalid-${i}`, fullText: 'InputValidationError: Missing required parameter file_path', isError: true,
+    } });
+    t.queue.push({ type: 'tool_result', source: agentKind, data: {
+      toolUseIds: [0, 1, 2, 3, 4].map((i) => `invalid-${i}`), summary: 'invalid parameters',
     } });
     await vi.advanceTimersByTimeAsync(0);
     expect(t.errors()).toHaveLength(0);
@@ -216,18 +221,63 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     expect(t.handle.abort).not.toHaveBeenCalled();
   });
 
-  it('lets the reviewer keep a suspected loop running', async () => {
+  // 游戏截图误停：16 次四种调用轮转不等于空转；三次放行后仍需继续，且不增加复核调用。
+  it('reviews phone operation with user goals and explanations, then keeps running within the review budget', async () => {
     const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
     const t = setup(agentKind, false, reviewer);
-    await t.session.send('investigate');
-    for (let i = 0; i < 6; i++) await t.tool(String(i));
+    const userIntent = { earlierUserMessages: ['Play the phone game using screenshots.'], currentUserMessage: 'Continue until the level ends.' };
+    await t.session.send('Continue until the level ends.', { [AUTO_REVIEW_USER_INTENT]: userIntent });
+    // PR #7404 review: delta + final 全文不能重复，避免 2000 字符发送预算挤掉最新理由。
+    const prefix = 'Observing the animation. '.repeat(50);
+    const explanation = `${prefix}The target moves; I will observe its new position before tapping.`;
+    if (agentKind === 'pi') {
+      const context = createPiTranslateContext(t.logger);
+      translatePiEvent({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: prefix,
+      } }, t.queue, context);
+      translatePiEvent({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: explanation }], stopReason: 'toolUse',
+      } }, t.queue, context);
+    } else {
+      const context = { rt: newCodexRuntimeState(), log: { info() {}, warn() {}, error() {}, debug() {} } };
+      const item = { type: 'agentMessage', id: 'explanation', text: prefix };
+      translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item }, t.queue, context);
+      translateItemNotification('completed', {
+        threadId: 'thread', turnId: 'turn', item: { ...item, text: explanation },
+      }, t.queue, context);
+    }
+    t.queue.push({ type: 'thinking', data: { text: 'private reasoning must not be sent' }, source: agentKind });
+    t.queue.push({ type: 'text', data: { text: 'unrelated background task' }, source: agentKind, turnScope: 'background' });
+    const operations = ['screenshot', 'tap', 'swipe', 'Read'];
+    for (let i = 0; i < 16; i++) await t.tool(String(i), {}, operations[i % 4]);
     expect(reviewer).toHaveBeenCalledOnce();
     expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
       sessionId: 'test-session', agentKind, model: 'test-model',
-      verdict: { reason: 'consecutive', count: 4, toolName: 'read' },
+      userIntent,
+      assistantExplanation: explanation,
+      verdict: { reason: 'rotation', count: 16, toolName: 'Read' },
     });
+    for (let i = 16; i < 100; i++) await t.tool(String(i), {}, operations[i % 4]);
+    expect(reviewer).toHaveBeenCalledTimes(3);
     expect(t.errors()).toHaveLength(0);
     expect(t.handle.abort).not.toHaveBeenCalled();
+  });
+
+  it('includes accepted steering and discards a stop based on the previous user goal', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const t = setup(agentKind, false, reviewer);
+    await t.session.send('Read the current screen.');
+    for (let i = 0; i < 4; i++) await t.tool(String(i));
+    await t.session.steer('Keep observing until the animation ends.');
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.handle.abort).not.toHaveBeenCalled();
+    await t.tool('after-steer');
+    expect(reviewer.mock.calls[1]?.[0].userIntent).toEqual({
+      earlierUserMessages: ['Read the current screen.'],
+      currentUserMessage: 'Keep observing until the animation ends.',
+    });
   });
 
   it('interrupts after the reviewer confirms a loop, once and only for the reviewed turn', async () => {

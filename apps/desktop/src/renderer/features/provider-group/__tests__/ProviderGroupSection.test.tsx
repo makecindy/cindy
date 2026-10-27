@@ -315,7 +315,7 @@ describe('ProviderGroupSection', () => {
     providerState.providers[0].connected = false;
     stored = { strategy: 'usage', autoSwitch: true, members: [LOCAL] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Claude" />);
-    expect(await screen.findByText('能读取订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(await screen.findByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '最少占用' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('给最闲的那台')).toBeTruthy();
     expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
@@ -334,7 +334,7 @@ describe('ProviderGroupSection', () => {
     stored = { strategy: 'order', autoSwitch: true, members };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('能读取订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '按顺序' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
   });
@@ -497,7 +497,7 @@ describe('ProviderGroupSection', () => {
       initialConfig={stored}
     />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('能读取订阅用量时，先用配额快重置的电脑，再选用量低的，相近时按组策略')).toBeTruthy();
+    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
   });
 });
 

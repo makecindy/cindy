@@ -282,7 +282,7 @@ export function ContactsImportDialog({ open, onOpenChange }: Props) {
                     placeholder={t('settings.contacts.import.groupPlaceholder')}
                     className={cn(
                       'h-8 min-w-0 flex-1 rounded-lg bg-[var(--settings-input-bg)] px-2.5 text-13 outline-none',
-                      'text-[var(--settings-input-text)] placeholder:text-[var(--settings-section-desc)]',
+                      'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
                     )}
                   />
                   <Button

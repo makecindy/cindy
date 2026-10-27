@@ -7,6 +7,7 @@ import type { RemoteSession } from "@/session/types";
 import { SwipeableSessionRow } from "@/session/SwipeableSessionRow.ios";
 
 const runtime = vi.hoisted(() => ({
+  width: 400,
   translation: { value: 0 },
   props: null as SwipeableProps | null,
   reset: vi.fn(),
@@ -17,11 +18,21 @@ const runtime = vi.hoisted(() => ({
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-  Pressable: ({ children }: { children?: React.ReactNode }) => (
-    <button>{children}</button>
+  Pressable: ({
+    children,
+    onPress,
+    testID,
+  }: {
+    children?: React.ReactNode;
+    onPress?: () => void;
+    testID?: string;
+  }) => (
+    <button onClick={onPress} data-testid={testID}>
+      {children}
+    </button>
   ),
   StyleSheet: { create: (value: unknown) => value },
-  useWindowDimensions: () => ({ width: 400 }),
+  useWindowDimensions: () => ({ width: runtime.width }),
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
@@ -95,10 +106,14 @@ vi.mock("react-native-reanimated", async () => {
 });
 vi.mock("lucide-react-native", () =>
   Object.fromEntries(
-    ["Archive", "ArchiveRestore", "Ellipsis", "Pin", "PinOff"].map((name) => [
-      name,
-      () => null,
-    ]),
+    [
+      "Check",
+      "Archive",
+      "ArchiveRestore",
+      "Ellipsis",
+      "Pin",
+      "PinOff",
+    ].map((name) => [name, () => null]),
   ),
 );
 vi.mock("react-i18next", () => ({
@@ -124,7 +139,9 @@ vi.mock("@/theme/tokens", () => ({
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
+let host: HTMLDivElement;
 const controls = {
+  onMarkRead: vi.fn(),
   onArchive: vi.fn(),
   onTogglePin: vi.fn(),
   onShowOptions: vi.fn(),
@@ -135,6 +152,7 @@ function render(id: string) {
     root.render(
       <SwipeableSessionRow
         {...controls}
+        testID="swipe"
         session={{ id, status: "active" } as RemoteSession}
       >
         row
@@ -151,17 +169,38 @@ function release(direction: "left" | "right") {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  runtime.width = 400;
   runtime.translation.value = 0;
   runtime.styles = [];
   runtime.reactions.clear();
-  root = createRoot(document.createElement("div"));
+  host = document.createElement("div");
+  root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
 
 describe("iOS swipe runtime contracts (mocked native boundary)", () => {
+  // #7083: refreshed row objects and rotation must not rebuild RNGH's worklet
+  // graph. Existing release tests do not compare the native callback boundary.
+  it("keeps gesture callbacks stable while using the current width and recycled task", () => {
+    render("a");
+    const initial = runtime.props!;
+    render("a");
+    expect(runtime.props!.onSwipeableWillOpen).toBe(initial.onSwipeableWillOpen);
+    runtime.width = 800;
+    render("b");
+    expect(runtime.props!.onSwipeableWillOpen).toBe(initial.onSwipeableWillOpen);
+    expect(runtime.props!.onSwipeableOpenStartDrag).toBe(initial.onSwipeableOpenStartDrag);
+    expect(runtime.props!.onSwipeableClose).toBe(initial.onSwipeableClose);
+    drag(-260);
+    release("left");
+    expect(controls.onArchive).not.toHaveBeenCalled();
+    drag(-500);
+    release("left");
+    expect(controls.onArchive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "b" }));
+  });
   it.each([
     ["left", -260, "onArchive"],
-    ["right", 260, "onTogglePin"],
+    ["right", 260, "onMarkRead"],
   ] as const)(
     "full swipe still works after slot recycling: %s",
     (direction, value, action) => {
@@ -190,14 +229,36 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
       release(direction);
       expect(controls.onArchive).not.toHaveBeenCalled();
       expect(controls.onTogglePin).not.toHaveBeenCalled();
+      expect(controls.onMarkRead).not.toHaveBeenCalled();
     },
   );
+  // User-requested contract: full swipe reads; pin remains a separate tap. Unit at native boundary.
+  it.each([
+    ["pinAction", "onTogglePin"],
+    ["readAction", "onMarkRead"],
+  ] as const)("tapping %s only executes its own action", (button, action) => {
+    render("a");
+    act(() =>
+      (
+        host.querySelector(
+          `[data-testid="swipe.${button}"]`,
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    expect(controls[action]).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id: "a" }),
+    );
+    expect(
+      controls[action === "onMarkRead" ? "onTogglePin" : "onMarkRead"],
+    ).not.toHaveBeenCalled();
+    expect(runtime.close).toHaveBeenCalledOnce();
+  });
   it("keeps layout width responsive in both directions and resets the armed state", () => {
     render("a");
     expect(runtime.timing).not.toHaveBeenCalled();
-    drag(160);
+    drag(260);
     expect(
-      runtime.styles.map((fn) => fn()).find((s) => s.width === 136),
+      runtime.styles.map((fn) => fn()).find((s) => s.width === 236),
     ).toBeDefined();
     drag(-260);
     expect(
@@ -207,6 +268,8 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
     expect(
       runtime.styles.map((fn) => fn()).filter((s) => s.width === 56),
     ).toHaveLength(2);
-    expect(runtime.timing.mock.calls.map((call) => call[0])).toEqual([1, 0]);
+    expect(runtime.timing.mock.calls.map((call) => call[0])).toEqual([
+      1, 0, 1, 0,
+    ]);
   });
 });

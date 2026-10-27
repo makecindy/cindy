@@ -525,6 +525,8 @@ export interface RewindCommitResult {
 }
 
 export interface ForkSdkSessionOptions {
+  /** Host-resolved shared-provider storage. Never accepted directly from a remote caller. */
+  hostedGuestHome?: string;
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */
   sourceSdkSessionId: string;
   /**

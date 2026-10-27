@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Alert,
+  AppState,
   Linking,
   Platform,
   Pressable,
@@ -62,7 +63,10 @@ import {
   readPushEnabled,
   syncPushRegistration,
   writePushEnabled,
+  readPushPreviewEnabled,
+  writePushPreviewEnabled,
 } from '@/notifications/pushNotifications';
+import { isChatBackgroundSupported, readChatBackgroundEnabled, writeChatBackgroundEnabled } from '@/notifications/chatBackground';
 import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
@@ -146,6 +150,8 @@ export default function SettingsScreen() {
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushPreview, setPushPreview] = useState(true);
+  const [chatBackground, setChatBackground] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
   // 使用统计(TapDB)开关。真相在 analyticsConsentStore,这里只是视图态。
@@ -367,7 +373,7 @@ export default function SettingsScreen() {
     }
   }, [auth, loggingOut, router, t]);
 
-  // 退出登录先确认(与首页抽屉、伙伴页同一套 confirmLogout 文案):运行中任务要额外说明。
+  // 退出登录先确认(与首页抽屉同一套 confirmLogout 文案):运行中任务要额外说明。
   const requestLogout = useCallback(() => {
     if (loggingOut) return;
     confirmLogout(t, hasRunningRemoteTasks(), () => void logout());
@@ -385,8 +391,13 @@ export default function SettingsScreen() {
     void readPushEnabled().then((enabled) => {
       if (!cancelled) setPushEnabled(enabled);
     });
+    void readPushPreviewEnabled().then(value => { if (!cancelled) setPushPreview(value); });
+    const refreshBackground = () => { void readChatBackgroundEnabled().then(value => { if (!cancelled) setChatBackground(value); }); };
+    refreshBackground();
+    const foreground = AppState.addEventListener('change', state => { if (state === 'active') refreshBackground(); });
     return () => {
       cancelled = true;
+      foreground.remove();
     };
   }, []);
 
@@ -439,6 +450,7 @@ export default function SettingsScreen() {
       }
       await writePushEnabled(true);
       setPushEnabled(true);
+      if (result === 'local-only') setPushMessage(t('settings.notifications.googleUnavailable'));
     } catch (error) {
       setPushMessage(formatRemoteError(error));
     } finally {
@@ -642,10 +654,10 @@ export default function SettingsScreen() {
           ) : null}
         </SettingsGroup>
 
-        {/* 通知:任务完成推送(仅 iOS;Android 待 FCM/厂商通道) */}
+        {/* Notification permission and preview preferences belong to this installation. */}
         {isPushSupported() ? (
           <SettingsGroup
-            footer={t('settings.notifications.taskDoneHint')}
+            footer={t('settings.notifications.taskDoneHint') + (isChatBackgroundSupported() ? ` ${t('settings.notifications.backgroundHint')}` : '')}
             messages={[pushMessage ? { text: pushMessage, testID: 'settings.pushMessage' } : null]}
             title={t('settings.notifications.sectionTitle')}
           >
@@ -659,6 +671,31 @@ export default function SettingsScreen() {
               testID="settings.pushToggleRow"
               value={pushEnabled}
             />
+            <SettingsSwitchRow
+              accessibilityLabel={t('settings.notifications.preview')}
+              label={t('settings.notifications.preview')}
+              value={pushPreview}
+              disabled={pushBusy || !pushEnabled}
+              onValueChange={() => {
+                const next = !pushPreview;
+                setPushBusy(true);
+                void writePushPreviewEnabled(next).then(() => {
+                  setPushPreview(next);
+                  return syncPushRegistration({ enabled: pushEnabled, apiFetch: auth.apiFetch });
+                }).catch(error => setPushMessage(formatRemoteError(error))).finally(() => setPushBusy(false));
+              }}
+            />
+            {isChatBackgroundSupported() ? <SettingsSwitchRow
+              accessibilityLabel={t('settings.notifications.background')}
+              label={t('settings.notifications.background')}
+              value={chatBackground}
+              disabled={pushBusy || !pushEnabled}
+              onValueChange={() => {
+                const next = !chatBackground;
+                void writeChatBackgroundEnabled(next).then(() => setChatBackground(next))
+                  .catch(error => setPushMessage(formatRemoteError(error)));
+              }}
+            /> : null}
           </SettingsGroup>
         ) : null}
 

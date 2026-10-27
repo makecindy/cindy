@@ -76,6 +76,7 @@ import {
   isGlobalTabId,
   removeGlobalTab,
   setActiveGlobalTabId,
+  subscribeRevealSessionTab,
   useActiveGlobalTabId,
   useGlobalTabs,
 } from './globalTabs';
@@ -511,7 +512,8 @@ export function RightSidebarShell({
   ]);
 
   // 面板收束后不再注册的历史页签在 hydration 后静默关闭，避免显示死页签。
-  // `ghost:*`、`bot-delegations` 和 `bot-artifacts` 只作为数据库历史值保留。
+  // `ghost:*`、`bot-delegations`、`bot-artifacts` 和 `bot-workbench`(伙伴工作台已并入聊天头部
+  // 的近况浮层)只作为数据库历史值保留。
   // 这些 kind 已无渲染方,
   // 留着只会落到 PlaceholderBody 变成"敬请期待"的死页签。
   useEffect(() => {
@@ -519,7 +521,8 @@ export function RightSidebarShell({
     const legacyGhostTabs = bucket.tabs.filter((tab) =>
       tab.kind.startsWith('ghost:') ||
       tab.kind === ('bot-delegations' as TabKindId) ||
-      tab.kind === ('bot-artifacts' as TabKindId),
+      tab.kind === ('bot-artifacts' as TabKindId) ||
+      tab.kind === ('bot-workbench' as TabKindId),
     );
     if (legacyGhostTabs.length === 0) return;
     void (async () => {
@@ -676,6 +679,28 @@ export function RightSidebarShell({
     },
     [activeGlobalTabId, groupId, pinnedTabs, sessionId, soloMode],
   );
+
+  // 程序打开的任务页签(插件任务页)要露出来:与用户点选同口径离开本组的全局页签。
+  const revealContextRef = useRef({ activeGlobalTabId, inGroup, pinnedTabs, hostedTabIds });
+  revealContextRef.current = { activeGlobalTabId, inGroup, pinnedTabs, hostedTabIds };
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    return subscribeRevealSessionTab((targetSessionId, tabId) => {
+      if (targetSessionId !== sessionId) return;
+      const context = revealContextRef.current;
+      if (soloMode) {
+        if (context.hostedTabIds?.has(tabId)) setHostedActiveTabId(tabId);
+        return;
+      }
+      // 与页签投影共用弹出归属镜像;不要依赖尚未重渲染的新页签列表。
+      if (!context.inGroup(tabId) || isTabPoppedOut(tabId)) return;
+      setGroupActiveTabId(groupId, sessionId, tabId);
+      const activeGlobal = context.activeGlobalTabId;
+      if (activeGlobal && context.pinnedTabs.some((tab) => tab.id === activeGlobal)) {
+        setActiveGlobalTabId(null);
+      }
+    });
+  }, [groupId, sessionId, soloMode]);
 
   // 主窗:已弹出的页签窗口(同任务或只有全局页签的),右键菜单「移到窗口 …」的目标。
   // 标签用窗口里第一个页签的标题(插件的 TabPillTitle 组件,不是字符串)。

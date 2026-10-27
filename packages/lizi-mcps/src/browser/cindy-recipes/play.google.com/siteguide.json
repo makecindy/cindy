@@ -1,0 +1,13 @@
+{
+  "site": "play.google.com",
+  "auth": "公开信息，无需登录。",
+  "recipes": [
+    "google-play-search"
+  ],
+  "notes": "公开搜索结果；listingText 保留实际可见字段，缺失的评分/开发者不推测。地区由 country 指定。结果固定最多 20 条。",
+  "source": "Cindy",
+  "verifiedAt": "2026-10-23",
+  "aliases": [
+    "google-play"
+  ]
+}

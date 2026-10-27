@@ -113,7 +113,7 @@ function oldHost() {
   }).createMakerSendTransaction(deps);
   const guardedSend = released('sendToAgentAccepted', {}, {
     sendToAgentAcceptedUnlocked: transaction.sendToAgentAccepted,
-    assertReviewExternalInputAllowed: async () => {}, reconcileBotModelRoute: async () => {},
+    syncBotLanePermission: async () => {}, assertReviewExternalInputAllowed: async () => {}, reconcileBotModelRoute: async () => {},
     maker: { getSession: () => engine }, refreshBotCapabilityEpochBeforeSend: async () => {},
     withSendToSessionLock: async (_id: string, run: () => unknown) => run(),
     getDbClient: () => ({ drizzle: db }), sessions, botProfiles, botSessionLinks, eq: orm.eq,

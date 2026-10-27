@@ -62,6 +62,7 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   d.effortsUnknown = m.effortsUnknown === true;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
+  if (m.supportsUltrafastMode !== undefined) d.supportsUltrafastMode = m.supportsUltrafastMode;
   if (m.group !== undefined) d.group = m.group;
   if (m.sortOrder !== undefined) d.sortOrder = m.sortOrder;
   if (m.mode !== undefined) d.mode = m.mode;

@@ -1,7 +1,15 @@
 {
   "site": "coingecko.com",
   "auth": "只读无需登录",
-  "entry": { "api": "https://api.coingecko.com/api/v3/search?query={query}" },
-  "recipes": ["coingecko-search"],
-  "notes": "公开搜索接口。返回 JSON {coins:[{id,name,symbol,market_cap_rank,thumb,...}], exchanges:[...], categories:[...], nfts:[...]}。无需 key（公开 demo 接口有速率限制）。"
+  "entry": {
+    "api": "https://api.coingecko.com/api/v3/search?query={query}"
+  },
+  "recipes": [
+    "coingecko-search"
+  ],
+  "notes": "公开搜索接口。返回 JSON {coins:[{id,name,symbol,market_cap_rank,thumb,...}], exchanges:[...], categories:[...], nfts:[...]}。无需 key（公开 demo 接口有速率限制）。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站可用能力以 siteguide 当前目录为准。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

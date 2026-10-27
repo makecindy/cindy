@@ -32,6 +32,8 @@ import {
   type PluginMarketSnapshotOptions,
 } from './service.js';
 
+import { preparePluginShare } from './sharing.js';
+
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
@@ -60,7 +62,7 @@ async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOpti
 /**
  * Reuse the market snapshot reconciliation outside the Plugins page so
  * default-install plugins are provisioned and stable-source updates are applied
- * as soon as an app owner is ready. The Plugins page remains a later retry path.
+ * as soon as an app owner is ready. Resume and periodic maintenance retry it.
  */
 export type DefaultMarketPluginSyncOutcome = 'completed' | 'deferred' | 'failed';
 
@@ -89,10 +91,13 @@ export function defaultMarketPluginSyncOutcome(
   return 'failed';
 }
 
-export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome> {
+export async function syncDefaultMarketPlugins(
+  trigger: PluginMarketSnapshotOptions['trigger'] = 'background',
+): Promise<DefaultMarketPluginSyncOutcome> {
   try {
     let reconciliationOutcome: 'completed' | 'failed' | null = null;
     const snapshot = await snapshotAndSignalRemovalNotice({
+      trigger,
       onDefaultReconciliationOutcome: (outcome) => {
         reconciliationOutcome = outcome;
       },
@@ -113,6 +118,16 @@ export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyn
       error: error instanceof Error ? error.message : String(error),
     });
     return 'failed';
+  }
+}
+
+/** Signal foreground removals without requesting another snapshot or disk scan. */
+export async function refreshForegroundMarketPlugins(): Promise<'completed' | 'failed'> {
+  try {
+    return await service().refreshCatalogForForeground();
+  } finally {
+    // A removal can succeed before a later maintenance step fails.
+    signalRemovalNoticeAvailable();
   }
 }
 
@@ -147,7 +162,7 @@ export function registerPluginMarketIpc(): void {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
       snapshotAndSignalRemovalNotice({
-        deferReconciliation: true,
+        discoveryOnly: true,
         onConsentHoldsChanged: signalUpdateConsentHoldsChanged,
       }),
     );
@@ -161,6 +176,10 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() =>
       service().detail(requireString(pluginId, 'pluginId')),
     );
+  });
+  ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return preparePluginShare(pluginId, options);
   });
   ipcMain.handle('plugin-market:local-icons', (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

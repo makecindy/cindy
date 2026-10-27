@@ -14,7 +14,7 @@ External account connections have moved out of the old "Third-Party Platforms" s
 - **GitLab** — handled by the Cindy GitLab plugin (Plugins > Cindy GitLab; existing PAT connections are migrated automatically).
 - **Codex** — sign in under Settings > Model Providers (separate from the Codex CLI binary the app ships with).
 - **FeiShu** — bot only (App ID / Secret under Settings > IM bots; see the FeiShu bot topic). FeiShu is no longer a sign-in method for Cindy itself.
-- **Cindy AI** — Settings > Model Providers. Web-search keys are configured on the matching plugin detail page (Cindy Web Search).
+- **Cindy AI** — Settings > Model Providers. Cindy Web Search uses this account by default and needs no key; optional Brave / Tavily / DeepSeek search keys are configured on that plugin's detail page.
 
 **Managing connections:**
 

@@ -38,7 +38,7 @@ function fixture() {
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
- const deps = { isPluginTaskPermissionAllowed, withSessionPermissionChange, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => ownership.current, readPluginTaskConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => cold ? null : live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampPluginTaskPermissionMode: (x: string) => x, writePluginTaskConfig: write, broadcastSessionPatched: vi.fn() };
+ const deps = { isPluginTaskPermissionAllowed, withBotPermissionChange: async (_id: string, change: () => Promise<unknown>) => change(), withSessionPermissionChange, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => ownership.current, readPluginTaskConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => cold ? null : live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampPluginTaskPermissionMode: (x: string) => x, writePluginTaskConfig: write, broadcastSessionPatched: vi.fn() };
  const allDeps = {...deps, pluginWriteAccessGate:gate, pluginWriteAccessIdentity:()=>identity};
  const run = new Function(...Object.keys(allDeps), js)(...Object.values(allDeps));
  let setMode!: (event: unknown, sessionId: string, mode: string) => Promise<unknown>;
@@ -46,15 +46,15 @@ function fixture() {
  let remote = false;
  const persistedResults = new WeakSet<object>();
  const forgetGrants = vi.fn();
- const settingDeps = {...deps, forgetCredentialGrants:forgetGrants, log:{warn:vi.fn()}, ipcMain:{handle:(_name:unknown,fn:typeof setMode)=>{setMode=fn;}}, MAKER_INVOKE:{SET_PERMISSION_MODE:'permission'}, isDeviceLinkInvoke:()=>remote, assertTrustedAppRendererEvent:()=>{}, assertReviewSettingsUnlocked:async()=>{}, isSessionPermissionMode:()=>true, throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});}, persistPermissionModeWithoutRuntime:async(_id:string,mode:string)=>(await epoch.client.tx('bots.persistSessionPermission',{mode})).updated, markRemoteSettingPersistedInsideHandler:(result:object)=>persistedResults.add(result)};
+ const settingDeps = {...deps, syncBotLinkedLanePermissions: vi.fn(async()=>{}), forgetCredentialGrants:forgetGrants, log:{warn:vi.fn()}, ipcMain:{handle:(_name:unknown,fn:typeof setMode)=>{setMode=fn;}}, MAKER_INVOKE:{SET_PERMISSION_MODE:'permission'}, isDeviceLinkInvoke:()=>remote, assertTrustedAppRendererEvent:()=>{}, assertReviewSettingsUnlocked:async()=>{}, isSessionPermissionMode:()=>true, throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});}, persistPermissionModeWithoutRuntime:async(_id:string,mode:string)=>(await epoch.client.tx('bots.persistSessionPermission',{mode})).updated, markRemoteSettingPersistedInsideHandler:(result:object)=>persistedResults.add(result)};
  new Function(...Object.keys(settingDeps), settingJs)(...Object.values(settingDeps));
  expect(setMode, 'SET_PERMISSION_MODE source extraction must register its handler').toBeTypeOf('function');
  const planPersist=vi.fn(async(_id:string,patch:{planModeEnabled:boolean})=>{history.planModeEnabled=patch.planModeEnabled;});
  const planDeps={...settingDeps,persistSessionFields:planPersist,ipcMain:{handle:(_name:unknown,fn:typeof setPlan)=>{setPlan=fn;}},MAKER_INVOKE:{SET_PLAN_MODE:'plan'}};
  new Function(...Object.keys(planDeps), planJs)(...Object.values(planDeps));
  expect(setPlan, 'SET_PLAN_MODE source extraction must register its handler').toBeTypeOf('function');
- const setImMode = (mode: PermissionMode) => changeSessionPermissionMode({
-  sessionId:'task', mode, modes:[{id:mode,displayName:mode}],
+ const setImMode = (mode: PermissionMode, confirmedFullAccess = false) => changeSessionPermissionMode({
+  sessionId:'task', mode, confirmedFullAccess, modes:[{id:mode,displayName:mode}],
   readPreviousMode:async()=>history.permissionMode as PermissionMode,
   getLiveSession:()=>cold?null:live,
   persist:async next=>{await epoch.client.tx('bots.persistSessionPermission',{mode:next});},
@@ -354,28 +354,40 @@ it.each(['queued','runtime','database'])('rejects IM ownership changes during %s
  expect(f.epoch.client.tx).toHaveBeenCalledTimes(point==='database'?1:0);
 });
 
-it('lets a real Session policy lease restore through the send fence while a permission commit waits',async()=>{
+// Regression: all permission transitions must have identical runtime/persistence
+// results for ordinary and IM-leased tasks through local, remote and IM entry points.
+it.each(['local','remote','im'].flatMap(entry=>[false,true].map(groupTurn=>({entry,groupTurn}))))('commits every permission transition immediately ($entry, group turn=$groupTurn)',async({entry,groupTurn})=>{
  const f=fixture(), transport=vi.fn(async()=>{});
+ if(entry==='remote')f.remote();
  const logger={trace(){},debug(){},info(){},warn(){},error(){},fatal(){},child(){return logger;}};
  const session=new Session({id:'task',agentKind:'codex',workDir:'/fixture',permissionMode:'ask',turnStallMs:0,
   handle:{setPermissionMode:transport,setInteractionResolver(){},close:async()=>{}} as never,
-  capabilities:{permissionModes:[{id:'ask'},{id:'bypassPermissions'}],setPermissionModeMidSession:{supported:true},
+  capabilities:{permissionModes:[{id:'ask'},{id:'auto'},{id:'bypassPermissions'}],setPermissionModeMidSession:{supported:true},
    turnPermissionPolicy:{unsupportedPermissionModes:['bypassPermissions']}} as never,logger});
- const releaseLease=session.acquireTurnLease();
+ const releaseLease=groupTurn?session.acquireTurnLease():()=>{};
  f.live.setPermissionMode.mockImplementation(mode=>session.setPermissionMode(mode as PermissionMode));
- let started!:()=>void;const entered=new Promise<void>(r=>{started=r;});
- f.live.setPermissionMode.mockImplementationOnce(mode=>{started();return session.setPermissionMode(mode as PermissionMode);});
- const change=f.setMode('bypassPermissions');
  try{
-  await entered;
-  expect(transport).not.toHaveBeenCalled();
-  // The continuation's existing send fence and Host-owned restore stay free.
-  await withSendToSessionLock('task',()=>session.setPermissionModeTracked('ask'));
-  expect(transport).toHaveBeenCalledExactlyOnceWith('ask');
-  expect(f.epoch.client.tx).not.toHaveBeenCalled();
- }finally{releaseLease();await change;await session.close();}
- expect(transport.mock.calls).toEqual([['ask'],['bypassPermissions']]);
- expect(f.history.permissionMode).toBe('bypassPermissions');
+  f.history.permissionMode='ask';
+  const expected:PermissionMode[][]=[];
+  // Covers all six directions and a repeated selection without ending the turn.
+  for(const mode of ['ask','auto','bypassPermissions','auto','ask','bypassPermissions','ask'] as const){
+   const previous=session.permissionModeState;
+   const previousMode=previous.mode;
+   if(previousMode===null)throw new Error('expected a previously selected permission mode');
+   if(entry==='im'){
+    if(mode==='bypassPermissions'){
+     await expect(f.setImMode(mode)).resolves.toMatchObject({kind:'confirmation-required'});
+     expect(transport.mock.calls).toEqual(expected);
+    }
+    await expect(f.setImMode(mode,true)).resolves.toMatchObject({kind:'changed',mode});
+   }else await f.setMode(mode);
+   expected.push([mode]);
+   expect(transport.mock.calls).toEqual(expected);
+   expect(f.history.permissionMode).toBe(mode);
+   await expect(withSendToSessionLock('task',()=>session.setPermissionModeIfUnchanged(previous,previousMode))).resolves.toBe(false);
+   expect(session.permissionModeState.mode).toBe(mode);
+  }
+ }finally{releaseLease();await session.close();}
 });
 
 

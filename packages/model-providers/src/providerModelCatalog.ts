@@ -2,7 +2,7 @@ import { previousModelGenerations } from './modelGeneration.js';
 import { sourceProviderForPreset } from './providerPresetIdentity.js';
 import { providerEndpointBindings } from './providerEndpointTemplate.js';
 import { declaredModelInterface } from './providerInterfaceRoutes.js';
-import interfaceModels from "../catalog/provider-interface-models.json" with { type: "json" };
+import registryData from "../catalog/model-registry.json" with { type: "json" };
 import generated from "../catalog/provider-models.json" with { type: "json" };
 import { pickModelMetadata, type ModelMetadata } from "./modelMetadataLayers.js";
 import type { ModelCost, PiModelApi, ProviderWireProtocol } from "./types.js";
@@ -44,14 +44,13 @@ export const PROVIDER_MODEL_CATALOG = { ...sourceCatalog, providers: { ...source
 
 // Official per-model contracts override the pinned Pi serializer choice, without
 // borrowing another supplier's metadata or adding unlisted models to an account.
-for (const [provider, declaration] of Object.entries(interfaceModels)) {
-  const interfaces = declaration.models as Record<string, { api: string; endpoint: string }>;
+for (const provider of new Set(registryData.interfaceProfiles.map(profile => profile.providerId))) {
   const rows = PROVIDER_MODEL_CATALOG.providers[provider];
   if (!rows) continue;
   PROVIDER_MODEL_CATALOG.providers[provider] = rows.map(row => {
-    const declared = interfaces[row.id];
-    if (!declared || new URL(declared.endpoint).origin !== new URL(row.upstream).origin) return row;
-    return { ...row, upstream: declaredModelInterface(provider, row.id)!.baseUrl, execution: { ...row.execution, pi: { ...row.execution.pi, api: declared.api } } };
+    const declaration = declaredModelInterface(provider, row.id);
+    if (!declaration || new URL(declaration.baseUrl).origin !== new URL(row.upstream).origin) return row;
+    return { ...row, upstream: declaration.baseUrl, execution: { ...row.execution, pi: { ...row.execution.pi, api: declaration.api } } };
   });
 }
 

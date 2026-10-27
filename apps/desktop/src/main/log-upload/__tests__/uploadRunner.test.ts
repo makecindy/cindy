@@ -323,7 +323,8 @@ describe('失败与空结果：标记必须保留', () => {
 
   it('上传失败（离线）⇒ 还原标记', async () => {
     const { deps, markers } = harness({
-      send: vi.fn(async () => ({ ok: false as const, batches: 0, sentRecords: 0, status: 0 })),
+      send: vi.fn(async () => ({ ok: false as const, batches: 0, sentRecords: 0, status: 0, error: 'getaddrinfo ENOTFOUND' })),
+      log: { info: vi.fn(), warn: vi.fn() },
     });
 
     const outcome = await runUpload(deps, {
@@ -333,6 +334,7 @@ describe('失败与空结果：标记必须保留', () => {
     });
 
     expect(outcome).toEqual({ kind: 'failed', status: 0 });
+    expect(deps.log.warn).toHaveBeenCalledWith(expect.stringContaining('log upload failed'), 'getaddrinfo ENOTFOUND');
     expect(markers.releaseClaimed).toHaveBeenCalledTimes(1);
     expect(markers.resolveClaimed).not.toHaveBeenCalled();
   });

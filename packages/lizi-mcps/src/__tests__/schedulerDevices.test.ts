@@ -427,6 +427,8 @@ describe("cindy_scheduler cross-device routing", () => {
       { bindToCurrentSession: true },
       { model: null },
       { cronExpr: "not a cron" },
+      // 运行位置 id 相对本机的设备目录,对那台电脑没有意义。
+      { agentDeviceId: "studio", model: "claude-opus-5-5" },
     ]) {
       const result = await s.registry.call("schedule_update", {
         id: "r1",

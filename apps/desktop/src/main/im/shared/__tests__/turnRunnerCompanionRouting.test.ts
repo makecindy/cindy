@@ -11,7 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent, MakerEvent, Session, SessionSendResult } from '@cindy/maker-core';
+import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermissionPolicy } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
@@ -489,6 +489,40 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(rebuilt.send).toHaveBeenCalledTimes(1);
     for (const [, text] of mocks.im.sendText.mock.calls) expect(String(text)).not.toContain('❌');
     expect(runner.getMakerSessionById('mimi-main')).toBe(rebuilt.session);
+  });
+
+  // Use the public runner and inspect Session.send: a binding alone must never
+  // suppress the policy on fallback. No network or extra runtime is required.
+  it.each([
+    { route: 'companion', owner: true, optIn: true, forced: false },
+    { route: 'companion', owner: false, optIn: true, forced: true },
+    { route: 'companion', owner: undefined, optIn: true, forced: true },
+    { route: 'companion', owner: true, optIn: false, forced: true },
+    { route: 'paused', owner: true, optIn: true, forced: true },
+    { route: 'missing-row', owner: true, optIn: true, forced: true },
+    { route: 'unbound', owner: true, optIn: true, forced: true },
+  ])('keeps the resolved-route permission boundary: %j', async ({ route, owner, optIn, forced }) => {
+    if (route === 'paused') {
+      companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    } else if (route === 'missing-row') {
+      botRows.delete('mimi-main');
+    } else if (route === 'unbound') {
+      binding = null;
+    }
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => true,
+    };
+    await runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'permission-route',
+      text: 'hello', attachments: [], requesterIsOwner: owner,
+      turnPermissionPolicy: policy, inheritCompanionOwnerPermissions: optIn,
+    });
+    const id = route === 'companion' ? 'mimi-main' : legacyIdFor(BOT_CONTEXT, OWNER);
+    const send = harnesses.get(id)!.send;
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]![1]?.turnPermissionPolicy).toBe(forced ? policy : undefined);
   });
 
   it('falls back to the channel’s own routing when the bot cannot be resolved, warning once', async () => {

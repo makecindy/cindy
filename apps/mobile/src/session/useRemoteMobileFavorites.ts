@@ -29,7 +29,7 @@ export function mobileFavorite(item: RemoteModelFavorite): MobileModelFavorite {
     ...item,
     agent: item.agent === "cc" ? "claude-code" : item.agent,
     effort: item.effort ?? "",
-    fast: !!item.fast,
+    fast: item.fast ?? false,
   };
 }
 /** Convert exactly one UI action to an operation, never send a stale full table. */

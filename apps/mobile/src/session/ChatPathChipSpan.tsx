@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
 import { useRecyclingState } from '@legendapp/list/react-native';
 import { Text } from '@/components/AppText';
@@ -11,11 +11,12 @@ type PathStateHook = <T>(initial: T | (() => T)) => readonly [T, Dispatch<SetSta
 /**
  * 文件/目录路径 chip 的共享执行体(远程会话文件交互,对齐桌面 #631 的 chip 点亮
  * 语义)。inline code 与本地路径链接两种形态共用:候选先经被控端精确 stat 验证——
- * 文件/目录点亮可点(文件 → Quick Look 预览页;目录 → 文件浏览器定位),明确
- * 不存在保持纯文本,链路断等无法判定时乐观点亮(点击后预览页自己的错误 UX 兜底)。
+ * 文件/目录点亮可点(文件 → Quick Look 预览页;目录 → 文件浏览器定位)。
+ * 自动识别的不存在路径保持纯文本；作者显式写出的链接保留点击与长按菜单，
+ * 文件读取和失败反馈交给原有预览页。链路断等无法判定时按形状决定自动引用的点亮。
  * workdir 外的绝对路径同样候选(对齐桌面):文件走被控端 absPath 取件通道预览,
  * 目录因文件浏览器只认 workdir 内而保持纯文本(canOpenChatPathChip)。
- * 无会话上下文(context null)/ 流式中 → plainStyle 纯文本渲染。
+ * 无会话上下文(context null) → plainStyle 纯文本渲染；流式中不发起预检。
  */
 export function ChatPathChipSpan({
   candidate,
@@ -24,6 +25,7 @@ export function ChatPathChipSpan({
   plainStyle,
   SpanText,
   streaming,
+  explicitLink = false,
   usePathState = useRecyclingState,
 }: {
   candidate: ChatPathCandidate | null;
@@ -33,6 +35,8 @@ export function ChatPathChipSpan({
   plainStyle: StyleProp<TextStyle>;
   SpanText: typeof Text;
   streaming?: boolean;
+  /** Authored Markdown links retain an open action even when the file is missing. */
+  explicitLink?: boolean;
   /** Composer cards live outside LegendList, whose state setters require a list item. */
   usePathState?: PathStateHook;
 }) {
@@ -44,6 +48,11 @@ export function ChatPathChipSpan({
     const absPath = resolveChatAbsPath(candidate.href, ctx.workdir);
     return { absPath, relPath: toWorkdirRel(ctx.workdir, absPath) };
   }, [candidate, ctx]);
+  const actionScope = useRef<{ ctx: typeof ctx; target: typeof target } | null>(null);
+  useEffect(() => {
+    actionScope.current = { ctx, target };
+    return () => { actionScope.current = null; };
+  }, [ctx, target]);
   // verdict 是**缓存的纯派生**,chip 不自己存结论:ForRender 版会把 TTL 未过期的负缓存
   // 回成 'unknown',于是断链期间的乐观点亮也来自缓存。自存一份的话收不到缓存变化 ——
   // 同一路径出现在多个 chip 上时,A 按 unknown 点亮、B 拿到确定的 nonfile,A 会一直
@@ -104,25 +113,43 @@ export function ChatPathChipSpan({
   const verdictAllowsLit = candidate?.ambiguousShape
     ? verdict === 'file' || verdict === 'directory'
     : verdict !== undefined && verdict !== 'nonfile';
-  const lit = !!ctx && !!candidate && !!target && verdictAllowsLit;
+  const lit = !!ctx && !!candidate && !!target && (explicitLink || verdictAllowsLit);
   if (!lit) {
     return <SpanText style={plainStyle}>{display}</SpanText>;
   }
   const kind: 'file' | 'directory' =
-    verdict === 'directory' || (verdict === 'unknown' && candidate.directoryShape) ? 'directory' : 'file';
+    verdict === 'directory' || (verdict !== 'file' && candidate.directoryShape) ? 'directory' : 'file';
   if (!canOpenChatPathChip(kind, target.relPath)) {
     return <SpanText style={plainStyle}>{display}</SpanText>;
   }
-  const chipTarget: ChatFilePathTarget = {
-    kind,
-    relPath: target.relPath,
-    absPath: target.absPath,
-    ...(kind === 'file' && candidate.line !== undefined ? { line: candidate.line } : {}),
+  const activate = async (action: (value: ChatFilePathTarget) => void) => {
+    let actionKind = kind;
+    if (explicitLink) {
+      // A visible authored link may be tapped before background verification,
+      // or after a cached miss. Resolve the kind before opening or building its
+      // menu; a directory without a trailing slash must not enter file preview.
+      try {
+        const stat = await ctx.statPath(target.absPath);
+        if (stat.kind === 'dir') actionKind = 'directory';
+        else if (stat.kind === 'file') actionKind = 'file';
+      } catch {
+        // Preserve the existing preview/browser failure UX and copy menu when
+        // the host is unavailable; no local lookup or connection reset.
+      }
+      if (actionScope.current?.ctx !== ctx || actionScope.current.target?.absPath !== target.absPath) return;
+    }
+    if (!canOpenChatPathChip(actionKind, target.relPath)) return;
+    action({
+      kind: actionKind,
+      relPath: target.relPath,
+      absPath: target.absPath,
+      ...(actionKind === 'file' && candidate.line !== undefined ? { line: candidate.line } : {}),
+    });
   };
   return (
     <SpanText
-      onLongPress={ctx.onLongPressPath ? () => ctx.onLongPressPath?.(chipTarget) : undefined}
-      onPress={() => ctx.onOpenPath(chipTarget)}
+      onLongPress={ctx.onLongPressPath ? () => { void activate(ctx.onLongPressPath!); } : undefined}
+      onPress={() => { void activate(ctx.onOpenPath); }}
       style={chipStyle}
       testID="message.markdownPathChip"
     >

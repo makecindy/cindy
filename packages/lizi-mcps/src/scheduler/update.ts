@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
+import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import { stabilizePreRunHookForUpdate, type UpdateScheduleInput } from '@cindy/maker-scheduler';
@@ -51,6 +52,12 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('传 null = 清空(同 model 一起回到默认路由);省略 = 不修改。'),
+      agentDeviceId: z
+        .string()
+        .min(1)
+        .nullable()
+        .optional()
+        .describe('每次新建任务时 Agent 的运行位置，语义见 schedule_create 同名字段（schedule_list_models 查位置与模型）。传 null 或 "local" = 回到本机；省略 = 不修改，但本次改了 agentKind / model / providerId 时会回到本机（来源与位置成对），要留在原处须一并重传。仅本机定时任务可设。'),
       effort: z
         .enum(EFFORT)
         .nullable()
@@ -138,6 +145,8 @@ export function registerScheduleUpdateTool(
             // 语义相反;先读后写又会覆盖别处同时改的超时。要求调用方显式给出:数值或
             // null(不限时),由一次写入完成。
             ? '改其它电脑上的 preRunHook 必须显式传 timeoutMs(数值,或 null 表示不限时;先用 schedule_get 读到当前值)'
+          : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
+            ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null && key !== 'intervalMs')
             ? '其它电脑上的定时任务暂不支持用 null 清空 intervalMs 以外的字段'
             : null;
@@ -184,6 +193,10 @@ export function registerScheduleUpdateTool(
         // undefined(storage 按 hasOwnProperty 判定 → 清列 NULL)。此前 schema 只收
         // string,agent 想把任务从一个引擎的模型路由上摘下来(如伙伴接管期用 Codex
         // 模型跑过、再改回 Claude Code)只能报 INVALID_ARGS,陈旧路由永远清不掉。
+        const agentDeviceId = (patch as { agentDeviceId?: string | null }).agentDeviceId;
+        if (agentDeviceId === null || agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
+          input = { ...input, agentDeviceId: undefined };
+        }
         for (const key of ['model', 'providerId', 'effort', 'workingDir'] as const) {
           if ((patch as Record<string, unknown>)[key] === null) {
             input = { ...input, [key]: undefined };

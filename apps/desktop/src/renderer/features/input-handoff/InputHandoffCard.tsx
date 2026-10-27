@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 /**
  * InputHandoffCard (代输入)
  * ---------------------------------------------------------------------------
@@ -450,7 +451,7 @@ function LiveViewLink({ deviceId, requestId }: { deviceId: string; requestId: st
     },
     [],
   );
-  const name = devices?.find((device) => device.deviceId === deviceId)?.name || deviceId;
+  const name = deviceDisplayName(deviceId, undefined, devices ?? []);
   return (
     <QuietLink
       disabled={opening}

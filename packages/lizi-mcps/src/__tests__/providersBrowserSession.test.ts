@@ -12,9 +12,10 @@ import { runWithLiziMcpSessionContext } from '../session-context.js';
 
 // 捕获 createBrowserMcpServer 收到的 deps(含 wrap 后的 getRuntime),
 // 不真的起 McpServer。
-const capturedDeps: Array<{ getRuntime(): { call(req: unknown): unknown } }> = [];
+type CapturedDeps = { getRuntime(): { call(req: unknown): unknown }; recipeFiles?: () => Promise<unknown> };
+const capturedDeps: CapturedDeps[] = [];
 vi.mock('../browser/index.js', () => ({
-  createBrowserMcpServer: (deps: { getRuntime(): { call(req: unknown): unknown } }) => {
+  createBrowserMcpServer: (deps: CapturedDeps) => {
     capturedDeps.push(deps);
     return { __fake: 'mcp-server' };
   },
@@ -45,6 +46,24 @@ function buildWrappedRuntime(factoryCtx: {
 }
 
 describe('cindy_browser provider — __mcpSessionId 注入', () => {
+  // #6826: file broker must receive the calling task at tool-call time, just
+  // like the runtime. Prior tests only checked browser requests. Unit tier;
+  // empty Codex factory followed by two different task contexts is minimal.
+  it('binds adapter file access to each calling task instead of UI focus', async () => {
+    const recipeFiles = vi.fn(async (_sessionId?: string) => ({
+      read: () => Buffer.from('fake-image'), open: () => 1,
+    }));
+    const provider = createLiziMcpProviders({ browser: {
+      getRuntime: () => ({ call: vi.fn() }) as never, recipeFiles,
+    } }).find(p => p.name === 'cindy_browser')!;
+    provider.toClaudeSdkConfig({ agentKind: 'codex', workingDir: '' });
+    for (const sessionId of ['first-task', 'second-task']) {
+      await runWithLiziMcpSessionContext({ agentKind: 'codex', workingDir: '', sessionId },
+        () => capturedDeps[0]!.recipeFiles!());
+    }
+    expect(recipeFiles.mock.calls).toEqual([['first-task'], ['second-task']]);
+  });
+
   it('Claude 路径:factory ctx 自带 sessionId,直接注入', async () => {
     const { runtime, innerCall } = buildWrappedRuntime({
       agentKind: 'claude-code',

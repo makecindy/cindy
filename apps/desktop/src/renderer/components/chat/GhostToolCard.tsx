@@ -41,6 +41,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Copy, FolderOpen, Ghost, Loader2 } from 'lucide-react';
 
 import { ImageLightbox } from './ImageLightbox';
+import { mailCardFooterHtml } from './mailCardFooter';
 import { ModelLightbox } from './ModelLightbox';
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
 import { toast } from '@/lib/toast';
@@ -155,7 +156,7 @@ function buildCardSrcDoc(sanitizedHtml: string, themeVars: string): string {
     '<style>html,body{margin:0;padding:0;overflow:hidden;font-family:system-ui,-apple-system,sans-serif}img{max-width:100%;-webkit-user-drag:none;-webkit-user-select:none;user-select:none}@media (prefers-reduced-motion:reduce){*{animation:none!important}}</style>',
     `<style>${sliderCss}</style>`,
     '</head><body>',
-    sanitizedHtml,
+    mailCardFooterHtml(sanitizedHtml),
     '</body></html>',
   ].join('');
 }

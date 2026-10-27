@@ -25,6 +25,9 @@ it('pages the actual list query across tied timestamps without skipping or repea
       insert.run(`s${String(n).padStart(4, '0')}`, 'archived', Math.floor(n / 3), 'cached preview');
     insert.run('active', 'active', 200, 'active');
     insert.run('deleted', 'deleted', 200, 'deleted');
+    sqlite.prepare('UPDATE sessions SET last_activity_at=? WHERE id=?').run(900, 's0506');
+    const first = await selectSessionListRows(db, eq(sessions.status, 'archived'), 1);
+    expect(first[0].session.lastActivityAt).toBe(900);
     const ids: string[] = [];
     let before: { id: string; updatedAt: number } | undefined;
     for (;;) {

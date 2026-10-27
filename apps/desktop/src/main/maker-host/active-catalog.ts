@@ -1942,6 +1942,13 @@ function computeMerged(): Catalog {
       }),
     ])),
   }));
+  // Ultrafast is a native Codex account capability; bridge aliases cannot inherit it.
+  providers = providers.map(provider => ({ ...provider, models: Object.fromEntries(
+    Object.entries(provider.models).map(([agent, models]) => [agent,
+      agent === 'codex' ? models : models?.map(model => model.supportsUltrafastMode
+        ? { ...model, supportsUltrafastMode: false } : model),
+    ]),
+  ) }));
   return { ...b, modelRegistry, providers };
 }
 

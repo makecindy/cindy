@@ -49,6 +49,11 @@ export class SharedTaskHost {
   // Keep failed writes too: disposal must not report durability after a disk error.
   private readonly closeWrites = new Map<string, Promise<void>>();
   private readonly reconciliation = new Map<string, Map<string, () => void>>();
+  // Scheduling only: closed IDs the server has confirmed absent or closed.
+  private readonly settled = new Set<string>();
+  private journalIds: string[] = [];
+  private failedCreates = 0;
+  private listedAfterFailedCreates = 0;
   constructor(private readonly options: SharedTaskHostOptions) {
     const lifecycle: SharedTaskCreationState = options.creationState ?? { pending: new Map(), identities: new Map() };
     this.creating = lifecycle.pending;
@@ -182,6 +187,10 @@ export class SharedTaskHost {
     try {
       created = await creating;
       rememberCreated(created.sharedTaskId);
+    } catch (error) {
+      // A lost response may still have created a share this host never learned.
+      this.failedCreates++;
+      throw error;
     } finally { this.creating.delete(creating); }
     if (this.boundaryClosed || this.closedSessions.has(sessionId)) {
       // The boundary drains this request, journals the identity and closes it
@@ -211,10 +220,23 @@ export class SharedTaskHost {
     }
   }
 
+  /**
+   * Whether server authority can still differ from this host: an active or
+   * pending share, or a local closure the server has not confirmed. Never
+   * grants or revokes access; it only decides whether the next restore polls.
+   */
+  needsAuthorityRefresh(): boolean {
+    if (this.creating.size || this.failedCreates !== this.listedAfterFailedCreates) return true;
+    for (const [id, entry] of this.entries) if (!this.closed.has(id) && entry.detail?.status === 'active') return true;
+    for (const id of [...this.closed, ...this.created.keys(), ...this.journalIds]) if (!this.settled.has(id)) return true;
+    return false;
+  }
+
   async restore(allowNetwork = true): Promise<void> {
     this.assertCurrent();
     const journal = await this.options.journal.latest();
     this.assertCurrent();
+    this.journalIds = journal.map((item) => item.sharedTaskId);
     // Shared profile writers hand off terminal changes through the journal.
     // Close access objects as well as the index so existing captures also expire.
     for (const item of journal) if (item.terminal) this.revokeLocally(item.sharedTaskId);
@@ -235,6 +257,10 @@ export class SharedTaskHost {
       }
     }
     if (!allowNetwork) return;
+    // Only IDs known before the list was requested can be judged by it; an ID
+    // learned mid-request may be missing from a list the server built earlier.
+    const candidates = [...this.journalIds, ...this.created.keys(), ...this.closed];
+    const failedCreates = this.failedCreates;
     const active = await this.options.api.list();
     this.assertCurrent();
     const owned = active.filter((item) => item.ownerAccountId === this.options.ownerAccountId && item.hostDeviceId === this.options.hostDeviceId);
@@ -247,6 +273,11 @@ export class SharedTaskHost {
         await this.options.journal.close(item.snapshot);
         this.assertCurrent();
       }
+    }
+    // An open share stays unsettled; the entry check keeps polling it.
+    const ownedIds = new Set(owned.map((item) => item.sharedTaskId));
+    for (const id of candidates) {
+      if (!ownedIds.has(id) && (this.closed.has(id) || !this.entries.has(id))) this.settled.add(id);
     }
     for (const item of owned) {
       this.assertCurrent();
@@ -263,8 +294,11 @@ export class SharedTaskHost {
         // Retry a previous explicit close that was persisted before connectivity
         // failed. A process restart itself never closes an active sharedTask.
         await this.options.api.close(item.sharedTaskId);
+        this.settled.add(item.sharedTaskId);
       } else await this.refresh(item.sharedTaskId);
     }
+    // The owned list above included any orphan of those failed creates.
+    this.listedAfterFailedCreates = failedCreates;
   }
 
   detail(sharedTaskId: string): SharedTaskDetail | null {
@@ -334,6 +368,7 @@ export class SharedTaskHost {
     const closing = persisted.then(async () => {
       this.assertCurrent();
       await this.options.api.close(sharedTaskId);
+      this.settled.add(sharedTaskId);
     });
     this.options.revoke(sharedTaskId);
     this.options.changed(sharedTaskId);

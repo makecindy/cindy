@@ -104,7 +104,7 @@ export async function create(body?: {
   model?: string;
   effort?: string;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
   agentKind?: 'cc' | 'codex' | 'pi';
@@ -131,6 +131,11 @@ export async function create(body?: {
    * checkout; the persisted source later drives the `cindy_make` tool injection.
    */
   source?: 'cindy-make';
+  /**
+   * 新建页开始输入时先建出来的未发送任务：只在本机列表可见，清空输入就删掉，
+   * 第一次发送前转为普通任务(见 main/localDb/provisionalSessions.ts)。
+   */
+  provisional?: boolean;
 }): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }
@@ -185,7 +190,7 @@ export async function update(
     model?: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交), 与 maker.setPlanMode 双 IPC 协调。 */
     planModeEnabled?: boolean;
     sdkSessionId?: string | null;
@@ -193,6 +198,11 @@ export async function update(
     totalCostUsd?: number;
     contextTokens?: number;
     contextWindow?: number;
+    /**
+     * 任务级工作上下文预算（tokens）；null = 清除显式选择、跟随模型路由默认。
+     * 落库后 main 会把新窗口应用到活实例（空闲冷重建 / 回合中登记 pending）。
+     */
+    contextWindowBudget?: number | null;
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;

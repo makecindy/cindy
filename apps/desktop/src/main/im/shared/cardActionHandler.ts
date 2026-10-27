@@ -1023,7 +1023,7 @@ export function createCardActionHandler(
       {
         fallbackModel: newTaskDefault?.model,
         desiredEffort: desktopPrefs.effort,
-        desiredFastMode: desktopPrefs.fastMode === true,
+        desiredFastMode: desktopPrefs.fastMode ?? false,
       },
     );
     // 换了模型时 effort 用 reconcile 结果(保存档可能超出兜底模型的支持集,原样透传

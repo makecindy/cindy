@@ -301,6 +301,7 @@ export class SessionActivityRelay {
 
 function toSessionActivityPayload(activity: AgentIslandSessionActivity): SessionActivityPayload {
   return {
+    ...(activity.completionToken ? { completionToken: activity.completionToken } : {}),
     ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
     sessionId: activity.sessionId,
     phase: activity.phase,
@@ -334,6 +335,7 @@ function toTerminalActivityPayload(sessionId: string): SessionActivityPayload {
 
 function activitySignature(payload: SessionActivityPayload): string {
   return [
+    payload.completionToken ?? '',
     payload.phase,
     payload.completionNotification ?? '',
     payload.compactDetail,

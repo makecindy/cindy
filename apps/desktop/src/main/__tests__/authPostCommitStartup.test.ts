@@ -58,6 +58,9 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
       productionFunction('requestStableOwnerPostCommit'),
       productionFunction('recoverAccountFreeOwnerAtStartup'),
       productionFunction('initialize'),
+      `let authStateEpoch = 0;
+       let settledLoginCommitCount = 0;
+       ${productionFunction('initialize')}`,
       'return { initialize, recoverAccountFreeOwnerAtStartup, requestStableOwnerPostCommit };',
     ].join('\n'),
     { compilerOptions: { target: ScriptTarget.ES2022 } },

@@ -20,6 +20,8 @@ import { botProfileDir } from '../botProfileFolder.js';
 import { LEGACY_MAX_DIRECTORIES, boundLegacyJudgments } from '../botWorkbenchLegacy.js';
 import {
   mergeCompanionWorkbench,
+  readBotLinkedProjects,
+  setBotLinkedProject,
   normalizeWorkbench,
   readCompanionWorkbench,
   readLegacyWorkbenchJudgments,
@@ -161,5 +163,37 @@ describe('legacy workbench moving with the companion', () => {
       directories: [{ path: '/elsewhere', addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'laptop' }], tasks: {},
     });
     expect((await readCompanionWorkbench(root, 'bot-1', 'desk')).directories).toHaveLength(1);
+  });
+});
+
+// Linked-project restoration: existing tests only cover legacy judgment/cloud transport.
+// Production storage must keep multiple associations, other computers and judgments; no task ownership is written.
+// Minimal regression: add/remove a second directory beside a legacy directory. Tier: unit, isolated temporary files.
+describe('linked projects', () => {
+  it('retains legacy links and judgments while independently adding and removing multiple projects', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-projects-'));
+    const first = path.join(root, 'first'); const second = path.join(root, 'second');
+    const legacy = { directories: [{ path: first, addedAt: 'old' }, { path: first, addedAt: 'remote', deviceId: 'other' }], tasks: { 'idea:icons': judgment('idea', '2026-10-01T00:00:00.000Z') } };
+    const file = await writeLegacy(root, legacy);
+    await setBotLinkedProject(root, 'bot-1', { path: second }, true, () => {});
+    await setBotLinkedProject(root, 'bot-1', { path: second }, true, () => {});
+    expect(await readBotLinkedProjects(root, 'bot-1')).toHaveLength(3);
+    expect(await readBotLinkedProjects(root, 'bot-2')).toEqual([]);
+    await setBotLinkedProject(root, 'bot-1', { path: first }, false, () => {});
+    expect((await readBotLinkedProjects(root, 'bot-1')).map(p => [p.path, p.deviceId])).toEqual([[first, 'other'], [second, undefined]]);
+    const saved = JSON.parse(await readFile(file, 'utf8'));
+    expect(saved.tasks).toEqual(legacy.tasks);
+    expect(saved.responsibleSessionIds).toBeUndefined();
+    expect((await readCompanionWorkbench(root, 'bot-1', 'self')).directories.map(p => p.deviceId)).toEqual(['other', 'self']);
+  });
+  it('refuses damaged data and revoked writes without losing the existing associations', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-projects-'));
+    const file = await writeLegacy(root, '{broken');
+    await expect(setBotLinkedProject(root, 'bot-1', { path: root }, true, () => {})).rejects.toThrow();
+    expect(await readFile(file, 'utf8')).toBe('{broken');
+    await writeLegacy(root, { directories: [{ path: root, addedAt: 'old' }], tasks: {} });
+    let checks = 0;
+    await expect(setBotLinkedProject(root, 'bot-1', { path: root }, false, () => { if (++checks === 4) throw Error('REVOKED'); })).rejects.toThrow('REVOKED');
+    expect(await readBotLinkedProjects(root, 'bot-1')).toEqual([{ path: root, addedAt: 'old' }]);
   });
 });

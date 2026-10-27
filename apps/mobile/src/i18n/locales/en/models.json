@@ -25,6 +25,12 @@
     "fastTag": "Fast"
   },
   "options": {
+    "speed": {
+      "label": "Speed",
+      "standard": "Standard",
+      "fast": "Fast",
+      "ultrafast": "Ultrafast"
+    },
     "fastMode": "Fast Mode",
     "fastModeAccessibility": "Fast mode {{model}}",
     "reasoningEffort": "Reasoning Effort",

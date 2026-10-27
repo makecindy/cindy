@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import {
   requestSessionTagCatalog,
+  encodeModelSpeedPayload,
+  decodeModelSpeedPayload,
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
 } from "../sessionListTransport.js";
@@ -69,4 +71,67 @@ it("rejects broken references instead of silently losing labels", () => {
   expect(() =>
     decodeSessionTagCatalog(channel, { format: "unknown" }),
   ).toThrow();
+});
+
+// Compatibility tier: legacy clients validate fastMode as a boolean. Content is never rewritten.
+it("projects Ultrafast as an additive setting and restores it for new clients", () => {
+  const rows = [{ id: 's1', fastMode: 'ultrafast', runtimeEffective: { fastMode: 'ultrafast' },
+    messages: [{ content: { fastMode: 'ultrafast' } }] }, { id: 's2', fastMode: false }];
+  const wire = encodeModelSpeedPayload(channel, rows);
+  expect(wire).toEqual([{ ...rows[0], fastMode: true, fastModeTier: 'ultrafast',
+    runtimeEffective: { fastMode: true, fastModeTier: 'ultrafast' } }, rows[1]]);
+  expect(decodeModelSpeedPayload(channel, wire)).toEqual(rows);
+  expect(rows[0].fastMode).toBe('ultrafast');
+  expect(encodeModelSpeedPayload('local-db:messages:list', rows)).toBe(rows);
+  expect(decodeModelSpeedPayload(channel, [{ fastMode: false, fastModeTier: 'ultrafast' }]))
+    .toEqual([{ fastMode: false, fastModeTier: 'ultrafast' }]);
+  const push = { sessionId: 's1', patch: { fastMode: 'ultrafast' } };
+  expect(decodeModelSpeedPayload('local-db:sessions:patched', encodeModelSpeedPayload('local-db:sessions:patched', push)))
+    .toEqual(push);
+  const favorite = [{ uid: 'f', fast: 'ultrafast' }];
+  expect(decodeModelSpeedPayload('maker:model-favorites:get', encodeModelSpeedPayload('maker:model-favorites:get', favorite)))
+    .toEqual(favorite);
+});
+
+// Protocol regression: real draft snapshots and teammate settings have distinct nesting.
+// The session-list fixture above did not exercise these channels or model-keyed preferences.
+it("keeps legacy draft and teammate speeds boolean while new clients recover the exact tier", () => {
+  const defaults = {
+    model: 'gpt-6.1-sol', fastMode: 'ultrafast',
+    fastModeByModel: { 'gpt-6.1-sol': 'ultrafast', standard: false, fast: true },
+    providerModelMemory: { 'codex:*': {
+      effortByModel: { 'gpt-6.1-sol': 'ultra' },
+      fastByModel: { 'gpt-6.1-sol': 'ultrafast' },
+    } },
+  };
+  const projected = {
+    ...defaults, fastMode: true, fastModeTier: 'ultrafast',
+    fastModeByModel: { 'gpt-6.1-sol': true, standard: false, fast: true },
+    fastModeByModelTiers: { 'gpt-6.1-sol': 'ultrafast' },
+    providerModelMemory: { 'codex:*': {
+      effortByModel: { 'gpt-6.1-sol': 'ultra' },
+      fastByModel: { 'gpt-6.1-sol': true },
+      fastByModelTiers: { 'gpt-6.1-sol': 'ultrafast' },
+    } },
+  };
+  for (const [name, input, expected] of [
+    ['maker:get-new-maker-defaults', defaults, projected],
+    ['maker:new-maker-draft:changed', { claudeCode: {}, codex: defaults, pi: {} },
+      { claudeCode: {}, codex: projected, pi: {} }],
+  ] as const) {
+    const wire = encodeModelSpeedPayload(name, input);
+    expect(wire).toEqual(expected);
+    expect(decodeModelSpeedPayload(name, wire)).toEqual(input);
+  }
+  const route = { harness: 'codex', model: 'gpt-6.1-sol', fastMode: 'ultrafast' };
+  const bot = { id: 'bot', capabilities: {
+    modelChain: [route], modelChainOverride: [route], modelOverride: route,
+    content: { fastMode: 'ultrafast' },
+  } };
+  const wireRoute = { ...route, fastMode: true, fastModeTier: 'ultrafast' };
+  const wire = encodeModelSpeedPayload('local-db:bots:get', bot);
+  expect(wire).toEqual({ ...bot, capabilities: { ...bot.capabilities,
+    modelChain: [wireRoute], modelChainOverride: [wireRoute], modelOverride: wireRoute } });
+  expect(decodeModelSpeedPayload('local-db:bots:get', wire)).toEqual(bot);
+  expect(defaults.fastMode).toBe('ultrafast');
 });

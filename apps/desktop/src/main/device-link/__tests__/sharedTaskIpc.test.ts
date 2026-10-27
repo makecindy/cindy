@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   trusted: vi.fn(),
   list: vi.fn(),
   close: vi.fn(),
+  forget: vi.fn(),
   host: { activeSharedTaskIds: vi.fn(() => []), open: vi.fn(), close: vi.fn() },
 }));
 vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, handler: (event: unknown, raw: unknown) => Promise<unknown>) => h.handlers.set(channel, handler) } }));
@@ -15,7 +16,7 @@ vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => 'owner' }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: h.trusted }));
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => h.context }));
 vi.mock('../sharedTaskRuntime.js', () => ({ requireSharedTaskHost: () => h.host }));
-vi.mock('../sharedTaskApi.js', () => ({ sharedTaskApi: { list: h.list, close: h.close } }));
+vi.mock('../sharedTaskApi.js', () => ({ sharedTaskApi: { list: h.list, close: h.close }, forgetSharedTaskList: h.forget }));
 
 const invoke = (channel: string, command: unknown) => h.handlers.get(channel)!({}, command);
 const commands = [
@@ -62,6 +63,16 @@ describe('shared-task IPC availability', () => {
     await expect(state()).resolves.toEqual({ available: true, detail: null });
     await expect(invoke(SHARED_TASK_ACCOUNT_CHANNEL, { action: 'owned' })).resolves.toEqual([]);
     expect(h.list).toHaveBeenCalledTimes(1);
+  });
+
+  // Reconnect / revocation refreshes must read the server, not a list cached before the event.
+  it('drops the cached directory only for an event-driven fresh read', async () => {
+    registerSharedTaskIpc(() => true, () => true);
+    await invoke(SHARED_TASK_ACCOUNT_CHANNEL, { action: 'list' });
+    expect(h.forget).not.toHaveBeenCalled();
+    await invoke(SHARED_TASK_ACCOUNT_CHANNEL, { action: 'list', fresh: true });
+    expect(h.forget).toHaveBeenCalledOnce();
+    expect(h.list).toHaveBeenCalledTimes(2);
   });
 
   it('retains the guest and tunneled-account permission guards before availability', async () => {

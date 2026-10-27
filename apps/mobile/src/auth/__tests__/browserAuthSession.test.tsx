@@ -8,6 +8,8 @@ const native = vi.hoisted(() => ({
   replaceRoute: vi.fn(),
   closeAccount: undefined as (() => void) | undefined,
   storage: new Map<string, string>(),
+  chatFiles: new Map<string, string>(),
+  removeChatFile: vi.fn(),
   readSecure: vi.fn(),
   deleteSecure: vi.fn(),
   writeSecure: vi.fn(),
@@ -92,7 +94,8 @@ vi.mock('@/auth/pkce', () => ({
   createState: () => `fixture-state-${++native.state}`,
 }));
 vi.mock('@/auth/deviceId', () => ({ ensureDeviceId: async () => 'fixture-device', hasStoredDeviceId: async () => true }));
-vi.mock('@/auth/mobileAccountVault', () => ({
+vi.mock('@/auth/mobileAccountVault', async (original) => ({
+  ...(await original<typeof import('../mobileAccountVault')>()),
   readMobileAccountVault: async () => null,
   clearMobileLoginCredentialsForLogout: native.logoutCleanup,
   listMobileSavedAccounts: () => [],
@@ -103,7 +106,7 @@ vi.mock('@/auth/nativeSocial', () => ({}));
 vi.mock('@/auth/ssoOrgHistory', () => ({ rememberSsoOrgIdentifier: async () => {} }));
 vi.mock('@/auth/canaryChannelSync', () => ({}));
 vi.mock('@/auth/xdOrgBetaDefault', () => ({}));
-vi.mock('@/analytics/mobileTapdb', () => ({ clearTapdbUser: async () => {}, stopMobileTapdbReporting: async () => {} }));
+vi.mock('@/analytics/mobileTapdb', () => ({ setTapdbUser: async () => {}, clearTapdbUser: async () => {}, stopMobileTapdbReporting: async () => {} }));
 vi.mock('@/analytics/analyticsConsentStore', () => ({ clearAnalyticsConsent: async () => {} }));
 vi.mock('@/notifications/pushNotifications', () => ({ unregisterPushTokenBestEffort: native.unregisterPush }));
 vi.mock('@/session/agentCapabilitiesCache', () => ({ resetAgentCapabilitiesCache: async () => {} }));
@@ -111,6 +114,14 @@ vi.mock('@/session/composerPaletteCache', () => ({ resetComposerPaletteCache: as
 vi.mock('@/device-link/remoteResourceCache', () => ({ clearRemoteResourceCache: async () => {} }));
 vi.mock('@/session/mobileHomeListCache', () => ({ clearCachedHomeListSnapshot: async () => {} }));
 vi.mock('@/remote-desktop/credentialIdentity', () => ({ updateCredentialAccessToken() {} }));
+vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
+  read: async (key: string) => native.chatFiles.get(key) ?? null,
+  write: async (key: string, value: string) => { native.chatFiles.set(key, value); },
+  remove: native.removeChatFile,
+  files: async () => [...native.chatFiles.keys()],
+}) }));
+// Cache failure banners belong to the app shell, not AuthProvider's listener lifecycle.
+vi.mock('@/session/cacheWriteNotice', () => ({ notifyCacheWriteFailure: vi.fn() }));
 vi.mock('@/session/mobileSessionMessageCache', () => ({ clearCachedSessionMessages: async () => {} }));
 vi.mock('@/session/remoteHistoryDiskCache', () => ({ clearHistoryDisk: async () => {} }));
 vi.mock('@/session/mobileVoiceCredentialStore', () => ({ clearAllMobileVoiceCredentials: async () => {} }));
@@ -197,7 +208,8 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.providers.mockReset().mockResolvedValue({ social: ['wechat'], emailCode: true, smsCode: false });
     native.initialUrl.mockReset().mockResolvedValue(null);
     native.requestCode.mockReset().mockResolvedValue(undefined);
-    native.storage.clear();
+    native.storage.clear(); native.chatFiles.clear();
+    native.removeChatFile.mockReset().mockImplementation(async (key: string) => { native.chatFiles.delete(key); });
     native.writeSecure.mockReset().mockImplementation(async (key: string, value: string) => { native.storage.set(key, value); });
     native.logoutCleanup.mockReset();
     native.unregisterPush.mockReset();
@@ -253,14 +265,47 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.logoutCleanup.mockImplementationOnce(async () => {
       native.storage.delete('cindy.mobile.auth.session.v1');
     });
+    native.chatFiles.set('fixture-room.json', 'private chat history');
     native.clearSpeaker.mockRejectedValueOnce(new Error('keychain unavailable'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await act(async () => { await auth[action](); });
     expect(native.clearSpeaker).toHaveBeenCalledWith(owner.accountKey);
+    expect(native.chatFiles.size).toBe(0);
     expect(native.storage.has('cindy.mobile.auth.session.v1')).toBe(false);
     expect(native.storage.has('cindy.mobile.auth.userProfile')).toBe(false);
     expect(getMobileAuthOwner().accountKey).toBe('');
     expect(warn).toHaveBeenCalledWith('[auth] speaker filter cleanup pending; will retry');
+  });
+
+  // PR #7242: logout-only coverage did not prove the next fresh login gates identity
+  // publication on retrying failed disk cleanup. Unit, real AuthProvider + chat store.
+  it('retries failed logout chat cleanup before a fresh login can persist or activate its identity', async () => {
+    native.chatFiles.set('fixture-room.json', 'private chat history');
+    native.removeChatFile.mockRejectedValueOnce(new Error('file busy'));
+    await act(async () => { await auth.logout(); });
+    expect(native.chatFiles.size).toBe(1);
+    await restartProvider();
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    native.exchange.mockResolvedValue({
+      status: 'ok', accessToken: 'fixture-access', refreshToken: 'fixture-refresh', expiresIn: 3600,
+      membership: { id: 'fixture-org-user', kind: 'organization', role: 'member', displayName: 'Fixture',
+        email: 'user@example.invalid', orgId: 'fixture-org', orgName: 'Fixture Organization' },
+    });
+    native.removeChatFile.mockRejectedValueOnce(new Error('still busy'));
+    await start();
+    await emitLink(callbackUrl());
+    expect(native.removeChatFile).toHaveBeenCalledTimes(2);
+    expect(auth.isAuthenticated).toBe(false);
+    expect(native.storage.has('cindy.mobile.auth.session.v1')).toBe(false);
+    expect(native.storage.has('cindy.mobile.auth.accounts.v1')).toBe(false);
+    expect(native.chatFiles.size).toBe(1);
+
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    await start();
+    await emitLink(callbackUrl());
+    expect(native.chatFiles.size).toBe(0);
+    expect(auth.isAuthenticated).toBe(true);
+    expect(native.storage.get('cindy.mobile.auth.session.v1')).toContain('fixture-refresh');
   });
 
   it.each(['sso', 'social'] as const)('retains %s login on Android dismiss and accepts a delayed deep link', async (kind) => {
@@ -729,6 +774,43 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.exchange).toHaveBeenCalledTimes(1);
     expect(auth.loginState).toBe(state);
     expect(auth.authError).toBeNull();
+  });
+
+
+  // A native browser promise may outlive the screen's explicit reset. Exercise
+  // the real provider epoch fence with success, rejection and dismissal replies.
+  it.each(['success', 'reject', 'cancel'] as const)('can reset a hung browser and fences its late %s result from the next attempt', async result => {
+    let settle!: (value: any) => void;
+    let fail!: (error: Error) => void;
+    native.open.mockImplementationOnce(() => new Promise((resolve, reject) => { settle = resolve; fail = reject; }));
+    let old!: Promise<boolean>;
+    await act(async () => { old = auth.dispatchLoginAction({ type: 'start-social-browser', provider: 'wechat', label: 'WeChat' }); });
+    expect(auth.loginState?.step).toBe('browser-redirect');
+    expect(native.open).toHaveBeenCalledOnce();
+    const oldCallback = callbackUrl();
+    await act(async () => { expect(await auth.dispatchLoginAction({ type: 'reset' })).toBe(true); });
+    expect(auth.isBusy).toBe(false);
+    await start('social');
+    const pending = native.storage.get(pendingKey);
+    const state = auth.loginState;
+    await act(async () => {
+      if (result === 'reject') fail(new Error('old browser failed'));
+      else settle(result === 'success' ? { type: 'success', url: oldCallback } : { type: 'cancel' });
+      expect(await old).toBe(false);
+    });
+    expect(auth.loginState).toBe(state);
+    expect(auth.authError).toBeNull();
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledOnce();
+  });
+  it('reports native browser launch failures without consuming the pending callback identity', async () => {
+    native.open.mockRejectedValueOnce(new Error('BROWSER_UNAVAILABLE'));
+    await start('social');
+    expect(auth.authError).toBe('BROWSER_UNAVAILABLE');
+    expect(auth.isBusy).toBe(false);
+    expect(native.storage.has(pendingKey)).toBe(true);
   });
 
   it('an earlier attempt cannot consume the new attempt after cancel and retry', async () => {

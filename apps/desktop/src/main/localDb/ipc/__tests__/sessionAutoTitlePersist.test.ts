@@ -95,6 +95,7 @@ function createDb(initialTitle: string): void {
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       parent_session_id TEXT,
       forked_at_message_id TEXT,
       worktree_path TEXT,

@@ -273,7 +273,7 @@ export interface MobileSessionAgentSwitchIntent {
   model: string;
   providerId: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 
 /** desktop 登记 / 取消跨 Agent 意图后的稳定结果。 */

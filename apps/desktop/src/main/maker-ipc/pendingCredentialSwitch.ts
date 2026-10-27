@@ -48,7 +48,7 @@ export interface PendingCredentialSwitch {
    * 预写进 DB,不回滚的话懒 resume 会经停用隐式来源重建(PR #744 review 第十六轮)。
    * 缺席 = 无从回滚,退化为只清显式来源。
    */
-  previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+  previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean | 'ultrafast' };
   requestedAt: number;
   /** Account owner captured when this delayed choice was accepted. */
   ownerEpoch?: string;
@@ -98,13 +98,13 @@ export interface PendingCredentialSwitchDeps {
     agent: AgentKind,
     model: string,
     providerId: string | null,
-    opts?: { desiredFastMode?: boolean },
+    opts?: { desiredFastMode?: boolean | 'ultrafast' },
   ) => Promise<{
     model?: string;
     providerId: string | null;
     degraded: boolean;
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
   }>;
   /**
    * 把收口裁决后的实际 route 持久化(生产 = 直写 sessions 行 + 广播
@@ -115,7 +115,7 @@ export interface PendingCredentialSwitchDeps {
    */
   persistRoute?: (
     sessionId: string,
-    route: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean },
+    route: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean | 'ultrafast' },
   ) => Promise<void>;
   /** 自愈兜底重试间隔覆写(测试用)。 */
   retryDelayMs?: number;
@@ -144,7 +144,7 @@ export class PendingCredentialSwitchService {
       forceSessionRebuild?: boolean;
       selectionSource?: 'agent';
       agentKind?: AgentKind;
-      previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+      previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean | 'ultrafast' };
       ownerEpoch?: string;
     },
   ): void {
@@ -369,7 +369,7 @@ export class PendingCredentialSwitchService {
    */
   private async resolveApplyRoute(
     target: PendingCredentialSwitch,
-  ): Promise<{ providerId: string | null; model?: string; effort?: string; fastMode?: boolean; apply: boolean }> {
+  ): Promise<{ providerId: string | null; model?: string; effort?: string; fastMode?: boolean | 'ultrafast'; apply: boolean }> {
     const { resolveRoute } = this.deps;
     if (!resolveRoute) return { providerId: target.providerId, apply: true };
     try {
@@ -390,7 +390,7 @@ export class PendingCredentialSwitchService {
       // 不动 fast,DB 现值即它):目标全停换兜底模型时按落地拷贝 reconcile,不支持
       // Fast 的兜底不再带着 fast 标志被上游拒(PR #744 review 第十九轮)。
       const resolved = await resolveRoute(target.agentKind, target.model, target.providerId, {
-        desiredFastMode: target.previousRoute?.fastMode === true,
+        desiredFastMode: target.previousRoute?.fastMode ?? false,
       });
       if (!resolved.model) {
         // 目标全停且目录里没有任何启用兜底模型:回滚到切换前的运行路由(register 时
@@ -473,7 +473,7 @@ export class PendingCredentialSwitchService {
   private async finalizeApply(
     sessionId: string,
     target: PendingCredentialSwitch,
-    resolved: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean; apply: boolean },
+    resolved: { providerId: string | null; model?: string; effort?: string; fastMode?: boolean | 'ultrafast'; apply: boolean },
     reason: string,
   ): Promise<void> {
     if (resolved.apply) {

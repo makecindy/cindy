@@ -32,6 +32,7 @@ describe("sealed original settings commands", () => {
     },
     { kind: "authorize", path: "/oauth/account/connect" },
     { kind: "authorization-result", requestId: "authorization-1" },
+    { kind: "document", epoch: 1 },
     { kind: "close" },
   ])("parses the settings envelope for $kind", (command) => {
     expect(parsePluginSettingsRequest(request(command))).toEqual(
@@ -72,6 +73,10 @@ describe("sealed original settings commands", () => {
     { kind: "answer-directory", requestId: "directory-1", path: 42 },
     { kind: "authorization-result", requestId: "../elsewhere" },
     { kind: "close", path: "/kv" },
+    { kind: "document", epoch: 0 },
+    { kind: "document", epoch: 1.5 },
+    { kind: "document", epoch: Number.MAX_SAFE_INTEGER + 1 },
+    { kind: "document", epoch: 1, sourceId: "forged" },
     { kind: "unknown" },
   ])("rejects malformed or ambiguous $kind commands", (command) => {
     expect(parsePluginSettingsRequest(request(command))).toBeNull();

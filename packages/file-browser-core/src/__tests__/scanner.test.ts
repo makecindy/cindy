@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readFile as fsReadFile, rm, symlink, writeFile as fsWriteFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile as fsReadFile,
+  readdir as fsReaddir,
+  rename as fsRename,
+  rm,
+  stat as fsStat,
+  symlink,
+  writeFile as fsWriteFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -155,6 +165,55 @@ describe('file-browser scanner path boundaries', () => {
   });
 });
 
+describe('file-browser scanner case-only renames', () => {
+  it('rejects a case-only rename when source and destination are different files', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      const source = path.join(root, 'Foo.md');
+      const destination = path.join(root, 'foo.md');
+      await fsWriteFile(source, 'source', 'utf8');
+      await fsWriteFile(destination, 'destination', 'utf8');
+      const [sourceStat, destinationStat] = await Promise.all([fsStat(source), fsStat(destination)]);
+      // Case-insensitive hosts cannot hold the two-file fixture. Keep this regression
+      // active on case-sensitive CI hosts instead of turning an overwrite into a pass.
+      if (sourceStat.dev === destinationStat.dev && sourceStat.ino === destinationStat.ino) return;
+
+      await expect(renameEntry(root, 'Foo.md', 'foo.md')).rejects.toThrow('目标已存在: foo.md');
+      await expect(fsReadFile(source, 'utf8')).resolves.toBe('source');
+      await expect(fsReadFile(destination, 'utf8')).resolves.toBe('destination');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a genuine case-only rename when the host filesystem supports it', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      const probe = path.join(root, 'probe');
+      const workdir = path.join(root, 'workdir');
+      await mkdir(probe);
+      await mkdir(workdir);
+      await fsWriteFile(path.join(probe, 'Probe.md'), 'probe', 'utf8');
+      try {
+        await fsRename(path.join(probe, 'Probe.md'), path.join(probe, 'probe.md'));
+      } catch {
+        return;
+      }
+
+      await fsWriteFile(path.join(workdir, 'Foo.md'), 'source', 'utf8');
+      await expect(renameEntry(workdir, 'Foo.md', 'foo.md')).resolves.toMatchObject({
+        relPath: 'foo.md',
+        type: 'file',
+        size: 6,
+      });
+      await expect(fsReadFile(path.join(workdir, 'foo.md'), 'utf8')).resolves.toBe('source');
+      await expect(fsReaddir(workdir)).resolves.toEqual(['foo.md']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('readFileChunk', () => {
   it('reassembles a file losslessly across chunk boundaries (binary, no zero-padding)', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
@@ -301,6 +360,40 @@ describe('readFile binary detection', () => {
       expect(await fsReadFile(path.join(root, 'doc.pdf'), 'latin1')).toBe(MINIMAL_NUL_FREE_PDF);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('file-browser scanner builtin ignore tiers', () => {
+  /**
+   * 回归:用户在文件树里右键新建 `build` 这类目录后看不到它、且刷新无效
+   * (2026-09 用户报告)。根因是 BUILTIN_IGNORE 无差别隐藏构建产物目录。
+   * 现在内置清单分两层,`showIgnoredDirs` 放行可放开的那一层。
+   */
+  it('hides a freshly created build/ dir by default, shows it with showIgnoredDirs', async () => {
+    const { loadIgnoreMatcher, listDir, __clearCacheForTesting } = await import('../index');
+    __clearCacheForTesting();
+    const workdir = await mkdtemp(path.join(os.tmpdir(), 'fb-builtin-'));
+    try {
+      await createFolder(workdir, 'build');
+      await createFolder(workdir, 'src');
+
+      const hiddenMatcher = await loadIgnoreMatcher(workdir, {
+        hideMetaFiles: true,
+        honorVcsIgnore: false,
+      });
+      const hidden = await listDir(workdir, '', hiddenMatcher, { docMode: false });
+      expect(hidden.map((e) => e.name)).toEqual(['src']);
+
+      const revealMatcher = await loadIgnoreMatcher(workdir, {
+        hideMetaFiles: true,
+        honorVcsIgnore: false,
+        showIgnoredDirs: true,
+      });
+      const revealed = await listDir(workdir, '', revealMatcher, { docMode: false });
+      expect(revealed.map((e) => e.name)).toEqual(['build', 'src']);
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
     }
   });
 });

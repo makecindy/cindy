@@ -460,7 +460,7 @@ function SocialLinksPanel() {
             </span>
             <ExternalLink
               aria-hidden
-              className="shrink-0 text-[var(--settings-section-sublabel)] opacity-65 transition-opacity duration-[var(--motion-fast,150ms)] group-hover:opacity-100"
+              className="shrink-0 text-[var(--text-tertiary)] transition-colors duration-[var(--motion-fast,150ms)] group-hover:text-[var(--settings-section-sublabel)]"
               size={13}
               strokeWidth={1.7}
             />
@@ -521,7 +521,7 @@ export function AutoUpdateToggleRow() {
           <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.autoUpdateLabel')}
           </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.linuxUpdateDescription')}
           </p>
         </div>
@@ -566,7 +566,7 @@ export function AutoUpdateToggleRow() {
           <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.autoUpdateLabel')}
           </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.autoUpdateDescription')}
           </p>
         </div>
@@ -642,7 +642,7 @@ function AnalyticsToggleRow() {
           <span id="settings-search-settings-about-analyticsLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.analyticsLabel')}
           </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.analyticsDescription')}
           </p>
         </div>
@@ -698,7 +698,7 @@ function DebugLogToggleRow() {
           aria-label={t('settings.about.debugLogLabel')}
         />
       </div>
-      <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70 pr-12">
+      <p className="text-12 leading-[1.4] text-[var(--text-secondary)] pr-12">
         {t('settings.about.debugLogDescription')}
       </p>
     </div>
@@ -761,7 +761,7 @@ function CrashAutoUploadToggleRow() {
           <span id="settings-search-settings-about-logUpload-crashAutoLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.logUpload.crashAutoLabel')}
           </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.logUpload.crashAutoDescription')}
           </p>
         </div>
@@ -801,7 +801,7 @@ function InfoRow({
         className={cn(
           'truncate text-13 font-medium',
           dim
-            ? 'text-[var(--settings-section-sublabel)] opacity-70'
+            ? 'text-[var(--text-secondary)]'
             : 'text-[var(--settings-section-title)]',
         )}
       >

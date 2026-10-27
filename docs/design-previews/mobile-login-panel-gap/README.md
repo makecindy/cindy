@@ -39,8 +39,8 @@
 - **当前列**：直接 `import` 仓库工作树的 `apps/mobile/src/auth/loginSkinLayout.ts`
   （该文件是纯数据 / 纯函数、零 react-native，node 可直接加载）
 - **main 列**：`git show origin/main:<同一路径>` 取出源码文本后同样 `import`
-- **稿值参照**：`figmaLoginY` / `figBottomGap` 取自 `docs/design-rules/figma-component-spec.md`
-  §12 表 wave6 的逐值记录（短屏 `705:915` Log_in 组 @(35,622)、长屏 `705:799` @(35,827)；
+- **稿值参照**：`figmaLoginY` / `figBottomGap` 取自 `docs/design-rules/DESIGN.md` §16.2 的移动端 stage 几何表
+  （原 `figma-component-spec.md` §12 wave6 逐值记录已于 2026-10-23 移除，追史见提交 `70b32d7578`）（短屏 `705:915` Log_in 组 @(35,622)、长屏 `705:799` @(35,827)；
   主容器 680×882 → 短屏底距 30 / 长屏底距 115）
 - **面板内几何**（标题 / 副标题 / 输入框 / 主按钮 / 圆钮行 / 协议行）：取同文件的
   `LOGIN_GROUP` / `LOGIN_TITLE` / `LOGIN_SUBTITLE` / `LOGIN_CONTROL` / `LOGIN_SOCIAL` /

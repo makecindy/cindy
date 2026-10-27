@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { currentOperationBudget, operationWait } from '../utils/operationBudget';
 import fs from 'node:fs/promises';
 
 import {
@@ -34,6 +35,7 @@ import {
   safeDirectorySpellings,
 } from './gitExec';
 import { gitPathOutput } from './gitPathOutput';
+import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -406,7 +408,12 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 /**
  * 探测 cwd 状态: 是否 git repo / 是否在 worktree 内 / git 是否可用 / 当前分支 / repo root
  */
-export const detectCwd = createCwdProbeScheduler(detectCwdOnce);
+const scheduledDetectCwd = createCwdProbeScheduler(detectCwdOnce);
+export function detectCwd(cwd: string): Promise<DetectCwdResp> {
+  // Automatic snapshots own cancellation. Never lend their abortable probe to
+  // an unrelated UI request (or borrow an unabortable pending UI probe).
+  return currentOperationBudget() ? operationWait(detectCwdOnce(cwd)) : scheduledDetectCwd(cwd);
+}
 
 // Share the work budget across realpath and every Git query. Git's additional
 // 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
@@ -415,6 +422,7 @@ const CWD_PROBE_TIMEOUT_MS = 10_000;
 async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
   const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
   const probeGit = async (args: readonly string[], dir?: string) => {
+    currentOperationBudget()?.check();
     const timeoutMs = Math.ceil(deadline - performance.now());
     if (timeoutMs <= 0) {
       throw new GitExecError({
@@ -1045,15 +1053,21 @@ export async function copyClaudeSiviDirs(
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
-export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+// Only opt-in creators retain a handle for failure compensation; normal startup stays asynchronous.
+const backgroundCheckouts = new Map<string, Promise<void>>();
+export async function awaitBackgroundCheckout(sessionId: string): Promise<void> {
+  await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
+}
+
+export async function createWorktree(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req);
+    return createWorktreeInner(req, options);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1160,6 +1174,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
 
     // 4. mkdirp parent
     return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
+      await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
       const parentDir = path.dirname(worktreePath);
       await timed('ensure parent directory', () => fs.mkdir(parentDir, { recursive: true }));
       snap.parentEnsured = parentDir;
@@ -1198,6 +1213,13 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
           (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
         ));
         bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
+        if (options?.trackBackgroundCheckout) {
+          const settled = bgPromise.catch(() => undefined);
+          backgroundCheckouts.set(req.sessionId, settled);
+          void settled.finally(() => {
+            if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+          });
+        }
       } catch (err) {
         await releaseWorktreeRuntimeLease(checkoutLease);
         // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
@@ -1213,6 +1235,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       try {
         await timed('configure hooks', () => configureHooksPath(worktreePath, baseRepo));
       } catch (err) {
+        if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
         await rollbackPartialCreate(snap);
         return { ok: false, error: classifyError(classifyAny(err)) };
       }
@@ -1275,6 +1298,8 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       return { ok: true, meta };
     });
   } catch (err) {
+    // Failed worker creation must also wait when metadata has not been published yet.
+    if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
     // 兜底: 任何未捕获的异常走 classifier + rollback
     await rollbackPartialCreate(snap);
     log.warn(

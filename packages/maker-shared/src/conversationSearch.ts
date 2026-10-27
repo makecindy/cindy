@@ -243,7 +243,6 @@ export function filterResultsByRequestFilters(
     results: response.results.filter((item) => {
       if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
       if (!matchesWorkingDirSet(item.session.workingDir, allowedDirs)) return false;
-      if (item.session.orcaRole === 'worker') return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
       if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {

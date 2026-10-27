@@ -825,12 +825,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * threadId 走 thread 容器。**权限不足/调用失败直接抛错** — 调用方据此
    * 区分「无历史」与「拉取失败」并给 owner 可见提示;turn 降级照跑由调用方兜。
    */
-  fetchChatHistoryPage(args: {
-    chatId: string;
-    threadId?: string;
-    pageToken?: string;
-    pageSize?: number;
-  }): Promise<outbound.ChatHistoryPage> {
+  fetchChatHistoryPage(args: Parameters<typeof outbound.fetchChatHistoryPage>[0]): Promise<outbound.ChatHistoryPage> {
     return outbound.fetchChatHistoryPage(args);
   }
 

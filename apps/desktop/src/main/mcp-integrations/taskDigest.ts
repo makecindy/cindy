@@ -286,7 +286,7 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
           model,
           provider_id: text(record.providerId),
           effort: text(record.effort),
-          fast: record.fastMode === true,
+          fast: (record.fastMode === 'ultrafast' ? 'ultrafast' : record.fastMode === true),
         }
       : null,
   };

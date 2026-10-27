@@ -92,6 +92,8 @@ describe('wallpaper catalog compatibility', () => {
         windowZoom: 1.2,
       });
       expect(settings).toEqual({
+        terminalFamily: '',
+        terminalSize: 13,
         wallpaperId: 'none',
         customWallpaperUrl: '',
         wallpaperMotion: 'dynamic',

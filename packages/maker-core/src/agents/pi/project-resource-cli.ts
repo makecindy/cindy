@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { shouldPruneSkillScanDirectory } from '../shared/skill-scan-limits.js';
 
 export interface PiProjectResourceCliPaths {
   readonly skills: readonly string[];
@@ -80,20 +81,54 @@ function listDir(dir: string): fs.Dirent[] {
   }
 }
 
+function isSymlinkDirectory(target: string): boolean {
+  try {
+    return fs.lstatSync(target).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function hasSkillFile(dir: string): boolean {
+  return ['SKILL.md', 'skill.md'].some((name) => isFile(path.join(dir, name)));
+}
+
 function collectSkillDirs(repoRoot: string, skillsDir: string, bucket: Set<string>): void {
   const resolvedDir = realpathOrNull(skillsDir);
   if (!resolvedDir || !isDir(resolvedDir) || !isWithinRoot(repoRoot, resolvedDir)) return;
+
+  const addSkill = (realFolder: string): void => {
+    const skillMd = ['SKILL.md', 'skill.md']
+      .map((name) => path.join(realFolder, name))
+      .find(isFile);
+    const realMd = skillMd ? realpathOrNull(skillMd) : null;
+    if (realMd && isFile(realMd) && isWithinRoot(repoRoot, realMd)) bucket.add(realFolder);
+  };
+
   for (const entry of listDir(resolvedDir)) {
-    if (entry.name.startsWith('.')) continue;
-    const realFolder = realpathOrNull(path.join(resolvedDir, entry.name));
+    if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
+    const candidatePath = path.join(resolvedDir, entry.name);
+    const realFolder = realpathOrNull(candidatePath);
     if (!realFolder || !isDir(realFolder) || !isWithinRoot(repoRoot, realFolder)) continue;
-    const upper = path.join(realFolder, 'SKILL.md');
-    const lower = path.join(realFolder, 'skill.md');
-    const skillMd = isFile(upper) ? upper : isFile(lower) ? lower : null;
-    if (!skillMd) continue;
-    const realMd = realpathOrNull(skillMd);
-    if (!realMd || !isFile(realMd) || !isWithinRoot(repoRoot, realMd)) continue;
-    bucket.add(realFolder);
+    if (hasSkillFile(realFolder)) {
+      addSkill(realFolder);
+      continue;
+    }
+    // Direct symlinked Skills remain supported above; a symlinked namespace
+    // could escape the repo or cycle and is intentionally not walked.
+    // lstat must see the unresolved path: a Windows junction may be reported
+    // as a directory by readdir and by the resolved realpath.
+    const isSymlink = entry.isSymbolicLink()
+      || (entry.isDirectory() && isSymlinkDirectory(candidatePath));
+    if (isSymlink || shouldPruneSkillScanDirectory(entry.name)) continue;
+
+    // At most one namespace/author level: <root>/<namespace>/<skill>.
+    for (const nested of listDir(realFolder)) {
+      if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
+      const nestedFolder = realpathOrNull(path.join(realFolder, nested.name));
+      if (!nestedFolder || !isDir(nestedFolder) || !isWithinRoot(repoRoot, nestedFolder)) continue;
+      if (hasSkillFile(nestedFolder)) addSkill(nestedFolder);
+    }
   }
 }
 

@@ -5,11 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
+vi.mock('../fastPolicyRuntime.js', () => ({ groupFastPolicyPending: vi.fn(() => false), syncGroupFastPolicy: vi.fn(async () => {}) }));
+vi.mock('../../device-link/dispatch.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
 vi.mock('../runtime.js', () => ({
   getProviderGroupDirectory: vi.fn(),
   getProviderGroupRouter: vi.fn(),
   getProviderGroupRemoteClient: vi.fn(),
   readProviderGroupOfSession: vi.fn(),
+  readProviderGroupRebalanceSuggestion: vi.fn(),
+  recordProviderGroupRebalanceDecision: vi.fn(),
 }));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn(), listProviderGroups: vi.fn() }));
 vi.mock('../bindings.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
@@ -21,6 +25,9 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../device-link/index.js', () => ({ broadcast: vi.fn(), getSelfDeviceId: vi.fn(() => 'self'), remoteInvoke: vi.fn(), remoteBackgroundInvoke: vi.fn() }));
 // 同账号管理的转发另有 managementClient.test.ts；IPC 回归只替换转发，不拉进分享运行时。
 vi.mock('../managementClient.js', () => ({ invokeProviderManagement: vi.fn() }));
+vi.mock('../../device-link/providerShareGuest.js', () => ({
+  captureProviderShareGroupRecovery: vi.fn<() => (ids: readonly string[]) => Promise<void>>(() => async () => {}),
+}));
 vi.mock('../../device-link/providerShareRuntime.js', () => ({
   executeProviderShareManagementCommand: vi.fn(), parseProviderShareCommand: vi.fn(),
 }));
@@ -33,6 +40,7 @@ import {
   markMembersUnreachableHere,
   parseProviderGroupCommand,
   registerProviderGroupIpc,
+  createProviderGroupCommandDeps,
   PROVIDER_GROUP_REACHABILITY_CHECK_TIMEOUT_MS,
   type ProviderGroupCommandDeps,
 } from '../ipc';
@@ -41,8 +49,10 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessi
 import { executeProviderShareManagementCommand, parseProviderShareCommand } from '../../device-link/providerShareRuntime';
 import { getProviderGroupDirectory, getProviderGroupRouter } from '../runtime';
 import { invokeProviderManagement } from '../managementClient';
+import { captureProviderShareGroupRecovery } from '../../device-link/providerShareGuest';
 import { pruneProviderGroupBindings } from '../bindings';
 import { readProviderGroup, writeProviderGroup } from '../store';
+import { broadcast } from '../../device-link/index';
 
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
@@ -86,6 +96,18 @@ function deps(candidates: ProviderGroupCandidate[], existing: ProviderGroupConfi
 }
 
 describe('parseProviderGroupCommand', () => {
+  // Unit: the real command boundary must preserve the confirmed message ID instead of a session-wide decision.
+  it('passes a confirmed message id through parsing and execution', async () => {
+    const d = deps([]);
+    d.rebalanceDecision = vi.fn(async () => true);
+    const request = { action: 'rebalance-decision', sessionId: 's1', memberKey: MINI.key, remember: false, clientId: 'message-a' };
+    const command = parseProviderGroupCommand(request);
+    if (command.action !== 'rebalance-decision') throw new Error('Expected the rebalance decision command');
+    expect(await executeProviderGroupCommand(d, command)).toEqual({ ok: true });
+    expect(d.rebalanceDecision).toHaveBeenCalledWith('s1', MINI.key, false, 'message-a');
+    expect(() => parseProviderGroupCommand({ ...request, clientId: 'bad id' })).toThrow();
+  });
+
   it('rejects malformed commands', () => {
     expect(() => parseProviderGroupCommand(null)).toThrow();
     expect(() => parseProviderGroupCommand({ action: 'get', providerId: 'bad id' })).toThrow();
@@ -313,6 +335,31 @@ describe('provider group IPC remote management', () => {
     expect(sharedView.members[0]).not.toHaveProperty('unreachableHere');
   });
 
+  // Regression 2026-10-26, unit: the settings page uses remote-manage instead of
+  // remote-view. One authorized shared member missing locally used to appear unreachable.
+  it.each(groupRequests)('restores a missing shared member before probing the remote $command.action view', async (request) => {
+    const d = deps([]);
+    const sharedView = {
+      ...view, config: { ...config, members: [LOCAL, SHARED] },
+      members: [{ ...view.members[0], key: SHARED.key, kind: SHARED.kind }],
+    };
+    const restored = new Set<string>();
+    let recovery: Promise<void> | undefined;
+    vi.mocked(captureProviderShareGroupRecovery).mockReturnValueOnce((ids) => {
+      recovery = Promise.resolve().then(() => { ids.forEach((id) => restored.add(id)); });
+      return recovery;
+    });
+    const readDeviceCatalog = vi.fn(async (id: string) => {
+      await recovery;
+      if (!restored.has(id)) throw new Error('[REMOTE_AGENT_SHARE_REMOVED] share not found');
+      return [];
+    });
+    Object.assign(d, { directory: { ...d.directory, readDeviceCatalog } });
+    const result = await invokeRemoteCommand(d, async () => sharedView, request);
+    expect(result).toEqual(sharedView);
+    expect(readDeviceCatalog).toHaveBeenCalledExactlyOnceWith(SHARED.agentDeviceId);
+  });
+
   it('keeps candidates and share management results unchanged, and accepts a deleted group without probing members', async () => {
     const d = deps([]);
     const readDeviceCatalog = vi.fn();
@@ -349,6 +396,36 @@ describe('provider group IPC remote management', () => {
 });
 
 describe('executeProviderGroupCommand save', () => {
+  it.each(['save-if-current', 'delete-if-current'] as const)(
+    'does not publish or prune %s under a new owner after Fast synchronization fails',
+    async (action) => {
+      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+      const d = deps([], config);
+      d.syncFastPolicy = vi.fn(async () => { d.switchOwner('owner-b'); throw Error('native busy'); });
+      await expect(executeProviderGroupCommand(d, {
+        action, providerId: 'anthropic', expectedConfig: config, config: { ...config, allowFast: false },
+      })).rejects.toThrow('PRECONDITION_FAILED');
+      expect(d.pruneBindings).not.toHaveBeenCalled();
+      expect(d.changed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['save-if-current', 'delete-if-current'] as const)(
+    'publishes the committed %s and prunes bindings even if native Fast synchronization fails',
+    async (action) => {
+      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+      const d = deps([], config);
+      d.syncFastPolicy = vi.fn(async () => { throw Error('native busy'); });
+      await expect(executeProviderGroupCommand(d, {
+        action, providerId: 'anthropic', expectedConfig: config,
+        config: { ...config, allowFast: false },
+      })).rejects.toThrow('native busy');
+      expect(d.pruneBindings).toHaveBeenCalledWith('anthropic', action === 'delete-if-current' ? null : new Set(['local']));
+      expect(d.changed).toHaveBeenCalledWith('anthropic');
+      expect(d.readGroup('anthropic')).toEqual(action === 'delete-if-current' ? null : { ...config, allowFast: false });
+    },
+  );
+
   it.each(['save-if-current', 'delete-if-current'] as const)('refuses %s before any work while the old owner is being torn down', async (action) => {
     const d = deps([]);
     vi.mocked(isAppSessionBoundaryPending).mockReturnValue(true);
@@ -537,6 +614,14 @@ describe('executeProviderGroupCommand save', () => {
 });
 
 describe('provider management receiver account boundary', () => {
+  it('invalidates the local model catalog when a subscription group changes', () => {
+    vi.mocked(broadcast).mockClear();
+    createProviderGroupCommandDeps().changed('openai');
+    expect(broadcast).toHaveBeenCalledWith('maker:provider:changed', {});
+    vi.mocked(broadcast).mockClear();
+    createProviderGroupCommandDeps().changed('xai');
+    expect(broadcast).not.toHaveBeenCalledWith('maker:provider:changed', {});
+  });
   it('refreshes reshare coordination after a remote group edit without adding local-only consent details to the reply', async () => {
     const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
     const d = deps([], config);
@@ -566,16 +651,6 @@ describe('provider management receiver account boundary', () => {
     vi.mocked(parseProviderShareCommand).mockReturnValueOnce({ action: 'received' });
     expect(() => parseProviderManagementRequest({ action: 'manage-share', command: { action: 'received' } }))
       .toThrow(/PERMISSION_DENIED/);
-  });
-
-  // 本机作为使用方的闲置释放设置只在本机窗口可改，不经同账号管理通道。
-  it.each([
-    { action: 'get-idle-release' },
-    { action: 'set-idle-release', value: { idleMinutes: 5 } },
-    { action: 'reset-idle-release' },
-  ] as const)('keeps $action out of the management scope', (command) => {
-    vi.mocked(parseProviderShareCommand).mockReturnValueOnce(command);
-    expect(() => parseProviderManagementRequest({ action: 'manage-share', command })).toThrow(/PERMISSION_DENIED/);
   });
 
   // 「用量」块的按天明细(provider-groups.md §7)：只读的分享者查询，和 own-usage 一样经管理通道转交。

@@ -3,11 +3,10 @@ import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AppFrame, mountPage } from '../../ui-page/harness';
 import { CindyDeviceRow } from '../../../src/renderer/features/bots/CindyDeviceRow';
-import { BotSessionContentHeaderRegistration } from '../../../src/renderer/features/bots/BotSessionContentHeader';
 import { cindyDeviceOptions } from '../../../src/renderer/features/bots/cindyDeviceRoster';
 import { Select } from '../../../src/renderer/components/ui/select';
 
-// Roster hooks are replaced at build time (ui-page.mjs `stubs`); the row, picker, header,
+// Roster hooks are replaced at build time (ui-page.mjs `stubs`); the row, picker,
 // Radix select, routing, theme and fonts are the production implementations.
 type Roster = Parameters<typeof cindyDeviceOptions>;
 
@@ -55,7 +54,6 @@ function DevicePickerPage({ data }: { data: Record<string, unknown> }) {
   );
   return (
     <AppFrame sidebar={sidebar}>
-      <BotSessionContentHeaderRegistration bot={options[roster.currentIndex].bot} />
       <div className="min-h-0 flex-1 p-6">
         <output hidden data-testid="opens">
           {opens}

@@ -53,6 +53,8 @@ export function collaborationRenderer() {
     buildMessageHierarchyLayout, formatLocalizedDuration, iconSize, iconStroke,
     Bot: () => null, ChevronDown: () => null, ChevronRight: () => null,
     FoldableHeaderButton: Header, logUnhandledRenderItem,
+    // 这些协作卡片都不是本机刚发出的消息。
+    localSendStartedAt: () => null,
     MessageBubble: ({ item }: { item: { message: { body: string } } }) => React.createElement('span', null, item.message.body),
   };
   return { state, ...executeRenderer<Record<'RenderItemView' | 'SubagentCard' | 'OrcaCollabCard', React.ComponentType<any>>>(declarations

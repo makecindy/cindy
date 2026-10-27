@@ -339,9 +339,20 @@ html:lang(ko) {
   content: none;
 }
 /* 输入框推荐提示词生效时,推荐词由 ChatInput 的 overlay 承载,关掉原生 placeholder。 */
+[data-voice-hint-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
+[data-voice-hint-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before,
 [data-recommendation-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
 [data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
+}
+.ProseMirror[data-voice-holding='true'],
+.ProseMirror[data-voice-holding='true'] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 空框用完整语音提示替代语音光标，避免图标压住提示首字。 */
+[data-voice-hint-active='true'] [data-voice-caret] {
+  visibility: hidden;
 }
 /* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder;
    预览不改变编辑器高度,见 ChatInput 的 promptPreviewLines。 */
@@ -2101,6 +2112,31 @@ mark.doc-search-mark [class] {
   height: 1px;
   flex: 0 0 auto;
   background: var(--border-default);
+}
+/* CINDY 毛玻璃下根容器透明,缝的背后是窗口原生材质;CINDY 边框是半透明墨水
+   (DESIGN.md §15.16),先垫页面底色再叠线色,不让窗外透出来。壁纸模式下两侧面板
+   本身就透出壁纸画布,缝照常直接叠在画布上。 */
+[data-theme='cindy-light'] :is(.layout-divider-v, .layout-divider-h),
+[data-theme='cindy-dark'] :is(.layout-divider-v, .layout-divider-h) {
+  background: linear-gradient(var(--border-default), var(--border-default)), var(--surface);
+}
+html[data-wallpaper-active='true'] :is(.layout-divider-v, .layout-divider-h) {
+  background: var(--border-default);
+}
+/* CINDY 文字色是半透明墨水,图标经 currentColor 继承同一颜色;图标由多段描边拼成,
+   半透明时每段各叠一次,交叠处出深点(浅色)/亮点(深色)。改为整枚合成:子元素按同色
+   不透明绘制,整枚图标再按原色透明度蒙一层,等同实色图标整体降透明度。不透明颜色时
+   蒙层全透光,视觉零变化;:where 不加优先级,组件可自行覆盖。lucide 图标自动生效,
+   手写的单色多段图标加 data-ink-icon(子元素若另有颜色会被一起蒙淡,不要加)。 */
+@supports (color: rgb(from currentColor r g b / 1)) {
+  :where([data-theme='cindy-light'], [data-theme='cindy-dark'])
+    :where(svg.lucide, svg[data-ink-icon]) {
+    mask-image: linear-gradient(currentColor, currentColor);
+  }
+  :where([data-theme='cindy-light'], [data-theme='cindy-dark'])
+    :where(svg.lucide > *, svg[data-ink-icon] > *) {
+    color: rgb(from currentColor r g b / 1);
+  }
 }
 /* 隐线规则是**单侧**的 —— 面板收起/隐藏后它两侧的缝要"合并成一条",不能两条全藏
    (否则收起中间面板后,剩下相邻两块之间反而没线了,2026-07-08 实测 bug):

@@ -13,6 +13,8 @@ import type { FavoriteStore } from '@/state/useRemoteModelFavorites';
  *     配置真的应用到正在跑的那一份**(live 状态不读记忆表,只清记忆等于只改了显示),
  *     跨引擎时复用与 applyEngine 同一条切换链路;
  *   - 收藏:☆ 是单向「存一份当前生效配置的副本」,收藏行的 ☆ 才是删除;
+ *   - 最近使用:选中**真的应用成功**才记(定时任务 / 设置等非对话入口不开,见
+ *     `recordRecentUsage`);
  *   - 选中:跨引擎的那一下**不走**普通 onSelect,交给调用方的切换事务。
  *
  * 本 hook 持有写入锁；点亮反馈的计时器留在组件里，经 `onFavoriteFlash` 回调触发。
@@ -33,6 +35,7 @@ import {
   type ModelFavoriteConfig,
   type ModelFavoriteItem,
 } from '@/state/modelFavorites';
+import { getRecentModelsOwner, recordRecentModel } from '@/state/recentModels';
 
 import type { ModelMemoryAccessors } from './ModelSelector';
 import type { UnifiedSelectedRow } from './UnifiedModelPanel';
@@ -68,7 +71,7 @@ export interface UnifiedRowActionsOptions {
    * 收藏 live 判定必须拿它和副本比:composer / 另一窗口只改了 Fast 时,uid 还在,
    * 但副本已经不是正在跑的配置。缺省按关(与行配置合成一致)。
    */
-  liveFast?: boolean | undefined;
+  liveFast?: boolean | 'ultrafast' | undefined;
   modelMemory?: ModelMemoryAccessors | undefined;
   /**
    * live 选中行改深度。返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;
@@ -78,7 +81,7 @@ export interface UnifiedRowActionsOptions {
   onEffortChangeLive?: ((effort: Effort) => void | boolean | Promise<void | boolean>) | undefined;
   /** live 选中行改 Fast。返回值语义同 `onEffortChangeLive`。 */
   onFastModeChangeLive?:
-    ((enabled: boolean) => void | boolean | Promise<void | boolean>) | undefined;
+    ((enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>) | undefined;
   onSelect: (
     providerId: string,
     modelId: string,
@@ -102,6 +105,11 @@ export interface UnifiedRowActionsOptions {
         config: UnifiedSelectedRow,
       ) => ActionResult)
     | undefined;
+  /**
+   * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
+   * 默认关:统一面板被对话之外的入口共用,那些选择是配置动作;只有对话侧两个入口开启。
+   */
+  recordRecentUsage?: boolean;
   sessionEngineFilter?:
     | {
         currentAgent: AgentKind;
@@ -124,7 +132,7 @@ export interface UnifiedRowActionsOptions {
            * 时事务必须原样应用 —— 收藏副本的 Fast 与目标引擎记忆值不同、或恢复推荐要
            * 明确关 Fast 时,重解析会让界面配置与运行态分离。
            */
-          fast?: boolean;
+          fast?: boolean | 'ultrafast';
           /** 这次选中的收藏锚点(选普通模型行 / 非「选中一行」的动作为 null)。 */
           favoriteUid?: string | null;
         }) => void | boolean | Promise<void | boolean>;
@@ -168,7 +176,7 @@ export interface UnifiedRowActionsOptions {
 export interface UnifiedOptimisticConfig {
   anchorKey: string;
   effort?: Effort;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /**
@@ -194,7 +202,7 @@ export function withOptimisticConfig(
     fast,
     customized:
       config.customized ||
-      fast ||
+      !!fast ||
       (effort !== null && defaultEffort != null && effort !== defaultEffort),
   };
 }
@@ -221,7 +229,7 @@ export interface UnifiedRowActions {
     anchor: UnifiedAnchor,
     entry: UnifiedModelEntry,
     config: UnifiedRowConfig,
-    enabled: boolean,
+    enabled: boolean | 'ultrafast',
   ) => ActionResult;
   resetToRecommended: (
     anchor: UnifiedAnchor,
@@ -238,6 +246,8 @@ export interface UnifiedRowActions {
     anchor: UnifiedAnchor,
     config: UnifiedRowConfig,
     favorite?: ModelFavoriteItem,
+    /** 该锚点指向的模型行 —— 「最近使用」记的归一化行身份从这里取(见 selectRow 实现)。 */
+    entry?: UnifiedModelEntry,
   ) => ActionResult;
 }
 
@@ -375,6 +385,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     onSelect,
     onConfigure,
     onSelectedFavoriteAnchorClear,
+    recordRecentUsage = false,
     sessionEngineFilter,
     sessionAgent,
     resolveEngineConfig,
@@ -408,6 +419,44 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     add: (config) => favoriteWrite(() => favoriteStore.add(config)),
     update: (uid, patch) => favoriteWrite(() => favoriteStore.update(uid, patch)),
     remove: (uid) => favoriteWrite(() => favoriteStore.remove(uid)),
+  };
+
+  /**
+   * 「最近使用」的唯一记录点:选择**真的应用成功**之后才记 —— 取消确认 / 写入失败 / 抛错都
+   * 不记(与收藏锚点「成功才落」同一条规则)。void 视为成功(调用方既有约定);同步 / 异步
+   * 结果都接住,并把原结果原样传回去(调用方还要靠 false 决定留不留面板)。
+   *
+   * 记的是**归一化行身份 + 那一刻生效的整份配置**(引擎 / 深度 / Fast):最近 = 配置副本,
+   * 与收藏同一套语义(见 recentModels 文件头),星标也按这份副本与收藏做完全匹配。
+   * 缺省字段不落快照(effort 无所谓「跟随推荐」/ fast 关闭)。
+   */
+  const rememberRecentModel = (
+    result: ActionResult,
+    entry: UnifiedModelEntry | undefined,
+    config: UnifiedRowConfig,
+  ): ActionResult => {
+    if (!recordRecentUsage || !entry) return result;
+    // 归属代次在**发起选择时**捕获:选择可能是异步的(跨引擎事务、远程写),回调落地时用户
+    // 可能已经登出 / 切到本地模式。那种情况下绝不能把 A 的一条模型记录写进 B 的分区
+    // (2026-09-16 review P1:跨账号串写)。归属变了就整条丢弃 —— 少一条快捷方式远好于串号。
+    const ownerAtSelect = getRecentModelsOwner();
+    const commit = (applied: void | boolean): void | boolean => {
+      if (applied !== false && getRecentModelsOwner() === ownerAtSelect) {
+        recordRecentModel({
+          providerId: entry.providerId,
+          modelId: entry.modelId,
+          agent: config.engine,
+          ...(config.effort ? { effort: config.effort } : {}),
+          // 三态：`'ultrafast'` 必须原样存，写成 `true` 会让「最近」里再应用变成普通 Fast。
+          ...(config.fast ? { fast: config.fast } : {}),
+        });
+      }
+      return applied;
+    };
+    if (result && typeof result === 'object' && 'then' in result) {
+      return Promise.resolve(result).then(commit);
+    }
+    return commit(result);
   };
 
   // ── 「把一份配置真的应用到正在跑的那一份上」的三条链路 ─────────────────────
@@ -537,7 +586,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
      * 收藏 Fast 与记忆值不同、或恢复推荐要明确关 Fast 时,存储清了 / 收藏落了,任务却
      * 还带着记忆里的旧 Fast 在跑 —— 界面配置与运行态分离。
      */
-    fast: boolean;
+    fast: boolean | 'ultrafast';
     /**
      * 事务成功后会话该把哪条收藏记成「当前选中」。**必填、不给默认值**(2026-08-17 review
      * 第四轮 K3):三个调用点的语义正好相反 —— 编辑选中收藏的引擎要**保住**这条锚点
@@ -734,7 +783,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
               modelId: anchor.modelId,
               agent: engine,
               ...(config.effort ? { effort: config.effort } : {}),
-              ...(config.fast ? { fast: true as const } : {}),
+              ...(config.fast ? { fast: config.fast } : {}),
             })
           : undefined;
       // 改的不是当前选中的那条收藏(或引擎没变 / 没注入解析器)→ 它只描述「下次选它用什么」,
@@ -847,7 +896,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // device-link 镜像、IM /model)。这里写归一化 id 会造出一份谁也读不到的影子记录,
     // 同时污染那张表。anchor.modelId 只是行身份,不是可以发出去的东西。
     if (!modelMemory && onConfigure) {
-      return selectRow(anchor, { ...config, effort }, undefined, true);
+      // 第 4 参(preferredEntry)不传 —— 「配置应用」不是一次模型选择,最近使用不在此记录。
+      return selectRow(anchor, { ...config, effort }, undefined, undefined, true);
     }
     modelMemory?.setEffort(
       config.agent,
@@ -895,7 +945,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     }
     // 同上:Fast 槽也按 wire id 存取。
     if (!modelMemory && onConfigure) {
-      return selectRow(anchor, { ...config, fast: enabled }, undefined, true);
+      return selectRow(anchor, { ...config, fast: enabled }, undefined, undefined, true);
     }
     modelMemory?.setFast(
       config.agent,
@@ -1042,7 +1092,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       modelId: anchor.modelId,
       agent: config.engine,
       ...(config.effort ? { effort: config.effort } : {}),
-      ...(config.fast ? { fast: true as const } : {}),
+      ...(config.fast ? { fast: config.fast } : {}),
     });
     if (result) return result.then(() => { onFavoriteFlash(anchorKey(anchor)); });
     onFavoriteFlash(anchorKey(anchor));
@@ -1124,6 +1174,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     anchor: UnifiedAnchor,
     config: UnifiedRowConfig,
     favorite?: ModelFavoriteItem,
+    entry?: UnifiedModelEntry,
     configuring = false,
   ): ActionResult => {
     if (interactionDisabled) return;
@@ -1135,31 +1186,38 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 交出去的一律是**该引擎的 wire id**(建会话 / 切模型 / 写 draft 都用它);
     // 行的归一化身份另放在 config.rowModelId 里,调用方要记 override / 收藏时用那个。
     const wireModelId = config.wireModelId ?? anchor.modelId;
-    if (sessionEngineFilter && shouldCrossEngine(config.agent)) {
-      // 收藏锚点一并交出去:会话侧要在事务**真成功后**才把它记成「当前选中的收藏」
-      // (取消 / 失败时什么都没换,锚点当然不能动)。同引擎那一路由 onSelect 的 config 带走。
-      return (configuring && sessionEngineFilter.onCrossEngineConfigure
-        ? sessionEngineFilter.onCrossEngineConfigure
-        : sessionEngineFilter.onCrossEngineSelect)({
-        providerId: anchor.providerId,
-        modelId: wireModelId,
-        targetAgent: config.agent,
-        effort,
-        // 行上显示的 Fast 就是按目标引擎解析好的那个值(resolveUnifiedRowConfig /
-        // resolveFavoriteRowConfig 均已过能力门控):显式交给事务,收藏副本「Fast 关」
-        // 也要能压过目标记忆里残留的「开」(2026-08-17 review)。
-        fast: config.fast,
-        favoriteUid: favorite ? favorite.uid : null,
-      });
-    }
-    // 生效引擎 / Fast / 收藏锚点随选中一起交出去:调用方(M5 新会话)要按它派生
-    // newMakerDraft 的 vendor,再重推一遍必然与行上显示的三元组漂移。
-    return (configuring && onConfigure ? onConfigure : onSelect)(anchor.providerId, wireModelId, effort, {
-      engine: config.engine,
-      fast: config.fast,
-      favoriteUid: favorite ? favorite.uid : null,
-      rowModelId: anchor.modelId,
-    });
+    const result =
+      sessionEngineFilter && shouldCrossEngine(config.agent)
+        ? // 收藏锚点一并交出去:会话侧要在事务**真成功后**才把它记成「当前选中的收藏」
+          // (取消 / 失败时什么都没换,锚点当然不能动)。同引擎那一路由 onSelect 的 config 带走。
+          // configuring 时优先走配置入口（#4496 的 onCrossEngineConfigure），否则才是切换事务。
+          (configuring && sessionEngineFilter.onCrossEngineConfigure
+            ? sessionEngineFilter.onCrossEngineConfigure
+            : sessionEngineFilter.onCrossEngineSelect)({
+            providerId: anchor.providerId,
+            modelId: wireModelId,
+            targetAgent: config.agent,
+            effort,
+            // 行上显示的 Fast 就是按目标引擎解析好的那个值(resolveUnifiedRowConfig /
+            // resolveFavoriteRowConfig 均已过能力门控):显式交给事务,收藏副本「Fast 关」
+            // 也要能压过目标记忆里残留的「开」(2026-08-17 review)。
+            fast: config.fast,
+            favoriteUid: favorite ? favorite.uid : null,
+          })
+        : // 生效引擎 / Fast / 收藏锚点随选中一起交出去:调用方(M5 新会话)要按它派生
+          // newMakerDraft 的 vendor,再重推一遍必然与行上显示的三元组漂移。
+          (configuring && onConfigure ? onConfigure : onSelect)(
+            anchor.providerId,
+            wireModelId,
+            effort,
+            {
+              engine: config.engine,
+              fast: config.fast,
+              favoriteUid: favorite ? favorite.uid : null,
+              rowModelId: anchor.modelId,
+            },
+          );
+    return rememberRecentModel(result, entry, config);
   };
 
   return {

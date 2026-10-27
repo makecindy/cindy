@@ -84,3 +84,15 @@ describe('wireNoteMemory', () => {
     expect(memory.plan('s2', { 'ui-language': UI }).notes).toEqual({ 'ui-language': UI });
   });
 });
+
+// Unit / #7253: idle direct sends add only delivery context. They must not erase
+// language/device deduplication already committed by the ordinary send path.
+it('preserves other notes when an idle send commits only delivery context', () => {
+  const memory = createWireNoteMemory();
+  const notes = { 'ui-language': UI, 'task-delivery': 'Report final delivery' } as const;
+  memory.plan('s1', notes).commit();
+  memory.plan('s1', { 'task-delivery': notes['task-delivery'] }, { partial: true }).commit();
+  expect(memory.plan('s1', notes).notes).toEqual({});
+  memory.plan('s1', { 'task-delivery': notes['task-delivery'] }, { partial: true, force: true }).commit();
+  expect(memory.plan('s1', notes).notes).toEqual({ 'ui-language': UI });
+});

@@ -5014,7 +5014,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
 
     expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
     // 第一条已经处理中，第二条仍显示排队。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']);
   });
 
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
@@ -5033,7 +5033,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
 
     // 取消排队任务时清掉它的状态，不影响正在执行的任务。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀', '']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀', '']);
   });
 
   it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
@@ -5052,7 +5052,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']); // 两条各一个在册
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
@@ -5074,7 +5074,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
-    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     d.onDisconnected('conn-1');
     fr.finish({ status: 'ok' });
@@ -5128,7 +5128,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
   });
 
   it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
@@ -5139,7 +5139,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/)]);
 
     const draining = d.deactivateAccount();
     fr.finish({ status: 'ok' });
@@ -5373,6 +5373,51 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
       const end = c.last('turn.end')!.payload;
       expect(end.clientFinal).toEqual({ complete: false });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 2026-10-27 长期 pending 回归：经真实 dispatcher 验证小时级 429 后完整正文
+  // 进入既有出箱交接，且下一轮能执行；已有未知回执用例不覆盖长退避。unit 假时钟。
+  it('终稿长退避到期后交回完整正文、释放同任务队列，不重跑已完成轮次', async () => {
+    vi.useFakeTimers();
+    const ledger = memoryTerminalLedger();
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: ledger });
+    try {
+      const c = respondingCollector(d, (p) =>
+        p.requestId === 'req-1' && p.purpose === 'turn-final'
+          ? { ok: false, channelErrorCode: 429, retryAfterMs: 3_600_000 }
+          : {},
+      );
+      d.onConnected('conn-1', c.send, ALL_FEATURES);
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await tick();
+      d.handleDispatch('conn-1', telegramDispatch({ requestId: 'req-2' }), c.send);
+      await tick();
+      expect(c.last('task.ack')?.payload.result).toBe('queued');
+      fr.finish({ finalText: '已经生成的完整答案' });
+      await tick(40);
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('pending');
+      expect(c.ofType('turn.end')).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await tick(40);
+      expect(c.last('turn.end')?.payload).toMatchObject({
+        requestId: 'req-1',
+        finalText: '已经生成的完整答案',
+        clientFinal: { complete: false },
+      });
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('sent');
+      expect(fr.calls).toHaveLength(2);
+      fr.finish({ finalText: '第二轮答案' });
+      await tick(40);
+      expect(c.ofType('turn.end').map((m) => m.payload.requestId)).toEqual(['req-1', 'req-2']);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(fr.calls).toHaveLength(2);
+      expect(ops(c.sent, 'turn-final').filter((m) => m.payload.requestId === 'req-1')).toHaveLength(1);
+    } finally {
+      d.dispose();
       vi.useRealTimers();
     }
   });

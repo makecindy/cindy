@@ -26,6 +26,7 @@
 
 import { hasUserVisibleText } from '../../shared/visibleText.js';
 import type { AgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
+import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
 
 import {
   isNetworkishErrorMessage,
@@ -49,6 +50,8 @@ export interface InterruptedTurnErrorSignals {
   usageLimit?: boolean;
   /** 上游给出的限额重置时刻(unix ms)。 */
   usageResetAt?: number;
+  /** Main-only: verified group exhaustion before dispatch; never borrow the old route's quota. */
+  providerGroupUsageLimit?: ProviderGroupUsageLimit;
   /** Codex app-server 的结构化错误 tag(如 `usageLimitExceeded`)。 */
   codexErrorInfo?: string;
 }
@@ -177,6 +180,23 @@ export function shouldPreserveWaitingContinuationOnlyAutoResume(input: {
   if (input.coordinatorAttemptToken !== token) return false;
   // autoRetryLastError 在入队前就清掉 autoResumePending；不能靠它判断交棒窗口。
   return input.hasLiveSchedule || input.hasQueuedAutoResume;
+}
+
+/** Keep only the exact fallback callback across a runtime rebuild or cross-harness switch. */
+export function shouldPreserveRuntimeFallbackAutoResume(input: {
+  closeReason: unknown;
+  leasedAttemptToken: number | undefined;
+  guardIsCurrentAttempt: boolean;
+  bookIsCurrentAttempt: boolean;
+  coordinatorAttemptToken: number | null | undefined;
+  isAutoResumePending: boolean;
+  hasLiveSchedule: boolean;
+}): boolean {
+  return (input.closeReason === 'requested' || input.closeReason === 'runtime-refresh' || input.closeReason === 'agent-switch')
+    && input.leasedAttemptToken !== undefined
+    && input.guardIsCurrentAttempt && input.bookIsCurrentAttempt
+    && input.coordinatorAttemptToken === input.leasedAttemptToken
+    && input.isAutoResumePending && input.hasLiveSchedule;
 }
 
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {

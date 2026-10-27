@@ -6,7 +6,7 @@ export interface SessionActionStripSessionLike {
   agentKind: 'cc' | 'codex' | string;
   contextTokens?: number;
   contextWindow?: number;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   model: string;
   orcaRole?: 'lead' | 'worker' | string | null;
   permissionMode: string;

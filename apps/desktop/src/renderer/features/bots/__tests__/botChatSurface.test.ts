@@ -38,10 +38,11 @@ describe('Bot 对话的判定条件', () => {
   });
 
   it('伙伴对话换掉任务顶栏,而不是在它旁边再加一个', () => {
-    expect(sessionView).toContain(
-      '<BotSessionContentHeaderRegistration bot={botChatIdentity} />',
-    );
+    expect(sessionView).toMatch(/botChatIdentity\s*\?\s*\(\s*<BotSessionContentHeaderRegistration bot=\{botChatIdentity\}/);
     expect(sessionView).toContain('<SessionContentHeaderRegistration');
+    const botHeader = sessionView.match(/<BotSessionContentHeaderRegistration\b[\s\S]*?\/>/)?.[0];
+    expect(botHeader).toBeTruthy();
+    expect(botHeader).not.toMatch(/\bonVoice(?:Active)?\s*=/);
   });
 });
 
@@ -64,6 +65,14 @@ describe('消息流的头像挂载', () => {
 });
 
 describe('伙伴输入框只保留对话动作', () => {
+  it('语音对话入口接入输入框，并传递可用与通话状态', () => {
+    expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
+    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked}');
+    expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
+    const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
+    expect(voiceGate).toContain('pendingInputHandoff');
+  });
+
   it('伙伴保留标准权限 chip，仅隐藏模型选择器', () => {
     expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(1);
     expect(chatInput.indexOf('<PermissionSelector')).toBeLessThan(chatInput.indexOf('!hideRuntimeControls ? ('));

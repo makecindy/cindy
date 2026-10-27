@@ -368,3 +368,13 @@ describe('deriveModelSections', () => {
     expect(sections[0].models.every((m) => m.sourceProviderId === 'xd')).toBe(true);
   });
 });
+
+// Unit: actual flat/section selector derivation must exclude a Decisions endpoint even if selected.
+// Existing picker cases did not exercise evaluation; one chat + one decision is the minimum input.
+it('excludes decision models from both Agent lists including selected preservation', () => {
+  const p = provider('decision-provider', ['codex'], { codex: [model('chat', { mode: 'chat' }), model('jev', { mode: 'evaluation' })] });
+  const options = { providers: [p], agent: 'codex' as const, providerScope: 'as-given' as const,
+    keepSelected: { providerId: p.id, modelId: 'jev' } };
+  expect(deriveModelList(options).map(m => m.id)).toEqual(['chat']);
+  expect(deriveModelSections(options).flatMap(s => s.models.map(m => m.id))).toEqual(['chat']);
+});

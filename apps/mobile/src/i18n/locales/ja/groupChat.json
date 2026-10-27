@@ -1,8 +1,8 @@
 {
   "title": "グループチャット",
   "memberSeparator": "、",
-  "memberCount_one": "仲間 {{count}} 人",
-  "memberCount_other": "仲間 {{count}} 人",
+  "memberCount_one": "メンバー {{count}} 人",
+  "memberCount_other": "メンバー {{count}} 人",
   "organizer": "まとめ役",
   "waitingConfirm": "{{name}} があなたの確認を待っています",
   "loadFailedTitle": "このグループチャットを読み込めません",
@@ -60,6 +60,8 @@
     "send": "送信"
   },
   "timeline": {
+    "newMessages_one": "新着メッセージ {{count}} 件",
+    "newMessages_other": "新着メッセージ {{count}} 件",
     "emptyTitle": "このグループにはまだメッセージがありません",
     "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
     "roundEnded": "仲間たちの発言が終わりました",
@@ -80,7 +82,8 @@
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
     "deleted": "元のメッセージは削除されました",
-    "attachments": "{{name}} など {{total}} 件"
+    "attachments": "{{name}} など {{total}} 件",
+    "unavailable": "このメッセージは見つかりません。"
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",
@@ -113,6 +116,7 @@
     "start": "開始する",
     "dismiss": "今回はやめる",
     "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoNote": "ステップが終わると自動で次へ進みます。",
     "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
     "superseded": "更新済み",
     "dismissed": "見送りました",
@@ -137,6 +141,7 @@
     "allDone": "すべて完了"
   },
   "speaking": {
+    "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
   },
@@ -171,6 +176,7 @@
     "replyModeAll": "誰でも返信できる",
     "replyModeMentioned": "@ された仲間だけ返信",
     "replyModeNote": "付け加えることがない仲間は発言しません。1 ラウンドは最大 3 周・10 件までで、その後は「議論を続ける」を押すまで待ちます。",
+    "replyModeNoteQueue": "仲間が順番に一人ずつ答え、最初の 5 人は自動で続きます。仲間のメッセージを引用したり、そのスレッドに返信したりしても呼び出せます。",
     "replyModeSaveFailed": "返信の設定を保存できませんでした。もう一度お試しください",
     "delete": "グループチャットを削除",
     "deleteNote": "削除されるのはこのグループチャットとそのメッセージだけです。仲間本人、その記憶、個別のチャットには影響しません。",
@@ -192,20 +198,25 @@
     "add": "仲間を追加",
     "projectDirOnComputer": "パソコンで選択・変更できます",
     "memberActions": "{{name}} の操作",
-    "managementComputer": "管理用コンピュータ",
     "retry": "再試行",
-    "reconnect": "再接続",
     "conflict": "グループ設定が更新されました。内容を確認してから再保存してください。入力内容は保持されています。",
     "archive": "グループチャットをアーカイブ",
     "archiveConfirmTitle": "「{{name}}」をアーカイブしますか？",
     "archiveNote": "アーカイブできるのは所有者のみです。新しいメッセージは送信できなくなりますが、履歴は保持されます。",
-    "managementStatus": {
-      "ready": "接続済み",
-      "loading": "接続中…",
-      "noHost": "未接続",
-      "permission": "読み取り専用",
-      "upgrade": "更新が必要",
-      "unavailable": "設定を取得できません"
+    "description": "グループの説明",
+    "descriptionSaveFailed": "グループの説明を保存できませんでした。",
+    "makeAdmin": "管理者にする",
+    "removeAdmin": "管理者を解除",
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "guest": "ゲスト"
+    },
+    "cloudStatus": {
+      "loading": "設定を読み込み中…",
+      "permission": "この設定を変更できるのはグループのオーナーと管理者だけです。",
+      "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
     }
   },
   "errors": {

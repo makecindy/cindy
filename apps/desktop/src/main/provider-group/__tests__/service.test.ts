@@ -11,12 +11,15 @@ import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/p
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
+import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../cooling';
 import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
 import { createProviderGroupRouter, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../router';
 import { providerGroupCodexUsageSnapshot, type ProviderGroupCodexUsageSnapshot } from '../usage';
 import {
   createProviderGroupService,
   PROVIDER_GROUP_PRE_SEND_FAILED_TTL_MS,
+  PROVIDER_GROUP_REBALANCE_ACCEPT_TTL_MS,
+  PROVIDER_GROUP_REBALANCE_BACKOFF_MS,
   PROVIDER_GROUP_RECENT_DROP_MS,
   PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS,
   PROVIDER_GROUP_SUPERSEDED_ERROR,
@@ -44,6 +47,13 @@ function member(kind: ProviderGroupMember['kind'], agentDeviceId: string | null,
 }
 
 const LEASE = { recovery: 'lease' };
+// Runtime handoff regression: overload must cool the failing member and consume
+// a guest's offer just like limits. Earlier service coverage only sent limits;
+// the coordinator regression covers which recovery owner receives this error.
+const SWITCH_FAILURES = [
+  { cause: 'usage-limit', signals: { sdkError: 'rate_limit' } },
+  { cause: 'overload', signals: { reason: 'upstream-overload', codexErrorInfo: 'serverOverloaded' } },
+] as const;
 const LOCAL = member('local', null, 'anthropic');
 const MINI = member('device', 'mini', 'anthropic-1a2b3c4d');
 const STUDIO = member('share', 'share:s1', 'anthropic');
@@ -68,6 +78,8 @@ function harness(options: {
   const bindings = new Map<string, ProviderGroupBinding>();
   /** 因组内电脑被移出或组被删除而解除过的任务 → 那个组。 */
   const released = new Map<string, ProviderGroupRef>();
+  /** 选过「以后自动换号」的任务。 */
+  const autoRebalance = new Set<string>();
   // 现读那台的状态：默认与组内电脑状态同一份离线名单，单测按需逐次指定。
   const probe = vi.fn(async (agentDeviceId: string, providerId: string): Promise<ResolvedMemberState> => {
     const found = config.members.find((m) => m.agentDeviceId === agentDeviceId && m.providerId === providerId);
@@ -144,6 +156,10 @@ function harness(options: {
     continueSession: vi.fn(async () => 'resumed' as const),
     fallback: vi.fn(),
     readResetAt: vi.fn(() => null),
+    readAutoRebalance: vi.fn((id: string) => autoRebalance.has(id)),
+    writeAutoRebalance: vi.fn(async (id: string) => {
+      autoRebalance.add(id);
+    }),
     now: () => now,
     // 等原电脑恢复时的退避不真等。
     sleep: vi.fn(async (_ms: number) => {}),
@@ -434,10 +450,10 @@ describe('nextAfterStartFailure', () => {
 });
 
 describe('onTurnError (automatic switch)', () => {
-  it('hands the task to the next computer and continues the turn with an activity row', async () => {
+  it.each(SWITCH_FAILURES)('hands off, cools the member and continues after $cause', async ({ cause, signals }) => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
+    h.service.onTurnError('s1', signals, 7);
     await flush();
     expect(h.deps.leaseRecovery).toHaveBeenCalledWith('s1', 7);
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', {
@@ -450,12 +466,16 @@ describe('onTurnError (automatic switch)', () => {
     // 交接后用新令牌续跑(旧会话关闭撤销了原来的等待)。
     expect(h.deps.rearmContinue).toHaveBeenCalledWith('s1', LEASE, expect.any(Number));
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
-      agentSwitch: { from: 'local-name', to: `${MINI.key}-name`, cause: 'usage-limit' },
+      agentSwitch: { from: 'local-name', to: `${MINI.key}-name`, cause },
     }));
     expect(h.deps.fallback).not.toHaveBeenCalled();
-    // 撞到用量上限的那台进入冷却，新任务不会分到它。
-    expect(h.router.coolingUntil('anthropic', 'local', MODEL)).toBe(1_000_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
-    expect(h.router.coolingUntil('anthropic', 'local', 'claude-sonnet-5')).toBeNull();
+    // 限额按模型冷却，过载按账号短暂冷却；其他任务不会立即回到这台。
+    expect(h.router.coolingUntil('anthropic', 'local', MODEL)).toBe(
+      1_000_000 + (cause === 'overload' ? PROVIDER_GROUP_FAILURE_COOLDOWN_MS : PROVIDER_GROUP_DEFAULT_COOLDOWN_MS),
+    );
+    expect(h.router.coolingUntil('anthropic', 'local', 'claude-sonnet-5')).toBe(
+      cause === 'overload' ? 1_000_000 + PROVIDER_GROUP_FAILURE_COOLDOWN_MS : null,
+    );
   });
 
   it('switches back to this computer with its provider when a remote member fails', async () => {
@@ -1244,6 +1264,129 @@ describe('beforeSend', () => {
   });
 });
 
+// 2026-10-21 用户裁决(provider-groups.md §6.2「任务进行中换号」)：上一轮结束后用户发下一条消息前，另一个账号的配额明显
+// 更该先用时提议换号；用户确认才换(可选这个任务以后自动换)，定时任务的消息不换。确认、等待与失败都在这里决定，
+// 客户端只问与转达选择，所以从服务入口验证。
+describe('switching accounts between messages to balance quota', () => {
+  // 本机：周配额才用 10%，快一周后才重置；mini：一天后重置，还剩 80%(明显更该先用)。时间单位与 harness 的 now 一致。
+  const paceUsage = (updatedAt: number): Record<string, ClaudeSubscriptionUsageSnapshot> => ({
+    local: { updatedAt, fiveHour: { utilization: 0, resetsAt: 3_000 }, sevenDay: { utilization: 10, resetsAt: 600_000 } },
+    [MINI.key]: { updatedAt, fiveHour: { utilization: 0, resetsAt: 3_000 }, sevenDay: { utilization: 20, resetsAt: 87_400 } },
+  });
+  function paced() {
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [LOCAL, MINI], usage });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    return { ...h, usage };
+  }
+
+  it('offers the account to use first and moves there on the next message only after the user confirms', async () => {
+    const h = paced();
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({
+      kind: 'ask',
+      memberKey: MINI.key,
+      quota: { usedPercent: 20, resetAtMs: 87_400_000 },
+    });
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+
+    expect(await h.service.rebalanceDecision('s1', MINI.key, false, 'message-a')).toBe(true);
+    const progress = vi.fn();
+    await h.service.beforeSend('s1', { progress, clientId: 'message-a' });
+    expect(progress).toHaveBeenCalledWith('switching');
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
+      's1',
+      { agentKind: 'claude-code', model: MODEL, providerId: MINI.providerId, agentDeviceId: 'mini' },
+      { beforeSend: true, isCurrent: expect.any(Function), reason: 'quota-rebalance' },
+    );
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    // 确认只管那一条消息；到了那台也不再提议换回来。
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+  });
+
+  it('keeps a scheduled message on the current account and saves the confirmation for the user’s own message', async () => {
+    const h = paced();
+    await h.service.rebalanceDecision('s1', MINI.key, false, 'message-a');
+    await h.service.beforeSend('s1', { scheduled: true });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
+  // §6.2：弹窗期间目标已满载或短窗口变紧时，普通分配的兜底不能用于主动换号。
+  // 现有成功/交接失败用例没有覆盖提议之后的状态变化；unit，从服务入口验证仍留原账号。
+  it.each(['full', 'tight', 'unknown', 'less-urgent'] as const)('keeps the current account when the proposed target becomes %s', async (state) => {
+    const h = paced();
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: MINI.key });
+    if (state === 'full') {
+      for (let i = 0; i < MINI.limit; i++) {
+        await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL,
+          exclude: new Set(['local']), reserveFor: `other-${i}` });
+      }
+    } else if (state === 'tight') {
+      h.usage[MINI.key].fiveHour = { utilization: 90, resetsAt: 11_800 };
+    } else if (state === 'less-urgent') {
+      h.usage[MINI.key].sevenDay = { utilization: 20, resetsAt: 600_000 };
+    } else {
+      delete h.usage[MINI.key];
+    }
+    await h.service.rebalanceDecision('s1', MINI.key, false, 'message-a');
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+  });
+
+  it('does not offer while a reply is running and drops a confirmation whose message was never sent', async () => {
+    const h = paced();
+    h.deps.isTurnRunning.mockReturnValue(true);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+    h.deps.isTurnRunning.mockReturnValue(false);
+
+    await h.service.rebalanceDecision('s1', MINI.key, false, 'message-a');
+    h.advance(PROVIDER_GROUP_REBALANCE_ACCEPT_TTL_MS + 1);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(await h.service.rebalanceDecision('s1', 'device:elsewhere:anthropic', false)).toBe(false);
+  });
+
+  it('remembers “switch automatically” for that task only', async () => {
+    const h = paced();
+    h.bindings.set('s2', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    await h.service.rebalanceDecision('s1', MINI.key, true, 'message-a');
+    expect(h.deps.writeAutoRebalance).toHaveBeenCalledWith('s1');
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
+    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'ask', memberKey: MINI.key });
+  });
+
+  // §6.2：A 确认后离开而未发送，B 取消或没有提议时不能继承 A 的换号；此前只按任务 id 暂存。
+  it('consumes a confirmation only for the message whose client id was confirmed', async () => {
+    const h = paced();
+    expect(await h.service.rebalanceDecision('s1', MINI.key, true)).toBe(false);
+    expect(h.deps.writeAutoRebalance).not.toHaveBeenCalled();
+    await h.service.rebalanceDecision('s1', MINI.key, false, 'message-a');
+    await h.service.beforeSend('s1', { clientId: 'message-b' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends on the current account when the move fails and stops offering that account for a while', async () => {
+    const h = paced();
+    h.deps.switchAgentLocation.mockRejectedValueOnce(new Error('handoff failed'));
+    await h.service.rebalanceDecision('s1', MINI.key, false, 'message-a');
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+
+    h.advance(PROVIDER_GROUP_REBALANCE_BACKOFF_MS + 1);
+    Object.assign(h.usage, paceUsage(1_000_000 + PROVIDER_GROUP_REBALANCE_BACKOFF_MS + 1));
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: MINI.key });
+  });
+});
+
 describe('onTurnError — one decision for every failure (failurePolicy)', () => {
   it('switches when the agent there ends mid-turn without a terminal event (default: switch), without cooling it', async () => {
     const h = harness();
@@ -1292,10 +1435,11 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     return { ...h, service, guestSwitch, tick: (ms: number) => { clock += ms; } };
   }
 
-  it('hands off and reopens with the token when the group computer asks to switch', async () => {
+  it.each(SWITCH_FAILURES)('hands off and reopens with the token after $cause', async ({ cause, signals }) => {
     const h = guestHarness();
     h.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
-    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
+    expect(h.service.mayHandleTurnError('s1', signals)).toBe(true);
+    h.service.onTurnError('s1', signals, 7);
     await flush();
     // 位置仍是同一个分享：强制重新交接。
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', {
@@ -1307,7 +1451,7 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
     expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
-      groupSwitch: { cause: 'usage-limit' },
+      groupSwitch: { cause },
     }));
     const info = (h.deps.continueSession.mock.calls[0] as unknown[])[2] as Record<string, unknown>;
     expect(info).not.toHaveProperty('agentSwitch');
@@ -1413,38 +1557,38 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
 describe('no error while switching (mayHandleTurnError + hooks)', () => {
   const LIMIT = { sdkError: 'rate_limit' };
 
-  it('predicts a switch only for bound tasks in a group that can still move them', () => {
+  it.each(SWITCH_FAILURES)('predicts a switch only for a group that can move after $cause', ({ signals }) => {
     const h = harness();
     // 没归组、也没有分享者的凭证：照常先报错。
-    expect(h.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(h.service.mayHandleTurnError('s1', signals)).toBe(false);
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    expect(h.service.mayHandleTurnError('s1', LIMIT)).toBe(true);
+    expect(h.service.mayHandleTurnError('s1', signals)).toBe(true);
     // 换到哪台都一样的失败不换。
     expect(h.service.mayHandleTurnError('s1', { message: 'prompt is too long', sdkError: 'invalid_request' })).toBe(false);
 
     const off = harness({ autoSwitch: false });
     off.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    expect(off.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(off.service.mayHandleTurnError('s1', signals)).toBe(false);
 
     // 组里只剩这一台电脑：换不了。
     const alone = harness({ members: [LOCAL] });
     alone.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    expect(alone.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(alone.service.mayHandleTurnError('s1', signals)).toBe(false);
   });
 
-  it('predicts a switch for a shared task only with a fresh token from the group computer', () => {
+  it.each(SWITCH_FAILURES)('requires a fresh token from the group computer after $cause', ({ signals }) => {
     let clock = 0;
     const guestSwitch = createProviderGroupGuestSwitch(() => clock);
     const h = harness({ row: { agentDeviceId: 'share:share-from-alice', providerId: 'alice-anthropic' } });
     const service = createProviderGroupService({ ...h.deps, guestSwitch });
-    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(service.mayHandleTurnError('s1', signals)).toBe(false);
     guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
-    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(true);
+    expect(service.mayHandleTurnError('s1', signals)).toBe(true);
     // 只看不取：之后的换电脑仍拿得到凭证。
     expect(guestSwitch.claim('s1')).toBe(true);
     guestSwitch.offer('s1', 'token-bbbbbbbbbbbbbbbb');
     clock += PROVIDER_GROUP_SWITCH_OFFER_TTL_MS + 1;
-    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(service.mayHandleTurnError('s1', signals)).toBe(false);
   });
 
   it('reports a successful switch and never hands back', async () => {

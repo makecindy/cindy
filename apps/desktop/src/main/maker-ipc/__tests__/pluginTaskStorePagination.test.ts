@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { expect, it } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { createPluginTaskStore } from '../pluginTaskStore.js';
+import { createPluginTargetStore } from '../pluginTargetStore.js';
 import { createPluginTaskService } from '../pluginTaskService.js';
 
 it.each(['absent', 'raw session', 'revoked', 'changed revision', 'other plugin', 'send'] as const)(
@@ -80,5 +81,50 @@ it('pages by creation time and ID without losing later records with smaller UUID
       await expect(store.list('other', operation, target, prefix + 'z', 10)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
       await expect(store.list('p', operation, 'different', prefix + 'z', 10)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     }
+  } finally { sqlite.close(); }
+});
+
+// Production receipt store: indexed per-key SQLite writes must preserve cancellation
+// across restarts/late ACKs. Existing owned-task tests do not cover target reservations.
+// Minimal input: reserve one key, cancel, accept late, then reopen the store (unit, :memory:).
+it('retains target cancellation and request identities without replacing unrelated receipts', async () => {
+  const sqlite = new Database(':memory:');
+  try {
+    sqlite.exec(`CREATE TABLE plugin_task_requests(id TEXT PRIMARY KEY, plugin_id TEXT,
+      operation TEXT, target_id TEXT, request_key TEXT, fingerprint TEXT, payload TEXT,
+      revision INTEGER, created_at INTEGER);
+      CREATE UNIQUE INDEX plugin_task_request_key ON plugin_task_requests(plugin_id, operation, target_id, request_key)`);
+    const db = { drizzle: drizzle(sqlite) } as unknown as DbClient;
+    const store = createPluginTargetStore(db, () => {});
+    const receipt = { id: 'plugin-target:first', pluginId: 'p', requestKey: 'key', hash: 'hash',
+      status: 'pending' as const, taskId: 'task', target: { kind: 'task' as const, id: 'task' }, approvalRevision: 'approved' };
+    expect(await store.reserve(receipt)).toBe(true);
+    expect(await store.reserve({ ...receipt, id: 'plugin-target:duplicate' })).toBe(false);
+    const other = { ...receipt, id: 'plugin-target:other', pluginId: 'other-plugin' };
+    expect(await store.reserve(other)).toBe(true);
+    await store.accept(other.id, 'queue');
+    const before = sqlite.prepare('SELECT * FROM plugin_task_requests WHERE id = ?').get(other.id);
+    await store.cancel('p', 'key');
+    await store.accept(receipt.id, 'steer');
+    const restarted = createPluginTargetStore(db, () => {});
+    expect(await restarted.get('p', 'key')).toEqual({ ...receipt, status: 'cancelled' });
+    expect(await restarted.getById(other.id)).toMatchObject({ ...other, status: 'accepted', delivery: 'queue' });
+    expect(sqlite.prepare('SELECT * FROM plugin_task_requests WHERE id = ?').get(other.id)).toEqual(before);
+    // Cancel-before-send stays cancelled, and repeated cancellation retains the original identity.
+    const cancelled = await restarted.cancel('p', 'early');
+    expect(await restarted.cancel('p', 'early')).toEqual(cancelled);
+    expect(await restarted.reserve({ ...receipt, id: 'plugin-target:late', requestKey: 'early' })).toBe(false);
+    expect((await restarted.get('p', 'early'))?.status).toBe('cancelled');
+  } finally { sqlite.close(); }
+});
+it('rejects a target-store write against a stale account snapshot before mutation', async () => {
+  const sqlite = new Database(':memory:');
+  try {
+    const store = createPluginTargetStore({ drizzle: drizzle(sqlite) } as unknown as DbClient,
+      () => { throw new Error('Owner changed'); });
+    await expect(store.cancel('p', 'key')).rejects.toThrow('Owner changed');
+    await expect(store.reserve({ id: 'id', pluginId: 'p', requestKey: 'key', hash: 'hash', status: 'pending' }))
+      .rejects.toThrow('Owner changed');
+    // There is deliberately no table: a SQL operation would fail with a different error.
   } finally { sqlite.close(); }
 });

@@ -168,7 +168,10 @@ export interface SessionMenuSheetProps {
   worker?: SessionMenuWorkerActions;
   leavingSharing?: boolean;
   onTogglePinned(): void;
-  onArchive(): void;
+  /** 由调用方在列表预览事务内等待确认，再提交归档。 */
+  onArchive(prepare: (isCurrent: () => boolean) => Promise<boolean>): void;
+  /** 菜单收起后执行归档确认(如绑定了自动化);返回 false 时留在当前任务、不归档。 */
+  confirmArchive?: (isCurrent: () => boolean) => Promise<boolean>;
   onRestore(): void;
   onDelete(): void;
   onClose(): void;
@@ -210,6 +213,7 @@ export function SessionMenuSheet({
   leavingSharing = false,
   onTogglePinned,
   onArchive,
+  confirmArchive,
   onRestore,
   onDelete,
   onClose,
@@ -219,6 +223,13 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const pendingArchiveRef = useRef<(() => void) | null>(null);
+  const handleClosed = useCallback(() => {
+    const archive = pendingArchiveRef.current;
+    pendingArchiveRef.current = null;
+    onClosed?.();
+    archive?.();
+  }, [onClosed]);
   const menuUsage = useSessionMenuUsage(
     session,
     usageReader,
@@ -491,8 +502,13 @@ export function SessionMenuSheet({
         onClose();
         return;
       case 'archive':
-        if (session.status === 'archived') onRestore();
-        else onArchive();
+        if (session.status === 'archived') {
+          onRestore();
+          onClose();
+          return;
+        }
+        // 先响应点击收起菜单，关闭动画结束后再查询/弹确认，避免原生 Modal 吞掉 Alert。
+        pendingArchiveRef.current = () => onArchive(confirmArchive ?? (async () => true));
         onClose();
         return;
       case 'delete':
@@ -501,7 +517,7 @@ export function SessionMenuSheet({
       default:
         return;
     }
-  }, [confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, renamePrefill, session]);
+  }, [confirmArchive, confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, renamePrefill, session]);
 
   const currentExtraDirs = normalizeExtraDirs(session.extraDirs ?? undefined);
   const addExtraDir = useCallback((path: string) => {
@@ -600,7 +616,7 @@ export function SessionMenuSheet({
     );
   }, [codexRateLimits, codexResetBusy, onResetCodexRateLimits, resetSummary, t]);
 
-  const tagsSheet = useTaskTagsSheet(visible, onClosed);
+  const tagsSheet = useTaskTagsSheet(visible, handleClosed);
   const menuContent = (
     <View style={styles.menuBody} testID="session.menuSheetBody">
       {renaming ? (

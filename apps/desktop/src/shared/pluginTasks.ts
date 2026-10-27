@@ -1,10 +1,11 @@
+import type { PluginMessageAttachment } from './pluginAttachments.js';
 /** Ordinary local Session API. No Bot/Orca identity or permission override is accepted. */
 export interface PluginTaskRoute {
   agentKind: 'cc' | 'codex' | 'pi';
   providerId: string;
   model: string;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 export type PluginTaskRunStatus =
   | 'queued'
@@ -49,6 +50,8 @@ export interface PluginTaskRun {
   inputMessageId: string;
   status: PluginTaskRunStatus;
   acceptedAt: number;
+  /** Opaque Host invocation correlation; never a permission grant. */
+  invocationId?: string;
   acceptedConfig: PluginTaskRoute;
   execution?: { instanceId: string; generation: number };
   /** Host-observed retry input aliases; never supplied by the plugin. */
@@ -103,6 +106,9 @@ export type PluginTaskRequest = (
       requestKey: string;
       expectedRevision: number;
       text: string;
+      attachments?: PluginMessageAttachment[];
+      /** Optional Host-issued parent invocation; correlation only, not execution authority. */
+      invocationId?: string;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

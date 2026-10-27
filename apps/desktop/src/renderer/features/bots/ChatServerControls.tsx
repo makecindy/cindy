@@ -4,7 +4,7 @@ import { ChatInviteDialog } from './ChatInviteDialog';
 import { ChatReactionButton } from './ChatReactionButton';
 import { UserPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { MessageActionBar } from '@/components/chat/MessageActionBar';
+import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { Tip } from '@/components/ui/tooltip';
@@ -110,13 +110,11 @@ function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQu
  */
 export function ChatMessageHoverActions({ besideReactions = false, ...props }: ChatMessageActionProps & { besideReactions?: boolean }) {
   const [picker, setPicker] = useState(false);
-  const right = props.align === 'right';
   return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-bot-group-message-actions="" data-open={picker ? '' : undefined}
-      className={cn('pointer-events-none absolute top-0 z-10 w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
-        right ? 'right-full' : 'left-full', besideReactions ? (right ? 'mr-6' : 'ml-6') : (right ? 'mr-1.5' : 'ml-1.5'))}>
+    <BubbleHoverToolbar marker="data-bot-group-message-actions" side={props.align === 'right' ? 'left' : 'right'}
+      open={picker} besideReactions={besideReactions}>
       <ChatMessageToolbar {...props} compact picker={picker} onPickerChange={setPicker} />
-    </div>
+    </BubbleHoverToolbar>
   );
 }
 

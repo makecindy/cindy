@@ -458,6 +458,7 @@ export interface UnifiedAgentCapability extends Pick<CatalogModel, 'displayPrici
    * 事实,本包拿不到,由渲染层叠加(registry.ts 明示)。
    */
   supportsFastMode: boolean;
+  supportsUltrafastMode?: boolean;
   /** 该 (provider, agent) 下的上下文窗口(同 id 跨 agent 可不同,如 gpt-5.5 cc=1M / codex=272K)。 */
   contextWindow: number;
   /** 该窗口是否为显式声明的真实上限(`CatalogModel.contextWindowVerified`)。 */
@@ -514,6 +515,7 @@ function capabilityOf(
     ...resolveDefaultEffort(model),
     // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
     supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
+    supportsUltrafastMode: agent === 'codex' && model.supportsUltrafastMode === true,
     contextWindow: model.contextWindow,
     contextWindowVerified: model.contextWindowVerified === true,
   };

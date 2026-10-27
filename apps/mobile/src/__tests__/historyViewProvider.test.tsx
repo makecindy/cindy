@@ -14,6 +14,8 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+// Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
+vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
 import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';

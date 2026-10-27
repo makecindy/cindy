@@ -373,10 +373,12 @@ export function agentCapabilitiesForDevice(
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
+  supportsOrcaWorkerUpdate?: boolean;
 }> {
   return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
     supportsOrcaWorkerPermissionMode?: boolean;
     supportsDeferredOrcaUiAssignment?: boolean;
+    supportsOrcaWorkerUpdate?: boolean;
   }>;
 }
 
@@ -388,6 +390,16 @@ export function agentCapabilitiesForDevice(
 export function makerApiFor(sessionId: string): RoutableMaker {
   const deviceId = getSessionDeviceId(sessionId);
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
+/**
+ * 输入框开始打字时请任务所在电脑提前启动 Agent。尽力而为：旧被控端没有该 channel、
+ * 断线或拒绝都只意味着下一次发送照常冷启动，调用方不需要处理结果。
+ */
+export function prewarmSessionFor(sessionId: string, createOpts: unknown): Promise<unknown> {
+  const deviceId = getSessionDeviceId(sessionId);
+  if (deviceId) return invokeRemote(deviceId, 'maker:session:prewarm', [sessionId, createOpts]);
+  return window.electronAPI.maker.prewarmSession?.(sessionId, createOpts) ?? Promise.resolve(undefined);
 }
 
 /**
@@ -990,6 +1002,8 @@ export interface RoutableOrcaWorkflows {
   switchFocus: FullOrca['switchFocus'];
   idleWorker: FullOrca['idleWorker'];
   archiveWorker: FullOrca['archiveWorker'];
+  /** 修改 worker 的展示角色名与 team 内唯一标识。 */
+  updateWorker: FullOrca['updateWorker'];
   endTeam: FullOrca['endTeam'];
   getCollaborationSettings: FullOrca['getCollaborationSettings'];
   listExecutionDevices: FullOrca['listExecutionDevices'];
@@ -1034,6 +1048,12 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
       invokeRemote(deviceId, 'maker:worker:archive', [
         { leadSessionId, workerId },
       ])) as FullOrca['archiveWorker'],
+    updateWorker: ((input: {
+      leadSessionId: string;
+      workerId: string;
+      role?: string;
+      label?: string;
+    }) => invokeRemote(deviceId, 'maker:worker:update', [input])) as FullOrca['updateWorker'],
     endTeam: t('maker:team:end') as FullOrca['endTeam'],
     getCollaborationSettings: t(
       'maker:collaboration-settings:get',

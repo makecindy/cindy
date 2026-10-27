@@ -5,11 +5,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { WechatBotMcpHostDeps } from './types.js';
+import { sendFileWithImagePreview, type PrepareOutboundImage } from './outboundImage.js';
 
 const MAX_MESSAGE_CHARS = 30_000;
 const MAX_DISPLAY_NAME_CHARS = 180;
 
 type WechatMcpDeps = WechatBotMcpHostDeps & {
+  prepareOutboundImage?: PrepareOutboundImage;
   getPeerId: () => Promise<string | null> | string | null;
   workingDir?: string;
 };
@@ -120,11 +122,11 @@ async function sendFileToUser(deps: WechatMcpDeps, args: Record<string, unknown>
   }
 
   try {
-    const sent = await deps.sendFile(peerId, safePath, parsed.data.displayName);
+    const sent = await sendFileWithImagePreview(safePath, parsed.data.displayName, deps.prepareOutboundImage,
+      (file, name) => deps.sendFile(peerId, file, name));
     if (sent.ok) {
       return result({
-        ok: true,
-        messageId: sent.messageId,
+        ...sent,
         sent: {
           displayName: parsed.data.displayName ?? path.basename(safePath),
         },

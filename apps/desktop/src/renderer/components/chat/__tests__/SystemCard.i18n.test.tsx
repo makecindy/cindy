@@ -27,6 +27,16 @@ it('shows a model-only boundary without inventing a Harness change', () => {
   expect(screen.queryByText(/Claude Code/)).toBeNull();
 });
 
+// provider-groups.md §6.2：用户确认为了先用那台的配额换号时，分隔条在位置后写明原因(手机端同一句)。
+it('says why the task moved when the user switched accounts to use quota first', async () => {
+  await i18n.changeLanguage('zh-CN');
+  render(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'cc', toAgentKind: 'cc', toModel: 'claude-opus-5-5',
+    fromAgentDeviceId: null, toAgentDeviceId: 'office-pc', toAgentDeviceName: 'Office PC', switchReason: 'quota-rebalance',
+  }} />);
+  expect(screen.getByRole('separator').getAttribute('aria-label')).toBe('Agent 已改到 Office PC 上运行 · 这个账号的配额更该先用');
+});
+
 describe('command card localization boundaries', () => {
   it.each(SUPPORTED_LOCALES)('localizes card labels while preserving command data: %s', async (locale) => {
     await i18n.changeLanguage(locale);

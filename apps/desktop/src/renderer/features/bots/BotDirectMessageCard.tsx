@@ -1,3 +1,4 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowLeftRight, ChevronDown, ChevronUp, SquareArrowOutUpRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -113,7 +114,7 @@ function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageM
       </div>
       {meta.preview.trim() ? (
         <p className="mt-1.5 line-clamp-2 whitespace-pre-wrap break-words rounded-lg border-l-2 border-[var(--msg-blockquote-border)] bg-[var(--surface-chip)] px-2.5 py-1.5 text-13 leading-[1.6] text-[var(--text-primary)]">
-          {meta.preview.trim()}
+          {forwardedRequestDisplayText(meta.preview).trim()}
         </p>
       ) : null}
       <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
@@ -151,7 +152,7 @@ function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageM
                         {sender.name} · {formatBotMessageGroupTime(message.createdAt, i18n.language)}
                       </div>
                       <div className="min-w-0 break-words text-13 text-[var(--text-primary)]">
-                        <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
+                        <MarkdownRenderer workingDir="" content={forwardedRequestDisplayText(message.content)} allowPrivilegedLinks={false} />
                       </div>
                     </div>
                   </article>

@@ -69,7 +69,7 @@ export class MobileTaskSettings {
         v.providerId.length > 128 ||
         (v.effort !== undefined &&
           !(PLUGIN_TASK_EFFORTS as readonly unknown[]).includes(v.effort)) ||
-        typeof v.fastMode !== 'boolean'
+        (typeof v.fastMode !== 'boolean' && v.fastMode !== 'ultrafast')
       )
         throw new Error('PLUGIN_SETTINGS_INVALID');
       const agent = v.agentKind === 'cc' ? 'claude-code' : (v.agentKind as 'codex' | 'pi');
@@ -83,7 +83,7 @@ export class MobileTaskSettings {
         !model ||
         !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }) ||
         (v.effort !== undefined && !model.efforts.includes(v.effort as never)) ||
-        (v.fastMode && model.supportsFastMode !== true)
+        (v.fastMode && (model.supportsFastMode !== true || (v.fastMode === 'ultrafast' && (agent !== 'codex' || model.supportsUltrafastMode !== true))))
       )
         throw new Error('PLUGIN_MODEL_UNAVAILABLE');
       next.agentKind = v.agentKind as PluginTaskConfig['agentKind'];

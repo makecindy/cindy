@@ -45,6 +45,8 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { buildClaudeHarnessHooks } from './harness-hooks.js';
+import { createHarnessHookBridge } from '../shared/harness-hooks.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
   reportSubagentModelDiagnostics,
@@ -60,6 +62,7 @@ import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
 import {
   BaseAgent,
+  LOCAL_AGENT_CLIENT,
   OneShotError,
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
@@ -153,7 +156,7 @@ import {
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
-  annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewConfirmUndeliveredNotice,
@@ -1435,6 +1438,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const remoteRoute =
       opts.remoteHostId && this.deps.resolveRemoteClaudeRoute
         ? await this.deps.resolveRemoteClaudeRoute({
+            sessionId: opts.sessionId,
             providerId: opts.providerId,
             model: opts.model,
           })
@@ -1484,6 +1488,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const getAuthEnv = this.deps.auth.getAuthEnv.bind(this.deps.auth);
     const sdkModel = sdkModelFor(opts.model);
     const initialSdkEffort = this.sdkEffortForModel(opts.model, opts.effort ?? 'high', opts.providerId);
+    // 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+    // 本任务热切模型时 host 会随 setModel 下新值；缺席保持当前值。
+    // 必须早于下面的 configuredWindows （窗口表在 buildQuery 之前就要用它，
+    // 否则会撞 TDZ）。
+    let mutableContextWindowBudget: number | null = opts.contextWindowBudget ?? null;
     const binaryPath = this.deps.binaryPath;
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
@@ -1513,7 +1522,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     })();
     const configuredWindows = [...new Set([...this.capabilities.availableModels.map((model) => model.id), opts.model])]
       .flatMap((model) => {
-        const limit = this.deps.resolveModelContextLimit?.(opts.providerId, model);
+        // 任务级预算优先于模型级上限：本任务的窗口就是预算（host 已收敛），
+        // 其余模型条目保持目录/上限口径。
+        const limit = model === opts.model && mutableContextWindowBudget !== null
+          ? mutableContextWindowBudget
+          : this.deps.resolveModelContextLimit?.(opts.providerId, model);
         return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0
           ? [{ id: sdkModelFor(model), contextWindow: limit, mirrorOneMillionSuffix: false as const }]
           : [];
@@ -1892,6 +1905,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (currentQ === q) nonHarnessMcpServerNames = fallbackNames;
     };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
+      const client = opts[LOCAL_AGENT_CLIENT];
+      if (client) {
+        hostMcpServerNames = new Set([client.mcpName ?? 'client']);
+        registeredMcpServerNames = hostMcpServerNames;
+        nonHarnessMcpServerNames = hostMcpServerNames;
+        return { [client.mcpName ?? 'client']: { type: 'http', url: client.url, headers: { Authorization: `Bearer ${client.token}` } } };
+      }
       if (hosted) {
         // 设备托管：只用经隧道的服务——cindy_exec(文件与命令)+ 任务所在电脑提供的 Cindy 工具。
         const headers = { Authorization: `Bearer ${hosted.tunnelToken}` };
@@ -2190,7 +2210,34 @@ export class ClaudeCodeAgent extends BaseAgent {
         })],
       }],
     };
-    const localClaudeHooks = reviewMode
+    // Native Claude Auto skips canUseTool. Hand back only the calls Cindy itself must decide;
+    // everything else stays with the native classifier so no call is reviewed twice.
+    const nativeAutoPolicyHook: HookCallback = async (input) => {
+      if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+      if (
+        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
+        || !usesNativeClaudeAutoReview()
+      ) return { continue: true };
+      const pre = input as PreToolUseHookInput;
+      const toolName = pre.tool_name;
+      const decide = (permissionDecision: 'allow' | 'ask', reason: string) => ({
+        continue: true,
+        hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision, permissionDecisionReason: reason },
+      });
+      const isMcp = resolveMcpToolTarget(toolName, registeredMcpServerNames) !== null;
+      const mcpPolicy = isMcp ? classifyMcpApprovalPolicy(toolName, pre.tool_input) : null;
+      // Requester authority (owner / group guest) and forceConfirmToolCall are only known to
+      // Cindy, and a channel policy outranks trusted-MCP approval: route every call to canUseTool.
+      if (activeTurnPermissionPolicy) return decide('ask', 'Cindy reviews tool calls in channel turns.');
+      // Trusted MCP still goes through canUseTool: the Host shortcut allows it without a model call,
+      // but a plugin-delegated task must be re-checked against its live delegation scope first.
+      if (mcpPolicy === 'auto-approve') return decide('ask', 'Trusted Cindy tool: Host shortcut and delegation check.');
+      if (mcpPolicy === 'prompt-each-time') return decide('ask', 'This tool requires Cindy confirmation.');
+      return { continue: true };
+    };
+    const harnessHookBridge = createHarnessHookBridge();
+    const harnessHooksEnabled = !reviewMode && !hosted && !opts.remoteHostId;
+    const baseLocalClaudeHooks = reviewMode
       ? mergeClaudeHookSets(
           { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] },
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
@@ -2230,7 +2277,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           buildClaudeAskUserQuestionCallerProvenanceHooks(),
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
           this.deps.claudeHooks,
+          // Last: earlier guards may deny; this only routes what remains.
+          { PreToolUse: [{ hooks: [nativeAutoPolicyHook] }] },
         );
+    const localClaudeHooks = mergeClaudeHookSets(baseLocalClaudeHooks,
+      harnessHooksEnabled ? buildClaudeHarnessHooks(request => harnessHookBridge.run(request)) : undefined);
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
         this.deps.capabilityRouting,
@@ -2244,7 +2295,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
       const policy = activeTurnPermissionPolicy;
-      if (!policy) return false;
+      if (!policy || mutablePermissionMode === 'bypassPermissions') return false;
       try {
         return policy.forceConfirmToolCall(toolName, input) === true;
       } catch (error) {
@@ -2272,8 +2323,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       kind: InteractionRequest['kind'];
       resolve: (d: InteractionDecision) => void;
       settled: boolean;
-      /** 本轮来源/执行范围约束独立于 MCP 的逐次审批偏好。 */
-      turnPolicyForcePrompt?: boolean;
       /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
       unavailableHandoff?: boolean;
       /** 目录授权变化会使这次文件读写审批的根快照失效。 */
@@ -2293,7 +2342,7 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     async function dispatchInteraction(
       req: InteractionRequest,
-      opts?: { turnPolicyForcePrompt?: boolean; directorySensitive?: boolean },
+      opts?: { directorySensitive?: boolean },
     ): Promise<InteractionDecision> {
       if (!interactionResolver) {
         return safeDefaultDecision(req.kind, 'no_resolver_attached');
@@ -2304,7 +2353,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           kind: req.kind,
           resolve,
           settled: false,
-          ...(opts?.turnPolicyForcePrompt ? { turnPolicyForcePrompt: true } : {}),
           ...(opts?.directorySensitive ? { directorySensitive: true } : {}),
           ...(req.kind === 'permission' && isAutoReviewUnavailableMetadata(req.metadata)
             ? { unavailableHandoff: true }
@@ -2337,11 +2385,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       const entries = Array.from(pendingInteractions.entries());
       for (const [requestId, entry] of entries) {
         if (entry.settled) continue;
-        const effectiveResolveAs = resolveAs === 'allow' && entry.turnPolicyForcePrompt ? 'deny' : resolveAs;
-        const decision = effectiveResolveAs === 'allow' && entry.kind !== 'ask_user_question'
+        const decision = resolveAs === 'allow' && entry.kind !== 'ask_user_question'
           ? ({ kind: entry.kind, behavior: 'allow' } as InteractionDecision)
           : safeDefaultDecision(entry.kind, reason);
-        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+        if (resolveAs === 'deny' && entry.unavailableHandoff) {
           autoReviewConfirmUndeliveredNotice.notify();
         }
         entry.settled = true;
@@ -2350,7 +2397,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const dismissedPayload: InteractionDismissedEvent = {
           requestId,
           reason,
-          resolvedAs: effectiveResolveAs,
+          resolvedAs: resolveAs,
         };
         eventQueue.push({ type: 'interaction_dismissed', data: dismissedPayload, source: 'claude-code' });
       }
@@ -2573,6 +2620,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
       let forcePrompt = mutablePermissionMode !== 'auto' && turnPolicyForcePrompt;
       let unavailableHandoff = false;
+      let autoReviewAskReason: string | undefined;
       let reviewedWritePath: string | null | undefined;
       let executionInput = input;
       const normalizedAction = normalizeBuiltinToolForAutoReview(toolName, input);
@@ -2633,9 +2681,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           return { behavior: 'deny', message: 'The current Plan turn is read-only.' };
         }
         if (modeAfterReview === 'bypassPermissions') {
-          if (turnPolicyForcePrompt) {
-            return { behavior: 'deny', message: 'Permission mode changed; retry within the authorized turn scope.' };
-          }
           return { behavior: 'allow', updatedInput: executionInput };
         }
         if (modeAfterReview !== reviewPermissionMode) {
@@ -2657,6 +2702,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (autoDecision.unavailable) {
             autoReviewUnavailableNotice.notify();
             unavailableHandoff = true;
+          } else {
+            autoReviewAskReason = autoDecision.reason;
           }
           forcePrompt = true;
         }
@@ -2684,10 +2731,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       };
       const decision = await dispatchInteraction(
-        unavailableHandoff
-          ? annotatePermissionRequestForUnavailableReview(permissionRequest)
-          : permissionRequest,
-        { turnPolicyForcePrompt, directorySensitive: directorySensitivePermission },
+        annotatePermissionRequestForAutoReview(permissionRequest, {
+          unavailable: unavailableHandoff,
+          reason: autoReviewAskReason,
+        }),
+        { directorySensitive: directorySensitivePermission },
       );
       notifyIfAutoReviewConfirmUndelivered(unavailableHandoff, decision);
       if (isPlanToolBlocked(toolName)) {
@@ -2824,6 +2872,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       ]),
     ];
     const resolveModelContextWindow = (model: string, providerId = mutableProviderId): number | undefined => {
+      // 任务级预算优先：本任务的工作窗口由用户显式选定，host 已收敛到目录上限内。
+      if (mutableContextWindowBudget !== null && Number.isFinite(mutableContextWindowBudget) && mutableContextWindowBudget > 0) {
+        return mutableContextWindowBudget;
+      }
       const configured = this.deps.resolveModelContextLimit?.(providerId, model);
       if (configured && Number.isFinite(configured) && configured > 0) return configured;
 
@@ -2874,7 +2926,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // Fast 模式:进 flag settings 层(= --settings),解锁 cc 二进制在 Agent SDK 通道下的
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
-        fastMode: mutableFastMode,
+        fastMode: opts.fastModePolicy?.isAllowed() === false ? false : mutableFastMode,
+        fastModeAllowed: opts.fastModePolicy?.isRequestAllowed?.() ?? opts.fastModePolicy?.isAllowed(),
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
       });
@@ -2942,16 +2995,17 @@ export class ClaudeCodeAgent extends BaseAgent {
     let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext>;
     const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
-    // is registered, that would also bypass Cindy's trusted-server and prompt policies,
-    // leaving permission requests with no Cindy interaction surface. Keep native Auto for
-    // MCP-free sessions, but route host-MCP sessions through SDK default so canUseTool owns
-    // the decision.
+    // Claude's native OAuth Auto classifier bypasses canUseTool. Local sessions keep it with
+    // host MCPs attached: nativeAutoPolicyHook (PreToolUse) still runs for every call and
+    // hands Cindy-owned decisions (trusted servers, prompt-each-time, IM turn policies) back
+    // to canUseTool, so each call is reviewed once. Remote and device-hosted sessions cannot
+    // run that local hook and stay on SDK default whenever an MCP is registered.
     const hasRegisteredMcpServers = (): boolean => registeredMcpServerNames.size > 0;
     const usesNativeClaudeAutoReview = (): boolean =>
       !nativeAutoReviewUnavailable
       && mutableAutoReviewCredentialMode === 'oauth-bearer'
-      && !hasRegisteredMcpServers()
+      && !hosted
+      && (!opts.remoteHostId || !hasRegisteredMcpServers())
       // Claude native Auto sees additionalDirectories as one undifferentiated scope and
       // bypasses canUseTool. Use the scope frozen into the active Query: after revoke,
       // that Query still carries its broader directory allowlist.
@@ -3082,6 +3136,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           sessionId: sid,
           agentKind: 'claude-code',
           model: toolLoopGuardModelForScope(parentToolUseId),
+          userIntent: currentAutoReviewIntent,
         }),
         // 复核结果晚到时,guard 可能已随新 turn 重置;只处理仍在位的同一 monitor。
         onReviewedStop: (verdict) => {
@@ -3157,7 +3212,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       && (planTurnActive || sdkInPlanMode) && !isReadOnlyClaudeTool(toolName);
     // Fast 模式运行时态:启动取 opts.fastMode 快照,setFastMode 覆盖。buildSettings 每次读最新值;
     // host 只在「该 model 支持 + 走官方供应商」时才传 true(renderer 配置门控),agent 忠实消费。
-    let mutableFastMode = opts.fastMode === true;
+    let mutableFastMode = opts.fastMode === true && opts.fastModePolicy?.isAllowed() !== false;
     // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖。
     // SDK additionalDirectories 在 Query 创建时冻结;代际不一致时下一次 send
     // 走 rewind 同款 resume+fork 重建,下一 turn 生效,不用 fresh:true。
@@ -3269,6 +3324,18 @@ export class ClaudeCodeAgent extends BaseAgent {
     // SSE idle watchdog 触发时也会主动清, 防止 SDK drain 期间又起 timer。
     // rewind preview/commit 业务层用 isTurnRunning() 前置守卫, 不在 turn 跑时操作 SDK。
     let turnInFlight = false;
+    let harnessCompaction: {
+      boundary: boolean;
+      result: boolean;
+      failed: boolean;
+      resolve: (value: { noop?: boolean }) => void;
+      reject: (error: Error) => void;
+    } | undefined;
+    function failHarnessCompaction(): void {
+      const pending = harnessCompaction;
+      harnessCompaction = undefined;
+      pending?.reject(new Error('Claude compaction did not finish on the current query'));
+    }
     // send() 处于 beginNewTurn→userInputAccepted 之间时置 true。
     // abort() 在此期间跳过 turnInFlight 清除:并发 send 负责在错误路径上
     // (finishSendBeforeUserInput) 自行清 turnInFlight 并 emit boundary,
@@ -3896,7 +3963,6 @@ export class ClaudeCodeAgent extends BaseAgent {
             const REMOTE_APPROVAL_TIMEOUT_MS = 110_000;
             async function dispatchWithTimeout(
               req: InteractionRequest,
-              dispatchOpts?: { turnPolicyForcePrompt?: boolean },
             ): Promise<InteractionDecision> {
               let timer: NodeJS.Timeout | undefined;
               try {
@@ -3905,7 +3971,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                     dismissSinglePending(req.requestId, 'approval_timeout');
                     reject(new Error('approval timed out'));
                   }, REMOTE_APPROVAL_TIMEOUT_MS);
-                  dispatchInteraction(req, dispatchOpts).then(resolve, reject);
+                  dispatchInteraction(req).then(resolve, reject);
                 });
               } finally {
                 if (timer) clearTimeout(timer);
@@ -4037,15 +4103,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               params.input ?? {},
             );
             if (mutablePermissionMode === 'bypassPermissions') {
-              return remoteTurnPolicyForcePrompt
-                ? { kind: 'permission', behavior: 'deny', reason: 'Permission mode changed; retry within the authorized turn scope.' }
-                : { kind: 'permission', behavior: 'allow' };
+              return { kind: 'permission', behavior: 'allow' };
             }
             // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
             // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
             const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
             let remoteForcePrompt = mutablePermissionMode !== 'auto' && remoteTurnPolicyForcePrompt;
             let remoteUnavailableHandoff = false;
+            let remoteAutoReviewAskReason: string | undefined;
             const reviewPermissionMode = mutablePermissionMode;
             if (reviewPermissionMode === 'auto' || (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt)) {
               const normalizedAction = normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {});
@@ -4074,9 +4139,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 return { kind: 'permission', behavior: 'deny', reason: 'The current Plan turn is read-only.' };
               }
               if (modeAfterReview === 'bypassPermissions') {
-                return remoteTurnPolicyForcePrompt
-                  ? { kind: 'permission', behavior: 'deny', reason: 'Permission mode changed; retry within the authorized turn scope.' }
-                  : { kind: 'permission', behavior: 'allow' };
+                return { kind: 'permission', behavior: 'allow' };
               }
               if (modeAfterReview === reviewPermissionMode && autoDecision.verdict === 'allow') {
                 return { kind: 'permission', behavior: 'allow' };
@@ -4093,6 +4156,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (autoDecision.unavailable) {
                 autoReviewUnavailableNotice.notify();
                 remoteUnavailableHandoff = true;
+              } else {
+                remoteAutoReviewAskReason = autoDecision.reason;
               }
               remoteForcePrompt = true;
             } else {
@@ -4115,10 +4180,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             let decision: InteractionDecision;
             try {
               decision = await dispatchWithTimeout(
-                remoteUnavailableHandoff
-                  ? annotatePermissionRequestForUnavailableReview(remotePermissionRequest)
-                  : remotePermissionRequest,
-                { turnPolicyForcePrompt: remoteTurnPolicyForcePrompt },
+                annotatePermissionRequestForAutoReview(remotePermissionRequest, {
+                  unavailable: remoteUnavailableHandoff,
+                  reason: remoteAutoReviewAskReason,
+                }),
               );
             } catch {
               if (remoteUnavailableHandoff) autoReviewConfirmUndeliveredNotice.notify();
@@ -4319,7 +4384,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // Re-read at each Query boundary: plugin uninstall/disable may remove the
       // previous projection while the conversation itself remains open.
       // 受邀者(另一个账号)的托管会话不带本机安装的托管技能(属于本机用户与其组织)。
-      const managedSkills = !reviewMode && !hosted?.guest && this.deps.getManagedSkills
+      const managedSkills = !reviewMode && !hosted?.guest && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && this.deps.getManagedSkills
         ? await this.deps.getManagedSkills() : [];
       const managedDisabledPaths = currentDisabledSkillLaunchPaths(managedDisabledSkillLaunch);
       const allowedManagedSkills = resolveAllowedManagedSkills(managedSkills, managedSkillGrants, managedDisabledPaths);
@@ -4413,6 +4478,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                         pid,
                         kind: 'claude',
                         role: 'task-host',
+                        sessionId: opts.sessionId ?? null,
                       }),
                     trackDebugFile: process.env.XDT_CC_DEBUG_NET === '1' && ccDebugFile
                       ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})
@@ -4446,7 +4512,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           canUseTool: sdkCanUseTool,
           // Bot MCP selection is explicit; native delegation remains available.
           // 设备托管：只用经隧道的 MCP(本机用户 / 项目里的 MCP 启动命令会在本机执行)。
-          ...(opts.botRuntimeProfile || hosted ? { strictMcpConfig: true } : {}),
+          ...(opts.botRuntimeProfile || hosted || opts[LOCAL_AGENT_CLIENT] ? { strictMcpConfig: true } : {}),
+          ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? { tools: [] } : {}),
           // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替；
           // 另含 host 路由表关闭的自带工具(见 claudeDisallowedTools)。
           ...(claudeDisallowedTools.length > 0
@@ -4456,7 +4523,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
-          settingSources: reviewMode || !!opts.botRuntimeProfile
+          settingSources: reviewMode || !!opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
             ? []
             : hosted ? ['project', 'local'] : ['user', 'project', 'local'],
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
@@ -4531,7 +4598,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             taintWorkspaceSettings(message);
             throw new Error(message);
           }
-          return applyFlagSettings(settings);
+          return applyFlagSettings(opts.fastModePolicy?.isAllowed() === false ? { ...settings, fastMode: false } : settings);
         };
       }
       if (newSdkSessionId && localQueryStarted && !unacceptedForks.has(query)) {
@@ -4551,6 +4618,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // closed=true 后 finally 的 eventQueue.end() 收尾 → Session 自动 close → 下次 send
     // 走 IPC lazy create-session 重建 handle。
     function teardownDeadHandle(logLabel: string): void {
+      harnessHookBridge.close();
+      failHarnessCompaction();
       // Provider death is not a successful user cancellation. Session status
       // and the queued terminal error/done must decide observer settlement.
       resetClaudeGenerationTiming(runtimeState.generation);
@@ -4698,7 +4767,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       pendingBoundaryEvents: number;
       /** A later natural/synthetic done has closed the product turn. */
       settled: boolean;
-      /** A submitted async answer already accepted by the SDK input queue. */
+      /** An async answer or waiting-turn steer accepted by the SDK input queue. */
       asyncAnswer?: boolean;
     };
     // Claims are created synchronously when the provider enqueues a `done`.
@@ -4755,6 +4824,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       activeContinuationId === null
         ? null
         : continuationClaims.get(activeContinuationId) ?? null;
+    // A foreground result can leave the same product waiting on background work.
+    // Its live SDK input queue still accepts corrections during that interval.
+    const hasSteerableTurn = (): boolean =>
+      !closed && !turnState.interruptRequested && continuationCancellationGeneration === null &&
+      (turnInFlight || activeContinuationClaim()?.state === 'awaiting');
     const releaseSettledContinuationClaim = (claim: ContinuationClaim): void => {
       if (!claim.settled || claim.pendingBoundaryEvents > 0) return;
       continuationClaims.delete(claim.id);
@@ -5275,6 +5349,19 @@ export class ClaudeCodeAgent extends BaseAgent {
       // consumer sees an unclaimed idle event and finalizes the product turn
       // before the continuation starts.
       push(e: AgentEvent) {
+        if (harnessCompaction) {
+          if (e.type === 'compact_boundary') harnessCompaction.boundary = true;
+          if (e.type === 'error' && isTerminalAgentErrorEvent(e)) harnessCompaction.failed = true;
+          if (e.type === 'done') {
+            harnessCompaction.result = true;
+            const result = e.data as { is_error?: boolean } | undefined;
+            if (result?.is_error) harnessCompaction.failed = true;
+            return true;
+          }
+          // A control operation must not finish the previous product turn or
+          // publish command response text as a new assistant answer.
+          if (e.type === 'status' || e.type === 'text' || e.type === 'error') return true;
+        }
         if (deferResumeFailureBoundary) {
           deferredResumeFailureEvents.push(e);
           return true;
@@ -5371,6 +5458,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           continuationTerminalBoundaryEvents.add(e);
           pendingContinuationTerminalBoundaries += 1;
         }
+        if (e.type === 'text' && turnInFlight && !turnState.interruptRequested) {
+          const data = e.data as { text?: unknown; isFinal?: unknown } | undefined;
+          const text = data?.text;
+          const parent = e.agentMeta?.parentUuid;
+          if (typeof text === 'string') {
+            getToolLoopMonitor(typeof parent === 'string' && parent ? parent : undefined).onAssistantText(text, data?.isFinal === true);
+          }
+        }
         const accepted = pushForwardedEvent(e);
         if (!accepted && createdContinuationClaim) {
           // A claim minted for a boundary that the host can never observe has
@@ -5443,6 +5538,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       turnInFlight = false;
       clearUpstreamResponseIdle();
+      if (harnessCompaction) {
+        const pending = harnessCompaction;
+        harnessCompaction = undefined;
+        if (pending.failed || !pending.result) pending.reject(new Error('Claude compaction failed or was cancelled'));
+        else pending.resolve(pending.boundary ? {} : { noop: true });
+        return;
+      }
       // 本轮已经是静默 /compact。瞬时失败由 onCompactCanceled 打开重试，等下一轮用户
       // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
       if (!endingHostAutoCompact) triggerAutoCompactIfNeeded();
@@ -5569,7 +5671,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 && !mutablePlanMode
                 && !planTurnActive
                 && mutableAutoReviewCredentialMode === 'oauth-bearer'
-                && hasRegisteredMcpServers()
+                && !usesNativeClaudeAutoReview()
                 && nativeAutoQueries.has(currentQ)
               ) {
                 try {
@@ -6361,7 +6463,43 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     };
     const handle: AgentSessionHandle = {
+      harnessHooks: harnessHooksEnabled ? ['tool.before', 'compaction.before'] : [],
+      setHarnessHookHandler: handler => harnessHookBridge.setHandler(handler),
+      ...(harnessHooksEnabled ? {
+        requestHarnessCompaction: () => {
+          if (closed || turnInFlight || harnessCompaction || pendingRewindTo ||
+              idleResumeRebuildGate || cancellationRebuildGate || runningBackgroundTasks.size > 0) {
+            return Promise.reject(new Error('SESSION_RUNNING: Claude is not idle for compaction'));
+          }
+          return new Promise<{ noop?: boolean }>((resolve, reject) => {
+            harnessCompaction = { boundary: false, result: false, failed: false, resolve, reject };
+            // Reserve the existing query lane synchronously. Both host automatic
+            // compaction and all user sends honor turnInFlight; Claude owns the
+            // command, native PreCompact hooks, transcript and context adoption.
+            turnInFlight = true;
+            let dispatched = false;
+            try {
+              beginNewTurn(mutableFastMode ? 'priority' : 'standard');
+              resetToolLoopGuards();
+              dispatched = inputQueue.push({ type: 'user', message: { role: 'user', content: '/compact' }, parent_tool_use_id: null });
+              if (!dispatched) throw new Error('Claude compaction input queue is closed');
+              armUpstreamResponseIdle();
+            } catch (error) {
+              // Only a rejected dispatch can release the lane without a native
+              // terminal. Once queued, a lost acknowledgement is not replayable.
+              if (!dispatched) {
+                harnessCompaction = undefined;
+                turnInFlight = false;
+                clearUpstreamResponseIdle();
+              }
+              reject(error instanceof Error ? error : new Error('Claude compaction dispatch failed'));
+            }
+          });
+        },
+      } : {}),
       disabledSkillPaths: disabledSkillSnapshot,
+      // IM turn policies carry requester authority the native classifier cannot see.
+      getAutoReviewOwner: () => usesNativeClaudeAutoReview() && !activeTurnPermissionPolicy ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(
           action,
@@ -6815,7 +6953,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude steer cancelled before acceptance');
         }
         if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;
-        if (!turnInFlight) {
+        if (!hasSteerableTurn()) {
           throw new Error('No active Claude turn to steer');
         }
         log.debug('steer ▶ user message', {
@@ -6842,7 +6980,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude steer cancelled before acceptance');
         }
-        if (!turnInFlight) {
+        if (!hasSteerableTurn()) {
           // Image resizing can take long enough for a fast turn to finish. Do not
           // silently route a stale "插话" into the next send path; the renderer
           // keeps the original queue/composer content and lets the user retry.
@@ -6867,7 +7005,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
-        if (sendOpts?.[ASYNC_QUESTION_ANSWER]) queuedAsyncAnswer = true;
+        const awaitingClaim = activeContinuationClaim();
+        if (awaitingClaim?.state === 'awaiting') {
+          // This input belongs to the already claimed next segment, not another
+          // successor. Stopping its last background task must not discard it.
+          awaitingClaim.asyncAnswer = true;
+        } else if (sendOpts?.[ASYNC_QUESTION_ANSWER]) queuedAsyncAnswer = true;
         appendActiveCapabilitySelectionText(
           userMessageTextForCapabilityRouting(message.content),
         );
@@ -7225,6 +7368,8 @@ export class ClaudeCodeAgent extends BaseAgent {
 
       async close() {
         if (closed) return;
+        harnessHookBridge.close();
+        failHarnessCompaction();
         // Closing/dead sessions settle through Session status (or their queued
         // terminal event), never through the successful task-stop path.
         resetClaudeGenerationTiming(runtimeState.generation);
@@ -7346,8 +7491,18 @@ export class ClaudeCodeAgent extends BaseAgent {
         return expected !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
       },
 
-      async setModel(newModel: string, setModelOpts?: { providerId?: string | null; effort?: Effort }) {
+      async setModel(
+        newModel: string,
+        setModelOpts?: {
+          providerId?: string | null;
+          effort?: Effort;
+          contextWindowBudget?: number | null;
+        },
+      ) {
         if (reviewMode) return;
+        if (setModelOpts?.contextWindowBudget !== undefined) {
+          mutableContextWindowBudget = setModelOpts.contextWindowBudget;
+        }
         const targetProviderId = setModelOpts?.providerId !== undefined
           ? setModelOpts.providerId
           : mutableProviderId;
@@ -7358,6 +7513,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // providerId 用调用方给的目标来源(可能正在切 provider),缺省回落会话启动值。
         if (opts.remoteHostId && resolveRemoteClaudeRoute) {
           const nextRoute = await resolveRemoteClaudeRoute({
+            sessionId: opts.sessionId,
             providerId: targetProviderId,
             model: newModel,
           });
@@ -7571,14 +7727,19 @@ export class ClaudeCodeAgent extends BaseAgent {
         mutableEffort = newEffort;
       },
 
-      async setFastMode(enabled: boolean) {
-        if (reviewMode) return;
+      async setFastMode(enabled: boolean | 'ultrafast') {
+        if (reviewMode && opts.fastModePolicy?.isAllowed() !== false) return;
+        if (opts.fastModePolicy?.isAllowed() === false) enabled = false;
+        if (enabled === 'ultrafast') throw new Error('Ultrafast requires the Codex runtime');
         // 与 setEffort 同款:走 SDK applyFlagSettings 改 flag settings 层 `fastMode`。
         // cc 二进制的 sticky-on latch 负责缓存安全(header 一旦发出整 session 保持,中途 toggle
         // 不破 server 端 cache key)—— 所以这里直接切、不做缓存兜底。是否 Opus/官方/firstParty
         // 由二进制把关(不支持时优雅 no-op),agent 不重复硬判(规则 9 留给配置 + 二进制)。
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setFastMode', { from: mutableFastMode, to: enabled, controlRequestsBlocked: isControlBlocked });
+        if (isControlBlocked && opts.fastModePolicy?.isAllowed() === false && mutableFastMode) {
+          throw new Error('Subscription Fast policy is waiting for the native runtime to accept settings');
+        }
         if (!isControlBlocked) {
           await q.applyFlagSettings({ fastMode: enabled });
         }

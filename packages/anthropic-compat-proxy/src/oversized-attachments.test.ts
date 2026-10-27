@@ -4,7 +4,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { IncomingMessage } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectRecoverableBody, recoverInlineAttachments as recover, type RecoveredAttachment } from './oversized-attachments.js';
+import { collectRecoverableBody, recoverInlineAttachments as recover, recoverOversizedMessage, type RecoveredAttachment } from './oversized-attachments.js';
 
 const recoverInlineAttachments = (body: Parameters<typeof recover>[0], limit: number, prepare: (a: RecoveredAttachment) => Promise<string>) =>
   recover(body, limit, { prepare, commit: async () => {} });
@@ -169,4 +169,23 @@ it('does not commit staged files when the recovered request still cannot fit', a
   const commit = vi.fn();
   expect(await recover(f.body, 1000, { prepare: async () => '/tmp/kept', commit })).toBeNull();
   expect(commit).not.toHaveBeenCalled();
+});
+
+// #7055: a WebSocket request is a single in-memory message, not a request stream.
+it('recovers an in-memory message within the target, oldest attachment first, and drops its spool', async () => {
+  const message = Buffer.from(JSON.stringify({ input: [image(), image(), image()] }));
+  const target = message.length - 100_000;
+  let spooled = '';
+  const result = await recoverOversizedMessage(message, target, body => {
+    spooled = body.filePath;
+    return recoverInlineAttachments(body, target, async () => '/tmp/kept.png');
+  }, new AbortController().signal);
+  expect(result!.length).toBeLessThanOrEqual(target);
+  const input = JSON.parse(result!.toString()).input;
+  expect(input[0].type).toBe('input_text');
+  expect(input.slice(1)).toEqual([image(), image()]);
+  await expect(access(spooled)).rejects.toThrow();
+  const unfit = Buffer.from(JSON.stringify({ instructions: 'x'.repeat(100_000), input: [image()] }));
+  expect(await recoverOversizedMessage(unfit, 1000, body => recoverInlineAttachments(body, 1000, async () => '/tmp/kept.png'),
+    new AbortController().signal)).toBeNull();
 });

@@ -1,3 +1,4 @@
+import { normalizeVoiceConversationPreferences, normalizeVoiceConversationSelection, normalizeSentencePlaybackOverrides, type VoiceConversationSelection } from './voiceConversation';
 import type {
   DictationDictionaryAdviceInput,
   DictationDictionaryLearningAction,
@@ -84,6 +85,12 @@ export interface VoiceInputDictionaryCandidate {
 }
 
 export interface VoiceInputSettings {
+  /** Explicit speech selection; absent means follow the available catalog. */
+  conversationSelection?: VoiceConversationSelection | null;
+  /** Per-companion overrides; absence inherits the default without copying it. */
+  conversationSelections?: Record<string, VoiceConversationSelection | null>;
+  /** Missing entries follow the enabled default; false waits for the complete reply. */
+  conversationSentencePlayback?: Record<string, boolean>;
   language: VoiceInputLanguage;
   microphoneDeviceId: string | null;
   muteSystemAudio: boolean;
@@ -171,10 +178,10 @@ export type VoiceInputDictionaryLearningEvidence = Pick<
 export const DEFAULT_DICTIONARY_SYNC_ENABLED = true;
 
 /**
- * 长按输入框语音输入的系统默认值。默认关闭:按住鼠标通常是在选字,只有用户主动
- * 打开才改变这个手势的含义。
+ * 长按输入框语音输入默认开启。设置页不展示开关；手动配置仍可通过
+ * composerLongPressEnabledOverride 显式关闭，删除 override 恢复默认。
  */
-export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = false;
+export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = true;
 
 export const MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_ENTRIES = 1_000;
@@ -539,12 +546,18 @@ export function normalizeVoiceInputSettings(
   const defaults = getDefaultVoiceInputSettings(platform, region);
   if (!raw || typeof raw !== 'object') return defaults;
   const candidate = raw as Partial<VoiceInputSettings>;
+  const conversationSelections = normalizeVoiceConversationPreferences(candidate.conversationSelections);
+  const conversationSentencePlayback = normalizeSentencePlaybackOverrides(candidate.conversationSentencePlayback);
   const legacyPlayStartSound = (candidate as { playStartSound?: unknown }).playStartSound;
   const shortcut =
     'shortcut' in candidate
       ? normalizeVoiceInputShortcut(candidate.shortcut)
       : defaults.shortcut;
   return {
+    ...(normalizeVoiceConversationSelection(candidate.conversationSelection)
+      ? { conversationSelection: normalizeVoiceConversationSelection(candidate.conversationSelection) } : {}),
+    ...(Object.keys(conversationSelections).length ? { conversationSelections } : {}),
+    ...(Object.keys(conversationSentencePlayback).length ? { conversationSentencePlayback } : {}),
     language: isVoiceInputLanguage(candidate.language) ? candidate.language : defaults.language,
     microphoneDeviceId:
       typeof candidate.microphoneDeviceId === 'string' && candidate.microphoneDeviceId.trim().length > 0

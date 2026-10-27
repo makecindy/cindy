@@ -1,3 +1,6 @@
+import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
+import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { AgentKind } from '@cindy/maker-core';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
@@ -8,13 +11,14 @@ interface RuntimeRoute {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 interface BotRouteState {
   chain: BotModelRoute[];
   current: RuntimeRoute;
   hasRuntimeOverride: boolean;
+  scheduledModelBaseline?: string | null;
   followsCindyDefault?: boolean;
   next?: RuntimeRoute;
 }
@@ -26,6 +30,9 @@ function configuredRoute(
 ): RuntimeRoute | null {
   const key = JSON.stringify(chain);
   const isDraftChange = key !== JSON.stringify(state.chain);
+  // An automation owns its temporary route until ordinary input restores it.
+  // This also applies to companions following Cindy defaults and after restart.
+  if (!isDraftChange && parseScheduledModelBaseline(state.scheduledModelBaseline) && (previous === undefined || previous === key)) return null;
   if (!state.followsCindyDefault && !isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
   const primary = chain[0];
   if (!primary) return null;
@@ -39,9 +46,38 @@ function configuredRoute(
   };
 }
 
+function savedRuntimeRoute(state: BotRouteState): RuntimeRoute | null {
+  const baseline = parseScheduledModelBaseline(state.scheduledModelBaseline);
+  if (!baseline || baseline.pendingBotProfileVersion) return null;
+  const { agentKind, model, providerId, effort, fastMode } = baseline;
+  return { agentKind, model, providerId, effort, fastMode,
+    ...(state.current.agentDeviceId ? { agentDeviceId: state.current.agentDeviceId } : {}),
+  };
+}
+
 function sameRoute(a: RuntimeRoute, b: RuntimeRoute): boolean {
   return a.agentKind === b.agentKind && a.model === b.model && a.providerId === b.providerId
     && a.effort === b.effort && a.fastMode === b.fastMode && (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null);
+}
+
+/** Apply through both runtime switch paths before retiring recovery state. */
+export function createBotModelRouteApplier(deps: {
+  stage(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
+  isIdle(sessionId: string): boolean;
+  applyPendingSwitch(sessionId: string): Promise<void>;
+  hasPendingSwitch(sessionId: string): boolean;
+  onApplied(sessionId: string): Promise<void>;
+}) {
+  return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void> => {
+    await deps.stage(sessionId, route, current);
+    if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
+    // Same-Harness choices wait in runtime control, not the Harness registry.
+    // Staging alone must not retire the durable recovery marker.
+    if (deps.hasPendingSwitch(sessionId) || getSessionRuntimeControlSnapshot(sessionId).pending) {
+      throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
+    }
+    await deps.onApplied(sessionId);
+  };
 }
 
 /** Apply the permanent profile through ordinary Session model/switch controls.
@@ -53,6 +89,8 @@ export function createBotModelRouteReconciler(deps: {
   withSessionLock?<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   read(sessionId: string, purpose: 'apply' | 'preview'): Promise<BotRouteState | null>;
   apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
+  /** An accepted permanent choice supersedes temporary preferences, even without a switch. */
+  onSelectionAccepted?(sessionId: string, expectedBaseline?: string | null): Promise<void | boolean>;
 }) {
   let owner: string | undefined;
   const configured = new Map<string, string>();
@@ -79,7 +117,9 @@ export function createBotModelRouteReconciler(deps: {
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
         if (!state) {
-          configured.delete(sessionId);
+          // Paused profiles are absent from the apply reader. Keep an explicit
+          // save pending until resume can accept it and invalidate the scope.
+          if (configured.get(sessionId) !== '') configured.delete(sessionId);
           return;
         }
         if (!state.chain.length) {
@@ -87,23 +127,30 @@ export function createBotModelRouteReconciler(deps: {
           throwIpcError('PRECONDITION_FAILED', '请先选择已开启的伙伴模型');
         }
         const key = JSON.stringify(state.chain);
-        const route = configuredRoute(state, configured.get(sessionId));
+        const previous = parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
+          ? '' : configured.get(sessionId);
+        const route = configuredRoute(state, previous);
         if (!route) {
           configured.set(sessionId, key);
           return;
         }
         const current = state.current;
-        if (!sameRoute(route, current) || (state.next && !sameRoute(route, state.next))) {
-          try {
-            await deps.apply(sessionId, route, state.current);
-          } catch (error) {
-            // A failed obsolete selection must not discard a newer explicit save.
-            // Re-read its route and runtime state; never retry the same failure
-            // indefinitely or continue applying after the account owner changes.
-            if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
-            if ((revisions.get(sessionId) ?? 0) !== revision) continue;
-            throw error;
+        const needsApply = !sameRoute(route, current) || !!(state.next && !sameRoute(route, state.next));
+        try {
+          if (needsApply) await deps.apply(sessionId, route, current);
+          if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+          if ((revisions.get(sessionId) ?? 0) !== revision) continue;
+          // Only a durable save or profileChanged's explicit marker supersedes the scope.
+          // Ordinary IM preparation can switch routes before automation restore.
+          if (previous === '') {
+            const accepted = await deps.onSelectionAccepted?.(sessionId, state.scheduledModelBaseline);
+            if (accepted === false) continue; // A newer durable save won the compare-and-set.
           }
+        } catch (error) {
+          // A failed obsolete selection must not discard a newer explicit save.
+          if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+          if ((revisions.get(sessionId) ?? 0) !== revision) continue;
+          throw error;
         }
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
@@ -122,13 +169,17 @@ export function createBotModelRouteReconciler(deps: {
       if (inFlight.get(sessionId) === operation) inFlight.delete(sessionId);
     }
   };
+  const invalidate = (sessionId: string): void => {
+    syncOwner();
+    revisions.set(sessionId, (revisions.get(sessionId) ?? 0) + 1);
+    configured.set(sessionId, '');
+  };
   return Object.assign(reconcile, {
+    invalidate,
     /** Explicit saves invalidate fallback even before the first send. A newer
      * save during an in-flight switch is reread before this promise settles. */
     profileChanged(sessionId: string): Promise<void> {
-      syncOwner();
-      revisions.set(sessionId, (revisions.get(sessionId) ?? 0) + 1);
-      configured.set(sessionId, '');
+      invalidate(sessionId);
       return reconcile(sessionId);
     },
     /** Read-only preview: sharing the send decision must not consume a profile change. */
@@ -141,10 +192,12 @@ export function createBotModelRouteReconciler(deps: {
       return (
         configuredRoute(
           state,
-          configured.get(sessionId),
+          parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
+            ? '' : configured.get(sessionId),
           draftChain ? normalizeBotModelChain(draftChain) : undefined,
         ) ??
         state.next ??
+        savedRuntimeRoute(state) ??
         state.current
       );
     },

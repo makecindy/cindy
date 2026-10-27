@@ -79,7 +79,7 @@ export function GhostCardPromptPanel({
             }
           }}
           placeholder={placeholder || t('chat.mivoAction.promptPlaceholder')}
-          className="w-full resize-none rounded-md border px-2 py-1.5 text-xs outline-none placeholder:text-[var(--text-tertiary)]"
+          className="w-full resize-none rounded-md border px-2 py-1.5 text-xs outline-none placeholder:text-[var(--text-placeholder)]"
           style={{
             backgroundColor: 'var(--msg-tool-card-bg)',
             borderColor: 'var(--msg-tool-card-border)',

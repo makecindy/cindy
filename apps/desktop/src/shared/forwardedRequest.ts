@@ -19,6 +19,12 @@ export interface ForwardedRequestSource {
   userText: string | null;
   sessionId?: string;
   clientId?: string;
+  /**
+   * The sending host admitted this relay in a turn it verified as the owner's own request
+   * (teammate principal `owner`). Only then does the receiver treat userText as the owner's
+   * request for this task. Optional on the wire; older hosts drop or never send it.
+   */
+  ownerVerified?: true;
 }
 
 /** Kept under the existing protected, non-human input receipt. */
@@ -33,7 +39,16 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (source.userText === null) return { userText: null };
   if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
     || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
-  return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId };
+  return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
+    ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}) };
+}
+
+/** The owner's words of a verified relay, for the receiver's auto-review intent. Never other text. */
+export function verifiedOwnerRequestText(receipt: unknown): string | undefined {
+  if (!receipt || typeof receipt !== 'object' || (receipt as { kind?: unknown }).kind !== 'agent-request') return undefined;
+  const source = readForwardedRequestSource((receipt as { request?: unknown }).request);
+  return source?.ownerVerified && typeof source.userText === 'string' && source.userText.trim()
+    ? source.userText : undefined;
 }
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */

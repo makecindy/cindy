@@ -44,13 +44,22 @@ interface SnapshotMeta {
   frames?: Map<number, ElementFrame>;
 }
 
+export interface WindowObservationScope {
+  query?: string;
+  max_elements?: number;
+  max_depth?: number;
+}
+
 /** 保留的窗口数与历史快照数上限(FIFO 淘汰)。 */
 const MAX_TRACKED_WINDOWS = 256;
 const MAX_TRACKED_SNAPSHOTS = 1024;
 
 export class WindowSnapshotTracker {
-  /** (session, pid, window_id) → 最新一代快照 id。 */
-  private readonly latestByWindow = new Map<string, string>();
+  /** Scope survives invalidation; only snapshotId authorizes element reuse. */
+  private readonly latestByWindow = new Map<string, {
+    snapshotId?: string;
+    scope?: WindowObservationScope;
+  }>();
   /** 快照 id → 元信息;保留近期历史以便区分 superseded 和 unknown。 */
   private readonly metaById = new Map<string, SnapshotMeta>();
   /** driver 观察 id / element_token 前缀 → 本层快照 id。 */
@@ -66,7 +75,7 @@ export class WindowSnapshotTracker {
   }
 
   /** get_window_state 成功后调用:登记新一代快照并返回其 id。 */
-  record(sessionId: string | undefined, pid: number, windowId: number): string {
+  record(sessionId: string | undefined, pid: number, windowId: number, scope?: WindowObservationScope): string {
     const sessionKey = sessionId ?? '';
     const windowKey = this.windowKey(sessionKey, pid, windowId);
     if (!this.latestByWindow.has(windowKey) && this.latestByWindow.size >= MAX_TRACKED_WINDOWS) {
@@ -83,9 +92,14 @@ export class WindowSnapshotTracker {
     }
     this.seq += 1;
     const id = `ws-${this.seq.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    this.latestByWindow.set(windowKey, id);
+    this.latestByWindow.set(windowKey, { snapshotId: id, scope });
     this.metaById.set(id, { windowKey, sessionKey, pid, windowId });
     return id;
+  }
+
+  /** Only the latest successful explicit read supplies a follow-up's traversal scope. */
+  observationScope(sessionId: string | undefined, pid: number, windowId: number): WindowObservationScope | undefined {
+    return this.latestByWindow.get(this.windowKey(sessionId ?? '', pid, windowId))?.scope;
   }
 
   /** A failed observation invalidates earlier IDs and aliases without issuing a usable ID. */
@@ -94,7 +108,8 @@ export class WindowSnapshotTracker {
     pid: number,
     windowId: number,
   ): void {
-    this.latestByWindow.delete(this.windowKey(sessionId ?? '', pid, windowId));
+    const window = this.latestByWindow.get(this.windowKey(sessionId ?? '', pid, windowId));
+    if (window) window.snapshotId = undefined;
   }
 
   /** Register a host/driver snapshot id as an alias for the MCP-level guard id. */
@@ -160,7 +175,7 @@ export class WindowSnapshotTracker {
     const key = sessionId ?? '';
     const id = snapshotId !== undefined
       ? this.aliasToId.get(this.aliasKey(key, snapshotId)) ?? snapshotId
-      : windowId !== undefined ? this.latestByWindow.get(this.windowKey(key, pid, windowId)) : undefined;
+      : windowId !== undefined ? this.latestByWindow.get(this.windowKey(key, pid, windowId))?.snapshotId : undefined;
     const meta = id === undefined ? undefined : this.metaById.get(id);
     return meta?.sessionKey === key && meta.pid === pid ? meta.frames?.get(index) : undefined;
   }
@@ -200,10 +215,10 @@ export class WindowSnapshotTracker {
       return {
         ok: false,
         reason: 'window_mismatch',
-        latestSnapshotId: this.latestByWindow.get(meta.windowKey),
+        latestSnapshotId: this.latestByWindow.get(meta.windowKey)?.snapshotId,
       };
     }
-    const latest = this.latestByWindow.get(meta.windowKey);
+    const latest = this.latestByWindow.get(meta.windowKey)?.snapshotId;
     if (latest !== canonicalSnapshotId) {
       return { ok: false, reason: 'superseded', latestSnapshotId: latest };
     }

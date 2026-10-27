@@ -357,13 +357,26 @@ downloadArtifact({
   return zipPath;
 }
 
+/**
+ * Windows 自带的 tar.exe(bsdtar，能解 zip、认盘符路径)。不能按 PATH 找：在 Git Bash 里装依赖时，
+ * PATH 上先命中的是 Git 自带的 GNU tar，它把 `C:\...` 里的冒号当成「远程主机:路径」，
+ * 报 `Cannot connect to C: resolve failed`，也解不了 zip。系统目录里没有时才退回 PATH。
+ */
+export function resolveSystemTarCommand(platform = process.platform, env = process.env, exists = fs.existsSync) {
+  if (platform !== 'win32') return 'tar';
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || env.windir || env.WINDIR || 'C:\\Windows';
+  const systemTar = path.win32.join(systemRoot, 'System32', 'tar.exe');
+  return exists(systemTar) ? systemTar : 'tar';
+}
+
 function extractElectronZipWithSystemTar(zipPath, root = ROOT) {
   const electronDir = getElectronDir(root);
   const distDir = path.join(electronDir, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  log(`使用系统 tar 解压 Electron zip：${zipPath}`);
-  const result = spawnSync('tar', ['-xf', zipPath, '-C', distDir], {
+  const tar = resolveSystemTarCommand();
+  log(`使用系统 tar 解压 Electron zip：${zipPath}（${tar}）`);
+  const result = spawnSync(tar, ['-xf', zipPath, '-C', distDir], {
     cwd: root,
     stdio: 'inherit',
   });

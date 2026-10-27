@@ -66,6 +66,65 @@ describe('controlled capability page lifetime', () => {
   });
 });
 
+it('shows the name, not the internal id, of a kept reference this computer does not have', async () => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+      maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list, listAgentSkills: async () => ({ success: true, skills: [] }), plugins: { list: async () => [] } },
+    },
+  });
+  const bot = { id: 'bot-1', canonicalSessionId: 's1' } as BotProfile;
+  const capabilities = { modelChain: [], modelChainOverride: null, mcpMode: 'allowlist', mcpServers: ['mcp_9f3a', 'mcp_unnamed'],
+    mcpServerNames: { mcp_9f3a: '公司知识库' }, toolsets: [] } as unknown as BotProfile['capabilities'];
+  const view = render(<BotCapabilitySettings bot={bot} capabilities={capabilities} skills={[]} onChange={vi.fn()} expanded />);
+  expect(await view.findByText('公司知识库')).toBeTruthy();
+  expect(view.queryByText('mcp_9f3a')).toBeNull();
+  expect(view.getByText('mcp_unnamed')).toBeTruthy();
+  expect(view.getAllByText('bots.capabilities.notOnThisComputer')).toHaveLength(2);
+});
+
+it.each([
+  { enabled: true, runtimeStatus: 'discovered', firstEnabled: false, firstStatus: 'discovered' },
+  { enabled: false, runtimeStatus: 'discovered', firstEnabled: true, firstStatus: 'discovered' },
+  { enabled: true, runtimeStatus: 'discovered', firstEnabled: true, firstStatus: 'failed' },
+  { enabled: true, runtimeStatus: 'failed', firstEnabled: true, firstStatus: 'discovered' },
+])('uses the runtime winner for duplicate skill state: $enabled/$runtimeStatus', async ({ enabled, runtimeStatus, firstEnabled, firstStatus }) => {
+  const discovered = [
+    { name: 'agent-ops', path: '/home/.agents/skills/agent-ops/SKILL.md', scope: 'repo',
+      description: 'First source description', enabled: firstEnabled, runtimeStatus: firstStatus },
+    { name: 'agent-ops', path: '/home/.agents/skills/agent-ops/SKILL.md', scope: 'user',
+      description: 'Runtime winner description', enabled, runtimeStatus },
+    { name: 'unique-skill', path: '/project/.pi/skills/unique-skill/SKILL.md', enabled: true },
+  ];
+  const listAgentSkills = vi.fn(async () => ({ success: true, skills: discovered }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills, plugins: { list: async () => [] } },
+  } });
+  const onChange = vi.fn();
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [] } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={onChange} />);
+
+  await waitFor(() => expect(view.getAllByRole('switch', { name: 'agent-ops' })).toHaveLength(1));
+  const checkbox = view.getByRole('switch', { name: 'agent-ops' }) as HTMLButtonElement;
+  const available = enabled && runtimeStatus !== 'failed';
+  expect(checkbox.disabled).toBe(!available);
+  expect(view.getByText('Runtime winner description')).toBeTruthy();
+  expect(view.queryByText('First source description')).toBeNull();
+  expect(view.getByRole('switch', { name: 'unique-skill' })).toBeTruthy();
+  if (available) {
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('skill', ['agent-ops']);
+  }
+  // Rendering must leave the discovery catalog intact for other consumers.
+  expect(discovered).toHaveLength(3);
+  expect(listAgentSkills).toHaveBeenCalledOnce();
+});
+
 
 it('shows inherited tools as selected and preserves the others when one is explicitly removed', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {

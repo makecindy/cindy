@@ -50,6 +50,7 @@ export interface WorkbenchTranscriptWire {
 }
 
 export interface BotWorkbenchCallbacks {
+  projects?: (params: { callerSessionId: string; projectId?: string; linked?: boolean; includeAvailable?: boolean }) => Promise<ControlResult<{ projects: Array<Record<string, unknown>> }, string>>;
   setResponsibility?: (params: { callerSessionId: string; taskId: string; responsible: boolean }) => Promise<ControlResult<{ taskId: string; responsible: boolean }, string>>;
   todos?: (
     callerSessionId: string,
@@ -125,6 +126,29 @@ export function registerBotWorkbenchTools(
   deps: BotWorkbenchToolDeps,
 ): void {
   const callerSessionId = () => deps.getSessionContext().sessionId ?? null;
+  if (deps.callbacks.projects) {
+    const projects = deps.callbacks.projects;
+    registry.register({
+      name: 'list_teammate_projects', category: 'bots',
+      description: 'List your linked projects with their computer, directory and availability. Read relevant project instructions and materials on demand with your file tools; keep project knowledge in its existing location, not your personal memory. Foreign-computer paths must not be read locally. include_available also lists local registered projects you can link. This does not read project contents, assign tasks, authorize repository changes or start background work.',
+      inputShape: { include_available: z.boolean().optional() },
+      handler: async ({ include_available }) => {
+        const id = callerSessionId(); if (!id) return missingSession();
+        const result = await projects({ callerSessionId: id, includeAvailable: include_available });
+        return result.ok ? okPayload({ projects: result.projects }) : errorPayload(result.errorCode, result.message);
+      },
+    });
+    registry.register({
+      name: 'set_teammate_project', category: 'bots',
+      description: 'Link or unlink one project in your own teammate settings when the owner requests it. Use the project_id from list_teammate_projects(include_available=true). Unlinking preserves files, project registration, memory and task responsibility. Linking is context only, not authorization to edit a repository, contact tasks or scan in the background.',
+      inputShape: { project_id: z.string().regex(/^[a-f0-9]{64}$/), linked: z.boolean() },
+      handler: async ({ project_id, linked }) => {
+        const id = callerSessionId(); if (!id) return missingSession();
+        const result = await projects({ callerSessionId: id, projectId: project_id, linked });
+        return result.ok ? okPayload({ projects: result.projects }) : errorPayload(result.errorCode, result.message);
+      },
+    });
+  }
   if (deps.callbacks.todos) registerTodoTools(registry, callerSessionId, deps.callbacks.todos);
 
   if (deps.callbacks.setResponsibility) {
@@ -132,7 +156,7 @@ export function registerBotWorkbenchTools(
     registry.register({
       name: 'set_workbench_task_responsibility',
       category: 'bots',
-      description: 'Explicitly take or release responsibility for one Cindy task on this computer. Only take work the owner asked you to handle. Tasks you start yourself are recorded by the host. Release only changes your responsibility; it does not stop, move, archive or delete the task, and does not affect Todo. Taking responsibility alone does not start execution; the host then wakes you when the task gets stuck, waits, errors or finishes.',
+      description: 'Explicitly take or release responsibility for one Cindy task on this computer. Taking needs the owner\'s request in this turn; you may release on your own. Tasks you start yourself are recorded by the host. Release only changes your responsibility; it does not stop, move, archive or delete the task, and does not affect Todo. Taking responsibility alone does not start execution; the host then wakes you when the task gets stuck, waits, errors or finishes.',
       inputShape: { task_id: z.string().min(1).max(256), responsible: z.boolean() },
       handler: async ({ task_id, responsible }) => {
         const id = callerSessionId();
@@ -184,8 +208,8 @@ export function registerBotWorkbenchTools(
     category: 'bots',
     description:
       '让一件任务接着做:给它发一句话,消息标明由你发出,任务正忙时排到当前一轮之后。'
-      + '主人私聊输入及宿主实时核验的群内主人请求沿用普通任务权限流程，不另加行动确认卡；访客或核验暂不可用不算主人输入。总调度、创建者、跟进责任与自动唤醒不授予发消息许可，自动轮次未经授权只准备建议。'
-      + '取得独立行动授权后，总调度伙伴可继续没有伙伴开的任务(含在线电脑上的)、自己开的任务,以及已交给它跟进的任务;别的伙伴开的任务默认由那位伙伴跟进,'
+      + '主人这一轮开口时按主人的意思发；自主唤醒（跟进、例行任务）时只用来让交给你跟进的任务按原目标接着做，不借它追加新要求、改目标或停止任务，那些要等主人开口。'
+      + '总调度伙伴可继续没有伙伴开的任务(含在线电脑上的)、自己开的任务,以及已交给它跟进的任务;别的伙伴开的任务默认由那位伙伴跟进,'
       + '会返回 TASK_FOLLOWED_BY_OTHER_BOT,只能读不能继续,需要接手时告诉主人可在那位伙伴的设置里打开「它开的任务也交给你跟进」。'
       + '其它伙伴只能继续自己接手的任务,你自己开的后台任务继续用 message_session_task。'
       + '发之前先 get_task_digest 确认它还需要这句话;把 message 写成那件任务收到就能直接做的一句指令,不要重复它已经做完的外部操作。'

@@ -1,36 +1,10 @@
 /**
- * 群聊发件箱：用户点发送后立即在时间线末尾显示自己的消息，不等 main / 服务器回执。
- *
- * 只是 renderer 内存里的展示状态，不持久化，也不替代 main 的幂等与服务器的权威时间线：
- * - 每条消息保存 composer 交来的完整发送输入（`BotGroupSendInput`，附件除外——附件在
- *   入队时就开始烧录标注，提交时序列化），提交与重试都原样发出，这里不挑字段；新增发送字段只需
- *   composer 放进 `input`，显示、回执与重试自动带上。
- * - `input.clientId` 是身份，失败重试沿用同一个 clientId，main 与服务器据此去重，
- *   所以这里绝不自动重发。
- * - 同一个群的提交按发出顺序一条一条交给 main，保持用户看到的先后。
- * - 回执带回的 `messageId` 是替换依据：时间线读到这条消息就收起临时气泡；回执之后开始的
- *   一次重读即使没读到（被挤出最新一页），也说明它已进历史，同样收起。
- * - 推送重读可能先于回执到达。此时只对正在提交的那一条（同群同时最多一条）做显示上的
- *   去重：基线之后出现、未被任何回执认领、正文与附件数一致的自己的消息视为它，回执到达后
- *   仍以 messageId 为准。
- * - 附件：临时消息从输入的附件生成列表；带手绘标注的图片烧录完成后改用烧录后的本地预览
- *   （同一份烧录结果也用于提交与重试，不重复烧录；放回输入框的仍是带笔迹的原件）。真实消息到了
- *   而服务器副本还没下载好（没有 url / path，或还没出现在列表里——main 只列已下载的副本）时，按同一 messageId
- *   把本地预览接到真实消息上，直到副本可用（见 `mergeBotGroupLocalAttachments`）。
- * - 离开输入框的附件不再受草稿保护：发件箱条目持有的图片地址（含标注原图与烧录副本）登记进
- *   存储清理的保护清单，条目移除时同步撤下；已确认消息的本地预览不登记——发送时 main 已在群的
- *   `bot-group-attachment` 引用下固定这些图片。尚未进入消息的暂存文件按归属回收：还没开始提交的条目
- *   （排队中、已失败）归发件箱，群被删除（含不在当前页的群：列表里消失且读取确认已不存在）时
- *   立即回收；已开始提交的条目归它的那次请求，条目在烧录期间被丢弃就不再发出并回收，
- *   已交给 main 的等结果——成功（已进入消息）不碰，失败才回收。main 的发送在 IPC 返回前读完
- *   全部本地文件，失败时不留任何引用暂存路径的本地记录（服务端只引用已上传的副本）。
- *   切换账号时同样按此发出回收，但 main 只删当前账号暂存目录里的副本，而 renderer 看到切换时
- *   main 已在新账号（或边界）下：前一账号的副本留在它自己的暂存目录，renderer 无法再删，
- *   不在发件箱范围内（main 的暂存副本按账号划界）。
- * - 失败时交还输入框（输入框空着才交还，见 `registerBotGroupComposer`），否则留在时间线上
- *   显示没发出去，可重试或编辑；失败时输入框不在（切群、分享模式），回来注册输入框时同样交还。
- * - 切换到另一个账号时整体清空，旧账号的迟到回执一律丢弃；同账号的 generation 修复、认证边界
- *   短暂发布的 null、退出后重新登录同一账号都不清空。群被删除时丢弃该群的条目。
+ * Existing group-chat outbox: immediate timeline projection, per-room FIFO and stable clientId.
+ * Main persists each entry and its media references before the composer relinquishes the draft.
+ * Startup restores queued/failed/sent entries; transport failures retry, content/access refusals
+ * remain available for editing. A receipt remains until its canonical message is read back.
+ * Annotation materialization and local preview replacement reuse the same send attempt.
+ * Owner changes clear this window's projection without deleting the previous owner's ledger.
  */
 import { useCallback, useSyncExternalStore } from 'react';
 
@@ -39,6 +13,7 @@ import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from 
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import { setBotGroupOutboxAttachmentUrls } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
+import type { BotGroupOutboxStoredEntry } from '../../../shared/botGroupOutboxStorage';
 import type {
   BotGroupAttachment,
   BotGroupErrorCode,
@@ -186,6 +161,69 @@ function releaseStaged(files: readonly AttachedFile[]): void {
 /** Entries whose `submit` has started: that request owns their files until it settles. */
 const submitting = new Set<string>();
 const entryKey = (groupId: string, clientId: string) => `${groupId}\n${clientId}`;
+const durable = () => botGroupApi()?.botGroupOutbox;
+function persist(entry: BotGroupOutboxEntry): Promise<unknown> {
+  return durable()?.({ action: 'put', owner: getDataOwnerGeneration(), entry: entry as unknown as BotGroupOutboxStoredEntry }) ?? Promise.resolve();
+}
+function forgetSaved(groupId: string, clientId: string): void {
+  void durable()?.({ action: 'remove', owner: getDataOwnerGeneration(), groupId, clientId }).catch(() => undefined);
+}
+
+/** Main-window lifetime: restore once per owner and retry transport failures in room order. */
+export function startBotGroupOutbox(): () => void {
+  ensureOwner();
+  const owner = getDataOwnerGeneration();
+  let stopped = false;
+  let ready = false;
+  const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
+  const run = async () => {
+    if (!current() || !owner.dataOwnerId || !durable()) return;
+    if (!ready) {
+      const saved = await durable()!({ action: 'list', owner });
+      if (!current()) return;
+      for (const value of saved) {
+        const entry = value as unknown as BotGroupOutboxEntry;
+        const group = groupOf(entry.input.groupId);
+        if (!group.entries.some(row => row.input.clientId === entry.input.clientId)) group.entries = [...group.entries, entry];
+      }
+      ready = true; emit();
+    }
+    for (const [groupId, group] of groups) {
+      const first = group.entries.find(entry => entry.status !== 'sent');
+      if (first && first.retryable !== false && !submitting.has(entryKey(groupId, first.input.clientId))) {
+        if (first.status === 'failed') retryBotGroupSend(groupId, first.input.clientId);
+        else schedule(groupId, first.input.clientId);
+      }
+      if (group.entries.some(entry => entry.status === 'sent')) {
+        const token = beginBotGroupTimelineRead();
+        const options = group.entries.some(entry => entry.input.conversationKind === 'direct')
+          ? { conversationKind: 'direct' as const } : undefined;
+        let result = options ? await botGroupApi()!.getBotGroup(groupId, options) : await botGroupApi()!.getBotGroup(groupId);
+        if (!current()) return;
+        if (result.ok) {
+          noteBotGroupTimeline(groupId, result.group.messages, token);
+          // A restart may happen after many newer messages. Reconcile receipts outside
+          // the newest page without moving or discarding the displayed timeline.
+          while (result.ok && result.group.hasMoreBefore && group.entries.some(entry => entry.status === 'sent')) {
+            const before = Math.min(...result.group.messages.map(message => message.sequence));
+            if (!Number.isFinite(before)) break;
+            result = await botGroupApi()!.getBotGroup(groupId, { ...options, beforeSequence: before });
+            if (!current()) return;
+            if (!result.ok) break;
+            noteBotGroupTimeline(groupId, result.group.messages, token);
+            if (!result.group.messages.some(message => message.sequence < before)) break;
+          }
+        }
+        else if (result.errorCode === 'NOT_FOUND' || result.errorCode === 'PERMISSION_DENIED') discardBotGroupOutbox(groupId);
+      }
+    }
+  };
+  let running = false;
+  const tick = () => { if (!running) { running = true; void run().catch(() => undefined).finally(() => { running = false; }); } };
+  const timer = setInterval(tick, 5_000);
+  window.addEventListener('online', tick); window.addEventListener('focus', tick); tick();
+  return () => { stopped = true; clearInterval(timer); window.removeEventListener('online', tick); window.removeEventListener('focus', tick); };
+}
 
 /** Drop entries the outbox still owns; a request in progress settles its own (see `submit`). */
 function releaseUnsubmitted(groupId: string, entries: readonly BotGroupOutboxEntry[]): void {
@@ -202,7 +240,7 @@ function ensureOwner(): void {
   if (previous === null) return;
   generation += 1;
   // The previous account's queued and failed sends go with it; one being submitted settles itself.
-  for (const [groupId, group] of groups) releaseUnsubmitted(groupId, group.entries);
+  if (!durable()) for (const [groupId, group] of groups) releaseUnsubmitted(groupId, group.entries);
   groups.clear();
   preparing.clear();
   protectHeldMedia();
@@ -225,6 +263,7 @@ function update(groupId: string, clientId: string, patch: Partial<BotGroupOutbox
   if (!group || index < 0) return null;
   const next = { ...group.entries[index]!, ...patch };
   group.entries = group.entries.map((entry, at) => (at === index ? next : entry));
+  void persist(next).catch(() => undefined);
   emit();
   return next;
 }
@@ -233,6 +272,7 @@ function remove(groupId: string, clientId: string): void {
   const group = groups.get(groupId);
   if (!group || !group.entries.some((entry) => entry.input.clientId === clientId)) return;
   group.entries = group.entries.filter((entry) => entry.input.clientId !== clientId);
+  forgetSaved(groupId, clientId);
   emit();
 }
 
@@ -250,7 +290,7 @@ function displayAttachments(files: readonly AttachedFile[]): BotGroupAttachment[
 }
 
 /** Show the message at once and queue it behind the group's earlier sends. */
-export function enqueueBotGroupSend(draft: BotGroupOutboxDraft): void {
+export async function enqueueBotGroupSend(draft: BotGroupOutboxDraft): Promise<void> {
   const { groupId, clientId } = draft.input;
   const group = groupOf(groupId);
   const entry: BotGroupOutboxEntry = {
@@ -267,6 +307,12 @@ export function enqueueBotGroupSend(draft: BotGroupOutboxDraft): void {
   // Sent again after 编辑 (same clientId): a burn that failed before is tried afresh.
   preparing.delete(entryKey(groupId, clientId));
   emit();
+  if (durable()) {
+    const owner = getDataOwnerGeneration();
+    try { await persist(entry); }
+    catch (error) { if (isDataOwnerGenerationCurrent(owner)) remove(groupId, clientId); throw error; }
+    if (!isDataOwnerGenerationCurrent(owner)) throw new Error('OUTBOX_OWNER_CHANGED');
+  }
   schedule(groupId, clientId);
   // Burn annotations in now, not when the message's turn comes: the bubble shows the result.
   if (entry.files.length > 0) void prepare(groupId, clientId).catch(() => undefined);
@@ -285,10 +331,11 @@ function prepare(groupId: string, clientId: string): Promise<readonly AttachedFi
   const existing = preparing.get(key);
   if (existing) return existing;
   const requestGeneration = generation;
+  const requestOwner = getDataOwnerGeneration();
   const pending = materializeAnnotatedAttachmentsForSend(entry.files, entry.attachmentScope, { burnFailure: 'abort' })
     .then((files) => {
       const prepared = files ?? [];
-      if (requestGeneration === generation) {
+      if (requestGeneration === generation && isDataOwnerGenerationCurrent(requestOwner)) {
         update(groupId, clientId, { prepared, attachments: displayAttachments(prepared) });
       }
       if (preparing.get(key) === pending) preparing.delete(key);
@@ -322,9 +369,10 @@ export function editBotGroupSend(groupId: string, clientId: string): boolean {
 function schedule(groupId: string, clientId: string): void {
   const group = groupOf(groupId);
   const requestGeneration = generation;
+  const requestOwner = getDataOwnerGeneration();
   // Kept by the request itself: after an account switch the entry is gone but its files are not.
   const files = group.entries.find((entry) => entry.input.clientId === clientId)?.files ?? [];
-  group.chain = group.chain.then(() => submit(groupId, clientId, requestGeneration, files)).catch(() => undefined);
+  group.chain = group.chain.then(() => submit(groupId, clientId, requestGeneration, files, requestOwner)).catch(() => undefined);
 }
 
 async function submit(
@@ -332,15 +380,19 @@ async function submit(
   clientId: string,
   requestGeneration: number,
   files: readonly AttachedFile[],
+  requestOwner: ReturnType<typeof getDataOwnerGeneration>,
 ): Promise<void> {
   // An account switch nothing else noticed yet (no group open) settles the outbox here.
   ensureOwner();
-  const isCurrent = () => requestGeneration === generation && !accountChanged();
+  const isCurrent = () => requestGeneration === generation && !accountChanged()
+    && (!durable() || isDataOwnerGenerationCurrent(requestOwner));
   // Dropped before its turn (account switch, deleted group): whoever dropped it released its files.
   if (!isCurrent()) return;
   const group = groups.get(groupId);
   const entry = group?.entries.find((candidate) => candidate.input.clientId === clientId);
   if (!group || !entry || entry.status !== 'sending') return;
+  // A retryable earlier send must not be overtaken after a transport failure.
+  if (durable() && group.entries.slice(0, group.entries.indexOf(entry)).some(row => row.status !== 'sent')) return;
   // From here this request owns the files. Still the outbox's message: same account, still listed.
   const owned = () =>
     isCurrent() && (groups.get(groupId)?.entries.some((candidate) => candidate.input.clientId === clientId) ?? false);
@@ -370,9 +422,12 @@ async function submitOwned(
     const prepared = await prepare(groupId, clientId);
     // Dropped while annotations were burning in: it never reaches main.
     if (!owned()) {
-      releaseStaged(files);
+      if (!durable()) releaseStaged(files);
       return;
     }
+    const saved = groups.get(groupId)?.entries.find(row => row.input.clientId === clientId);
+    if (saved) await persist(saved);
+    if (!owned()) return;
     const result: BotGroupSendResult = await api.sendBotGroupMessage({
       ...entry.input,
       ...(prepared.length > 0 ? { attachments: toBotGroupAttachmentInputs(prepared) } : {}),
@@ -380,7 +435,7 @@ async function submitOwned(
     if (!owned()) {
       // A late answer for a dropped message: keep what went out, release what did not. Main has
       // read the files by the time it answers.
-      if (!result.ok) releaseStaged(files);
+      if (!result.ok && !durable()) releaseStaged(files);
       return;
     }
     if (result.ok) {
@@ -390,7 +445,7 @@ async function submitOwned(
     }
     // An original that is no longer available is not put back with the draft.
     if (result.errorCode === 'QUOTE_UNAVAILABLE') update(groupId, clientId, { quote: null });
-    retryable = !CONTENT_REFUSALS.has(result.errorCode);
+    retryable = !CONTENT_REFUSALS.has(result.errorCode) && !['NOT_FOUND', 'PERMISSION_DENIED'].includes(result.errorCode);
     errorKey =
       result.errorCode === 'INVALID_PARAMS' && prepared.length > 0
         ? 'bots.groupChat.composer.attachmentsFailed'
@@ -398,7 +453,7 @@ async function submitOwned(
   } catch (error) {
     // Burn-in failed (never sent) or the call failed without an answer from main's handler.
     if (!owned()) {
-      releaseStaged(files);
+      if (!durable()) releaseStaged(files);
       return;
     }
     if (isAnnotationBurnInError(error)) errorKey = 'chat.media.annotateBurnFailedNotSent';
@@ -406,8 +461,8 @@ async function submitOwned(
   const failed = update(groupId, clientId, { status: 'failed', errorKey, retryable, baseline: undefined });
   if (!failed) return;
   const composer = composers.get(groupId);
-  if (composer?.restore(failed)) remove(groupId, clientId);
-  composer?.notifyFailed(errorKey);
+  if (!durable() && composer?.restore(failed)) remove(groupId, clientId);
+  if (!durable() || !retryable) composer?.notifyFailed(errorKey);
 }
 
 /** Mark the start of a timeline read; pass the token to `noteBotGroupTimeline` when it lands. */
@@ -425,7 +480,7 @@ export function noteBotGroupTimeline(groupId: string, messages: readonly BotGrou
   const byId = new Map(messages.map((message) => [message.id, message]));
   const settled = (entry: BotGroupOutboxEntry) =>
     entry.status === 'sent' &&
-    ((entry.messageId !== undefined && byId.has(entry.messageId)) || (entry.receiptTick ?? Infinity) < readToken);
+    ((entry.messageId !== undefined && byId.has(entry.messageId)) || (!durable() && (entry.receiptTick ?? Infinity) < readToken));
   const previews = new Map(group.previews);
   let changed = false;
   // A settled message keeps its local previews until the timeline has a usable copy of each.
@@ -451,6 +506,7 @@ export function noteBotGroupTimeline(groupId: string, messages: readonly BotGrou
         continue;
       }
       const sequence = entry.messageId ? byId.get(entry.messageId)?.sequence : undefined;
+      forgetSaved(groupId, entry.input.clientId);
       if (sequence !== undefined) floor = Math.max(floor, sequence);
     }
     group.entries = kept;
@@ -519,6 +575,7 @@ export function discardBotGroupOutbox(groupId: string): void {
   const group = groups.get(groupId);
   if (!group) return;
   groups.delete(groupId);
+  for (const entry of group.entries) forgetSaved(groupId, entry.input.clientId);
   releaseUnsubmitted(groupId, group.entries);
   emit();
 }
@@ -555,8 +612,9 @@ function verifyGroupGone(groupId: string, attempt: number): void {
   const requestOwner = getDataOwnerGeneration();
   let definite = false;
   verifying.add(groupId);
-  void api
-    .getBotGroup(groupId)
+  const options = group.entries.some(entry => entry.input.conversationKind === 'direct')
+    ? { conversationKind: 'direct' as const } : undefined;
+  void (options ? api.getBotGroup(groupId, options) : api.getBotGroup(groupId))
     .then((result) => {
       if (!isDataOwnerGenerationCurrent(requestOwner)) return;
       definite = result.ok || result.errorCode === 'NOT_FOUND';
@@ -582,7 +640,7 @@ function verifyGroupGone(groupId: string, attempt: number): void {
 export function registerBotGroupComposer(groupId: string, handle: BotGroupComposerHandle): () => void {
   composers.set(groupId, handle);
   const failed = groups.get(groupId)?.entries.find((entry) => entry.status === 'failed');
-  if (failed && handle.restore(failed)) {
+  if (failed && !durable() && handle.restore(failed)) {
     remove(groupId, failed.input.clientId);
     handle.notifyFailed(failed.errorKey ?? 'bots.groupChat.composer.sendFailed');
   }

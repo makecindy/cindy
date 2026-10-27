@@ -60,6 +60,20 @@ function method(signature) {
 
 const harness = `
 import Foundation
+enum ShareType: String { case text, url, image, audio, video, file }
+struct SharePayload { let type: ShareType; let value: String; let mimeType: String; let metadata: String? }
+class NSItemProvider {
+  let payload: SharePayload?
+  init(_ payload: SharePayload?) { self.payload = payload }
+}
+class NSExtensionItem {
+  var attachments: [NSItemProvider]?
+  var attributedContentText: NSAttributedString?
+  init(_ providers: [NSItemProvider], _ text: String? = nil) {
+    attachments = providers
+    attributedContentText = text.map { NSAttributedString(string: $0) }
+  }
+}
 class UIResponder { var next: UIResponder? }
 class UIApplication: UIResponder {
   var calls = 0
@@ -103,6 +117,8 @@ class ShareIntoViewController: UIResponder {
   var alerts: [UIAlertController] = []
   func present(_ alert: UIAlertController, animated: Bool) { alerts.append(alert) }
   func shareString(_ key: String) -> String { key }
+  func parseProvider(_ provider: NSItemProvider) async -> SharePayload? { provider.payload }
+  ${method("nonisolated private func processInputItems").replace("private func", "func")}
   ${method("func openParentApp()")}
   ${method("private func openURL(")}
   ${method("private func close()")}
@@ -160,6 +176,37 @@ do {
   let action = controller.alerts[0].actions[0]; action.handler(action)
   check(controller.extensionContext!.completions == 1)
 }
+do {
+  let controller = ShareIntoViewController(); controller.showShareFeedback(received: false, tooMany: true)
+  check(controller.alerts[0].title == "tooManyTitle")
+  check(controller.extensionContext!.completions == 0)
+}
+// Execute the actual generated item assembly and partial-failure cleanup.
+let finished = DispatchSemaphore(value: 0)
+Task.detached {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root); finished.signal() }
+  let owned = root.appendingPathComponent("cindy-share-" + UUID().uuidString).appendingPathComponent("owned.txt")
+  let referenced = root.appendingPathComponent("cindy-share-" + UUID().uuidString).appendingPathComponent("keep.txt")
+  for url in [owned, referenced] {
+    try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try! Data("fixture".utf8).write(to: url)
+  }
+  let controller = ShareIntoViewController()
+  let file = SharePayload(type: .file, value: owned.absoluteString, mimeType: "text/plain", metadata: nil)
+  let text = SharePayload(type: .text, value: referenced.absoluteString, mimeType: "text/plain", metadata: nil)
+  let failed = await controller.processInputItems([NSExtensionItem([NSItemProvider(file), NSItemProvider(text), NSItemProvider(nil)])])
+  check(failed.isEmpty)
+  check(!FileManager.default.fileExists(atPath: owned.path))
+  check(FileManager.default.fileExists(atPath: referenced.path))
+  let captioned = await controller.processInputItems([NSExtensionItem([NSItemProvider(file)], "caption")])
+  check(captioned.count == 2 && captioned.last?.value == "caption")
+  let duplicate = await controller.processInputItems([NSExtensionItem([NSItemProvider(text)], text.value)])
+  check(duplicate.count == 1)
+  let standalone = await controller.processInputItems([NSExtensionItem([], "selection")])
+  check(standalone.count == 1 && standalone[0].value == "selection")
+}
+check(finished.wait(timeout: .now() + 5) == .success)
 print("PASS: generated Swift share feedback (success, failure, timeout, missing responder, duplicate/late reply, cancel, Done)")
 `;
 const dir = mkdtempSync(join(tmpdir(), "cindy-share-feedback-test-"));

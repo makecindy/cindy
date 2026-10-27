@@ -4,7 +4,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BotGroupOpenPlanSummary, BotGroupSummary } from '../../../../shared/botGroupChat';
-import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
 import { botGroupReadKey, markBotRead, resetBotReadStateForTests } from '../botReadState';
 
 vi.mock('@/hooks/useProviderOnboarding', () => ({
@@ -149,8 +148,6 @@ async function renderSidebar() {
 }
 
 beforeEach(() => {
-  // These tests are about the menu's own entries; the new-entry hint has its own test file.
-  window.localStorage.setItem(sidebarOwnerStorageKey('sidebar.botMarketEntryHint.v1', 'owner'), 'seen');
   mocks.navigate.mockReset();
   mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.manage.mockReset().mockResolvedValue({ ok: true });

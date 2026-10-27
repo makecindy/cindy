@@ -71,7 +71,8 @@ afterEach(() => {
 function fixture(namespace: string | null = null) {
   let owner: string | null = 'owner',
     revision = 'installed-1',
-    allowed = true;
+    allowed = true,
+    nowOffset = 0;
   const file = Buffer.from(
     '<!doctype html><html><head></head><body><input id="original"><script src="settings.js"></script></body></html>',
   );
@@ -119,12 +120,14 @@ function fixture(namespace: string | null = null) {
     },
   );
   const disconnect = vi.fn(async () => {}),
-    post = vi.fn(async () => {}),
-    connect = vi.fn(async () => {});
+    post = vi.fn(async (_ghost: InstalledGhost, _pageId: string, _channel: string, _data: unknown, _sourceId?: string) => {}),
+    connect = vi.fn(async () => {}),
+    poll = vi.fn(async (): Promise<any[]> => []);
   const validateDirectory = vi.fn<(path: string) => Promise<string>>(
     async () => '/target/resolved',
   );
   const service = new MobilePluginPages({
+    now: () => Date.now() + nowOffset,
     list: () => [ghost],
     revision: () => revision,
     captureOwner: () => {
@@ -142,7 +145,7 @@ function fixture(namespace: string | null = null) {
     }),
     connect,
     post,
-    poll: async () => [],
+    poll,
     disconnect,
     fetch: vi.fn(),
     settingsFetch,
@@ -209,6 +212,8 @@ function fixture(namespace: string | null = null) {
     return { view, fetch };
   };
   return {
+    advance: (ms: number) => { nowOffset += ms; },
+    now: () => Date.now() + nowOffset,
     service,
     ghost,
     stored,
@@ -219,6 +224,7 @@ function fixture(namespace: string | null = null) {
     open,
     post,
     connect,
+    poll,
     disconnect,
     wire,
     auth,
@@ -236,6 +242,14 @@ function fixture(namespace: string | null = null) {
 }
 
 describe('original remote plugin settings', () => {
+  it('advertises controller-routed settings authorization in the opened document', async () => {
+    const f = fixture();
+    const response = await f.service.provider().invoke!(
+      { controllerDeviceId: 'controller-a' },
+      { collectionId: 'plugins', actionId: 'settings:open', resourceRef: { collectionId: 'plugins', kind: 'plugin', id: f.ghost.instanceKey }, input: { expectedInstalledApproval: ghostInstallApprovalToken(f.ghost.approval) } } as never,
+    );
+    expect(response).toMatchObject({ result: { controllerAuthorization: true, pluginId: f.ghost.instanceKey } });
+  });
   it.each([null, 'org'])(
     'serves the original HTML in a unique, hardened session for namespace %s',
     async (ns) => {
@@ -254,6 +268,15 @@ describe('original remote plugin settings', () => {
       expect(ses.setPermissionCheckHandler).toHaveBeenCalled();
     },
   );
+  it('carries a credential check only inside the encrypted settings session', async () => {
+    const f = fixture(), { fetch } = await f.open();
+    f.settingsFetch.mockResolvedValueOnce({ status: 200, mime: 'application/json', base64: Buffer.from('{"valid":true}').toString('base64') });
+    const value = 'synthetic-check-candidate';
+    expect(await (await fetch('/secrets/key/check', { method: 'POST', body: JSON.stringify({ value }) })).json()).toEqual({ valid: true });
+    expect(f.settingsFetch).toHaveBeenCalledWith(expect.anything(), '/secrets/key/check', 'POST', JSON.stringify({ value }), expect.any(Function), expect.any(Function));
+    expect(JSON.stringify(f.wire)).not.toContain(value);
+    expect(f.controllerStored.size).toBe(0);
+  });
   it('writes a new key only to B through the signed encrypted exchange, then reads B status', async ({ onTestFinished }) => {
     // Unit regression: the real handshake/write must work when each clock read advances 1 ms.
     // The wall-clock fixture previously missed this boundary and intermittently failed in CI.
@@ -511,6 +534,69 @@ describe('original remote plugin settings', () => {
     expect(Buffer.from(result.base64, 'base64').toString()).toBe('{"ok":true}');
     expect(f.service.settingsAuthorizationBinding(action)).toBeNull();
   });
+  // Production settingsRequest/binding must survive a phone backgrounding during OAuth.
+  // Existing happy-path coverage never advances time; 121s idle is the minimal failure.
+  // Unit tier: in-memory endpoint/context, no provider tokens or external OAuth involved.
+  it.each([['page', true], ['sweep', false]] as const)('retains only an in-flight OAuth lease through %s after 120s idle (success=%s)', async (entry, success) => {
+    const f = fixture();
+    await f.open();
+    const pageId = [...(f.service as unknown as { pages: Map<string, unknown> }).pages.keys()][0];
+    const action = await f.service.settingsRequest('controller-a', {
+      op: 'settings', id: pageId, command: {kind: 'authorize', path: '/oauth/login/connect'},
+    }) as {requestId: string; actionId: string; expectedRevision: number};
+    let resolve!: (result: {status: number; mime: string; base64: string}) => void;
+    f.settingsFetch.mockImplementationOnce(() => new Promise(done => {resolve = done;}));
+    const finish = vi.fn();
+    const cancelled = new AbortController();
+    withRemoteOauthContext({scope: 'fixture', peer: 'controller-a', expiresAt: f.now() + 300_000,
+      cancelled: cancelled.signal, assertCurrent() {}, authorize: vi.fn(), finish},
+      () => expect(f.service.runSettingsAuthorization(action)).toBe(true));
+    f.advance(121_000);
+    if (entry === 'sweep') f.service.notify(pageId, 'example', 'fixture notification');
+    expect(f.service.settingsAuthorizationBinding(action)?.current()).toBe(true);
+    resolve({status: 200, mime: 'application/json', base64: Buffer.from(JSON.stringify({ok: success})).toString('base64')});
+    await Promise.resolve();
+    expect(finish).toHaveBeenCalledWith(success);
+    // A terminal authorization stays single-use until its result is consumed.
+    withRemoteOauthContext({scope: 'replay', peer: 'controller-a', expiresAt: f.now() + 300_000,
+      assertCurrent() {}, authorize: vi.fn(), finish},
+      () => expect(f.service.runSettingsAuthorization(action)).toBe(false));
+    expect(f.settingsFetch).toHaveBeenCalledTimes(1);
+    f.advance(121_000);
+    await expect(f.service.settingsRequest('controller-a', {op: 'settings', id: pageId,
+      command: {kind: 'poll', after: 0}})).rejects.toThrow();
+  });
+  it.each(['deadline', 'cancel', 'close', 'owner', 'controller', 'approval', 'no-deadline', 'not-started'] as const)(
+    'does not retain an OAuth page after %s', async (reason) => {
+      const f = fixture();
+      await f.open();
+      const pageId = [...(f.service as unknown as {pages: Map<string, unknown>}).pages.keys()][0];
+      const action = await f.service.settingsRequest('controller-a', {op: 'settings', id: pageId,
+        command: {kind: 'authorize', path: '/oauth/login/connect'}}) as {requestId: string; actionId: string; expectedRevision: number};
+      let resolve!: (result: {status: number; mime: string; base64: string}) => void;
+      const cancelled = new AbortController();
+      const finish = vi.fn();
+      if (reason !== 'not-started') {
+        f.settingsFetch.mockImplementationOnce(() => new Promise(done => {resolve = done;}));
+        withRemoteOauthContext({scope: 'fixture', peer: 'controller-a',
+          expiresAt: reason === 'no-deadline' ? undefined : f.now() + 300_000,
+          cancelled: cancelled.signal, assertCurrent() {}, authorize: vi.fn(), finish},
+          () => expect(f.service.runSettingsAuthorization(action)).toBe(true));
+      }
+      f.advance(reason === 'deadline' ? 300_000 : 121_000);
+      if (reason === 'cancel') cancelled.abort();
+      if (reason === 'close') await f.service.settingsRequest('controller-a', {op: 'settings', id: pageId, command: {kind: 'close'}});
+      if (reason === 'owner') f.owner('replacement');
+      if (reason === 'controller') f.revoke();
+      if (reason === 'approval') f.revision();
+      f.service.notify(pageId, 'example', 'fixture notification');
+      expect(f.service.settingsAuthorizationBinding(action)?.current() ?? false).toBe(false);
+      await expect(f.service.settingsRequest('controller-a', {op: 'settings', id: pageId,
+        command: {kind: 'poll', after: 0}})).rejects.toThrow();
+      resolve?.({status: 200, mime: 'application/json', base64: Buffer.from('{"ok":true}').toString('base64')});
+      await Promise.resolve();
+      if (reason !== 'not-started') expect(finish).toHaveBeenCalledWith(false);
+    });
   it('rejects foreign identities and unsafe package descriptors', () => {
     expect(() =>
       parseSettingsDocument({ pageId: 'p', pluginId: 'elsewhere' }, 'example'),
@@ -529,4 +615,118 @@ describe('original remote plugin settings', () => {
       ),
     ).toThrow();
   });
+});
+
+// #6680 post-merge P1: unseen confirmations and directory replies survive package navigation.
+// Real Host entry, in-memory transport. Existing tests only covered lease close/revocation.
+// Minimal input: A creates a prompt, document advances before poll/answer, then B queries.
+it.each([false, true])('invalidates document prompts while retaining Host notices and another page (polled=%s)', async (polled) => {
+  const f = fixture();
+  const opened = await f.service.provider().invoke!({ controllerDeviceId: 'controller-a' }, {
+    collectionId: 'plugins', actionId: 'settings:open', resourceRef: { collectionId: 'plugins', kind: 'plugin', id: f.ghost.instanceKey },
+    input: { expectedInstalledApproval: ghostInstallApprovalToken(f.ghost.approval) },
+  } as never);
+  const pageId = (opened.result as any).pageId;
+  const send = (command: any) => f.service.settingsRequest('controller-a', { op: 'settings', id: pageId, command });
+  cleanup.push(() => { void send({ kind: 'close' }).catch(() => {}); });
+  const advance = (epoch: number) => send({ kind: 'document', epoch });
+  const origin = async () => {
+    await send({ kind: 'subscribe', channels: ['test'] });
+    await send({ kind: 'post', channel: 'test', data: { op: 'action' } });
+    return f.post.mock.calls.at(-1)![4] as string;
+  };
+  await advance(1);
+  const a = await origin();
+  const params = { ghostId: f.ghost.instanceKey!, ghostName: 'Original plugin', body: 'A action', confirmText: null, cancelText: null, danger: false };
+  await f.open();
+  const otherPageId = [...(f.service as unknown as { pages: Map<string, unknown> }).pages.keys()].find(id => id !== pageId)!;
+  const otherAnswer = f.service.confirm(otherPageId, params);
+  const confirm = f.service.confirm(a, params);
+  const directory = f.service.chooseDirectory(a, f.ghost.instanceKey!, 'A folder');
+  const pending = polled ? await send({ kind: 'poll', after: 0 }) as any : null;
+  const currentA = f.service.captureSource(a, f.ghost.instanceKey!);
+  expect(currentA()).toBe(true);
+  expect(f.service.notify(a, f.ghost.instanceKey!, 'Saved on Host')).toBe(true);
+  await advance(2);
+  expect(await confirm).toBe(false);
+  expect(await directory).toBeNull();
+  const otherPoll = await f.service.settingsRequest('controller-a', { op: 'settings', id: otherPageId, command: { kind: 'poll', after: 0 } }) as any;
+  expect(otherPoll.confirms).toHaveLength(1);
+  await f.service.settingsRequest('controller-a', { op: 'settings', id: otherPageId, command: { kind: 'confirm', requestId: otherPoll.confirms[0].id, accepted: true } });
+  expect(await otherAnswer).toBe(true);
+  expect(currentA()).toBe(false);
+  expect(await send({ kind: 'poll', after: 0 })).toMatchObject({ confirms: [], directories: [], notifications: [{ text: 'Saved on Host' }] });
+  if (pending) {
+    await expect(send({ kind: 'confirm', requestId: pending.confirms[0].id, accepted: true })).rejects.toThrow();
+    await expect(send({ kind: 'answer-directory', requestId: pending.directories[0].id, path: '/target/folder' })).rejects.toThrow();
+  }
+  await expect(f.service.confirm(a, params)).rejects.toThrow();
+  await expect(f.service.chooseDirectory(a, f.ghost.instanceKey!, 'Late A')).rejects.toThrow();
+  expect(f.service.notify(a, f.ghost.instanceKey!, 'A finished saving')).toBe(true);
+  const b = await origin();
+  expect(b).not.toBe(a);
+  const bDirectory = f.service.chooseDirectory(b, f.ghost.instanceKey!, 'B folder');
+  const bAnswer = f.service.confirm(b, params);
+  await advance(2); // Duplicate acknowledgement must not cancel B.
+  const bPoll = await send({ kind: 'poll', after: 0 }) as any;
+  await send({ kind: 'confirm', requestId: bPoll.confirms[0].id, accepted: true });
+  expect(await bAnswer).toBe(true);
+  await send({ kind: 'answer-directory', requestId: bPoll.directories[0].id, path: '/target/folder' });
+  expect(await bDirectory).toBe('/target/resolved');
+  expect(bPoll.notifications).toEqual([expect.objectContaining({ text: 'A finished saving' })]);
+  await expect(advance(1)).rejects.toThrow();
+  await send({ kind: 'close' });
+  expect(f.service.notify(a, f.ghost.instanceKey!, 'closed')).toBe(false);
+});
+
+it('rejects a directory answer and a delayed fetch confirmation after document replacement', async () => {
+  const f = fixture();
+  await f.open();
+  const pageId = [...(f.service as unknown as { pages: Map<string, unknown> }).pages.keys()][0];
+  const send = (command: any) => f.service.settingsRequest('controller-a', { op: 'settings', id: pageId, command });
+  await send({ kind: 'document', epoch: 1 });
+  await send({ kind: 'subscribe', channels: ['test'] });
+  await send({ kind: 'post', channel: 'test', data: {} });
+  const source = f.post.mock.calls.at(-1)![4] as string;
+  const chosen = f.service.chooseDirectory(source, f.ghost.instanceKey!, 'A');
+  const poll = await send({ kind: 'poll', after: 0 }) as any;
+  let resolvePath!: (path: string) => void;
+  f.validateDirectory.mockImplementationOnce(() => new Promise(resolve => { resolvePath = resolve; }));
+  const answering = send({ kind: 'answer-directory', requestId: poll.directories[0].id, path: '/target/folder' });
+  let delayedConfirm!: () => Promise<boolean>;
+  let fetchCurrent!: () => boolean;
+  f.settingsFetch.mockImplementationOnce(async (_ghost, _path, _method, _body, current, confirmConnection) => {
+    fetchCurrent = current;
+    delayedConfirm = () => confirmConnection!('Service', 'example.com');
+    return { status: 200, mime: 'application/json', base64: '' };
+  });
+  await send({ kind: 'fetch', path: '/connections/service', method: 'POST' });
+  await send({ kind: 'document', epoch: 2 });
+  resolvePath('/target/folder');
+  await expect(answering).rejects.toThrow();
+  expect(await chosen).toBeNull();
+  expect(fetchCurrent()).toBe(false);
+  await expect(delayedConfirm()).rejects.toThrow();
+});
+
+it('does not return B prompts or events in a poll started by document A', async () => {
+  const f = fixture();
+  await f.open();
+  const pageId = [...(f.service as unknown as { pages: Map<string, unknown> }).pages.keys()][0];
+  const send = (command: any) => f.service.settingsRequest('controller-a', { op: 'settings', id: pageId, command });
+  await send({ kind: 'document', epoch: 1 });
+  await send({ kind: 'subscribe', channels: ['test'] });
+  let finish!: (events: any[]) => void;
+  f.poll.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const aPoll = send({ kind: 'poll', after: 0 });
+  await send({ kind: 'document', epoch: 2 });
+  await send({ kind: 'post', channel: 'test', data: {} });
+  const b = f.post.mock.calls.at(-1)![4]!;
+  const answer = f.service.confirm(b, { ghostId: f.ghost.instanceKey!, ghostName: 'B', body: 'B action', confirmText: null, cancelText: null, danger: false });
+  finish([{ sequence: 1, channel: 'test', data: 'B event' }]);
+  expect(await aPoll).toMatchObject({ events: [], confirms: [], directories: [] });
+  const bPoll = await send({ kind: 'poll', after: 0 }) as any;
+  expect(bPoll.confirms).toHaveLength(1);
+  await send({ kind: 'confirm', requestId: bPoll.confirms[0].id, accepted: true });
+  expect(await answer).toBe(true);
 });

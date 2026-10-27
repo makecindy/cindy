@@ -13,9 +13,14 @@ import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser
 import { buildExtractFnSource, type ExtractSpec } from './extract.js';
 import type { Recipe, RecipeStep } from './recipe-loader.js';
 import { isHttpUrl } from './url-guard.js';
+import { runOpenCliAdapter } from './opencli-page.js';
+import type { RecipeFiles } from '@jackwener/opencli/cindy';
 
 export interface RecipeRunDeps {
   call: (req: BrowserControlRequest) => Promise<BrowserControlResult>;
+  targetId?: string;
+  recipeSecrets?: { read(key: string): string | null; write(key: string, value: string): boolean };
+  recipeFiles?: () => Promise<RecipeFiles>;
   logger?: { warn?: (message: string, meta?: unknown) => void };
 }
 
@@ -27,6 +32,7 @@ export interface RecipeRunResult {
   failedStep?: number;
   failedAction?: string;
   message?: string;
+  failureKind?: 'input' | 'guard' | 'expect' | 'action';
 }
 
 // `{{var}}` with an optional `|modifier` (e.g. `{{query|url}}`). The modifier
@@ -256,12 +262,73 @@ function stepResultValue(step: RecipeStep, res: BrowserControlResult): unknown {
   return res.data;
 }
 
+/** Guard data is JSON-encoded, never interpolated into executable source. */
+function guardRequest(step: RecipeStep, vars: Record<string, unknown>): BrowserControlRequest | undefined {
+  if (!step.guard) return undefined;
+  const guard = {
+    url: interpolate(step.guard.url, vars),
+    selector: interpOpt(step.guard.selector, vars),
+    text: interpOpt(step.guard.text, vars),
+  };
+  if (!isHttpUrl(guard.url)) throw new Error('guard.url 必须是完整 http(s) URL');
+  return { action: 'act', request: { kind: 'evaluate', fn: `() => {
+    const g = ${JSON.stringify(guard)};
+    if (location.href !== g.url) return false;
+    const nodes = g.selector ? Array.from(document.querySelectorAll(g.selector)).filter(el => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+    }) : [document.body];
+    return nodes.length === 1 && !!nodes[0] && (g.text === undefined || nodes[0].textContent.trim() === g.text);
+  }` } };
+}
+
+/** Validate actual records, not a producer's claimed count. Empty results cannot
+ * satisfy required fields/equals through Array.every's vacuous truth. */
+function expectationError(expectation: RecipeStep['expect'], value: unknown): string | undefined {
+  if (!expectation) return undefined;
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  const rows = Array.isArray(value) ? value : Array.isArray(record?.records) ? record.records : record ? [record] : [];
+  const { minCount, requiredFields, equals } = expectation;
+  if (minCount !== undefined && rows.length < minCount) return `expect: 至少 ${minCount} 条，实际 ${rows.length} 条`;
+  if ((requiredFields?.length || Object.keys(equals ?? {}).length) && !rows.length) return 'expect: 结果为空';
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') return 'expect: 结果必须是对象';
+    for (const field of requiredFields ?? []) {
+      const v = (row as Record<string, unknown>)[field];
+      if (v == null || (typeof v === 'string' && !v.trim())) return `expect: 必需字段 ${field} 为空`;
+    }
+    for (const [field, expected] of Object.entries(equals ?? {})) {
+      if ((row as Record<string, unknown>)[field] !== expected) return `expect: 字段 ${field} 不匹配`;
+    }
+  }
+  return undefined;
+}
+
 /** Execute a recipe. `inputs` seed the variable scope; step `as` adds to it. */
 export async function runRecipe(
   recipe: Recipe,
   inputs: Record<string, unknown> | undefined,
   deps: RecipeRunDeps,
 ): Promise<RecipeRunResult> {
+  if (recipe.adapter) {
+    let started = false;
+    try {
+      const args = { ...(inputs ?? {}) };
+      for (const [from, to] of Object.entries(recipe.adapterInputMap ?? {})) {
+        if (Object.hasOwn(args, from)) { args[to] = args[from]; if (from !== to) delete args[from]; }
+      }
+      const output = await runOpenCliAdapter(recipe.adapter, args, {
+        ...deps,
+        onExecutionStart: () => { started = true; },
+      });
+      return { ok: true, recipe: recipe.id, steps: [{ action: 'adapter', ok: true }], output };
+    } catch (error) {
+      return { ok: false, recipe: recipe.id, steps: started ? [{ action: 'adapter', ok: false }] : [],
+        ...(started ? { failedStep: 0, failedAction: 'adapter' } : {}),
+        failureKind: started ? 'action' : 'input', message: error instanceof Error ? error.message : String(error) };
+    }
+  }
   const vars: Record<string, unknown> = { ...(inputs ?? {}) };
   for (const [name, spec] of Object.entries(recipe.inputs ?? {})) {
     if (spec.required && (vars[name] === undefined || vars[name] === null)) {
@@ -311,8 +378,36 @@ export async function runRecipe(
   for (let i = 0; i < recipe.steps.length; i++) {
     const step = recipe.steps[i];
     let req: BrowserControlRequest;
+    let expectation: RecipeStep['expect'];
+    let combinedGuard = false;
     try {
       req = stepToRequest(step, vars);
+      // Construct all input-dependent checks before touching the page.
+      expectation = step.expect && { ...step.expect,
+        equals: step.expect.equals && Object.fromEntries(Object.entries(step.expect.equals)
+          .map(([field, expected]) => [field, typeof expected === 'string' ? interpolate(expected, vars) : expected])),
+      };
+      const guard = guardRequest(step, vars);
+      if (guard && step.action === 'extract') {
+        // Read-only extraction can verify identity and read fields in one page
+        // evaluation. This avoids an extra browser round trip and DOM race.
+        const extractFn = req.request!.fn;
+        req = { ...req, request: { ...req.request!, fn: `async () => {
+          if (!((${guard.request!.fn})())) return { matched: false };
+          return { matched: true, value: await ((${extractFn})()) };
+        }` } };
+        combinedGuard = true;
+      } else if (guard) {
+        let matched = false;
+        try {
+          const result = await deps.call(guard);
+          matched = result.ok && (result.data as { result?: unknown } | undefined)?.result === true;
+        } catch { /* A failed observation never authorizes the action. */ }
+        if (!matched) return {
+          ok: false, recipe: recipe.id, steps, failedStep: i, failedAction: step.action,
+          failureKind: 'guard', message: '页面身份或定位条件已变化；该步骤未执行，请重新观察页面。',
+        };
+      }
     } catch (err) {
       return {
         ok: false,
@@ -320,12 +415,32 @@ export async function runRecipe(
         steps,
         failedStep: i,
         failedAction: step.action,
+        failureKind: 'input',
         message: err instanceof Error ? err.message : String(err),
       };
     }
-    const res = await deps.call(req);
+    let res: BrowserControlResult;
+    try {
+      res = await deps.call(req);
+    } catch (err) {
+      res = { ok: false, action: req.action, message: err instanceof Error ? err.message : String(err) };
+    }
+    if (combinedGuard && res.ok) {
+      const checked = (res.data as { result?: { matched?: boolean; value?: unknown } } | undefined)?.result;
+      if (checked?.matched !== true) return {
+        ok: false, recipe: recipe.id, steps, failedStep: i, failedAction: step.action,
+        failureKind: 'guard', message: '页面身份或定位条件已变化；未读取结果，请重新观察页面。',
+      };
+      res = { ...res, data: { ...(res.data as object), result: checked.value } };
+    }
     const innerError = innerEvaluateError(step, res);
-    const stepOk = res.ok && innerError === undefined;
+    let expectError: string | undefined;
+    try {
+      if (res.ok && !innerError) expectError = expectationError(expectation, stepResultValue(step, res));
+    } catch (err) {
+      expectError = err instanceof Error ? err.message : String(err);
+    }
+    const stepOk = res.ok && innerError === undefined && expectError === undefined;
     steps.push({ action: step.action, ok: stepOk });
     // Only store the result on success: a failed (but `optional`) step must not
     // leak a `{ok:false,...}`/failure blob into `vars`, or a later `{{as}}` ref
@@ -333,7 +448,7 @@ export async function runRecipe(
     // throws "missing recipe variable" (loud) — the intended behavior.
     if (stepOk && step.as) vars[step.as] = stepResultValue(step, res);
     if (!stepOk) {
-      const failMessage = res.message ?? innerError ?? `step ${i} (${step.action}) failed`;
+      const failMessage = res.message ?? innerError ?? expectError ?? `step ${i} (${step.action}) failed`;
       if (step.optional) {
         deps.logger?.warn?.(`recipe ${recipe.id} step ${i} (${step.action}) failed but is optional`, {
           message: failMessage,
@@ -346,6 +461,7 @@ export async function runRecipe(
         steps,
         failedStep: i,
         failedAction: step.action,
+        failureKind: expectError ? 'expect' : 'action',
         message: failMessage,
       };
     }

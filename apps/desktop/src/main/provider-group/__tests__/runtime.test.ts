@@ -225,8 +225,8 @@ describe('provider group runtime quota account selection', () => {
     await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
     for (const member of await firstRead) {
       expect(providerGroupMemberUsageState(member, 'gpt-5.3-codex', Date.now(), fastKind))
-        .toMatchObject({ limited: true, usagePercent: 100 });
-      expect(providerGroupMemberUsageState(member, 'gpt-5.3-codex', Date.now(), slowKind).usagePercent).toBeNull();
+        .toMatchObject({ limited: true, urgency: 0 });
+      expect(providerGroupMemberUsageState(member, 'gpt-5.3-codex', Date.now(), slowKind).urgency).toBeNull();
     }
     const secondRead = h.read();
     await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
@@ -243,7 +243,7 @@ describe('provider group runtime quota account selection', () => {
     for (const member of await h.read()) {
       expect(providerGroupMemberUsageState(member, 'gpt-5.3-codex', Date.now(), fastKind).limited).toBe(true);
       expect(providerGroupMemberUsageState(member, 'gpt-5.3-codex', Date.now(), slowKind))
-        .toMatchObject({ limited: false, usagePercent: 25 });
+        .toMatchObject({ limited: false, urgency: expect.any(Number) });
       expect(member.codexUsage?.appServerBuckets?.__default__?.updatedAt).toBe(native ? startedAt : completedAt);
       expect(member.codexUsage?.webSnapshot?.updatedAt).toBe(native ? completedAt : startedAt);
     }
@@ -288,7 +288,7 @@ describe('provider group runtime quota account selection', () => {
     expect(result).toMatchObject({ kind: 'member', member: { key: 'local' } });
     if (result.kind === 'member') {
       expect(providerGroupMemberUsageState(result.resolved[0], model, Date.now(), native ? 'codex' : 'pi'))
-        .toMatchObject({ limited: true, usagePercent: 100 });
+        .toMatchObject({ limited: true, urgency: 0 });
     }
     await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS);
   });

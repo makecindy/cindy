@@ -45,7 +45,7 @@ export interface RemoteSession {
   providerId?: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** Temporary host runtime route; optional for older controlled Desktop versions. */
   runtimeGeneration?: number;
   runtimeBaseline?: RemoteSessionRuntimeProfile;
@@ -97,6 +97,7 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   createdAt: string;
   updatedAt: string;
   deviceLinkDeviceId?: string;
@@ -122,7 +123,7 @@ export interface RemoteSessionRuntimeProfile {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface RemoteSessionRuntimePending {
@@ -245,7 +246,7 @@ export interface QueuedRemoteMessage {
     model: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     displayReasoning?: string;
     resumeSessionId?: string;
     makerMemoryEnabled?: boolean;
@@ -292,6 +293,8 @@ export interface InputProjection {
   toolLoop?: MobileToolLoopErrorDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
+  /** Explicit failed-turn continuation eligibility; absent on older hosts. */
+  errorCanContinue?: boolean;
   autoResumePending?: Record<string, unknown> | null;
   /** Current vendor-turn owner for an auto-resume continuation, when supported by the host. */
   continuationTurnClientId?: string | null;

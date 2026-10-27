@@ -57,6 +57,7 @@ async function setup(options: {
   beforeOwnershipRead?: () => void;
   creators?: Record<string, string>;
   extraBots?: string[];
+  schedulerOff?: boolean;
   subscribeActivity?: (watch: TaskWatch) => (() => void) | null;
 } = {}) {
   let now = 1_000_000;
@@ -92,6 +93,7 @@ async function setup(options: {
         log,
         onChange,
         getActivitySnapshots: () => [],
+        readSessionExecution: (id) => ({ instanceId: id, generation: 1 }),
         isToolCallInFlight: () => false,
         getPendingInteractions: () => [],
         readLocalSessions: async (ids) => ids.map(meta),
@@ -100,7 +102,7 @@ async function setup(options: {
           options.beforeOwnershipRead?.();
           return { bots, creatorBySession: new Map(Object.entries(options.creators ?? {})), responsibleByBot: new Map() };
         },
-        readSchedulerOverride: () => ({ customized: true, schedulerBotId: 'sched' }),
+        readSchedulerOverride: () => ({ customized: !options.schedulerOff, schedulerBotId: options.schedulerOff ? null : 'sched' }),
         listRemoteDevices: async () => null,
         invokeRemote: async () => { throw new Error('unused'); },
       }),
@@ -115,10 +117,29 @@ async function setup(options: {
     await created.start();
     return created;
   };
-  return { runtime, create, engine, execute, remind, push, now: () => now, advance: (ms: number) => { now += ms; } };
+  return { runtime, create, engine, execute, remind, push, bots, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 
 describe('BotAutonomyRuntime with the routine engine', () => {
+  it('never wakes for owner tasks without opt-in, while retaining explicitly delegated work', async () => {
+    const t = await setup({ schedulerOff: true, creators: { delegated: 'a' } });
+    const engine = await t.engine();
+    const runtime = await t.runtime(engine);
+    try {
+      runtime.watch.applyActivity('mine', errored('mine'));
+      runtime.watch.applyActivity('delegated', errored('delegated'));
+      await runtime.watch.settled();
+      await runtime.evaluate();
+      await vi.waitFor(() => expect(t.execute).toHaveBeenCalledOnce());
+      expect(t.execute.mock.calls[0]![0].botId).toBe('a');
+      expect(t.execute.mock.calls[0]![1].events.map(({ event }) => event.subject)).toEqual(['delegated']);
+      expect(engine.list('sched')[0].enabled).toBe(true);
+    } finally {
+      runtime.stop();
+      await engine.stop();
+    }
+  });
+
   it('re-registers the host source after an engine rebuild and keeps one built-in rule per active teammate', async () => {
     const t = await setup();
     const first = await t.engine();
@@ -417,4 +438,226 @@ describe('BotAutonomyRuntime with the routine engine', () => {
       await engine.stop();
     }
   });
+});
+
+// Unit §6.3: earlier runtime tests disabled timers and could not detect idle scans.
+// Real runtime + TaskWatch, fake clock: default-off -> delegated running -> completed.
+it('starts the scan timer only for observed work and releases it when that work ends', async () => {
+  vi.useFakeTimers();
+  const options = { schedulerOff: true, creators: {} as Record<string, string> };
+  const t = await setup(options);
+  const runtime = t.create({ registerSource: vi.fn(), publish: vi.fn(async () => ({ accepted: 0, duplicate: false })),
+    ensureBuiltin: vi.fn(async () => ({} as never)) });
+  const sweep = vi.spyOn(runtime.watch, 'sweep');
+  try {
+    await runtime.start();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sweep).not.toHaveBeenCalled();
+    options.creators.child = 'a';
+    runtime.watch.applyActivity('child', running('child'));
+    await runtime.refreshFollowers();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sweep).toHaveBeenCalledTimes(1);
+    runtime.watch.applyActivity('child', null);
+    await runtime.watch.settled();
+    sweep.mockClear();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sweep).not.toHaveBeenCalled();
+    options.schedulerOff = false;
+    await runtime.refreshFollowers();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sweep).toHaveBeenCalledTimes(1);
+    options.schedulerOff = true;
+    await runtime.refreshFollowers();
+    sweep.mockClear();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sweep).not.toHaveBeenCalled();
+  } finally {
+    runtime.stop();
+    vi.useRealTimers();
+  }
+});
+
+// Unit / PR #6675: a delegation arrives after the watcher went idle, then its one
+// ownership refresh fails. Earlier recovery coverage only exercised initial startup.
+it('retries a failed delegation ownership refresh while idle and admits the cached activity', async () => {
+  vi.useFakeTimers();
+  let failRead = false;
+  const options = { schedulerOff: true, creators: {} as Record<string, string>,
+    beforeOwnershipRead: () => { if (failRead) throw new Error('busy'); } };
+  const t = await setup(options);
+  const publish = vi.fn<AutonomyEngine['publish']>(async () => ({ accepted: 1, duplicate: false }));
+  const runtime = t.create({ registerSource: vi.fn(), publish, ensureBuiltin: vi.fn(async () => ({} as never)) });
+  const sweep = vi.spyOn(runtime.watch, 'sweep');
+  try {
+    await runtime.start();
+    options.creators.child = 'a';
+    runtime.watch.applyActivity('child', errored('child'));
+    failRead = true;
+    await runtime.refreshFollowers();
+    expect(runtime.watch.get('child')).toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    failRead = false;
+    t.advance(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sweep).toHaveBeenCalledOnce();
+    expect(runtime.watch.get('child')).toMatchObject({ followerBotId: 'a', phase: 'errored' });
+    expect(publish).toHaveBeenCalledWith(HOST_SESSIONS_SOURCE_ID,
+      expect.objectContaining({ type: 'errored', subject: 'child' }), expect.any(Function));
+    runtime.watch.applyActivity('child', null);
+    await runtime.watch.settled();
+    sweep.mockClear();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sweep).not.toHaveBeenCalled();
+  } finally {
+    runtime.stop();
+    vi.useRealTimers();
+  }
+});
+
+// Unit / PR #6675: pausing the selected scheduler is not opting out of observation.
+// Check the existing owner reminder through the real runtime and routine engine.
+it('keeps opted-in tasks visible and reminds the owner when the scheduler teammate is paused', async () => {
+  const t = await setup();
+  const engine = await t.engine();
+  const runtime = await t.runtime(engine);
+  try {
+    runtime.watch.applyActivity('mine', waiting('mine', t.now()));
+    await runtime.watch.settled();
+    t.bots.get('sched')!.status = 'paused';
+    await runtime.refreshFollowers();
+    expect(runtime.watch.needsSweep()).toBe(true);
+    expect(runtime.glance('sched').waiting.map(row => row.sessionId)).toEqual(['mine']);
+    expect(runtime.watch.get('mine')?.followerBotId).toBeNull();
+    t.advance(AUTONOMY_THRESHOLDS.waitingAfterMs);
+    await runtime.sweep();
+    expect(t.remind).toHaveBeenCalledOnce();
+    expect(t.execute).not.toHaveBeenCalled();
+  } finally {
+    runtime.stop();
+    await engine.stop();
+  }
+});
+
+// Unit / #6675: activity can run through completion before the debounced ownership
+// refresh. Previous recovery coverage kept the task active until ownership loaded.
+// Only a witnessed completion may publish/count; stopped, unrelated and stale
+// completed tasks must remain silent. Fake time also covers an ownership retry.
+it.each([false, true])('keeps a fast delegation completion across delayed ownership (read failure: %s)', async (failFirstRead) => {
+  vi.useFakeTimers();
+  let failRead = false;
+  const options = { schedulerOff: true, creators: {} as Record<string, string>,
+    beforeOwnershipRead: () => { if (failRead) throw new Error('busy'); } };
+  const t = await setup(options);
+  const publish = vi.fn<AutonomyEngine['publish']>(async () => ({ accepted: 1, duplicate: false }));
+  const runtime = t.create({ registerSource: vi.fn(), publish, ensureBuiltin: vi.fn(async () => ({} as never)) });
+  const completed = (id: string) => ({ ...running(id), phase: 'completed', lastActivityAtMs: t.now() } as SessionActivitySnapshot);
+  try {
+    await runtime.start();
+    options.creators.child = options.creators.stopped = options.creators.stale = 'a';
+    for (const id of ['child', 'unrelated', 'stopped']) {
+      runtime.watch.applyActivity(id, running(id));
+      runtime.watch.reportDelivery(id, { instanceId: id, generation: 1 }, true);
+    }
+    for (const id of ['child', 'unrelated', 'stale']) runtime.watch.applyActivity(id, completed(id));
+    runtime.watch.applyActivity('stopped', null);
+    await runtime.watch.settled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(runtime.watch.needsSweep()).toBe(false);
+    failRead = failFirstRead;
+    await runtime.refreshFollowers();
+    if (failFirstRead) {
+      expect(publish).not.toHaveBeenCalled();
+      failRead = false;
+      t.advance(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(HOST_SESSIONS_SOURCE_ID,
+      expect.objectContaining({ type: 'finished', subject: 'child' }), expect.any(Function));
+    expect(runtime.glance('a').doneToday).toBe(1);
+    expect(runtime.watch.needsSweep()).toBe(false);
+    await runtime.refreshFollowers();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(publish).toHaveBeenCalledOnce();
+  } finally {
+    runtime.stop();
+    vi.useRealTimers();
+  }
+});
+
+// Unit / PR #6675: a finished last delegation no longer needs state scans, but a
+// failed ensure/publish must retain event delivery and stop retrying after success.
+it.each(['ensure', 'publish'] as const)('retries the last completion after %s fails and then releases the timer', async (failure) => {
+  vi.useFakeTimers();
+  let failing = true;
+  const t = await setup({ schedulerOff: true, creators: { child: 'a' } });
+  const publish = vi.fn<AutonomyEngine['publish']>(async () => {
+    if (failure === 'publish' && failing) throw new Error('publish unavailable');
+    return { accepted: 1, duplicate: false };
+  });
+  const runtime = t.create({ registerSource: vi.fn(), publish, ensureBuiltin: vi.fn(async () => {
+    if (failure === 'ensure' && failing) throw new Error('storage unavailable');
+    return {} as never;
+  }) });
+  const sweep = vi.spyOn(runtime.watch, 'sweep');
+  try {
+    await runtime.start();
+    runtime.watch.applyActivity('child', running('child'));
+    await runtime.watch.settled();
+    expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, true)).toBe(true);
+    runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed' } as SessionActivitySnapshot);
+    await runtime.watch.settled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.watch.needsSweep()).toBe(false);
+    failing = false;
+    publish.mockClear();
+    t.advance(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(HOST_SESSIONS_SOURCE_ID,
+      expect.objectContaining({ type: 'finished', subject: 'child' }), expect.any(Function));
+    expect(runtime.watch.get('child')).toBeUndefined();
+    expect(runtime.watch.finished().map(row => row.sessionId)).toEqual(['child']);
+    sweep.mockClear();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sweep).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledOnce();
+    // The event ledger expires after 24h. A later settings/activity refresh must not replay it.
+    t.advance(25 * 60 * 60_000);
+    expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, true)).toBe(false);
+    runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed' } as SessionActivitySnapshot);
+    await runtime.refreshFollowers();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(publish).toHaveBeenCalledOnce();
+  } finally {
+    runtime.stop();
+    vi.useRealTimers();
+  }
+});
+
+// Unit / #7253: the production runtime must wake only on an explicit delivery,
+// regardless of idle duration. Existing tests cover terminal delivery/retries, not
+// semantic intermediate turns. Minimal input: false/absent report + completed.
+it('publishes final delivery immediately and stays silent for intermediate or unreported ends', async () => {
+  const t = await setup({ schedulerOff: true, creators: { child: 'a' } });
+  const publish = vi.fn<AutonomyEngine['publish']>(async () => ({ accepted: 1, duplicate: false }));
+  const runtime = t.create({ registerSource: vi.fn(), publish, ensureBuiltin: vi.fn(async () => ({} as never)) });
+  await runtime.start({ timers: false });
+  try {
+    for (const final of [undefined, false, true]) {
+      runtime.watch.applyActivity('child', running('child'));
+      await runtime.watch.settled();
+      if (final !== undefined) expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, final)).toBe(true);
+      const ended = t.now();
+      runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed', lastActivityAtMs: ended } as SessionActivitySnapshot);
+      await runtime.watch.settled();
+      await runtime.evaluate();
+      expect(publish).toHaveBeenCalledTimes(final ? 1 : 0);
+      if (final) expect(publish.mock.calls[0][1]).toMatchObject({ type: 'finished', occurredAt: ended });
+      t.advance(3_600_000);
+      await runtime.sweep();
+      expect(publish).toHaveBeenCalledTimes(final ? 1 : 0);
+    }
+  } finally { runtime.stop(); }
 });

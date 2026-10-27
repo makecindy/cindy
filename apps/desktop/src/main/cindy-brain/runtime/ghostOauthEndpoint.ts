@@ -28,6 +28,7 @@
  * 产生的全部令牌只存在主机保险库与内存缓存,本端点没有任何读回动作。
  */
 
+import { getRemoteOauthContext, type RemoteOauthContext } from '../../plugin-oauth/context.js';
 import { GhostKvError } from '../ghostKvStore.js';
 import { assertGhostProtocolTargetCurrent, GhostProtocolTargetChangedError } from './ghostProtocolTargetGuard.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from './ghostSecretsEndpoint.js';
@@ -61,6 +62,8 @@ export interface GhostOauthEndpointManager {
     secretKey: string,
     decl: GhostOauthDecl,
     opts?: {
+      /** Trusted Host transaction context; never supplied by the settings page. */
+      remote?: RemoteOauthContext;
       scopes?: readonly string[];
       clientId?: string;
       deliveryHosts?: readonly string[];
@@ -101,6 +104,8 @@ export async function handleGhostOauthRequest(args: {
 }): Promise<GhostOauthRequestOutcome> {
   const { method, pathname, readBodyText, oauthSecrets, networkHosts, manager, ghostId: instanceKey, log } =
     args;
+  // Capture the validated Host exchange before awaiting any untrusted page body.
+  const remote = getRemoteOauthContext();
   if (args.isCurrent?.() === false) return { status: 403 };
   const assertCurrent = (): void => assertGhostProtocolTargetCurrent(args.isCurrent);
   const runMutation = async <T>(task: () => Promise<T> | T): Promise<T> => {
@@ -287,6 +292,7 @@ export async function handleGhostOauthRequest(args: {
     try {
       const opts = {
         ...connectTarget,
+        ...(remote ? { remote } : {}),
         ...(args.isCurrent ? { assertCurrent } : {}),
         ...(scopesOverride !== undefined ? { scopes: scopesOverride } : {}),
         ...(clientIdOverride !== undefined ? { clientId: clientIdOverride } : {}),

@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
 }));
 
 const { writeUserRecipe, resetSiteRecipe } = await import('../writer.js');
-const { buildUserRecipes } = await import('../loader.js');
+const { loadUserBrowserRecipes } = await import('../loader.js');
 
 let dir: string;
 beforeEach(async () => {
@@ -23,10 +23,8 @@ afterEach(async () => {
 });
 
 /** Read a site's L2 files back the way the loader would. */
-async function readBack(site: string) {
-  const recipeRaw = await fs.readFile(path.join(dir, site, 'recipe.json'), 'utf8').catch(() => null);
-  const entries = recipeRaw ? { [`${site}/recipe.json`]: recipeRaw } : {};
-  return buildUserRecipes(entries, {});
+async function readBack(_site: string) {
+  return loadUserBrowserRecipes(dir);
 }
 
 describe('writeUserRecipe / resetSiteRecipe', () => {
@@ -45,9 +43,29 @@ describe('writeUserRecipe / resetSiteRecipe', () => {
     await writeUserRecipe({ site: 'x.com', recipe: { id: 'r', steps: [{ action: 'navigate', url: 'https://one/' }] } }, dir);
     await writeUserRecipe({ site: 'x.com', recipe: { id: 'r', steps: [{ action: 'navigate', url: 'https://two/' }] } }, dir);
     const files = await fs.readdir(path.join(dir, 'x.com'));
-    expect(files).toEqual(['recipe.json']); // single file, overwritten
+    expect(files).toEqual(['recipes']);
+    expect(await fs.readdir(path.join(dir, 'x.com', 'recipes'))).toHaveLength(1);
     const back = await readBack('x.com');
     expect((back.recipes.get('r')?.steps[0] as { url: string }).url).toBe('https://two/');
+  });
+
+  it('loads a legacy recipe with its owning site so a future failure can suspend it', async () => {
+    await fs.mkdir(path.join(dir, 'legacy.example'));
+    await fs.writeFile(path.join(dir, 'legacy.example', 'recipe.json'), JSON.stringify({ id: 'legacy', steps: [{ action: 'navigate', url: 'https://legacy.example/' }] }));
+    const back = await loadUserBrowserRecipes(dir);
+    expect(back.recipes.get('legacy')?.validation).toEqual({ site: 'legacy.example', state: 'active' });
+  });
+
+  it('keeps multiple flows and suspended state across reload, shadowing the legacy id', async () => {
+    await fs.mkdir(path.join(dir, 'x.com'));
+    await fs.writeFile(path.join(dir, 'x.com', 'recipe.json'), JSON.stringify({ id: 'first', steps: [{ action: 'navigate', url: 'https://old/' }] }));
+    await writeUserRecipe({ site: 'x.com', recipe: { id: 'first', validation: { site: 'x.com', state: 'suspended' }, steps: [{ action: 'navigate', url: 'https://new/' }] } }, dir);
+    await writeUserRecipe({ site: 'x.com', recipe: { id: '../second', steps: [{ action: 'navigate', url: 'https://x.com/' }] } }, dir);
+    const back = await loadUserBrowserRecipes(dir);
+    expect(back.recipes.size).toBe(2);
+    expect(back.recipes.get('first')?.validation?.state).toBe('suspended');
+    expect(back.recipes.get('first')?.steps[0].url).toBe('https://new/');
+    expect(back.recipes.has('../second')).toBe(true);
   });
 
   it('rejects a path-unsafe site segment', async () => {

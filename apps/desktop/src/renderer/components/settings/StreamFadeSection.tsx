@@ -41,7 +41,7 @@ export function StreamFadeSection() {
           >
             {t('settings.streamFade.label')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.streamFade.hint')}
           </p>
         </div>

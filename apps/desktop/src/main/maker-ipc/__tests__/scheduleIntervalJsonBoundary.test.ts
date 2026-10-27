@@ -213,6 +213,22 @@ describe('scheduled model selection IPC compatibility', () => {
     }));
   });
 
+  // PR #6832: template creation dropped the runtime location while retaining its
+  // model/provider. Existing template cases bound a task and had no device field.
+  // Unit tier: JSON -> real IPC handler -> creation input, with a remote-only route.
+  it.each(['studio', null, undefined])('preserves template runtime location %s through the JSON handler', async (agentDeviceId) => {
+    const create = vi.fn(async (input: CreateScheduleInput) => input);
+    setSchedulerReady({ create } as never, {} as never);
+    registerScheduleHandlers();
+    const wire = JSON.parse(JSON.stringify({
+      templateId: BUILTIN_TEMPLATES[0]!.id,
+      overrides: { agentDeviceId, agentKind: 'codex', model: 'remote-only', providerId: 'remote-source' },
+    }));
+    const result = await handlers.get('maker:schedule:create-from-template')!(null, wire);
+    expect(result).toMatchObject({ agentKind: 'codex', model: 'remote-only', providerId: 'remote-source' });
+    expect((result as CreateScheduleInput).agentDeviceId).toBe(agentDeviceId);
+  });
+
   it.skipIf(process.platform === 'win32')('rejects a template override whose pre-run hook has a shell syntax error', async () => {
     const create = vi.fn(async (input: CreateScheduleInput) => input);
     setSchedulerReady({ create } as never, {} as never);

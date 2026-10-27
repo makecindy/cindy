@@ -79,7 +79,11 @@ import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
-import { readWindowsDesktopSupport, configureWindowsDesktopSupport } from './windowsHost';
+import {
+  readWindowsDesktopSupport,
+  configureWindowsDesktopSupport,
+  WindowsDesktopSetupError,
+} from './windowsHost';
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
@@ -1173,8 +1177,11 @@ export function registerRemoteDesktopIpc(
     remoteDesktop.stop(undefined, undefined, 'disabled');
     try {
       await configureWindowsDesktopSupport(enabled);
-    } catch {
-      throwIpcError('PERMISSION_DENIED', 'Windows desktop support setup failed');
+    } catch (error) {
+      // Carry the helper's step code so settings can name the failed step.
+      // It holds no path or account name, only a fixed code and OS number.
+      const detail = error instanceof WindowsDesktopSetupError ? error.detail : undefined;
+      throwIpcError('PERMISSION_DENIED', detail ?? 'Windows desktop support setup failed');
     } finally {
       windowsSetupBusy = false;
     }

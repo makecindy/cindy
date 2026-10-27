@@ -60,6 +60,7 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s speaker gate startup', page =>
       takeRefinementContextTail: (value: string) => value,
       buildMobileVoiceSessionRefinementContext: () => ({}), renderItems: [],
       formatRemoteError: String,
+      prewarmAgentOnTyping: () => {},
     };
     return { run: start(bindings), createGate, createController, controller, startupSeq, finishGate, prewarmed, setVoiceError };
   }

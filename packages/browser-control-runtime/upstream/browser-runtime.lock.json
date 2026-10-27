@@ -64,6 +64,10 @@
     },
     {
       "file": "extension/src/browser/pw-session.ts",
+      "desc": "use Playwright local-path uploads only for a live browser managed by this runtime"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
       "desc": "export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)"
     },
     {
@@ -85,6 +89,10 @@
     {
       "file": "extension/src/browser/routes/agent.act.hooks.ts",
       "desc": "apply the effective browser proxy mode to direct input file uploads"
+    },
+    {
+      "file": "extension/src/browser/routes/agent.act.ts",
+      "desc": "resolve the selected tab alias before comparing or executing action targets"
     },
     {
       "file": "extension/src/browser/routes/agent.act.ts",
@@ -112,7 +120,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "9a4e02b5c865d4f3cec6e44b1862050ba706542d96a67f564c4c3b60cf7fdc97",
+  "contentHash": "0e13e4827f1eea59d796bb5727e1775aac55b5066f98fe204458801fba1f6171",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

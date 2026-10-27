@@ -966,7 +966,7 @@ function buildSessionSnapshot(
     totalCostUsd: session.totalCostUsd,
     contextTokens: session.contextTokens,
     contextWindow: session.contextWindow,
-    fastMode: !!session.fastMode,
+    fastMode: (session.fastMode ?? false),
     planModeEnabled: !!session.planModeEnabled,
     agentKind: session.agentKind,
     codexHistoryHasProductPrompt:

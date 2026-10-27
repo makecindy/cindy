@@ -150,12 +150,25 @@ const log = createLogger('main:im');
 
 let wired = false;
 
+/** Personal WeChat operations a remote Desktop's teammate settings may drive (set once the IM stack is wired). */
+export interface WechatSettingsApi {
+  getState(): unknown;
+  getChannelSettings(): unknown;
+  setCompanion(botId: string | null): Promise<unknown>;
+  unbind(): Promise<unknown>;
+  cancelAuthorization(): void;
+}
+let wechatSettingsApi: WechatSettingsApi | null = null;
+export function getWechatSettingsApi(): WechatSettingsApi | null {
+  return wechatSettingsApi;
+}
+
 export interface DesktopCcPrefs {
   model: string;
   providerId?: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 let _desktopCcPrefs: DesktopCcPrefs | null = null;
@@ -389,6 +402,41 @@ export function startImOrchestrators(): void {
     },
   });
 
+  const setWechatCompanion = (botId: string | null) =>
+    connectionLifecycle.runWhileStarted(async () => {
+      const generation = captureImAccountGeneration();
+      if (generation === null) throwIpcError('PRECONDITION_FAILED', 'Account unavailable');
+      try {
+        await setWechatCompanionBinding(botId, (commit) => wechatIm.updateCompanionBinding(() => {
+          if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
+          commit();
+        }));
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        throwIpcError('PRECONDITION_FAILED',
+          ['WECHAT_CONNECTION_BUSY', 'BOT_INACTIVE', 'WECHAT_COMPANION_IN_USE'].includes(code)
+            ? code : 'WECHAT_COMPANION_UPDATE_FAILED');
+      }
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) window.webContents.send('wechatBot:channel-settings-changed', readWechatChannelSettings());
+      });
+      return readWechatChannelSettings();
+    });
+  const unbindWechat = () =>
+    connectionLifecycle.runWhileStarted(async () => {
+      await wechatIm.unbind();
+      return { ok: true };
+    });
+  // The teammate settings host (a remote Desktop's pages) uses the same operations; browser
+  // authorization and the native directory chooser stay on this window's IPC.
+  wechatSettingsApi = {
+    getState: () => wechatIm.getState(),
+    getChannelSettings: () => readWechatChannelSettings(),
+    setCompanion: setWechatCompanion,
+    unbind: unbindWechat,
+    cancelAuthorization: () => { wechatIm.cancelAuthorization(); },
+  };
+
   ipcMain.handle('wechatBot:get-state', (event) => {
     assertTrustedAppRendererEvent(event);
     return wechatIm.getState();
@@ -404,10 +452,7 @@ export function startImOrchestrators(): void {
   });
   ipcMain.handle('wechatBot:unbind', (event) => {
     assertTrustedAppRendererEvent(event);
-    return connectionLifecycle.runWhileStarted(async () => {
-      await wechatIm.unbind();
-      return { ok: true };
-    });
+    return unbindWechat();
   });
   ipcMain.handle('wechatBot:get-channel-settings', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -418,25 +463,7 @@ export function startImOrchestrators(): void {
     if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
       throwIpcError('INVALID_ARGUMENT', 'Invalid teammate');
     }
-    return connectionLifecycle.runWhileStarted(async () => {
-      const generation = captureImAccountGeneration();
-      if (generation === null) throwIpcError('PRECONDITION_FAILED', 'Account unavailable');
-      try {
-        await setWechatCompanionBinding(botId as string | null, (commit) => wechatIm.updateCompanionBinding(() => {
-          if (!isImAccountGenerationCurrent(generation)) throw new Error('ACCOUNT_CHANGED');
-          commit();
-        }));
-      } catch (error) {
-        const code = error instanceof Error ? error.message : '';
-        throwIpcError('PRECONDITION_FAILED',
-          ['WECHAT_CONNECTION_BUSY', 'BOT_INACTIVE', 'WECHAT_COMPANION_IN_USE'].includes(code)
-            ? code : 'WECHAT_COMPANION_UPDATE_FAILED');
-      }
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) window.webContents.send('wechatBot:channel-settings-changed', readWechatChannelSettings());
-      });
-      return readWechatChannelSettings();
-    });
+    return setWechatCompanion(botId as string | null);
   });
   ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
     assertTrustedAppRendererEvent(event);

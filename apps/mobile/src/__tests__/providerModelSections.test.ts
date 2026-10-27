@@ -266,7 +266,7 @@ describe('resolveRowSelection —— 选行落点(effort 优先级与桌面共�
       },
     };
   };
-  const memoryWith = (effort?: string, fast?: boolean): MobileModelMemoryAccessors => ({
+  const memoryWith = (effort?: string, fast?: boolean | 'ultrafast'): MobileModelMemoryAccessors => ({
     getEffort: () => effort,
     setEffort: () => undefined,
     getFast: () => fast,
@@ -341,6 +341,32 @@ describe('resolveRowSelection —— 选行落点(effort 优先级与桌面共�
     expect(resolveRowSelection({ ...base, hasFastModeCap: false, memory: memoryWith(undefined, true) }).fastMode).toBe(false);
   });
 
+  // PR #6559 P1, unit: selection output used by new/switch draft requests.
+  // Existing cases only restored booleans. Minimal failure: ultrafast memory
+  // after the target account withdraws that capability (Fast remains enabled).
+  it('restores Ultrafast only while the target account and engine support it', () => {
+    const p = provider('openai', { codex: [{ ...model('gpt-5.5'), supportsFastMode: true }] });
+    const row: ProviderModelRow = {
+      provider: p,
+      model: { ...rowOf('openai').model, supportsFastMode: true, supportsUltrafastMode: true },
+    };
+    const memory = memoryWith(undefined, 'ultrafast');
+    const base = { row, agentKind: 'codex' as const, currentModelId: 'gpt-5.4',
+      currentProviderId: 'openai', currentEffort: 'medium', hasFastModeCap: true, memory };
+    expect(resolveRowSelection(base).fastMode).toBe('ultrafast');
+    row.model.supportsUltrafastMode = false;
+    expect(resolveRowSelection(base).fastMode).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [row], true, 'ultrafast')).toBe(false);
+    row.model.supportsUltrafastMode = true;
+    expect(resolveRowSelection(base).fastMode).toBe('ultrafast');
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [row], true, 'ultrafast')).toBe(true);
+    expect(resolveRowSelection({ ...base, hasFastModeCap: false }).fastMode).toBe(false);
+    p.agents = ['claude-code'];
+    p.models['claude-code'] = p.models.codex;
+    p.routing = { 'claude-code': { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } };
+    expect(resolveRowSelection({ ...base, agentKind: 'claude-code' }).fastMode).toBe(false);
+  });
+
   it('模型无 effort 档 → 空串(手机语义:创建/切换时省略该字段)', () => {
     const p = provider('openai', { codex: [model('gpt-mini')] });
     const row: ProviderModelRow = {
@@ -370,20 +396,20 @@ describe('isFastRestorable —— 记忆 fast 恢复前的重验门控(codex P2)
   };
 
   it('行在目录中且支持 Fast 且 agent 有能力 → 可恢复', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], true)).toBe(true);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], true, true)).toBe(true);
   });
 
   it('目录不再标记 Fast-capable → 不可恢复(防 UI 关 / 实发 true 矛盾态)', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(false)], true)).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(false)], true, true)).toBe(false);
   });
 
   it('agent 无 Fast 能力(hasFastModeCap=false)→ 不可恢复', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], false)).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], false, true)).toBe(false);
   });
 
   it('(provider, model) 不在目录中 → 不可恢复', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [], true)).toBe(false);
-    expect(isFastRestorable('codex', 'other', 'gpt-5.5', [fastRow(true)], true)).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [], true, true)).toBe(false);
+    expect(isFastRestorable('codex', 'other', 'gpt-5.5', [fastRow(true)], true, true)).toBe(false);
   });
 });
 

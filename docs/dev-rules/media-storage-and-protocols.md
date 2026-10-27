@@ -156,9 +156,14 @@
 - 默认不把媒体仓绝对路径直接暴露给 Renderer、插件或远端。跨边界传递使用托管 URL、
   受控 grant／deposit／ledger，或已有上传与远程媒体服务。
 - 唯一的路径揭示例外是：用户明确询问某个受管媒体地址在本机的存储位置时，Host 先用
-  安全解析器核验为现存普通文件。Auto 档对精确单文件路径和用户请求进行 AI 审阅；
-  allow 可返回当前 Agent，block 返回原因，ask 或服务故障才使用 Host-owned 确认卡。
-  其它档位仍须用户点击允许。路径进入会话记录，因此也可能同步到用户的配对设备。
+  安全解析器核验为现存普通文件。Auto 档沿用实时审批负责人：原生审批已审核受管 URL
+  及“向 Agent 返回该媒体的本机绝对路径并写入任务记录”这一效果时，不因安全解析而再调
+  Cindy 复审；这里仍是同一受管资源，不是符号链接暴露出的新文件目标。由 Cindy 负责时，
+  对精确单文件路径和用户请求进行 AI 审阅。工具说明必须写明真实效果和当前权限流程，
+  不得以“之后一定弹确认卡”误导审批。Cindy 审阅 allow 可返回当前 Agent，block 返回原因，
+  ask 或服务故障才使用 Host-owned 确认卡。本地活跃 Full Access 自动允许，
+  其它档位仍须用户点击允许；远程任务不能借此自动取得控制端文件路径。
+  路径进入会话记录，因此也可能同步到用户的配对设备。
   Agent 自报“用户已同意”不是授权证据，也不能借路径揭示给插件或远端开放文件读取。
 - `xdt-image://`、`xdt-video://`、`xdt-model://` 和 `userData/cc-agent/` 是冻结的历史兼容层。
   可以读取已有地址，不得新增写入路径、扩展生命周期或把新功能接回旧仓。
@@ -217,7 +222,11 @@
   不转发部分结果；整批新增媒体引用经补偿日志回滚，仅删除本次新建的非媒体文件，
   不删除已有文件或共享 blob；无引用 blob 仍由统一媒体回收。临时请求与解码文件在结束时清理。
 - Codex、Claude、Pi 的本机 HTTP JSON 代理共用恢复；Pi 必须验证原有 session token。
-  缺少有效任务绑定、SSH 任务、压缩/不透明请求与 WebSocket 不套用本机路径恢复。
+  缺少有效任务绑定、SSH 任务、压缩/不透明请求不套用本机路径恢复。
+- WebSocket 例外：ChatGPT 订阅直连的 Codex WebSocket 单条消息上限约 16 MiB（超限回 1009，
+  HTTP 无此限制），所以只有该链路的出站消息超过 15 MiB（实测阈值，常量在 `codex-proxy-host.ts`）
+  才复用上述外置，压到 12 MiB 再发；未超限的消息逐字节不变。它没有 507 语义：外置不可用、
+  无任务绑定或压不下来时原样转发，由上游 1009 与 Codex 的 HTTPS 回退兜底。
 
 ## 图像参数与最终结果
 
@@ -268,6 +277,23 @@
 
 ## 多端与远程
 
+- 发图工具同时交付渠道与 Cindy 聊天（2026-10-27）：本地图片通过宿主的
+  `prepareOutboundImage` 复用 `publishImage` 入仓，渠道发送同一个不可变副本。成功结果返回
+  既有 `xdt_image_urls`，Desktop / Mobile 按现有工具产物入口在聊天流中直接展示；不要求
+  模型再调用导入工具或在最终回复补贴图片。外发成功的结果同时带 `_xdt_forward_media: false`，
+  个人 IM 与官方 hook 的工具媒体收集器跳过自动转发，该标记不影响聊天展示。
+  `sendFileWithImagePreview` 为具名发送工具提供共用适配；已接飞书／Lark 的 `send_file`、
+  `send_file_to_user`，微信 `send_file_to_user`，Telegram `send_media` 的本地 `photo`。
+  预览沿用媒体仓支持的 PNG / JPEG / GIF / WebP；渠道可发但媒体仓尚不支持的 BMP
+  仍按原渠道发送，并返回 `imagePreviewError: IMAGE_PREVIEW_UNSUPPORTED`，不静默当作普通文件。
+  权限／Plan 的当前性判据在首次异步操作前捕获，入仓与发送前均校验同一代次。
+  普通文件、Telegram URL / file_id 与任意底层 `call_api` 保持既有行为，不推测媒体字节。
+  新字段为可选返回字段，旧工具和未注入宿主回调的调用保持原样，旧客户端仍识别既有图片字段。
+  预览准备失败不把渠道发送成功改报失败：结果保留真实回执并附 `imagePreviewError`；渠道发送
+  失败不声明已交付图片。图片入仓后发送失败的任务引用沿用任务删除清理，不增加重发／恢复队列。
+  不回填旧记录、不重放渠道发送；模型另行在正文引用图片仍遵守既有 Markdown 出站规则。
+  回归见 `feishuBotLaneTools.test.ts`、`providersFeishuRouting.test.ts`、`wechatMcpServer.test.ts`、
+  `telegramBotMcpServer.test.ts`、`collabSendOutcome.test.ts` 与两个渠道 runner 的媒体收集测试。
 - 将已有截图或本地图片保存为持久受管附件时，Agent 使用 Core `media(action: "import_image", path)`：Host
   按当前任务文件权限读取，在当前媒体仓入库并登记任务引用，再返回 `xdt_image_urls`。
   工作目录外路径复用现有授权，SSH 任务不得回退读取控制端同名文件。返回成功仅表示

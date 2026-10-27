@@ -1,4 +1,3 @@
-import { formatForwardedRequest } from './forwardedRequest.js';
 import { ipcMain } from 'electron';
 import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { DL_SESSION_HANDOFF_CHANNEL } from '@cindy/device-link';
@@ -67,7 +66,7 @@ export function createSessionHandoffHandler(deps: {
     const requestSource = readForwardedRequestSource(request.requestSource);
     if (request.requestSource !== undefined && (!requestSource || !matchesForwardedRequest(requestSource, body)))
       throwIpcError('INVALID_PARAMS', 'Request source does not match the forwarded body');
-    const message = requestSource ? body : formatForwardedRequest({ userText: null }, body);
+    const message = body;
     const sender = requireObject(request.sender, 'sender');
     // 任务 id 是不透明字符串（IM 任务的 id 可以很长）；只拒绝会伪造设备前缀或说明结构的写法。
     const senderSessionId = boundedString(sender.sessionId, 'sender.sessionId', 512);

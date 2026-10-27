@@ -3,7 +3,9 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { buildUserProvider, getModel, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { createWorkerLabel } from '../workerLabel';
+import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
 import * as draftEffort from '../newMakerDraftModelPrefs';
 import { resolveDeviceLinkSubmission } from '../deviceLinkCreateArgs';
@@ -13,6 +15,7 @@ import type { Effort } from '@/lib/userPreferences.types';
 import type { AgentSkillCommand } from '@cindy/maker-core';
 import { plainTextToTiptapDoc, type BuiltInSkillDraftIntent } from '@/lib/composerDraftStore';
 import { leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend } from '@/lib/slashCommands';
+import { deviceDisplayName } from '@/lib/deviceName';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -35,6 +38,12 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+const collabBuilder = source.statements.find((node): node is ts.FunctionDeclaration =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'draftEnableOrcaOptions');
+if (!collabBuilder) throw new Error('Draft collaboration builder missing');
+const collabBuilderCode = ts.transpileModule(`${collabBuilder.getText(source)}; draftEnableOrcaOptions`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
 function executable(name: string) {
   if (!callbacks[name]) throw new Error(`NewMakerDraftRoute.${name} callback missing`);
   return ts.transpileModule(`(${callbacks[name].getText(source)})`, {
@@ -74,6 +83,7 @@ async function submit(options: {
   worktreeSkills?: AgentSkillCommand[];
   deviceId?: string;
   worktreeSkillsAfterCollab?: AgentSkillCommand[];
+  collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
 } = {}) {
   const providers = options.providers ?? [provider()];
@@ -125,11 +135,15 @@ async function submit(options: {
     if (channel === 'maker:create-session') return { sessionId: args[0].id, workDir: args[0].workingDir };
     throw new Error(`Unexpected remote invoke: ${channel}`);
   });
+  const enableOrca = vi.fn(async () => {
+    worktreeSkills = options.worktreeSkillsAfterCollab;
+    return { workerSessionId: 'worker' };
+  });
   vi.stubGlobal('window', { electronAPI: {
     deviceLink: { invoke: invokeRemote },
     worktreeCreate: vi.fn(async () => ({ ok: true, meta: { path: worktreePath, branch: 'cindy/creator' } })),
     localDb: { sessions: { create: ipcCreate } }, maker: {
-    enableOrca: async () => { worktreeSkills = options.worktreeSkillsAfterCollab; return { workerSessionId: 'worker' }; },
+    enableOrca,
     setGoal, listAgentSkills,
     listDesktopCommands: async () => ({ success: true, commands: [] }),
     listAgentCommands: async () => ({ success: true, commands: [] }),
@@ -150,13 +164,14 @@ async function submit(options: {
   const setPending = vi.fn();
   const toastError = vi.fn();
   const environment = {
+    deviceDisplayName,
     ...draftEffort, getModel, window,
     localProviders: providers, localProvidersLoading: false, providers,
     capabilityAgentKind: agentKind, persistedAgentKind: agentKind,
     calibratedDraftModel: selectedModel, chatPrefs, getProviderModelEffort: () => undefined,
     chatInitialProviderId: selectedProviderId, chatInitialPermissionMode: 'default',
     effectiveSourceId: selectedProviderId,
-    sendInFlightRef: { current: false }, effectiveCollab: { enabled: !!options.worktreeSkillsAfterCollab },
+    sendInFlightRef: { current: false }, effectiveCollab: options.collab ?? { enabled: !!options.worktreeSkillsAfterCollab },
     collabPolicy: { enabled: true }, collabPolicyEligible: true,
     usesDeviceCatalog: !!options.agentDeviceId || !!options.deviceId, deviceLinkInitial: null,
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
@@ -216,6 +231,11 @@ async function submit(options: {
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
     toast: { error: toastError, warning: noop },
   };
+  if (options.collab) {
+    environment.draftEnableOrcaOptions = runInNewContext(collabBuilderCode, {
+      ...environment, connectedProvidersForAgent, isModelSelectableForNewRoute, createWorkerLabel,
+    });
+  }
   const localDraftEffort = runInNewContext(executable('localDraftEffort'), environment)();
   const selection = runInNewContext(executable('draftInitialSelection'), { ...environment, localDraftEffort })();
   Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });
@@ -230,11 +250,25 @@ async function submit(options: {
     }
     await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote, enableOrca };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #6787, unit: the form stored both computers but the real draft builder
+  // dropped the model computer. Existing route tests stubbed that builder. Use
+  // the same production callback harness with the actual builder and assert IPC.
+  it.each(['send', 'goal'] as const)('forwards both Worker computers when creating a local %s', async entry => {
+    const result = await submit({ entry, collab: { enabled: true, worker: 'codex', workerConfig: {
+      role: 'developer', model: 'remote-only', providerId: 'remote-provider',
+      executionDeviceId: 'work-pc', executionWorkingDir: '/worker', agentDeviceId: 'model-pc',
+    } } });
+    expect(result.errors).toEqual([]);
+    expect(result.enableOrca).toHaveBeenCalledExactlyOnceWith('created', expect.objectContaining({
+      workerAgent: 'codex', model: 'remote-only', providerId: 'remote-provider',
+      executionDeviceId: 'work-pc', workingDir: '/worker', agentDeviceId: 'model-pc',
+    }));
+  });
   // Unit: a Claude-prefilled creator draft must be resolved again after switching
   // to Pi, including when Pi uses another computer as its provider. Exercise the
   // actual home submit callback before any session creation/handoff.

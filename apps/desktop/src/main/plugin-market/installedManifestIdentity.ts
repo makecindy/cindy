@@ -81,6 +81,21 @@ interface OrganizationInstallationEvidenceInput {
   identity: InstalledMarketManifestIdentity | null;
 }
 
+/** Old receipts may lack a package hash; require both stored market and approved manifest identities. */
+export function hasVerifiedLegacyMarketInstallation(
+  input: OrganizationInstallationEvidenceInput,
+): boolean {
+  const { evidence, identity } = input;
+  if (!evidence?.legacyMigrated || evidence.packageSha256 !== null || !identity ||
+      !installedIdentityMatchesManifest(identity, evidence.approvedManifest)) return false;
+  if (input.records.length !== 1) return false;
+  const record = input.records[0]!;
+  return record.installed && /^[a-f0-9]{64}$/.test(record.sha256) &&
+    (record.source === 'market' || record.source === 'legacy-adopted') &&
+    record.ghostId === identity.manifest.id && record.version === identity.manifest.version &&
+    verifyInstalledMarketManifest(record, identity);
+}
+
 function matchesApprovedOrganizationInstallation(
   record: PluginMarketInstallationRecord,
   input: OrganizationInstallationEvidenceInput,

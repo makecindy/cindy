@@ -26,6 +26,13 @@ const documents = new Map<
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
 >();
+// Electron throws this from any WebFrameMain getter (`contents.focusedFrame`, `frame.url`,
+// `frame.parent`, `event.frame`) once the render frame is gone, which is routine while an
+// App iframe is being torn down or recreated. It must not escape a WebContents event
+// callback: that surfaces as a top-level uncaughtException and quits the whole app.
+function isDisposedFrameError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Render frame was disposed');
+}
 async function readBridgeBody(request: Request): Promise<string> {
   const reader = request.body?.getReader();
   if (!reader) throw new Error('MCP_APP_INVALID_REQUEST');
@@ -152,37 +159,50 @@ export function registerMcpAppProtocol(): void {
         input.shift
       )
         return;
-      for (let frame = contents.focusedFrame; frame; frame = frame.parent) {
-        if (!frame.url.startsWith('cindy-mcp-app:')) continue;
-        const url = new URL(frame.url);
-        if (url.pathname !== '/sandbox' || url.hostname.endsWith('-view')) continue;
-        const entry = documents.get(url.hostname);
-        if (!entry || entry.owner !== getCurrentDbClientSnapshot()) return;
-        event.preventDefault();
-        void frame
-          .executeJavaScript("window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))")
-          .catch(() => {});
-        return;
+      try {
+        for (let frame = contents.focusedFrame; frame; frame = frame.parent) {
+          if (!frame.url.startsWith('cindy-mcp-app:')) continue;
+          const url = new URL(frame.url);
+          if (url.pathname !== '/sandbox' || url.hostname.endsWith('-view')) continue;
+          const entry = documents.get(url.hostname);
+          if (!entry || entry.owner !== getCurrentDbClientSnapshot()) return;
+          event.preventDefault();
+          void frame
+            .executeJavaScript("window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))")
+            .catch(() => {});
+          return;
+        }
+      } catch (error) {
+        // The focused frame vanished mid-walk: there is nothing left to relay Escape to.
+        if (!isDisposedFrameError(error)) throw error;
       }
     });
     contents.on('will-frame-navigate', (event) => {
-      const source = event.frame?.url || event.initiator?.url || '';
-      // A declared nested iframe is allowed to load its approved origin. Only
-      // descendants of the actual App resource get this grant, never the App
-      // itself or its trusted sandbox proxy.
-      let nestedDomains: readonly string[] | undefined;
-      for (let ancestor = event.frame?.parent; ancestor; ancestor = ancestor.parent) {
-        if (!ancestor.url.startsWith('cindy-mcp-app:')) continue;
-        const url = new URL(ancestor.url);
-        if (!url.hostname.endsWith('-view') || url.pathname !== '/resource') continue;
-        const entry = documents.get(url.hostname.slice(0, -5));
-        nestedDomains =
-          entry?.owner === getCurrentDbClientSnapshot()
-            ? (entry.document.policy?.frameDomains ?? [])
-            : [];
-        break;
+      try {
+        const source = event.frame?.url || event.initiator?.url || '';
+        // A declared nested iframe is allowed to load its approved origin. Only
+        // descendants of the actual App resource get this grant, never the App
+        // itself or its trusted sandbox proxy.
+        let nestedDomains: readonly string[] | undefined;
+        for (let ancestor = event.frame?.parent; ancestor; ancestor = ancestor.parent) {
+          if (!ancestor.url.startsWith('cindy-mcp-app:')) continue;
+          const url = new URL(ancestor.url);
+          if (!url.hostname.endsWith('-view') || url.pathname !== '/resource') continue;
+          const entry = documents.get(url.hostname.slice(0, -5));
+          nestedDomains =
+            entry?.owner === getCurrentDbClientSnapshot()
+              ? (entry.document.policy?.frameDomains ?? [])
+              : [];
+          break;
+        }
+        if (!isMcpAppFrameNavigationAllowed(source, event.url, nestedDomains))
+          event.preventDefault();
+      } catch (error) {
+        if (!isDisposedFrameError(error)) throw error;
+        // Source and ancestry can no longer be established, so the navigation policy
+        // cannot approve it. Fail closed rather than let it bypass the checks.
+        event.preventDefault();
       }
-      if (!isMcpAppFrameNavigationAllowed(source, event.url, nestedDomains)) event.preventDefault();
     });
   });
   protocol.handle('cindy-mcp-app', async (request) => {

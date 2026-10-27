@@ -18,12 +18,14 @@ import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
 import type { RegionalMoney } from '../../../../shared/regionalMoney';
 import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import type { ProviderView } from '@cindy/model-providers';
+import type { ModelAccessCreditUsage } from '../../../../shared/modelAccess';
 
 const mocks = vi.hoisted(() => ({
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   codexSnapshot: null as RateLimitSnapshot | null,
   xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
   gatewaySnapshot: null as ClaudeAccountUsageSnapshot | null,
+  creditSnapshot: null as ModelAccessCreditUsage | null,
   sessionTokens: null as number | null,
   codexAuthInjection: null as string | null,
   providers: [] as ProviderView[],
@@ -40,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   refreshCodexRateLimits: vi.fn(),
   resetSnapshot: null as MobileCodexRateLimitsResult | null,
   consumeReset: vi.fn(),
+  fetchProviderAccountUsage: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -48,6 +51,7 @@ vi.mock('react-i18next', () => ({
     t: (key: string, options: Record<string, string | number> = {}) => {
       const templates: Record<string, string> = {
         'quotaCard.usageTitle': '用量明细',
+        'quotaCard.staleData': '数据更新于 {{minutes}} 分钟前',
         'todaySpend.openXaiUsage': '打开 Grok 用量页面',
         'todaySpend.codex.sessionTokensLine': '本任务 Token {{tokens}}',
         'quotaCard.speedLabel': '速度',
@@ -134,7 +138,9 @@ vi.mock('@/hooks/useAccountUsage', () => ({
 vi.mock('@/hooks/useClaudeAccountUsage', () => ({
   useClaudeAccountUsage: (enabled: boolean) => (enabled ? mocks.gatewaySnapshot : null),
 }));
-vi.mock('@/hooks/useModelAccessCreditUsage', () => ({ useModelAccessCreditUsage: () => null }));
+vi.mock('@/hooks/useModelAccessCreditUsage', () => ({
+  useModelAccessCreditUsage: (enabled: boolean) => (enabled ? mocks.creditSnapshot : null),
+}));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({
   requestClaudeSubscriptionRefresh: vi.fn(),
   useClaudeSubscriptionUsage: () => mocks.claudeSnapshot,
@@ -262,13 +268,15 @@ beforeEach(() => {
   mocks.consumeReset.mockReset();
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
+  mocks.creditSnapshot = null;
   mocks.sessionTokens = null;
   mocks.codexAuthInjection = null;
   mocks.providers = [];
   mocks.accountSnapshots = {};
+  mocks.fetchProviderAccountUsage.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { openExternal: mocks.openExternal, maker: { usage: { consumeCodexRateLimitReset: mocks.consumeReset } } },
+    value: { openExternal: mocks.openExternal, maker: { fetchProviderAccountUsage: mocks.fetchProviderAccountUsage, usage: { consumeCodexRateLimitReset: mocks.consumeReset } } },
   });
 });
 
@@ -277,6 +285,149 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+// PR #7031: replace the brittle three-route source regex with actual navigation.
+// Unit/jsdom: each selected provider has its own observable URL; gateway stays local.
+it.each<{
+  vendorKey: 'cc' | 'codex' | 'pi';
+  providerId: string;
+  upstream?: string;
+  label: string;
+  url: string | null;
+}>([
+  { vendorKey: 'cc', providerId: 'anthropic', label: '打开 Claude 用量页面', url: 'https://claude.ai/settings/usage' },
+  { vendorKey: 'codex', providerId: 'openai', label: '打开 Codex 用量页面', url: 'https://chatgpt.com/codex/settings/usage' },
+  { vendorKey: 'pi', providerId: 'xai', label: '打开 Grok 用量页面', url: 'https://grok.com' },
+  { vendorKey: 'pi', providerId: 'deepseek', upstream: 'https://api.deepseek.com', label: 'providerAccountUsage.openDashboard', url: 'https://platform.deepseek.com/usage' },
+  { vendorKey: 'pi', providerId: 'glm', upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://www.bigmodel.cn/coding-plan/personal/usage' },
+  { vendorKey: 'pi', providerId: 'zai', upstream: 'https://api.z.ai/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://z.ai/manage-apikey/coding-plan/personal/my-plan' },
+  { vendorKey: 'cc', providerId: 'xd', label: '用量明细', url: null },
+])('opens the selected $providerId account dashboard', async ({ vendorKey, providerId, upstream, label, url }) => {
+  if (upstream) {
+    mocks.providers = [{
+      id: providerId, auth: { method: 'apiKey' },
+      routing: { pi: { upstream, authStrategy: 'api-key-header' } },
+    } as ProviderView];
+    mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error: 'auth', dashboardUrl: url });
+  }
+  render(<TodaySpendChip vendorKey={vendorKey} providerId={providerId} sessionId="session-1" />);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  if (url) expect(mocks.openExternal).toHaveBeenCalledExactlyOnceWith(url);
+  else expect(mocks.openExternal).not.toHaveBeenCalled();
+});
+
+// PR #7031: service error mapping alone does not verify the real chip's visible
+// result. Unit/jsdom, no saved snapshot + an auth/network failure must end waiting.
+it.each(['auth', 'network'])('shows API account %s errors instead of waiting forever', async (error) => {
+  mocks.providers = [{
+    id: 'deepseek', auth: { method: 'apiKey' },
+    routing: { pi: { upstream: 'https://api.deepseek.com', authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error });
+  render(<TodaySpendChip vendorKey="pi" providerId="deepseek" sessionId="session-1" />);
+  await act(async () => {});
+  act(() => screen.getByRole('button', { name: 'providerAccountUsage.openDashboard' }).focus());
+  const card = screen.getByTestId('quota-hover-card');
+  expect(within(card).getByText(`providerAccountUsage.error.${error}`)).toBeTruthy();
+  expect(within(card).queryByText('等待额度数据')).toBeNull();
+});
+
+// #4907: QuotaHoverCard tests cover the threshold, but the real chip never supplied
+// the personal balance observation time. Unit/jsdom: stale balance 60 is sufficient.
+describe('TodaySpendChip credit snapshot time', () => {
+  function creditSnapshot(observedAt: string): ModelAccessCreditUsage {
+    return {
+      available: '60',
+      plan: { remaining: '60', used: '40', total: '100' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: '0', total: '0' },
+      promotionalGrants: [],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt,
+    };
+  }
+
+  function gatewayChip() {
+    return <TodaySpendChip vendorKey="cc" providerId="xd" sessionId="session-1" />;
+  }
+
+  function openUsageCard() {
+    act(() => screen.getByRole('button', { name: '用量明细' }).focus());
+    return screen.getByTestId('quota-hover-card');
+  }
+
+  // Unit regression: the rendered chip and card must distinguish a disabled
+  // enterprise daily limit from a failed daily read; omitted flags retain legacy behavior.
+  it.each([
+    { dailyLimitEnabled: true, todaySpend: 3, daily: true, warning: false },
+    { dailyLimitEnabled: true, todaySpend: null, daily: false, warning: true },
+    { dailyLimitEnabled: false, todaySpend: null, daily: false, warning: false },
+    { dailyLimitEnabled: false, todaySpend: 3, daily: false, warning: false },
+    { dailyLimitEnabled: undefined, todaySpend: 3, daily: true, warning: false },
+    { dailyLimitEnabled: undefined, todaySpend: null, daily: false, warning: true },
+  ])('respects the daily limit state %j', ({ dailyLimitEnabled, todaySpend, daily, warning }) => {
+    mocks.gatewaySnapshot = {
+      spend: 40, maxBudget: 100, currency: 'CNY', fetchedAt: Date.now(),
+      todaySpend, ...(dailyLimitEnabled === undefined ? {} : { dailyLimitEnabled }),
+    };
+    render(gatewayChip());
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent?.includes('todaySpend.dailyLimitLabel')).toBe(daily);
+    const card = openUsageCard();
+    expect(Boolean(within(card).queryByText('quotaCard.dailyLabel'))).toBe(daily);
+    expect(Boolean(within(card).queryByText('todaySpend.tooltip.dailyUnavailable'))).toBe(warning);
+    expect(within(card).getByText('quotaCard.monthlyLabel')).toBeTruthy();
+  });
+
+  it('shows the retained balance observation time and clears it after a fresh snapshot', () => {
+    mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
+    const view = render(gatewayChip());
+    const card = openUsageCard();
+    expect(within(card).getByText('数据更新于 10 分钟前')).toBeTruthy();
+    const balance = within(card).getByRole('progressbar');
+    expect(balance.getAttribute('aria-valuenow')).toBe('60');
+    const balanceText = card.textContent;
+
+    mocks.creditSnapshot = { ...mocks.creditSnapshot, observedAt: new Date().toISOString() };
+    view.rerender(gatewayChip());
+    expect(within(card).queryByText(/数据更新于/)).toBeNull();
+    expect(card.textContent).toBe(balanceText?.replace('数据更新于 10 分钟前', ''));
+  });
+
+  it.each([null, '', 'invalid-time'])(
+    'does not invent a snapshot time for missing or invalid observations (%s)',
+    (observedAt) => {
+      mocks.creditSnapshot = observedAt === null ? null : creditSnapshot(observedAt);
+      render(gatewayChip());
+      expect(within(openUsageCard()).queryByText(/数据更新于/)).toBeNull();
+    },
+  );
+
+  it('keeps the enterprise quota fetchedAt when a credit snapshot is also present', () => {
+    mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
+    mocks.gatewaySnapshot = {
+      spend: 40, maxBudget: 100, currency: 'CNY', todaySpend: 3,
+      fetchedAt: Date.now() - 20 * 60_000,
+    };
+    render(gatewayChip());
+    expect(within(openUsageCard()).getByText('数据更新于 20 分钟前')).toBeTruthy();
+  });
+
+  it.each([
+    { providerId: 'custom-api' },
+    { providerId: 'xd', remoteHostId: 'ssh-host' },
+    { providerId: 'xd', deviceLinkDeviceId: 'remote-device' },
+  ])('does not borrow local balance or observation time for %j', (route) => {
+    mocks.creditSnapshot = creditSnapshot(new Date(Date.now() - 10 * 60_000).toISOString());
+    render(<TodaySpendChip vendorKey="cc" sessionId="session-1" {...route} />);
+    const card = openUsageCard();
+    expect(within(card).queryByRole('progressbar')).toBeNull();
+    expect(within(card).queryByText(/数据更新于/)).toBeNull();
+  });
 });
 
 describe('TodaySpendChip Claude subscription popover', () => {

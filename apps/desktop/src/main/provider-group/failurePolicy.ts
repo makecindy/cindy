@@ -19,6 +19,7 @@
 import { SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
+import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
 import { isContextOverflowErrorData, isOversizedHistoryErrorData } from '../maker-ipc/contextOverflowRollover.js';
@@ -76,6 +77,18 @@ export const PROVIDER_GROUP_SUPERSEDED_ERROR = 'provider group: superseded by us
 /** 组里没有能接这个任务的电脑(本机任务的错误码，渲染端按 chat.remoteError 给文案)。 */
 export const PROVIDER_GROUP_UNAVAILABLE_ERROR =
   '[REMOTE_AGENT_GROUP_UNAVAILABLE] no computer in the provider group can run this task right now';
+
+/** Created before dispatch, from the group's verified quota result (not provider error text). */
+export class ProviderGroupUsageLimitError extends Error {
+  constructor(readonly limit: ProviderGroupUsageLimit) {
+    super('[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit'
+      + (limit.resetAtMs === null ? '' : `; resets_at: ${limit.resetAtMs}`));
+  }
+}
+
+export function providerGroupUnavailableError(pick: { usageLimit?: ProviderGroupUsageLimit }): Error {
+  return pick.usageLimit ? new ProviderGroupUsageLimitError(pick.usageLimit) : new Error(PROVIDER_GROUP_UNAVAILABLE_ERROR);
+}
 
 /** 远程 Agent 任务结束时本机给的 reason(remote-agent/controller/proxyHandle)：lost = 连续拉不到那台，closed = 那台那边结束了。 */
 const REMOTE_AGENT_LOST_REASON = 'remote_agent_lost';
@@ -213,7 +226,7 @@ export function decideProviderGroupFailure(
   // 本机主动关掉了还在运行的会话(本机的操作，不是那台的问题)。
   if (message.startsWith(SESSION_CLOSED_MID_TURN_MESSAGE)) return { action: 'stay', why: 'local' };
   const code = errorCodeOf(message);
-  if (code === 'REMOTE_AGENT_GROUP_UNAVAILABLE') return { action: 'stay', why: 'group-unavailable' };
+  if (code === 'REMOTE_AGENT_GROUP_UNAVAILABLE' || code === 'REMOTE_AGENT_GROUP_USAGE_LIMIT') return { action: 'stay', why: 'group-unavailable' };
   if (phase !== 'run' && code && TASK_STATE_CODES.has(code)) return { action: 'stay', why: 'task-state' };
 
   // ── 换到哪台都一样 ──

@@ -143,6 +143,7 @@ const SCHEDULER_DDL = [
       model_agent_kind TEXT,
       model TEXT,
       provider_id TEXT,
+      agent_device_id TEXT,
       effort TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,

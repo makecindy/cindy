@@ -2,6 +2,7 @@ import type { Nodes } from 'mdast';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
+import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 
 import { htmlImgToImageNode } from './htmlImage';
 
@@ -10,11 +11,11 @@ const previewParser = unified().use(remarkParse).use(remarkGfm);
 /** Extract readable text without HTML output or link destinations. */
 export function markdownPreviewText(
   markdown: string,
-  options: { includeImageAlt?: boolean } = {},
+  options: { includeImageAlt?: boolean; imageFallback?: string } = {},
 ): string {
   // Marked's link regex can backtrack for minutes on short bracketed code spans.
   // These previews run on Main after DB replies, so use the existing remark parser.
-  const stack: Array<Nodes | string> = [previewParser.parse(markdown)];
+  const stack: Array<Nodes | string> = [previewParser.parse(richAnswerText(markdown))];
   const parts: string[] = [];
   const includeImageAlt = options.includeImageAlt !== false;
   while (stack.length > 0) {
@@ -33,10 +34,13 @@ export function markdownPreviewText(
         break;
       case 'image':
       case 'imageReference':
-        if (includeImageAlt) parts.push(node.alt ?? '');
+        if (includeImageAlt) parts.push(node.alt?.trim() || options.imageFallback || '');
         break;
       case 'html':
-        if (includeImageAlt) parts.push(htmlImgToImageNode(node)?.alt ?? '', ' ');
+        if (includeImageAlt) {
+          const image = htmlImgToImageNode(node);
+          if (image) parts.push(image.alt?.trim() || options.imageFallback || '', ' ');
+        }
         break;
       case 'definition':
         break;

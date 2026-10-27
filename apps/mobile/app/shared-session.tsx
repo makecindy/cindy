@@ -12,6 +12,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
+import { notifySharedTaskMembershipChanged } from '@/device-link/sharedTaskMembershipSignal';
 import { filterVisibleSharedTasks } from '@/device-link/sharedTaskVisibility';
 import { sharedTaskErrorKey } from '@/device-link/sharedTaskCompatibility';
 import { isSharedTaskGone } from '@/device-link/sharedTaskAccessWatch';
@@ -230,6 +231,7 @@ export default function SharedSessionScreen() {
     const parsed = parseSharedTaskInvitation(input, DEVICE_LINK_API_BASE_URL);
     if (!parsed.ok) { setNotice(t(parsed.reason === 'different-server' ? 'sharedTask.invitationDifferentServer' : 'sharedTask.invalid')); return; }
     const joined = await api.join(parsed.invitation, sharedTaskAccountName(user?.name));
+    notifySharedTaskMembershipChanged();
     if (!current()) return;
     const detail = await api.get(joined.sharedTaskId);
     if (!current()) return;
@@ -292,6 +294,7 @@ export default function SharedSessionScreen() {
           failed.push(item);
         }
       }
+      if (closed.size) notifySharedTaskMembershipChanged();
       if (!current()) return;
       setOwned((value) => value.filter((item) => !closed.has(item.sharedTaskId)));
       const failedCount = failed.length;
@@ -299,6 +302,7 @@ export default function SharedSessionScreen() {
     }, true, { items: items.map((item) => item.title + ' · ' + deviceName(item.hostDeviceId)), note: t('sharedTask.closeAllScopeNote') });
   const leave = () => confirm(t('sharedTask.leaveTitle'), t('sharedTask.leaveBody'), t('sharedTask.leaveKeep'), t('sharedTask.leave'), async (current) => {
     await api.leave(guestId!);
+    notifySharedTaskMembershipChanged();
     if (!current()) return;
     if (guestTarget) { link.closeLink(guestTarget); remoteSessionStore.removeDevice(guestTarget); }
     router.replace('/devices');
@@ -306,6 +310,7 @@ export default function SharedSessionScreen() {
   const taskCard = <View style={styles.taskRow}><FileText size={iconSize.md} color={colors.textTertiary} /><View style={styles.grow}><Text style={styles.taskTitle}>{title}</Text><Text style={styles.metadata}>{task?.deviceLinkDeviceName ?? t('sharedTask.runsOnHostDevice')}</Text></View></View>;
   const leaveListed = (item: SharedTaskListItem) => confirm(t('sharedTask.leaveTitle'), t('sharedTask.leaveBody'), t('sharedTask.leaveKeep'), t('sharedTask.leave'), async current => {
     await api.leave(item.sharedTaskId);
+    notifySharedTaskMembershipChanged();
     if (!current()) return;
     const target = sharedTaskHostPeer(item.sharedTaskId, item.hostDeviceId);
     link.closeLink(target); remoteSessionStore.removeDevice(target);
@@ -393,7 +398,7 @@ export default function SharedSessionScreen() {
         <Text style={styles.intro}>{t('sharedTask.startIntro')}</Text>{taskCard}
         <View style={styles.noticeBox}><Users size={iconSize.sm} color={colors.textTertiary} /><Text style={[styles.smallMuted, styles.grow]}>{t('sharedTask.inviteNotice')}</Text></View>
         <Text style={styles.smallMuted}>{t('sharedTask.offlineAutoClose')}</Text>
-        <View style={styles.footer}><SharedTaskAction grow action={{ label: t('sharedTask.open'), tone: 'primary', busy, onPress: () => void run(async () => { await host({ action: 'open', sessionId: sessionId! }); }) }} /></View>
+        <View style={styles.footer}><SharedTaskAction grow action={{ label: t('sharedTask.open'), tone: 'primary', busy, onPress: () => void run(async () => { await host({ action: 'open', sessionId: sessionId! }); notifySharedTaskMembershipChanged(); }) }} /></View>
       </> : <>
         <Text style={styles.caption}>{title}</Text>
         <View style={styles.copyBox}><Link size={iconSize.md} color={colors.textTertiary} /><View style={styles.grow}><Text style={styles.smallMuted}>{t('sharedTask.inviteBoxTitle')}</Text><Text style={styles.smallMuted}>{t('sharedTask.inviteBoxHint')}</Text></View>
@@ -414,6 +419,7 @@ export default function SharedSessionScreen() {
         <View style={styles.noticeBox}><Clock size={iconSize.sm} color={colors.textTertiary} /><Text style={[styles.smallMuted, styles.grow]}>{t('sharedTask.remoteHostOfflineNote')}</Text></View>
         <View style={styles.footer}><SharedTaskAction grow action={{ label: t('sharedTask.closeCurrent'), tone: 'danger', disabled: busy, onPress: () => confirm(t('sharedTask.closeOneTitle'), t('sharedTask.closeOneBody'), t('sharedTask.closeAllKeep'), t('sharedTask.close'), async current => {
           await host({ action: 'close', sharedTaskId: detail.sharedTaskId });
+          notifySharedTaskMembershipChanged();
           if (current() && mode === 'detail') goBackGuarded(router, { pathname: '/shared-session', params: { mode: 'manage' } });
         }) }} /></View>
       </> : <>

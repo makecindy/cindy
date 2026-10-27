@@ -1,11 +1,15 @@
 {
   "site": "www.coupang.com",
-  "auth": "需要登录态 + 真浏览器:Coupang 反爬极严(Akamai),未登录或非浏览器会话访问搜索接口会被喂 HTML/挑战页;请在持久浏览器登录 coupang.com 后使用",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.coupang.com/",
-    "searchPage": "https://www.coupang.com/np/search?q=<keyword>&channel=user&page=1",
-    "searchJson": "https://www.coupang.com/np/search?q=<keyword>&channel=user&page=<n>"
+    "home": "https://www.coupang.com"
   },
-  "recipes": ["coupang-search"],
-  "notes": "策略 COOKIE/同源 fetch。关键:不要直接 navigate 到搜索 JSON——非同源/未登录/非浏览器访问会被反爬喂 HTML 或挑战页。正确姿势:先 navigate 到 https://www.coupang.com/np/search?q=<词>&channel=user&page=1(让浏览器过一次反爬、建立会话),再用 evaluate 在页面内 fetch('/np/search?q=<词>&channel=user&page=<n>', {credentials:'include'})。响应是 JSON 时,商品数组在 data.products / data.productList / products / productList / items 之一;单条字段命名不统一,常见 {productId, title|name|productName, price|salePrice|finalPrice, originalPrice|basePrice, rating, reviewCount}。务必先判断 responseText 是否以 '<' 开头(HTML=被挡),被挡时如实报「需登录/被反爬」。商品页统一拼 https://www.coupang.com/vp/products/<productId>。上游还有 JSON-LD / __NEXT_DATA__ / DOM 多重兜底,但都是 DOM 抓取、稳定性差,本配方只走干净的 JSON 接口路径。"
+  "recipes": [
+    "coupang-search"
+  ],
+  "notes": "兼容入口 coupang-search 现执行内置 coupang/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

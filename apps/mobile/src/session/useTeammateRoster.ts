@@ -4,6 +4,7 @@ import { REMOTE_RESOURCE_MANIFEST_CHANNEL, type RemoteResourceManifestResponse }
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { toDeviceListItems } from '@/device-link/devices';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
@@ -120,6 +121,7 @@ export function useTeammateRoster(enabled = true) {
           });
         } catch (cause) {
           if (current()) {
+            mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-manifest' });
             failures.push(cause);
             if (isAutoRecoveringRemoteError(cause)) failedHosts.current.add(deviceId);
           }
@@ -143,7 +145,10 @@ export function useTeammateRoster(enabled = true) {
       groupTargets = targets.filter((target) => advertisingGroups.has(target.deviceId)
         || (!answered.has(target.deviceId) && previousGroupTargets.some((host) => host.deviceId === target.deviceId)));
       void cacheRemoteResourceHome(user?.id ?? '', collections);
-    } catch (cause) { error = formatRemoteError(cause); failures.push(cause); }
+    } catch (cause) {
+      mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-directory' });
+      error = formatRemoteError(cause); failures.push(cause);
+    }
     if (!current()) return;
     lastCollections.current = { binding, home: collections };
     if (!failures.length) recovery.current?.succeeded();
@@ -196,7 +201,8 @@ export function useTeammateRoster(enabled = true) {
     // Stable reference (revocation is applied at discovery and again to the listed rows).
     groupTargets: ready ? discovery.groupTargets : NO_TARGETS,
     createTargets: ready && status === 'online' ? discovery.createTargets.filter((host) => !revoked.has(host.deviceId) && list.isOnline(host)) : NO_TARGETS,
-    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
+    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error
+      && (!discovery.targets.length || (!list.error && discovery.targets.every(list.isOnline))),
     loading: !ready || !discovery.settled || list.loading,
     refreshing: list.refreshing,
     error: ready ? discovery.error ?? (discovery.targets.length ? list.error : null) : null, refresh };

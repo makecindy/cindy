@@ -4,6 +4,8 @@ import type { WebView } from 'react-native-webview';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
+import { DirectLinkTransport } from '@/device-link/DirectLinkTransport';
+import { createDirectRuntimeBridge } from '@cindy/device-link';
 import { HtmlSnapshotReader } from '@/session/HtmlFileReader';
 import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import type { HtmlPreviewProgress, PrepareMobileHtmlPreview } from '@/session/mobileHtmlPreview';
@@ -110,6 +112,57 @@ it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('recreates peer
   expect(state.install).toHaveBeenCalledTimes(1);
   act(() => state.props.onMessage({ nativeEvent: { data: '{"type":"ready"}' } }));
   expect(state.install).toHaveBeenCalledTimes(2);
+});
+
+// Production bridge lifecycle, separate from file transfers: a backgrounded/crashed
+// data-only WebView must immediately release paths and reject old document callbacks.
+it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('releases the LAN path after %s with bounded restarts', async event => {
+  const bridge = createDirectRuntimeBridge(), closed = vi.fn();
+  root = createRoot(document.createElement('div'));
+  act(() => root!.render(createElement(DirectLinkTransport, { bridge, enabled: true, owner: 'one' })));
+  const message = (type: string, extra = {}) => ({ nativeEvent: { data: JSON.stringify({ type, ...extra }) } });
+  act(() => state.props.onMessage(message('ready')));
+  bridge.runtime.create('one', { closed, open() {}, message() {}, drained() {} });
+  const old = state.props;
+  act(() => old[event]());
+  expect(closed).toHaveBeenCalledOnce();
+  expect(state.mounts).toBe(2);
+  act(() => old.onMessage(message('ready')));
+  expect(() => bridge.runtime.create('two', { closed, open() {}, message() {}, drained() {} })).toThrow('UNAVAILABLE');
+  act(() => state.props.onMessage(message('ready')));
+  bridge.runtime.create('two', { closed, open() {}, message() {}, drained() {} });
+  act(() => state.props[event]());
+  expect(closed).toHaveBeenCalledTimes(2);
+  expect(state.mounts).toBe(2);
+  expect(() => bridge.runtime.create('three', { closed, open() {}, message() {}, drained() {} })).toThrow('UNAVAILABLE');
+});
+
+it('does not accept LAN bridge callbacks across backgrounding, owner changes or unmount', () => {
+  const bridge = createDirectRuntimeBridge(), closed = vi.fn();
+  const events = { closed, open() {}, message() {}, drained() {} };
+  const ready = { nativeEvent: { data: '{"type":"ready"}' } };
+  root = createRoot(document.createElement('div'));
+  act(() => root!.render(createElement(DirectLinkTransport, { bridge, enabled: true, owner: 'one' })));
+  act(() => state.props.onMessage(ready));
+  bridge.runtime.create('one', events);
+  const old = state.props;
+  act(() => { for (const fn of state.appStateListeners) fn('background'); });
+  expect(closed).toHaveBeenCalledOnce();
+  act(() => { for (const fn of state.appStateListeners) fn('active'); });
+  act(() => old.onMessage(ready));
+  expect(() => bridge.runtime.create('two', events)).toThrow('UNAVAILABLE');
+  act(() => state.props.onMessage(ready));
+  bridge.runtime.create('two', events);
+  const previousOwner = state.props;
+  act(() => root!.render(createElement(DirectLinkTransport, { bridge, enabled: true, owner: 'two' })));
+  expect(closed).toHaveBeenCalledTimes(2);
+  act(() => previousOwner.onMessage(ready));
+  expect(() => bridge.runtime.create('three', events)).toThrow('UNAVAILABLE');
+  act(() => state.props.onMessage(ready));
+  const disposed = state.props;
+  act(() => root!.unmount()); root = undefined;
+  act(() => disposed.onMessage(ready));
+  expect(() => bridge.runtime.create('three', events)).toThrow('UNAVAILABLE');
 });
 
 it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('routes snapshot %s to the existing error owner', (event) => {

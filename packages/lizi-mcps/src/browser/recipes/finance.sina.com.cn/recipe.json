@@ -1,12 +1,25 @@
 {
   "id": "sinafinance-news",
-  "match": ["finance.sina.com.cn", "app.cj.sina.com.cn"],
-  "description": "读取新浪财经 7x24 小时实时财经快讯(返回 JSON:id/发布时间/正文/阅读数)。走公开接口 app.cj.sina.com.cn/api/news/pc,无需登录。limit 控制条数(最大 50),tag=0 为全部。",
-  "inputs": { "limit": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://app.cj.sina.com.cn/api/news/pc?page=1&size={{limit|url}}&tag=0" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "finance.sina.com.cn",
+    "app.cj.sina.com.cn"
   ],
-  "output": "{{json}}"
+  "description": "新浪财经 7x24 小时实时快讯",
+  "access": "read",
+  "adapter": "sinafinance/news",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max results (max 50)"
+    },
+    "type": {
+      "required": false,
+      "type": "int",
+      "default": 0,
+      "description": "News type: 0=全部 1=A股 2=宏观 3=公司 4=数据 5=市场 6=国际 7=观点 8=央行 9=其它"
+    }
+  },
+  "steps": []
 }

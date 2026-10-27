@@ -7,7 +7,10 @@
  * - 没有 creator 的任务（主人自己开的、远程电脑上的）由总调度跟。
  * - 没有可用总调度时为 null：不叫醒任何伙伴，「等你」由宿主直接发系统提醒。
  */
-import { DEFAULT_SCHEDULER_BOT_ID } from '../../shared/botAutonomy.js';
+
+import type { RoutineRun } from '@cindy/maker-scheduler';
+import { HOST_SESSIONS_SOURCE_ID, type WatchedSession } from '../../shared/botAutonomy.js';
+import { isPendingForFallback } from './events.js';
 
 export interface FollowerBotState {
   status: string;
@@ -27,8 +30,8 @@ export function isFollowerAvailable(bot: FollowerBotState | undefined): boolean 
 
 /**
  * 「自动跟进所有任务」的有效伙伴：用户 override 指向的伙伴仍存在（非归档 / 删除中）就用它
- * （显式 null = 用户关掉了总调度）；override 指向的伙伴已不存在时回到默认；默认 = 存在且
- * 在用（active）的 Cindy 助理，否则没有总调度。
+ * （显式 null = 用户关掉了总调度）；目标已不存在时关闭，不自动转交其他伙伴。
+ * 未自定义的新用户和老用户都默认关闭，只有明确选择才开始读取与分析自己的任务。
  */
 export function resolveSchedulerBotId(
   override: { customized: boolean; schedulerBotId: string | null },
@@ -42,7 +45,7 @@ export function resolveSchedulerBotId(
     if (override.schedulerBotId === null) return null;
     if (exists(override.schedulerBotId)) return override.schedulerBotId;
   }
-  return bots.get(DEFAULT_SCHEDULER_BOT_ID)?.status === 'active' ? DEFAULT_SCHEDULER_BOT_ID : null;
+  return null;
 }
 
 export function deriveFollowerBotId(input: {
@@ -68,4 +71,27 @@ export function readAllowSchedulerFollow(capabilitiesJson: string | null | undef
   } catch {
     return false;
   }
+}
+
+/** Recheck queued events against current ownership/consent before sending any data to a model. */
+export type FollowUpSubject = Pick<WatchedSession, 'sessionId' | 'deviceId' | 'shared' | 'canonicalOfBotId' | 'creatorBotId'>;
+
+export function filterFollowUpEvents(
+  botId: string,
+  events: RoutineRun['events'],
+  rows: readonly WatchedSession[],
+  schedulerBotId: string | null,
+  bots: FollowerBotDirectory,
+  now: number,
+  subjects: readonly FollowUpSubject[] = rows,
+): RoutineRun['events'] {
+  const isAllowed = (row: FollowUpSubject) => row.deviceId === null && !row.shared
+    && row.canonicalOfBotId !== botId
+    && deriveFollowerBotId({ creatorBotId: row.creatorBotId, schedulerBotId, bots }) === botId;
+  const ids = new Set(subjects.filter(isAllowed).map((row) => row.sessionId));
+  return events.filter(({ sourceId, event }) => sourceId === HOST_SESSIONS_SOURCE_ID && (
+    event.type === 'sweep'
+      ? rows.some((row) => isAllowed(row) && isPendingForFallback(row, now))
+      : typeof event.subject === 'string' && ids.has(event.subject)
+  ));
 }

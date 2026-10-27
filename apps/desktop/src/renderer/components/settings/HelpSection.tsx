@@ -15,7 +15,7 @@ const cardClass = cn(
 );
 
 const sectionTitleClass = 'text-13 font-medium leading-[1.3] text-[var(--settings-section-title)]';
-const sectionDescClass = 'mt-1 text-12 leading-[1.6] text-[var(--settings-section-sublabel)] opacity-80';
+const sectionDescClass = 'mt-1 text-12 leading-[1.6] text-[var(--text-secondary)]';
 
 export function HelpSection({ onAskHelp }: HelpSectionProps) {
   const { t } = useTranslation();

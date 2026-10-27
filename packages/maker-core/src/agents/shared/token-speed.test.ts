@@ -168,6 +168,32 @@ describe('TokenSpeedMeter (pi-token-speed algorithm)', () => {
 });
 
 describe('UsageTokenSpeedMeter', () => {
+  // Regression: a long Codex run can report more output while tool-paused
+  // generation time is frozen. Existing tests only covered backwards clocks.
+  // Unit: the public snapshot must withdraw the bad interval and recover.
+  it('excludes output without elapsed time and resumes from the next paired interval', () => {
+    const meter = new UsageTokenSpeedMeter();
+    meter.recordUsage(100, 1_000);
+    meter.recordUsage(2_122_500, 1_000);
+    expect(meter.snapshot()).toBeUndefined();
+    meter.recordUsage(2_122_877, 11_000);
+    expect(meter.snapshot()).toMatchObject({ tokens: 477, elapsedMs: 11_000, rate: 37.7 });
+    expect(meter.snapshot()?.average).toBeCloseTo(477 / 11);
+  });
+
+  it('keeps paired totals and peak across native continuations but resets a new user turn', () => {
+    const meter = new UsageTokenSpeedMeter();
+    meter.recordUsage(1_000, 10_000);
+    meter.stop();
+    meter.startSegment();
+    expect(meter.snapshot()).toBeUndefined();
+    meter.recordUsage(377, 10_000);
+    expect(meter.snapshot()).toMatchObject({ tokens: 1_377, elapsedMs: 20_000, average: 68.85, peak: 100 });
+    meter.reset();
+    meter.recordUsage(377, 10_000);
+    expect(meter.snapshot()).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7, peak: 37.7 });
+  });
+
   it('uses the last three paired intervals weighted by duration, including hidden output', () => {
     const meter = new UsageTokenSpeedMeter();
     expect(meter.snapshot()).toBeUndefined();

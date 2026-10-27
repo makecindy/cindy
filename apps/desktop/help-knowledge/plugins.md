@@ -15,7 +15,7 @@ Plugins (internally "意识" / Ghost) extend what the agents can do — they add
 **Built-in plugins that ship with the app:**
 
 - **Cindy Art** (`$cindy-art`) — generate and edit images and short videos.
-- **Cindy Web Search** (`$cindy-web-search`) — public web search (add your own Brave or Tavily key on its detail page).
+- **Cindy Web Search** (`$cindy-web-search`) — public web search. **No key needed**: by default it searches through Cindy AI and uses your signed-in Cindy account's balance (unavailable in local mode). Results come with a title, link, and short summary. To search through your own service instead, add a Brave, Tavily, or DeepSeek key on its detail page. A failed search is reported as-is; it never silently switches to another source.
 - **Cindy Mermaid** (`$cindy-mermaid`) — build / repair Mermaid diagrams.
 - **Cindy GitHub** (`$cindy-github`) / **Cindy GitLab** (`$cindy-gitlab`) — read / write issues, PRs / MRs, reviews, CI, releases.
 - **Filo Google** (`$filo-google`) — Gmail / Calendar / Drive / Sheets.
@@ -54,7 +54,7 @@ Plugins (internally "意识" / Ghost) extend what the agents can do — they add
 
 **Configuring a plugin's account / API key:**
 
-- Do it on the plugin's **detail page**. Plugins that use a key (web-search, GitHub/GitLab tokens) have a field there; the value goes straight into the host's encrypted store and can't be read back.
+- Do it on the plugin's **detail page**. Plugins that use a key (optional search-service keys for Web Search, GitHub/GitLab tokens) have a field there; the value goes straight into the host's encrypted store and can't be read back.
 - Plugins that use OAuth (for example Filo Google) show a **Connect account** button instead.
 
 **Notes:**

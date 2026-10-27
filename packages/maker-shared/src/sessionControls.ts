@@ -14,7 +14,7 @@ export interface SessionControlsSessionLike {
   contextTokens?: number;
   contextWindow?: number;
   effort?: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   model: string;
   permissionMode: string;
   status: 'active' | 'archived' | 'deleted' | string;
@@ -95,7 +95,8 @@ export function summarizeContextUsage(value: unknown, localizer?: PresentationLo
     ?? record.maxContextTokens
     ?? record.contextWindow,
   );
-  const percent = readNumber(record.percent ?? record.percentage ?? record.contextPercent);
+  const percent = readNumber(record.percent);
+  const percentage = readNumber(record.percentage ?? record.contextPercent);
   const costUsd = readNumber(record.costUsd ?? record.totalCostUsd);
   const parts: string[] = [];
   if (contextTokens !== null) {
@@ -105,6 +106,8 @@ export function summarizeContextUsage(value: unknown, localizer?: PresentationLo
   }
   if (percent !== null) {
     parts.push(`${Math.round(percent > 1 ? percent : percent * 100)}%`);
+  } else if (percentage !== null) {
+    parts.push(`${Math.round(percentage)}%`);
   } else if (contextTokens !== null && maxContextTokens !== null && maxContextTokens > 0) {
     parts.push(`${Math.round((contextTokens / maxContextTokens) * 100)}%`);
   }

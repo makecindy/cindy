@@ -8,6 +8,8 @@ import {
   parsePluginConnectionOffer,
   parsePluginConnectionInput,
   parsePluginAuthorizationOffer,
+  parsePluginAuthorizationRequest,
+  type PluginOauthCallback,
   parsePluginDeviceOffer,
   parseInputHandoffOffer,
   parseInputHandoffPresentation,
@@ -46,9 +48,11 @@ export async function runMobilePluginAuthorization(deps: {
     code: string | undefined,
     expiresAt: number,
   ): Promise<void>;
+  receiveLoopback?(request: { url: string; callbackUrl: string; state: string }, expiresAt: number, signal: AbortSignal): Promise<PluginOauthCallback>;
   clearInput(): void;
   assertCurrent(): void;
   pause(): Promise<void>;
+  isForeground?(): boolean;
   now?(): number;
 }): Promise<void> {
   const now = deps.now ?? Date.now,
@@ -104,6 +108,35 @@ export async function runMobilePluginAuthorization(deps: {
         await deps.invoke({ op: "callback", id: id!, box }),
       );
       if (result.accepted !== true) throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
+    };
+    const receiveLoopback = async (request: { url: string; callbackUrl: string; state: string }) => {
+      if (!deps.receiveLoopback) throw new Error("PLUGIN_OAUTH_UPDATE_REQUIRED");
+      const abort = new AbortController();
+      let checking = false;
+      const monitor = setInterval(() => {
+        if (checking || deps.isForeground?.() === false) return;
+        checking = true;
+        void (async () => {
+          try {
+            deps.assertCurrent();
+            const status = object(await deps.invoke({ op: "status", id: id! }));
+            deps.assertCurrent();
+            if (!["authorizing", "starting"].includes(String(status.phase))) abort.abort();
+          } catch { if (deps.isForeground?.() !== false) abort.abort(); }
+          finally { checking = false; }
+        })();
+      }, 600);
+      try {
+        const value = await deps.receiveLoopback(request, deadline, abort.signal);
+        while (deps.isForeground?.() === false) {
+          deps.assertCurrent();
+          if (now() >= deadline) throw new Error("PLUGIN_OAUTH_CLOSED");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        deps.assertCurrent();
+        if (now() >= deadline) throw new Error("PLUGIN_OAUTH_CLOSED");
+        return value;
+      } finally { clearInterval(monitor); abort.abort(); }
     };
     while (now() < deadline) {
       await deps.pause();
@@ -179,9 +212,12 @@ export async function runMobilePluginAuthorization(deps: {
         if (caps.authorizationV1 !== true)
           throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
         const offer = parsePluginAuthorizationOffer(raw);
-        // A computer loopback callback cannot be reinterpreted as the phone's localhost.
-        if (offer.request.kind === "loopback")
-          throw new Error("PLUGIN_AUTHORIZATION_COMPUTER_CALLBACK");
+        if (offer.request.kind === "loopback") {
+          const value = await receiveLoopback(offer.request);
+          await deliver({ ...value, state: offer.state });
+          opened = true;
+          continue;
+        }
         await deps.showAuthorization(
           offer.request.url,
           offer.request.kind === "device" ? offer.request.userCode : undefined,
@@ -199,7 +235,6 @@ export async function runMobilePluginAuthorization(deps: {
         );
         await deliver({ kind: "device-opened", state: offer.state });
       } else {
-        // Legacy PKCE loopback offers need the computer's callback listener.
         oauthExact(raw, [
           "authorizeUrl",
           "callbackUrl",
@@ -207,7 +242,9 @@ export async function runMobilePluginAuthorization(deps: {
           "corsOrigins",
           "state",
         ]);
-        throw new Error("PLUGIN_AUTHORIZATION_COMPUTER_CALLBACK");
+        const request = parsePluginAuthorizationRequest({ kind: "loopback", url: raw.authorizeUrl, callbackUrl: raw.callbackUrl, state: raw.state });
+        if (request.kind !== "loopback") throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
+        await deliver(await receiveLoopback(request));
       }
       opened = true;
     }

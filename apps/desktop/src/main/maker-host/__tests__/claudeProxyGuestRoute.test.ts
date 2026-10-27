@@ -29,6 +29,16 @@ vi.mock('../claude-fast-mode-log', () => ({
   createClaudeFastModeRequestTransform: () => () => null,
   createClaudeFastModeResponseObserver: () => () => undefined,
 }));
+vi.mock('../anthropic-responses-bridge-host', () => ({
+  getResponsesBridgeHandler: () => ({ handle: async ({ res }: { res: { writeHead(status: number): void; end(): void } }) => {
+    res.writeHead(204);
+    res.end();
+  } }),
+  getPiNativeSubscriptionHandler: () => async ({ res }: { res: { writeHead(status: number): void; end(): void } }) => {
+    res.writeHead(204);
+    res.end();
+  },
+}));
 
 import { DEVICE_HOSTED_GUEST_ROUTE_HEADER } from '@cindy/maker-core';
 import { buildRegistry, buildUserProvider } from '@cindy/model-providers';
@@ -39,7 +49,7 @@ import {
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
-import { getActiveCatalog, setCustomProviders } from '../active-catalog';
+import { getActiveCatalog, setCustomProviders, setXdGatewayModels } from '../active-catalog';
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
@@ -55,14 +65,14 @@ import {
   setProviderOAuthTokenReader,
   setProviderViewsReader,
 } from '../provider-route';
-import { clearAllSessionProviders, getSessionProvider } from '../session-provider-store';
+import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider } from '../session-provider-store';
 import { registerPiProxySession } from '../pi-proxy-session-auth';
 
 const SHARED_UPSTREAM = 'https://shared.example/api/anthropic';
 const OTHER_UPSTREAM = 'https://other.example/api/anthropic';
 
 function ctxWith(headers: Record<string, string>) {
-  return { reqId: 1, method: 'POST', url: '/v1/messages', headers } as never;
+  return { reqId: 1, method: 'POST', url: '/v1/messages', headers };
 }
 
 async function statusOf(decision: RoutingDecision | null): Promise<number | undefined> {
@@ -83,6 +93,11 @@ function installProviders(): void {
         wireProtocol: 'anthropic-messages',
         models: [{ id: model, name: model }],
       },
+      pi: {
+        baseUrl,
+        wireProtocol: 'anthropic-messages',
+        models: [{ id: model, name: model }, { id: `${model}-private`, name: `${model}-private` }],
+      },
     },
   });
   setCustomProviders([
@@ -101,6 +116,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
     setClaudeProxySessionIdResolver(() => null);
     setPendingCredentialSwitchReader(() => undefined);
     setProviderOAuthTokenReader(() => null);
+    setXdGatewayModels(['google/gemini-3.7-flash', 'gemini-3.6-flash'].map(id => ({ id, agents: ['pi'] })));
     installProviders();
     transform = createModelRoutingTransform();
   });
@@ -109,6 +125,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
     resetGuestProviderRoutesForTest();
     clearAllSessionProviders();
     setCustomProviders([]);
+    setXdGatewayModels([]);
     setCustomProviderKeyReader(() => null);
     setProviderViewsReader(async () => []);
   });
@@ -160,6 +177,58 @@ describe('Claude proxy routing for shared-provider guests', () => {
     expect(getSessionProvider('guest-session')).toBeNull();
   });
 
+  // The catalog offers this model, but each person's current grant must remain the authority.
+  it('isolates model grants for two people and enforces revocation on the next proxy request', async () => {
+    let allowed = true;
+    const first = registerGuestProviderRoute('first-person', 'shared-a', () => allowed);
+    const second = registerGuestProviderRoute('second-person', 'shared-a', () => false);
+    const request = (token: string) => Promise.resolve(transform(
+      { model: 'shared-model' }, ctxWith({ [GUEST_ROUTE_HEADER]: token, 'x-api-key': 'placeholder' }),
+    ));
+    expect((await request(first.token))?.upstreamOverride).toBe(SHARED_UPSTREAM);
+    expect(await statusOf(await request(second.token))).toBe(403);
+    allowed = false;
+    expect(await statusOf(await request(first.token))).toBe(403);
+  });
+
+  // Unit regression for review 4327117965: the real proxy must return 403 when
+  // only the other catalog profile is granted. Existing coverage had one model
+  // with a compatible [1m] wire alias, never two independently authorized entries.
+  it.each([
+    ['shared-model', 'shared-model[1m]'],
+    ['shared-model[1m]', 'shared-model'],
+  ])('keeps 1M catalog profiles distinct when only %s is granted', async (granted, denied) => {
+    setCustomProviders([buildUserProvider({
+      id: 'shared-a', name: 'Shared', runtimes: { 'claude-code': {
+        baseUrl: SHARED_UPSTREAM, wireProtocol: 'anthropic-messages',
+        models: [{ id: 'shared-model', name: 'Standard' }, { id: 'shared-model[1m]', name: '1M' }],
+      } },
+    })]);
+    const { token } = registerGuestProviderRoute('guest-session', 'shared-a', model => model === granted);
+    const request = (model: string) => Promise.resolve(transform(
+      { model }, ctxWith({ [GUEST_ROUTE_HEADER]: token, 'x-api-key': 'placeholder' }),
+    ));
+    expect((await request(granted))?.upstreamOverride).toBe(SHARED_UPSTREAM);
+    expect(await statusOf(await request(denied))).toBe(403);
+    if (denied.endsWith('[1m]')) expect(await statusOf(await request(denied.replace('[1m]', '[1M]')))).toBe(403);
+  });
+
+  it('keeps disabled 1M catalog profiles from borrowing an enabled base profile', async () => {
+    const provider = buildUserProvider({
+      id: 'shared-a', name: 'Shared', runtimes: { 'claude-code': {
+        baseUrl: SHARED_UPSTREAM, wireProtocol: 'anthropic-messages',
+        models: [{ id: 'shared-model', name: 'Standard' }, { id: 'shared-model[1m]', name: '1M' }],
+      } },
+    });
+    provider.models['claude-code']![1]!.disabled = true;
+    setCustomProviders([provider]);
+    const { token } = registerGuestProviderRoute('guest-session', 'shared-a', () => true);
+    const decision = await Promise.resolve(transform(
+      { model: 'shared-model[1m]' }, ctxWith({ [GUEST_ROUTE_HEADER]: token, 'x-api-key': 'placeholder' }),
+    ));
+    expect(await statusOf(decision)).toBe(403);
+  });
+
   it('refuses a body-less request unless the shared provider is the default gateway', async () => {
     const { token } = registerGuestProviderRoute('guest-session', 'shared-a');
     const decision = await Promise.resolve(transform(undefined, ctxWith({ [GUEST_ROUTE_HEADER]: token })));
@@ -189,12 +258,111 @@ describe('Claude proxy routing for shared-provider guests', () => {
         'x-cindy-pi-session-token': 'root-token',
         'x-cindy-pi-provider-id': 'shared-a',
       })));
-      // 分享的供应商：受邀者守门放行，照常按会话来源路由(这里的 fixture 没有 Pi 运行时)。
-      expect(await statusOf(shared)).not.toBe(403);
+      expect(shared?.upstreamOverride).toBe(SHARED_UPSTREAM);
     } finally {
       disposeRoot();
       disposeChild();
     }
+  });
+
+  // Unit regression for #6592 / provider-sharing §12: the production routing transform must
+  // deny an ungranted Pi model before any upstream/native handler. Earlier coverage only
+  // changed providers. Minimal failure: two models at one provider, only the first granted.
+  it.each(['guest', 'owner'].flatMap(trust => ['shared-a', 'openai', 'xai', 'xd'].map(providerId => ({ trust, providerId }))))('rechecks live Pi model grants for $trust $providerId root and child routes', async ({ trust, providerId }) => {
+    const models = getActiveCatalog().providers.find(provider => provider.id === providerId)!.models.pi!;
+    const [first, second] = models.filter(model => !model.disabled);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    const wireId = (id: string) => providerId === 'openai' ? id.replace(/^chatgpt\//, '')
+      : providerId === 'xai' ? id.replace(/^xai\//, '') : id;
+    let allowedModel = first.id;
+    if (trust === 'guest') registerGuestProviderRoute('pi-model-guest', providerId, async model => model === allowedModel);
+    else bindHostedSessionProvider('pi-model-guest', providerId, (id, model) => id === providerId && model === allowedModel);
+    registerGuestProviderRoute('other-person', providerId, () => false);
+    const disposers = [
+      registerPiProxySession('pi-model-guest', 'root-token', () => providerId),
+      registerPiProxySession('pi-model-guest', 'child-token', () => providerId, { scope: 'subagent-route' }),
+      registerPiProxySession('other-person', 'other-token', () => providerId),
+      registerPiProxySession('local-pi', 'local-token', () => providerId),
+    ];
+    const request = (model: string, token: string, sessionId = 'pi-model-guest') => Promise.resolve(transform(
+      providerId === 'xd' ? { contents: [] } : { model: wireId(model) }, { ...ctxWith({
+        'x-cindy-pi-session-id': sessionId,
+        'x-cindy-pi-session-token': token,
+        'x-cindy-pi-provider-id': providerId,
+      }), ...(providerId === 'xd' ? { url: `/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse` } : {}) },
+    ));
+    const expectAllowed = async (decision: RoutingDecision | null) => {
+      if (providerId === 'openai' || providerId === 'xai') expect(await statusOf(decision)).toBe(204);
+      else if (providerId === 'xd') expect(decision?.headerOverride?.authorization).toBe('Bearer sk-gw');
+      else expect(decision?.upstreamOverride).toBe(SHARED_UPSTREAM);
+    };
+    try {
+      for (const token of ['root-token', 'child-token']) {
+        await expectAllowed(await request(first.id, token));
+        expect(await statusOf(await request(second.id, token))).toBe(403);
+        expect(await statusOf(await request('unknown-model', token))).toBe(403);
+        expect(await statusOf(await request('', token))).toBe(403);
+      }
+      expect(await statusOf(await request(first.id, 'other-token', 'other-person'))).toBe(403);
+      const forgedPath = { ...ctxWith({
+        'x-cindy-pi-session-id': 'pi-model-guest',
+        'x-cindy-pi-session-token': 'root-token',
+        'x-cindy-pi-provider-id': providerId,
+      }), url: `/v1beta/models/${encodeURIComponent(first.id)}:streamGenerateContent` };
+      // A URL naming an allowed model cannot hide a different/opaque subscription body.
+      expect(await statusOf(await transform({ model: wireId(second.id) }, forgedPath))).toBe(403);
+      expect(await statusOf(await transform(undefined, forgedPath))).toBe(403);
+      if (providerId === 'xd') {
+        expect(await statusOf(await transform({ model: first.id }, {
+          ...forgedPath, url: `/v1beta/models/${encodeURIComponent(second.id)}:streamGenerateContent`,
+        }))).toBe(403);
+      }
+      // A live change must revoke the old model and allow the newly granted model without restart.
+      allowedModel = second.id;
+      for (const token of ['root-token', 'child-token']) {
+        expect(await statusOf(await request(first.id, token))).toBe(403);
+        await expectAllowed(await request(second.id, token));
+      }
+      // Local Pi is independent of restrictions on guests sharing the same provider.
+      await expectAllowed(await request(first.id, 'local-token', 'local-pi'));
+    } finally {
+      for (const dispose of disposers) dispose();
+    }
+  });
+
+  it('allows an authorized owner child provider independently of the parent provider', async () => {
+    let childAllowed = true;
+    bindHostedSessionProvider('owner-parent', 'shared-a', (providerId, model) => childAllowed && providerId === 'other-b' && model === 'other-model');
+    const dispose = registerPiProxySession('owner-parent', 'owner-child', () => 'other-b', { scope: 'subagent-route' });
+    const request = () => transform({ model: 'other-model' }, ctxWith({
+      'x-cindy-pi-session-id': 'owner-parent', 'x-cindy-pi-session-token': 'owner-child', 'x-cindy-pi-provider-id': 'other-b',
+    }));
+    try {
+      expect(await request()).toMatchObject({ upstreamOverride: OTHER_UPSTREAM });
+      childAllowed = false;
+      expect(await statusOf(await request())).toBe(403);
+    } finally { dispose(); }
+  });
+
+  // Unit regression for review 4328205893 / provider-sharing §12. Pi coverage
+  // missed CC's per-request provider inference. A hosted child must use
+  // the actual custom/subscription provider's live grant, not its parent's.
+  it.each(['implicit', 'subscription'])('authorizes the resolved Claude child provider on the %s route', async (routeKind) => {
+    const childProvider = routeKind === 'implicit' ? 'other-b' : 'xai';
+    const parentProvider = routeKind === 'implicit' ? 'xai' : 'xd';
+    const model = routeKind === 'implicit' ? 'other-model' : getActiveCatalog().providers.find(p => p.id === 'xai')!.models['claude-code']![0].id;
+    let childAllowed = true;
+    bindHostedSessionProvider('owner-parent', parentProvider, (providerId, id) => childAllowed && providerId === childProvider && id === model);
+    setClaudeProxySessionIdResolver(() => 'owner-parent');
+    const request = () => transform({ model }, ctxWith({ 'x-claude-code-session-id': 'owner-sdk', 'x-api-key': 'sk-gw' }));
+    if (routeKind === 'implicit') expect(await request()).toMatchObject({ upstreamOverride: OTHER_UPSTREAM });
+    else expect(await statusOf(await request())).toBe(204);
+    childAllowed = false;
+    expect(await statusOf(await request())).toBe(403);
+    // Granting only the parent cannot authorize a request routed elsewhere.
+    bindHostedSessionProvider('owner-parent', parentProvider, providerId => providerId === parentProvider);
+    expect(await statusOf(await request())).toBe(403);
   });
 
   it('keeps requests without a route token on the existing routing (same-account unchanged)', async () => {
@@ -233,13 +401,13 @@ describe('guest provider route store', () => {
     expect(guestProviderRouteForToken(token)).toBeNull();
   });
 
-  it('matches models of the shared provider only, ignoring the 1M suffix', () => {
+  it('matches models of the shared provider only, ignoring the 1M suffix', async () => {
     installProviders();
-    expect(guestProviderOffersModel('shared-a', 'claude-code', 'shared-model')).toBe(true);
-    expect(guestProviderOffersModel('shared-a', 'claude-code', 'shared-model[1m]')).toBe(true);
-    expect(guestProviderOffersModel('shared-a', 'claude-code', 'other-model')).toBe(false);
-    expect(guestProviderOffersModel('shared-a', 'codex', 'shared-model')).toBe(false);
-    expect(guestProviderOffersModel('shared-a', 'claude-code', '')).toBe(false);
+    expect(await guestProviderOffersModel('shared-a', 'claude-code', 'shared-model')).toBe(true);
+    expect(await guestProviderOffersModel('shared-a', 'claude-code', 'shared-model[1m]')).toBe(true);
+    expect(await guestProviderOffersModel('shared-a', 'claude-code', 'other-model')).toBe(false);
+    expect(await guestProviderOffersModel('shared-a', 'codex', 'shared-model')).toBe(false);
+    expect(await guestProviderOffersModel('shared-a', 'claude-code', '')).toBe(false);
   });
 
   it('keeps only the shared provider\'s Codex routes for a guest host', () => {

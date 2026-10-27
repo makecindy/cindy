@@ -29,6 +29,10 @@ export function hasPluginTaskApproval(ghost: InstalledGhost | null | undefined):
   );
 }
 
+export function hasPluginTargetApproval(ghost: InstalledGhost | null | undefined): boolean {
+  return hasPluginTaskApproval(ghost) && ghost?.manifest.agent?.targets === true && ghost.targetCapabilityApproved === true;
+}
+
 /** Reuse Host permission UI; no plugin-supplied confirmation or manifest flag is authority. */
 export async function ensurePluginTaskApproval(
   id: string,
@@ -38,19 +42,21 @@ export async function ensurePluginTaskApproval(
     confirm(facts: GhostInstallConsentFacts): Promise<boolean>;
     approve(id: string, revision: string, isCurrent: () => boolean): Promise<boolean>;
   },
+  capability: 'tasks' | 'targets' = 'tasks',
 ): Promise<boolean> {
   const ghost = deps.getGhost(id);
   if (!deps.isCurrent()) return false;
-  if (hasPluginTaskApproval(ghost)) return true;
+  if ((capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval)(ghost)) return true;
   if (
     !ghost?.enabled ||
     ghost.manifest.agent?.tasks !== true ||
-    ghost.approval?.state !== 'approved'
+    ghost.approval?.state !== 'approved' ||
+    (capability === 'targets' && (!hasPluginTaskApproval(ghost) || ghost.manifest.agent.targets !== true))
   )
     return false;
   const revision = ghost.approval.revision;
   const permissions = ghostPermissionItems(ghost.manifest).filter((item) => item.kind !== 'tool');
-  const added = permissions.filter((item) => item.key === 'agent:tasks');
+  const added = permissions.filter((item) => item.key === `agent:${capability}`);
   if (added.length !== 1) return false;
   const confirmed = await deps.confirm({
     kind: 'update',

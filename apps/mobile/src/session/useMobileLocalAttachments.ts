@@ -94,6 +94,7 @@ async function deleteLocalUris(uris: readonly string[]): Promise<void> {
 
 export interface UseMobileLocalAttachmentsResult {
   beginOutboxAttachmentHandoff: () => Promise<ReturnType<MobileLocalAttachmentUploadController['beginHandoff']>>;
+  insertUploadedAttachment: (current: RemoteSerializedAttachment[], attachment: RemoteSerializedAttachment) => RemoteSerializedAttachment[];
   getUploadedSource: (id: string) => MobileLocalAttachmentUploadCandidate | undefined;
   /** Resolve a tray upload to its delivered attachment without retaining temporary URIs. */
   getUploadedAttachmentId: (localId: string) => string | undefined;
@@ -339,13 +340,10 @@ export function useMobileLocalAttachments(
         onAbandoned: undefined, onConsumed: undefined,
       });
       optionsRef.current.onUploaded(attachment, deliveredCandidate, localId);
-      if (candidate.cleanupLocalUris) {
-        // 只有持久缩略图已经接管 composer / sent-message 预览后才删源文件；
-        // 注册失败时保留到页面卸载，不能让已上传附件立刻变成坏图。
-        if (deliveredCandidate.uri !== candidate.uri) {
-          // 附件已交给 composer/outbox，清理失败不能再把成功翻成上传失败。
-          void candidate.cleanupLocalUris(localUris).catch(() => undefined);
-        }
+      if (candidate.cleanupLocalUris && (candidate.kind === 'file' || deliveredCandidate.uri !== candidate.uri)) {
+        // Staging owns retry/send bytes. Images additionally require a replacement
+        // preview before deleting their source; ordinary files have no URI preview.
+        void candidate.cleanupLocalUris(localUris).catch(() => undefined);
       }
     },
     onFailed: (err, localId, candidate) => {
@@ -630,6 +628,18 @@ export function useMobileLocalAttachments(
           if (!(error instanceof Error) || error.message !== 'ATTACHMENT_DELIVERING') throw error;
         }
       }
+    },
+    insertUploadedAttachment: (current, attachment) => {
+      const order = uploadedSourcesRef.current.get(attachment.id)?.incomingShareOrder;
+      if (!order) return [...current, attachment];
+      let position = current.length;
+      for (let i = 0; i < current.length; i++) {
+        const other = uploadedSourcesRef.current.get(current[i].id)?.incomingShareOrder;
+        if (other?.batchId !== order.batchId) continue;
+        position = i + 1;
+        if (other.index > order.index) { position = i; break; }
+      }
+      return [...current.slice(0, position), attachment, ...current.slice(position)];
     },
     getUploadedSource: (id) => uploadedSourcesRef.current.get(id),
     getUploadedAttachmentId: (localId) => [...uploadedSourcesRef.current].find(([, source]) => source.localId === localId)?.[0],

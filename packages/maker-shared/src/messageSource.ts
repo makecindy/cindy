@@ -1,3 +1,4 @@
+export { forwardedRequestDisplayText } from './forwardedRequestDisplay.js';
 /**
  * 消息来源：界面标签与发给模型的来源说明共用的一份描述。
  *

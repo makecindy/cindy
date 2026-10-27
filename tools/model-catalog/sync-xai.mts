@@ -51,8 +51,11 @@ async function getJson(url: string, headers: Record<string, string> = {}) {
   catch { throw new Error(`Invalid JSON: ${url}`); }
 }
 try {
-  const catalogUrl = 'https://model-access.cindy.app/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1';
-  const baseline = parseCatalog(values.catalog ? await readJson(values.catalog) : await getJson(catalogUrl));
+  const catalogUrl = 'https://model-access.cindy.app/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1';
+  let baseline = parseCatalog(values.catalog ? await readJson(values.catalog) : await getJson(catalogUrl));
+  if (!values.catalog && (baseline.modelRegistry?.schemaVersion ?? 0) < 5) {
+    baseline = parseCatalog(await getJson(catalogUrl.replace('Version=6', 'Version=5')));
+  }
   let account: unknown;
   let details: unknown;
   if (offline) {

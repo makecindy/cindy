@@ -6,6 +6,7 @@
  */
 
 export type BrowserControlAction =
+  | 'recipeCommand'
   | 'doctor'
   | 'status'
   | 'start'
@@ -98,6 +99,8 @@ export interface BrowserActRequest {
 
 export interface BrowserControlRequest {
   action: BrowserControlAction;
+  /** Host-internal transport for bundled adapters; never exposed as an MCP action. */
+  recipeCommand?: { method: string; sessionId?: string; params?: Record<string, unknown> };
   /** Per-start proxy URL. Credentials are accepted only in-memory by the host. */
   proxyServer?: string;
   /** Public DNS patterns allowed for page navigation while proxyServer is active. */

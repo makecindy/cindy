@@ -704,6 +704,15 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
       .messages.find((m) => m.askUserRequestId === 'ask-other');
     expect(askMsg?.askUserStatus).toBe('answered'); // 与答题端一致,而非 expired
     expect(askMsg?.askUserAnswers).toEqual({ 'X?': 'A' });
+
+    // #7144: replaying a close through the real remote-push subscription must
+    // not hide the already answered history row. Pending expiry is tested below.
+    host.hostDismiss(s, 'ask-other', 'server_request_resolved');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.find(
+      (m) => m.askUserRequestId === 'ask-other',
+    )).toBe(askMsg);
+    expect(askMsg?.askUserStatus).toBe('answered');
   });
 
   it('对端 dismiss 但无 decision(真·放弃 / 老被控端)→ ask 仍标 expired(兜底)', async () => {

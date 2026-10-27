@@ -45,10 +45,16 @@ export function WechatBotSection({
   expanded,
   onToggle,
   companion,
+  host,
 }: {
   expanded: boolean;
   onToggle: () => void;
   companion?: { id: string; name: string };
+  /**
+   * Set when the teammate runs on another computer: its WeChat API. Authorizing opens a browser and
+   * scanning happens on that computer, so connecting stays there; assignment and release work from here.
+   */
+  host?: { name: string; api: Window['electronAPI']['wechatBot'] };
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -65,7 +71,7 @@ export function WechatBotSection({
     resetWorkingDirectory,
     setCompanion,
     isUpdatingCompanion,
-  } = useWechatBot();
+  } = useWechatBot(host?.api);
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
   const assigned = channelSettings?.companionBotId;
   const otherCompanion = !!companion && !!assigned && assigned !== companion.id;
@@ -235,18 +241,20 @@ export function WechatBotSection({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="lg"
-              loading={isAuthorizing}
-              type="button"
-              onClick={() => void handleAuthorize()}
-              disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
-              className="flex-1"
-            >
-              <RotateCw size={13} />
-              {t('settings.wechatBot.actions.rebind')}
-            </Button>
+            {host ? null : (
+              <Button
+                variant="secondary"
+                size="lg"
+                loading={isAuthorizing}
+                type="button"
+                onClick={() => void handleAuthorize()}
+                disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
+                className="flex-1"
+              >
+                <RotateCw size={13} />
+                {t('settings.wechatBot.actions.rebind')}
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="lg"
@@ -274,17 +282,23 @@ export function WechatBotSection({
               )}
             </p>
           </div>
-          <Button
-            variant="cta"
-            size="lg"
-            loading={isAuthorizing}
-            type="button"
-            onClick={() => void handleAuthorize()}
-            disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
-            className="w-full"
-          >
-            {t('settings.wechatBot.actions.connect')}
-          </Button>
+          {host ? (
+            <p className="text-12 leading-[1.6] text-[var(--settings-section-desc)]">
+              {t('bots.remoteSettings.finishOnHost', { device: host.name })}
+            </p>
+          ) : (
+            <Button
+              variant="cta"
+              size="lg"
+              loading={isAuthorizing}
+              type="button"
+              onClick={() => void handleAuthorize()}
+              disabled={isAuthorizing || isUpdatingCompanion || !channelSettings || disabledByPolicy}
+              className="w-full"
+            >
+              {t('settings.wechatBot.actions.connect')}
+            </Button>
+          )}
         </div>
       )}
     </ImChannelSettingsCard>

@@ -8,6 +8,8 @@
  */
 import {
   boundAgentReferenceText,
+  buildTodoReferenceHref,
+  parseTodoReferenceHref,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 import {
@@ -57,7 +59,7 @@ export interface ComposerQuoteNode {
 
 export interface ComposerMentionNode {
   type: 'mention';
-  kind: ComposerAtResourceItem['type'] | 'project';
+  kind: ComposerAtResourceItem['type'] | 'project' | 'todo';
   label: string;
   raw: string;
   /** Project references retain their decoded semantic location beside `raw`. */
@@ -386,6 +388,13 @@ export function slashCommandTextNode(commandName: string): ComposerTextNode {
   return { type: 'text', text: value, slashCommand: value };
 }
 
+/** One of the teammate's todos, quoted from its 近况 sheet (same wire as Desktop's todo chip). */
+export function todoReferenceComposerNode(input: { botId: string; todoId: string; title: string }): ComposerMentionNode {
+  const href = buildTodoReferenceHref(input.botId, input.todoId);
+  const label = input.title.trim() || 'Todo';
+  return { type: 'mention', kind: 'todo', label, raw: `[${label.replace(/([[\]\\])/g, '\\$1')}](${href})`, href };
+}
+
 export function sessionLinkComposerNode(input: {
   href: string;
   label: string;
@@ -584,6 +593,19 @@ export function serializeComposerDocument(document: ComposerDocument): Serialize
           ...(node.titled && node.label ? { title: node.label } : {}),
         });
       }
+    } else if (node.type === 'mention' && node.kind === 'todo' && node.href) {
+      const target = parseTodoReferenceHref(node.href);
+      if (target) {
+        agentReferences.push({
+          kind: 'todo',
+          start,
+          end: start + wire.length,
+          href: node.href,
+          botId: target.botId,
+          todoId: target.todoId,
+          title: node.label,
+        });
+      }
     } else if (
       node.type === 'mention'
       && node.kind === 'project'
@@ -690,6 +712,9 @@ function composerNodeFromAgentReference(
       workingDir: reference.workingDir,
     };
   }
+  if (reference.kind === 'todo') {
+    return { type: 'mention', kind: 'todo', label: reference.title, raw, href: reference.href };
+  }
   // Desktop-only live context and Plugin resources have no Mobile atom yet.
   // Preserve the exact wire span as editable text instead of miscasting it as
   // a project mention or dropping user-visible content.
@@ -772,7 +797,7 @@ function normalizeNode(node: ComposerNode): ComposerNode | null {
   if (node.type === 'mention') {
     if (
       typeof node.kind !== 'string'
-      || !['file', 'dir', 'agent', 'project'].includes(node.kind)
+      || !['file', 'dir', 'agent', 'project', 'todo'].includes(node.kind)
       || typeof node.raw !== 'string'
       || !node.raw
       || typeof node.label !== 'string'
@@ -793,6 +818,10 @@ function normalizeNode(node: ComposerNode): ComposerNode | null {
         href,
         workingDir: parsed.workingDir,
       };
+    }
+    if (node.kind === 'todo') {
+      if (typeof node.href !== 'string' || !parseTodoReferenceHref(node.href)) return null;
+      return { type: 'mention', kind: 'todo', raw: node.raw, label: node.label, href: node.href };
     }
     return { type: 'mention', kind: node.kind, raw: node.raw, label: node.label };
   }

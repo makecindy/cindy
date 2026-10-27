@@ -70,6 +70,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import type { WebBrowserState } from '../plugins/web-browser';
 import type { TabKindBodyProps } from '../types';
@@ -93,6 +94,7 @@ import {
   __resetGlobalTabsForTest,
   addGlobalPluginTab,
   getActiveGlobalTabId,
+  requestRevealSessionTab,
 } from '../globalTabs';
 import { __resetTabGroupsForTest, getTabGroup } from '../tabGroups';
 import { toast } from '@/lib/toast';
@@ -897,6 +899,47 @@ describe('RightSidebarShell empty state', () => {
     view.unmount();
   });
 
+  // #6861:冷启动归属未知不能收起插件任务页或改写恢复的选择;正文只在确认本机后加载。
+  // 真实 Shell → 可用性投影 → plugin-task → GhostWebviewBody;旧覆盖只测已解析的清单。
+  // 最小输入:持久化任务页 + undefined→null/远端;另带普通页检测选中位丢失。tier:unit。
+  it.each([
+    { device: null, mixed: false }, { device: 'other-device', mixed: false },
+    { device: null, mixed: true }, { device: 'other-device', mixed: true },
+  ])('preserves plugin task selection until ownership resolves ($device, mixed=$mixed)', async ({ device, mixed }) => {
+    installedGhostsMock.list = [{
+      manifest: { id: 'alpha', name: 'Alpha', taskView: { html: 'task.html', title: 'Task Page' } },
+      enabled: true, dir: '/tmp/alpha',
+    }];
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        ...(mixed ? [{ id: 'files', kind: 'file-browser', state: null }] : []),
+        { id: 'plugin-task', kind: 'plugin-task', state: { instanceId: 'alpha' } },
+      ], activeTabId: 'plugin-task',
+    });
+    const props = {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true, onAllTabsClosed,
+    };
+    const view = render(createElement(RightSidebarShell, props));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    expect(screen.getByText('Task Page')).toBeTruthy();
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    expect(document.querySelector('webview')).toBeNull();
+    view.rerender(createElement(RightSidebarShell, { ...props, deviceLinkDeviceId: device }));
+    if (device === null) {
+      await waitFor(() => expect(document.querySelector('webview')?.getAttribute('src')).toBe('cindy-ghost://alpha/task.html?session=s1'));
+      expect(getBucket('s1').activeTabId).toBe('plugin-task');
+      expect(onAllTabsClosed).not.toHaveBeenCalled();
+      expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(screen.queryByText('Task Page')).toBeNull());
+      expect(document.querySelector('webview')).toBeNull();
+      expect(onAllTabsClosed).toHaveBeenCalledTimes(mixed ? 0 : 1);
+    }
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+  });
+
   it('keeps a persisted Subagents-only sidebar intact while Pi eligibility is loading', async () => {
     const onAllTabsClosed = vi.fn();
     tabsIpc.list.mockResolvedValueOnce({
@@ -1669,6 +1712,61 @@ describe('RightSidebarShell empty state', () => {
   // - 现有覆盖缺口:相邻用例只覆盖可用性过滤(subagents / retired),没有跨窗口归属。
   // - 最小失败输入:两页签会话 + 镜像标记 active 页签已弹出。
   // - tier:unit(jsdom,进程内 store 与镜像,无 IPC)。
+  // #6861 同族回归:弹出请求不得清空主窗全局选择;归还后同一请求才露出任务页。
+  // 真实 Shell + 页签镜像交错弹出/归还,补齐独立窗口选中用例缺少的主窗半边;unit。
+  it('reveals a task tab only while the attached shell hosts it', async () => {
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html', title: 'Alpha Panel' } }, enabled: true },
+    ];
+    const globalTab = addGlobalPluginTab('alpha')!;
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-web', kind: 'web-browser', state: null },
+      ],
+      activeTabId: 'tab-files',
+    });
+    __setSidebarTabWindowsStateForTest({
+      'tab-web': { windowId: 'w1', sessionId: 's1', open: true },
+    });
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true,
+      unifiedTopbar: true,
+    }));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    fireEvent.click(screen.getByText('rightSidebar.tabs.kinds.pluginView'));
+    expect(getActiveGlobalTabId()).toBe(globalTab.id);
+    act(() => requestRevealSessionTab('s1', 'tab-web'));
+    expect(getActiveGlobalTabId()).toBe(globalTab.id);
+    act(() => __setSidebarTabWindowsStateForTest({}));
+    await waitFor(() => expect(document.querySelector('[data-sortable-id="tab-web"]')).toBeTruthy());
+    act(() => requestRevealSessionTab('s1', 'tab-web'));
+    expect(getActiveGlobalTabId()).toBeNull();
+  });
+
+  // 独立窗口多页签时，main 转来的 reveal 必须改变窗口内部激活位，不写主窗的任务桶。
+  it('selects only hosted tabs when a popped-out window receives a reveal request', async () => {
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-web', kind: 'web-browser', state: null },
+      ],
+      activeTabId: 'tab-files',
+    });
+    const selected = vi.fn();
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true,
+      hostedTabIds: new Set(['tab-files', 'tab-web']), onActiveTabChange: selected,
+    }));
+    await waitFor(() => expect(selected).toHaveBeenLastCalledWith('tab-web'));
+    tabsIpc.setActive.mockClear();
+    act(() => requestRevealSessionTab('s1', 'tab-files'));
+    await waitFor(() => expect(selected).toHaveBeenLastCalledWith('tab-files'));
+    act(() => requestRevealSessionTab('s1', 'foreign-tab'));
+    expect(selected).toHaveBeenLastCalledWith('tab-files');
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+  });
+
   it('hides popped-out tabs from the sidebar and keeps the solo window on its own tab', async () => {
     registerTabKind({
       kind: 'terminal',

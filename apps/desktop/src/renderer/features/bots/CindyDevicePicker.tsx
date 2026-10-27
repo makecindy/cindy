@@ -1,18 +1,11 @@
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Select } from '@/components/ui/select';
-import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { cn } from '@/lib/utils';
-import { useBotProfiles, useBotUnreadCounts } from './botStore';
-import { useRemoteBots } from './useRemoteBots';
-import { useCompanionCloud } from './companionCloudStore';
-import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
-import { cindyDeviceKey, cindyDeviceOptions, type CindyDeviceOption } from './cindyDeviceRoster';
+import type { CindyDeviceOption } from './cindyDeviceRoster';
 import { formatBotUnreadBadge } from './botListDisplay';
 import { isBotKnownOffline } from './BotConnectionStatus';
-import type { BotChatIdentity } from './BotSessionContentHeader';
 
-/** Shared device menu for the single sidebar entry and the chat header. */
+/** Device menu for the single sidebar Cindy entry (the chat header lists computers in 近况). */
 export function CindyDevicePicker({
   options,
   current,
@@ -81,40 +74,6 @@ export function CindyDevicePicker({
         const option = options.find((candidate) => candidate.key === key);
         if (option && option.key !== current.key) onSelect(option);
       }}
-    />
-  );
-}
-
-export function CindyHeaderDevicePicker({ bot }: { bot: BotChatIdentity }) {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const cloud = useCompanionCloud();
-  // A demoted local Cindy is not the "local" option: she runs on her main computer.
-  const bots = withoutCloudCompanions(withoutShadowedBots(useBotProfiles(), cloud), cloud);
-  // Copies other computers still list for a Cindy that runs elsewhere are not choices either.
-  const remoteBots = withoutCloudCompanions(cloudRemoteBots(cloud, useRemoteBots()), cloud);
-  const devices = useDeviceLinkDeviceList();
-  const unread = useBotUnreadCounts();
-  const options = cindyDeviceOptions(
-    bots,
-    remoteBots,
-    devices ?? [],
-    unread,
-    t('bots.devicePicker.local'),
-  );
-  const current = options.find((option) => option.key === cindyDeviceKey(bot));
-  if (!current || options.length < 2)
-    return bot.deviceId ? (
-      <div className="ml-auto flex shrink-0 items-center gap-1">
-        <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>
-      </div>
-    ) : null;
-  return (
-    <CindyDevicePicker
-      options={options}
-      current={current}
-      onSelect={(option) => navigate(option.route)}
-      className="max-w-44 shrink"
     />
   );
 }

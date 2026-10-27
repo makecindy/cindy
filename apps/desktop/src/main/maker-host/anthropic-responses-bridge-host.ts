@@ -2,6 +2,8 @@ import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
 import { getSessionFastMode } from './session-effort-store.js';
+import { standardSpeedRequest } from '@cindy/maker-core';
+import { subscriptionRequestAllowsFast } from './subscription-fast-request-policy.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 anthropic-responses-bridge 装配 ——
@@ -821,6 +823,15 @@ export function getPiNativeSubscriptionHandler(
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
 
+      // Native Pi sends each tool-loop request here; recheck after auth/context awaits.
+      if (isOpenAiSubscriptionProviderId(providerId) && !subscriptionRequestAllowsFast(sessionId, providerId)) {
+        const bytes = contentEncoding?.toLowerCase() === 'zstd' ? await zstdDecompressAsync(outboundBody) : outboundBody;
+        const standard = standardSpeedRequest(JSON.parse(bytes.toString('utf8')));
+        outboundBody = Buffer.from(JSON.stringify(standard));
+        delete headers['content-encoding'];
+      }
+
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       const response = await deps.fetch(upstream.url, {
         method: 'POST',
         headers,

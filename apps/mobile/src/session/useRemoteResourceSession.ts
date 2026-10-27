@@ -10,17 +10,19 @@ import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailabil
 import { createRemoteReadRecovery } from '@/device-link/remoteReadRecovery';
 import { createRemoteSyncCoordinator, retryRemoteSyncRead, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
 import { isAutoRecoveringRemoteError, formatRemoteError } from '@/device-link/remoteStatus';
-import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
+import { forgetRemoteResource, markRemoteResourceRead } from '@/device-link/remoteResourceCache';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { RemoteSession } from './types';
+import { useCachedCompanionSession } from './useCachedCompanionSession';
 
 /** Follow a companion's current host-owned task on focus/reconnect, retaining its permanent identity. */
 export function useRemoteResourceSession(deviceId: string, deviceName: string, sessionId: string, canMarkRead: boolean, metadataVerified = false) {
   const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string; openSearch?: string; resourceHistorySessionId?: string }>();
-  const collectionId = typeof params.resourceCollectionId === 'string' ? params.resourceCollectionId : '';
-  const resourceId = typeof params.resourceId === 'string' ? params.resourceId : '';
-  const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : '';
+  const savedCompanion = useCachedCompanionSession(deviceId, sessionId);
+  const collectionId = typeof params.resourceCollectionId === 'string' ? params.resourceCollectionId : savedCompanion ? 'teammates' : '';
+  const resourceId = typeof params.resourceId === 'string' ? params.resourceId : savedCompanion?.ref.id ?? '';
+  const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : savedCompanion?.ref.kind ?? '';
   const historyEntry = params.openSearch === '1';
   const transcriptEntry = params.resourceHistorySessionId === sessionId;
   const { invoke, openLink, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
@@ -39,7 +41,8 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
   const retry = useCallback(() => setAttempt(value => value + 1), []);
   const cached = readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, collectionId)
     .find(row => row.host.deviceId === deviceId && row.item.ref.id === resourceId && row.item.ref.kind === resourceKind)?.item;
-  const resource = display?.identity === identity ? display.resource : cached ?? null;
+  const savedMatches = savedCompanion?.ref.id === resourceId && savedCompanion.ref.kind === resourceKind && collectionId === 'teammates';
+  const resource = display?.identity === identity ? display.resource : cached ?? (savedMatches ? savedCompanion : null);
   const stage = (display?.identity === identity
     ? display.resource.blocks?.find(block => block.id === 'invitation' && block.primitive === 'status')?.data as { stage?: string } | undefined
     : undefined)?.stage;
@@ -122,8 +125,10 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
         setFailure({ binding, message: formatRemoteError(error) });
         recovery.failed(error);
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
-        if (code === 'NOT_FOUND' || /\[NOT_FOUND\]/.test(String(error))) {
+        const denied = ['NOT_FOUND', 'FORBIDDEN', 'PERMISSION_DENIED', 'ACCESS_REVOKED', 'DEVICE_REVOKED'];
+        if (denied.includes(String(code)) || denied.some(value => String(error).includes(`[${value}]`))) {
           setDisplay(null);
+          if (user?.id) void forgetRemoteResource(user.id, resourceId);
           // A removed/hidden resource must leave the cached task view immediately.
           // The resolver displays the existing unavailable/retry state.
           router.replace({ pathname: '/resources/[collectionId]/[resourceId]', params: {

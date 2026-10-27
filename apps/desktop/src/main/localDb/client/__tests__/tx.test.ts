@@ -251,6 +251,7 @@ interface TestSessionRow {
   codexHistoryHasProductPrompt: boolean | null;
   parentSessionId: string | null;
   forkedAtMessageId: string | null;
+  agentDeviceId?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -2132,6 +2133,7 @@ describe('db worker tx handlers', () => {
           parentSessionId: 'src',
           forkedAtMessageId: 'c2',
           providerId: 'xd',
+          agentDeviceId: 'provider-computer',
           contextWindow: 100000,
           contextWindowRuntime: 100000,
         }),
@@ -2146,7 +2148,7 @@ describe('db worker tx handlers', () => {
       expect(result).toEqual({ messageCount: 1 });
       await expect(
         client.queryOne(
-          'SELECT working_dir, parent_session_id, forked_at_message_id, provider_id, context_window, context_window_runtime FROM sessions WHERE id = ?',
+          'SELECT working_dir, parent_session_id, forked_at_message_id, provider_id, agent_device_id, context_window, context_window_runtime FROM sessions WHERE id = ?',
           ['forked'],
         ),
       ).resolves.toEqual({
@@ -2154,6 +2156,7 @@ describe('db worker tx handlers', () => {
         parent_session_id: 'src',
         forked_at_message_id: 'c2',
         provider_id: 'xd',
+        agent_device_id: 'provider-computer',
         context_window: 100000,
         context_window_runtime: 100000,
       });
