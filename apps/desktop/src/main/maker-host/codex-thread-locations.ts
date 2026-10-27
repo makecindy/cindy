@@ -8,6 +8,8 @@ interface ThreadLocation {
   sqliteHome?: string;
 }
 
+type NormalizeResumeLocation = (threadId: string, rolloutPath: string, sqliteHome: string) => string;
+
 /** A native thread has one durable rollout, regardless of the account resuming it. */
 export class CodexThreadLocations {
   constructor(private readonly directory: string) {}
@@ -61,17 +63,19 @@ export class CodexThreadLocations {
   async prepareResume(
     threadId: string,
     prepareLegacy: (threadId: string) => Promise<string | undefined>,
+    normalize?: NormalizeResumeLocation,
   ): Promise<string | undefined> {
     const value = await this.readLocation(threadId);
     if (!value) return prepareLegacy(threadId);
-    return await this.rolloutExists(value.path) ? value.path : undefined;
+    if (!await this.rolloutExists(value.path)) return;
+    return (await this.normalizeResumeLocation(value, normalize)).path;
   }
 
   async readStorage(
     threadId: string,
-    legacy?: { home: string; prepare: (threadId: string) => Promise<string | undefined> },
+    legacy?: { home: string; prepare: (threadId: string) => Promise<string | undefined>; normalize?: NormalizeResumeLocation },
   ): Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined> {
-    const value = await this.readLocation(threadId);
+    let value = await this.readLocation(threadId);
     if (!value) {
       // Pre-multi-account threads have no location record. Resolve their native
       // storage before an account-specific host starts, without moving history.
@@ -80,6 +84,7 @@ export class CodexThreadLocations {
       await this.record(threadId, legacyRollout, legacy.home);
       return { historyHome: historyHomeForRollout(legacyRollout), sqliteHome: legacy.home, rolloutPath: legacyRollout };
     }
+    value = await this.normalizeResumeLocation(value, legacy?.normalize);
     const historyHome = historyHomeForRollout(value.path);
     // thread/start returns a future path before the first turn materializes it.
     // Keep storage ownership even then, so native resume can distinguish an unused
@@ -89,6 +94,18 @@ export class CodexThreadLocations {
       sqliteHome: value.sqliteHome ?? historyHome,
       rolloutPath: value.path,
     };
+  }
+
+  private async normalizeResumeLocation(
+    value: ThreadLocation,
+    normalize?: NormalizeResumeLocation,
+  ): Promise<ThreadLocation> {
+    if (!normalize) return value;
+    const sqliteHome = value.sqliteHome ?? historyHomeForRollout(value.path);
+    const prepared = normalize(value.threadId, value.path, sqliteHome);
+    if (prepared === value.path) return value;
+    await this.record(value.threadId, prepared, sqliteHome);
+    return { ...value, path: prepared, sqliteHome };
   }
 
   async record(threadId: string, rolloutPath: string, sqliteHome?: string): Promise<void> {

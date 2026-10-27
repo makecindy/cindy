@@ -380,7 +380,7 @@ import {
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import { attachAgentsToMakerMemory, createDesktopMakerMemoryManager } from './maker-memory-host.js';
 import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
-import { prepareExternalCodexSessionForResume, readCodexThreadStorageForArchive } from './codex-local-sessions.js';
+import { normalizeAdoptedCodexRolloutForResume, prepareExternalCodexSessionForResume, readCodexThreadStorageForArchive } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
@@ -2247,7 +2247,9 @@ export function getMaker(): Maker {
       unregisterCodexMcpThreadContext,
       prepareCodexResumeSession: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
-        return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
+        return ownerCodexThreadLocations().prepareResume(
+          threadId, prepareExternalCodexSessionForResume, normalizeAdoptedCodexRolloutForResume,
+        );
       },
       resolveCodexThreadStorage: async (threadId, options) => {
         if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageForArchive(threadId) : undefined;
@@ -2257,6 +2259,7 @@ export function getMaker(): Maker {
           : await ownerCodexThreadLocations().readStorage(threadId, {
           home: getCodexHome(),
           prepare: prepareExternalCodexSessionForResume,
+          normalize: normalizeAdoptedCodexRolloutForResume,
         });
         if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex history owner changed during preparation');
         return storage;

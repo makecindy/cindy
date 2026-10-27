@@ -39,10 +39,12 @@ import {
   parseCodexRolloutMessageLine,
   scanExternalCodexSessions,
   prepareExternalCodexSessionForResume,
+  normalizeAdoptedCodexRolloutForResume,
   readCodexThreadStorageForArchive,
   dumpCodexThreadStateRows,
   classifyCodexHistoryOversized,
 } from '../maker-host/codex-local-sessions';
+import { CodexThreadLocations } from '../maker-host/codex-thread-locations';
 import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import * as schema from '../localDb/schema';
@@ -1506,6 +1508,118 @@ describe('importExternalCodexMessagesForSession', () => {
 describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => {
   // 桌面端 codex-home = app.getPath('userData')/codex-home(见 getDesktopCodexHome)。
   const desktopHome = () => path.join(targetUserData, 'codex-home');
+
+  // #6736: prepareExternalCodexSessionForResume must return a filename accepted
+  // by app-server's paginated thread/resume, including previously adopted state.
+  // Existing adoption fixtures use abbreviated dates and never enforce that RPC
+  // contract. Minimal unit input: a canonical external rollout or its old private
+  // adopted alias plus one thread row; all files live in the existing temp fixture.
+  it.each(['external', 'previously-adopted', 'repeatedly-adopted'])('returns a canonical resume path for %s history (#6736)', async (kind) => {
+    const name = `rollout-2026-10-22T01-00-00-${threadId}.jsonl`;
+    const sourceHome = kind === 'external' ? externalHome : desktopHome();
+    const sourcePath = path.join(sourceHome, 'sessions', kind === 'external' ? name
+      : kind === 'repeatedly-adopted' ? `rollout-cindy-adopted-2-rollout-cindy-adopted-${name}`
+        : `rollout-cindy-adopted-${name}`);
+    const contents = `${JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd: '/tmp/project' } })}\n`;
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, contents);
+    const sourceDb = createStateDb(sourceHome);
+    insertThread(sourceDb, threadId, sourcePath, { updatedAt: 2_000 });
+    const targetDb = kind === 'external' ? createStateDb(desktopHome()) : sourceDb;
+
+    const prepared = await prepareExternalCodexSessionForResume(threadId);
+    expect(path.basename(prepared!)).toBe(name);
+    expect(fs.readFileSync(prepared!, 'utf8')).toBe(contents);
+    const db = new Database(targetDb, { readonly: true });
+    expect(db.prepare('SELECT rollout_path AS path FROM threads WHERE id = ?').get(threadId)).toEqual({ path: prepared });
+    db.close();
+    expect(fs.readFileSync(sourcePath, 'utf8')).toBe(contents);
+    if (kind === 'external') expect(fs.statSync(prepared!).ino).not.toBe(fs.statSync(sourcePath).ino);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(prepared);
+  });
+
+  // The multi-account index bypasses legacy preparation. Repair must use the
+  // indexed original database even when the currently selected HOME differs.
+  it.each(['resume', 'storage'])('repairs indexed adopted history through %s without changing owners (#6736)', async (entry) => {
+    const home = path.join(rootDir, 'account-a');
+    const sqliteHome = path.join(rootDir, 'account-a-state');
+    const name = `rollout-2026-10-22T01-00-00-${threadId}.jsonl`;
+    const adopted = path.join(home, 'sessions', `rollout-cindy-adopted-${name}`);
+    const canonical = path.join(home, 'sessions', name);
+    fs.mkdirSync(path.dirname(adopted), { recursive: true });
+    fs.writeFileSync(adopted, 'authoritative history\n');
+    const dbPath = createStateDb(sqliteHome);
+    insertThread(dbPath, threadId, adopted, { updatedAt: 2_000 });
+    const locations = new CodexThreadLocations(path.join(rootDir, 'owner-index'));
+    await locations.record(threadId, adopted, sqliteHome);
+    const legacy = vi.fn(async () => { throw new Error('must not search another HOME'); });
+    if (entry === 'resume') {
+      expect(await locations.prepareResume(threadId, legacy, normalizeAdoptedCodexRolloutForResume)).toBe(canonical);
+    } else {
+      expect(await locations.readStorage(threadId, { home: desktopHome(), prepare: legacy, normalize: normalizeAdoptedCodexRolloutForResume }))
+        .toEqual({ historyHome: home, sqliteHome, rolloutPath: canonical });
+    }
+    expect(legacy).not.toHaveBeenCalled();
+    expect(await locations.read(threadId)).toBe(canonical);
+    expect(await locations.readStorage(threadId)).toEqual({ historyHome: home, sqliteHome, rolloutPath: canonical });
+    fs.appendFileSync(adopted, 'late native append\n');
+    expect(fs.readFileSync(canonical, 'utf8')).toBe('authoritative history\nlate native append\n');
+  });
+
+  it('preserves both histories when canonical publication conflicts with an adopted inode (#6736)', () => {
+    const home = desktopHome();
+    const name = `rollout-2026-10-22T01-00-00-${threadId}.jsonl`;
+    const adopted = path.join(home, 'sessions', `rollout-cindy-adopted-${name}`);
+    const canonical = path.join(home, 'sessions', name);
+    fs.mkdirSync(path.dirname(adopted), { recursive: true });
+    fs.writeFileSync(adopted, 'adopted history');
+    fs.writeFileSync(canonical, 'different native history');
+    const dbPath = createStateDb(home);
+    insertThread(dbPath, threadId, adopted, { updatedAt: 2_000 });
+    expect(() => normalizeAdoptedCodexRolloutForResume(threadId, adopted, home)).toThrow(/conflicts with adopted history/);
+    expect(fs.readFileSync(adopted, 'utf8')).toBe('adopted history');
+    expect(fs.readFileSync(canonical, 'utf8')).toBe('different native history');
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.prepare('SELECT rollout_path AS path FROM threads WHERE id = ?').get(threadId)).toEqual({ path: adopted });
+    db.close();
+  });
+
+  // Greptile P1: an existing native writer may append between the SQLite CAS
+  // checks. Renaming that same inode must retain the append, not block resume.
+  // Unit gap: prior tests appended only after prepareResume had already returned.
+  it('keeps a native append during adopted-name state handoff (#6736)', () => {
+    const home = desktopHome();
+    const name = `rollout-2026-10-22T01-00-00-${threadId}.jsonl`;
+    const adopted = path.join(home, 'sessions', `rollout-cindy-adopted-${name}`);
+    const canonical = path.join(home, 'sessions', name);
+    fs.mkdirSync(path.dirname(adopted), { recursive: true });
+    fs.writeFileSync(adopted, 'authoritative history\n');
+    const dbPath = createStateDb(home);
+    insertThread(dbPath, threadId, adopted, { updatedAt: 2_000 });
+    const prepare = Database.prototype.prepare;
+    let appended = false;
+    const prepareSpy = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (this: Database.Database, ...args) {
+      const statement = prepare.apply(this, args);
+      if (!appended && args[0] === 'UPDATE threads SET rollout_path = ? WHERE id = ? AND rollout_path = ?') {
+        appended = true;
+        fs.appendFileSync(adopted, 'late native append\n');
+      }
+      return statement;
+    });
+
+    try {
+      expect(normalizeAdoptedCodexRolloutForResume(threadId, adopted, home)).toBe(canonical);
+      expect(appended).toBe(true);
+      expect(fs.readFileSync(canonical, 'utf8')).toBe('authoritative history\nlate native append\n');
+      expect(fs.statSync(canonical).ino).toBe(fs.statSync(adopted).ino);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.prepare('SELECT rollout_path AS path FROM threads WHERE id = ?').get(threadId)).toEqual({ path: canonical });
+    db.close();
+  });
+
 
   /** 在桌面端 localDb 插一条 codex 会话(sdk_session_id=threadId)。 */
   function insertLocalCodexSession(
@@ -4242,7 +4356,10 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     }
 
     expect(filledAfterCommit).toBe(true);
-    expect(prepared).toBe(publication);
+    // #6736 exposes the committed private inode under its canonical RPC name;
+    // the late writer remains on the separately preserved original inode.
+    expect(path.basename(prepared!)).toBe(path.basename(sourceRollout));
+    expect(fs.statSync(prepared!).ino).toBe(fs.statSync(publication!).ino);
     expect(fs.existsSync(primary)).toBe(false);
     expect(fs.readFileSync(preservedPrimary!, 'utf-8')).toBe(nativeContents);
     const targetDb = new Database(targetDbPath, { readonly: true });
@@ -4250,8 +4367,8 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
       .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
       .get(threadId) as { rolloutPath: string };
     targetDb.close();
-    expect(targetRow.rolloutPath).toBe(publication);
-    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(publication);
+    expect(targetRow.rolloutPath).toBe(prepared);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(prepared);
     expect(fs.readFileSync(publication!, 'utf-8')).toBe(sourceContents);
   });
 
@@ -4908,7 +5025,11 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
       .get(threadId) as { rolloutPath: string };
     targetDb.close();
     expect(path.resolve(targetRow.rolloutPath)).toBe(adoptedPath);
-    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(adoptedPath);
+    // #6736 cannot return the non-canonical alias to paginated resume. A second
+    // canonical inode remains ambiguous, so retain both histories and fail closed.
+    await expect(prepareExternalCodexSessionForResume(threadId)).rejects.toThrow(
+      /canonical rollout namespace changed during recovery handoff/,
+    );
   });
 
   it('keeps a state-less external adoption from publishing beside a new native canonical', async () => {

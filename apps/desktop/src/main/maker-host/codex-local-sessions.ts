@@ -455,6 +455,79 @@ export function readCodexThreadStorageForArchive(threadId: string): {
 
 /** Ensure a Codex thread from another local CODEX_HOME is visible to xdt-maker's app-server. */
 export async function prepareExternalCodexSessionForResume(threadId: string): Promise<string | undefined> {
+  const targetHome = getDesktopCodexHome();
+  const prepared = await prepareExternalCodexSessionStorage(threadId);
+  if (!prepared) return prepared;
+  // Keep adoption hidden until the existing guarded transaction has selected
+  // its private inode. Newer app-server paginated resume also validates the
+  // basename even when a state row points directly at that inode (#6736).
+  if (!canonicalAdoptedRolloutName(prepared, threadId)) return prepared;
+  if (!samePath(targetHome, getDesktopCodexHome())) {
+    throw resumePreparationBlocked(threadId, 'the private Codex home changed during adoption');
+  }
+  return normalizeAdoptedCodexRolloutForResume(threadId, prepared, targetHome);
+}
+
+/** Re-adoption can wrap an already adopted basename; both resume entries agree. */
+function canonicalAdoptedRolloutName(prepared: string, threadId: string): string | undefined {
+  let name = path.basename(prepared);
+  let adopted = false;
+  for (;;) {
+    const wrapped = name.match(/^rollout-cindy-adopted(?:-\d+)?-(rollout-.+)$/)?.[1];
+    if (!wrapped) break;
+    adopted = true;
+    name = wrapped;
+  }
+  return adopted && isCanonicalCodexRolloutPath(name, threadId) ? name : undefined;
+}
+
+/** Normalize only the exact indexed private history, never another account's HOME. */
+export function normalizeAdoptedCodexRolloutForResume(
+  threadId: string,
+  prepared: string,
+  sqliteHome: string,
+): string {
+  const adoptedName = canonicalAdoptedRolloutName(prepared, threadId);
+  if (!adoptedName) return prepared;
+  const targetHome = historyHomeForRollout(prepared);
+  const targetDbPath = findLatestStateDb(sqliteHome);
+  const snapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, prepared, true);
+  if (!targetDbPath || !snapshot) {
+    throw resumePreparationBlocked(threadId, 'the adopted private rollout changed before canonical handoff');
+  }
+  const canonicalPath = path.join(path.dirname(prepared), adoptedName);
+  assertNoUnexpectedCanonicalRollouts(threadId, targetHome, [canonicalPath]);
+  // Publish another name for the SAME private inode, never copy authoritative
+  // private history: a writer already using the adopted path must stay attached.
+  // Keep the old name as a recoverable alias, including after a crash before CAS.
+  const published = publishStagedFullRolloutAtCanonical(
+    threadId, targetHome, { path: prepared, created: false, snapshot, allowNativeAppend: true }, canonicalPath,
+  );
+  if (!published.staged || !sameRegularFileIdentity(prepared, canonicalPath)) {
+    throw resumePreparationBlocked(threadId, 'a different canonical rollout conflicts with adopted history');
+  }
+  const canonicalSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, canonicalPath, true);
+  if (!canonicalSnapshot || canonicalSnapshot.size < snapshot.size) {
+    throw resumePreparationBlocked(threadId, 'the canonical adopted rollout changed before state handoff');
+  }
+  const guard = () => {
+    assertSoleCanonicalPath(threadId, targetHome, canonicalPath, true);
+    if (!sameRegularFileIdentity(prepared, canonicalPath)) {
+      throw resumePreparationBlocked(threadId, 'the adopted rollout alias changed during canonical handoff');
+    }
+  };
+  if (!handoffThreadToCopiedRollout(
+    targetDbPath, threadId, targetHome, prepared,
+    { path: canonicalPath, created: published.created, snapshot: canonicalSnapshot, allowNativeAppend: true }, guard,
+  )) {
+    throw resumePreparationBlocked(threadId, 'the adopted rollout pointer changed during canonical handoff');
+  }
+  return acceptStateBackedWinnerAfterRecovery(
+    targetDbPath, threadId, targetHome, canonicalPath, { beforeReturn: guard },
+  );
+}
+
+async function prepareExternalCodexSessionStorage(threadId: string): Promise<string | undefined> {
   if (!isLikelyThreadId(threadId)) return;
   const targetHome = getDesktopCodexHome();
   const targetDbPath = findLatestStateDb(targetHome);
@@ -1432,16 +1505,22 @@ interface PrivateRolloutPublication {
   path: string;
   created: boolean;
   snapshot: NonEmptyRolloutSnapshot;
+  // Only same-inode private aliases may advance while a native writer appends.
+  // External copies must remain byte/stat stable through their publication.
+  allowNativeAppend?: boolean;
 }
 
 function readPrivateNonEmptyRolloutSnapshot(
   targetHome: string,
   candidate: string,
+  allowNativeAppend = false,
 ): NonEmptyRolloutSnapshot | null {
   if (!isPathInside(targetHome, candidate)) return null;
   const snapshot = readNonEmptyRolloutSnapshot(candidate);
   return snapshot
-    && nonEmptyRolloutStillMatches(candidate, snapshot)
+    && (allowNativeAppend
+      ? regularFileIdentityMatchesSnapshot(candidate, snapshot)
+      : nonEmptyRolloutStillMatches(candidate, snapshot))
     && isPathInside(targetHome, candidate)
     ? snapshot
     : null;
@@ -1452,7 +1531,7 @@ function privateRolloutPublicationOwnsPath(
   publication: PrivateRolloutPublication,
   candidatePath = publication.path,
 ): boolean {
-  const current = readPrivateNonEmptyRolloutSnapshot(targetHome, candidatePath);
+  const current = readPrivateNonEmptyRolloutSnapshot(targetHome, candidatePath, publication.allowNativeAppend);
   return !!current
     && current.dev === publication.snapshot.dev
     && current.ino === publication.snapshot.ino;
@@ -1462,13 +1541,14 @@ function privateRolloutPublicationStillMatches(
   targetHome: string,
   publication: PrivateRolloutPublication,
 ): boolean {
-  const current = readPrivateNonEmptyRolloutSnapshot(targetHome, publication.path);
-  return !!current
-    && current.dev === publication.snapshot.dev
-    && current.ino === publication.snapshot.ino
-    && current.size === publication.snapshot.size
-    // Removing the temporary hard-link after publication legitimately changes
-    // ctime/link-count on the same immutable inode; mtime still binds content.
+  const current = readPrivateNonEmptyRolloutSnapshot(targetHome, publication.path, publication.allowNativeAppend);
+  if (!current
+    || current.dev !== publication.snapshot.dev
+    || current.ino !== publication.snapshot.ino) return false;
+  if (publication.allowNativeAppend) return current.size >= publication.snapshot.size;
+  // Removing the temporary hard-link after publication legitimately changes
+  // ctime/link-count on the same immutable inode; mtime still binds content.
+  return current.size === publication.snapshot.size
     && current.mtimeMs === publication.snapshot.mtimeMs;
 }
 
