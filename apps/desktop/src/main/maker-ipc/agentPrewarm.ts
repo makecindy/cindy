@@ -1,6 +1,6 @@
 /**
- * Agent 预热：用户在任务输入框开始打字时，提前启动这个任务的 Agent 进程，把
- * 1–4 秒的冷启动藏进打字时间里。本机任务与远程控制端的任务走同一入口。
+ * Agent 预热：用户在任务输入框开始输入（打字、粘贴、开始语音输入）时，提前启动
+ * 这个任务的 Agent 进程，把 1–4 秒的冷启动藏进输入时间里。本机任务与远程控制端的任务走同一入口。
  *
  * 只管理「预热出来、还没被真正发送用过」的进程：
  * - 同时最多保留 MAX_WARM 个，超出时关掉最早的那个；
@@ -25,18 +25,14 @@ export interface AgentPrewarmSessionRow {
   remoteHostId: string | null;
   agentDeviceId: string | null;
   orcaRole: string | null;
-  sdkSessionId: string | null;
 }
 
 /**
  * Whether a task's runtime may be started before the user sends.
  *
- * Starting a runtime loads the project's own settings (hooks, MCP servers), which is
- * what a send does too — but a send is the user's explicit act. Typing alone is not
- * consent to run a directory's code, so only tasks the user has already sent in
- * (they have a native session id from a real turn) are prewarmed; a task that was
- * never sent, e.g. one pointing at a freshly cloned or imported directory, waits
- * for its first real send.
+ * Starting a runtime loads the project's own settings (hooks, MCP servers) exactly as
+ * the send that follows would, so prewarm only moves that moment earlier; a runtime
+ * that is never used is closed by idle reclaim or the cap.
  */
 export function isAgentPrewarmEligible(row: AgentPrewarmSessionRow | undefined): boolean {
   return (
@@ -46,8 +42,7 @@ export function isAgentPrewarmEligible(row: AgentPrewarmSessionRow | undefined):
     !row.remoteHostId &&
     !row.agentDeviceId &&
     !row.orcaRole &&
-    AGENT_PREWARM_SESSION_SOURCES.has(row.source ?? 'user') &&
-    !!row.sdkSessionId
+    AGENT_PREWARM_SESSION_SOURCES.has(row.source ?? 'user')
   );
 }
 
@@ -58,6 +53,8 @@ export type AgentPrewarmOutcome = 'started' | 'warm' | 'skipped';
 export interface AgentPrewarmDeps {
   /** Start the runtime if this task has none; true only when a new one was started. */
   start(sessionId: string, createOpts: unknown): Promise<boolean>;
+  /** Whether this task currently has a runtime (settings changes such as a model switch may close it). */
+  isLive(sessionId: string): boolean;
   /** Close an unused prewarmed runtime; must leave a runtime that is doing work alone. */
   closeIfUnused(sessionId: string, stillUnused: () => boolean): Promise<void>;
   setTimer(fn: () => void, ms: number): unknown;
@@ -123,9 +120,13 @@ export function createAgentPrewarmer(
       const pending = starting.get(sessionId);
       if (pending) return pending;
       if (warm.has(sessionId)) {
-        // Still typing in the same task: keep its runtime for another full window.
-        arm(sessionId);
-        return Promise.resolve('warm');
+        if (deps.isLive(sessionId)) {
+          // Still typing in the same task: keep its runtime for another full window.
+          arm(sessionId);
+          return Promise.resolve('warm');
+        }
+        // Closed since it was warmed (model / engine / directory change): start it again.
+        untrack(sessionId);
       }
       // Tasks that are still starting count against the cap too, so a burst of
       // requests can never launch more than `maxWarm` runtimes at once: make room

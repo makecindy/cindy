@@ -6,6 +6,7 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
+import { Tooltip } from '@/components/ui/tooltip';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1734,6 +1735,33 @@ describe('CreateWorkerPopover execution device', () => {
       expect(onCreate.mock.calls[0]![0]).not.toHaveProperty(field);
   });
 
+  // Unit/jsdom: a remote-model Lead can place files on another host and select
+  // an independent model computer, without leaking the Lead's model location.
+  it('keeps the selected work host when choosing a remote model for its Worker', async () => {
+    listExecutionDevices.mockResolvedValue({ devices: [
+      { deviceId: 'mac-mini', name: 'Mac mini', supported: true, supportsAgentDevice: true },
+    ] });
+    const invoke = vi.fn(async () => ({ locations: [{ agentDeviceId: 'agent-pc', name: 'Agent PC' }] }));
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+    mocks.remoteProviders = [{ id: 'openai', name: 'OpenAI', connected: true,
+      remoteInvocationEnabled: true, agents: ['codex'], models: { codex: [model('codex/gpt-5.5')] } }];
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open leadSessionId="lead" leadAgentDeviceId="lead-model-pc"
+      remoteAgentDevices={[{deviceId: 'agent-pc', name: 'Agent PC'}]} executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    const picker = await screen.findByRole('combobox', { name: 'orca.createWorker.executionDeviceLabel' });
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('mac-mini', 'maker:orca:remote-worker:models', [{}]));
+    expect(mocks.deviceProvidersFor).toBe('mac-mini');
+    await waitFor(() => expect(screen.getByTestId('model-selector').dataset.remoteHome).toBe('mac-mini'));
+    fireEvent.click(screen.getByTestId('pick-remote-codex'));
+    expect(mocks.deviceProvidersFor).toBe('agent-pc');
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'mac-mini',
+      agentDeviceId: 'agent-pc', model: 'codex/gpt-5.5', providerId: 'openai' });
+  });
+
   it('offers other computers only when enabled and the list is not empty', async () => {
     const { unmount } = render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
     expect(listExecutionDevices).not.toHaveBeenCalled();
@@ -2192,7 +2220,7 @@ describe('local Worker project selection', () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     projectContext.mockReset().mockResolvedValue(context);
-    (window as unknown as {electronAPI: unknown}).electronAPI = {localDb: {orcaWorkflows: {projectContext}}};
+    (window as unknown as {electronAPI: unknown}).electronAPI = {localDb: {orcaWorkflows: {projectContext}}, worktreeListBranches: vi.fn().mockResolvedValue({branches: ['main']})};
   });
   afterEach(() => {cleanup(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); delete (window as unknown as {electronAPI?: unknown}).electronAPI;});
   // Native picker cancellation does not select a project. Rejected IPC must also leave
@@ -2245,7 +2273,7 @@ describe('local Worker project selection', () => {
     const missing = {...project, directory: '/gone', baseRepo: null, branch: null, exists: false};
     projectContext.mockResolvedValue({...context, selected: missing});
     const onCreate = vi.fn();
-    render(<ProjectForm onCreate={onCreate} />);
+    render(<Tooltip.Provider><ProjectForm onCreate={onCreate} /></Tooltip.Provider>);
     await screen.findByText('orca.workerProject.missingDirectory');
     expect(screen.queryByText('orca.workerProject.notGit /gone')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
@@ -2258,7 +2286,7 @@ describe('local Worker project selection', () => {
     const empty = {...project, branch: null, headState: 'unborn'};
     projectContext.mockResolvedValue({...context, inherited: empty, selected: empty});
     const onCreate = vi.fn();
-    render(<ProjectForm onCreate={onCreate} />);
+    render(<Tooltip.Provider><ProjectForm onCreate={onCreate} /></Tooltip.Provider>);
     await screen.findByText('orca.workerProject.emptyRepo /repo');
     expect(screen.queryByRole('checkbox')).toBeNull();
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
@@ -2270,7 +2298,7 @@ describe('local Worker project selection', () => {
     projectContext.mockResolvedValue({...context, selected: detached});
     window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['main']});
     const onCreate = vi.fn();
-    render(<ProjectForm onCreate={onCreate} />);
+    render(<Tooltip.Provider><ProjectForm onCreate={onCreate} /></Tooltip.Provider>);
     await screen.findByText('orca.workerProject.directDetached other orca.workerProject.detachedHead abcdef01');
     fireEvent.click(screen.getByRole('checkbox'));
     const branchButton = screen.getByRole('button', {name: 'newChat.branchChip.label'});
@@ -2283,6 +2311,24 @@ describe('local Worker project selection', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
     expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({worktree: {sourceBranch: 'main'}}));
     expect(branchButton.textContent).toBe('main');
+  });
+  it('displays the remote source as origin/main but submits its full ref without fetching', async () => {
+    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['main'], remoteDefaultBranch: 'refs/remotes/origin/main'});
+    window.electronAPI.worktreeBranchSyncStatus = vi.fn().mockResolvedValue({branch: 'main', remote: 'origin', remoteBranch: 'main', remoteOnly: false, ahead: 0, behind: 0, dirtyFiles: 0});
+    window.electronAPI.worktreeSyncBranch = vi.fn();
+    const onCreate = vi.fn();
+    render(<Tooltip.Provider><ProjectForm onCreate={onCreate} /></Tooltip.Provider>);
+    await screen.findByRole('checkbox');
+    fireEvent.click(screen.getByRole('checkbox'));
+    const branchButton = screen.getByRole('button', {name: 'newChat.branchChip.label'});
+    expect(window.electronAPI.worktreeListBranches).not.toHaveBeenCalled();
+    fireEvent.click(branchButton);
+    fireEvent.click(await screen.findByRole('option', {name: 'origin/main'}));
+    expect(branchButton.textContent).toBe('origin/main');
+    expect(screen.getByText('orca.workerProject.splitWarning origin/main')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', {name: 'Create'}));
+    expect(onCreate).toHaveBeenLastCalledWith({worktree: {sourceBranch: 'refs/remotes/origin/main'}});
+    expect(window.electronAPI.worktreeSyncBranch).not.toHaveBeenCalled();
   });
   it('omits workingDir for unchanged inheritance and resets worktree choice on reopening', async () => {
     const {result, rerender} = renderHook(({open}) => useWorkerProjectSelection(open, 'lead', true), {initialProps: {open: true}});
@@ -2347,7 +2393,7 @@ describe('local Worker project selection', () => {
         ? {...project, directory: dir, branch: 'selected-branch'} : opening);
       window.electronAPI.showOpenDirectoryDialog = vi.fn().mockResolvedValue({canceled: false, path: directory});
       const onCreate = vi.fn();
-      render(<ProjectForm onCreate={onCreate} />);
+      render(<Tooltip.Provider><ProjectForm onCreate={onCreate} /></Tooltip.Provider>);
       fireEvent.click(await screen.findByRole('button', {name: 'orca.workerProject.current'}));
       fireEvent.click(screen.getByRole('button', {name: 'newChat.folderPicker.browseProjectFolder'}));
       await waitFor(() => expect(projectContext).toHaveBeenLastCalledWith('lead', directory));

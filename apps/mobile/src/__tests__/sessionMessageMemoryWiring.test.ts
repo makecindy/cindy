@@ -91,8 +91,12 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toContain('enabled: appStateActive && remoteHistoryAvailable && !isScheduleDetail,');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, pageHasMessageWork)');
     const bridge = source('src/session/MobileOutboxBridge.tsx');
-    expect(bridge).toMatch(/remoteSessionStore\.acquireSessionMessageWork\(\s*record\.item\.sessionId,\s*true,?\s*\)/);
-    expect(bridge).toContain('for (const lease of leases.values()) lease.release()');
+    // Lease acquisition/release behavior is exercised through the production
+    // adapter in newSessionCreation.test.ts. This guard protects effect cleanup.
+    expect(bridge).toContain('const messageLeases = createOutboxMessageLeases({');
+    expect(bridge).toContain('store: remoteSessionStore,');
+    expect(bridge).toContain('messageLeases.refresh();');
+    expect(bridge).toContain('messageLeases.dispose();');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, true)');
     expect(screen.match(/messageWorkLease\.release\(\);/g)).toHaveLength(1);
     for (const signal of [

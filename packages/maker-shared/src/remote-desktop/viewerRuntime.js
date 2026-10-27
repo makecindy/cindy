@@ -135,6 +135,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   let remoteCursor = null,
     lastLocalMove = 0,
     localCursorAwake = false;
+  // The lower native pad is always relative input, independently of the video
+  // surface's touch mode. Keep its contact alive while the finger pauses too.
+  let nativeTouchpad = null;
   let touchCursor = null,
     touchCursorTimer = null,
     touchCursorVisible = false;
@@ -699,11 +702,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         post({ type: "scaleMode", mode: scaleMode });
       }
     }
-    const touchFeedback = control && mode === "touch" && touchCursorVisible;
-    const cursorX = mode === "touch" && touchCursor ? touchCursor.x : cx;
-    const cursorY = mode === "touch" && touchCursor ? touchCursor.y : cy;
+    const directTouch = mode === "touch" && !nativeTouchpad;
+    const touchFeedback = control && directTouch && touchCursorVisible;
+    const cursorX = directTouch && touchCursor ? touchCursor.x : cx;
+    const cursorY = directTouch && touchCursor ? touchCursor.y : cy;
     cursor.style.transition =
-      mode === "touch" && !touchFeedback && !reducedMotion.matches
+      directTouch && !touchFeedback && !reducedMotion.matches
         ? "opacity 120ms ease-out"
         : "none";
     for (const el of [image, video]) {
@@ -724,15 +728,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       cursor.style.top = r.y + cursorY * r.height - remoteCursor.hotY + "px";
       cursor.style.display = "block";
       cursor.style.opacity = (
-        mode === "touch"
+        directTouch
           ? touchFeedback
           : remoteCursor.visible ||
-            (control && mode === "pointer" && localCursorAwake)
+            (control && (mode === "pointer" || nativeTouchpad) && localCursorAwake)
       )
         ? "1"
         : "0";
     } else {
-      cursor.style.opacity = (mode === "touch" ? !touchFeedback : false)
+      cursor.style.opacity = (directTouch ? !touchFeedback : false)
         ? "0"
         : "1";
       cursor.style.width = "18px";
@@ -814,14 +818,17 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!remoteCursor || remoteCursor.png !== value.png)
       cursorImage.src = "data:image/png;base64," + value.png;
     // Keep delayed host coordinates from pulling the local touchpad backwards.
+    const nativeOwnsCursor = nativeTouchpad &&
+      (nativeTouchpad.down ||
+        performance.now() - Math.max(lastLocalMove, nativeTouchpad.endedAt ?? 0) <= 200);
     if (
-      !remoteCursor ||
       !control ||
-      mode !== "pointer" ||
-      (!pointers.size && performance.now() - lastLocalMove > 200)
+      (!nativeOwnsCursor && (!remoteCursor || mode !== "pointer" ||
+        (!pointers.size && performance.now() - lastLocalMove > 200)))
     ) {
       cx = value.x;
       cy = value.y;
+      nativeTouchpad = null;
     }
     if (value.visible) localCursorAwake = false;
     remoteCursor = value;
@@ -841,7 +848,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!pending.length) pendingSince = performance.now();
     // Remote visibility can remain hidden after synthetic mouse movement. Wake
     // the local touchpad cursor until the host reports a visible cursor again.
-    if (event.kind === "move" && mode === "pointer") localCursorAwake = true;
+    if (event.kind === "move" && (mode === "pointer" || nativeTouchpad)) localCursorAwake = true;
     if (event.kind === "key" || event.kind === "text") {
       localCursorAwake = false;
       render();
@@ -920,6 +927,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }, 33);
   cleanups.push(() => clearInterval(inputTimer));
   function release() {
+    nativeTouchpad = null;
     stopEdgePan();
     desktopPan = null;
     clearTimeout(hold);
@@ -2224,15 +2232,25 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }
       case "nativeTouchpad": {
         if (!nativeMouseControls || !control) break;
+        if (message.phase === "start") {
+          nativeTouchpad = { down: true };
+          break;
+        }
+        if (message.phase === "end") {
+          if (nativeTouchpad) {
+            nativeTouchpad.down = false;
+            nativeTouchpad.endedAt = performance.now();
+          }
+          break;
+        }
         if (message.tap === true) {
           if (!heldMouse.size) { click(); flush(); }
           break;
         }
         if (!Number.isFinite(message.dx) || !Number.isFinite(message.dy)) break;
+        nativeTouchpad ??= { down: false };
         moveTouchpad(message.dx, message.dy);
         queue({ kind: "move", x: cx, y: cy });
-        touchCursor = { x: cx, y: cy };
-        touchCursorVisible = true;
         render();
         break;
       }

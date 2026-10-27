@@ -104,7 +104,7 @@ describe('Agent Island device sessions', () => {
       2_000,
     );
     expect(waiting.events).toEqual([
-      { sessionId: 'remote-1', title: 'Fix login', deviceName: 'Studio Mac', kind: 'needs-reply' },
+      { sessionId: 'remote-1', deviceId: 'device-a', title: 'Fix login', deviceName: 'Studio Mac', kind: 'needs-reply' },
     ]);
     const waitingDisplay = buildAgentIslandDisplayState(state, 2_000);
     expect(waitingDisplay.mode).toBe('expanded');

@@ -6,6 +6,7 @@
  */
 
 export const VERSION = '0.0.0';
+export { standardSpeedRequest, withFastModePolicy } from './agents/shared/fast-mode-policy.js';
 
 // types
 export * from './types/index.js';

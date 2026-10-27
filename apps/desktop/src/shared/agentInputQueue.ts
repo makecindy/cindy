@@ -498,6 +498,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
+  turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
   /**
    * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；
@@ -535,6 +537,9 @@ export interface AgentInputProjection {
    * resending this string through the normal composer path.
    */
   errorRetryText: string | null;
+  /** Host confirms this error belongs to a persisted scheduled input whose recovery ended.
+   * Missing on older hosts means unavailable; never infer it from conversation history. */
+  errorCanContinue?: boolean;
   /**
    * 凭证切换等待态:发送需要重启共享 codex 进程,但被列出的会话(其它本地 Codex
    * 任务)挡住。等待中的那条消息保留在队首,挡路任务结束后 main 自动重发;renderer

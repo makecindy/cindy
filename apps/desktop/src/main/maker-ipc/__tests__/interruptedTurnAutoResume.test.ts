@@ -17,7 +17,7 @@ describe('runtime fallback rebuild ownership', () => {
   it.each(['runtime-refresh', 'requested', 'unexpected', 'agent-switch', 'deleted'])('preserves the exact live retry only for its own rebuild: %s', closeReason => {
     const input = { closeReason, leasedAttemptToken: 1, guardIsCurrentAttempt: true,
       bookIsCurrentAttempt: true, coordinatorAttemptToken: 1, isAutoResumePending: true, hasLiveSchedule: true };
-    expect(shouldPreserveRuntimeFallbackAutoResume(input)).toBe(['runtime-refresh', 'requested'].includes(closeReason));
+    expect(shouldPreserveRuntimeFallbackAutoResume(input)).toBe(['runtime-refresh', 'requested', 'agent-switch'].includes(closeReason));
     for (const stale of [{ leasedAttemptToken: undefined }, { guardIsCurrentAttempt: false },
       { bookIsCurrentAttempt: false }, { coordinatorAttemptToken: 2 }, { isAutoResumePending: false }, { hasLiveSchedule: false }]) {
       expect(shouldPreserveRuntimeFallbackAutoResume({ ...input, ...stale })).toBe(false);

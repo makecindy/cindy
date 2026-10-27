@@ -1,12 +1,24 @@
 {
   "id": "npm-search",
-  "match": ["npmjs.com", "registry.npmjs.org"],
-  "description": "用 npm registry 的公开搜索 API 搜包,返回 JSON(包名/版本/描述)。读接口而非扒 DOM。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://registry.npmjs.org/-/v1/search?text={{query|url}}&size=20" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "npmjs.com",
+    "registry.npmjs.org"
   ],
-  "output": "{{json}}"
+  "description": "Search the public npm registry by keyword",
+  "access": "read",
+  "adapter": "npm/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword (e.g. \"react\", \"graphql client\")"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max results (1-250)"
+    }
+  },
+  "steps": []
 }

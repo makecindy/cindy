@@ -72,6 +72,39 @@ export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginT
     throw new PluginTaskError('INVALID_REQUEST', 'Team plan exceeds the supported size');
   return data;
 }
+
+/**
+ * true = 给定 label 中被已登记计划的**未结算**条目引用。
+ * 计划整体不可变，且 label 是 Worker 归属与委派自动授权的寻址键；
+ * 活动计划引用到的 label 不允许改名，否则 releaseWorker 与自动授权都会找不到条目。
+ */
+export function isTeamPlanLabelLocked(
+  plan: PluginTeamPlan | undefined,
+  settledLabels: readonly string[] | undefined,
+  labels: ReadonlyArray<string | null>,
+): boolean {
+  if (!plan) return false;
+  const settled = new Set(settledLabels ?? []);
+  const locked = new Set(
+    plan.items.filter((item) => !settled.has(item.label)).map((item) => item.label),
+  );
+  return labels.some((label) => label !== null && locked.has(label));
+}
+
+/**
+ * 收据级计划锁：只有当插件仍安装（pluginInstalled，任务归属未被卸载撤销）时才锁定 label。
+ * 插件卸载后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
+ * 保留的收据不得继续禁止改名；停用 / 未批准可恢复，重新启用后计划仍会继续，故仍锁定。
+ */
+export function isTeamPlanLabelLockedByReceipt(
+  receipt: Pick<PluginTaskReceipt, 'payload' | 'operation'> | undefined,
+  pluginInstalled: boolean,
+  labels: ReadonlyArray<string | null>,
+): boolean {
+  if (!receipt || receipt.operation !== 'create' || !pluginInstalled) return false;
+  const data = readPluginTaskPlanReceipt(receipt.payload);
+  return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
+}
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
@@ -157,6 +190,9 @@ export interface PluginTaskServiceDeps {
   ): Promise<'cancelled' | 'stopping' | 'stale'>;
   now?: () => number;
   id?: () => string;
+  /** Host bookkeeping only; plugins cannot mint or increment usage identities. */
+  prepareInvocation?(pluginId: string, id: string, parentId?: string, operation?: string, sessionId?: string): string;
+  acceptInvocation?(pluginId: string, id: string): void;
 }
 
 /** Uses native input/terminal facts. Never infers completion from idle or the latest assistant. */
@@ -454,13 +490,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       }),
     send: async (
       pluginId: string,
-      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; attachments?: PluginMessageAttachment[] },
+      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; attachments?: PluginMessageAttachment[]; invocationId?: string },
     ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async images => {
       const prepared = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
-        const fingerprint = hash(images.length
+        const contentIdentity = images.length
           ? [request.text, request.expectedRevision, images.map(({ hash, name }) => [hash, name])]
-          : [request.text, request.expectedRevision]);
+          : [request.text, request.expectedRevision];
+        const fingerprint = hash(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]);
         const previous = replay(
           await deps.store.find(pluginId, 'send', request.taskId, request.requestKey),
           fingerprint,
@@ -476,12 +513,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         await deps.resolveRoute(pluginId, view.resolvedConfig);
         await assertDispatch(pluginId, view.taskId, assertPlanCurrent);
         const runId = id();
+        const invocationId = deps.prepareInvocation?.(pluginId, runId, request.invocationId, 'tasks.send', view.taskId);
         const run: PluginTaskRun = {
           runId,
           taskId: view.taskId,
           inputMessageId: `plugin-task:${runId}`,
           status: 'queued',
           acceptedAt: now(),
+          ...(invocationId ? { invocationId } : {}),
           acceptedConfig: view.resolvedConfig,
           usage: { status: 'unavailable', reason: 'Per-input usage has not been reconciled.' },
         };
@@ -509,6 +548,10 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           images,
         );
         if (!outcome.ok) failure = 'failed';
+        else if (prepared.run.invocationId) {
+          // Usage persistence must never turn an accepted input into a retry.
+          try { deps.acceptInvocation?.(pluginId, prepared.run.invocationId); } catch { /* Best effort, as tool recording. */ }
+        }
       } catch {
         // Before entering dispatch, this input is known not to have reached the host.
         failure = dispatchStarted ? 'reconciling' : 'failed';
@@ -602,6 +645,9 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           run.execution = execution;
           run.status = 'running';
           await save(row, run);
+          if (run.invocationId) {
+            try { deps.acceptInvocation?.(row.pluginId, run.invocationId); } catch { /* Never change input acceptance. */ }
+          }
           await assertDispatch(row.pluginId, taskId, assertPlanCurrent);
           assertPlanCurrent();
         }

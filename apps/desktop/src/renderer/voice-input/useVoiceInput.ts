@@ -145,6 +145,8 @@ export type UseVoiceInputResult = {
   getLastRefinement: () => VoiceInputRefinementSnapshot | null;
   /** 同步读取当前状态，不经过 React 渲染。长按手势靠它判断是否占用了录音。 */
   getState: () => VoiceInputState;
+  /** 仅预热音频处理与服务连接，不打开麦克风。 */
+  prepare: () => void;
   /** 同步 claim 录音后立刻返回是否占用；启动流程（授权确认、采集、连接）在后台继续。 */
   start: (options?: VoiceInputStartOptions) => boolean;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
@@ -1236,6 +1238,19 @@ export function useVoiceInput(
     voiceInputSettings.microphoneDeviceId,
   ]);
 
+  const prepare = useCallback(() => {
+    if (disabledRef.current || !editorRef.current || editorRef.current.isDestroyed) return;
+    if (!['idle', 'done', 'error'].includes(stateRef.current)) return;
+    // Every composer mouse-down reaches here, including ordinary clicks and
+    // text selection. Opening even an authorized microphone can switch Bluetooth
+    // headphones to call audio, so leave device capture to start() after the hold.
+    void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
+    void window.electronAPI.voiceInput.prewarm({
+      sourceLanguage: voiceInputSettings.language,
+      refinementEnabled: voiceInputSettings.refinementEnabled,
+    }).catch(() => undefined);
+  }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
+
   const start = useCallback((startOptions?: VoiceInputStartOptions): boolean => {
     const currentState = stateRef.current;
     if (
@@ -1789,6 +1804,7 @@ export function useVoiceInput(
     getLastSubmittedText: () => lastSubmittedTextRef.current,
     getLastRefinement: () => lastRefinementRef.current,
     getState,
+    prepare,
     start,
     stop: stopWithGate,
     cancel,

@@ -25,6 +25,7 @@ export type RemoteSessionActivityPhase = 'running' | 'needs-interaction' | 'comp
 
 /** 镜像 @cindy/device-link 的 SessionActivityPayload(renderer 不直接依赖该包)。 */
 export interface RemoteSessionActivity {
+  completionToken?: string;
   sessionId: string;
   phase: RemoteSessionActivityPhase;
   compactDetail: string;
@@ -63,6 +64,7 @@ function isPhase(value: unknown): value is RemoteSessionActivityPhase {
 
 function sameActivity(a: RemoteSessionActivity, b: RemoteSessionActivity): boolean {
   return (
+    a.completionToken === b.completionToken &&
     a.phase === b.phase &&
     a.compactDetail === b.compactDetail &&
     a.workingPhase === b.workingPhase &&
@@ -153,6 +155,8 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
     return;
   }
   const next: RemoteSessionActivity = {
+    ...(typeof p.completionToken === 'string' && p.completionToken.length > 0 && p.completionToken.length <= 128
+      ? { completionToken: p.completionToken } : {}),
     sessionId,
     phase: p.phase,
     compactDetail: typeof p.compactDetail === 'string' ? p.compactDetail : '',

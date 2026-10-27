@@ -1691,3 +1691,20 @@ it('keeps durable coordination hidden on phone history without hiding user-facin
   expect(JSON.stringify(rendered)).toContain('Requested status');
   expect(JSON.stringify(rendered)).toContain('Final result');
 });
+
+
+// Unit regression: historical machine inputs used to expose JSON escapes in bubbles/copy.
+// Same bytes from a human must remain untouched; source content still drives replay.
+it('projects forwarded machine history without rewriting human text or persisted bytes', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  const rows = normalizeRemoteMessages([
+    message({ id: 'forwarded', role: 'user', content, agentMeta: { origin: { kind: 'session', senderSessionId: 'sender' } } }),
+    message({ id: 'human', role: 'user', content }),
+  ]);
+  expect(rows[0].body).toContain('第一段\n\n保留 `\\n`');
+  expect(rows[0].source.content).toBe(content);
+  expect(rows[0].draftBody).toBe(content);
+  expect(composerDocumentFromSerializedMessage(rows[0].draftBody!).nodes).toEqual([{ type: 'text', text: content }]);
+  expect(rows[1].body).toBe(content);
+  expect(rows[1].draftBody).toBeUndefined();
+});

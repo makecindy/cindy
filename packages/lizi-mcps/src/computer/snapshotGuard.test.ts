@@ -770,7 +770,9 @@ describe('computer snapshot guard', () => {
 });
 
 describe('password fields', () => {
-  it('refuses agent typing into a password field and points at 代输入', async () => {
+  // MCP entry, unit tier: follow-up observations must retain OS hit-test frames;
+  // ordinary explicit reads alone did not cover the action + observation path.
+  it.each([false, true])('refuses typing into passwords, including action observations (observe=%s)', async (observe) => {
     const dispatch = vi.fn(async (name: string) => name === 'get_window_state'
       ? {
           elements: [
@@ -785,7 +787,9 @@ describe('password fields', () => {
       point ? point.y === 70 : focusedSecure);
     const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch, isSecureTarget }, { sessionId: 'secure' });
     try {
-      const state = await h.call('get_window_state', { pid: 1, window_id: 2 });
+      const state = observe
+        ? (await h.call('click', { pid: 1, window_id: 2, x: 1, y: 1, observe: {} })).observation as Record<string, unknown>
+        : await h.call('get_window_state', { pid: 1, window_id: 2 });
       for (const [tool, extra] of [['type_text', { text: 'synthetic' }], ['set_value', { value: 'synthetic' }]] as const) {
         expect(await h.call(tool, { pid: 1, window_id: 2, element_token: 'w:1', ...extra })).toMatchObject({
           ok: false,
@@ -796,7 +800,7 @@ describe('password fields', () => {
           .toMatchObject({ errorCode: 'SECURE_FIELD' });
       }
       expect(isSecureTarget).toHaveBeenCalledWith({ pid: 1, point: { x: 60, y: 70 } });
-      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledTimes(observe ? 2 : 1);
       expect(await h.call('type_text', { pid: 1, window_id: 2, element_token: 'w:0', text: 'someone@example.test' }))
         .toMatchObject({ ok: true });
       // Plain typing lands in the focused element.

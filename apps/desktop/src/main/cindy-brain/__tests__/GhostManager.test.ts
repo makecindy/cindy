@@ -103,6 +103,137 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
   };
 }
 
+describe('official simulator identity migration', () => {
+  it.each(['prepared', 'backed-up', 'placed', 'committed'] as const)(
+    'recovers an interrupted rename at %s without duplicating the installed instance', async phase => {
+      await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+      const old = manager.list()[0]!;
+      const oldRelId = installedGhostPhysicalRelId(old);
+      const other = new GhostManager({ getRootDir: () => path.join(workDir, 'package-fixture') });
+      await other.install(await makeCindy('new.cindy', goodManifest('cindy-simulator')), { namespace: null });
+      const next = other.list()[0]!;
+      const relId = installedGhostPhysicalRelId(next);
+      const nextStore = new GhostInstallReceiptStore(() => other.approvalStateRoot());
+      const nextApproval = nextStore.read(relId);
+      if (nextApproval.state !== 'approved') throw new Error('missing fixture approval');
+      const store = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+      const backupDirName = `.cindy-updating-${pluginInstallStoragePart(relId)}-1234abcd`;
+      await store.writePendingMutation(relId, {
+        kind: 'update', packageSha256: nextApproval.receipt.packageSha256!,
+        receiptRevision: nextApproval.receipt.revision, backupDirName,
+        phase: phase === 'prepared' ? 'prepared' : 'backed-up', simulatorPreviousRelId: oldRelId,
+      });
+      const finalDir = path.join(rootDir, relId);
+      if (phase !== 'prepared') fs.renameSync(old.dir, path.join(rootDir, backupDirName));
+      if (phase === 'placed' || phase === 'committed') fs.cpSync(next.dir, finalDir, { recursive: true });
+      if (phase === 'committed') await store.write({ ...nextApproval.receipt, simulatorPreviousRelId: oldRelId },
+        { relId, skillSourceDir: finalDir });
+      manager = new GhostManager({ getRootDir: () => rootDir });
+      const recovered = manager.list();
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]!.manifest.id).toBe(phase === 'committed' ? 'cindy-simulator' : 'baguette-simulator');
+      expect(installedGhostStoragePart(recovered[0]!)).toBe(installedGhostStoragePart(old));
+      expect(recovered[0]!.approval.state).toBe('approved');
+      expect(store.readPendingMutationSync(relId).state).toBe('missing');
+      expect(fs.existsSync(path.join(rootDir, backupDirName))).toBe(false);
+    },
+  );
+
+  it('does not take over an organization installation', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: 'acme' });
+    const old = manager.list()[0]!;
+    const file = await makeCindy('new.cindy', goodManifest('cindy-simulator'));
+    await expectRejection(await manager.update(file, { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old), expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    }), 'state-changed');
+    expect(manager.list()[0]!.dir).toBe(old.dir);
+  });
+
+  it('does not replace a separately installed target or accept a stale source approval', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+    const old = manager.list()[0]!;
+    const file = await makeCindy('new.cindy', goodManifest('cindy-simulator'));
+    await expectRejection(await manager.update(file, { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old),
+      expectedInstalledApproval: 'approved:00000000-0000-4000-8000-000000000001',
+    }), 'state-changed');
+    await manager.install(file, { namespace: null });
+    await expectRejection(await manager.update(file, { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old), expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    }), 'state-changed');
+    expect(manager.list()).toHaveLength(2);
+  });
+
+  it('keeps the original bare storage key and existing task grants for a legacy root install', async () => {
+    const manifest = { ...goodManifest('baguette-simulator'), slots: ['tool', 'agent'], agent: { tasks: true, targets: true } };
+    await installLegacyApproved(await makeCindy('legacy.cindy', manifest));
+    const old = manager.list()[0]!;
+    const store = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    const approval = store.read(installedGhostPhysicalRelId(old));
+    if (approval.state !== 'approved') throw new Error('missing fixture receipt');
+    await store.write({ ...approval.receipt, taskCapabilityApproved: true, targetCapabilityApproved: true },
+      { relId: installedGhostPhysicalRelId(old), skillSourceDir: old.dir });
+    const result = await manager.update(await makeCindy('new.cindy', { ...manifest, id: 'cindy-simulator' }), {
+      namespace: null, simulatorPreviousRelId: installedGhostPhysicalRelId(old),
+      expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    });
+    expect(result).toHaveProperty('ghost');
+    const next = manager.list()[0]!;
+    expect(installedGhostStoragePart(next)).toBe('baguette-simulator');
+    const receipt = manager.readApprovedInstallReceipt(installedGhostStoragePart(next));
+    expect(receipt).toMatchObject({ id: 'cindy-simulator', taskCapabilityApproved: true, targetCapabilityApproved: true });
+    await manager.setEnabled(installedGhostPhysicalRelId(next), false, ghostInstallApprovalToken(next.approval));
+    expect(manager.list()[0]!.enabled).toBe(false);
+    await manager.uninstall(installedGhostPhysicalRelId(manager.list()[0]!));
+    expect(manager.list()).toHaveLength(0);
+  });
+
+  it.each([true, false])('preserves storage and enabled=%s across rename, restart and subsequent updates', async (enabled) => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')),
+      { initiallyEnabled: enabled, namespace: null });
+    const old = manager.list()[0]!;
+    const previousRelId = installedGhostPhysicalRelId(old);
+    const nextPackage = await makeCindy('new.cindy', { ...goodManifest('cindy-simulator'), version: '2.0.0' });
+    const result = await manager.update(nextPackage, {
+      expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+      namespace: null, simulatorPreviousRelId: previousRelId,
+    });
+    expect(result).toHaveProperty('ghost');
+    expect(manager.list()).toHaveLength(1);
+    const next = manager.list()[0]!;
+    expect(next.manifest.id).toBe('cindy-simulator');
+    expect(next.enabled).toBe(enabled);
+    expect(installedGhostStoragePart(next)).toBe(installedGhostStoragePart(old));
+    expect(fs.existsSync(old.dir)).toBe(false);
+    manager = new GhostManager({ getRootDir: () => rootDir });
+    expect(installedGhostStoragePart(manager.list()[0]!)).toBe(installedGhostStoragePart(old));
+    // Registry recovery must derive the same key from the host receipt, never from the new name.
+    fs.unlinkSync(path.join(manager.approvalStateRoot(), 'plugin-instances.v2.json'));
+    manager = new GhostManager({ getRootDir: () => rootDir });
+    const recovered = manager.list()[0]!;
+    expect(installedGhostStoragePart(recovered)).toBe(installedGhostStoragePart(old));
+    const update = await manager.update(await makeCindy('next.cindy', {
+      ...goodManifest('cindy-simulator'), version: '3.0.0',
+    }), { expectedInstalledApproval: ghostInstallApprovalToken(recovered.approval), namespace: null });
+    expect(update).toHaveProperty('ghost');
+    expect(installedGhostStoragePart(manager.list()[0]!)).toBe(installedGhostStoragePart(old));
+  });
+
+  it('restores the old package and approval when the new receipt cannot commit', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+    const old = manager.list()[0]!;
+    const result = await manager.update(await makeCindy('new.cindy', goodManifest('cindy-simulator')), {
+      namespace: null, simulatorPreviousRelId: installedGhostPhysicalRelId(old),
+      expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+      beforePackageCommit: () => { throw new Error('injected commit failure'); },
+    });
+    expect(result).toHaveProperty('rejection.code', 'io');
+    expect(manager.list()).toHaveLength(1);
+    expect(manager.list()[0]!.manifest.id).toBe('baguette-simulator');
+    expect(manager.list()[0]!.approval).toEqual(old.approval);
+  });
+});
+
 describe('GhostManager enable revision boundary', () => {
   // Unit regression: an unreadable installation subtree used to become an empty
   // scan and persist active:false. Exercise list(), retain the approved install
@@ -3447,21 +3578,23 @@ describe('GhostManager · install', () => {
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 
-  it('main-view 清单声明的 HTML 不在包内 → inspect/install 都拒绝', async () => {
+  // 安装入口与 Forge 必须同样拒绝缺失页面；原先只覆盖 main-view，task-view 会漏装。
+  it.each(['main-view', 'task-view'] as const)('%s 清单声明的 HTML 不在包内 → inspect/install 都拒绝', async (slot) => {
+    const field = slot === 'main-view' ? 'mainView' : 'taskView';
     const manifest = {
       ...goodManifest(),
       minCindyVersion: '1.2.3',
-      slots: ['tool', 'main-view'],
-      mainView: { html: 'ui/main-view.html' },
+      slots: ['tool', slot],
+      [field]: { html: `ui/${slot}.html` },
     };
-    const cindy = await makeCindy('missing-main-view.cindy', manifest, {
+    const cindy = await makeCindy(`missing-${slot}.cindy`, manifest, {
       'main.js': '// browser entry',
     });
 
     expect(await manager.inspect(cindy)).toMatchObject({
       rejection: {
         code: 'file-invalid',
-        reason: expect.stringContaining('ui/main-view.html'),
+        reason: expect.stringContaining(`ui/${slot}.html`),
       },
     });
     await expectRejection(await manager.install(cindy), 'file-invalid');

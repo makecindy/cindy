@@ -468,6 +468,18 @@ export class AutoResumeBookkeeping {
     return this.suppressedErrors.has(sessionId);
   }
 
+  /** 供应商组接管尚未排期的候选错误：交出同一轮的详情与全部终态，不落库、不提前回报失败。 */
+  takeDeferredError(
+    sessionId: string,
+    owner: SuppressedTurnErrorOwner,
+  ): Pick<SuppressedTurnErrorEntry, 'detail' | 'orcaTerminal' | 'groupTerminal'> | null {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry || entry.attemptToken !== null || !sameSuppressedTurnErrorOwner(entry.deferredOwner, owner)) return null;
+    this.suppressedErrors.delete(sessionId);
+    this.suppressedErrorClients.delete(sessionId);
+    return { detail: entry.detail, orcaTerminal: entry.orcaTerminal, groupTerminal: entry.groupTerminal };
+  }
+
   /** Product terminal error（非 continuation）记下随后那条同一代 unclaimed done。 */
   noteFailedTurnCompletionTail(sessionId: string, generation: number): void {
     this.failedTurnCompletionTails.set(sessionId, generation);

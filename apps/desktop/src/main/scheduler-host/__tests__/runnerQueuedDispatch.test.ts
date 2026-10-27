@@ -56,6 +56,7 @@ const mocks = vi.hoisted(() => ({
   setSessionFastMode: vi.fn(),
   setSessionEffort: vi.fn(),
   executePreRunHook: vi.fn(),
+  isSessionInTurn: vi.fn(() => false),
 }));
 
 const sharedProduction = vi.hoisted(() => ({
@@ -95,7 +96,7 @@ vi.mock('../../localDb/dialogueWorkspace', () => ({
 
 vi.mock('../../maker-ipc/register.js', () => ({
   wireSessionToIpc: mocks.wireSessionToIpc,
-  isSessionInTurn: () => false,
+  isSessionInTurn: mocks.isSessionInTurn,
   noteSilentStopUserSend: vi.fn(),
   onSilentStopSettled: vi.fn(() => () => {}),
 }));
@@ -414,6 +415,7 @@ function createRunnerHarness(
     /** 停用轴裁决桩(缺省 = 不裁决,与生产未接线时一致)。 */
     checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
     acquirePendingAgentSwitch?: MakerScheduleRunnerDeps['acquirePendingAgentSwitch'];
+    prepareModelPreferences?: MakerScheduleRunnerDeps['prepareModelPreferences'];
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
     applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
   } = {},
@@ -453,6 +455,7 @@ function createRunnerHarness(
     schedulerQueue,
     checkModelRoute: opts.checkModelRoute,
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
+    prepareModelPreferences: opts.prepareModelPreferences,
     applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, model, providerId) => {
       await liveSession.setModel(model, { providerId });
       mocks.getSessionProvider.mockReturnValue(providerId);
@@ -484,6 +487,7 @@ function latestNotifiedRun(notifier: Notifier & { notify: ReturnType<typeof vi.f
 beforeEach(() => {
   setCodexAppliedCustomProviderRoutes([]);
   vi.clearAllMocks();
+  mocks.isSessionInTurn.mockReturnValue(false);
   mocks.backfillSessionMeta.mockReset();
   mocks.getSessionRowSnapshot.mockResolvedValue({
     status: 'active',
@@ -495,6 +499,92 @@ beforeEach(() => {
 });
 
 describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
+  // PR #7104 / unit: retrying an old message must still yield to the human,
+  // even though its persisted send-time sorting key no longer advances.
+  it('defers a heartbeat after recent human recovery instead of enqueueing it', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    queue.deps.getLastUserActionAt = () => Date.now();
+    const { runner, logger } = createRunnerHarness(h.session, queue.deps);
+    mocks.isSessionInTurn.mockReturnValue(true);
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active', userSendAt: Date.now() - 30 * 60_000, providerId: null,
+    });
+    await expect(runner.fire(heartbeatSchedule(), createFireContext()))
+      .resolves.toMatchObject({ deferred: true });
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('defer fire (user-active)'));
+    expect(queue.enqueueCalls).toHaveLength(0);
+    expect(h.session.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { age: 10 * 60_000, inTurn: true },
+    { age: 0, inTurn: false },
+  ])('does not yield for expired recovery or an idle turn: %j', async ({ age, inTurn }) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, hasQueued: true });
+    queue.deps.getLastUserActionAt = () => Date.now() - age;
+    const { runner, logger } = createRunnerHarness(h.session, queue.deps);
+    mocks.isSessionInTurn.mockReturnValue(inTurn);
+    await runner.fire(heartbeatSchedule(), createFireContext());
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('defer fire (user-active)'));
+  });
+
+  // #7044 / unit: the backing schedule is manual, but RoutineEngine owns its
+  // retries. Unlike existing queue-busy cases, a recent user turn must yield
+  // after a passed precheck without queuing a prompt or starting the model.
+  it('defers a routine with a passed precheck while its canonical user turn is active', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker, notifier, logger } = createRunnerHarness(h.session, queue.deps);
+    mocks.isSessionInTurn.mockReturnValue(true);
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', userSendAt: Date.now(), providerId: null });
+    mocks.executePreRunHook.mockResolvedValue({ status: 'passed', decision: 'run', exitCode: 0,
+      timedOut: false, durationMs: 1, stdout: 'pending', stderr: '',
+      stdoutTruncated: false, stderrTruncated: false, aborted: false });
+    const ctx = { ...createFireContext(), deferToCaller: true };
+    await expect(runner.fire(heartbeatSchedule({ source: 'bot', manual: true,
+      preRunHook: { command: 'check' } }), ctx)).resolves.toMatchObject({ deferred: true });
+    expect(mocks.executePreRunHook).toHaveBeenCalledOnce();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('defer fire (user-active)'));
+    expect(queue.enqueueCalls).toHaveLength(0);
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.session.send).not.toHaveBeenCalled();
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  // 2026-10-23 regression, unit tier: a follow-owner run queued behind an
+  // override must refresh its route at dispatch, not keep the enqueue-time
+  // automation model. Earlier queue cases had no deferred owner preference.
+  it('uses the restored owner route when a queued run follows the task model', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    Object.assign(h.session, { model: 'automatic-model' });
+    const checkModelRoute = vi.fn<NonNullable<MakerScheduleRunnerDeps['checkModelRoute']>>(
+      async () => ({ kind: 'pass' }),
+    );
+    const opts = {
+      metaModel: 'automatic-model', checkModelRoute,
+      prepareModelPreferences: vi.fn(async (_id: string, override: boolean) => {
+        expect(override).toBe(false);
+        opts.metaModel = 'owner-model';
+        Object.assign(h.session, { model: 'owner-model' });
+      }),
+    };
+    const { runner } = createRunnerHarness(h.session, queue.deps, opts);
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    expect(opts.prepareModelPreferences).not.toHaveBeenCalled();
+    await queue.accept();
+    expect(checkModelRoute).toHaveBeenLastCalledWith('claude-code', 'owner-model', null);
+    expect(h.session.setModel).not.toHaveBeenCalledWith('automatic-model', expect.anything());
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+    expect(opts.prepareModelPreferences).toHaveBeenCalledTimes(1);
+  });
+
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });

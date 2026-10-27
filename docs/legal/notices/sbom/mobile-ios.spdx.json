@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-ios",
-  "documentNamespace": "https://cindy.app/spdx/mobile-ios/195ab0d7a13705576a098da85509873559924059ab8af30df7ab0ddc18b309ad",
+  "documentNamespace": "https://cindy.app/spdx/mobile-ios/ab71609fb2949d614ff7ae15b09ed651c5e6e5732454f459132b46d6ec4e77d9",
   "creationInfo": {
-    "created": "2026-10-16T03:37:01Z",
+    "created": "2026-10-22T12:27:42Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -3000,8 +3000,8 @@
     },
     {
       "name": "acorn",
-      "SPDXID": "SPDXRef-Package-863f64282bd14065",
-      "versionInfo": "8.17.0",
+      "SPDXID": "SPDXRef-Package-260146c1aad9f1c8",
+      "versionInfo": "8.19.0",
       "downloadLocation": "https://github.com/acornjs/acorn",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -3011,7 +3011,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/acorn@8.17.0"
+          "referenceLocator": "pkg:npm/acorn@8.19.0"
         }
       ]
     },
@@ -4593,6 +4593,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/entities@4.5.0"
+        }
+      ]
+    },
+    {
+      "name": "entities",
+      "SPDXID": "SPDXRef-Package-e8e54b2b281da909",
+      "versionInfo": "8.0.0",
+      "downloadLocation": "https://github.com/fb55/entities",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/entities@8.0.0"
         }
       ]
     },
@@ -7993,6 +8010,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/parse-png@2.1.0"
+        }
+      ]
+    },
+    {
+      "name": "parse5",
+      "SPDXID": "SPDXRef-Package-432f3a6d834a3e82",
+      "versionInfo": "8.0.1",
+      "downloadLocation": "https://github.com/inikulin/parse5",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/parse5@8.0.1"
         }
       ]
     },
@@ -11497,7 +11531,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-863f64282bd14065"
+      "relatedSpdxElement": "SPDXRef-Package-260146c1aad9f1c8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11963,6 +11997,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-90d482e821f163c4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e8e54b2b281da909"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12963,6 +13002,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-d9ea6d1d995ea187"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-432f3a6d834a3e82"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

@@ -11,6 +11,7 @@ import {
   type SpeechPreviewStart,
   type SpeechVoiceCatalog,
   type SpeechStartResult,
+  type SpeechAudioResult,
   type VoiceExitDecision,
 } from '../../shared/voiceConversation.js';
 import type {
@@ -80,20 +81,26 @@ export class VoiceConversationService {
     const owner = this.deps.owner();
     const connection = this.deps.connection(selection);
     const identity = JSON.stringify(connection);
-    return loadSpeechVoices(connection, selection.modelId, this.deps.fetch, () => {
-      if (
-        this.deps.owner() !== owner ||
-        JSON.stringify(this.deps.connection(selection)) !== identity
-      )
-        throw new Error('connection_changed');
-    });
+    return loadSpeechVoices(
+      connection,
+      selection.modelId,
+      this.deps.fetch,
+      () => {
+        if (
+          this.deps.owner() !== owner ||
+          JSON.stringify(this.deps.connection(selection)) !== identity
+        )
+          throw new Error('connection_changed');
+      },
+      selection.providerId ?? 'xd',
+    );
   }
 
   /** Preview uses the exact synthesis adapter without starting ASR or submitting a task. */
   async startPreview(
     sender: number,
     selection: SpeechPreviewStart,
-  ): Promise<{ sampleRate: number }> {
+  ): Promise<SpeechAudioResult> {
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
     if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
       throw new Error('model_unavailable');

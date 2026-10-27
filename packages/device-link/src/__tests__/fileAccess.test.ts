@@ -8,6 +8,20 @@ const metadata = {
   transferRequired: true,
 };
 describe("shared file read policy", () => {
+  // Unit: old peers omit video MIME mappings; preserve both authorization and the
+  // WeakMap-bound staging lease when reconciling metadata with downloaded bytes.
+  it.each(['same', 'version', 'size', 'unversioned', 'explicit-type'] as const)(
+    'reconciles generic peer media only for the authorized version: %s', async mode => {
+      const prepared = { ...metadata, version: 'a'.repeat(64), mimeType: 'video/mp4' };
+      const direct = { ossKey: '', size: prepared.size + (mode === 'size' ? 1 : 0),
+        version: mode === 'unversioned' ? undefined : (mode === 'version' ? 'b' : 'a').repeat(64),
+        mimeType: mode === 'explicit-type' ? 'text/html' : 'application/octet-stream' };
+      const expectedMime = mode === 'same' ? prepared.mimeType : direct.mimeType;
+      const result = await readDeviceFile({ prepare: async () => prepared, peer: async () => direct, fallback: vi.fn() });
+      expect(result).toBe(direct);
+      expect(result.mimeType).toBe(expectedMime);
+    },
+  );
   it.each(['cancelled', 'superseded'])('reopens from cache and refreshes independently of a %s read', async mode => {
     const cached = { ...metadata, version: 'a'.repeat(64), inlineBase64: 'YQ==' };
     const fresh = { ...cached, version: 'b'.repeat(64), transferRequired: false, inlineBase64: 'Yg==' };

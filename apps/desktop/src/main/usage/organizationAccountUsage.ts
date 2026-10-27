@@ -17,8 +17,11 @@ export async function readOrganizationAccountUsage(): Promise<ClaudeAccountUsage
       (row.currency !== 'CNY' && row.currency !== 'USD') ||
       (row.budgetResetAt !== null && (typeof row.budgetResetAt !== 'string' || !Number.isFinite(Date.parse(row.budgetResetAt))))) return null;
     if (row.maxBudget === null) return 'unlimited';
+    const dailyLimitEnabled = row.dailyLimitEnabled === true;
+    const todaySpend = dailyLimitEnabled && typeof row.todaySpend === 'number' && Number.isFinite(row.todaySpend) && row.todaySpend >= 0
+      ? row.todaySpend : null;
     return { spend: row.spend, maxBudget: row.maxBudget, currency: row.currency,
-      budgetResetAt: row.budgetResetAt, todaySpend: null, fetchedAt: Date.now() };
+      budgetResetAt: row.budgetResetAt, todaySpend, dailyLimitEnabled, fetchedAt: Date.now() };
   } catch (error) {
     if (error instanceof ServerApiError && (error.statusCode === 404 ||
       (error.statusCode === 501 && error.code === 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED'))) return undefined;

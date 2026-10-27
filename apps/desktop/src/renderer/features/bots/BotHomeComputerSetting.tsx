@@ -1,15 +1,14 @@
 /**
  * 伙伴的「主力电脑」入口（docs/product-rules/cloud-companions.md §3.1）：伙伴设置里的一行，以及聊天
- * 顶部「在 X 上运行」。任何一台电脑上都能看到伙伴在哪里运行，点开列出可以换去的电脑：
+ * 头部近况浮层的「电脑」块（BotGlancePopover）。任何一台电脑上都能看到伙伴在哪里运行，点开列出可以换去的电脑：
  * 本机是主力电脑时由本机交出；主力电脑在线时请它交出；主力电脑连不上时只能在这台电脑继续。
  * 确认后打开换过去的伙伴。服务器不支持云端伙伴时不出现。
  */
 import { useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Monitor } from 'lucide-react';
+import { ChevronRight, Monitor } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   DropdownMenu,
@@ -76,8 +75,8 @@ async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<
   return false;
 }
 
-/** `inline`: the settings row shows failures under itself; `toast`: the header chip has no room. */
-function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toast') {
+/** `inline`: the settings row shows failures under itself; `toast`: the 近况 popover has no room. */
+export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toast') {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
@@ -175,7 +174,7 @@ function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline' | 'toa
     error, setError, inFlight, load, confirm, targetName };
 }
 
-type HomeSwitch = ReturnType<typeof useCompanionHomeSwitch>;
+export type HomeSwitch = ReturnType<typeof useCompanionHomeSwitch>;
 
 function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitch }) {
   const { t } = useTranslation();
@@ -192,8 +191,10 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
           : t('bots.cloud.notEnabled')}
       </DropdownMenuItem>
     );
+  const hereOff = choices.thisComputer === 'REMOTE_CONTROL_OFF'
+    ? <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.hereControlOff')}</DropdownMenuItem> : null;
   if (choices.targets.length === 0)
-    return <DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>;
+    return <><DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>{hereOff}</>;
   return (
     <>
       {choices.targets.map((target) => (
@@ -203,11 +204,12 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
           </span>
         </DropdownMenuItem>
       ))}
+      {hereOff}
     </>
   );
 }
 
-function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitch }) {
+export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitch }) {
   const { t } = useTranslation();
   const device = state.pending ? state.targetName(state.pending) : '';
   const busyDevice = state.busyTarget ? state.targetName(state.busyTarget) : '';
@@ -274,35 +276,5 @@ export function BotHomeComputerSetting({ bot, className = 'mt-3' }: { bot: Compa
       ) : null}
       <HomeSwitchConfirm bot={bot} state={state} />
     </div>
-  );
-}
-
-/** 「在 X 上运行」 in the chat header; null when the companion has no known home. */
-export function CompanionHomeChip({ bot }: { bot: CompanionHomeBot }) {
-  const { t } = useTranslation();
-  const state = useCompanionHomeSwitch(bot, 'toast');
-  if (!state.actor || !state.home) return null;
-  const label = state.homeHere ? t('bots.cloud.runsHere') : t('bots.cloud.runsOn', { device: state.homeName });
-  return (
-    <>
-      <DropdownMenu onOpenChange={(open) => { if (open) state.load(); }}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            data-testid="bot-home-computer-chip"
-            title={t('bots.cloud.switchHint', { name: bot.name })}
-            className="flex min-w-0 max-w-56 shrink items-center gap-1 rounded-full px-2 py-1 text-12 text-[var(--text-tertiary)] outline-none hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            style={WINDOW_NO_DRAG_STYLE}
-          >
-            <span className="min-w-0 truncate">{label}</span>
-            <ChevronDown size={12} className="shrink-0" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-56 max-w-80">
-          <HomeMenuItems bot={bot} state={state} />
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <HomeSwitchConfirm bot={bot} state={state} />
-    </>
   );
 }

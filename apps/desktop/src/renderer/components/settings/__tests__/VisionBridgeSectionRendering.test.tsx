@@ -23,6 +23,9 @@ class ResizeObserverStub {
 }
 (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= ResizeObserverStub;
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));

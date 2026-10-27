@@ -147,7 +147,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   };
   const atomIcon = (node) => {
     if (node.type === 'quote' || (node.type === 'session-link' && node.messageClientId)) return '❝';
-    if (node.type === 'mention') return node.kind === 'dir' || node.kind === 'project' ? '⌁' : node.kind === 'agent' ? '◇' : '▧';
+    if (node.type === 'mention') return node.kind === 'dir' || node.kind === 'project' ? '⌁' : node.kind === 'agent' ? '◇' : node.kind === 'todo' ? '☐' : '▧';
     if (node.type === 'session-link') return '↳';
     return '▤';
   };

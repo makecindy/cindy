@@ -34,6 +34,8 @@ export type GhostInstallConsentPolicy =
       initiator: GhostInstallConsentInitiator;
       origin: GhostInstallConsentOrigin;
       originLabel?: string;
+      target?: GhostInstallConsentRequest['target'];
+      force?: boolean;
     }
   /** 后台自动更新：不能弹窗，需要确认时抛 `GhostInstallConsentRequiredError`。 */
   | { mode: 'automatic' }
@@ -42,7 +44,7 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string }
+  | { mode: 'confirmed'; key: string; forced?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
@@ -60,6 +62,18 @@ export function confirmedTaskCapability(
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === `agent:${capability}`) ? true : undefined;
+}
+
+/** Named approvals are written only after the package/receiver consent has been revalidated. */
+export function confirmedHarnessCapabilities(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] | undefined {
+  if (decision.mode !== 'confirmed') return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.filter(item => item.key.startsWith('harness:')).map(item => item.key);
 }
 
 /**
@@ -111,7 +125,8 @@ export async function obtainGhostInstallConsent(
   packageSha256: string,
 ): Promise<GhostInstallConsentDecision> {
   if (policy.mode === 'exempt') return { mode: 'exempt', reason: policy.reason };
-  const facts = evaluateGhostInstallConsent(installed, manifest);
+  const forced = policy.mode === 'prompt' && policy.force === true;
+  const facts = evaluateGhostInstallConsent(installed, manifest, forced);
   if (!facts) return { mode: 'unprompted' };
   if (policy.mode === 'automatic') throw new GhostInstallConsentRequiredError(facts);
   let confirmed: boolean;
@@ -120,6 +135,7 @@ export async function obtainGhostInstallConsent(
       initiator: policy.initiator,
       origin: policy.origin,
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
+      ...(policy.target ? { target: policy.target } : {}),
       facts,
     });
   } catch {
@@ -133,6 +149,7 @@ export async function obtainGhostInstallConsent(
   }
   return {
     mode: 'confirmed',
+    ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(
       facts,
       packageSha256,
@@ -152,7 +169,7 @@ export function assertGhostInstallConsent(
   packageSha256: string,
 ): void {
   if (decision.mode === 'exempt') return;
-  const facts = evaluateGhostInstallConsent(installedNow, manifest);
+  const facts = evaluateGhostInstallConsent(installedNow, manifest, decision.mode === 'confirmed' && decision.forced === true);
   if (!facts) {
     // 只有原本判定无需确认的决策，才能在落位时仍然无需确认。用户确认过的更新
     // 若受体已被换成权限已覆盖候选包的版本，必须按过期拒绝，不能沿用这次确认。

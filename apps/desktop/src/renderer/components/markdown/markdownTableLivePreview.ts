@@ -2,6 +2,12 @@ import { Facet, RangeSetBuilder, StateField, type ChangeSpec } from '@codemirror
 import { redo, undo } from '@codemirror/commands';
 import { Decoration, EditorView, WidgetType } from '@codemirror/view';
 
+import {
+  docSearchRangesField,
+  selectDocSearchRangesWithin,
+  type DocSearchRange,
+} from './docSearchRanges';
+
 export type TableMenuLabels = Record<TableAction, string>;
 
 const defaultTableMenuLabels: TableMenuLabels = {
@@ -55,22 +61,38 @@ type TableMenuEntry =
 
 export const markdownTableDecorationField = StateField.define({
   create(state) {
-    return buildMarkdownTableDecorations(state.doc);
+    return buildMarkdownTableDecorations(state.doc, readDocSearchRanges(state));
   },
   update(value, transaction) {
-    if (!transaction.docChanged) return value;
-    return buildMarkdownTableDecorations(transaction.state.doc);
+    // 搜索命中集合变了也要重建:widget 靠 eq 相同被复用,再由 updateDOM 就地
+    // 补画高亮(见 MarkdownTableWidget.updateDOM 的说明)。引用比较即可 ——
+    // setDocSearchRangesEffect 每次派发新数组,doc 变化时 field 自身也会返回新数组。
+    const nextRanges = readDocSearchRanges(transaction.state);
+    const prevRanges = readDocSearchRanges(transaction.startState);
+    if (!transaction.docChanged && nextRanges === prevRanges) return value;
+    return buildMarkdownTableDecorations(transaction.state.doc, nextRanges);
   },
   provide: (field) => EditorView.decorations.from(field),
 });
 
-function buildMarkdownTableDecorations(doc: EditorView['state']['doc']) {
+/** 读取共享命中集合;未注册 docSearchRangesField 的宿主返回空数组。 */
+function readDocSearchRanges(state: EditorView['state']): DocSearchRange[] {
+  return state.field(docSearchRangesField, false) ?? [];
+}
+
+function buildMarkdownTableDecorations(
+  doc: EditorView['state']['doc'],
+  searchRanges: DocSearchRange[],
+) {
   const builder = new RangeSetBuilder<Decoration>();
   let line = doc.line(1);
   while (line.number <= doc.lines) {
     const block = findMarkdownTableAtLineInDoc(doc, line.number);
     if (block) {
-      const widget = new MarkdownTableWidget(block);
+      const widget = new MarkdownTableWidget(
+        block,
+        selectDocSearchRangesWithin(searchRanges, block.from, block.to),
+      );
       builder.add(
         block.from,
         block.to,
@@ -97,7 +119,9 @@ export function findMarkdownTableAtLine(
   return findMarkdownTableAtLineInDoc(view.state.doc, lineNumber);
 }
 
-function findMarkdownTableAtLineInDoc(
+// 导出给搜索可见性口径用:PlaintextEditor 收集 conceal 区间时要与实际渲染
+// 用完全相同的表格判定(而不是 `isMarkdownTableSourceLine` 那种行形状近似)。
+export function findMarkdownTableAtLineInDoc(
   doc: EditorView['state']['doc'],
   lineNumber: number,
 ): MarkdownTableBlock | null {
@@ -144,6 +168,175 @@ function isMarkdownTableSeparator(text: unknown): boolean {
   const cells = splitMarkdownTableRow(text).map((cell) => cell.trim());
   if (cells.length < 2) return false;
   return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+/**
+ * 表格里"看得见但不是单元格文字"的区间:分隔行 `| --- | --- |`、单元格之间
+ * 的竖线、行首行尾空白,以及单元格内部的 inline 标记字符(渲染时被换成
+ * `<strong>` / `<code>` / `<br>`,星号与反引号本身不显示)。搜索命中落在这些
+ * 区间时既没有可见文字、也不该计入命中数(否则搜索条会报一个用户永远看不到
+ * 的高亮)。
+ *
+ * markdown 表格是 block replace widget,这些区间由本函数按 doc 坐标提供,
+ * 调用方(PlaintextEditor.findAll)据此过滤命中集合。
+ */
+export function collectMarkdownTableHiddenRanges(
+  doc: EditorView['state']['doc'],
+  blocks: MarkdownTableBlock[] = collectMarkdownTableBlocks(doc),
+): Array<{ from: number; to: number }> {
+  const out: Array<{ from: number; to: number }> = [];
+  for (const block of blocks) {
+    out.push(...complementOfCellTextRanges(doc, block));
+  }
+  return out;
+}
+
+/**
+ * 一次性线性扫描出全文的表格块。搜索可见性口径有多个消费者(表格结构字符、
+ * conceal 行判定),共用这一份结果 —— 逐行各自调 `findMarkdownTableAtLineInDoc`
+ * 会让每行都重扫整段,大文档上变成平方级(每次输入都跑一遍)。
+ *
+ * 块内行整段跳过,所以每个候选行只被探测一次。
+ */
+export function collectMarkdownTableBlocks(
+  doc: EditorView['state']['doc'],
+): MarkdownTableBlock[] {
+  const blocks: MarkdownTableBlock[] = [];
+  let line = doc.line(1);
+  while (line.number <= doc.lines) {
+    const block = findMarkdownTableAtLineInDoc(doc, line.number);
+    if (block) {
+      blocks.push(block);
+      const blockEndLine = doc.lineAt(block.to).number;
+      if (blockEndLine >= doc.lines) break;
+      line = doc.line(blockEndLine + 1);
+      continue;
+    }
+    if (line.to >= doc.length) break;
+    line = doc.line(line.number + 1);
+  }
+  return blocks;
+}
+
+function complementOfCellTextRanges(
+  doc: EditorView['state']['doc'],
+  block: MarkdownTableBlock,
+): Array<{ from: number; to: number }> {
+  const visible: Array<{ from: number; to: number }> = [];
+  const hidden: Array<{ from: number; to: number }> = [];
+  // 渲染模型会把超出列数的 cell 截掉(normalizeCells),那些文字没有对应单元格
+  // 可高亮 —— 宽度超出的行必须整段算隐藏,否则搜索条会报点不到的高亮。
+  const renderedColumns = getColumnCount(block.model);
+  const firstLine = doc.lineAt(block.from).number;
+  const lastLine = doc.lineAt(block.to).number;
+  for (let number = firstLine; number <= lastLine; number++) {
+    const line = doc.line(number);
+    // 分隔行渲染成表格边框,`---` / `:` 不对应任何可见文字 → 整行算隐藏。
+    if (isMarkdownTableSeparator(line.text)) continue;
+    const cells = splitMarkdownTableRowWithRanges(line.text, line.from);
+    for (let index = 0; index < cells.length; index++) {
+      const cell = cells[index];
+      if (index >= renderedColumns) {
+        if (cell.contentTo > cell.contentFrom) {
+          hidden.push({ from: cell.contentFrom, to: cell.contentTo });
+        }
+        continue;
+      }
+      if (cell.contentTo <= cell.contentFrom) continue;
+      visible.push({ from: cell.contentFrom, to: cell.contentTo });
+      hidden.push(...collectCellInlineMarkerRanges(cell));
+    }
+  }
+  visible.sort((a, b) => a.from - b.from);
+  // 补集(块级结构字符)+ 单元格内部的 inline 标记字符,最后合并去重。
+  const out: Array<{ from: number; to: number }> = [...hidden];
+  let cursor = block.from;
+  for (const span of visible) {
+    if (span.from > cursor) out.push({ from: cursor, to: span.from });
+    cursor = Math.max(cursor, span.to);
+  }
+  if (cursor < block.to) out.push({ from: cursor, to: block.to });
+  return mergeRanges(out);
+}
+
+/**
+ * 单元格内联标记的一个 token。`contentStart/contentEnd` 是标记内部的可见内容
+ * 区间(strong 的两个 `**`、code 的两个反引号、`<br>` 整段),`start/end` 是整段
+ * 范围。渲染与搜索可见性都从这里取,避免两套正则各自演化。
+ */
+type InlineMarkdownToken = {
+  kind: 'strong' | 'code' | 'break';
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+};
+
+const INLINE_MARKDOWN_RE = /(\*\*([^*\n]+)\*\*|`([^`\n]+)`|<br\s*\/?>)/gi;
+
+function matchInlineMarkdownTokens(source: string): InlineMarkdownToken[] {
+  const tokens: InlineMarkdownToken[] = [];
+  for (const match of source.matchAll(INLINE_MARKDOWN_RE)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (match[0].toLowerCase().startsWith('<br')) {
+      // `<br>` 整段变成换行,自身不显示。
+      tokens.push({ kind: 'break', start, end, contentStart: start, contentEnd: end });
+      continue;
+    }
+    const markerLength = match[2] != null ? 2 : 1;
+    tokens.push({
+      kind: match[2] != null ? 'strong' : 'code',
+      start,
+      end,
+      contentStart: start + markerLength,
+      contentEnd: end - markerLength,
+    });
+  }
+  return tokens;
+}
+
+/**
+ * 单元格内部的"被标记吃掉"字符:`**x**` 的两个星号、`` `c` `` 的反引号、
+ * `<br>` 整段 —— 渲染时它们变成 `<strong>` / `<code>` / 换行,屏幕上不显示。
+ *
+ * 用与 `buildRenderedCellSegments` 同一份 token 解析(不另写正则、不靠渲染
+ * 偏移映射反推),所以标记规则变了这里自动跟着变。
+ *
+ * 口径前提:按"未 reveal"计算。reveal 只发生在单元格正在编辑时(光标附近
+ * 标记显形),而搜索时焦点在搜索框,不存在 reveal。
+ */
+function collectCellInlineMarkerRanges(
+  cell: { text: string; contentFrom: number; contentTo: number },
+): Array<{ from: number; to: number }> {
+  const text = cell.text.trim();
+  const tokens = matchInlineMarkdownTokens(text);
+  if (tokens.length === 0) return [];
+  const out: Array<{ from: number; to: number }> = [];
+  const base = cell.contentFrom;
+  for (const token of tokens) {
+    if (token.kind === 'break') {
+      out.push({ from: base + token.start, to: base + token.end });
+      continue;
+    }
+    out.push({ from: base + token.start, to: base + token.contentStart });
+    out.push({ from: base + token.contentEnd, to: base + token.end });
+  }
+  return out;
+}
+
+function mergeRanges(ranges: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
+  const sorted = [...ranges].sort((a, b) => a.from - b.from || a.to - b.to);
+  const out: Array<{ from: number; to: number }> = [];
+  for (const span of sorted) {
+    const last = out[out.length - 1];
+    if (last && span.from <= last.to) {
+      last.to = Math.max(last.to, span.to);
+      continue;
+    }
+    out.push({ ...span });
+  }
+  return out;
 }
 
 export function parseMarkdownTable(text: string): MarkdownTableModel | null {
@@ -369,8 +562,33 @@ function escapeTableCell(text: string): string {
 }
 
 class MarkdownTableWidget extends WidgetType {
-  constructor(private readonly block: MarkdownTableBlock) {
+  /**
+   * @param highlights 落在这张表格源码区间内的搜索命中(doc 坐标)。表格是
+   *   block replace widget,落在同一区间的 `cm-doc-search-match` mark 装饰
+   *   不会被 CodeMirror 渲染,所以高亮由 widget 自己在单元格 DOM 里画。
+   */
+  constructor(
+    private readonly block: MarkdownTableBlock,
+    private readonly highlights: DocSearchRange[] = [],
+  ) {
     super();
+  }
+
+  /**
+   * CodeMirror 复用 widget 的 DOM 时(hits 变了但表格本身没变)走这里就地补
+   * 高亮,而不是整表重建 —— 重建会打断正在编辑的单元格(焦点丢失、未提交
+   * 的输入回滚)。返回 true 表示 DOM 已经自行更新到新状态;表格源码变了就
+   * 返回 false,交回 CodeMirror 整表重建(那时连单元格文本一起刷新)。
+   */
+  updateDOM(dom: HTMLElement, view: EditorView, from: WidgetType): boolean {
+    const previous = from instanceof MarkdownTableWidget ? from : null;
+    if (!previous) return false;
+    if (previous.block.text !== this.block.text || previous.block.from !== this.block.from) {
+      return false;
+    }
+    if (sameSearchRanges(previous.highlights, this.highlights)) return true;
+    applyTableSearchHighlights(dom, this.block, this.highlights);
+    return true;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -427,7 +645,7 @@ class MarkdownTableWidget extends WidgetType {
     thead.appendChild(headRow);
     table.appendChild(thead);
     this.block.model.header.forEach((cell, columnIndex) => {
-      headRow.appendChild(this.createCell(view, 'th', 0, columnIndex, cell.text, wrapper));
+      headRow.appendChild(this.createCell(view, 'th', 0, columnIndex, cell, wrapper));
     });
 
     const tbody = document.createElement('tbody');
@@ -436,7 +654,7 @@ class MarkdownTableWidget extends WidgetType {
       const tr = document.createElement('tr');
       tbody.appendChild(tr);
       row.forEach((cell, columnIndex) => {
-        tr.appendChild(this.createCell(view, 'td', rowIndex + 1, columnIndex, cell.text, wrapper));
+        tr.appendChild(this.createCell(view, 'td', rowIndex + 1, columnIndex, cell, wrapper));
       });
     });
 
@@ -452,7 +670,14 @@ class MarkdownTableWidget extends WidgetType {
   }
 
   eq(other: MarkdownTableWidget): boolean {
-    return this.block.text === other.block.text && this.block.from === other.block.from;
+    return (
+      this.block.text === other.block.text &&
+      this.block.from === other.block.from &&
+      // hits 参与比较是刻意的:eq 相等时 CodeMirror 直接复用旧 DOM 且**不会**调
+      // updateDOM,高亮会停在旧值上。让它不相等,CodeMirror 才会退到
+      // updateDOM 的原地更新路径(DOM 仍然复用,不打断单元格编辑)。
+      sameSearchRanges(this.highlights, other.highlights)
+    );
   }
 
   private createControls(view: EditorView, root: HTMLElement): HTMLElement {
@@ -522,7 +747,7 @@ class MarkdownTableWidget extends WidgetType {
     tag: 'td' | 'th',
     rowIndex: number,
     columnIndex: number,
-    text: string,
+    model: MarkdownTableCell,
     root: HTMLElement,
   ): HTMLTableCellElement {
     const cell = document.createElement(tag);
@@ -530,8 +755,10 @@ class MarkdownTableWidget extends WidgetType {
     cell.spellcheck = false;
     cell.dataset.row = String(rowIndex);
     cell.dataset.column = String(columnIndex);
-    cell.dataset.sourceText = text;
-    renderInlineMarkdown(cell, text);
+    cell.dataset.sourceText = model.text;
+    const searchRanges = computeCellSearchRanges(model, this.highlights, this.block.from);
+    cell.dataset.searchHighlights = serializeSearchRanges(searchRanges);
+    renderInlineMarkdown(cell, model.text, [], searchRanges);
 
     if (tag === 'th') {
       const handle = document.createElement('span');
@@ -1083,7 +1310,13 @@ function rootOrSelf(cell: HTMLTableCellElement): Element {
 function renderTableCells(root: Element, active: HTMLTableCellElement | null): void {
   for (const cell of root.querySelectorAll<HTMLTableCellElement>('th, td')) {
     if (cell === active) continue;
-    renderInlineMarkdown(cell, cell.dataset.sourceText ?? '');
+    // 单元格离开编辑态后重绘,顺带把 dataset 里记着的搜索高亮恢复回来。
+    renderInlineMarkdown(
+      cell,
+      cell.dataset.sourceText ?? '',
+      [],
+      parseSearchRanges(cell.dataset.searchHighlights),
+    );
   }
   if (active) renderActiveCell(active);
 }
@@ -1107,45 +1340,201 @@ function isComposingTableCell(cell: HTMLTableCellElement): boolean {
   return cell.dataset.composing === 'true';
 }
 
+/** 单元格渲染后的一个片段。renderedFrom/renderedTo 是它在"渲染文本"里的坐标。 */
+type RenderedCellSegment =
+  | { kind: 'text' | 'strong' | 'code'; text: string; renderedFrom: number; renderedTo: number }
+  | { kind: 'break'; renderedFrom: number; renderedTo: number };
+
+const SEARCH_HIGHLIGHT_CLASS = 'cm-doc-search-match';
+const SEARCH_ACTIVE_HIGHLIGHT_CLASS = 'cm-doc-search-match cm-doc-search-active';
+
 function renderInlineMarkdown(
   cell: HTMLTableCellElement,
   source: string,
   revealRanges: Array<{ from: number; to: number }> = [],
+  searchRanges: DocSearchRange[] = [],
 ): void {
   const handle = cell.querySelector('.cm-md-table-resize-handle');
   handle?.remove();
   cell.textContent = '';
   cell.dataset.revealRanges = serializeRevealRanges(revealRanges);
 
-  let pos = 0;
-  const pattern = /(\*\*([^*\n]+)\*\*|`([^`\n]+)`|<br\s*\/?>)/gi;
-  for (const match of source.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    if (start > pos) cell.appendChild(document.createTextNode(source.slice(pos, start)));
-    if (match[0].toLowerCase().startsWith('<br')) {
-      cell.appendChild(document.createElement('br'));
-      pos = end;
-      continue;
-    }
-    if (shouldRevealInlineMarkdown(start, end, revealRanges)) {
-      cell.appendChild(document.createTextNode(match[0]));
-      pos = end;
-      continue;
-    }
-    if (match[2] != null) {
-      const strong = document.createElement('strong');
-      strong.textContent = match[2];
-      cell.appendChild(strong);
-    } else if (match[3] != null) {
-      const code = document.createElement('code');
-      code.textContent = match[3];
-      cell.appendChild(code);
-    }
-    pos = end;
+  for (const segment of buildRenderedCellSegments(source, revealRanges)) {
+    appendRenderedCellSegment(cell, segment, searchRanges);
   }
-  if (pos < source.length) cell.appendChild(document.createTextNode(source.slice(pos)));
   if (handle) cell.appendChild(handle);
+}
+
+/**
+ * 把 cell 源码切成渲染片段(纯文本 / strong / code / 换行)。坐标推进规则
+ * 必须与 `sourceOffsetToRenderedOffset` 一致(标记本身不占渲染长度,`<br>`
+ * 占 1),否则高亮会错位。内联标记的切分与搜索可见性口径共用
+ * `matchInlineMarkdownTokens`。
+ */
+function buildRenderedCellSegments(
+  source: string,
+  revealRanges: Array<{ from: number; to: number }>,
+): RenderedCellSegment[] {
+  const segments: RenderedCellSegment[] = [];
+  let pos = 0;
+  let rendered = 0;
+
+  const pushText = (text: string): void => {
+    if (text.length === 0) return;
+    segments.push({ kind: 'text', text, renderedFrom: rendered, renderedTo: rendered + text.length });
+    rendered += text.length;
+  };
+
+  for (const token of matchInlineMarkdownTokens(source)) {
+    if (token.start > pos) pushText(source.slice(pos, token.start));
+    if (token.kind === 'break') {
+      segments.push({ kind: 'break', renderedFrom: rendered, renderedTo: rendered + 1 });
+      rendered += 1;
+    } else if (shouldRevealInlineMarkdown(token.start, token.end, revealRanges)) {
+      pushText(source.slice(token.start, token.end));
+    } else {
+      const text = source.slice(token.contentStart, token.contentEnd);
+      segments.push({ kind: token.kind, text, renderedFrom: rendered, renderedTo: rendered + text.length });
+      rendered += text.length;
+    }
+    pos = token.end;
+  }
+  if (pos < source.length) pushText(source.slice(pos));
+  return segments;
+}
+
+/**
+ * 按渲染坐标把片段写进 cell,命中部分包一层 `.cm-doc-search-match`(active
+ * 命中再叠 `.cm-doc-search-active`)。class 与 CodeMirror 正文里的 mark
+ * decoration 完全一致,所以一套 CSS 同时管住正文与表格单元格。
+ */
+function appendRenderedCellSegment(
+  cell: HTMLTableCellElement,
+  segment: RenderedCellSegment,
+  searchRanges: DocSearchRange[],
+): void {
+  if (segment.kind === 'break') {
+    cell.appendChild(document.createElement('br'));
+    return;
+  }
+  const container =
+    segment.kind === 'strong'
+      ? document.createElement('strong')
+      : segment.kind === 'code'
+        ? document.createElement('code')
+        : null;
+
+  let cursor = segment.renderedFrom;
+  for (const range of sortedSearchRanges(searchRanges)) {
+    const from = Math.max(range.from, segment.renderedFrom);
+    const to = Math.min(range.to, segment.renderedTo);
+    if (to <= from) continue;
+    appendPlainText(container ?? cell, segment.text.slice(cursor - segment.renderedFrom, from - segment.renderedFrom));
+    const hit = document.createElement('span');
+    hit.className = range.active ? SEARCH_ACTIVE_HIGHLIGHT_CLASS : SEARCH_HIGHLIGHT_CLASS;
+    hit.textContent = segment.text.slice(from - segment.renderedFrom, to - segment.renderedFrom);
+    (container ?? cell).appendChild(hit);
+    cursor = to;
+  }
+  appendPlainText(
+    container ?? cell,
+    segment.text.slice(cursor - segment.renderedFrom),
+  );
+  if (container) cell.appendChild(container);
+}
+
+function appendPlainText(parent: Node, text: string): void {
+  if (text.length === 0) return;
+  parent.appendChild(document.createTextNode(text));
+}
+
+function sortedSearchRanges(ranges: DocSearchRange[]): DocSearchRange[] {
+  return [...ranges].sort((a, b) => a.from - b.from || a.to - b.to);
+}
+
+function sameSearchRanges(a: DocSearchRange[], b: DocSearchRange[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (range, index) =>
+      range.from === b[index].from && range.to === b[index].to && range.active === b[index].active,
+  );
+}
+
+/**
+ * 落在某个单元格里的命中 → 渲染坐标下的高亮区间。
+ *
+ * `MarkdownTableCell.sourceFrom/sourceTo` 是**表格块内**的相对偏移(见
+ * commitTable 里 `block.from + sourceFrom` 的用法),要先加回 blockFrom 才是
+ * doc 坐标。单元格文本是 trim 过的,这段区间正好对应 trim 后的内容。
+ */
+function computeCellSearchRanges(
+  model: MarkdownTableCell,
+  highlights: DocSearchRange[],
+  blockFrom: number,
+): DocSearchRange[] {
+  if (model.sourceFrom == null || model.sourceTo == null || highlights.length === 0) return [];
+  const cellFrom = blockFrom + model.sourceFrom;
+  const cellTo = blockFrom + model.sourceTo;
+  const out: DocSearchRange[] = [];
+  for (const range of highlights) {
+    const from = Math.max(range.from, cellFrom);
+    const to = Math.min(range.to, cellTo);
+    if (to <= from) continue;
+    out.push({
+      from: sourceOffsetToRenderedOffset(model.text, from - cellFrom, []),
+      to: sourceOffsetToRenderedOffset(model.text, to - cellFrom, []),
+      active: range.active,
+    });
+  }
+  return out;
+}
+
+/** 就地刷新整张表格 widget 的高亮(搜索命中变化时走 MarkdownTableWidget.updateDOM)。 */
+function applyTableSearchHighlights(
+  root: HTMLElement,
+  block: MarkdownTableBlock,
+  highlights: DocSearchRange[],
+): void {
+  for (const cell of root.querySelectorAll<HTMLTableCellElement>('th, td')) {
+    const rowIndex = Number(cell.dataset.row);
+    const columnIndex = Number(cell.dataset.column);
+    if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) continue;
+    const modelCell =
+      rowIndex === 0
+        ? block.model.header[columnIndex]
+        : block.model.rows[rowIndex - 1]?.[columnIndex];
+    if (!modelCell) continue;
+    const ranges = computeCellSearchRanges(modelCell, highlights, block.from);
+    // dataset 一定要先写:编辑中的 cell 只暂缓重绘,不能暂缓"新高亮是多少"。
+    // 否则失焦后 renderTableCells 会拿旧区间重画,搜索条是新查询、单元格却回到
+    // 上一轮的高亮(project-search 跳转不聚焦搜索框,这条路径是真实存在的)。
+    cell.dataset.searchHighlights = serializeSearchRanges(ranges);
+    // 正在编辑 / 输入法组合中的单元格不重绘:重绘会打断用户输入与光标。
+    // 高亮在 focusout 后由 renderTableCells 补回。
+    if (isComposingTableCell(cell) || document.activeElement === cell) continue;
+    renderInlineMarkdown(cell, cell.dataset.sourceText ?? '', [], ranges);
+  }
+}
+
+/** 高亮区间存 dataset:与 reveal-ranges 同风格,cell 重绘时不必回查 model。 */
+function serializeSearchRanges(ranges: DocSearchRange[]): string {
+  return ranges
+    .map((range) => `${range.from}:${range.to}${range.active ? ':a' : ''}`)
+    .join(',');
+}
+
+function parseSearchRanges(value: string | undefined): DocSearchRange[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((chunk) => {
+      const [from, to, flag] = chunk.split(':');
+      const fromNum = Number(from);
+      const toNum = Number(to);
+      if (!Number.isFinite(fromNum) || !Number.isFinite(toNum)) return null;
+      return { from: fromNum, to: toNum, active: flag === 'a' };
+    })
+    .filter((range): range is DocSearchRange => range != null);
 }
 
 function shouldRevealInlineMarkdown(

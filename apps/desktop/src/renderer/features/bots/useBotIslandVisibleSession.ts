@@ -1,10 +1,10 @@
 import { useEffect } from 'react';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 
-/** Called by the route's ownership gate, never by URL-only navigation. */
-export function useBotIslandVisibleSession(sessionId: string | null) {
+/** Report only the exact task after metadata and history load, never a URL-only landing. */
+export function useBotIslandVisibleSession(sessionId: string | null, enabled = true) {
   useEffect(() => {
-    if (!isAgentIslandSupported()) return;
+    if (!enabled || !isAgentIslandSupported()) return;
     const sync = () => {
       // Main accepts only a focused window or its pending notification target.
       // A DOM focus check here can drop that ack before focus has settled.
@@ -16,5 +16,5 @@ export function useBotIslandVisibleSession(sessionId: string | null) {
       window.removeEventListener('focus', sync);
       void window.electronAPI.agentIsland?.setVisibleSession?.(null);
     };
-  }, [sessionId]);
+  }, [sessionId, enabled]);
 }

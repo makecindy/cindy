@@ -158,6 +158,7 @@ export function registerCreateWorkersTool(
           fast: worker.fast,
           label: worker.label,
           ...(worker.working_dir !== undefined ? { workingDir: worker.working_dir } : {}),
+          ...(worker.images ? { initialTaskImages: worker.images } : {}),
           ...(worker.new_worktree !== undefined ? { worktree: worker.new_worktree.source_branch === undefined ? {} : { sourceBranch: worker.new_worktree.source_branch } } : {}),
           ...(worker.execution_device_id !== undefined ? { executionDeviceId: worker.execution_device_id } : {}),
           ...toHostAgentDeviceId(worker.agent_device_id),

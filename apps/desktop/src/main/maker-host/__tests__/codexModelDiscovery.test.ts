@@ -95,6 +95,16 @@ const SAMPLE = {
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it.each([
+    { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
+    { additional_speed_tiers: ['fast', 'ultrafast'] },
+  ])('reads both native cache speed declarations: %j', fields => {
+    const [model] = mapCodexModelsToCatalog({ models: [{ slug: 'gpt-6.1-sol',
+      visibility: 'list', supported_in_api: true, ...fields }] });
+    expect(model).toMatchObject({ supportsFastMode: true, supportsUltrafastMode: true });
+    expect(model.discoveredMetadata?.supportsFastMode).toBe(true);
+  });
+
   it('retains native maximum and explicit image capability separately from defaults', () => {
     const [model] = mapCodexModelsToCatalog({
       models: [

@@ -43,6 +43,8 @@
   // 关闭 / 最大化 / 弹出按钮由主机统一提供);position:"tab" 时声明本字段拒装
   // 一级主视图是独立能力，见 §4.20。使用时直接声明：
   // "mainView": { "title": "工作台", "icon": "puzzle", "html": "main-view.html" }
+  // 跟对话的任务页(§4.22):页签存在每个任务自己的右侧栏里,随任务切换
+  // "taskView": { "title": "模拟器", "html": "task.html" }
   // 可选 "open": "page"(缺省,撑满内容区)/ "sidebar"(作为页签进聊天区某一边,配 "side":
   // left / right / top / bottom)/ "window"(弹成独立窗口);只是左侧导航入口的默认打开方式,
   // 用户拖过 / 弹过后以用户的放置为准。可选 "multiple": true 允许同一视图同时开在多处。
@@ -117,6 +119,7 @@ tool name 对齐，协议键、工具名和参数名不翻译：
   },
   "panel": { "title": "Plugin panel" },
   "mainView": { "title": "Workspace" },
+  "taskView": { "title": "Simulator" },
   "network": {
     "secrets": {
       "api_key": { "label": "API key", "hint": "Create one in account settings." }
@@ -139,7 +142,7 @@ tool name 对齐，协议键、工具名和参数名不翻译：
 ```
 
 可翻译字段：`name`、`description`、`whenToUse`、`tools`(工具 description 与参数
-文案)、`panel.title`、`mainView.title`、`network.secrets / connections`、`node.secretBindings`、
+文案)、`panel.title`、`mainView.title`、`taskView.title`、`network.secrets / connections`、`node.secretBindings`、
 `setup` 的 kv 标签；凭证、连接、Node 凭证和 kv 项按稳定 key 对齐(提供某个 key 的
 条目时 label 必填,hint 可选)。工具参数 schema 中已有的 `title / description` 用
 JSON Pointer 对齐（如 `/properties/query`；根节点用空字符串 `""`），参数名、类型、
@@ -153,19 +156,23 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 `prototype`；这些名称是宿主保留键，打包时会直接拒绝。
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
-`agent`、`panel`、`mainView`、`card`、`subscribe`、`network`、`node`、`preview`、
+`agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
 `skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`。不用的字段直接省略。
 `deviceSync` 的声明与调用约定见 [§4.10.2 同账号电脑间的插件资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
 阅读邮件可声明 `mailReader:{tool,hosts}`，工具接收 `{url}` 并返回 MailMessage，默认只读。
+可选 `participantPhotos:[{email,url}]` 最多 64 项，按小写邮箱精确匹配；照片 URL 仅 HTTPS，
+无凭据、自定义端口。缺照片/权限时省略，不阻断阅读；旧宿主忽略。桌面回退公开头像、
+企业图标和首字；头像不证明身份。正文外图仍需单独点击显示。
 `mail` 只能省略或写字面量 `true`；声明 `mailReader` 时必须同时有 `mail: true`，
 且 `tool` 必须指向本清单 `tools` 中的工具。协议校验与桌面安装校验都会拒绝不完整组合。
 支持打开即已读时增加 `mailReader.markRead:true`，读取工具接受可选 `markRead:true`；
 声明中的 `markRead` 只能省略或为字面量 `true`，`false`、字符串等其它值不合法。
 仅用户主动打开时传入，AI 读取和邻近预加载不传。成功读取后只标记当前邮件，不标记整个会话或草稿。
 Host 派发器会移除普通工具参数中的此标记，仅可信阅读器打开请求可注入；其它明确授权的已读操作工具不受影响。
+用户主动打开链接时，Host 还可注入 `openDraft:true`（普通工具参数不能自行设置）。识别为草稿后，插件解析服务商稳定的草稿 ID，复用已有公共草稿读取/展示流程，并在邮件结果中返回 `draftId`。Host 仅在核实当前任务、插件、邮箱账号与草稿一致后，给客户端返回 `draftCallId`，打开现有编辑器。插件不能自报卡片 ID；后台读取保持只读。旧 Host 不注入此标记，旧插件忽略它，继续支持只读展示。
 标记失败仍返回正文和 `markReadFailed:true`，由 Cindy 显示提示；新增 OAuth scope 不阻断已有授权的操作。
 适配器提供 providerName、draftStorage（server/local）、selectAccount、readDraft、writeDraft。
 通过 present 展示读回草稿，beforeTool 统一 get/send/update/delete，resolveDraft 获取最新位置。

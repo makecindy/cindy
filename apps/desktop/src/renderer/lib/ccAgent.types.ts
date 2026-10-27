@@ -285,6 +285,8 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  /** The accepted user input (clientId) the turn that wrote this row answers. */
+  replyToClientId?: string;
   /** Main-owned input receipt, retained for audit; never an authorization grant. */
   botTaskCoordinationInput?: import('../../shared/botTaskCoordination').BotTaskCoordination;
   /** Accepted internal coordination turn, used to suppress successful completion attention. */
@@ -385,6 +387,7 @@ export interface Session {
    * 与 updatedAt 解耦——改 model/effort/title 等字段不会动它。
    */
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   status: SessionStatus;
   /** 当前 session 接的 agent。老 session DEFAULT 'cc'。 */
   agentKind: AgentKind;

@@ -1,12 +1,18 @@
 {
   "id": "36kr-news",
-  "match": ["36kr.com"],
-  "description": "读取 36 氪最新科技/创投资讯(RSS 输出 XML:标题/链接/发布时间/摘要)。走公开 RSS 源 www.36kr.com/feed,无需登录。结果是 RSS XML 文本,逐个 <item> 解析 title/link/pubDate/description。",
-  "inputs": {},
-  "steps": [
-    { "action": "navigate", "url": "https://www.36kr.com/feed" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "feed", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "36kr.com"
   ],
-  "output": "{{feed}}"
+  "description": "Latest tech/startup news from 36kr (36氪)",
+  "access": "read",
+  "adapter": "36kr/news",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of articles (max 50)"
+    }
+  },
+  "steps": []
 }

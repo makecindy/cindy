@@ -12,8 +12,9 @@ import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
  * 判定逻辑与个人微信 / 钉钉共用 channelForceConfirmToolCall(嵌套解包覆盖
  * Claude call_tool、Codex MCP elicitation 与 Pi 桥接 MCP / 二级分派插件)。
  * maker 不支持某个会话权限档时会拒绝本策略(fail-closed), 不会静默放开。
- * 唯一例外是用户显式选择 Full access(bypassPermissions): adapter 会在 dispatch
- * 前取缔本策略, 直接按该档执行；群历史 lane 隔离仍独立生效。
+ * 新消息准入时，adapter 仅对 owner 轮次或伙伴自有 bot 在 Full access 下取缔策略。
+ * 主人运行中主动切档则与普通任务一致，当前已受理轮次立即跟随新权限，包括成员轮次；
+ * 来源身份、新消息准入与群历史 lane 隔离仍独立生效。
  */
 export function createTelegramGuestTurnPermissionPolicy(taskId: string, isOwner?: boolean): TurnPermissionPolicy {
   return {

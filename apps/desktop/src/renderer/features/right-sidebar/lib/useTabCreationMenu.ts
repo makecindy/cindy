@@ -1,11 +1,9 @@
-import { UNSAFE_NavigationContext } from 'react-router-dom';
-import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { useContext, useRef, useState, useSyncExternalStore } from 'react';
 import { Puzzle } from 'lucide-react';
 import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
-import { canonicalBotSessionId, useBotProfiles } from '@/features/bots/botStore';
+import { useBotProfiles } from '@/features/bots/botStore';
 import { findBotProfileForSession } from '@/features/bots/botSessionOwners';
 import { DetachedBotMenuOwnerContext } from '../botMenuOwnerContext';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
@@ -13,7 +11,6 @@ import { isRemoteSessionWriteBlocked } from '@/features/cc-agent/lib/remoteSessi
 import { sessionsStore } from '@/lib/sessionsStore';
 import { listTabKindMenuMetas, useTabKindRegistryVersion } from '../registry';
 import type { TabKindId, TabKindMenuMeta } from '../types';
-import { openBotWorkbenchTab } from './openBotWorkbenchTab';
 import { canOpenSideChat, openSideChatTab, type SideChatTabPlacement } from './openSideChatTab';
 import {
   addGlobalPluginTab, globalTabTitleForGhost, isGlobalTabCapableGhost,
@@ -77,17 +74,10 @@ export function useTabCreationMenu({
   );
   const remoteSessions = useRemoteProjectSessions();
   const session = remoteSessions.find(row => row.id === sessionId) ?? localSession;
-  const workbenchBotId = sessionId
-    && (bot ? canonicalBotSessionId(bot) === sessionId : linkedOwner?.canonical)
-    && !session?.remoteHostId && !session?.deviceLinkDeviceId
-    ? bot?.id ?? linkedOwner?.botId ?? null : null;
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
   const pending = useRef<string | null>(null);
-  // Detached sidebar hosts have no Router and must hand content back to the main window.
-  const router = useContext(UNSAFE_NavigationContext);
   const items = listTabKindMenuMetas().filter(item => {
     if (item.kind.startsWith('ghost:')) return false;
-    if (item.kind === 'bot-workbench' && !workbenchBotId) return false;
     if (item.kind === 'subagents' && !subagentsAvailable) return false;
     if (item.kind === 'side-chat' && (isBotSession || !canOpenSideChat(session))) return false;
     return !isBotSession || !BOT_SECONDARY_KINDS.has(item.kind);
@@ -121,17 +111,11 @@ export function useTabCreationMenu({
       setOpeningSessionId(sessionId);
       const opening = openSideChatTab(sessionId, {
         placement: sideChatPlacement,
-        onOpen: !isSidebarWindow() && router
-          ? (id) => router.navigator.push(`${router.basename.replace(/\/$/, '')}/cc-agent/${id}`) : undefined,
       });
       void opening.finally(() => {
         if (pending.current === sessionId) pending.current = null;
         setOpeningSessionId(current => current === sessionId ? null : current);
       });
-      return;
-    }
-    if (kind === 'bot-workbench' && workbenchBotId) {
-      void openBotWorkbenchTab(sessionId, workbenchBotId).catch(() => undefined);
       return;
     }
     onSelect(kind);

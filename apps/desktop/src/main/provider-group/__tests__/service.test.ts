@@ -11,6 +11,7 @@ import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/p
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
+import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../cooling';
 import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
 import { createProviderGroupRouter, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../router';
 import { providerGroupCodexUsageSnapshot, type ProviderGroupCodexUsageSnapshot } from '../usage';
@@ -46,6 +47,13 @@ function member(kind: ProviderGroupMember['kind'], agentDeviceId: string | null,
 }
 
 const LEASE = { recovery: 'lease' };
+// Runtime handoff regression: overload must cool the failing member and consume
+// a guest's offer just like limits. Earlier service coverage only sent limits;
+// the coordinator regression covers which recovery owner receives this error.
+const SWITCH_FAILURES = [
+  { cause: 'usage-limit', signals: { sdkError: 'rate_limit' } },
+  { cause: 'overload', signals: { reason: 'upstream-overload', codexErrorInfo: 'serverOverloaded' } },
+] as const;
 const LOCAL = member('local', null, 'anthropic');
 const MINI = member('device', 'mini', 'anthropic-1a2b3c4d');
 const STUDIO = member('share', 'share:s1', 'anthropic');
@@ -442,10 +450,10 @@ describe('nextAfterStartFailure', () => {
 });
 
 describe('onTurnError (automatic switch)', () => {
-  it('hands the task to the next computer and continues the turn with an activity row', async () => {
+  it.each(SWITCH_FAILURES)('hands off, cools the member and continues after $cause', async ({ cause, signals }) => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
+    h.service.onTurnError('s1', signals, 7);
     await flush();
     expect(h.deps.leaseRecovery).toHaveBeenCalledWith('s1', 7);
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', {
@@ -458,12 +466,16 @@ describe('onTurnError (automatic switch)', () => {
     // 交接后用新令牌续跑(旧会话关闭撤销了原来的等待)。
     expect(h.deps.rearmContinue).toHaveBeenCalledWith('s1', LEASE, expect.any(Number));
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
-      agentSwitch: { from: 'local-name', to: `${MINI.key}-name`, cause: 'usage-limit' },
+      agentSwitch: { from: 'local-name', to: `${MINI.key}-name`, cause },
     }));
     expect(h.deps.fallback).not.toHaveBeenCalled();
-    // 撞到用量上限的那台进入冷却，新任务不会分到它。
-    expect(h.router.coolingUntil('anthropic', 'local', MODEL)).toBe(1_000_000 + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS);
-    expect(h.router.coolingUntil('anthropic', 'local', 'claude-sonnet-5')).toBeNull();
+    // 限额按模型冷却，过载按账号短暂冷却；其他任务不会立即回到这台。
+    expect(h.router.coolingUntil('anthropic', 'local', MODEL)).toBe(
+      1_000_000 + (cause === 'overload' ? PROVIDER_GROUP_FAILURE_COOLDOWN_MS : PROVIDER_GROUP_DEFAULT_COOLDOWN_MS),
+    );
+    expect(h.router.coolingUntil('anthropic', 'local', 'claude-sonnet-5')).toBe(
+      cause === 'overload' ? 1_000_000 + PROVIDER_GROUP_FAILURE_COOLDOWN_MS : null,
+    );
   });
 
   it('switches back to this computer with its provider when a remote member fails', async () => {
@@ -1423,10 +1435,11 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     return { ...h, service, guestSwitch, tick: (ms: number) => { clock += ms; } };
   }
 
-  it('hands off and reopens with the token when the group computer asks to switch', async () => {
+  it.each(SWITCH_FAILURES)('hands off and reopens with the token after $cause', async ({ cause, signals }) => {
     const h = guestHarness();
     h.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
-    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 7);
+    expect(h.service.mayHandleTurnError('s1', signals)).toBe(true);
+    h.service.onTurnError('s1', signals, 7);
     await flush();
     // 位置仍是同一个分享：强制重新交接。
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', {
@@ -1438,7 +1451,7 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
     expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
-      groupSwitch: { cause: 'usage-limit' },
+      groupSwitch: { cause },
     }));
     const info = (h.deps.continueSession.mock.calls[0] as unknown[])[2] as Record<string, unknown>;
     expect(info).not.toHaveProperty('agentSwitch');
@@ -1544,38 +1557,38 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
 describe('no error while switching (mayHandleTurnError + hooks)', () => {
   const LIMIT = { sdkError: 'rate_limit' };
 
-  it('predicts a switch only for bound tasks in a group that can still move them', () => {
+  it.each(SWITCH_FAILURES)('predicts a switch only for a group that can move after $cause', ({ signals }) => {
     const h = harness();
     // 没归组、也没有分享者的凭证：照常先报错。
-    expect(h.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(h.service.mayHandleTurnError('s1', signals)).toBe(false);
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    expect(h.service.mayHandleTurnError('s1', LIMIT)).toBe(true);
+    expect(h.service.mayHandleTurnError('s1', signals)).toBe(true);
     // 换到哪台都一样的失败不换。
     expect(h.service.mayHandleTurnError('s1', { message: 'prompt is too long', sdkError: 'invalid_request' })).toBe(false);
 
     const off = harness({ autoSwitch: false });
     off.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    expect(off.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(off.service.mayHandleTurnError('s1', signals)).toBe(false);
 
     // 组里只剩这一台电脑：换不了。
     const alone = harness({ members: [LOCAL] });
     alone.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    expect(alone.service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(alone.service.mayHandleTurnError('s1', signals)).toBe(false);
   });
 
-  it('predicts a switch for a shared task only with a fresh token from the group computer', () => {
+  it.each(SWITCH_FAILURES)('requires a fresh token from the group computer after $cause', ({ signals }) => {
     let clock = 0;
     const guestSwitch = createProviderGroupGuestSwitch(() => clock);
     const h = harness({ row: { agentDeviceId: 'share:share-from-alice', providerId: 'alice-anthropic' } });
     const service = createProviderGroupService({ ...h.deps, guestSwitch });
-    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(service.mayHandleTurnError('s1', signals)).toBe(false);
     guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
-    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(true);
+    expect(service.mayHandleTurnError('s1', signals)).toBe(true);
     // 只看不取：之后的换电脑仍拿得到凭证。
     expect(guestSwitch.claim('s1')).toBe(true);
     guestSwitch.offer('s1', 'token-bbbbbbbbbbbbbbbb');
     clock += PROVIDER_GROUP_SWITCH_OFFER_TTL_MS + 1;
-    expect(service.mayHandleTurnError('s1', LIMIT)).toBe(false);
+    expect(service.mayHandleTurnError('s1', signals)).toBe(false);
   });
 
   it('reports a successful switch and never hands back', async () => {

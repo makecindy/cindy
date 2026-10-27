@@ -101,6 +101,9 @@ export function mergeBotGroupLatestPage(
   previous: BotGroupLoadedTimeline,
   next: BotGroupDetail,
 ): BotGroupLoadedTimeline {
+  if (next.historyRevision && next.historyRevision !== previous.group.historyRevision) {
+    return { group: next, older: [], olderPlans: [], olderHasMore: next.hasMoreBefore };
+  }
   const page = next.messages;
   const floor = page.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
   const ceiling = previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY);
@@ -123,9 +126,11 @@ export function mergeBotGroupLatestPage(
   const pushedOut = next.hasMoreBefore
     ? previous.group.messages.filter((message) => message.sequence < floor)
     : [];
+  const updates = new Map(next.messageUpdates?.map(message => [message.id, message]));
+  const refreshedOlder = updates.size ? stabilizeById(previous.older, previous.older.map(message => updates.get(message.id) ?? message)) : previous.older;
   const older = withThreadUnread(pushedOut.length > 0
-    ? stabilizeById(previous.older, mergeBotGroupMessages(previous.older, pushedOut))
-    : previous.older, next.threads);
+    ? stabilizeById(refreshedOlder, mergeBotGroupMessages(refreshedOlder, pushedOut.map(message => updates.get(message.id) ?? message)))
+    : refreshedOlder, next.threads);
   // The first rows moving down take over what the old latest page said about earlier history.
   const olderHasMore = pushedOut.length > 0 && previous.older.length === 0 ? previous.group.hasMoreBefore : previous.olderHasMore;
   const messages = stabilizeById(previous.group.messages, page, previous.older);

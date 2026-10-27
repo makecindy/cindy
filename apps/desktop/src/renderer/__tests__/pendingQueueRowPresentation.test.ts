@@ -331,3 +331,14 @@ describe('resolveSoleSteerableQueuedMessage', () => {
     ).toBeNull();
   });
 });
+
+
+// Unit regression: pending task input must show the same paragraphs as delivered
+// history, while its send payload and an ordinary user's draft stay literal.
+it('decodes forwarded queue display without mutating the queued body', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const entry = queuedMessage({ text: content, persistedContent: content, origin: { kind: 'session', senderSessionId: 'sender', displayText: content } });
+  expect(getPendingQueueRowPresentation(entry).displayText).toContain('第一段\n第二段');
+  expect(entry.persistedContent).toBe(content);
+  expect(getPendingQueueRowPresentation(queuedMessage({ text: content })).displayText).toBe(content);
+});

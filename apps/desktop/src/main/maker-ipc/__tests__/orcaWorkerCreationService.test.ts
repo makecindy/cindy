@@ -331,6 +331,8 @@ describe('orcaWorkerTitle', () => {
 });
 
 describe('Worker running on another device (execution device)', () => {
+  // Unit regression: a remote model must not move the Team or prevent a Worker
+  // from working on a third computer. The former guards rejected both inputs.
   const remoteDeps = (overrides: Partial<OrcaWorkerCreationDeps> = {}) => createDeps({
     openRemoteWorker: vi.fn(async (input) => ({
       ok: true as const,
@@ -443,15 +445,12 @@ describe('Worker running on another device (execution device)', () => {
     expect(deps.openRemoteWorker).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['SSH', { remoteHostId: 'host-1' }],
-    ['remote Agent', { agentDeviceId: 'device-b' }],
-  ])('refuses to mix with a Lead on %s', async (_name, leadPatch) => {
+  it('keeps SSH execution on its original SSH host', async () => {
     const { deps, service } = remoteDeps({
       getLeadSessionRow: vi.fn(async () => ({
         id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const, workingDir: '/repo',
         model: 'gpt-5.5', effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'xd',
-        remoteHostId: null, ...leadPatch,
+        remoteHostId: 'host-1',
       })),
     });
     const result = await service.createWorker({
@@ -459,6 +458,24 @@ describe('Worker running on another device (execution device)', () => {
     });
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, 'provider-pc'])('places a remote-model Lead’s Worker on its work computer with Agent selection %s', async agentDeviceId => {
+    const { deps, service } = remoteDeps({
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const,
+        workspaceKind: 'project' as const, workingDir: 'D:/lead', model: 'gpt-5.5',
+        effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'openai',
+        remoteHostId: null, agentDeviceId: 'lead-model-pc' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'tester', label: 'mac',
+      agent: 'codex', executionDeviceId: 'mac', workingDir: '/Users/demo/project',
+      ...(agentDeviceId !== undefined ? { agentDeviceId } : {}) });
+    expect(result).toMatchObject({ ok: true, executionDeviceId: 'mac', workingDir: '/Users/demo/project' });
+    const opened = vi.mocked(deps.openRemoteWorker!).mock.calls[0]![0];
+    if (agentDeviceId === undefined) expect(opened).not.toHaveProperty('agentDeviceId');
+    else expect(opened.agentDeviceId).toBe(agentDeviceId);
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
   });
 
   it('passes through device errors without recording a worker', async () => {
@@ -626,7 +643,6 @@ describe('Worker of a lead whose agent runs on another computer', () => {
 
     it.each([
       ['an SSH Lead', { lead: { remoteHostId: 'host-1' }, params: {} }],
-      ['a run-on-device Worker', { lead: {}, params: { executionDeviceId: 'office' } }],
       ['a malformed id', { lead: {}, params: { agentDeviceId: 'bad id/..' } }],
     ])('rejects another computer for %s', async (_name, { lead, params }) => {
       const { deps, service } = createDeps({

@@ -84,22 +84,45 @@ impl Pipe {
             shutdown: None,
         })
     }
+    /// Connects within the documented three-second open budget.
+    ///
+    /// The service drops and recreates its listening instance after every
+    /// accept timeout, and reports RUNNING just before the first instance
+    /// exists. `WaitNamedPipeW` returns immediately when no instance exists at
+    /// all, so a single attempt can fail with `ERROR_FILE_NOT_FOUND` purely for
+    /// landing in one of those gaps. Retry until the deadline, and keep waiting
+    /// out `ERROR_PIPE_BUSY` the ordinary way.
     pub fn client(name: &str) -> Result<Self> {
         let name = wide(name);
-        unsafe {
-            WaitNamedPipeW(name.as_ptr(), 3000);
-        }
-        let handle = Handle::new(unsafe {
-            CreateFileW(
-                name.as_ptr(),
-                FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                0,
-                ptr::null(),
-                OPEN_EXISTING,
-                FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
-                ptr::null_mut(),
-            )
-        })?;
+        let deadline = Instant::now() + Duration::from_millis(3000);
+        let handle = loop {
+            let raw = unsafe {
+                CreateFileW(
+                    name.as_ptr(),
+                    FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                    0,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                    ptr::null_mut(),
+                )
+            };
+            if !raw.is_null() && raw != INVALID_HANDLE_VALUE {
+                break Handle::new(raw)?;
+            }
+            let code = unsafe { GetLastError() };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() || (code != ERROR_FILE_NOT_FOUND && code != ERROR_PIPE_BUSY) {
+                return Err(io::Error::from_raw_os_error(code as i32));
+            }
+            if code == ERROR_PIPE_BUSY {
+                unsafe {
+                    WaitNamedPipeW(name.as_ptr(), remaining.as_millis() as u32);
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(25).min(remaining));
+            }
+        };
         Ok(Self {
             handle,
             buffered: Vec::new(),

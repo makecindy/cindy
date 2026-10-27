@@ -185,7 +185,7 @@ const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
   rendererFunction('MarkdownSelectableText').getText(rendererSource) + String.raw`
-function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, selectable, text, layout, code = false }) {
+function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true }) {
   const styles = {};
   const onOpenPayload = undefined;
   const inlinesSelectable = () => true;
@@ -212,6 +212,13 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const presentation = {};
   const rendersSentInlineBody = false;
   const canSelectVisibleText = true;
+  const shareSelectionActive = false;
+  const bubbleTextSelectable = canSelectVisibleText;
+  const companionMenuEnabled = false;
+  const companionQuote = undefined;
+  const replyQuote = undefined;
+  const replyTarget = null;
+  const replyTargetId = null;
   const isStreamingAssistant = false;
   const contentLayout = buildMessageContentLayout({ screenWidth: 402 });
   const t = i18n.t.bind(i18n);
@@ -229,6 +236,9 @@ return { BubbleHarness, MarkdownHarness };
     buildMessageContentLayout, nextSettledContentWidth,
     MarkdownBlockContent: ({ block, renderBlock }: { block: unknown; renderBlock: (block: unknown) => React.ReactNode }) => renderBlock(block),
     HighlightedCodeText: ({ text }: { text: string }) => React.createElement('code', null, text),
+    // Clipboard behavior has dedicated production-component tests; this stub only
+    // exposes action presence for the layout and share-mode assertions.
+    MarkdownCodeCopyButton: ({ text }: { text: string }) => React.createElement('button', { 'data-testid': 'code-copy-stub' }, text),
     mayExceedVisualLineThreshold, resolveUserMessageCollapse,
     AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD, AUTOMATION_USER_MESSAGE_COLLAPSED_LINES,
     LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, LONG_USER_MESSAGE_COLLAPSED_LINES,
@@ -284,5 +294,18 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     act(() => root.render(React.createElement(MarkdownHarness, { text: code, code: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
     expect(host.querySelector('code')?.textContent).toBe(code);
     expect(host.querySelector('[data-scroll]')).toBeNull();
+  });
+
+  it.each([
+    { codeCopyEnabled: true, text: 'const answer = 42;', hasCopy: true, padding: 0 },
+    { codeCopyEnabled: false, text: 'const answer = 42;', hasCopy: false, padding: null },
+    { codeCopyEnabled: true, text: '', hasCopy: false, padding: null },
+  ])('reserves copy-button space only for codeCopyEnabled=$codeCopyEnabled with text=$text', ({ codeCopyEnabled, text, hasCopy, padding }) => {
+    const layout = buildMessageContentLayout({ screenWidth: 402 });
+    act(() => root.render(React.createElement(MarkdownHarness, { text, code: true, codeCopyEnabled, layout })));
+    const content = host.querySelector('code')!.parentElement!;
+    const style = JSON.parse(content.getAttribute('data-style')!);
+    expect(style.at(-1).paddingTop).toBe(padding ?? layout.codePaddingVertical);
+    expect(host.querySelector('[data-testid="code-copy-stub"]') !== null).toBe(hasCopy);
   });
 });

@@ -374,7 +374,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             weight: r.member.weight,
             paused: r.member.paused,
             ...(until !== null ? { coolingUntil: until } : {}),
-            // 与选电脑排序用的同一个窗口(provider-groups.md §10 进度条)；分享来的电脑本来就不读配额。
+            // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)；分享来的电脑本来就不读配额。
             ...(quota.quota ? { quota: quota.quota } : {}),
             ...(quota.quota && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
           };

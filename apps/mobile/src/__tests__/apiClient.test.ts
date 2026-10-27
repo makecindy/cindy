@@ -132,6 +132,52 @@ describe('apiFetchRaw', () => {
     );
   });
 
+  // PR #7145 r4371434693: caller cancellation must reach native fetch and
+  // settle promptly even if transport ignores abort; existing tests only timed out.
+  it.each([0, 100])('aborts caller-owned requests without a timeout/auth side effect (timeout=%s)', async timeoutMs => {
+    vi.useFakeTimers();
+    let nativeSignal: AbortSignal | null | undefined;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      nativeSignal = init.signal; return new Promise<Response>(resolve => { finish = resolve; });
+    }));
+    const terminal = vi.fn(); const dispose = registerAccountUnavailableHandler(terminal);
+    const controller = new AbortController();
+    const request = apiFetchRaw('/v1/media', { baseUrl: 'https://chat.example.invalid', signal: controller.signal, timeoutMs });
+    void request.catch(() => {});
+    try {
+      controller.abort();
+      expect(nativeSignal?.aborted).toBe(true);
+      await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+      finish(new Response(JSON.stringify({ error: { code: 'ACCOUNT_UNAVAILABLE' } }), { status: 401 }));
+      await Promise.resolve(); await Promise.resolve();
+      expect(terminal).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+    } finally { dispose(); finish(new Response('{}')); }
+  });
+
+  it('cancels while the response body is still pending', async () => {
+    vi.useFakeTimers();
+    let startedBody!: () => void;
+    const bodyStarted = new Promise<void>(resolve => { startedBody = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: () => {
+      startedBody(); return new Promise(() => {});
+    } })));
+    const controller = new AbortController();
+    const request = apiFetchRaw('/v1/media', { baseUrl: 'https://chat.example.invalid', signal: controller.signal });
+    await bodyStarted; controller.abort();
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not start a fetch after its caller already cancelled', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(() => new Promise<Response>(() => {})); vi.stubGlobal('fetch', fetch);
+    const controller = new AbortController(); controller.abort();
+    const request = apiFetchRaw('/v1/media', { baseUrl: 'https://chat.example.invalid', signal: controller.signal }).catch(error => error);
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(request).resolves.toMatchObject({ name: 'AbortError' });
+  });
+
   it('aborts hung requests instead of leaving the UI in a connecting state', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {

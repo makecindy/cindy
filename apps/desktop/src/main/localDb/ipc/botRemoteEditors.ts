@@ -8,10 +8,12 @@ import type { RemoteResourceHostContext } from '../../device-link/remoteResource
 import type { BotSkillDetail } from '../../../shared/botSkill.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { createBotRemoteMemoryEditor, memoryCopy, type BotRemoteMemoryService } from './botRemoteMemory.js';
+import type { BotProjectOption } from '../../../shared/botWorkbench.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean };
 export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills'> {
+  projects?: { list(botId: string): Promise<BotProjectOption[]>; set(botId: string, id: string, linked: boolean): Promise<unknown> };
   followUp?: { get(): Promise<BotAutonomySettingsView>; set(botId: string | null): Promise<BotAutonomySettingsView> };
   modelDefaults(): Promise<BotModelRoute[]>;
   create(input: { id: string; name: string; avatarImageBase64: string; locale?: string; capabilities?: { modelChainOverride: BotModelRoute[] } }): Promise<void>;
@@ -29,6 +31,12 @@ export interface BotRemoteEditorOptions {
 }
 const text = (fallback: string, cn: string, tw: string, ja: string, ko: string): RemoteLocalizedText => ({ fallback, translations: { 'zh-CN': cn, 'zh-TW': tw, ja, ko } });
 export const editorCopy = {
+  projects: text('Linked Projects', '关联项目', '關聯專案', '関連プロジェクト', '연결된 프로젝트'),
+  projectLinked: text('Link This Project', '关联此项目', '關聯此專案', 'このプロジェクトを関連付ける', '이 프로젝트 연결'),
+  projectHelp: text('Read materials when needed. Linking does not assign sessions or start background work.', '需要时读取资料。关联不会接手任务，也不会启动后台工作。', '需要時讀取資料。關聯不會接手任務，也不會啟動背景工作。', '必要なときに資料を読みます。関連付けてもセッションの担当やバックグラウンド作業は開始しません。', '필요할 때 자료를 읽습니다. 연결해도 세션을 맡거나 백그라운드 작업을 시작하지 않습니다.'),
+  projectRemote: text('On another computer', '位于另一台电脑', '位於另一台電腦', '別のコンピューターにあります', '다른 컴퓨터에 있음'),
+  projectUnavailable: text('Directory unavailable', '目录暂不可用', '目錄暫不可用', 'ディレクトリを利用できません', '디렉터리를 사용할 수 없습니다'),
+  projectEmpty: text('Add projects to the project list on the teammate’s computer first.', '请先在伙伴所在电脑的项目列表中添加项目。', '請先在夥伴所在電腦的專案列表中新增專案。', '先にチームメイトのコンピューターのプロジェクト一覧に追加してください。', '먼저 팀원이 실행되는 컴퓨터의 프로젝트 목록에 프로젝트를 추가하세요.'),
   followUp: text("Follow Up on My Sessions", "跟进我的任务", "跟進我的任務", "自分のセッションをフォロー", "내 세션 후속 확인"),
   followUpConsent: text("Once enabled, I’ll read summaries of sessions you create on the teammate’s computer, assess progress, and let you know about important changes. This uses your model allowance. You can turn it off anytime.", "开启后，我会读取伙伴所在电脑上你创建的任务摘要，分析进展并提醒你重要变化。这会使用模型额度，你可以随时关闭。", "開啟後，我會讀取夥伴所在電腦上你建立的任務摘要，分析進度並提醒你重要變化。這會使用模型額度，你可以隨時關閉。", "有効にすると、チームメイトが動作するコンピューターであなたが作成したセッションの要約を読み、進捗を確認して重要な変化をお知らせします。モデルの利用枠を消費します。いつでも無効にできます。", "켜면 팀원이 실행되는 컴퓨터에서 직접 만든 세션의 요약을 읽고 진행 상황을 분석하여 중요한 변화를 알려드립니다. 모델 사용량이 소모되며 언제든 끌 수 있습니다."),
   followUpStart: text("Start Following Up", "开始跟进", "開始跟進", "フォローを開始", "후속 확인 시작"),
@@ -70,6 +78,35 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
   const memoryEditor = createBotRemoteMemoryEditor(deps, bind);
   return async (context: RemoteResourceHostContext, id: string, locale?: string, options: BotRemoteEditorOptions = {}): Promise<RemoteResource> => {
     const owner = deps.owner(); deps.assertOwner(owner);
+    const projectMatch = /^settings:([A-Za-z0-9_-]{1,128})\/projects(?:\/([a-f0-9]{64}))?$/.exec(id);
+    if (projectMatch && deps.projects) {
+      const [, botId, projectId] = projectMatch;
+      const settings = await deps.read(botId); deps.assertOwner(owner);
+      const projects = await deps.projects.list(botId); deps.assertOwner(owner);
+      const title = (project: BotProjectOption) => `${project.name}${project.deviceId ? ` · ${resolveRemoteText(editorCopy.projectRemote, locale)} (${project.deviceId})` : ''}`;
+      const resource: RemoteResource = { ref: ref(id), revision: hash(projects), display: { title: editorCopy.projects }, links: [], blocks: [] };
+      if (!projectId) {
+        resource.blocks = [{ id: 'projects', primitive: 'list', fallbackMarkdown: projects.length ? resolveRemoteText(editorCopy.projectHelp, locale) : resolveRemoteText(editorCopy.projectEmpty, locale),
+          data: { entries: projects.map(project => ({ id: project.id, title: `${project.linked ? '✓ ' : ''}${title(project)}`, resourceId: `${id}/${project.id}` })) } }];
+        return resource;
+      }
+      const project = projects.find(project => project.id === projectId);
+      if (!project) throwIpcError('NOT_FOUND', 'Project unavailable');
+      resource.display.title = title(project);
+      const panel = form('project', editorCopy.projects, [{ id: 'linked', label: editorCopy.projectLinked, kind: 'toggle' }], { linked: project.linked });
+      resource.blocks = [{ ...panel.block, fallbackMarkdown: [resolveRemoteText(editorCopy.projectHelp, locale), project.deviceId ? resolveRemoteText(editorCopy.projectRemote, locale) : !project.available ? resolveRemoteText(editorCopy.projectUnavailable, locale) : ''].filter(Boolean).join('\n\n') }];
+      resource.actions = [{ ...panel.action, disabled: settings.source.status !== 'active' }];
+      return bind(context, resource, async () => {
+        await deps.read(botId); deps.assertOwner(owner);
+        const next = await deps.projects!.list(botId); deps.assertOwner(owner);
+        return hash(next);
+      }, async request => {
+        const input = request.input ?? {}; keys(input, ['linked']);
+        if (typeof input.linked !== 'boolean') fail();
+        await deps.projects!.set(botId, projectId, input.linked as boolean); deps.assertOwner(owner);
+        return receipt(id);
+      });
+    }
     if (id === 'create') {
       const modelChain = await deps.modelDefaults(); deps.assertOwner(owner);
       const panel = form('create', editorCopy.create, [

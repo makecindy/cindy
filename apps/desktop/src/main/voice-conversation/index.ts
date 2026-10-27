@@ -1,12 +1,15 @@
 import { CompanionCallDialogue } from './dialogue.js';
 import { ipcMain, webContents, type IpcMainInvokeEvent } from 'electron';
 import type { AsrProvider, AudioGate } from '@cindy/voice-input-core';
+import { storedCustomProviderId } from '@cindy/model-providers';
 import {
   normalizeVoiceConversationSelection,
   normalizeSpeechModelSelection,
   type VoiceConversationPreference,
 } from '../../shared/voiceConversation.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
+import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
@@ -17,6 +20,7 @@ import { isProviderModelRouteDisabled } from '../utility-model/oneShotCandidates
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { VoiceConversationService } from './service.js';
+import { SpeechError } from './speechError.js';
 import { resolveSpeechConnection, speechModels, type SpeechCatalogDeps } from './models.js';
 import {
   companionVoicePreference,
@@ -30,13 +34,28 @@ import { classifyVoiceExit } from './semanticExit.js';
 
 const log = createLogger('voice-conversation');
 
+/** What a remote Desktop's voice settings page needs; the IPC channels stay local to this window. */
+export interface VoiceSettingsHostApi {
+  models(): ReturnType<VoiceConversationService['models']>;
+  voices(selection: unknown): ReturnType<VoiceConversationService['voices']>;
+  preference(botId: unknown): Promise<VoiceConversationPreference>;
+  setPreference(botId: unknown, value: unknown, sentencePlayback: unknown): Promise<VoiceConversationPreference>;
+}
+let settingsApi: VoiceSettingsHostApi | null = null;
+export function getVoiceSettingsHostApi(): VoiceSettingsHostApi | null {
+  return settingsApi;
+}
+
 function boundedString(value: unknown, name: string, limit: number): string {
   const text = requireString(value, name);
   if (!text.trim() || text.length > limit) throwIpcError('INVALID_PARAMS', `Invalid ${name}`);
   return text;
 }
 
-/** Local top-level renderer only; deliberately absent from device-link and plugin allowlists. */
+/**
+ * Local top-level renderer only; the IPC channels are deliberately absent from device-link and plugin
+ * allowlists. Model catalog and per-teammate preference are also served to the teammate settings host.
+ */
 export function registerVoiceConversationIpc(deps: {
   createProvider(): Promise<AsrProvider>;
   createAudioGate(): AudioGate | undefined;
@@ -50,7 +69,9 @@ export function registerVoiceConversationIpc(deps: {
       catalog: getActiveCatalog(),
       gatewayAllowed: getAppCapabilities().canUseCindyGateway,
       disabled: isProviderModelRouteDisabled,
+      visibilityOverride: getModelVisibilityOverride,
       readKey: readCustomProviderKey,
+      readOAuthToken: (providerId, oauth) => readCachedGenericOAuthAccessToken(storedCustomProviderId(providerId), oauth),
       gatewayConnection: () => ({
         baseUrl: effectiveXdGatewayBaseUrl(),
         apiKey: getProviderSecretStore().get('xd') ?? '',
@@ -95,14 +116,19 @@ export function registerVoiceConversationIpc(deps: {
       assertTrustedAppRendererEvent(event);
       try {
         return await action(event, ...args);
-      } catch {
+      } catch (error) {
         // Do not log args or upstream errors: either can include text or secrets.
         log.warn('IPC operation failed', { operation: name });
+        if (error instanceof SpeechError && error.code === 'timeout')
+          throwIpcError('VOICE_SPEECH_TIMEOUT', 'Speech response timed out.');
         throwIpcError('PRECONDITION_FAILED', 'Voice conversation is unavailable.');
       }
     });
   };
-  handle('models', () => service.models());
+  handle('models', async () => {
+    await waitForModelVisibilityMirror();
+    return service.models();
+  });
   handle('voices', (_event, raw) => {
     const selection = normalizeSpeechModelSelection(raw);
     if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid speech model');
@@ -140,10 +166,9 @@ export function registerVoiceConversationIpc(deps: {
       throw new Error('invalid_companion');
     return action(botId);
   };
-  handle('preference', (_event, raw) =>
-    preferenceBot(raw, (botId) => companionVoicePreference(deps.getSettings(), botId)),
-  );
-  handle('set-preference', (_event, raw, value, sentencePlayback) =>
+  const readPreference = (raw: unknown) =>
+    preferenceBot(raw, (botId) => companionVoicePreference(deps.getSettings(), botId));
+  const writePreference = (raw: unknown, value: unknown, sentencePlayback: unknown) =>
     preferenceBot(raw, (botId) => {
       const settings = deps.getSettings();
       const patch: Partial<VoiceInputSettings> = {};
@@ -164,8 +189,23 @@ export function registerVoiceConversationIpc(deps: {
         );
       }
       return companionVoicePreference(deps.updateSettings(patch), botId);
-    }),
+    });
+  handle('preference', (_event, raw) => readPreference(raw));
+  handle('set-preference', (_event, raw, value, sentencePlayback) =>
+    writePreference(raw, value, sentencePlayback),
   );
+  // The settings page of a remote Desktop reads and writes the same preference through the
+  // teammate settings host. Calls, previews and audio stay on the IPC channels above.
+  settingsApi = {
+    models: () => service.models(),
+    voices: (raw) => {
+      const selection = normalizeSpeechModelSelection(raw);
+      if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid speech model');
+      return service.voices(selection!);
+    },
+    preference: readPreference,
+    setPreference: writePreference,
+  };
   for (const operation of ['start', 'start-playback'] as const) {
     handle(operation, async (event, raw) => {
       if (isAppSessionBoundaryPending()) throw new Error('changing_account');

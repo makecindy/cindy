@@ -21,6 +21,8 @@ export type WebMicAudioEngineOptions = {
   audioProcessing?: boolean | AudioProcessingConfig;
   latencyMs?: number;
   keepAlive?: boolean;
+  /** Borrow a prepared session for this recording only, including device fallback. */
+  releaseAfterUse?: boolean;
   onStateChange?: (event: string, details?: Record<string, unknown>) => void;
   onInterrupted?: (message: string) => void;
 };
@@ -853,6 +855,40 @@ async function getOrCreateKeepAliveSession(
   return keepAliveSessionPromise;
 }
 
+/** Prepare an inactive microphone for one press; never activate PCM or replace another owner's device. */
+export function prepareVoiceInputMicrophone(options: WebMicAudioEngineOptions): (() => void) | undefined {
+  const normalized = normalizeKeepAliveOptions(options);
+  // A failed startup can leave its settling promise without a session. Let
+  // normal recording recover it; preparation must own a session synchronously.
+  if (keepAliveSessionPromise && !keepAliveSession) return;
+  if (keepAliveSession && (
+    keepAliveSession.isBusy() || keepAliveSession.isStaleAfterDeviceChange() ||
+    keepAliveSession.key !== keepAliveKey(normalized)
+  )) return;
+  // With no replacement needed, getOrCreate publishes the session before its
+  // first await. Retain that identity so a late cancellation cannot close a
+  // different session, including while getUserMedia is still pending.
+  const ready = getOrCreateKeepAliveSession(normalized);
+  const session = keepAliveSession;
+  void ready.then((prepared) => {
+    if (options.keepAlive && !prepared.isBusy()) {
+      scheduleKeepAliveIdleDispose(prepared, 'idle_timeout_after_prewarm', { refresh: false });
+    }
+  }).catch(() => undefined);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (options.keepAlive || !session || keepAliveSession !== session) return;
+    if (session.isBusy()) {
+      // Recording adopted it. Let its normal stop close the temporary device.
+      session.markStaleForReplacement();
+    } else {
+      void disposeKeepAliveVoiceInputMicrophone('press_preparation_cancelled').catch(() => undefined);
+    }
+  };
+}
+
 export async function prewarmVoiceInputMicrophone(options: WebMicAudioEngineOptions): Promise<void> {
   const normalized = normalizeKeepAliveOptions(options);
   // Prewarm can land mid-dictation: another ChatInput mounts, or a settings
@@ -1019,6 +1055,7 @@ export class WebMicAudioEngine {
   private readonly audioProcessing: boolean | AudioProcessingConfig;
   private readonly latencyMs?: number;
   private readonly keepAlive: boolean;
+  private readonly releaseAfterUse: boolean;
   private readonly onStateChange?: (event: string, details?: Record<string, unknown>) => void;
   private readonly onInterrupted?: (message: string) => void;
   private keepAliveSession?: KeepAliveMicSession;
@@ -1053,6 +1090,7 @@ export class WebMicAudioEngine {
     this.audioProcessing = options.audioProcessing ?? true;
     this.latencyMs = options.latencyMs;
     this.keepAlive = options.keepAlive ?? false;
+    this.releaseAfterUse = options.releaseAfterUse ?? false;
     this.onStateChange = options.onStateChange;
     this.onInterrupted = options.onInterrupted;
   }
@@ -1309,6 +1347,7 @@ export class WebMicAudioEngine {
     this.clearWatchdog();
     if (this.usingKeepAliveSession) {
       const session = this.keepAliveSession;
+      if (this.releaseAfterUse) session?.markStaleForReplacement();
       // Drop the claim taken in startKeepAlive, then only tear the session down
       // if nobody else still holds one. deactivate() clears the shared PCM
       // callback, sends setActive=false and detaches the output path — doing

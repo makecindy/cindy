@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { describePermissionAction, type PermissionActionSummary } from '@cindy/maker-shared/interaction';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
@@ -41,34 +42,22 @@ interface PermissionPromptProps {
 // Tool input → display text
 // ---------------------------------------------------------------------------
 
-function firstString(input: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const k of keys) {
-    const v = input[k];
-    if (typeof v === 'string' && v.length > 0) return v;
-  }
-  return undefined;
+// harness 无关:命令 / 文件 / 插件 / 浏览器的归类与手机、IM 共用 describePermissionAction;
+// 认不出的工具回退成格式化 JSON。
+export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
+  if (toolName.toLowerCase() === 'cindy.media.download' && typeof input.source === 'string') return input.source;
+  const action = describePermissionAction(toolName, input);
+  if (action.kind !== 'tool') return action.preview;
+  const text = JSON.stringify(input, null, 2);
+  return text.length > 500 ? text.slice(0, 500) + '...' : text;
 }
 
-// harness 无关:CC 工具名首字母大写 + file_path;pi 内置工具名小写 + path/command。
-// 按语义分组(命令 / 文件 / 模式)归一化,任一命名命中就抽出清爽正文,否则回退 JSON。
-export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
-  const name = toolName.toLowerCase();
-  if (name === 'cindy.media.download' && typeof input.source === 'string') return input.source;
-  const fallback = () => {
-    const text = JSON.stringify(input, null, 2);
-    return text.length > 500 ? text.slice(0, 500) + '...' : text;
-  };
-  if (name === 'bash' || name === 'powershell') {
-    return firstString(input, ['command']) ?? fallback();
-  }
-  if (name === 'read' || name === 'edit' || name === 'write') {
-    return firstString(input, ['file_path', 'path', 'notebook_path']) ?? fallback();
-  }
-  if (name === 'glob' || name === 'grep' || name === 'find' || name === 'ls') {
-    return firstString(input, ['pattern', 'path', 'query']) ?? fallback();
-  }
-  return fallback();
-}
+const ACTION_TITLE_KEYS: Record<Exclude<PermissionActionSummary['kind'], 'tool' | 'plugin'>, string> = {
+  command: 'newChat.permissionPrompt.titleCommand',
+  'file-read': 'newChat.permissionPrompt.titleFileRead',
+  'file-write': 'newChat.permissionPrompt.titleFileWrite',
+  browser: 'newChat.permissionPrompt.titleBrowser',
+};
 
 function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
   if (!Array.isArray(suggestions)) return [];
@@ -105,7 +94,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
-    submitting, submissionFailed } = permission;
+    autoReviewReason, submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
   // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
   // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
@@ -119,9 +108,16 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       ? consentHead
       : description;
 
-  const displayTitle = displayName
-    ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
-    : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
+  // Say what will happen ("run this command") instead of an internal tool name or an
+  // English harness title; unknown tools keep the previous wording.
+  const action = describePermissionAction(toolName, input);
+  const displayTitle = action.kind === 'plugin' && action.subject
+    ? t('newChat.permissionPrompt.titlePlugin', { plugin: action.subject })
+    : action.kind !== 'tool' && action.kind !== 'plugin'
+      ? t(ACTION_TITLE_KEYS[action.kind])
+      : displayName
+        ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
+        : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
   const codeContent = isPluginInstallConsent
     ? consentBody.join('\n')
     : formatToolInput(toolName, input);
@@ -226,6 +222,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       {promptDescription && (
         <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
           {promptDescription}
+        </p>
+      )}
+      {/* Why Auto stopped to ask: the reviewer's own explanation, in the user's language. */}
+      {!autoReviewUnavailable && autoReviewReason && (
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal leading-snug text-[var(--chat-input-text)]">
+          {t('newChat.permissionPrompt.autoReviewReason', { reason: autoReviewReason })}
         </p>
       )}
 

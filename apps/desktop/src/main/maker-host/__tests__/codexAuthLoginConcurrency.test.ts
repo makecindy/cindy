@@ -28,9 +28,11 @@ vi.mock('../managed-skills.js', () => ({
 
 vi.mock('@cindy/maker-core', () => ({}));
 
+// Load the production adapter once during collection, outside each login deadline.
+import { DesktopCodexAuthAdapter } from '../auth-adapters.js';
+
 describe('DesktopCodexAuthAdapter login single-flight', () => {
   it('rolls back credentials when Cancel arrives during successful-login finalization', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;
@@ -79,7 +81,6 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
   });
 
   it('coalesces the same mode but cancels and serializes a different mode', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;
@@ -136,7 +137,6 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
   });
 
   it('lets a later logout-style cancellation cancel a queued mode switch before it starts', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;
@@ -170,7 +170,6 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
   });
 
   it('restarts a cancelled same-mode login after the cancelled operation settles', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;
@@ -202,7 +201,6 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
   });
 
   it('queues a mode switch behind both the cancelled login and an active logout', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;
@@ -245,7 +243,6 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
   });
 
   it('queues a new login until an in-flight logout fully settles', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;
@@ -280,7 +277,6 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
   });
 
   it('lets a repeated logout cancel a login queued behind the active logout', async () => {
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = Object.create(DesktopCodexAuthAdapter.prototype) as InstanceType<
       typeof DesktopCodexAuthAdapter
     >;

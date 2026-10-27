@@ -48,46 +48,10 @@ export function readVoiceCallRecord(value: unknown): VoiceCallRecord | null {
  * Keep boolean outcomes for local bridge/test compatibility. */
 export type VoiceExitDecision = boolean | 'submit_then_exit';
 
-/** Local Desktop voice UI contract. No credentials, raw paths or remote invoke access. */
-export type SpeechProtocol = 'openai' | 'elevenlabs' | 'minimax';
+export { speechSpeedRange, isSpeechSpeedSupported, resolveSpeechSpeed } from './speechProtocols.js';
+export type { SpeechProtocol } from './speechProtocols.js';
+import { SPEECH_PROTOCOLS, type SpeechProtocol, type SpeechSpeedRange } from './speechProtocols.js';
 
-/** Native synthesis limits, shared by settings and Main. Compatible proxies must
- * implement their selected protocol; this is not a claim about gateway forwarding.
- * Eleven v3 currently excludes speed: https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech#speed
- */
-export function speechSpeedRange(modelId: string, protocol?: SpeechProtocol) {
-  switch (protocol) {
-    case 'elevenlabs':
-      return /(?:^|\/)eleven_v3(?:_|$)/i.test(modelId)
-        ? null
-        : { min: 0.7, max: 1.2 };
-    case 'minimax':
-      return { min: 0.5, max: 2 };
-    case 'openai':
-      return { min: 0.25, max: 4 };
-    default:
-      return null;
-  }
-}
-
-export function isSpeechSpeedSupported(
-  modelId: string,
-  protocol: SpeechProtocol,
-  speed: number | undefined,
-): boolean {
-  if (speed === undefined) return true;
-  const range = speechSpeedRange(modelId, protocol);
-  return !!range && Number.isFinite(speed) && speed >= range.min && speed <= range.max;
-}
-
-/** Reconcile an explicit choice when the user changes models, without storing
- * a default for companions that have never customized speed. */
-export function resolveSpeechSpeed(modelId: string, protocol: SpeechProtocol | undefined, speed?: number) {
-  const range = speechSpeedRange(modelId, protocol);
-  return range && speed !== undefined && Number.isFinite(speed)
-    ? Math.min(range.max, Math.max(range.min, speed))
-    : undefined;
-}
 // Missing provider/runtime is the original Cindy AI selection, never another connection.
 export type SpeechModelSelection = {
   providerId?: string;
@@ -105,8 +69,10 @@ export type SpeechVoice = { id: string; name: string };
 export type SpeechVoiceCatalog = {
   voices: SpeechVoice[];
   /** References are model-specific suggestions, not proof a compatible proxy supports them. */
-  source: 'provider' | 'reference' | 'manual';
+  source: 'provider' | 'reference' | 'mixed' | 'manual';
   truncated?: boolean;
+  /** Public references and verified entries remain usable after a partial private lookup. */
+  customVoicesUnavailable?: boolean;
 };
 export type SpeechPreviewStart = VoiceConversationSelection & {
   previewId: string;
@@ -115,6 +81,8 @@ export type SpeechPreviewStart = VoiceConversationSelection & {
   text: string;
 };
 export type VoiceConversationModel = {
+  /** Display preference only; hidden routes remain available for saved selections. */
+  pickerVisible?: boolean;
   id: string;
   name: string;
   providerId?: string;
@@ -123,6 +91,9 @@ export type VoiceConversationModel = {
   protocol?: SpeechProtocol;
   /** The official endpoint fixes protocol; saved overrides cannot select another adapter. */
   protocolLocked?: boolean;
+  /** Host-owned route capability. Absent uses protocol defaults; null omits speed.
+   * Display only, never persisted or accepted as a caller-provided capability. */
+  speedRange?: SpeechSpeedRange;
   defaultVoice?: string;
 };
 export type VoiceConversationPreference = {
@@ -131,7 +102,12 @@ export type VoiceConversationPreference = {
   /** Absent on older local bridges; the current default is enabled. */
   sentencePlayback?: boolean;
 };
-export type SpeechStartResult = { sampleRate: number } | { deferred: true };
+/** Local-only synthesis result. PCM remains pull-driven; encoded segments are
+ * received during bounded prefetch and decoded by the sandboxed audio player. */
+export type EncodedSpeechAudio = { format: 'mp3'; data: ArrayBuffer };
+export type SpeechAudioResult = { sampleRate: number } | EncodedSpeechAudio;
+export const MAX_ENCODED_SPEECH_BYTES = 8 * 1024 * 1024;
+export type SpeechStartResult = SpeechAudioResult | { deferred: true };
 export function voiceModelKey(model: {
   providerId?: string;
   agent?: AgentKind;
@@ -154,7 +130,7 @@ export type VoiceConversationStart = VoiceConversationSelection & {
 export interface VoiceConversationApi {
   models(): Promise<VoiceConversationModel[]>;
   voices(selection: SpeechModelSelection): Promise<SpeechVoiceCatalog>;
-  preview(input: SpeechPreviewStart): Promise<{ sampleRate: number }>;
+  preview(input: SpeechPreviewStart): Promise<SpeechAudioResult>;
   readPreview(previewId: string): Promise<{ pcm: ArrayBuffer; done: boolean }>;
   stopPreview(previewId: string): Promise<void>;
   preference(botId: string): Promise<VoiceConversationPreference>;
@@ -231,7 +207,7 @@ export function normalizeSpeechModelSelection(value: unknown): SpeechModelSelect
     modelId.length > 256 ||
     (providerId !== undefined &&
       (typeof providerId !== 'string' || !providerId.trim() || providerId.length > 256)) ||
-    (protocol !== undefined && !['openai', 'elevenlabs', 'minimax'].includes(protocol)) ||
+    (protocol !== undefined && !SPEECH_PROTOCOLS.includes(protocol)) ||
     ((providerId === undefined || providerId === 'xd') &&
       protocol !== undefined &&
       protocol !== 'openai') ||

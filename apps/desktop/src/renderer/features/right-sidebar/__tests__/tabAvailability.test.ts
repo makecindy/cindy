@@ -34,6 +34,22 @@ describe('sidebar availability', () => {
       projectAvailableTabs(pluginTabs, null, { installedGhosts: [], subagentsAvailable: true }).tabs,
     ).toHaveLength(3);
   });
+  // 任务页页签(跟对话):存在任务桶里,插件卸载 / 停用 / 不再声明 taskView 时隐藏;远程任务不投影本机插件。
+  it('hides plugin-task tabs whose plugin is gone, disabled or no longer has a task page', () => {
+    const taskTabs = [
+      { id: 'task-a', kind: 'plugin-task', state: { instanceId: 'alpha' } },
+      { id: 'task-b', kind: 'plugin-task', state: { instanceId: 'beta' } },
+      { id: 'task-c', kind: 'plugin-task', state: { instanceId: 'gamma' } },
+      { id: 'task-d', kind: 'plugin-task', state: { instanceId: 'gone' } },
+    ] as unknown as TabState[];
+    const alpha = { manifest: { id: 'alpha', taskView: { html: 't.html' } }, enabled: true } as InstalledGhost;
+    const beta = { manifest: { id: 'beta', taskView: { html: 't.html' } }, enabled: false } as InstalledGhost;
+    const gamma = { manifest: { id: 'gamma', mainView: { html: 'm.html' } }, enabled: true } as InstalledGhost;
+    expect(
+      projectAvailableTabs(taskTabs, 'task-b', { installedGhosts: [alpha, beta, gamma], subagentsAvailable: true }).tabs.map((tab) => tab.id),
+    ).toEqual(['task-a']);
+    expect(projectAvailableTabs(taskTabs, null, { installedGhosts: [], subagentsAvailable: true }).tabs).toEqual([]);
+  });
   it('filters persisted Cindy Make tabs when the product is disabled', () => {
     const cindyTabs = [
       { id: 'file', kind: 'file-browser', state: null },

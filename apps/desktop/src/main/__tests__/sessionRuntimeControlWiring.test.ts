@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { createEffortChangeCoordinator, enqueueEffortChange } from '../../renderer/components/new-chat/effortChangeQueue';
+import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
+import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
+import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -100,6 +103,9 @@ describe.each([
       sessionId: 'archived-task', effort: 'high', enabled: true,
       sessions: {}, eq: vi.fn(), getDbClient: () => ({ drizzle: { select: () => query } }),
       remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
+      readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
+      getSessionProvider: () => 'next-provider',
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
       // These archived fixtures have no saved automation model scope.
       updateSavedScheduledAxis: vi.fn(async () => false),
       updateScheduledPreference: vi.fn(async () => {}),
@@ -200,6 +206,71 @@ describe.each([
       expect(h.row).toMatchObject({ [field]: value });
     }
     expect(h.getSession).not.toHaveBeenCalled();
+  });
+});
+
+// Review R11: run the production IPC closure with the real runtime policy
+// wrapper. Policy-only tests cannot catch an IPC branch that bypasses it.
+// Guard tier shares this file's compiled Electron closure fixture; the minimal
+// sequence is deny -> allow -> explicit enable on an active Claude task.
+describe('active Claude subscription Fast setting', () => {
+  it.each([
+    { id: 'anthropic', auth: { method: 'oauth', native: 'claude' } },
+    { id: 'openai', auth: { method: 'oauth', native: 'codex' } },
+    { id: 'custom-api', auth: { method: 'apiKey' } },
+  ])('updates the live subscription handle while preserving API behavior ($id)', async provider => {
+    let allowed = true;
+    let fast: boolean | 'ultrafast' = true;
+    let enforce!: () => Promise<void>;
+    const onFastModeChanged = vi.fn();
+    const handle = withFastModePolicy({
+      setFastMode: async (next: boolean | 'ultrafast') => { fast = next; },
+      getFastMode: () => fast,
+      close: async () => {},
+    } as Parameters<typeof withFastModePolicy>[0], {
+      isAllowed: () => allowed,
+      subscribe: listener => { enforce = listener; return () => {}; },
+      onFastModeChanged,
+    });
+    const profile = { providerId: provider.id, agentDeviceId: null };
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
+    const persistFastMode = vi.fn(async () => {});
+    const bindings = {
+      sessionId: 'active-claude-task', enabled: true, sessions: {}, eq: vi.fn(),
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      agentSwitchPending: new Map(), readSessionRuntimeProfiles: async () => ({ effective: profile }),
+      createSubscriptionFastPolicy: () => ({ isAllowed: () => allowed }), supportsSubscriptionFastPolicy,
+      getSessionProvider: () => provider.id,
+      getActiveCatalog: () => ({ providers: [provider as ProviderView] }),
+      assertOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
+      isUserPendingAgentSwitchIntent, updateSavedScheduledAxis: async () => false,
+      resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
+      recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
+      maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
+      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      remoteResponse: undefined, log: { debug: vi.fn() },
+    };
+    const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
+    try {
+      allowed = false;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false);
+      allowed = true;
+      await enforce();
+      expect(handle.getFastMode!()).toBe(false); // relaxation alone must never enable
+      onFastModeChanged.mockClear();
+      await run();
+      expect(persistFastMode).toHaveBeenCalledOnce();
+      if (provider.auth.method === 'oauth') {
+        expect(handle.getFastMode!()).toBe(true);
+        expect(onFastModeChanged).toHaveBeenCalledWith(true);
+      } else {
+        expect(handle.getFastMode!()).toBe(false);
+        expect(onFastModeChanged).not.toHaveBeenCalled();
+      }
+    } finally {
+      await handle.close();
+    }
   });
 });
 
@@ -980,6 +1051,49 @@ describe('session runtime control wiring', () => {
     );
   });
 
+  it('carries the Pi thinking intent through every staged selection replay', () => {
+    const body = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
+    // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
+    expect(early).toContain('{ thinking: atomicSelection.thinking }');
+    // 发送回放 / deferred 结算另两条重建链也不能丢。
+    expect(registerSource).toContain('{ thinking: intent.thinking }');
+    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(
+      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+    ).toBeGreaterThanOrEqual(3);
+    // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
+    // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
+    // 场景原样复现。
+    const defer = body.slice(
+      body.indexOf('const deferLockedSelection = async () =>'),
+      body.indexOf('if (runtimeStatus.remoteHostId && isSessionInTurn(sessionId)) {'),
+    );
+    expect(defer).toContain('acceptSessionRuntimeMutation({');
+    expect(defer).toContain('deferSessionRuntimeAxisMutation({');
+    expect(
+      defer.split('{ thinking: atomicSelection.thinking }').length - 1,
+    ).toBeGreaterThanOrEqual(2);
+    // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
+    expect(registerSource).toContain(
+      "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
+    );
+    // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
+    // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
+    const rememberThinking = registerSource.slice(
+      registerSource.indexOf('rememberThinkingIntent: ({'),
+      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    );
+    expect(rememberThinking).toContain(
+      'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
+    );
+    expect(rememberThinking).toContain('DRAFT_PREF_APPLY');
+  });
+
   it('only relinks retained cross-host writers without rewriting native history', () => {
     const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
     expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
@@ -1337,6 +1451,21 @@ describe('session runtime control wiring', () => {
     const liveUsageRead = setModel.indexOf('getSessionLastLiveUsage(sessionId)');
     expect(liveUsageRead).toBeGreaterThan(-1);
     expect(liveUsageRead).toBeLessThan(pressurePreflight);
+    // 预算必须在预检之前读到，且预检比较的目标窗口必须带预算：否则小预算任务会拿
+    // 目录默认大窗证明「有余量」，跳过冷启动核实和切换后的最终窗口校验，既有上下文
+    // 直接落进过载窗口（Greptile P1，2026-09-22）。
+    const budgetRead = setModel.indexOf('await readStoredSessionContextWindowBudget(sessionId)');
+    const targetWindowResolve = setModel.indexOf('const coldPiTargetContextWindow');
+    expect(budgetRead).toBeGreaterThan(-1);
+    expect(budgetRead).toBeLessThan(targetWindowResolve);
+    expect(targetWindowResolve).toBeLessThan(pressurePreflight);
+    expect(
+      setModel.slice(targetWindowResolve, pressurePreflight).includes('sessionContextWindowBudget'),
+    ).toBe(true);
+    // 预算只读一次，预检与后续的缩窗闸门共用同一个值（同一锁内不可能变化）。
+    expect(
+      setModel.split('await readStoredSessionContextWindowBudget(sessionId)').length - 1,
+    ).toBe(1);
     expect(setModel).toContain('set-model: skipped cold Pi window verification');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
     // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。

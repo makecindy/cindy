@@ -13,6 +13,7 @@ import {
 } from '@/lib/subscriptionPlanLabel';
 import { matchScopedWindowForModel } from '../../../shared/claudeSubscriptionUsage';
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
 import {
@@ -75,7 +76,7 @@ export function ModelSourceUsageProvider({
   children: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(Date.now);
-  const enabled = scope !== null;
+  const enabled = scope !== null && !isProviderShareAgentDeviceId(scope.deviceId);
   const deviceId = scope?.deviceId ?? null;
   useEffect(() => {
     if (!enabled) return;

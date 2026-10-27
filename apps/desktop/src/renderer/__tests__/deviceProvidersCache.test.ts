@@ -15,6 +15,43 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+it('expires only subscription share snapshots and preserves ordinary API discovery cache semantics', async () => {
+  const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
+  const api = provider('openai');
+  const invoke = vi.fn(async (device: string) => ({ providers: [device === 'share:subscription' ? login : api] }));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const mod = await import('@/hooks/useDeviceProviders');
+  await mod.prefetchDeviceProviders('share:subscription');
+  await mod.prefetchDeviceProviders('share:api');
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription')).toBe(false);
+  const later = Date.now() + 61_000;
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(true);
+  expect(mod.isSubscriptionShareCatalogStale('share:api', later)).toBe(false);
+  expect(mod.isSubscriptionShareCatalogStale('same-account-computer', later)).toBe(false);
+  mod.evictDeviceProviders('share:subscription');
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(false);
+  await mod.prefetchDeviceProviders('share:api');
+  expect(invoke.mock.calls.filter(([device]) => device === 'share:api')).toHaveLength(1);
+});
+
+// A failed policy refresh evicts the authoritative cache. Its subscription
+// identity must survive that soft eviction so the next membership poll retries;
+// account/disconnect eviction must still discard the hint and any late result.
+it('retains subscription freshness after a failed soft refresh and clears it at the owner boundary', async () => {
+  const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
+  const invoke = vi.fn().mockResolvedValueOnce({ providers: [login] }).mockRejectedValueOnce(Error('temporary disconnect'));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const mod = await import('@/hooks/useDeviceProviders');
+  await mod.prefetchDeviceProviders('share:subscription');
+  const later = Date.now() + 61_000;
+  mod.evictDeviceProviders('share:subscription', { retainDisplaySnapshot: true });
+  await mod.prefetchDeviceProviders('share:subscription');
+  expect(mod.getCachedDeviceProviders('share:subscription')).toBeNull();
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(true);
+  mod.evictAllDeviceProviders();
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(false);
+});
+
 type Providers = {
   providers: ProviderView[];
   modelVisibilityOverrides?: Record<string, boolean>;

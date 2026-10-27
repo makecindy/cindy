@@ -69,6 +69,7 @@
     "copyStateCopied": "복사됨",
     "copyStateFailed": "복사 실패",
     "copyStateCopy": "복사",
+    "copyCode": "코드 복사",
     "thinkingHidden": "생각 내용 숨김",
     "thinkingDone": "생각 {{duration}}",
     "thinkingActive": "생각 중 {{elapsed}}",
@@ -171,7 +172,9 @@
     "diffEditCount": "{{n}}개 편집",
     "groupSentNamed": "그룹 「{{name}}」에서 보냄",
     "groupSent": "그룹에서 보냄",
-    "sourceGroupId": "그룹 ID: {{id}}"
+    "sourceGroupId": "그룹 ID: {{id}}",
+    "selectText": "텍스트 선택",
+    "you": "나"
   },
   "actions": {
     "attachmentsPrefix": "첨부파일: {{names}}",
@@ -232,6 +235,10 @@
     "cancel": "취소",
     "edit": "편집",
     "steer": "끼어들기",
+    "steerQueued": "아직 전달되지 않았습니다. 메시지는 대기열에 남아 있습니다.",
+    "moveUp": "한 칸 앞으로",
+    "moveDown": "한 칸 뒤로",
+    "cancelSend": "전송 취소",
     "collapseQueued": "대기 중인 메시지 접기",
     "expandRemainingQueued": "남은 {{n}}개의 대기 중인 메시지 펼치기",
     "collapse": "접기",
@@ -405,6 +412,10 @@
     "skillUpdated": "스킬 업데이트: {{title}}"
   },
   "richAnswer": {
+    "send": "메시지 보내기",
+    "sending": "보내는 중…",
+    "sent": "제출됨",
+    "sendFailed": "메시지가 제출되지 않았습니다. 입력한 내용은 유지됩니다.",
     "playVideo": "동영상 재생",
     "openVideoSource": "원본 동영상 열기",
     "calculationUnavailable": "이 값을 계산할 수 없습니다.",

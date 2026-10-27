@@ -17,7 +17,7 @@ import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activi
 import { describe, expect, it, vi } from 'vitest';
 
 import { AUTONOMY_THRESHOLDS } from '../../../shared/botAutonomy.js';
-import { AutonomyEventLedger } from '../events.js';
+import { AutonomyEventLedger, toRoutineEvent } from '../events.js';
 import {
   REMOTE_BACKOFF_MAX_MS,
   TaskWatch,
@@ -41,6 +41,7 @@ function activity(sessionId: string, phase: string, extra: Partial<SessionActivi
 }
 
 function harness(options: {
+  readSessionExecution?: TaskWatchDeps['readSessionExecution'];
   metas?: LocalSessionMeta[];
   snapshots?: SessionActivitySnapshot[];
   devices?: RemoteDeviceTarget[] | null;
@@ -79,6 +80,7 @@ function harness(options: {
     now: () => now,
     log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     getActivitySnapshots: () => options.snapshots ?? [],
+    readSessionExecution: options.readSessionExecution,
     isToolCallInFlight: (id) => toolsInFlight.has(id),
     getPendingInteractions: (id) => pending.get(id) ?? [],
     readLocalSessions,
@@ -479,4 +481,57 @@ it('keeps remote IO out of scheduled sweeps and notifies coalesced view reads of
   h.advance(120_000);
   await h.watch.sweep();
   expect(h.invokeRemote).toHaveBeenCalledTimes(2);
+});
+
+// #6737 review / unit: metadata IO can outlive the terminal boundary. The event
+// saved to the routine queue must retain the original native execution.
+it('captures completion execution before asynchronous reads or a later turn', async () => {
+  let execution = { instanceId: 'native-1', generation: 1 };
+  const h = harness({ metas: [meta('child')], creators: { child: 'a' }, readSessionExecution: () => execution });
+  await h.watch.start();
+  h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: null }));
+  await h.watch.settled();
+  expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+  h.watch.applyActivity('child', activity('child', 'completed', { turnGeneration: null }));
+  execution = { instanceId: 'native-2', generation: 2 };
+  await h.watch.settled();
+  const [candidate] = new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due;
+  expect(candidate).toBeDefined();
+  const saved = JSON.parse(JSON.stringify(toRoutineEvent(candidate, h.now())));
+  expect(saved.data).toMatchObject({ executionInstanceId: 'native-1', executionGeneration: 1 });
+  h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 2 }));
+  await h.watch.settled();
+  expect(h.watch.get('child')?.execution).toEqual(execution);
+  expect(saved.data).toMatchObject({ executionInstanceId: 'native-1', executionGeneration: 1 });
+  h.watch.stop();
+});
+
+// Unit / #7253: a model report must not survive a different native execution,
+// nor turn stopped/error activity into delivery. Existing identity coverage only
+// freezes event attribution. Minimal input: true in generation 1, completion in 2.
+it('binds delivery reports to the live execution and permits correcting a report before completion', async () => {
+  let execution = { instanceId: 'native', generation: 1 };
+  const h = harness({ metas: [meta('child')], creators: { child: 'a' }, readSessionExecution: () => execution });
+  await h.watch.start();
+  try {
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 1 }));
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    expect(h.watch.reportDelivery('child', execution, false)).toBe(true);
+    await h.watch.settled();
+    expect(h.watch.get('child')?.finalDelivery).toBe(false);
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    execution = { instanceId: 'native', generation: 2 };
+    expect(h.watch.reportDelivery('child', { ...execution, generation: 1 }, true)).toBe(false);
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 2 }));
+    h.watch.applyActivity('child', activity('child', 'completed', { turnGeneration: 2 }));
+    await h.watch.settled();
+    expect(new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due).toEqual([]);
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(false);
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 3 }));
+    execution = { instanceId: 'native', generation: 3 };
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    h.watch.applyActivity('child', null);
+    await h.watch.settled();
+    expect(new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due).toEqual([]);
+  } finally { h.watch.stop(); }
 });

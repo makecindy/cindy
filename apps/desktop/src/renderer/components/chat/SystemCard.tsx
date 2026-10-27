@@ -1068,7 +1068,7 @@ function AutoResumeActionRow({
         >
           {info.error && (
             <>
-              <div className="text-12 opacity-70">
+              <div className="text-12 text-[var(--text-secondary)]">
                 {t('chat.systemCard.autoResume.detail.reason')}
               </div>
               <pre className="m-0 mt-[2px] whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">

@@ -190,10 +190,16 @@ export function pickGhostPanelMediaUri(
 export function GhostWebviewBody({
   ghost,
   html,
+  query,
   onHostNode,
 }: {
   ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
   html: string | undefined;
+  /**
+   * 附在入口地址后的查询串(不含 `?`),如任务页的 `session=<id>`。协议供片与附加闸
+   * 都只按 pathname 判定,查询串只给页面自己读。
+   */
+  query?: string;
   onHostNode?: (node: HTMLDivElement | null) => void;
 }): ReactNode {
   const { manifest } = ghost;
@@ -232,7 +238,7 @@ export function GhostWebviewBody({
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
     webview.setAttribute('partition', partitionClaim);
-    webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${html}`);
+    webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${html}${query ? `?${query}` : ''}`);
     webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;');
     let disposed = false;
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -304,7 +310,7 @@ export function GhostWebviewBody({
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html]);
+  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query]);
 
   if (crashed) {
     return (

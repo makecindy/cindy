@@ -36,6 +36,16 @@ export default {
     const voiceFrame = await readVoiceFrame();
     assert.equal(voiceFrame.width, voiceFrame.height);
     assert.ok(voiceFrame.radius >= voiceFrame.height / 2);
+    // The free-text badge stays in the option badges' column; the mic sits before it.
+    const optionBadgeRight = await page.getByRole('button', { name: /可以，按这版实现/ })
+      .evaluate((node) => node.lastElementChild.getBoundingClientRect().right);
+    const customBadge = await page.getByTestId('ask-user-custom-badge').evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right };
+    });
+    const voiceRight = await page.getByTestId('ask-user-voice').evaluate((node) => node.getBoundingClientRect().right);
+    assert.ok(Math.abs(customBadge.right - optionBadgeRight) < 0.5, `badge column ${customBadge.right} vs ${optionBadgeRight}`);
+    assert.ok(voiceRight <= customBadge.left, 'Microphone sits before the free-text badge');
     if (ui.case !== 'unresolved') await page.getByRole('link', { name: 'sidebar-layout-v1.html' }).waitFor();
     assert.equal(await page.getByRole('link').count(), ui.case === 'unresolved' ? 0 : 2);
     if (ui.case !== 'unresolved') {

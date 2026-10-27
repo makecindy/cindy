@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG, buildUserProvider, providerPresetOAuth, type Catalog } from '@cindy/model-providers';
 
 type Handler = (...args: unknown[]) => unknown;
 const h = vi.hoisted(() => ({
@@ -8,6 +9,9 @@ const h = vi.hoisted(() => ({
   emit: vi.fn(),
   append: vi.fn(),
   boundary: false,
+  catalog: undefined as Catalog | undefined,
+  oauthToken: vi.fn<() => string | null>(),
+  readKey: vi.fn<() => string | null>(),
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -21,7 +25,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 }));
 vi.mock('../../cindy-brain/index.js', () => ({ hasEnabledGhostAssistantHook: () => false }));
 vi.mock('../../maker-host/active-catalog.js', () => ({
-  getActiveCatalog: () => ({
+  getActiveCatalog: () => h.catalog ?? ({
     providers: [
       {
         id: 'xd',
@@ -33,8 +37,11 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
   }),
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
-  readCustomProviderKey: () => null,
+  readCustomProviderKey: h.readKey,
   getProviderSecretStore: () => ({ get: () => 'test-key' }),
+}));
+vi.mock('../../maker-host/generic-oauth.js', () => ({
+  readCachedGenericOAuthAccessToken: h.oauthToken,
 }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({
   effectiveXdGatewayBaseUrl: () => 'https://gateway.test/v1',
@@ -65,6 +72,7 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
 import { registerVoiceConversationIpc } from '../index.js';
 import { outboundFetch } from '../../maker-host/outbound-fetch.js';
+import { clearModelVisibilityMirror, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
 const sender = (id = 1) => ({ sender: { id, once: vi.fn() } });
 const call = (name: string, ...args: unknown[]) =>
   h.handlers.get(`voice-conversation:${name}`)!(sender(), ...args);
@@ -74,6 +82,10 @@ beforeEach(() => {
   h.trusted.mockReset();
   h.append.mockReset();
   h.boundary = false;
+  h.catalog = undefined;
+  h.oauthToken.mockReset().mockReturnValue(null);
+  h.readKey.mockReset().mockReturnValue(null);
+  setModelVisibilityMirror({});
   vi.mocked(outboundFetch).mockReset();
   let settings = normalizeVoiceInputSettings({});
   registerVoiceConversationIpc({
@@ -95,6 +107,7 @@ beforeEach(() => {
   });
 });
 afterEach(async () => {
+  clearModelVisibilityMirror();
   h.trusted.mockReset();
   await call('end', 'call');
   await call('stop-preview', 'preview');
@@ -107,6 +120,120 @@ const start = () =>
     modelId: 'voice-test',
     voice: 'alloy',
   });
+
+// PR #6900 unit: injected model tests missed production credential-store wiring.
+// Exercise real IPC -> catalog -> voice query/synthesis with a legacy display ID,
+// then remove its login. Only the stored ID is read, never an API-key fallback.
+it('uses the saved OpenRouter OAuth connection without exposing its credential to the renderer', async () => {
+  const oauth = providerPresetOAuth('openrouter')!;
+  const modelId = 'elevenlabs/eleven-v3';
+  const provider = buildUserProvider({
+    id: 'xai', name: 'My router', auth: { method: 'oauth', oauth },
+    runtimes: { codex: { baseUrl: 'https://openrouter.ai/api/v1',
+      models: [{ id: modelId, name: 'Speech', mode: 'audio_speech' }] } },
+  });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.oauthToken.mockReturnValue('fake-saved-oauth-key');
+  h.readKey.mockReturnValue('fake-unrelated-api-key');
+  const models = await call('models');
+  expect(models).toEqual([expect.objectContaining({ providerId: 'custom:xai', id: modelId })]);
+  expect(h.oauthToken).toHaveBeenCalledWith('xai', oauth);
+  expect(JSON.stringify(models)).not.toContain('fake-saved-oauth-key');
+  const selection = { providerId: 'custom:xai', agent: 'codex', modelId, voice: 'sarah' };
+  vi.mocked(outboundFetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [
+    { id: modelId, supported_voices: ['sarah'] },
+  ] })));
+  expect(await call('voices', selection)).toMatchObject({ voices: [{ id: 'sarah' }] });
+  await call('start', { ...selection, callId: 'call', botId: 'bot', sessionId: 'canonical' });
+  vi.mocked(outboundFetch).mockResolvedValueOnce(new Response(new Uint8Array([1, 0]), {
+    headers: { 'Content-Type': 'audio/pcm' },
+  }));
+  await call('speak', { callId: 'call', requestId: 'oauth-speech', text: 'Hello' });
+  expect(vi.mocked(outboundFetch).mock.calls.map(([url]) => String(url))).toEqual([
+    'https://openrouter.ai/api/v1/models?output_modalities=speech',
+    'https://openrouter.ai/api/v1/audio/speech',
+  ]);
+  for (const [, init] of vi.mocked(outboundFetch).mock.calls)
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-saved-oauth-key');
+  expect(h.readKey).not.toHaveBeenCalled();
+  h.oauthToken.mockReturnValue(null);
+  expect(await call('models')).toEqual([]);
+  await expect(call('voices', selection)).rejects.toThrow('Voice conversation is unavailable');
+  expect(outboundFetch).toHaveBeenCalledTimes(2);
+});
+
+// PR #6768 unit regression: model discovery must wait for current-owner display
+// preferences. Existing IPC tests start with ready state and cannot catch this race.
+it('waits for display preferences before returning the speech picker catalog', async () => {
+  clearModelVisibilityMirror();
+  const ready = vi.fn();
+  const pending = call('models') as Promise<unknown>;
+  void pending.then(ready);
+  await Promise.resolve();
+  expect(ready).not.toHaveBeenCalled();
+  setModelVisibilityMirror({});
+  await expect(pending).resolves.toEqual([expect.objectContaining({ id: 'voice-test' })]);
+});
+
+// Oct 21 TTS stall: transport tests did not cover the IPC catch-all losing its
+// timeout cause. Unit: real handlers/service/transport, stalled fetch or PCM read.
+it.each(['headers', 'read'] as const)(
+  'exposes only a safe timeout code for stalled speech %s',
+  async (stage) => {
+    vi.useFakeTimers();
+    try {
+      await start();
+      if (stage === 'headers') {
+        vi.mocked(outboundFetch).mockImplementation(
+          (_url, init) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                'abort',
+                () => reject(new Error('private network detail')),
+                { once: true },
+              );
+            }),
+        );
+      } else {
+        vi.mocked(outboundFetch).mockResolvedValue(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2]));
+              },
+            }),
+            { headers: { 'Content-Type': 'audio/pcm' } },
+          ),
+        );
+      }
+      const speech = call('speak', { callId: 'call', requestId: 'one', text: 'hello' });
+      let pending = speech;
+      if (stage === 'read') {
+        await speech;
+        await call('read-speech', 'call', 'one');
+        pending = call('read-speech', 'call', 'one');
+      }
+      const result = expect(pending).rejects.toThrow(
+        '[VOICE_SPEECH_TIMEOUT] Speech response timed out.',
+      );
+      await vi.advanceTimersByTimeAsync(stage === 'headers' ? 30_000 : 15_000);
+      await result;
+      expect(outboundFetch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it('keeps untrusted upstream errors generic rather than forwarding their text or claimed timeout code', async () => {
+  await start();
+  vi.mocked(outboundFetch).mockRejectedValue(
+    new Error('[VOICE_SPEECH_TIMEOUT] private upstream detail'),
+  );
+  await expect(call('speak', { callId: 'call', requestId: 'one', text: 'hello' })).rejects.toThrow(
+    '[PRECONDITION_FAILED] Voice conversation is unavailable.',
+  );
+});
 
 it('patches playback without replacing the saved route and validates boolean overrides', async () => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };

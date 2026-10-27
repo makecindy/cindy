@@ -3,6 +3,7 @@
  * live in durableOutbox.ts / durableOutboxDelivery.ts; this module has no page ownership.
  * Recovery helpers remain for legacy direct sends and composer editing.
  */
+import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { i18n } from '@/i18n';
 import { isDurableOutboxHandedOff, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { MobileSessionReference } from '@/session/sessionReferences';
@@ -148,6 +149,8 @@ export interface MobileOutboxItem {
   agentReferences: AgentInputReference[];
   pastedTextRanges: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges: Array<{ start: number; end: number }>;
+  /** 伙伴私聊引用回复;旧记录没有该字段。 */
+  replyQuote?: ChatReplyQuote;
   /**
    * 发送时刻的权限档快照:plan 一次性语义在点发送时就恢复会话档,dispatch 重读
    * store 拿到的已是恢复后的值,消息本身必须仍按发送时刻的档位派发。
@@ -198,6 +201,7 @@ export interface MobileOutboxDisplayItem {
   quotesEncoded: boolean;
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  replyQuote?: ChatReplyQuote;
   attachmentCount: number;
   uploadedCount: number;
   /** 图片槽缩略格(按槽序);非图片附件走 fileCount 计数行。 */
@@ -244,6 +248,7 @@ export function buildOutboxItem(input: {
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  replyQuote?: ChatReplyQuote;
   permissionModeAtSend: string;
   planModeAtSend?: boolean;
   /** Optional source order across ready and pending slots, for external shares. */
@@ -298,6 +303,7 @@ export function buildOutboxItem(input: {
     agentReferences: input.agentReferences ?? [],
     pastedTextRanges: input.pastedTextRanges ?? [],
     slashCommandRanges: input.slashCommandRanges ?? [],
+    ...(input.replyQuote ? { replyQuote: input.replyQuote } : {}),
     permissionModeAtSend: input.permissionModeAtSend,
     ...(input.planModeAtSend !== undefined ? { planModeAtSend: input.planModeAtSend } : {}),
     attachmentSlots: slots,
@@ -499,6 +505,7 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     quotesEncoded: item.quotesEncoded,
     pastedTextRanges: item.pastedTextRanges,
     slashCommandRanges: item.slashCommandRanges,
+    ...(item.replyQuote ? { replyQuote: item.replyQuote } : {}),
     attachmentCount,
     uploadedCount,
     thumbnails,

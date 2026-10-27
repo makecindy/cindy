@@ -1,11 +1,25 @@
 {
   "id": "producthunt-feed",
-  "match": ["producthunt.com", "www.producthunt.com"],
-  "description": "读取 Product Hunt 最新发布的产品列表(名称/一句话简介/作者/发布时间/链接)。走官方公开 Atom feed,无需登录。返回的是 Atom XML 文本,每条产品在 <entry> 里:<title> 产品名、<content> 含 tagline、<author><name> 作者、<published> 时间、<link href> 产品页。",
-  "steps": [
-    { "action": "navigate", "url": "https://www.producthunt.com/feed" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "xml", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "producthunt.com",
+    "www.producthunt.com"
   ],
-  "output": "{{xml}}"
+  "description": "Latest Product Hunt launches (optional category filter)",
+  "access": "read",
+  "adapter": "producthunt/posts",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of results (max 50)"
+    },
+    "category": {
+      "required": false,
+      "type": "string",
+      "default": "",
+      "description": "Category filter: ai-agents, ai-coding-agents, ai-code-editors, ai-chatbots, ai-workflow-automation, vibe-coding, developer-tools, productivity, design-creative, marketing-sales, no-code-platforms, llms, finance, social-community, engineering-development"
+    }
+  },
+  "steps": []
 }

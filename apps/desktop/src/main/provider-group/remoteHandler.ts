@@ -34,6 +34,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 export const PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS = 8 * 24 * 60 * 60_000;
 
 export interface ProviderGroupRemoteHandlerDeps {
+  bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; controllerDeviceId?: string }): Promise<void>;
   /** 当前账号的分配器与负载(每个请求开头取一次，整个请求都用这一份)。 */
   scope(): ProviderGroupOwnerScope;
   readGroup(providerId: string): ProviderGroupConfig | null;
@@ -139,23 +140,54 @@ export async function handleProviderGroupRemote(
     case 'pick': {
       const { providerId } = request;
       if (!deps.isRemoteAllowed(providerId) || !deps.readGroup(providerId)) return { kind: 'none' };
-      const pick = await scope.router.pick({
-        providerId,
-        agentKind: request.agentKind,
-        model: request.model,
-        exclude: new Set(request.exclude),
-        ...(request.quotaRebalance ? { quotaRebalance: request.quotaRebalance } : {}),
-        // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
-        ...(request.exclude.length > 0 ? { fresh: true } : {}),
-        // 选中的同一步记上临时占用：同时来的几个请求不会读到同一份负载、全落到同一台。
-        onPicked: (memberKey) => scope.externalLoad.recordPick(controller, request.sessionId, providerId, memberKey),
-      });
-      // 等目录期间换了账号：这是上一个账号的组(占用也记在上一个账号那份里，随它作废)，不作数。
-      if (!scope.isCurrent() || pick.kind === 'none') return { kind: 'none' };
-      if (pick.kind === 'unavailable') return { kind: 'unavailable', ...(pick.usageLimit ? { usageLimit: pick.usageLimit } : {}) };
-      const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
-      return { kind: 'member', member: { key, kind, agentDeviceId, providerId: memberProviderId }, label: pick.label,
-        ...(request.quotaRebalance ? { quotaRebalance: true as const } : {}) };
+      const excluded = new Set(request.exclude);
+      while (true) {
+        const pick = await scope.router.pick({
+          providerId,
+          agentKind: request.agentKind,
+          model: request.model,
+          exclude: excluded,
+          ...(request.quotaRebalance ? { quotaRebalance: request.quotaRebalance } : {}),
+          // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
+          ...(excluded.size > 0 ? { fresh: true } : {}),
+          // 选中的同一步记上临时占用：同时来的几个请求不会读到同一份负载、全落到同一台。
+          onPicked: (memberKey) =>
+            scope.externalLoad.recordPick(controller, request.sessionId, providerId, memberKey),
+        });
+        // 等目录期间换了账号：这是上一个账号的组(占用也记在上一个账号那份里，随它作废)，不作数。
+        if (!scope.isCurrent() || pick.kind === 'none') return { kind: 'none' };
+        if (pick.kind === 'unavailable')
+          return {
+            kind: 'unavailable',
+            ...(pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
+          };
+        const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
+        try {
+          await deps.bindFastPolicy?.({
+            group: providerId,
+            deviceId: kind === 'local' ? null : agentDeviceId,
+            sessionId: request.sessionId,
+            controllerDeviceId: controller,
+          });
+        } catch (error) {
+          if (!scope.isCurrent()) return { kind: 'none' };
+          if (
+            !deps.readGroup(providerId)?.autoSwitch ||
+            !/REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_UNAVAILABLE/.test(String(error))
+          )
+            throw error;
+          if (excluded.has(key)) return { kind: 'unavailable' };
+          excluded.add(key);
+          continue;
+        }
+        if (!scope.isCurrent()) return { kind: 'none' };
+        return {
+          kind: 'member',
+          member: { key, kind, agentDeviceId, providerId: memberProviderId },
+          label: pick.label,
+          ...(request.quotaRebalance ? { quotaRebalance: true as const } : {}),
+        };
+      }
     }
     case 'cool':
     case 'cool-model': {

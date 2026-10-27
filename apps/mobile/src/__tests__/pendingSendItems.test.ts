@@ -20,6 +20,7 @@ import {
   isPendingSendItemSelected,
   mergePendingSendItems,
   pendingSendItemKey,
+  pendingSendBubbleText,
   pendingSendSpins,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -312,6 +313,8 @@ describe('buildPendingSendItems', () => {
       queue: [queued('same')],
       presentationByClientId: new Map([['same', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -431,6 +434,8 @@ describe('pending_send 渲染接线', () => {
       queue: [queued('selected')],
       presentationByClientId: new Map([['selected', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -592,4 +597,15 @@ describe('pending bubble source labels', () => {
     const [bubble] = build({ outbox: [outboxItem('o1')] });
     expect(bubble.source).toBeNull();
   });
+});
+
+
+// Unit regression: remote pending bubble used to expose transport escapes. The
+// original queue item is retained for sending; a human draft is not decoded.
+it('decodes only attributed forwarded pending bubbles', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const item = { ...queued('forwarded', content), origin: { kind: 'session' as const, senderSessionId: 'sender' } };
+  expect(pendingSendBubbleText(item)).toContain('第一段\n第二段');
+  expect(item.persistedContent).toBe(content);
+  expect(pendingSendBubbleText(queued('human', content))).toBe(content);
 });

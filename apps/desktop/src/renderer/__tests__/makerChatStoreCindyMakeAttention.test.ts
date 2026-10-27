@@ -2,12 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { clearSessionAttention, getSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { openPluginTaskTab } from '@/features/right-sidebar/lib/openPluginTaskTab';
+import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 
 vi.mock('@/lib/sessionsBus', () => ({ emitPatch: vi.fn() }));
+const windowRole = vi.hoisted(() => ({ secondary: false, sidebar: false }));
+vi.mock('@/lib/secondaryWindow', () => ({ isSecondaryWindow: () => windowRole.secondary }));
+vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => windowRole.sidebar }));
+vi.mock('@/features/right-sidebar/lib/openPluginTaskTab', () => ({ openPluginTaskTab: vi.fn(async () => {}) }));
+vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({ openUrlInSidebarBrowser: vi.fn(async () => {}) }));
+vi.mock('@/lib/toast', () => ({ toast: { info: vi.fn() } }));
 
 const sessionId = 'make-ingress';
 let created: (payload: unknown, ownerStamp?: unknown) => void;
 let remote: (payload: unknown) => void;
+let taskView: typeof created;
+let preview: typeof created;
 let leave: (() => void) | undefined;
 
 function message(status: string, overrides: Record<string, unknown> = {}) {
@@ -30,10 +40,16 @@ function message(status: string, overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  windowRole.secondary = false; windowRole.sidebar = false;
   setDataOwnerGeneration('make-owner', 1);
   const subscribe = () => () => {};
   vi.stubGlobal('window', {
     electronAPI: {
+      ghosts: {
+        onTaskViewOpen: (cb: typeof created) => { taskView = cb; return () => {}; },
+        onPreviewOpen: (cb: typeof created) => { preview = cb; return () => {}; },
+      },
       maker: {
         onEvent: subscribe,
         onStatusChanged: subscribe,
@@ -72,6 +88,27 @@ afterEach(() => {
 });
 
 describe('Make result dots at the real message ingress', () => {
+  // 同一主进程广播只允许一个 renderer 落页签；原有消息点测试不覆盖插件开页。
+  // 最小失败输入：副任务窗口收到 taskView/preview 广播（unit，无真实窗口）。
+  it.each(['primary', 'secondary', 'sidebar'] as const)('routes plugin page broadcasts only in the primary renderer: %s', async (role) => {
+    windowRole.secondary = role === 'secondary'; windowRole.sidebar = role === 'sidebar';
+    taskView({ instanceId: 'sim', sessionId });
+    preview({ name: 'Simulator', url: 'http://127.0.0.1:5000', sessionId });
+    await Promise.resolve();
+    expect(openPluginTaskTab).toHaveBeenCalledTimes(role === 'primary' ? 1 : 0);
+    expect(openUrlInSidebarBrowser).toHaveBeenCalledTimes(role === 'primary' ? 1 : 0);
+    if (role === 'primary')
+      expect(openPluginTaskTab).toHaveBeenLastCalledWith(sessionId, 'sim', {
+        userInitiated: false,
+      });
+    taskView({ instanceId: 'sim', sessionId, focus: true });
+    await Promise.resolve();
+    expect(openPluginTaskTab).toHaveBeenCalledTimes(role === 'primary' ? 2 : 0);
+    if (role === 'primary')
+      expect(openPluginTaskTab).toHaveBeenLastCalledWith(sessionId, 'sim', {
+        userInitiated: true,
+      });
+  });
   it.each(['local', 'remote'])(
     'updates %s dots without mounting the card or running an Agent',
     (origin) => {

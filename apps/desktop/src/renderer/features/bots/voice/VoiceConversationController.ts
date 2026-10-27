@@ -5,6 +5,7 @@ import type {
 } from '@/../shared/voiceConversation';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import type { PcmChunk } from '@/voice-input/WebMicAudioEngine';
 import type { SpeechPlayer } from './PcmSpeechPlayer';
 import { speechChunks, VoiceReplyTracker, type VoiceTaskFailure } from './VoiceReplyTracker';
@@ -50,7 +51,7 @@ export type VoiceSnapshot = {
   /** Partial question answers must never be concatenated into ordinary chat. */
   questionDraft?: string;
   level: number;
-  error: 'connection' | 'microphone' | 'send' | 'speech' | null;
+  error: 'connection' | 'microphone' | 'send' | 'speech' | 'speechTimeout' | null;
   muted: boolean;
   microphonePending: boolean;
   microphoneError: boolean;
@@ -1004,8 +1005,9 @@ export class VoiceConversationController {
             if (epoch === this.epoch && deferredEpoch === this.speechEpoch) this.fail('speech');
           });
       },
-      failed: () => {
-        if (current()) this.fail('speech');
+      failed: (error) => {
+        if (current())
+          this.fail(extractIpcError(error)?.code === 'VOICE_SPEECH_TIMEOUT' ? 'speechTimeout' : 'speech');
       },
       diagnostic: (event, details) => {
         if (current())

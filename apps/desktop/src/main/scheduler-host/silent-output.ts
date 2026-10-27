@@ -23,9 +23,11 @@ export function isSilencedSchedulerTurn(origin: SendOrigin | undefined): boolean
 
 /** Ordinary tasks keep their transcript even when completion notifications are silent. */
 export function hidesScheduledTranscript(
-  schedule: Pick<Schedule, 'source' | 'silentWhenIdle'>,
+  schedule: Pick<Schedule, 'source' | 'silentWhenIdle'> & Partial<Pick<Schedule, 'id'>>,
 ): boolean {
-  return schedule.source === 'bot' && schedule.silentWhenIdle === true;
+  // Routine backing schedules now run in independent lanes: keep their full inspectable transcript.
+  // Legacy non-routine Bot schedules may still target the main timeline.
+  return schedule.source === 'bot' && schedule.silentWhenIdle === true && !schedule.id?.startsWith('routine-');
 }
 
 /** Run-scoped presentation gate. Raw provider events still reach the scheduler and usage ledger. */

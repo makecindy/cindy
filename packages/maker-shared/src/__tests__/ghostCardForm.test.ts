@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parse, type DefaultTreeAdapterTypes } from 'parse5';
-import { applyMailInlineEdits, mailInlineDocument, mailInlineRuns, mailTextParagraphs, safeMailDocument } from '../mailTextEdit';
+import { applyMailInlineEdits, hasMailExternalImages, mailInlineDocument, mailInlineRuns, mailTextParagraphs, safeMailDocument } from '../mailTextEdit';
 import {
   parseGhostCardForm,
   parseGhostCardFormValues,
@@ -35,6 +35,26 @@ describe("declarative card forms", () => {
     expect(nodes.find(n => n.tagName === 'div')?.attrs.find(a => a.name === 'style')?.value).toBe('background:none');
     const csp = nodes.find(n => n.tagName === 'meta' && n.attrs.some(a => a.name === 'http-equiv' && a.value === 'Content-Security-Policy'))!;
     expect(csp.attrs.find(a => a.name === 'content')?.value.split(';').map(s => s.trim())).toContain('img-src data: cindy-media:');
+    expect(applyMailInlineEdits(source, {})!.html).toBe(source);
+  });
+  // Unit: opt-in adds only validated image requests; it must not enable scripts,
+  // CSS tracking, forged attributes or local-file access in either client.
+  it('allows external image sources only with explicit consent while retaining the mail sandbox', () => {
+    const source = '<img src="https://images.example.test/a" onerror="evil()" referrerpolicy="unsafe-url"><img src="http://images.example.test/b"><img src="//images.example.test/c"><img src="file:///private/photo.png"><img src="javascript:evil()"><img src="https://user:password@images.example.test/d"><script>evil()</script><style>@import "https://images.example.test/style";p{background:url(https://images.example.test/bg)}</style>';
+    expect(hasMailExternalImages(source)).toBe(true);
+    expect(hasMailExternalImages('<template><img src="https://images.example.test/a"></template><img src="cid:photo">')).toBe(false);
+    const nodes = elements(parse(mailInlineDocument(source, [], true)));
+    const images = nodes.filter(n => n.tagName === 'img');
+    expect(images.every(n => !n.attrs.some(a => a.name === 'src'))).toBe(true);
+    expect(images.map(n => n.attrs.find(a => a.name === 'data-cindy-mail-external-src')?.value)).toEqual([
+      'https://images.example.test/a', 'http://images.example.test/b', 'https://images.example.test/c', undefined, undefined, undefined,
+    ]);
+    expect(images.slice(0, 3).every(n => n.attrs.some(a => a.name === 'referrerpolicy' && a.value === 'no-referrer'))).toBe(true);
+    const csp = nodes.find(n => n.tagName === 'meta' && n.attrs.some(a => a.name === 'http-equiv'))!.attrs.find(a => a.name === 'content')!.value;
+    expect(csp).toContain('img-src data: cindy-media: https: http:');
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("default-src 'none'");
+    expect(mailInlineDocument(source, [], true)).not.toMatch(/evil|file:|@import|url\(|unsafe-url|password/);
     expect(applyMailInlineEdits(source, {})!.html).toBe(source);
   });
   it('omits legacy form nodes without joining malformed markup into executable tags', () => {
@@ -86,6 +106,17 @@ describe("declarative card forms", () => {
     expect(JSON.parse(values.attachmentItems)).toEqual(files);
     expect(visibleMailAttachments({ ...values, bodyHtml: '' }).map(f => f.key)).toEqual(['body', 'unused', 'pdf']);
     expect(visibleMailAttachments({ ...values, bodyHtml: '', quoteHtml: '' })).toEqual(files);
+  });
+  // Unit regression through insertMailImage: attachment-list coverage already checked CID
+  // prefixes, but insertion still used substring matching. `cid:photo-large` plus a `photo`
+  // attachment was the minimal input that incorrectly left the user's draft unchanged.
+  it('inserts an image when another inline CID only shares its prefix', () => {
+    const values = { bodyHtml: '<img src="cid:photo-large">', quoteHtml: '', attachmentItems: JSON.stringify([
+      { key: 'photo', filename: 'photo.png', mimeType: 'image/png', contentId: 'photo' },
+    ]) };
+    const next = insertMailImage(values, 'attachmentItems', 'photo');
+    expect(next.bodyHtml).toContain('<img src="cid:photo-large">');
+    expect(next.bodyHtml).toContain('<img src="cid:photo" alt="photo.png"');
   });
   it('inserts existing image bytes with an unused CID and keeps preview addresses out of the authored HTML', () => {
     const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;

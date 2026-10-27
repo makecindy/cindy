@@ -185,7 +185,16 @@ it('denies app display/legacy capture while preserving physical microphone and c
   expect(reply).toHaveBeenLastCalledWith(true);
   request(voice, 'media', reply, { ...details, mediaTypes: ['audio'] });
   expect(reply).toHaveBeenLastCalledWith(true);
-  for (const permission of ['notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
+  // Regression: the capture filter also denied the native video Fullscreen API.
+  // Tier 1: real permission handlers must allow host playback but keep automatic
+  // entry, foreign frames, voice windows and desktop capture denied.
+  expect(check(owner, 'fullscreen', '', details)).toBe(true);
+  request(owner, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(true);
+  expect(check(voice, 'fullscreen', '', details)).toBe(false);
+  request(voice, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(false);
+  for (const permission of ['automatic-fullscreen', 'notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
     expect(check(owner, permission, '', details)).toBe(false);
     request(owner, permission, reply, details);
     expect(reply).toHaveBeenLastCalledWith(false);
@@ -199,6 +208,9 @@ it('denies app display/legacy capture while preserving physical microphone and c
   ]) {
     expect(check(candidate, 'media', '', { ...requestDetails, mediaType: 'audio' })).toBe(false);
     request(candidate, 'media', reply, { ...requestDetails, mediaTypes: ['audio'] });
+    expect(reply).toHaveBeenLastCalledWith(false);
+    expect(check(candidate, 'fullscreen', '', requestDetails)).toBe(false);
+    request(candidate, 'fullscreen', reply, requestDetails);
     expect(reply).toHaveBeenLastCalledWith(false);
   }
   expect(check(owner, 'clipboard-sanitized-write', '', details)).toBe(true);
@@ -221,11 +233,11 @@ it('capture CSP forbids arbitrary network, application frames and inline/eval sc
   expect(csp).not.toMatch(/https:|wss:|unsafe-inline|unsafe-eval/);
 });
 
-it('keeps file transport separate and denies capture permissions', async () => {
-  const owner = new DesktopCaptureWindow(vi.fn(), 'files');
+it.each(['files', 'direct'] as const)('keeps %s transport separate and denies capture permissions', async (mode) => {
+  const owner = new DesktopCaptureWindow(vi.fn(), mode);
   const ready = owner.start();
   const win = fake.windows[0], ses = fake.sessions[0];
-  expect(win.webContents.mainFrame.url).toBe('http://localhost:9988/index.html?mode=files');
+  expect(win.webContents.mainFrame.url).toBe(`http://localhost:9988/index.html?mode=${mode}`);
   owner.registered(event(win));
   await ready;
   const check = ses.setPermissionCheckHandler.mock.calls[0][0];

@@ -135,6 +135,7 @@ export function WorkerProjectField({
   const [branchSnapshot, setBranchSnapshot] = useState<{
     base: string;
     values: string[];
+    remoteDefaultBranch?: string;
     failed?: boolean;
   }>();
   const [branchLoading, setBranchLoading] = useState(false);
@@ -155,7 +156,11 @@ export function WorkerProjectField({
       .then(
         (value) => {
           if (request === branchRequest.current)
-            setBranchSnapshot({ base, values: value.branches });
+            setBranchSnapshot({
+              base,
+              values: value.branches,
+              remoteDefaultBranch: value.remoteDefaultBranch,
+            });
         },
         () => {
           if (request === branchRequest.current)
@@ -177,7 +182,9 @@ export function WorkerProjectField({
     ? t('orca.workerProject.detachedHead', { sha: context.selected.branch?.slice(0, 8) })
     : (context?.selected.branch ?? '—');
   const sourceBranchLabel =
-    detached && branch === context?.selected.branch ? currentBranchLabel : branch;
+    detached && branch === context?.selected.branch
+      ? currentBranchLabel
+      : branch.replace(/^refs\/remotes\//, '');
   return (
     <div className="mb-4 space-y-2 text-12 text-[var(--text-secondary)]">
       <div className="font-medium text-[var(--text-tertiary)]">{t('orca.workerProject.label')}</div>
@@ -272,6 +279,12 @@ export function WorkerProjectField({
                       branchOnly
                       compact
                       branchLabel={branch}
+                      baseRepo={base}
+                      remoteDefaultBranch={
+                        branchSnapshot?.base === base
+                          ? branchSnapshot.remoteDefaultBranch
+                          : undefined
+                      }
                       branchDisplayLabel={sourceBranchLabel}
                       branches={branchSnapshot?.base === base ? branchSnapshot.values : []}
                       branchesLoading={branchLoading}

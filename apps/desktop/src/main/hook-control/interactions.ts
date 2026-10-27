@@ -34,7 +34,9 @@
 import type { InteractionButton, InteractionRequestPayload } from '@cindy/slack-hook-protocol';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import type { SharedPermission } from '../maker-ipc/sharedPermission';
+import { describePermissionAction } from '@cindy/maker-shared/interaction';
 import { permissionOutcomeText } from '../im/shared/permissionPresentation';
+import { autoReviewUnavailablePromptLine, permissionPromptDescription } from '../im/shared/autoReviewUnavailablePrompt';
 
 import {
   composeInteractionModel,
@@ -132,9 +134,15 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
   }
 
   const [allowOnce, allowAlways, deny] = model.choices;
-  const inputSummary = summarizeInput(model.input);
+  // 与 IM 富卡同口径：能认出的命令 / 文件 / 插件 / 浏览器步骤直接显示操作本身，并写明自动审批为何问你。
+  const action = describePermissionAction(model.toolName, model.input);
+  const inputSummary = action.kind === 'tool'
+    ? summarizeInput(model.input)
+    : truncate(action.preview, HOOK_PERMISSION_INPUT_SUMMARY_MAX);
+  const handoff = autoReviewUnavailablePromptLine(req) !== null;
   const body = [
-    model.description,
+    permissionPromptDescription(req) ?? '',
+    autoReviewUnavailablePromptLine(req) ?? '',
     `工具: \`${model.toolName}\``,
     inputSummary ? `\`\`\`${inputSummary}\`\`\`` : '',
   ]
@@ -147,13 +155,14 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
       body,
       buttons: [
         { id: 'perm:allow', label: '允许一次', style: allowOnce.style },
-        { id: 'perm:always', label: '本任务总是允许', style: allowAlways.style },
+        // Auto-review handoffs (AI ask or unavailable) only ever allow this one call.
+        ...(handoff ? [] : [{ id: 'perm:always', label: '本任务总是允许', style: allowAlways.style }]),
         { id: 'perm:deny', label: '拒绝', style: deny.style },
       ],
     },
     decisions: new Map<string, InteractionDecision>([
       ['perm:allow', allowOnce.decision],
-      ['perm:always', allowAlways.decision],
+      ...(handoff ? [] : [['perm:always', allowAlways.decision] as [string, InteractionDecision]]),
       ['perm:deny', deny.decision],
     ]),
     defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),

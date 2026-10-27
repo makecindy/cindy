@@ -7,12 +7,16 @@
     "title": "Mail",
     "openMailbox": "Open in mailbox",
     "loading": "Loading email…",
-    "failed": "Could not load this email. Check the connected mailbox account, retry, or open it in your mailbox.",
+    "failed": "Could not load this email. Retry or open it in your mailbox.",
+    "unavailable": "No email plugin is available. You can open this email in your mailbox.",
+    "notReady": "The email plugin is not set up. Connect your mailbox or open the original link.",
     "retry": "Retry",
     "to": "To",
     "cc": "Cc",
     "bcc": "Bcc",
-    "subject": "Subject"
+    "subject": "Subject",
+    "choosePlugin": "Choose a plugin to open this email.",
+    "personalPlugin": "Personal plugin"
   },
   "title": "Plugins",
   "all": "All",

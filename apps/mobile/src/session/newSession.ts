@@ -1,7 +1,10 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
+import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
   deriveOptimisticSessionTitle,
@@ -366,8 +369,10 @@ export function buildRecentWorkspaceOptions(
   sessions: readonly RemoteSession[],
   deviceId?: string,
   limit = 6,
+  projectAliases?: ProjectAliasDisplayIndex,
 ): RecentWorkspaceOption[] {
   const byPath = new Map<string, RecentWorkspaceOption>();
+  const membersByPath = new Map<string, RemoteSession[]>();
   for (const session of sessions) {
     if (deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== deviceId) continue;
     if (session.status === 'deleted') continue;
@@ -378,7 +383,10 @@ export function buildRecentWorkspaceOptions(
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     // Match home project grouping; keep the original path for display and remote actions.
     const pathKey = normalizeProjectOrderPath(workingDir);
-    const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+    const members = membersByPath.get(pathKey) ?? [];
+    members.push(session);
+    membersByPath.set(pathKey, members);
+    const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
     const current = byPath.get(pathKey);
     if (!current) {
       byPath.set(pathKey, {
@@ -395,6 +403,10 @@ export function buildRecentWorkspaceOptions(
     }
   }
 
+  for (const [key, workspace] of byPath) {
+    workspace.title = resolveProjectAliasForSessions(membersByPath.get(key) ?? [], projectAliases, deviceId)
+      ?? workspace.title;
+  }
   return [...byPath.values()]
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt) || a.workingDir.localeCompare(b.workingDir))
     .slice(0, Math.max(0, limit));
@@ -1181,7 +1193,7 @@ function readNewSessionDeviceOptionsParam(value: unknown): NewSessionDeviceOptio
       const record = item as Record<string, unknown>;
       const deviceId = readString(record.deviceId)?.trim() ?? '';
       if (!deviceId) return [];
-      const name = readString(record.name)?.trim() || deviceId;
+      const name = deviceDisplayName(deviceId, readString(record.name));
       return [{ deviceId, name }];
     });
   } catch {
@@ -1198,7 +1210,7 @@ function normalizeNewSessionDeviceOptions(
     const deviceId = option.deviceId.trim();
     if (!deviceId || seen.has(deviceId)) continue;
     seen.add(deviceId);
-    result.push({ deviceId, name: option.name.trim() || deviceId });
+    result.push({ deviceId, name: deviceDisplayName(deviceId, option.name) });
   }
   return result;
 }

@@ -20,7 +20,7 @@ import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
+import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import { createGuestProviderRouteBinder } from '../host/providerAccess';
 import { guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store';
 import {
@@ -205,7 +205,8 @@ function setup(options: {
   miniCapable?: boolean;
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
-  mini?: { failStart?: boolean; endImmediately?: boolean };
+  mini?: { failStart?: boolean; endImmediately?: boolean;
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
@@ -312,6 +313,32 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  // Unit regression for provider-sharing.md §3: first local work must reach the member with its push,
+  // before either poll batch can report hold. Existing relay cases did not carry this busy-state field.
+  // Real guest -> owner Host.handle -> member RunClient.push with JSON serialization on both hops.
+  it('forwards the first local hold with the process startup reply to the group member', async () => {
+    let forwarded: Record<string, unknown> | undefined;
+    const env = setup({ intercept: async (_device, request, forward) => {
+      if (request.op === 'push') forwarded = request;
+      return forward();
+    } });
+    const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    try {
+      await env.owner.handle(GUEST_A, {
+        op: 'push', runId: client.runId, seq: 1, hold: true,
+        frames: [{ connId: relayConnId(1, 'exec-1'), kind: 'message', data: '{"id":1,"result":{}}' }],
+      });
+      await vi.waitFor(() => expect(forwarded).toBeDefined());
+      expect(forwarded).toMatchObject({
+        hold: true,
+        frames: [{ connId: 'exec-1', kind: 'message', data: '{"id":1,"result":{}}' }],
+      });
+    } finally {
+      await client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
   // Review 4328897446, unit: the old three-host harness never exercised the
   // original member's model restrictions at the executing computer. A allows
   // only opus, while the executor offers opus and sonnet; revoke opus mid-run.
@@ -422,6 +449,18 @@ describe('provider group relay for shared users', () => {
     expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(child.newSdkSessionId);
     expect(env.relay.plan).toHaveBeenCalledTimes(1);
     await resumed.client.close('close', 'navigation');
+  });
+  // The guest cannot see or fix the member computer: a member whose agent went away
+  // before the fork must surface as the neutral unavailable error, not "install it there".
+  it('masks a member whose agent became unavailable before a guest fork', async () => {
+    let available = true;
+    const env = setup({ mini: { isAgentAvailable: () => available } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    await first.client.close('close', 'navigation');
+    available = false;
+    await expect(env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION, newSessionId: 'child-task',
+      agentKind: 'claude-code', sourceSdkSessionId: first.started.id, model: 'claude-opus', upToMessageId: 'old',
+      acceptsForkFailed: true })).rejects.toThrow(/^\[REMOTE_AGENT_UNAVAILABLE\]/);
   });
   it('hands a shared user’s new task to the chosen computer, which runs it isolated as a shared user', async () => {
     const env = setup();
@@ -603,6 +642,23 @@ describe('provider group relay for shared users', () => {
       .open('claude-code', openPayload('relayed-2', { relay: relayKeyFor(GUEST_A), options: { resumeSessionId: 'owner-native' } })))
       .rejects.toThrow(/cannot be resumed/);
     await client.close('close', 'navigation');
+  });
+
+  it.each([
+    { groupAssigned: true },
+    { groupAssigned: true, relay: relayKeyFor(GUEST_A) },
+  ])('keeps the local group policy on a guest execution even when routing was already assigned: %j', async (extra) => {
+    const env = setup({ plans: [{ kind: 'local' }] });
+    const started: Started[] = [];
+    const host = fakeAgentHost('policy-host', started, { trust: () => 'guest', groupRelay: env.relay });
+    try {
+      await host.handle(GUEST_A, { op: 'open', runId: runId(), agentKind: 'claude-code', payload: { json: openPayload('policy-task', extra) } });
+      await waitFor(() => started.length > 0);
+      expect(started[0].input.groupProviderId).toBe('shared-provider');
+      expect(env.relay.plan).not.toHaveBeenCalled();
+    } finally {
+      await host.dispose();
+    }
   });
 });
 

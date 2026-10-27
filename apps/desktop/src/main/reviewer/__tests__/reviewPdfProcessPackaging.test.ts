@@ -1,8 +1,9 @@
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
@@ -10,6 +11,7 @@ import { reviewPdfRuntimePackages } from '../reviewPdfRuntimeDeps';
 
 const desktopRoot = path.resolve(process.cwd());
 const workspaceRequire = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 
 describe('Review PDF utility process packaging contract', () => {
   it('packages a dedicated utility-process entry without reopening RunAsNode', () => {
@@ -50,23 +52,23 @@ describe('Review PDF utility process packaging contract', () => {
     expect(forge).toContain('...reviewPdfRuntimePackages(targetPlatform, targetArch)');
   });
 
-  it('staged canvas wrapper and current-platform binding load without workspace node_modules', () => {
+  it('staged canvas wrapper and current-platform binding load without workspace node_modules', async () => {
     const runtimePackages = reviewPdfRuntimePackages(process.platform, process.arch);
-    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-review-pdf-package-'));
+    const temp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-review-pdf-package-'));
     try {
       const stagedModules = path.join(temp, 'node_modules');
-      const stagePackage = (name: string): void => {
+      const stagePackage = async (name: string): Promise<void> => {
         const packageJson = workspaceRequire.resolve(`${name}/package.json`, {
           paths: [desktopRoot],
         });
         const destination = path.join(stagedModules, name);
-        fs.mkdirSync(path.dirname(destination), { recursive: true });
-        fs.cpSync(path.dirname(packageJson), destination, { recursive: true, dereference: true });
+        await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+        await fs.promises.cp(path.dirname(packageJson), destination, { recursive: true, dereference: true });
       };
-      for (const runtimePackage of runtimePackages) stagePackage(runtimePackage);
+      for (const runtimePackage of runtimePackages) await stagePackage(runtimePackage);
 
       const probeRequirePath = path.join(temp, 'probe.cjs');
-      const probe = spawnSync(
+      const probe = await execFileAsync(
         process.execPath,
         [
           '-e',
@@ -77,14 +79,13 @@ process.stdout.write(canvas.createCanvas(1, 1).toBuffer('image/png').subarray(1,
         ],
         { cwd: temp, encoding: 'utf8' },
       );
-      expect(probe.status, probe.stderr || String(probe.error ?? '')).toBe(0);
       expect(probe.stdout).toBe('PNG');
     } finally {
-      fs.rmSync(temp, { recursive: true, force: true });
+      await fs.promises.rm(temp, { recursive: true, force: true });
     }
-    // @napi-rs/canvas + 平台 binding 二进制整棵 cp 进 tmpdir + 子进程 require 探针,
-    // 纯磁盘 IO;满载 Windows runner 上默认 20s 盖不住(与 readSheetProcessPackaging
-    // 的同款形态),放宽避免把环境慢误判为契约失败。
+    // Keep real staging/loading and the existing IO budget, but yield while copying
+    // and probing: synchronous IO took 64s on Windows CI and can starve Vitest 3 RPC
+    // responses past their independent 60s deadline. execFile rejects nonzero exits.
   }, 120_000);
 
   it('maps every packaged Desktop target to its canvas binding', () => {

@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -112,6 +113,8 @@ export type DispatchWorkerMessageResult =
 export interface DispatchWorkerTaskParams {
   targetSessionId: string;
   message: string;
+  /** 可选, 随首条任务发给 worker 的本机图片绝对路径; 仅本机 worker。 */
+  imagePaths?: string[];
   dispatchMeta: {
     source: string;
     context: string;
@@ -150,6 +153,20 @@ export type DispatchWorkerTaskResult =
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
 export type OrcaOkResult =
   { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
+
+/** update_worker 的 domain result：worker 展示角色名与 team 内唯一 label。 */
+export type UpdateWorkerResult =
+  | { ok: true; workerId: string; role: string; label: string | null }
+  | {
+      ok: false;
+      errorCode:
+        | 'WORKER_NOT_FOUND'
+        | 'INVALID_PARAMS'
+        | 'DUPLICATE_LABEL'
+        | 'WORKER_STATE_CHANGED'
+        | 'INTERNAL';
+      message: string;
+    };
 
 /** worker 排队消息控制(list/update/cancel)对外暴露的失败码。 */
 export type WorkerQueuedMessageFailureCode =
@@ -249,19 +266,122 @@ export interface WorkerTerminalTurnCapture {
   manualInterrupt: OrcaManualInterruptSnapshot | null;
   /** Opaque identity of the auto-bridge state that belongs to the ending turn. */
   autoBridgeIdentity: object | null;
+  runtime?: { getTurnGeneration?(): number } | null;
+  turnGeneration?: number;
+}
+
+export interface OrcaDeliveryPermissionBaseline {
+  mode: string;
+  planEnabled: boolean;
+}
+
+export interface OrcaDeliverySessionRowSnapshot {
+  status: string;
+  clearedAt: number | null;
+  permissionMode: string;
+  planModeEnabled: boolean;
+}
+
+export interface OrcaDeliveryLiveSnapshot {
+  stablePermissionModeState: { mode: string | null } | null;
+  stablePlanModeState: { enabled: boolean } | null;
+}
+
+export type OrcaDeliveryVerdict = 'ok' | 'task-gone' | 'permissions-changing' | 'permissions-changed';
+
+/**
+ * Baselines captured at admission, each tagged with the source it belongs to: a resumed runtime
+ * can run a permission mode the persisted row does not carry, so they must never be shared.
+ */
+export function captureOrcaDeliveryBaselines(input: {
+  row: OrcaDeliverySessionRowSnapshot | null;
+  live: OrcaDeliveryLiveSnapshot | null;
+}): {
+  clearedAtAtCapture: number | null;
+  persistedAtCapture: OrcaDeliveryPermissionBaseline | null;
+  liveAtCapture: OrcaDeliveryPermissionBaseline | null;
+} {
+  const livePermission = input.live?.stablePermissionModeState;
+  const livePlan = input.live?.stablePlanModeState;
+  return {
+    clearedAtAtCapture: input.row?.clearedAt ?? null,
+    persistedAtCapture: input.row
+      ? { mode: input.row.permissionMode, planEnabled: input.row.planModeEnabled }
+      : null,
+    liveAtCapture: livePermission?.mode && livePlan
+      ? { mode: livePermission.mode, planEnabled: livePlan.enabled }
+      : null,
+  };
+}
+
+/**
+ * Delivery-scope decision for a dispatch accepted after the caller's turn ended.
+ * Durable facts only, and each permission baseline is compared against its own source: a resumed
+ * runtime may run a mode the persisted row does not carry, so mixing baselines cancels valid work.
+ */
+export function evaluateOrcaDeliveryScope(input: {
+  /** Cleared boundary captured at admission (`null` when the row was already missing). */
+  clearedAtAtCapture: number | null;
+  persistedAtCapture: OrcaDeliveryPermissionBaseline | null;
+  liveAtCapture: OrcaDeliveryPermissionBaseline | null;
+  row: OrcaDeliverySessionRowSnapshot | null;
+  live: OrcaDeliveryLiveSnapshot | null;
+}): OrcaDeliveryVerdict {
+  const { row, live } = input;
+  // Archived is reversible sidebar storage (it does not end the team), so only deletion and a
+  // new clear boundary revoke a queued dispatch. Pinned by the unit case for `archived`.
+  if (!row || row.status === 'deleted' || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
+  if (live) {
+    const permission = live.stablePermissionModeState;
+    const plan = live.stablePlanModeState;
+    // A permission/Plan switch in flight is a live revocation: never start work on the old one.
+    if (!permission?.mode || !plan) return 'permissions-changing';
+    if (!input.liveAtCapture
+      || permission.mode !== input.liveAtCapture.mode
+      || plan.enabled !== input.liveAtCapture.planEnabled) return 'permissions-changed';
+    return 'ok';
+  }
+  // A released runtime is not a revocation by itself, but the row is then the only authority.
+  if (!input.persistedAtCapture
+    || row.permissionMode !== input.persistedAtCapture.mode
+    || row.planModeEnabled !== input.persistedAtCapture.planEnabled) return 'permissions-changed';
+  return 'ok';
 }
 
 /** service 的 I/O 边界。register.ts 只负责把 DB、Maker、IPC broadcast 作为依赖组合进来。 */
 export interface OrcaTeamServiceDeps {
   captureControlAuthority?(leadSessionId: string): Promise<() => Promise<void>>;
+  /**
+   * Delivery-scope authority for callbacks that may settle after the caller's turn ended
+   * (queued acceptance, terminal-time retries). Round-scoped authority is already expired there.
+   */
+  captureDeliveryAuthority?(leadSessionId: string): Promise<() => Promise<void>>;
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
+  getLiveSession(sessionId: string): { isTurnRunning(): boolean; getTurnGeneration?(): number } | null;
   resumeWorkerSession(
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
+  updateWorkerIdentity: (input: {
+    workerId: string;
+    role: string;
+    label: string | null;
+    previousRole: string;
+    previousLabel: string | null;
+  }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
+  /**
+   * true = 这些 label 中被当前 lead 的插件 team plan 未结算条目引用，改名会破坏计划归属与委派自动授权。
+   * 非插件任务 / 无计划 / 已结算时不锁定。可选：未注入时不做计划锁。
+   */
+  isWorkerLabelLockedByPlan?: (params: {
+    leadSessionId: string;
+    labels: ReadonlyArray<string | null>;
+  }) => Promise<boolean>;
+  /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
+  cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
@@ -288,6 +408,7 @@ export interface OrcaTeamServiceDeps {
     message: string;
     workerId: string;
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
@@ -376,9 +497,16 @@ export interface OrcaTeamService {
     callerLeadSessionId: string;
     workerId: string;
     expectedStatus?: 'done';
-  }, opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void> }): Promise<OrcaOkResult>;
+  }, opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void>; assertDeliveryCurrent?: () => Promise<void> }): Promise<OrcaOkResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。 */
   archiveWorker(params: { callerLeadSessionId: string; workerId: string; onlyIfIdle?: boolean; beforeArchive?: () => Promise<void> }): Promise<OrcaOkResult>;
+  /** 外部调用边界：修改 worker 的展示角色名(role)与 team 内唯一标识(label)，不改执行单元本身。 */
+  updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult>;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
   /** workerRef 省略时读取 Lead 自己的输入队列(Worker 回报在 Lead 忙时排在这里)。 */
   listWorkerQueuedMessages(params: {
@@ -418,6 +546,8 @@ export interface OrcaTeamService {
   }): Promise<MoveWorkerQueuedMessageResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
+  captureLocalWorkerReport(sessionId: string): (accepted: boolean) => Promise<void>;
+  /** Execution-device settlement retains its existing durable done semantics. */
   settleReportedWorker(
     capture: WorkerTerminalTurnCapture,
     commit?: (markWorkerDone: boolean) => Promise<boolean>,
@@ -427,15 +557,19 @@ export interface OrcaTeamService {
   restoreWorkerPendingReport(sessionId: string, input: { workerId: string; leadSessionId: string }): void;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
   captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
+  /** Synchronous product boundary; never call for a suppressed vendor terminal. */
+  noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
 }
 
-/** ready/inFlight/version 共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
+/** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
 interface AutoBridgeState {
-  pending: true;
+  pending: boolean;
+  reportsInFlight: Set<Promise<void>>;
+  terminalObserved: boolean;
+  productTerminal?: Pick<WorkerTerminalTurnCapture, 'runtime' | 'turnGeneration'>;
   ready: boolean;
   inFlight: boolean;
-  version: number;
   workerId: string;
   leadSessionId: string;
   capturedText: string;
@@ -482,6 +616,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   });
   /** Per-worker transition tails serialize dispatch reservations against implicit done acknowledgement. */
   const workerTransitionTails = new Map<string, Promise<void>>();
+  /**
+   * Per-worker identity tails serialize rename read-modify-write；否则 UI 改 role 与 Lead 改 label
+   * 并发的两个请求会各自基于同一份旧快照回写完整 role+label，后者静默覆盖前者。
+   */
+  const workerIdentityTails = new Map<string, Promise<void>>();
   /** Active dispatch count stays positive from pre-resume reservation through host dispatch settlement. */
   const activeWorkerDispatches = new Map<string, number>();
   type ProvisionalDispatchSettlement =
@@ -506,12 +645,28 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
    * 下一次 done 广播仍会走 renderer 的可见性 ack 路径。done 的产品语义是
    * 「保持到用户看到为止」,所以只在 renderer 已尝试过确认时补收口,不做无条件自动 ack。
    */
-  const deferredDoneAcknowledgements = new Map<string, { assertCurrent?: () => Promise<void> }>();
-  const deferDoneAcknowledgement = (workerId: string, assertCurrent?: () => Promise<void>) => {
+  const deferredDoneAcknowledgements = new Map<string, { assertDeliveryCurrent?: () => Promise<void> }>();
+  const deferDoneAcknowledgement = (workerId: string, assertDeliveryCurrent?: () => Promise<void>) => {
     // An independent UI acknowledgement must not acquire a model caller's guard.
-    if (!deferredDoneAcknowledgements.has(workerId) || deferredDoneAcknowledgements.get(workerId)?.assertCurrent) {
-      deferredDoneAcknowledgements.set(workerId, { assertCurrent });
+    if (!deferredDoneAcknowledgements.has(workerId) || deferredDoneAcknowledgements.get(workerId)?.assertDeliveryCurrent) {
+      deferredDoneAcknowledgements.set(workerId, { assertDeliveryCurrent });
     }
+  };
+
+  /**
+   * Deferred retries run at a later terminal boundary, where the issuing turn's guard is gone.
+   * A failed snapshot capture keeps the existing guard rather than failing the call.
+   */
+  const captureDeferredAuthority = async (
+    leadSessionId: string,
+    opts?: { assertCurrent?: () => Promise<void>; assertDeliveryCurrent?: () => Promise<void> },
+  ): Promise<(() => Promise<void>) | undefined> => {
+    // An independent UI acknowledgement carries no caller authority: it must keep the
+    // no-credential semantics, otherwise a later permission change strands the worker on done.
+    if (!opts?.assertCurrent && !opts?.assertDeliveryCurrent) return undefined;
+    return opts.assertDeliveryCurrent
+      ?? await deps.captureDeliveryAuthority?.(leadSessionId).catch(() => undefined)
+      ?? opts.assertCurrent;
   };
 
   async function withWorkerTransition<T>(
@@ -553,12 +708,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sessionId: string,
     input: { workerId: string; leadSessionId: string },
   ): AutoBridgeState {
-    const previous = autoBridge.get(sessionId);
     const state: AutoBridgeState = {
       pending: true,
+      reportsInFlight: new Set(),
+      terminalObserved: false,
       ready: false,
       inFlight: false,
-      version: (previous?.version ?? 0) + 1,
       workerId: input.workerId,
       leadSessionId: input.leadSessionId,
       capturedText: '',
@@ -570,25 +725,32 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   function hasPendingWorkerReports(leadSessionId: string): boolean {
     for (const state of autoBridge.values()) {
-      if (state.leadSessionId === leadSessionId) return true;
+      if (state.pending && state.leadSessionId === leadSessionId) return true;
     }
     return false;
   }
 
-  /** Every pending-report removal goes through here so the Lead's completion can settle. */
+  function settlePendingReport(state: AutoBridgeState): void {
+    if (!state.pending) return;
+    state.pending = false;
+    state.deferred = undefined;
+    state.retryAfterRejectedDelivery = false;
+    if (hasPendingWorkerReports(state.leadSessionId)) return;
+    try {
+      deps.onLeadWorkerReportsSettled?.(state.leadSessionId);
+    } catch (err) {
+      deps.log.warn('orca lead report settle listener failed', {
+        leadSessionId: state.leadSessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   function deletePendingReport(sessionId: string): void {
     const removed = autoBridge.get(sessionId);
     if (!removed) return;
     autoBridge.delete(sessionId);
-    if (hasPendingWorkerReports(removed.leadSessionId)) return;
-    try {
-      deps.onLeadWorkerReportsSettled?.(removed.leadSessionId);
-    } catch (err) {
-      deps.log.warn('orca lead report settle listener failed', {
-        leadSessionId: removed.leadSessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
+    settlePendingReport(removed);
   }
 
   function clearRuntimeState(sessionId: string): void {
@@ -609,6 +771,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (autoBridge.get(sessionId) !== current) return false;
     if (previous) {
       autoBridge.set(sessionId, previous);
+      settlePendingReport(current);
     } else {
       deletePendingReport(sessionId);
     }
@@ -620,63 +783,83 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     current.ready = true;
     const deferred = current.deferred;
     current.deferred = undefined;
-    if (deferred) {
-      await bridgeWorkerCompletion(sessionId, deferred);
-    }
+    if (deferred) await bridgeWorkerCompletion(sessionId, deferred, current);
   }
 
   async function bridgeWorkerCompletion(
     sessionId: string,
     turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
+    state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
-    const state = autoBridge.get(sessionId);
     if (!state) return 'skipped';
-    if (!state.ready) {
-      state.deferred = turn;
-      return 'deferred';
-    }
-    if (state.inFlight) return 'skipped';
-
-    state.inFlight = true;
-    state.retryAfterRejectedDelivery = false;
-    const version = state.version;
-    const finalText =
-      turn.finalText.trim() ||
-      state.capturedText.trim() ||
-      turn.diagnostic?.trim() ||
-      '(no output captured)';
-    const header =
-      turn.status === 'error'
-        ? '[Auto-bridged: worker 异常终止]'
-        : '[Auto-bridged: worker 已完成，系统自动回传结果]';
-    const bridgeText = `${header}\n\n${finalText}`;
-    try {
-      const result = await deps.sendAutoBridgeToLead(
-        state.leadSessionId,
-        bridgeText,
-        state.workerId,
-      );
-      const latest = autoBridge.get(sessionId);
-      if (latest !== state || latest.version !== version) return 'skipped';
-      if (result.accepted) {
-        deletePendingReport(sessionId);
-        return 'accepted';
-      }
-      latest.inFlight = false;
-      latest.retryAfterRejectedDelivery = true;
-      return 'rejected';
-    } catch (err) {
-      const latest = autoBridge.get(sessionId);
-      if (latest === state && latest.version === version) {
-        latest.inFlight = false;
-        latest.retryAfterRejectedDelivery = true;
-      }
-      deps.log.warn('orca auto-bridge failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
+    // A manual report may be awaiting host acceptance. Never hold the transition lock
+    // across delivery: Lead acceptance can immediately dispatch another Worker turn.
+    for (;;) {
+      while (state.reportsInFlight.size) await Promise.all([...state.reportsInFlight]);
+      const decision = await withWorkerTransition(state.workerId, async () => {
+        if (autoBridge.get(sessionId) !== state || !state.pending) return 'skipped' as const;
+        // A report can begin while this transition is queued behind another mutation.
+        if (state.reportsInFlight.size) return 'wait' as const;
+        if (!state.ready) {
+          state.deferred = turn;
+          return 'deferred' as const;
+        }
+        if (state.inFlight) return 'skipped' as const;
+        state.inFlight = true;
+        state.retryAfterRejectedDelivery = false;
+        return 'send' as const;
       });
-      return 'rejected';
+      if (decision === 'wait') continue;
+      if (decision !== 'send') return decision;
+      break;
     }
+    const finalText = turn.finalText.trim() || state.capturedText.trim()
+      || turn.diagnostic?.trim() || '(no output captured)';
+    const header = turn.status === 'error'
+      ? '[Auto-bridged: worker 异常终止]'
+      : '[Auto-bridged: worker 已完成，系统自动回传结果]';
+    let accepted = false;
+    try {
+      accepted = (await deps.sendAutoBridgeToLead(
+        state.leadSessionId, `${header}\n\n${finalText}`, state.workerId,
+      )).accepted;
+    } catch (err) {
+      deps.log.warn('orca auto-bridge failed', {
+        sessionId, err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return withWorkerTransition(state.workerId, async () => {
+      if (autoBridge.get(sessionId) !== state) return 'skipped';
+      state.inFlight = false;
+      if (accepted || !state.pending) {
+        deletePendingReport(sessionId);
+        return accepted ? 'accepted' : 'skipped';
+      }
+      state.retryAfterRejectedDelivery = true;
+      return 'rejected';
+    });
+  }
+
+  function captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture {
+    const runtime = deps.getLiveSession(sessionId);
+    return {
+      sessionId,
+      manualInterrupt: deps.getManualInterrupt(sessionId),
+      autoBridgeIdentity: autoBridge.get(sessionId) ?? null,
+      ...(runtime?.getTurnGeneration ? { runtime, turnGeneration: runtime.getTurnGeneration() } : {}),
+    };
+  }
+
+  function noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void {
+    if (!capture?.runtime) return;
+    const current = autoBridge.get(capture.sessionId);
+    const previous = provisionalDispatches.get(capture.sessionId)?.previousPendingIdentity;
+    const state = current === capture.autoBridgeIdentity ? current
+      : previous === capture.autoBridgeIdentity ? previous : undefined;
+    if (!state) return;
+    // Auto-resume can advance the vendor generation within one product turn. Only
+    // its unsuppressed terminal closes report ownership, before queued user B starts.
+    state.productTerminal ??= { runtime: capture.runtime, turnGeneration: capture.turnGeneration };
   }
 
   function uniqueWorkers(workers: OrcaWorkerRecordSnapshot[]): OrcaWorkerRecordSnapshot[] {
@@ -855,8 +1038,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       resolved: { worker: target, link },
       message: params.message,
       mode: 'normal',
+      ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
       dispatchMeta: params.dispatchMeta,
       assertCurrent,
+      // Creation can queue its first task too; acceptance then lands after this call.
+      assertDeliveryCurrent: await deps.captureDeliveryAuthority?.(link.leadSessionId),
     });
     return mapNormalDispatchResult(target, execution);
   }
@@ -915,8 +1101,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     message: string;
     mode: 'normal' | 'interrupt';
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
     dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
     assertCurrent?: () => Promise<void>;
+    /** Rechecked when the target accepts, possibly after the caller's turn is over. */
+    assertDeliveryCurrent?: () => Promise<void>;
   }): Promise<ResolvedWorkerDispatchExecution> {
     const { worker: target, link } = params.resolved;
     await reserveWorkerDispatch(target.id);
@@ -986,13 +1175,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         settled?.resolveSettlement({ outcome: 'committed' });
       };
       const onAccepted = async (): Promise<void> => {
+        // Fail closed: without a delivery guard, keep the round check instead of skipping it.
+        const assertAcceptedCurrent = params.assertDeliveryCurrent ?? params.assertCurrent;
         try {
-          await params.assertCurrent?.();
+          // Acceptance can land after the caller's turn ended (queued item, cold resume).
+          await assertAcceptedCurrent?.();
           await withWorkerTransition(target.id, async () => {
             const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);
             const currentWorker = currentWorkers.find((worker) => worker.id === target.id);
+            // The store lists only active teams and worker sessions: absence is a real
+            // revocation (team ended / worker archived), not a stale turn.
+            if (!currentWorker) throw new Error('worker no longer belongs to an active team');
             acceptedSnapshot = {
-              previousStatus: currentWorker?.status ?? target.status,
+              previousStatus: currentWorker.status,
               previousPending: autoBridge.get(target.sessionId),
               previousManualInterrupt: deps.getManualInterrupt(target.sessionId),
             };
@@ -1015,9 +1210,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             provisionalDispatches.set(target.sessionId, currentProvisional);
             await deps.updateWorkerStatus(target.id, 'running');
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-            await markPendingReady(target.sessionId, currentPending);
           });
-          await params.assertCurrent?.();
+          if (currentPending) await markPendingReady(target.sessionId, currentPending);
+          await assertAcceptedCurrent?.();
         } catch (err) {
           try {
             await rollbackAccepted();
@@ -1048,6 +1243,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             message: params.message,
             workerId: link.workerId,
             ...(params.delivery ? { delivery: params.delivery } : {}),
+            ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
             dispatchMeta: params.dispatchMeta,
             onAccepted,
             onAcceptedRollback: rollbackAccepted,
@@ -1130,6 +1326,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     targetSessionId: string;
     message: string;
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
   }, assertCurrent?: () => Promise<void>): Promise<SendToWorkerResult> {
     return dispatchToWorker({ ...params, mode: 'normal' }, assertCurrent) as Promise<SendToWorkerResult>;
   }
@@ -1149,8 +1346,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     message: string;
     mode: 'normal' | 'interrupt';
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
   }, captured?: () => Promise<void>): Promise<SendToWorkerResult | InterruptWorkerResult> {
+    // interrupt 预留路径只支持纯文本; 内部误传图片宁拒勿静默丢。
+    if (params.mode === 'interrupt' && params.imagePaths?.length) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: 'image attachments are not supported for interrupt_worker',
+      };
+    }
     const assertCurrent = captured ?? await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    // A queued item is accepted only when the worker drains it, which can be long after this
+    // turn ended: that callback must use the delivery guard instead.
+    const assertDeliveryCurrent = await deps.captureDeliveryAuthority?.(params.callerLeadSessionId);
     const resolved = await resolveWorkerRef(params.callerLeadSessionId, params.targetSessionId);
     if (!resolved.ok) {
       return {
@@ -1167,7 +1376,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       message: params.message,
       mode: params.mode,
       ...(params.delivery ? { delivery: params.delivery } : {}),
+      ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
       assertCurrent,
+      assertDeliveryCurrent,
       dispatchMeta: {
         source: 'maker-ipc/collab',
         context:
@@ -1220,7 +1431,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
      * 否则 fire-once 契约被打破,且该 terminal 边界之后未必还有下一个 terminal
      * 事件来消费,worker 会带着悬置登记卡回 done(正是本机制要修的状态)。
      */
-    opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void> },
+    opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void>; assertDeliveryCurrent?: () => Promise<void> },
   ): Promise<OrcaOkResult> {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
@@ -1248,7 +1459,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 回报 settle 先落库、worker 自己的 turn 还在收尾:登记后由 terminal 边界重试(#3153)。
         // terminal 重试自身被拒时不登记(见 idleWorker 的 opts 注释)。
         if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
-          deferDoneAcknowledgement(worker.id, opts?.assertCurrent);
+          // The retry runs at a later terminal boundary: keep the delivery guard, not the turn's.
+          deferDoneAcknowledgement(worker.id, await captureDeferredAuthority(params.callerLeadSessionId, opts));
         }
         return {
           ok: false,
@@ -1258,7 +1470,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
       if (params.expectedStatus && deps.hasSendToSessionLock(worker.sessionId)) {
         if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
-          deferDoneAcknowledgement(worker.id, opts?.assertCurrent);
+          deferDoneAcknowledgement(worker.id, await captureDeferredAuthority(params.callerLeadSessionId, opts));
         }
         return {
           ok: false,
@@ -1318,6 +1530,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           };
         }
       }
+      // 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
+      deps.cancelWorkerResume?.(worker.sessionId);
       await assertAfterIdle();
       clearRuntimeState(worker.sessionId);
       if (!params.expectedStatus) {
@@ -1365,6 +1579,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
     deferredDoneAcknowledgements.delete(worker.id);
+    // 归档会释放 runtime；先取消未落地的后台预热，避免归档后被重新拉起（review P1）。
+    deps.cancelWorkerResume?.(worker.sessionId);
     await params.beforeArchive?.();
     await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive);
     await params.beforeArchive?.();
@@ -1380,6 +1596,112 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return params.onlyIfIdle ? deps.withSessionSendLock(worker.sessionId, archive) : archive();
     };
     return params.onlyIfIdle ? withWorkerTransition(params.workerId,perform) : perform();
+  }
+
+  async function updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult> {
+    const initial = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+    if (!initial.ok) {
+      if (initial.errorCode === 'NOT_FOUND') {
+        return { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerId} not found` };
+      }
+      return { ok: false, errorCode: 'INTERNAL', message: initial.message };
+    }
+    // 用解析出的 worker.id 串行化：worker_id / session_id 两种 ref 都落到同一把锁。
+    // 读-改-写整体在锁内，后到者重新读到前一次的结果，部分字段更新不会互相覆盖。
+    return withWorkerIdentityUpdate(initial.worker.id, async () => {
+      const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+      if (!found.ok) {
+        if (found.errorCode === 'NOT_FOUND') {
+          return { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` };
+        }
+        return { ok: false as const, errorCode: 'INTERNAL' as const, message: found.message };
+      }
+      const { link, worker } = found;
+      if (params.role === undefined && params.label === undefined) {
+        return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: 'role or label required' };
+      }
+
+      let role = worker.role;
+      if (params.role !== undefined) {
+        const normalized = normalizeOrcaWorkerRole(params.role);
+        if (!normalized.ok) return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: normalized.message };
+        role = normalized.value;
+      }
+      let label = worker.label;
+      if (params.label !== undefined) {
+        const normalized = normalizeOrcaWorkerLabel(params.label);
+        if (!normalized.ok) return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: normalized.message };
+        label = normalized.value;
+      }
+
+      // 幂等：值没变时不写库、不广播（MCP 重试与 UI 重复提交都落到这里）。
+      if (role === worker.role && label === worker.label) {
+        return { ok: true as const, workerId: worker.id, role, label };
+      }
+
+      // 插件 team plan 以 label 冻结 Worker 归属与委派自动授权且登记后不可变；
+      // 活动（未结算）计划引用到旧/新 label 时必须拒绝改 label，只放过 role 改名。
+      if (label !== worker.label && deps.isWorkerLabelLockedByPlan) {
+        const locked = await deps.isWorkerLabelLockedByPlan({
+          leadSessionId: link.leadSessionId,
+          labels: [worker.label, label],
+        });
+        if (locked) {
+          return {
+            ok: false as const,
+            errorCode: 'WORKER_STATE_CHANGED' as const,
+            message:
+              'worker label is referenced by the active plugin team plan and cannot be changed; change the role or release the worker first',
+          };
+        }
+      }
+
+      const updated = await deps.updateWorkerIdentity({
+        workerId: worker.id,
+        role,
+        label,
+        previousRole: worker.role,
+        previousLabel: worker.label,
+      });
+      if (!updated.ok) {
+        if (updated.errorCode === 'DUPLICATE_LABEL') {
+          return {
+            ok: false as const,
+            errorCode: 'DUPLICATE_LABEL' as const,
+            message: `label "${label}" already used in this team`,
+          };
+        }
+        return { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` };
+      }
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      return { ok: true as const, workerId: worker.id, role, label };
+    });
+  }
+
+  async function withWorkerIdentityUpdate<T>(
+    workerId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = workerIdentityTails.get(workerId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    workerIdentityTails.set(workerId, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (workerIdentityTails.get(workerId) === current) {
+        workerIdentityTails.delete(workerId);
+      }
+    }
   }
 
   /** 排队消息 source 判定:worker 队列里 orca 条目只可能来自其 lead(通信拓扑为 Lead↔Worker)。 */
@@ -1647,7 +1969,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           targets.some((item) => item.origin?.kind !== 'orca' || item.origin.senderLabel !== 'Lead')
         )
           return null;
-        return rebuildQueuedOrcaLeadMessage(targets[0]!, params.message, found.worker.id);
+        // 合并后条目代表全部被合并消息: 其余条目的图片按队列顺序并入保留条目,
+        // 避免"只改文本"语义静默丢图。
+        const survivor = targets[0]!;
+        const mergedFiles = [
+          ...(survivor.files ?? []),
+          ...targets.slice(1).flatMap((item) => item.files ?? []),
+        ];
+        return rebuildQueuedOrcaLeadMessage(
+          mergedFiles.length > 0 ? { ...survivor, files: mergedFiles } : survivor,
+          params.message,
+          found.worker.id,
+        );
       },
     );
     const latest = await listWorkerQueuedMessages({
@@ -1736,6 +2069,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     interruptWorker,
     idleWorker,
     archiveWorker,
+    updateWorker,
     listWorkerQueuedMessages,
     updateWorkerQueuedMessage,
     cancelWorkerQueuedMessage,
@@ -1744,7 +2078,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     moveWorkerQueuedMessage,
     captureWorkerText(sessionId, text, opts) {
       const state = autoBridge.get(sessionId);
-      if (!state || text.length === 0) return;
+      if (!state?.pending || text.length === 0) return;
       state.capturedText =
         opts?.isFinal === true
           ? text.slice(-MAX_CAPTURED_TEXT)
@@ -1752,6 +2086,38 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     clearAutoBridgeState(sessionId) {
       clearRuntimeState(sessionId);
+    },
+    captureLocalWorkerReport(sessionId) {
+      const state = autoBridge.get(sessionId);
+      // Direct user turns have no Lead obligation. In particular, a late callback must
+      // not look up and settle a new assignment that did not exist at capture time.
+      if (!state) return async () => {};
+      const runtime = deps.getLiveSession(sessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      if (state.productTerminal && (
+        state.productTerminal.runtime !== runtime
+        || state.productTerminal.turnGeneration !== generation
+      )) return async () => {};
+      // Capture before delivery: an already-started final report may be accepted
+      // after terminal capture or B's start and still belongs to A.
+      let release!: () => void;
+      const settled = new Promise<void>(resolve => { release = resolve; });
+      state.reportsInFlight.add(settled);
+      let finished = false;
+      return async (accepted) => {
+        if (finished) return;
+        finished = true;
+        try {
+          await withWorkerTransition(state.workerId, async () => {
+            const provisional = provisionalDispatches.get(sessionId);
+            if (accepted && (autoBridge.get(sessionId) === state
+              || provisional?.previousPendingIdentity === state)) settlePendingReport(state);
+          });
+        } finally {
+          state.reportsInFlight.delete(settled);
+          release();
+        }
+      };
     },
     async settleReportedWorker(capture, commit) {
       const link = await deps.getWorkerLinkBySessionId(capture.sessionId);
@@ -1779,13 +2145,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       // 重启前可能已经写入 done/error，但回报仍未被 Lead 接收。
       state.retryAfterRejectedDelivery = true;
     },
-    captureWorkerTerminalTurn(sessionId) {
-      return {
-        sessionId,
-        manualInterrupt: deps.getManualInterrupt(sessionId),
-        autoBridgeIdentity: autoBridge.get(sessionId) ?? null,
-      };
-    },
+    captureWorkerTerminalTurn,
+    noteWorkerProductTerminal,
     async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
@@ -1813,13 +2174,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const capture =
         params.capture?.sessionId === params.sessionId
           ? params.capture
-          : {
-              sessionId: params.sessionId,
-              manualInterrupt: deps.getManualInterrupt(params.sessionId),
-              autoBridgeIdentity: autoBridge.get(params.sessionId) ?? null,
-            };
+          : captureWorkerTerminalTurn(params.sessionId);
+      noteWorkerProductTerminal(capture);
       let manualInterruptOwnership = capture.manualInterrupt;
       const autoBridgeAtEntry = capture.autoBridgeIdentity;
+      const ownsRuntime = () => !capture.runtime || (
+        deps.getLiveSession(params.sessionId) === capture.runtime
+        && capture.runtime.getTurnGeneration?.() === capture.turnGeneration
+      );
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
       if (!link) return;
 
@@ -1830,6 +2192,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         const workers = await deps.listWorkersByLead(link.leadSessionId);
         const worker = workers.find((item) => item.id === link.workerId);
         let staleTerminal = false;
+        let completionState: AutoBridgeState | undefined;
         let provisionalWait:
           | {
               settlement: Promise<ProvisionalDispatchSettlement>;
@@ -1863,12 +2226,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             }
           }
 
-          // Every terminal branch is scoped to the identities captured before queue drain. A
-          // committed newer turn replaces either the auto-bridge object, the manual mark, or both.
-          if (
-            currentAutoBridge !== autoBridgeAtEntry ||
-            currentManualInterrupt !== manualInterruptOwnership
-          ) {
+          // A newer Lead assignment owns a different report identity; preserve that path.
+          if (currentAutoBridge !== autoBridgeAtEntry) {
+            staleTerminal = true;
+            return;
+          }
+          if (!ownsRuntime()) {
+            // Direct-user B can reuse A's report identity. Settle only A's obligation:
+            // its old terminal must not write B's status or clear B's Stop/provisional state.
+            const state = autoBridge.get(params.sessionId);
+            if (state?.pending && !manualInterruptOwnership) completionState = state;
+            else if (state) deletePendingReport(params.sessionId);
+            return;
+          }
+          if (currentManualInterrupt !== manualInterruptOwnership) {
             staleTerminal = true;
             return;
           }
@@ -1880,19 +2251,15 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
           const state = autoBridge.get(params.sessionId);
           if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
-            if (state?.retryAfterRejectedDelivery === true) {
-              await bridgeWorkerCompletion(params.sessionId, {
-                status: params.status,
-                finalText: params.finalText,
-                diagnostic: params.diagnostic,
-              });
+            if (state?.pending && (state.terminalObserved || state.retryAfterRejectedDelivery)) {
+              completionState = state;
               return;
             }
             // (#3153) done 的回报 settle 会先于本 turn 终止落库,renderer「看到 done
             // 即 ack」在 active-turn 守卫处被拒后没有重试闭环,worker 会永久停在 done
             // (runtime/attention 悬置)。这里在该 turn 的 terminal 边界补一次收口;
             // 没登记过被拒确认的 done 保持原样(维持「done 保持到用户看到为止」语义)。
-            retryAuthority = deferredDoneAcknowledgements.get(link.workerId)?.assertCurrent;
+            retryAuthority = deferredDoneAcknowledgements.get(link.workerId)?.assertDeliveryCurrent;
             retryAcknowledgeDone =
               worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
             clearRuntimeState(params.sessionId);
@@ -1908,12 +2275,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           }
 
           await deps.updateWorkerStatus(link.workerId, params.status);
+          if (state) state.terminalObserved = true;
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-          await bridgeWorkerCompletion(params.sessionId, {
-            status: params.status,
-            finalText: params.finalText,
-            diagnostic: params.diagnostic,
-          });
+          if (state && !state.pending) clearRuntimeState(params.sessionId);
+          else completionState = state;
         });
 
         if (provisionalWait) {
@@ -1936,6 +2301,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           return;
         }
         if (staleTerminal) return;
+        if (completionState) {
+          await bridgeWorkerCompletion(params.sessionId, params, completionState);
+          // Manual acceptance can win while terminal waits outside the lock.
+          await withWorkerTransition(link.workerId, async () => {
+            if (completionState && autoBridge.get(params.sessionId) === completionState && !completionState.pending) {
+              // A new direct-user turn may also start while delivery waits outside the lock.
+              if (ownsRuntime()) clearRuntimeState(params.sessionId);
+              else deletePendingReport(params.sessionId);
+            }
+          });
+        }
         break;
       }
 

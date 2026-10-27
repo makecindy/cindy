@@ -1,11 +1,15 @@
 {
   "site": "zhihu.com",
-  "auth": "需要登录态:知乎 api 对未登录/异常会话返回非 JSON 或被风控,请在持久浏览器登录 zhihu.com 后使用",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://www.zhihu.com",
-    "searchV3": "https://www.zhihu.com/api/v4/search_v3?t=general&offset=0&limit=<limit>&q=<keyword>",
-    "hotList": "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=50"
+    "home": "https://www.zhihu.com"
   },
-  "recipes": ["zhihu-search"],
-  "notes": "关键:不要直接 navigate 到 api 路径——非同源访问会被风控喂 SPA HTML。正确姿势是先 navigate 到 https://www.zhihu.com,再用 evaluate 步在页面内 fetch(api 全路径, {credentials:'include'}):同源 + 带 cookie。zhihu-search 走 /api/v4/search_v3?t=general&offset=0&limit=<n>&q=<encodeURIComponent(keyword)>;响应 {data:[{type:'search_result', object:{type,title,excerpt,voteup_count,author:{name},id,question:{id,name}}}]},只取 type==='search_result' 的项。URL 拼接按 object.type:answer→/question/<qid>/answer/<id>,article→zhuanlan.zhihu.com/p/<id>,否则→/question/<id>。另有热榜接口 /api/v3/feed/topstory/hot-lists/total?limit=50(data[].target.{title,answer_count,follower_count},detail_text 是热度文案);⚠️ 热榜响应里 question id 是 16+ 位大整数,JSON.parse 会丢精度,需先把 \"id\":<digits> 用正则替换成字符串再 parse,本配方未收录热榜正因这层处理较脆,需要时照此注意。务必使用持久浏览器(带登录态)。"
+  "recipes": [
+    "zhihu-search"
+  ],
+  "notes": "兼容入口 zhihu-search 现执行内置 zhihu/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

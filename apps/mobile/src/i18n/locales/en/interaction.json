@@ -21,6 +21,7 @@
     "allowOnceConfirm": "Confirm allow once",
     "highRisk": "High risk",
     "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
+    "autoReviewReason": "Auto review needs your decision: {{reason}}",
     "fullAccessConfirm": {
       "title": "Enable Full access?",
       "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
@@ -384,7 +385,12 @@
       "allowTitle": "The computer will continue after you allow this",
       "tool": "Tool: {{tool}}",
       "title": "Allow {{tool}}?",
-      "risk": "This command may change the system, repository, or an external service. Before allowing it, confirm that you trust the current task and command."
+      "risk": "This command may change the system, repository, or an external service. Before allowing it, confirm that you trust the current task and command.",
+      "titleCommand": "Allow this command to run?",
+      "titleFileRead": "Allow reading files?",
+      "titleFileWrite": "Allow changing files?",
+      "titleBrowser": "Allow this browser step?",
+      "titlePlugin": "Allow the {{plugin}} plugin?"
     },
     "ask": {
       "progress": "Question {{current}} of {{total}}",

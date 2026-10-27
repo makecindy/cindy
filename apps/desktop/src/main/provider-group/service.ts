@@ -315,6 +315,8 @@ export interface ProviderGroupBeforeSendOptions {
 
 /** 一次终态错误的处理结局(调用方据此结算换电脑期间先不呈现的那次错误)。 */
 export interface ProviderGroupTurnErrorHooks {
+  /** Async checks declined ownership before switching; true transfers back to interrupted-turn recovery. */
+  notHandled?(): boolean;
   /** 不换了，马上交回原有处理(报错与额度重置后自动继续)：先把错误放出来。 */
   beforeFallback?(): void;
   /** 已换到另一台电脑(或原电脑恢复后在原电脑)续上了这一轮。 */
@@ -1846,6 +1848,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         deps.log.warn('provider group: automatic switch failed', { sessionId, error: errorText(error) });
       }
       if (handled) return;
+      if (hooks?.notHandled?.()) return;
       hooks?.beforeFallback?.();
       deps.fallback(sessionId, signals, token);
     },

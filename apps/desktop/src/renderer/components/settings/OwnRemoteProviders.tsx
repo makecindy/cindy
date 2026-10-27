@@ -3,7 +3,7 @@
  * 打开了「允许被远程调用」且已连接的供应商——也就是模型列表里能选的那些远程供应商。
  *
  * 与本机供应商同在左栏，图标右上角带远程角标(与模型列表同一个 RemoteSourceMark)；点开在
- * 右栏查看所在电脑与开放模型；自己的供应商组可从这里进入「远程与分享」管理。供应商凭证仍在原电脑配置。
+ * 右栏查看所在电脑、剩余额度与开放模型；自己的供应商组可从这里进入「远程与分享」管理。供应商凭证仍在原电脑配置。
  *
  * 供应商组(provider-groups.md §10)：另一台电脑把某个供应商建成了组时，组里的电脑与分享不再单独
  * 列出，组所在电脑那一项标成供应商组，详情列出组内电脑与状态，并提供同账号管理入口。规则与模型列表同一份。
@@ -17,6 +17,7 @@ import { remoteInvocationModels } from '@cindy/model-providers';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
+import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { Tip } from '@/components/ui/tooltip';
 import { RemoteProviderGroupMembers } from '@/features/provider-group/RemoteProviderGroupMembers';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
@@ -31,6 +32,7 @@ import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from '../../../shared/providerShar
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 
 import { ReadOnlyProviderModelSection, readOnlyProviderModels } from './ReadOnlyProviderModels';
+import { useDeviceProviderSubscriptionCard } from './useProviderSubscriptionCard';
 
 export interface OwnRemoteProvider {
   /** 左栏选中态的键。 */
@@ -260,26 +262,48 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
       </div>
 
       <div
-        className="shrink-0 border-t px-5 py-3"
-        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+        data-testid="provider-detail-scroll"
+        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
       >
-        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-          {t(entry.group ? 'settings.providers.remote.groupNote' : 'settings.providers.remote.detailNote', {
-            device: entry.deviceName,
-          })}
-        </p>
+        <div
+          className="shrink-0 border-t px-5 py-3"
+          style={{ borderColor: 'var(--settings-theme-card-border)' }}
+        >
+          <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
+            {t(entry.group ? 'settings.providers.remote.groupNote' : 'settings.providers.remote.detailNote', {
+              device: entry.deviceName,
+            })}
+          </p>
+        </div>
+
+        {!entry.group && <OwnRemoteProviderQuota key={entry.key} entry={entry} />}
+
+        {entry.group && (
+          <RemoteProviderGroupMembers deviceId={entry.deviceId} providerId={entry.provider.id} config={entry.group} />
+        )}
+
+        <ReadOnlyProviderModelSection
+          title={t('settings.providers.remote.modelsTitle')}
+          models={models}
+          note={models.length === 0 ? t('settings.providers.remote.modelsEmpty') : null}
+          testId="own-remote-provider-models"
+        />
       </div>
+    </div>
+  );
+}
 
-      {entry.group && (
-        <RemoteProviderGroupMembers deviceId={entry.deviceId} providerId={entry.provider.id} config={entry.group} />
-      )}
-
-      <ReadOnlyProviderModelSection
-        title={t('settings.providers.remote.modelsTitle')}
-        models={models}
-        note={models.length === 0 ? t('settings.providers.remote.modelsEmpty') : null}
-        testId="own-remote-provider-models"
-      />
+/** 只随当前详情读取那台电脑的订阅额度；组的额度保留在各成员里，不取组所在电脑代替。 */
+function OwnRemoteProviderQuota({ entry }: { entry: OwnRemoteProvider }) {
+  const account = useDeviceProviderSubscriptionCard(entry.provider, entry.deviceId);
+  if (!account?.windows.length) return null;
+  return (
+    <div
+      data-testid="provider-usage-module"
+      className="shrink-0 border-t px-1 py-2"
+      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+    >
+      <QuotaHoverCard variant="embedded" account={account} />
     </div>
   );
 }

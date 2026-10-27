@@ -139,6 +139,10 @@ export interface ThemeColors {
   statusAccent: string;
   /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
   warningFg: string;
+  /** 账号额度条预警填充（剩余不足 30%）；仅额度图形使用，双模式同值。 */
+  quotaBarWarn: string;
+  /** 账号额度条紧张填充（剩余不超过 10%）；仅额度图形使用，双模式同值。 */
+  quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
   /**
@@ -189,9 +193,11 @@ export interface ThemeColors {
   homeListFabBorder: string;
   /** 会话行右滑「置顶/取消置顶」按钮底色(Heart Orange,与 statusAccent 同值但语义独立) */
   swipeActionPin: string;
+  /** 右滑已读:沿用灵动岛青绿色语义,加深底色保证白色单勾的对比度。 */
+  swipeActionRead: string;
   /** 会话行左滑「选项」按钮底色(iOS systemGray 感的中性灰) */
   swipeActionNeutral: string;
-  /** 会话行左滑「归档」按钮底色(iOS 系统蓝;不用 statusAwaiting 青——其上白字对比不足) */
+  /** 会话行左滑「归档」按钮底色:保留手机版原有蓝色,与灵动岛归档对齐 */
   swipeActionArchive: string;
   /** swipe 按钮上的文字/图标色:两个主题都是白(按钮底色恒为深色系,不能用会反相的 ctaText) */
   swipeActionText: string;
@@ -462,6 +468,8 @@ export const lightColors: ThemeColors = {
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
+  quotaBarWarn: '#F3A115',
+  quotaBarCrit: '#D91F37',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
@@ -481,6 +489,7 @@ export const lightColors: ThemeColors = {
   homeListFab: '#0F0F0F',
   homeListFabBorder: 'transparent',
   swipeActionPin: '#EA6B17',
+  swipeActionRead: '#008579',
   swipeActionNeutral: '#8e8e93',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
@@ -553,6 +562,8 @@ export const darkColors: ThemeColors = {
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
+  quotaBarWarn: '#F3A115',
+  quotaBarCrit: '#D91F37',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
@@ -569,6 +580,7 @@ export const darkColors: ThemeColors = {
   homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
   swipeActionPin: '#EA6B17',
+  swipeActionRead: '#008579',
   swipeActionNeutral: '#636366',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',

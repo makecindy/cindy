@@ -48,6 +48,34 @@ describe('provider voice catalogs', () => {
       source: 'manual',
       voices: [],
     });
+    // A known vendor prefix alone must not invent compatibility for new versions.
+    for (const modelId of [
+      'elevenlabs/eleven_v4',
+      'minimax/speech-3.0-hd',
+      'speech-2.8-hd',
+      'qwen/qwen-audio-3.1-tts-flash',
+      'qwen/qwen-audio-3.2-tts-plus',
+    ]) {
+      expect(
+        await loadSpeechVoices(connection('openai'), modelId, fetcher, () => {}, 'xd'),
+      ).toEqual({ source: 'manual', voices: [] });
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  // Unit: the newly admitted Gateway Qwen model needs its own verified references.
+  // Existing OpenAI/native Alibaba cases did not cover this namespaced Gateway route.
+  it('offers Qwen 3.1 Plus references only on its Gateway route without requesting a voice API', async () => {
+    const fetcher = vi.fn();
+    const modelId = 'qwen/qwen-audio-3.1-tts-plus';
+    const result = await loadSpeechVoices(connection('openai'), modelId, fetcher, () => {}, 'xd');
+    expect(result.source).toBe('reference');
+    expect(result.voices).toHaveLength(4);
+    expect(result.voices[0]).toMatchObject({ id: 'longanlingxin_v3.1' });
+    expect(await loadSpeechVoices(connection('openai'), modelId, fetcher, () => {}, 'custom')).toEqual({
+      source: 'manual',
+      voices: [],
+    });
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -181,3 +209,40 @@ describe('provider voice catalogs', () => {
     }
   });
 });
+
+// Unit tier: native references must not accidentally fall through to ElevenLabs
+// account discovery or invent a default for clone-only/unknown model variants.
+// Known DashScope models may query their own read-only customization directory.
+it.each([
+  ['qwen-tts', 'qwen3-tts-flash', 'Cherry'],
+  ['qwen-tts', 'qwen3-tts-flash-realtime', undefined],
+  ['dashscope-tts', 'cosyvoice-v3-flash', 'longanyang'],
+  ['dashscope-tts', 'qwen-audio-3.1-tts-flash', 'longanhuan_v3.1'],
+  ['dashscope-tts', 'cosyvoice-v3.5-plus', undefined],
+  ['dashscope-tts', 'private-model', undefined],
+] as const)(
+  'loads %s %s without falling through to another provider API',
+  async (protocol, modelId, voice) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({ output: { voice_list: [] } }));
+    const result = await loadSpeechVoices(connection(protocol), modelId, fetcher, () => {});
+    expect(result.source).toBe(voice ? 'reference' : 'manual');
+    expect(result.voices[0]?.id).toBe(voice);
+    if (protocol === 'dashscope-tts' && modelId !== 'private-model') {
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(fetcher.mock.calls[0][0]).toBe(
+        'https://provider.test/prefix/v1/services/audio/tts/customization',
+      );
+    } else expect(fetcher).not.toHaveBeenCalled();
+    const choice = {
+      providerId: 'ali',
+      agent: 'codex',
+      modelId,
+      protocol,
+      voice: voice ?? 'account-clone',
+    };
+    expect(normalizeVoiceConversationSelection(choice)).toEqual(choice);
+    expect(
+      normalizeVoiceConversationSelection({ ...choice, providerId: 'xd', agent: undefined }),
+    ).toBeUndefined();
+  },
+);

@@ -19,7 +19,8 @@ import type { ModelAccessCredentialsStore } from './credentialsStore.js';
  *    ——既有 key(无论手填还是旧下发)继续工作,新会话无感。
  *
  * 并发:single-flight——同步进行中再触发(登录三入口并发 / 手动重试)复用在途
- * Promise。写 key 仅在值变化时发生,避免每次登录都触发 codex env-key 重启抖动。
+ * Promise。供应商停用时不发起自动请求/重试,停用边界作废在途响应;重新启用恢复同步。
+ * 写 key 仅在值变化时发生,避免每次登录都触发 codex env-key 重启抖动。
  */
 
 /** 服务端错误的最小切片(serverApiClient.ServerApiError 的结构子集)。 */
@@ -64,6 +65,8 @@ export function isValidCredentialsPayload(p: unknown): p is CredentialsPayload {
 }
 
 export interface CredentialsSyncDeps {
+  /** The owner may suspend automatic provisioning without removing saved credentials. */
+  isProviderEnabled?(): boolean;
   /** GET /api/model-access/credentials(失败抛 ServerApiError 形状)。 */
   fetchCredentials(): Promise<CredentialsPayload>;
   /** POST /api/model-access/credentials/rotate。 */
@@ -102,6 +105,8 @@ export interface CredentialsSync {
    * 同世代已有同步在途时复用它;unsupported / disabled 下与 sync() 一样直接返回。
    */
   resyncAfterKeyRejection(): Promise<ModelAccessStatus>;
+  /** Fence pending automatic work on provider disable/re-enable; resume for the signed-in owner. */
+  handleProviderAccessChange(): void;
   /** 轮换:成功返回新状态;失败抛 CredentialsFetchError 形状(IPC 层映射错误码)。 */
   rotate(): Promise<ModelAccessStatus>;
   /**
@@ -139,7 +144,7 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
    */
   let inflightMode: SyncMode = { silent: false };
   /**
-   * 认证世代号:登出、换账号或同账号跨区时自增。所有写盘(key/endpoint/状态)
+   * 世代号:登出、换账号、同账号跨区或供应商停用变化时自增。所有写盘(key/endpoint/状态)
    * 都以发起时捕获的世代为闸——旧身份的在途请求在世代变更后一律作废。
    */
   let epoch = 0;
@@ -148,6 +153,15 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
   /** 当前登录身份(handleAuthChange 维护),null = 未登录/未知。 */
   let currentUserId: string | null = null;
   let currentRealm: AuthRegion | null = null;
+
+  const isProviderEnabled = () => deps.isProviderEnabled?.() !== false;
+
+  function canContinueSync(myEpoch: number): boolean {
+    if (myEpoch !== epoch) return false;
+    if (isProviderEnabled()) return true;
+    if (status.state === 'syncing') setStatus('idle');
+    return false;
+  }
 
   function snapshot(
     state: ModelAccessStatus['state'],
@@ -187,7 +201,7 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
     try {
       payload = await deps.fetchCredentials();
     } catch (err) {
-      if (myEpoch !== epoch) return 'stale';
+      if (!canContinueSync(myEpoch)) return 'stale';
       const e = asFetchError(err);
       if (e.statusCode === 503 || e.code === 'MODEL_ACCESS_DISABLED') {
         deps.log?.info('model-access disabled on server, falling back to manual key flow');
@@ -200,7 +214,7 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
       deps.log?.warn(`model-access credentials fetch failed: ${e.code} (${e.statusCode})`);
       return 'retryable';
     }
-    if (myEpoch !== epoch) return 'stale'; // 响应归属旧账号,丢弃
+    if (!canContinueSync(myEpoch)) return 'stale'; // Account or provider access changed.
     if (!isValidCredentialsPayload(payload)) {
       deps.log?.warn('model-access credentials response invalid (empty key / bad endpoint), kept local');
       return 'retryable';
@@ -237,6 +251,7 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
     if (myEpoch !== epoch) return status;
     if (!mode.silent) setStatus('syncing');
     for (let attempt = 0; ; attempt++) {
+      if (!canContinueSync(myEpoch)) return status;
       const result = await attemptOnce(myEpoch, mode);
       if (result === 'stale' || myEpoch !== epoch) return status; // 登出/换账号,放弃本轮
       if (result !== 'retryable') return result;
@@ -253,6 +268,7 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
   }
 
   function startSync(silent = false): Promise<ModelAccessStatus> {
+    if (!isProviderEnabled()) return Promise.resolve(status);
     // 只复用**同世代**的在途请求;旧世代 inflight 会因世代闸自行作废,
     // 这里直接为当前账号发起新一轮(短暂并行无害,旧轮零写盘)。
     if (inflight && inflightEpoch === epoch) {
@@ -294,6 +310,14 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
         return Promise.resolve(status);
       }
       return startSync(true);
+    },
+
+    handleProviderAccessChange() {
+      epoch++;
+      if (status.state === 'syncing') setStatus('idle');
+      if (currentUserId !== null && isProviderEnabled()) {
+        void startSync().catch(() => undefined);
+      }
     },
 
     async rotate() {

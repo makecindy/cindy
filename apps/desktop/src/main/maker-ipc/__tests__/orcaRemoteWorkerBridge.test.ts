@@ -72,6 +72,7 @@ function setup() {
         worker.status = status;
       },
     },
+    captureLocalWorkerReport: () => { throw new Error('remote report must not use local settlement'); },
     dispatchInterAgentMessage: dispatch,
     readLeadHistory: async () => ({
       items: [{ id: 'm1', role: 'user', content: 'Lead context', agentMeta: null, createdAt: 1 }],

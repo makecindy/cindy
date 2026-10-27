@@ -97,6 +97,9 @@ const makerPiManagerIntegrationInclude = [
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+  // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
+  'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
+  'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
 ];
 const mobileGuardInclude = [
   // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.
@@ -149,10 +152,16 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Cross-file host/engine prompt ownership and remote-authorization isolation.
+  'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
+  // Cross-hook voice stop/refine ownership and composer hydration race wiring.
+  'src/renderer/__tests__/voiceInputEnterToSend.test.ts',
   'src/renderer/__tests__/sessionAgentSwitchRemoteRouting.contract.test.ts',
   'src/main/__tests__/deviceLinkVoiceCredentialBootstrap.test.ts',
   'src/main/__tests__/discordExternalization.test.ts',
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
+  // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
+  'src/main/maker-ipc/__tests__/orcaDeliveryWiring.contract.test.ts',
   'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
@@ -361,6 +370,14 @@ export default {
             '**/*.bench.ts',
           ],
         },
+        integration: {
+          status: 'manual',
+          reason: 'Local application Agent protocol tests open real loopback sockets and temporary authorization stores.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--maxWorkers=2'),
+          include: ['src/main/local-agent/__tests__/*.integration.test.ts'],
+        },
         'git-integration': {
           status: 'manual',
           reason: 'Full real-Git coverage is explicit because it spawns hundreds of local subprocesses and is coordinated across worktrees.',
@@ -531,6 +548,8 @@ export default {
     requiredUnitWorkspace('@cindy/maker-scheduler', 'packages/maker-scheduler'),
     requiredUnitWorkspace('@cindy/maker-shared', 'packages/maker-shared'),
     requiredUnitWorkspace('@cindy/model-providers', 'packages/model-providers'),
+    noCollectableWorkspace('@jackwener/opencli', 'packages/opencli-vendor',
+      'Pinned production adapter sources; execution, host credentials and discovery are tested through @cindy/mcps and the browser-control-runtime.'),
     {
       name: '@cindy/orca-workflow',
       cwd: 'packages/orca-workflow',

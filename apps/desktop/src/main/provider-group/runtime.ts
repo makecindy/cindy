@@ -17,7 +17,7 @@ import {
   type ProviderGroupRebalanceSuggestion,
   type ProviderGroupSessionGroup,
 } from '../../shared/providerGroup.js';
-import { getReceivedShares } from '../device-link/providerShareGuest.js';
+import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
@@ -214,7 +214,9 @@ let remoteClient: ProviderGroupRemoteClient | null = null;
 
 /** 问其他电脑上的组(无状态，按调用时的账号经设备互联发出)。 */
 export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
-  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke);
+  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke, {
+    captureShareRecovery: captureProviderShareGroupRecovery,
+  });
   return remoteClient;
 }
 

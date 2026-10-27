@@ -33,6 +33,11 @@ export interface RemoteScheduleWriteInput {
   modelAgentKind?: RemoteScheduleAgentKind;
   model?: string;
   providerId?: string;
+  /**
+   * Agent 运行位置(相对任务所在电脑的另一台电脑);null = 任务所在电脑。省略时若本次
+   * 改了模型或来源,host 把运行位置归回任务所在电脑(来源与位置成对),否则保留原值。
+   */
+  agentDeviceId?: string | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   workspaceKind?: RemoteScheduleWorkspaceKind;
@@ -105,6 +110,8 @@ export interface RemoteSchedule {
   modelAgentKind?: RemoteScheduleAgentKind;
   model?: string;
   providerId?: string;
+  /** Agent 运行位置;省略 = 任务所在电脑。 */
+  agentDeviceId?: string;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   workspaceKind?: RemoteScheduleWorkspaceKind;

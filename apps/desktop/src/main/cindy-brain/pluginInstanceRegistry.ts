@@ -3,7 +3,8 @@
  *
  * instanceKey is the directory storage key (helper, _root__helper,
  * _ns__xd__helper). It is not allocated. Logical namespace still lives
- * here, because an old client can rewrite a receipt.
+ * here, because an old client can rewrite a receipt. The official simulator
+ * rename retains its original directory key, proven by the Host receipt.
  *
  * Storage (KV, secrets, OAuth, library, partitions, skills) must use
  * instanceKey. Do not derive a new key from a path or namespace.
@@ -18,6 +19,7 @@ import {
   hasDeliveryNamespace,
 } from '../../shared/pluginIdentity.js';
 import { isValidGhostId } from '../../shared/ghost.js';
+import { simulatorPreviousStoragePart, validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
 const PLUGIN_INSTANCE_REGISTRY_V1_VERSION = 1 as const;
 const PLUGIN_INSTANCE_REGISTRY_VERSION = 2 as const;
@@ -90,6 +92,7 @@ export interface InstanceConfirmationEvidence {
 }
 
 export interface PluginInstanceReceiptFact {
+  simulatorPreviousRelId?: string;
   ghostId: string;
   hasNamespace: boolean;
   namespace: string | null;
@@ -125,7 +128,9 @@ export function adoptContentInstall(input: {
   /** Set when the market ledger has exactly one installed record for this ghost. */
   marketPluginId?: string | null;
 }): PluginInstanceRecord | null {
-  const instanceKey = instanceKeyForExistingContent(input.relId);
+  const previous = input.receipt?.simulatorPreviousRelId;
+  const instanceKey = previous && validSimulatorMigration(previous, input.ghostId, input.receipt?.namespace)
+    ? simulatorPreviousStoragePart(previous) : instanceKeyForExistingContent(input.relId);
   if (!instanceKey || !isValidGhostId(input.ghostId)) return null;
   const origin = input.receipt?.installOrigin;
   const identity = parsePluginInstallRelId(input.relId);

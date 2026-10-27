@@ -170,6 +170,8 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** per-session 来源(供应商)显式选择; null/undefined = 跟随默认路由。透传到 sessionService.create → mapper 落盘。 */
       providerId?: string | null;
       source?: 'cindy-make';
+      /** 新建页的未发送任务(见 sessionService.create)。 */
+      provisional?: boolean;
     }): Promise<Session | null> => {
       try {
         const newSession = await sessionService.create({

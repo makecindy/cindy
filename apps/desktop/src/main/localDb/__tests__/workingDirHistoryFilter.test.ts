@@ -35,6 +35,7 @@ function createLocalDb(): Database.Database {
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
       orca_role TEXT,
+      orca_remote_lead TEXT,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,
@@ -73,6 +74,7 @@ function createLocalDb(): Database.Database {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT, role TEXT, route_key TEXT);
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       client_id TEXT NOT NULL,

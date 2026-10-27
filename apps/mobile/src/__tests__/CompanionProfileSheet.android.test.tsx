@@ -18,7 +18,7 @@ vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-id' }));
 vi.mock('@/platform/chrome', () => ({ NativeSwitch: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'FileText', 'Hand', 'History', 'Info', 'Link2', 'Settings2', 'Sparkles']
+vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'FileText', 'Hand', 'History', 'Info', 'Link2', 'MessageCircle', 'Settings2', 'Sparkles']
   .map(name => [name, Object.assign(() => null, { displayName: name })])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
@@ -87,7 +87,7 @@ it('lays out the iOS identity, entry groups, icons and host-ordered management a
   expect(avatar.closest('button')).toBeNull();
   expect(container.textContent).toContain('Cindy'); expect(container.textContent).not.toContain('Teammate on Mac');
   const rows = buttons().map(node => node.dataset.testid ?? '').filter(id => /^companionProfile\.[a-z]+$/.test(id));
-  expect(rows).toEqual(['profile', 'memory', 'models', 'skills', 'artifacts', 'search', 'permissions'].map(id => `companionProfile.${id}`));
+  expect(rows).toEqual(['profile', 'memory', 'models', 'skills', 'channels', 'artifacts', 'search', 'permissions'].map(id => `companionProfile.${id}`));
   const icons = Object.fromEntries(rows.map(id => [id.split('.')[1], byTest(id)!.dataset.icon]));
   // 图标与桌面 BotsHomeView 同一动作同一 lucide 图标(mobile-design-guide §6)。
   expect(icons).toMatchObject({ profile: 'Info', memory: 'Brain', models: 'Sparkles', skills: 'Settings2', artifacts: 'FileText', search: 'History', permissions: 'Hand' });

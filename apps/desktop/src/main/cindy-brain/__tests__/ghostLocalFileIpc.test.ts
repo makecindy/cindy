@@ -21,7 +21,7 @@ import { loadGhostFirstPartyFactsLoader } from '../ghostFirstPartyFacts.js';
 import { authorizeGhostTokenBroker } from '../ghostFirstPartyPrivilege.js';
 import { createGhostInstallReceipt, type GhostInstallReceipt } from '../ghostInstallReceipt.js';
 import { classifyGhostLocalUpdateSource } from '../ghostLocalUpdateSource.js';
-import { confirmedTaskCapability } from '../ghostInstallConsent.js';
+import { confirmedHarnessCapabilities, confirmedTaskCapability } from '../ghostInstallConsent.js';
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -270,6 +270,7 @@ function harness(
     createWindowGhostInstallConsentPrompt: vi.fn(),
     assertGhostInstallConsent: vi.fn(),
     confirmedTaskCapability,
+    confirmedHarnessCapabilities,
     withGhostInstallLock: async (_id: string, task: () => unknown) => task(),
     withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
     getGhostRuntime: () => runtime,
@@ -280,6 +281,7 @@ function harness(
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
     getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),
+    harnessSlotSingleton: null,
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
     getGhostOauthAccountManager: () => ({ prepareAccountsForChangedClients: vi.fn() }),
     ghostSourceStateArchiveId: () => '_ns__cindy-archive-test__filo-local',

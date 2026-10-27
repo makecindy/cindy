@@ -1,3 +1,5 @@
+import { reconcileNewSessionCatalogDraft, reconcileNewSessionSubmitDraft, revalidateNewSessionDraftAfterAuth, restoreNewSessionFastPreference } from '@/session/newSessionRuntimeReconciliation';
+import { newSessionDraft } from './fixtures/newSession';
 import { modelNeedsReselection } from '../session/modelReselection';
 import { isCindyAutoModelId } from '@cindy/model-providers/provider-identity';
 import { buildMobileModelSections, flattenProviderSections, isFastRestorable } from '../session/providerModelSections';
@@ -51,16 +53,24 @@ import {
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import type { ProviderModelRow } from '@/session/providerModelSections';
 import type { RemoteSession } from '@/session/types';
+import type { NewSessionDraft, SubmitGuardCatalog } from '@/session/newSession';
 
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 // Existing source contracts follow the extracted hooks; load their text once.
+const newSessionPageSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
 const newSessionSources = [
   'app/sessions/new.tsx',
   'src/session/useNewSessionDefaultSelection.ts',
   'src/session/useNewSessionHostDefaults.ts',
+  'src/session/newSessionForm.ts',
+  'src/session/useNewSessionWorkspace.ts',
+  'src/session/useNewSessionWorktreeSync.ts',
+  'src/session/newSessionVoiceInput.ts',
+  'src/session/prepareNewSessionCreation.ts',
+  'src/session/newSessionRuntimeReconciliation.ts',
 ].map(path => readTextLf(resolve(process.cwd(), path), 'utf8')).join('\n');
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
@@ -557,9 +567,14 @@ describe('isNewSessionRuntimePending', () => {
     expect(() => assertSubmitModelResolved({ model: 'claude-opus-5-5' }, 'claude-opus-5-5')).not.toThrow();
     expect(() => assertSubmitModelResolved({ model: '' }, 'delisted-model'))
       .toThrow('delisted-model 在这台电脑上已不可用，请重新选择模型后再发送。');
-    // 三处提交终检(创建前两处 + 鉴权后重验)都要经过这道拦截。
-    const source = newSessionSources;
-    expect(source.split('assertSubmitModelResolved(resolved, effectiveDraft.model);').length - 1).toBe(3);
+    // Normal/goal submission share one decision; auth refresh reuses it. Test
+    // the observable rejection, not how many copies of the assertion exist.
+    const draft = newSessionDraft({ agentKind: 'codex', model: 'delisted-model', providerId: 'gone' });
+    expect(() => reconcileNewSessionSubmitDraft(draft, {
+      rows: [], providers: [], catalogKnown: true, genAt: 0,
+    }, () => false, key => key)).toThrow('delisted-model');
+    expect(() => revalidateNewSessionDraftAfterAuth(draft, { providers: [] }, () => false, key => key))
+      .toThrow('delisted-model');
   });
 });
 
@@ -1663,7 +1678,7 @@ describe('new session model', () => {
 
     expect(parseNewSessionDeviceOptions(encoded)).toEqual([
       { deviceId: 'pc', name: 'PC' },
-      { deviceId: 'mac', name: 'mac' },
+      { deviceId: 'mac', name: '另一台电脑' },
     ]);
   });
 
@@ -1672,7 +1687,7 @@ describe('new session model', () => {
       { deviceId: 'pc', name: 'PC' },
     ]);
     expect(parseNewSessionDeviceOptions('not-json', { deviceId: 'pc', name: '' })).toEqual([
-      { deviceId: 'pc', name: 'pc' },
+      { deviceId: 'pc', name: '另一台电脑' },
     ]);
     expect(parseNewSessionDeviceOptions('')).toEqual([]);
   });
@@ -1793,6 +1808,29 @@ describe('new session model', () => {
         lastActivityAt: '2026-01-01T00:01:00.000Z',
       },
     ]);
+  });
+
+  // #6916, unit: the production picker must display host metadata without changing its path.
+  it('uses the selected host alias for recent workspace quick picks', () => {
+    const sessions = [remoteSession('app', { workingDir: '/repo/app', deviceLinkDeviceId: 'mac-a' })];
+    const aliases = new Map([
+      ['device:mac-a:/repo/app', 'Customer Portal'],
+      ['device:mac-b:/repo/app', 'Other Portal'],
+    ]);
+    expect(buildRecentWorkspaceOptions(sessions, 'mac-a', 6, aliases)[0]).toMatchObject({
+      title: 'Customer Portal', workingDir: '/repo/app',
+    });
+    expect(buildRecentWorkspaceOptions(sessions, 'mac-a', 6, new Map())[0].title).toBe('app');
+  });
+
+  it('keeps mixed local/SSH recent-workspace names independent of row order', () => {
+    const aliases = new Map([['device:mac-a:/repo/app', 'Local name']]);
+    const local = remoteSession('local', { workingDir: '/repo/app', deviceLinkDeviceId: 'mac-a' });
+    const ssh = remoteSession('ssh', { workingDir: '/repo/app', deviceLinkDeviceId: 'mac-a', remoteHostId: 'ssh-a' });
+    for (const rows of [[local, ssh], [ssh, local]]) {
+      expect(buildRecentWorkspaceOptions(rows, 'mac-a', 6, aliases)[0]).toMatchObject({ title: 'app', sessionCount: 2 });
+    }
+    expect(buildRecentWorkspaceOptions([ssh], 'mac-a', 6, aliases)[0].title).toBe('app');
   });
 
   // Remote path strings deliberately model the host OS, not the test runner's filesystem.
@@ -2022,7 +2060,10 @@ describe('new session model', () => {
 });
 
 describe('new session composer surface', () => {
-  it('keeps the controlled caret at the end after palette insertion and draft restore', () => {
+  // The native caret may echo before a render; these screen-only callbacks must
+  // publish text first. Restored text/caret behavior runs through newSessionForm
+  // in newSessionDraftRecovery.test.ts and newSessionIncomingShare.test.ts.
+  it('updates composer text before the controlled caret on slash or mention insertion', () => {
     const newSource = newSessionSources;
     const slashStart = newSource.indexOf('const selectSlashCommand = useCallback');
     const slashEnd = newSource.indexOf('const selectAtResource = useCallback', slashStart);
@@ -2030,9 +2071,6 @@ describe('new session composer surface', () => {
     const atStart = slashEnd;
     const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
     const atSource = newSource.slice(atStart, atEnd);
-    const restoreStart = newSource.indexOf('const restoreCreationDraft = useCallback');
-    const restoreEnd = newSource.indexOf('setDraft(recovered);', restoreStart);
-    const restoreSource = newSource.slice(restoreStart, restoreEnd);
 
     for (const source of [slashSource, atSource]) {
       expect(source).toContain('const current = firstMessageRef.current;');
@@ -2041,11 +2079,6 @@ describe('new session composer surface', () => {
         source.indexOf('setFirstMessageSelection(selection)'),
       );
     }
-    expect(restoreSource).toContain('firstMessageRef.current = recovered.firstMessage;');
-    expect(restoreSource).toContain('firstMessageSelectionRef.current = selection;');
-    expect(restoreSource).toContain('setFirstMessageSelection(selection);');
-    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments], undefined, stashed.deviceId || undefined);');
-    expect(newSource).toContain('restoreCreationDraft(record.creation.draft,');
   });
 
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
@@ -2068,321 +2101,26 @@ describe('new session composer surface', () => {
     expect(newSource).not.toContain("Platform.OS === 'ios' ? 'padding' : undefined");
   });
 
-  it('uses the shared mobile composer row rather than a separate input implementation', () => {
-    const newSource = newSessionSources;
-    const sessionSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
-    const newComposerStart = newSource.indexOf('<MobileComposerInputRow');
-    const newComposerEnd = newSource.indexOf('\n                />', newComposerStart) + '\n                />'.length;
-    const newComposerSource = newSource.slice(newComposerStart, newComposerEnd);
-    const attachmentButtonStart = newSource.indexOf('const renderAttachmentToggleButton = () => (');
-    const attachmentButtonEnd = newSource.indexOf('const renderCreateButton = () => (', attachmentButtonStart);
-    const attachmentButtonSource = newSource.slice(attachmentButtonStart, attachmentButtonEnd);
-    const createButtonStart = newSource.indexOf('const renderCreateButton = () => (');
-    const createButtonEnd = newSource.indexOf('// 聚焦卡片形态的底部工具排', createButtonStart);
-    const createButtonSource = newSource.slice(createButtonStart, createButtonEnd);
-    const composerIconButtonStart = newSource.indexOf('composerIconButton: {');
-    const composerIconButtonEnd = newSource.indexOf('composerCompactLeading:', composerIconButtonStart);
-    const composerIconButtonStyle = newSource.slice(composerIconButtonStart, composerIconButtonEnd);
-    const modelPillStart = newSource.indexOf('modelPill: {');
-    const modelPillEnd = newSource.indexOf('modelPillText:', modelPillStart);
-    const modelPillStyle = newSource.slice(modelPillStart, modelPillEnd);
-    const modelPillTextStart = newSource.indexOf('modelPillText: {');
-    const modelPillTextEnd = newSource.indexOf('inputVoiceHidden:', modelPillTextStart);
-    const modelPillTextStyle = newSource.slice(modelPillTextStart, modelPillTextEnd);
-    const voiceDraftTextStart = newSource.indexOf('voiceDraftText: {');
-    const voiceDraftTextEnd = newSource.indexOf('voiceDraftListeningPrompt:', voiceDraftTextStart);
-    const voiceDraftTextStyle = newSource.slice(voiceDraftTextStart, voiceDraftTextEnd);
-    const sendButtonStart = newSource.indexOf('sendButton: {');
-    const sendButtonEnd = newSource.indexOf('sendButtonDisabled:', sendButtonStart);
-    const sendButtonStyle = newSource.slice(sendButtonStart, sendButtonEnd);
-    const sendButtonDisabledStart = newSource.indexOf('sendButtonDisabled: {');
-    const sendButtonDisabledEnd = newSource.indexOf('sendButtonPressed:', sendButtonDisabledStart);
-    const sendButtonDisabledStyle = newSource.slice(sendButtonDisabledStart, sendButtonDisabledEnd);
-    const voiceButtonStart = newSource.indexOf('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    const voiceButtonEnd = newSource.indexOf('// 切 agent:', voiceButtonStart);
-    const voiceButtonSource = newSource.slice(voiceButtonStart, voiceButtonEnd);
-    const storedAgentStart = newSource.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
-    const storedAgentEnd = newSource.indexOf('// 新建任务默认运行配置', storedAgentStart);
-    const storedAgentSource = newSource.slice(storedAgentStart, storedAgentEnd);
-    const selectDeviceStart = newSource.indexOf('const selectDevice = useCallback((option: NewSessionDeviceOption) => {');
-    const selectDeviceEnd = newSource.indexOf('// 切 agent:', selectDeviceStart);
-    const selectDeviceSource = newSource.slice(selectDeviceStart, selectDeviceEnd);
-    const selectWorkingDirStart = newSource.indexOf('const selectWorkingDir = useCallback((workingDir: string) => {');
-    const selectDialogueWorkspaceStart = newSource.indexOf('const selectDialogueWorkspace = useCallback(() => {');
-    const selectRecentProjectStart = newSource.indexOf('const selectRecentProject = useCallback((workingDir: string) => {');
-    const openProjectBrowseStart = newSource.indexOf('const openProjectBrowse = useCallback(() => {');
-    const selectWorkingDirSource = newSource.slice(selectWorkingDirStart, selectDialogueWorkspaceStart);
-    const selectDialogueWorkspaceSource = newSource.slice(selectDialogueWorkspaceStart, selectRecentProjectStart);
-    const selectRecentProjectSource = newSource.slice(selectRecentProjectStart, openProjectBrowseStart);
-    const browseHiddenToggleStyleStart = newSource.indexOf('browseHiddenToggle: {');
-    const browseHiddenToggleStyleEnd = newSource.indexOf('browseCheckbox: {', browseHiddenToggleStyleStart);
-    const browseHiddenToggleStyle = newSource.slice(browseHiddenToggleStyleStart, browseHiddenToggleStyleEnd);
-    const createStart = newSource.indexOf('const createMessageSession = useCallback(async () => {');
-    const createEnd = newSource.indexOf('const createGoalSession = useCallback', createStart);
-    expect(createStart).toBeGreaterThan(-1);
-    expect(createEnd).toBeGreaterThan(createStart);
-    const createSource = newSource.slice(createStart, createEnd);
-    const dispatchStart = newSource.indexOf('const create = useCallback(async () => {', createEnd);
-    expect(dispatchStart).toBeGreaterThan(createEnd);
-    const dispatchEnd = newSource.indexOf('const goalDraftCommand', dispatchStart);
-    expect(dispatchEnd).toBeGreaterThan(dispatchStart);
-    const dispatchSource = newSource.slice(dispatchStart, dispatchEnd);
-    expect(dispatchSource).toContain("if (parsed?.name !== 'goal' || pendingGoalSkillRef.current === 'goal')");
-    expect(dispatchSource).toContain('await createMessageSession();');
-
-    expect(newSource).toContain("MobileComposerInputRow,");
-    expect(sessionSource).toContain("MobileComposerInputRow,");
-    expect(newSource).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
-    expect(newSource).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';");
-    expect(newSource).toContain('const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;');
-    expect(newSource).toContain('firstMessage: visualInitialDraft ?? readRouteString(params.draft) ?? (isRemoteTaskSuggestionId(params.suggestion)');
-    expect(newSource).toContain('t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)');
-    expect(newSource).toContain(': DEFAULT_NEW_SESSION_DRAFT.firstMessage)');
-    expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');
-    expect(newComposerSource).toContain('autoFocus={visualFocusComposer}');
-    expect(newComposerSource).toContain('maxHeight={composerResize.inputMaxHeight}');
-    expect(newComposerSource).toContain('inputFrameAnimatedStyle={composerResize.frameStyle}');
-    expect(newSource).toContain('gesture={composerResize.gesture}');
-    expect(newComposerSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
-    expect(newComposerSource).toContain('cardActive={composerCardActive}');
-    expect(newComposerSource).toContain('toolbar={renderComposerToolbar()}');
-    expect(newComposerSource).toContain('voicePlacement={composerVoicePlacement}');
-    expect(newComposerSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    expect(newComposerSource).toContain('cursorColor={colors.inputCaret}');
-    expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
-    expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
-    expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
-    expect(newComposerSource).toContain("inputStyle={voiceIsListening && Platform.OS !== 'ios' ? styles.inputVoiceHidden : undefined}");
-    expect(newComposerSource).toContain('setFirstMessageDraft(text);');
-    expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
-    expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
-    expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
-    expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
-    expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
-    expect(newSource).toContain('const renderComposerCompactLeading = () => (');
-    expect(newSource).not.toContain('styles.composerCompactAttachmentSlot');
-    expect(newSource).toContain('styles.composerCompactAttachmentHit');
-    expect(newSource).not.toContain('styles.composerCompactAttachmentHitArea');
-    expect(newSource).toContain('pointerEvents="none"');
-    expect(newSource).toContain('testID="newSession.attachmentToggleButton"');
-    expect(newSource).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(newSource).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(newSource).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(newSource).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
-    expect(newSource).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
-    expect(newSource).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
-    expect(newSource).toContain('const renderComposerToolbar = () => (');
-    // 左侧组包住 [+][权限][计划][模型],再接 spacer;右段 语音占位 → 创建。
-    const newToolbarStart = newSource.indexOf('const renderComposerToolbar = () => (');
-    const newToolbarEnd = newSource.indexOf('const renderComposerInputOverlay', newToolbarStart);
-    const newToolbarSource = newSource.slice(newToolbarStart, newToolbarEnd);
-    const newToolbarLeftGroupStart = newToolbarSource.indexOf('<ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">');
-    const newToolbarLeftGroupEnd = newToolbarSource.indexOf('</ComposerToolbarLeftGroup>');
-    const newToolbarModelIndex = newToolbarSource.indexOf('testID="newSession.modelIndicator"');
-    const newToolbarSpacerIndex = newToolbarSource.indexOf('<ComposerToolbarSpacer />');
-    const newToolbarVoiceSlotIndex = newToolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
-    expect(newToolbarLeftGroupStart).toBeGreaterThan(-1);
-    expect(newToolbarModelIndex).toBeGreaterThan(newToolbarLeftGroupStart);
-    expect(newToolbarLeftGroupEnd).toBeGreaterThan(newToolbarModelIndex);
-    expect(newToolbarSpacerIndex).toBeGreaterThan(newToolbarLeftGroupEnd);
-    expect(newToolbarVoiceSlotIndex).toBeGreaterThan(newToolbarSpacerIndex);
-    expect(newSource).toContain('PaperPlaneIcon');
-    expect(newSource).not.toContain('ArrowUp');
-    expect(attachmentButtonSource).toContain('contextSheetOpen && styles.composerIconButtonActive');
-    expect(attachmentButtonSource).toContain('color={contextSheetOpen ? colors.textPrimary : colors.textSecondary}');
-    expect(attachmentButtonSource).toContain('size={iconSize.sm}');
-    expect(createButtonSource).toContain('<PaperPlaneIcon');
-    expect(createButtonSource).toContain('size={iconSize.lg}');
-    expect(createButtonSource).toContain('color={canCreate ? colors.ctaText : colors.textSecondary}');
-    expect(createButtonSource).toContain('<ActivityIndicator color={colors.textSecondary} size="small" />');
-    expect(composerIconButtonStyle).toContain('backgroundColor: colors.sheetActionSurface');
-    expect(composerIconButtonStyle).toContain('borderColor: colors.sheetActionBorder');
-    expect(composerIconButtonStyle).toContain('borderWidth: StyleSheet.hairlineWidth');
-    expect(composerIconButtonStyle).toContain('height: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(composerIconButtonStyle).toContain('width: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(modelPillStyle).toContain('backgroundColor: colors.sheetActionSurface');
-    expect(modelPillStyle).toContain('borderColor: colors.sheetActionBorder');
-    expect(modelPillStyle).toContain('borderRadius: radius.pill');
-    expect(modelPillStyle).toContain('borderWidth: StyleSheet.hairlineWidth');
-    expect(modelPillStyle).toContain('minHeight: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(modelPillStyle).toContain('paddingHorizontal: spacing.md');
-    expect(modelPillTextStyle).toContain('color: colors.textPrimary');
-    expect(modelPillTextStyle).toContain('fontSize: typeScale.caption');
-    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.medium');
-    // 输入框字号档由 MobileComposerInputRow 统一持有(MOBILE_COMPOSER_DRAFT_TEXT_STYLE),
-    // 页面不再覆盖;语音草稿覆盖层必须引用同一档,否则换行位置与输入框错开(见
-    // composerVoiceDraftMetrics.test.ts)。
-    expect(newSource).not.toContain('sessionComposerInput');
-    expect(voiceDraftTextStyle).toContain('...MOBILE_COMPOSER_DRAFT_TEXT_STYLE');
-    expect(sendButtonStyle).toContain('backgroundColor: colors.cta');
-    expect(sendButtonStyle).toContain('borderColor: colors.cta');
-    expect(sendButtonStyle).toContain('borderWidth: StyleSheet.hairlineWidth');
-    expect(sendButtonStyle).toContain('height: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(sendButtonStyle).toContain('width: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(sendButtonDisabledStyle).toContain('backgroundColor: colors.surfaceChip');
-    expect(sendButtonDisabledStyle).toContain('borderColor: colors.border');
-    // 模型浮窗(ModelPickerSheet):composer 上方 drop-up 面板不回潮。2026-07-28 起
-    // 权限从浮窗二级视图提为工具排独立药丸(permissionIndicator)+ 独立 sheet,
-    // 新建页与会话页都隐藏浮窗 header 权限入口(hidePermissionTrigger),避免双入口;
-    // 旧的 permissionButton/permissionPanel 形态仍不允许回潮。
-    expect(newSource).toContain('<ModelPickerSheet');
-    expect(newSource).toContain('testID="newSession.modelSheet"');
-    expect(newSource).toContain('hidePermissionTrigger');
-    expect(newSource).toContain('testID="newSession.permissionIndicator"');
-    expect(newSource).toContain('testID="newSession.permissionSheet"');
-    expect(newSource).not.toContain('testID="newSession.permissionButton"');
-    expect(newSource).not.toContain('testID="newSession.permissionPanel"');
-    expect(newSource).not.toContain('testID="newSession.modelPickerPanel"');
-    // 语音生命周期内创建按钮常驻(2026-07-25 对齐桌面):录音中点创建=结束录音并
-    // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
-    expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
-    // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
-    // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
-    // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
-    // 文案——locale 异步恢复时字符串比对会静默失效(review 三轮收口)。
-    expect(newSource).toContain('isNewSessionDraftMissingPayloadOnly(draft, draftContent)');
-    expect(newSource).not.toContain("=== t('session.new.enterFirstMessageOrAttachment')");
-    expect(newSource).toContain('const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))');
-    expect(newSource).not.toContain('(!createValidation || voiceIsListening) &&');
-    expect(newSource).toContain('const composerShowCreateButton = composerHasMessage');
-    expect(newSource).toContain('const deviceSelectorDisabled = creating || voiceIsProcessing || !deviceHasChoices;');
-    // 按下即录(pressIn 起录):同一手势的松手由 voiceStartedOnPressInRef 吞掉,
-    // 不再直接把 onPress 绑到 toggle。
-    expect(voiceButtonSource).toContain('voiceStartedOnPressInRef.current = false;');
-    expect(voiceButtonSource).toContain('toggleVoiceRecording();');
-    expect(voiceButtonSource).toContain('disabled={creating || voiceIsProcessing}');
-    expect(newSource).toContain('const startVoiceRecording = useCallback(async () => {');
-    expect(newSource).toContain('const voiceStartupInFlightRef = useRef(false);');
-    expect(newSource).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
-    expect(newSource).toContain('const voiceStopInFlightRef = useRef(false);');
-    expect(newSource).toContain('if (!voiceRecordingActiveRef.current) {');
-    expect(newSource).not.toContain('if (!voiceRecordingActiveRef.current && !voiceStopInFlightRef.current) {');
-    expect(newSource).toContain('const voiceStartupSeqRef = useRef(0);');
-    expect(newSource).toContain('|| voiceStopInFlightRef.current');
-    expect(newSource).toContain('resolveMobileVoiceRecordingPermission({');
-    expect(newSource).toContain('voiceStartupInFlightRef.current = true;');
-    expect(newSource.indexOf('resolveMobileVoiceRecordingPermission({')).toBeLessThan(
-      newSource.indexOf('voiceStartupInFlightRef.current = true;'),
-    );
-    expect(newSource).toContain('getPermission: getRecordingPermissionsAsync');
-    expect(newSource).toContain("isAppActive: () => AppState.currentState === 'active'");
-    expect(newSource).toContain(
-      "voicePermissionRequestSeqRef.current !== permissionRequestSeq\n"
-      + "        || AppState.currentState !== 'active'\n"
-      + "      ) return;\n"
-      + "      startupSeq = voiceStartupSeqRef.current + 1;",
-    );
-    expect(newSource).toContain('const cancelVoiceForDeviceSwitch = useCallback(() => {');
-    expect(selectDeviceSource).toContain('voicePermissionRequestInFlightRef.current');
-    expect(selectDeviceSource).toContain('|| voiceStopInFlightRef.current');
-    expect(selectDeviceSource).toContain('|| voiceIsProcessing');
-    expect(selectDeviceSource).toContain('cancelVoiceForDeviceSwitch();');
-    expect(newSource).toContain('voiceStartupInFlightRef.current = false;');
-    expect(newSource).toContain('createMobileVoiceControllerSession({');
-    expect(newSource).toContain('createMobileCindyVoiceCredential(selectedDeviceId)');
-    expect(newSource).toContain('readNewSessionPreferences');
-    expect(newSource).toContain('saveNewSessionPreferences');
-    expect(newSource).toContain('pickNewSessionDefaultDevice({');
-    expect(newSource).toContain('const userTouchedDeviceRef = useRef(false);');
-    expect(newSource).toContain('if (!newSessionPreferencesLoaded) return;');
-    expect(newSource).toContain('if (userTouchedDeviceRef.current) return;');
-    expect(selectDeviceSource).toContain('userTouchedDeviceRef.current = true;');
-    expect(selectWorkingDirSource).toContain('setShowHiddenDirectories(false);');
-    expect(selectDialogueWorkspaceSource).toContain('setShowHiddenDirectories(false);');
-    expect(selectRecentProjectSource).toContain('setShowHiddenDirectories(false);');
-    expect(newSource).toContain("import { newSessionText } from '@/session/newSessionMessages';");
-    expect(newSource).toContain('accessibilityRole="checkbox"');
-    expect(newSource).toContain("accessibilityLabel={newSessionText('showHiddenDirectories')}");
-    expect(newSource).toContain('accessibilityState={{ checked: showHiddenDirectories, disabled: creating || undefined }}');
-    expect(newSource).toContain("{newSessionText('showHiddenDirectories')}");
-    expect(newSource).toContain("{newSessionText('emptyDirectory')}");
-    expect(newSource).not.toContain('显示隐藏文件夹');
-    expect(newSource).not.toContain('没有可显示的子目录。');
-    expect(browseHiddenToggleStyle).toContain('minHeight: 44');
-    expect(storedAgentSource).toContain('if (selectedDeviceId) autoDefaultDeviceRef.current = selectedDeviceId;');
-    expect(storedAgentSource).not.toContain('userTouchedRuntimeRef.current = true;');
-    expect(newSource).toContain('void saveNewSessionPreferences({ agentKind: nextKind });');
-    expect(newSource).toContain('testID="newSession.voiceStatus"');
-    expect(newSource).toContain('testID="newSession.voiceSettingsButton"');
-    expect(newSource).toContain('testID="newSession.voiceMicCaret"');
-    expect(newSource).toContain("const renderComposerInputOverlay = () => voiceIsListening && Platform.OS !== 'ios' ? (");
-    expect(newSource).toContain("import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';");
-    expect(newSource).toContain('const composerListeningPlaceholder = buildSessionComposerLayout({');
-    expect(newSource).toContain('<Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>');
-    // 听写 mic 波形 caret 用正文色(对齐桌面 --chat-input-text,2026-07-28 用户定案),不用 statusReady 蓝绿。
-    expect(newSource).toContain('<VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />');
-    // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
-    // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
-    expect(newSource).toContain('placeholderTextColor={colors.textPlaceholder}');
-    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textPlaceholder,');
-    expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
-    expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
-    expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });');
-    expect(newSource).toContain('voiceSelectionUserOwnedRef.current = false;\n      voicePendingSelectionEchoesRef.current = [];\n      const controller = createMobileVoiceControllerSession({');
-    expect(newSource).toContain('voiceDraftScrollRef.current?.scrollTo({ y: voiceDraftCaretFrame.top, animated: false });');
-    expect(newSource).toContain('draft.firstMessage.slice(0, firstMessageSelectionRef.current.end)');
-    expect(newSource).toContain('draft.firstMessage.slice(firstMessageSelectionRef.current.end)');
-    expect(newSource).toContain('caret.measureLayout(block, (x, y) => {');
-    expect(newSource).toContain('viewRef={voiceDraftCaretRef}');
-    expect(sharedSource).toContain('export function VoiceMicWaveCaret');
-    expect(newSource).toContain('const creatingRef = useRef(false);');
-    expect(createSource).toContain('|| voiceStartupInFlightRef.current');
-    expect(createSource).toContain('|| voiceStopInFlightRef.current');
-    expect(createSource).toContain('|| voiceIsProcessing');
-    expect(createSource).toContain('creatingRef.current = true;');
-    expect(createSource.indexOf('creatingRef.current = true;')).toBeLessThan(createSource.indexOf('const latestDraftText = await finishVoiceRecording();'));
-    expect(createSource).toContain('const latestDraftText = await finishVoiceRecording();');
-    expect(createSource).toContain('effectiveDraft = { ...effectiveDraft, firstMessage: latestDraftText };');
-    expect(createSource).toContain('creatingRef.current = false;');
-    expect(createButtonSource).toContain('busy: creating');
-    expect(createButtonSource).toContain('|| worktreeBranchPreferenceSaving');
-    expect(newSource).toContain('disabled: !canCreate || undefined,');
-    // No start cue on mobile: playing a cue via expo-audio during capture stalls
-    // the AVAudioEngine record tap (see mobileVoiceCue.ts). Only the end cue is wired.
-    expect(newSource).not.toContain('playMobileVoiceInputStartCue');
-    expect(newSource).not.toContain('onReadyForStartCue');
-    expect(newSource).toContain('onReadyForEndCue: credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,');
-    // Touch-down warm-up: the mic button prewarms the audio session + ASR
-    // connection at pressIn, and voice startup claims that connection when fresh.
-    expect(newSource).toContain('onPressIn={handleVoiceButtonPressIn}');
-    // 托管预热:凭登录态提前拿 voice-server 票据(BYOK/穿透路径已删除,
-    // 手机语音只保留 Cindy 官方托管路径)。
-    expect(newSource).toContain('prewarmMobileVoiceStart(selectedDeviceId, {');
-    expect(newSource).toContain('getAccessToken: () => auth.getAccessToken(),');
-    expect(newSource).toContain('refreshAccessToken: () => auth.refreshAccessToken(),');
-    expect(newSource).toContain('apiFetch: auth.apiFetch,');
-    expect(newSource).toContain('const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null));');
-    // 语音历史与词典快照只服务润色提示:后台读取,不挡在开麦之前。
-    expect(newSource).not.toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(newSource).toContain('void getMobileVoiceInputHistoryForHost(selectedDeviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)');
-    expect(newSource).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
-    // 停止后 150ms 内保持录音胶囊,超过才显示处理转圈。
-    expect(newSource).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
-    // 停止期保持胶囊外观,只有与语音无关的禁用原因(创建中)才置灰。
-    expect(newSource).toContain('(creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,');
-    expect(newSource).not.toContain('MobileVoiceServiceMode');
-    expect(newSource).not.toContain('LiteLlm');
-    expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');
-    expect(newSource).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
-    expect(newSource).toContain('voiceContext.createRefinerTarget(providerId, options),');
-    expect(newSource).toContain('voiceContext.warmRefiner(input),');
-    expect(newSource).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
-    expect(newSource).toContain('const composerVoicePlacement = voiceUiAvailable');
-    expect(newSource).toContain('hasTrailingAction: composerShowCreateButton');
-    expect(newSource).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
-    expect(newSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    expect(sessionSource).toContain('voicePlacement={composerVoicePlacement}');
-    expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
-    expect(sharedSource).toContain('MOBILE_COMPOSER_CONTROL_SIZE,');
-    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonPlacement,');
-    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
-    expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
-    expect(sharedSource).not.toContain('styles.voiceButtonAnchor');
-    expect(newSource).not.toContain('messageInput: {');
-    expect(newSource).not.toContain('composerToolbar: {');
-    expect(newSource).not.toContain('permissionIcon: {');
-    expect(newSource).not.toContain('style={styles.messageInput}');
+  // Permission/async-start wiring stays a source guard: the production voice
+  // functions run in newSessionVoiceInput.test.tsx; the screen owns the OS
+  // foreground check and the create/recording interlock.
+  it('rechecks recording permission and foreground before starting or creating', () => {
+    const page = newSessionPageSource;
+    const permission = page.indexOf('resolveMobileVoiceRecordingPermission({');
+    const startup = page.indexOf('voiceStartupInFlightRef.current = true;', permission);
+    expect(permission).toBeGreaterThan(-1);
+    expect(startup).toBeGreaterThan(permission);
+    expect(page.slice(permission, startup)).toContain("AppState.currentState !== 'active'");
+    expect(page).toContain('getPermission: getRecordingPermissionsAsync');
+    const createStart = page.indexOf('const createMessageSession = useCallback');
+    const createEnd = page.indexOf('const createGoalSession = useCallback', createStart);
+    const create = page.slice(createStart, createEnd);
+    const claim = create.indexOf('creatingRef.current = true;');
+    const stop = create.indexOf('await finishVoiceRecording()');
+    expect(claim).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(claim);
+    expect(create).toContain('effectiveDraft = { ...effectiveDraft, firstMessage: latestDraftText };');
+    expect(create).toContain('creatingRef.current = false;');
   });
 });
 
@@ -2395,21 +2133,18 @@ describe('new session worktree wiring (source locks)', () => {
   //  - 失败(业务 {ok:false} / invoke 抛错)早退留在表单,不建会话。
   const newSource = newSessionSources;
 
-  it('runs worktree:create before the optimistic pipeline with the same preset sessionId', () => {
-    const requestIdx = newSource.indexOf('const createRequest = buildWorktreeCreateRequest({');
-    const createIdx = newSource.indexOf('await maker.worktree.create(createRequest)', requestIdx);
-    const parseIdx = newSource.indexOf('parseWorktreeCreateResult(', requestIdx);
-    const pipelineIdx = newSource.indexOf('startNewSessionCreation({');
-    expect(requestIdx).toBeGreaterThan(0);
-    expect(createIdx).toBeGreaterThan(0);
-    expect(parseIdx).toBeGreaterThan(requestIdx);
-    expect(pipelineIdx).toBeGreaterThan(createIdx);
-    expect(newSource).toContain('effectiveDraft = { ...effectiveDraft, workingDir: resp.meta.path };');
-    expect(newSource).toContain('setError(formatWorktreeCreateFailure(resp.error));');
-    // 勾选生效三条件:project 模式 × 用户勾选 × 资格探测通过。
-    expect(newSource).toContain('worktreeIntent.applicable');
-    expect(newSource).toContain('&& worktreeIntent.enabled');
-    expect(newSource).toContain("&& worktreeIntent.eligibility.status === 'eligible'");
+  // Persistence/reservation/path outcomes run through the real preparation in
+  // newSessionCreationPersistence.test.ts. This guard protects the remaining
+  // screen handoff, where starting early would bypass durable preparation.
+  it('awaits durable worktree preparation before handing its identity to the optimistic pipeline', () => {
+    const preparation = newSessionPageSource.indexOf('await prepareNewSessionCreation({');
+    const pipeline = newSessionPageSource.indexOf('startNewSessionCreation({', preparation);
+    expect(preparation).toBeGreaterThan(-1);
+    expect(pipeline).toBeGreaterThan(preparation);
+    const handoff = newSessionPageSource.slice(preparation, pipeline);
+    expect(handoff).toContain('if (!prepared) return;');
+    expect(handoff).toContain('effectiveDraft = prepared.effectiveDraft;');
+    expect(handoff).toMatch(/const \{ sessionId,[\s\S]*?\} = prepared;/);
   });
 
   it('re-probes worktree eligibility when the relay or workstation reconnects', () => {
@@ -2463,7 +2198,7 @@ describe('new session worktree wiring (source locks)', () => {
 
   it('binds the new-screen recovery and background pipeline to the auth-owner generation', () => {
     const ownerCapture = newSource.indexOf('const authOwnerAtCreate = getMobileAuthOwner();');
-    const ownerCheck = newSource.indexOf('const isCurrentOwner = () => (', ownerCapture);
+    const ownerCheck = newSource.indexOf('captureNewSessionOwner(', ownerCapture);
     const recovery = newSource.indexOf(
       'const recovery = await recoverPendingPrecreatedWorktrees(worktreeAccountId, {',
       ownerCheck,
@@ -2502,7 +2237,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(failedPersistence).toBeGreaterThan(reservation);
     expect(remoteCreate).toBeGreaterThan(failedPersistence);
     expect(newSource.slice(failedPersistence, remoteCreate)).toContain(
-      "setError(t('session.new.worktreeRecoveryStateFailed'))",
+      "setGoalError(t('session.new.worktreeRecoveryStateFailed'))",
     );
     expect(newSource.slice(remoteCreate, remoteCreate + 500)).toContain(
       'recoveryKey,',
@@ -2511,7 +2246,7 @@ describe('new session worktree wiring (source locks)', () => {
       'maker.worktree.discardPrecreated',
     );
     expect(newSource.slice(remoteCreate, remoteCreate + 2_500)).toContain(
-      "setError(t('session.new.worktreeCleanupPending'))",
+      "setGoalError(t('session.new.worktreeCleanupPending'))",
     );
   });
 
@@ -2523,7 +2258,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(newSource).toContain('worktreeSourceBranchFromPreference(');
     expect(newSource).toContain('shouldAcceptWorktreeBranchListResult({');
     expect(newSource).toContain('sourceBranch: worktreeIntent.sourceBranch,');
-    expect(newSource).toContain('const worktreeIntent = captureWorktreeCreateIntent();');
+    expect(newSource).toContain('const worktreeIntent = prepareWorktreeCreateIntent(');
     expect(newSource).toContain('isWorktreeCreateIntentCurrent(worktreeIntent)');
     expect(newSource).toContain('precreatedWorktree = {');
     expect(newSource).toContain('recoveryKey,');
@@ -2538,7 +2273,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(newSource.slice(disabledStart, disabledEnd + 1)).not.toContain('worktreeEnabled');
 
     const selectStart = newSource.indexOf('const selectWorktreeSourceBranch = useCallback(');
-    const selectEnd = newSource.indexOf('// —— worktree 勾选播种', selectStart);
+    const selectEnd = newSource.indexOf('\n  }, [', selectStart);
     const selectBlock = newSource.slice(selectStart, selectEnd);
     expect(selectBlock).toContain('maker.applyNewMakerWorktreeBranchPref(');
     expect(selectBlock).not.toContain('toggleWorktree');
@@ -2653,7 +2388,7 @@ describe('submit guard catalog wiring (source locks)', () => {
     expect(createStart).toBeGreaterThan(-1);
     expect(goalStart).toBeGreaterThan(createStart);
     const createSlice = newSource.slice(createStart, goalStart);
-    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const goalSlice = newSessionPageSource.slice(newSessionPageSource.indexOf('const createGoalSession = useCallback'), newSessionPageSource.indexOf('const create = useCallback'));
     // 入口设备检查先于加锁(round-20 Standards P1 busy 泄漏):goal 的 setGoalBusy(true)
     // 前必须有该 return(create() 的检查在 try 内,finally 兜底,不要求此序)。
     // Standards P1:先断言 needle 存在(indexOf=-1 会让 -1<X 假通过)。
@@ -2785,7 +2520,8 @@ describe('submit guard catalog wiring (source locks)', () => {
     // resolveStartedDowngradeOrCommit 的降级/恢复 await 窗口可能换代(来源恢复或
     // 替换为 B)——鉴权降级失败(commit)分支必须像设备切换 commit 分支一样重跑
     // 有界 runGuard + genAt 核对,否则用等待前的空/旧目录校准草稿(codex review P2)。
-    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const goalStart = newSessionPageSource.indexOf('const createGoalSession = useCallback');
+    const goalSlice = newSessionPageSource.slice(goalStart, newSessionPageSource.indexOf('const create = useCallback', goalStart));
     // 两处 commit 后的 re-fence(鉴权降级 + 设备切换)
     const reFences = goalSlice.match(/for \(let pass = 0; pass < 2; pass \+= 1\) \{\s*\n\s*guardResult = await runGuard\(\);/g) ?? [];
     expect(reFences.length).toBe(2);
@@ -2808,7 +2544,8 @@ describe('submit guard catalog wiring (source locks)', () => {
   });
 
   it('goal commit segment: started 后无裸 return,goal.set 先于本地同步(round-22 Spec P1-2/P1-3)', () => {
-    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const goalStart = newSessionPageSource.indexOf('const createGoalSession = useCallback');
+    const goalSlice = newSessionPageSource.slice(goalStart, newSessionPageSource.indexOf('const create = useCallback', goalStart));
     const iStarted = goalSlice.indexOf('sessionCreateStarted = true;');
     const iCreate = goalSlice.indexOf('maker.createSession(');
     expect(iStarted).toBeGreaterThan(0);
@@ -2840,7 +2577,8 @@ describe('submit guard catalog wiring (source locks)', () => {
     // goal.set 等待期间同账号可能切换设备:owner 检查拦不住,settle 若继续用旧
     // selectedDeviceId 会把设备 A 的会话写进当前页面并跳转设备 A 会话页,用户
     // 还会在设备 B 上重复创建——settle 每处中止必须并列设备复核(greptile P1)。
-    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const goalStart = newSessionPageSource.indexOf('const createGoalSession = useCallback');
+    const goalSlice = newSessionPageSource.slice(goalStart, newSessionPageSource.indexOf('const create = useCallback', goalStart));
     const settleStart = goalSlice.indexOf('── settle 段');
     expect(settleStart).toBeGreaterThan(0);
     const settleSlice = goalSlice.slice(settleStart, goalSlice.indexOf('router.replace({'));
@@ -2856,7 +2594,8 @@ describe('submit guard catalog wiring (source locks)', () => {
   });
 
   it('goal settle 只登记本机预览,不把目标文案写成用户改名', () => {
-    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const goalStart = newSessionPageSource.indexOf('const createGoalSession = useCallback');
+    const goalSlice = newSessionPageSource.slice(goalStart, newSessionPageSource.indexOf('const create = useCallback', goalStart));
     const settleSlice = goalSlice.slice(
       goalSlice.indexOf('── settle 段'),
       goalSlice.indexOf('router.replace({'),
@@ -2888,18 +2627,6 @@ describe('fast memory restore wiring (source locks)', () => {
 
   // PR #6559 P1: replace the boolean-only source assertion with the production
   // effect's draft output. Unit tier; no React Native mount or real waiting.
-  const effectStart = newSource.indexOf('  useEffect(() => {', newSource.indexOf('  // Fast 记忆延迟恢复'));
-  const effectJs = ts.transpileModule(newSource.slice(effectStart, newSource.indexOf('  // 拉被控端 runtime', effectStart)), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const runRestoreEffect = new Function('env', `
-    const {selectedDeviceId, draft, draftMemory, modelRowsRef, activeSourceIdRef,
-      catalogReadyRef, targetAgentHasFast, getCachedAgentCapabilities,
-      buildAgentCapabilitiesCacheKey, setDraft, capabilities, modelRows,
-      deviceProviders, isFastRestorable} = env;
-    const useEffect = fn => fn();
-    ${effectJs}
-  `);
 
   it('defers speed restoration until capabilities arrive and clears a revoked Ultrafast tier', () => {
     const rows = flattenProviderSections(buildMobileModelSections({
@@ -2911,17 +2638,14 @@ describe('fast memory restore wiring (source locks)', () => {
           efforts: [], defaultEffort: null, supportsFastMode: true, supportsUltrafastMode: true }] },
       }],
     }).sections);
-    let draft = { agentKind: 'codex' as const, model: 'gpt', providerId: 'openai', fastMode: false as boolean | 'ultrafast' };
+    let draft = newSessionDraft({ agentKind: 'codex', model: 'gpt', providerId: 'openai', fastMode: false });
     let capsKnown = false;
     let remembered: boolean | 'ultrafast' = 'ultrafast';
-    const restore = () => runRestoreEffect({
+    const restore = () => restoreNewSessionFastPreference({
       selectedDeviceId: 'host', draft, draftMemory: { getFast: () => remembered },
-      modelRowsRef: { current: rows }, activeSourceIdRef: { current: 'openai' },
-      catalogReadyRef: { current: true }, targetAgentHasFast: () => capsKnown,
-      getCachedAgentCapabilities: () => capsKnown ? {} : undefined,
-      buildAgentCapabilitiesCacheKey: () => 'host:codex',
-      setDraft: (update: (current: typeof draft) => typeof draft) => { draft = update(draft); },
-      capabilities: null, modelRows: rows, deviceProviders: { ready: true }, isFastRestorable,
+      modelRows: rows, activeSourceId: 'openai', catalogReady: true,
+      hasFast: () => capsKnown, capabilitiesKnown: capsKnown,
+      setDraft: update => { draft = typeof update === 'function' ? update(draft) : update; },
     });
     restore();
     expect(draft.fastMode).toBe(false);
@@ -3125,53 +2849,6 @@ describe('closed saved model requires reselection', () => {
 // unit：执行页面原始回调与生产解析函数（不复制逻辑、不扫描参数字符串），断言最终计费来源。
 // 原 Hook 用例没有覆盖 app/ 的接线；旧号池或 xd 无模型行，自定义来源与新号池同名且排在前。
 describe('页面 Auto 校准和提交保留 Cindy 来源身份', () => {
-  const pageSource = ts.createSourceFile(
-    'new.tsx',
-    readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8'),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX,
-  );
-  const callbacks: ts.ArrowFunction[] = [];
-  function visit(node: ts.Node) {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === 'resolveRecentModelAndProvider'
-    ) {
-      let parent: ts.Node | undefined = node.parent;
-      while (parent && !ts.isArrowFunction(parent)) parent = parent.parent;
-      if (!parent || !ts.isArrowFunction(parent))
-        throw new Error('Missing page reconciliation callback');
-      callbacks.push(parent);
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(pageSource);
-  if (callbacks.length !== 4) throw new Error('Update Auto entry coverage after page refactor');
-  const entryNames = ['目录校准', '普通提交终检', '鉴权后终检', '目标模式终检'];
-  const entries = callbacks.map((callback, index) => {
-    const compiled = ts.transpileModule(
-      `async function run(bindings) {
-      let { effectiveDraft } = bindings;
-      const { modelRows, deviceProviders, rows, resolveRecentModelAndProvider,
-        modelNeedsReselection, assertSubmitModelResolved, reconcileEffortAfterFallback,
-        isCindyAutoModelId, buildMobileModelSections, flattenProviderSections } = bindings;
-      const guardSelected = () => ({ model: effectiveDraft.model, providerId: effectiveDraft.providerId });
-      const apply = ${callback.getText(pageSource)};
-      const result = await apply(bindings.argument);
-      return result ?? effectiveDraft;
-    }`,
-      { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
-    ).outputText;
-    return {
-      name: entryNames[index],
-      index,
-      run: new Function(`${compiled}; return run;`)() as (
-        bindings: Record<string, unknown>,
-      ) => Promise<{ model: string; providerId: string | null }>,
-    };
-  });
   const auto = 'auto/group-1';
   const provider = (id: string, source: 'builtin' | 'organization' | 'user', ids: string[]) =>
     ({
@@ -3209,36 +2886,25 @@ describe('页面 Auto 校准和提交保留 Cindy 来源身份', () => {
     },
   }));
   const fresh = { providers };
+  const entries = [
+    { name: '目录校准', run: (draft: NewSessionDraft, _guard: SubmitGuardCatalog) =>
+      reconcileNewSessionCatalogDraft(draft, rows, fresh) },
+    { name: '普通/目标提交终检', run: (draft: NewSessionDraft, guard: SubmitGuardCatalog) =>
+      reconcileNewSessionSubmitDraft(draft, guard, () => false, key => key) },
+    { name: '鉴权后终检', run: (draft: NewSessionDraft, _guard: SubmitGuardCatalog) =>
+      revalidateNewSessionDraftAfterAuth(draft, fresh, () => false, key => key) },
+  ];
   it.each(entries.flatMap((entry) => ['pool-old', null].map((from) => ({ ...entry, from }))))(
     '$name：$from 搬到新号池，不采用排在前面的自定义来源',
-    async ({ index, run, from }) => {
-      const draft = {
-        ...DEFAULT_NEW_SESSION_DRAFT,
-        agentKind: 'pi',
-        model: auto,
-        providerId: from,
-        fastMode: false,
-      };
+    async ({ run, from }) => {
+      const draft = newSessionDraft({ agentKind: 'pi', model: auto, providerId: from, fastMode: false });
       const guard = await resolveSubmitGuardCatalog({
         cached: () => undefined,
         gen: () => 0,
         fetch: async () => fresh,
         buildRows: () => rows,
       });
-      const result = await run({
-        effectiveDraft: draft,
-        modelRows: rows,
-        rows,
-        deviceProviders: fresh,
-        argument: index === 0 ? draft : index === 2 ? fresh : guard,
-        resolveRecentModelAndProvider,
-        modelNeedsReselection,
-        isCindyAutoModelId,
-        buildMobileModelSections,
-        flattenProviderSections,
-        assertSubmitModelResolved,
-        reconcileEffortAfterFallback,
-      });
+      const result = await run(draft, guard);
       expect(result).toMatchObject({ model: auto, providerId: 'pool-new' });
     },
   );

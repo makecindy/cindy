@@ -31,6 +31,7 @@ import { createWorkerSpecSchema } from '../../../../../lizi-mcps/src/xdt-helper/
 
 import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle, PiExtraSpawnConfig } from '../../base-agent.js';
+import { LOCAL_AGENT_CLIENT } from '../../base-agent.js';
 import type { AgentEvent, InteractionRequest, InteractionDecision } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -112,6 +113,37 @@ function anthropicToolTurn(
   );
 }
 
+function anthropicParallelToolTurn(
+  sequence: number,
+  calls: Array<{ name: string; input: Record<string, unknown> }>,
+): string {
+  const blocks = calls.map((call, index) =>
+    sseEvent('content_block_start', {
+      type: 'content_block_start', index,
+      content_block: { type: 'tool_use', id: `toolu_${sequence}_${index}`, name: call.name, input: {} },
+    }) +
+    sseEvent('content_block_delta', {
+      type: 'content_block_delta', index,
+      delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.input) },
+    }) +
+    sseEvent('content_block_stop', { type: 'content_block_stop', index }),
+  ).join('');
+  return (
+    sseEvent('message_start', {
+      type: 'message_start',
+      message: {
+        id: `msg_${sequence}`, type: 'message', role: 'assistant', model: 'pi-test-model',
+        content: [], stop_reason: null, usage: { input_tokens: 20, output_tokens: 0 },
+      },
+    }) +
+    blocks +
+    sseEvent('message_delta', {
+      type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 },
+    }) +
+    sseEvent('message_stop', { type: 'message_stop' })
+  );
+}
+
 function anthropicTextTurn(sequence: number, text: string): string {
   return (
     sseEvent('message_start', {
@@ -152,6 +184,15 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('local host tool isolation')) {
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: {} },
+      { name: 'cindy_mcp_list_tools', input: { server: 'calendar', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'calendar', tool: 'echo', args: { text: 'hello-pi' } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input) : anthropicTextTurn(4, 'Client tool complete');
+  }
   if (requestBody.includes('exercise task control modes')) {
     const calls = [
       { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
@@ -273,6 +314,18 @@ function scriptedAnthropicTurn(requestBody: string): string {
     return toolResultCount === 0
       ? anthropicToolTurn(1, 'cindy_mcp_list_tools', {})
       : anthropicTextTurn(2, 'unavailable servers reported');
+  }
+  if (requestBody.includes('parallel uninspected double call')) {
+    // 同一轮 message 里并行发两个未披露调用：pi 会先依次跑完两个 tool_call hook
+    // （都看到未披露 → 都跳过权限），再依次执行两个 execute。回归 zqchris 指出的
+    // TOCTOU 口子：第二个 execute 不能因为「此时已披露」就在没问过用户的情况下执行。
+    if (toolResultCount === 0) {
+      return anthropicParallelToolTurn(1, [
+        { name: 'cindy_mcp_call_tool', input: { server: 'cindy_echo', tool: 'echo', args: { text: 'parallel-a' } } },
+        { name: 'cindy_mcp_call_tool', input: { server: 'cindy_echo', tool: 'echo', args: { text: 'parallel-b' } } },
+      ]);
+    }
+    return anthropicTextTurn(2, 'both parallel calls were gated safely');
   }
   if (requestBody.includes('call without schema inspection')) {
     if (toolResultCount === 0) {
@@ -723,7 +776,12 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'k' }),
       },
-      runtimeConfig: { endpoint: gatewayUrl },
+      runtimeConfig: {
+        endpoint: gatewayUrl,
+        systemPrompt: 'CINDY_HOST_IDENTITY_CANARY',
+        answerDeliveryPrompt: 'CINDY_ANSWER_DELIVERY_CANARY',
+      },
+      getGhostRosterPrompt: () => 'WORKDIR_GHOST_ROSTER_CANARY',
       binaryPath: PI_BINARY,
       logger,
       turnChangeCapture: {
@@ -911,6 +969,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     bridgeMode:
         | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
     prompt = 'call the echo tool',
+    localHostOnly: boolean | 'native' = false,
+    // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
+    // 否则同文件前序用例已落盘的披露会让首次调用直接执行，掩盖门的行为。
+    sessionId = `mcp-itest-${permissionMode}`,
   ): Promise<{
     events: AgentEvent[];
     permissionAsked: boolean;
@@ -925,10 +987,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     let permissionAsked = false;
     try {
       handle = await agent.startSession({
-        sessionId: `mcp-itest-${permissionMode}`,
+        sessionId,
         workingDir: cwd,
         model: 'pi-test-model',
         permissionMode,
+        ...(localHostOnly ? {
+          [LOCAL_AGENT_CLIENT]: { url: mcpUrl, token: MCP_TOKEN, hostToolsOnly: localHostOnly === true, mcpName: 'calendar' },
+          userPrompt: 'CLIENT_INSTRUCTIONS_CANARY',
+          makerMemoryEnabled: false,
+          makerMemoryIndexSnapshot: 'PRIVATE_MEMORY_INDEX_CANARY',
+        } : {}),
       });
       handle.setInteractionResolver(async (req) => {
         if (req.kind === 'permission') permissionAsked = true;
@@ -975,6 +1043,38 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     expect(output).toContain('cindy/new');
     const startupNames = (requests[0]?.tools as Array<{name: string}>).map(tool => tool.name);
     expect(startupNames).not.toContain('mcp__cindy_orca__create_worker');
+  });
+
+  // 测试价值：真实 Pi 的启动工具面与调用链均受本机伙伴权限约束；旧 MCP 测试保留原生工具。
+  // 最小输入：独立客户端的 echo；tier integration，真实二进制与本机 socket，无供应商网络。
+  // 2026-10-22 维护者裁决：两种工具策略均保留 Cindy 装配与原生 preset，仍不装载私人记忆。
+  // 通过实际模型请求验证追加段与多次工具调用的稳定前缀，不读取生产源码或复制提示词常量。
+  it('local client tool isolation exposes only the client gateway and executes its tool', { timeout: 90_000 }, async () => {
+    echoCalls.length = 0;
+    const { requests, events, requestBodies } = await runOneTurn('bypassPermissions', async () => ({kind:'permission',behavior:'allow'}), 'local', 'local host tool isolation', true);
+    const system = JSON.stringify(requests[0].system);
+    for (const segment of ['CINDY_HOST_IDENTITY_CANARY', 'CINDY_ANSWER_DELIVERY_CANARY', 'CLIENT_INSTRUCTIONS_CANARY', 'WORKDIR_GHOST_ROSTER_CANARY'])
+      expect(system).toContain(segment);
+    expect(requests.every(request => JSON.stringify(request.system) === system)).toBe(true);
+    expect(requestBodies.join('')).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
+    expect((requests[0].tools as Array<{name:string}>).map(t=>t.name).sort()).toEqual(['cindy_mcp_call_tool','cindy_mcp_list_tools']);
+    expect(echoCalls.map(c=>c.text)).toEqual(['hello-pi']);
+    expect(events.some(e=>e.type==='text' && (e.data as {text?:string}).text?.includes('Client tool complete'))).toBe(true);
+  });
+
+  // core-product-principles §3.1 / pi-harness §3.1: explicitly selecting native
+  // execution preserves Pi's tools; application MCP isolation is not a safety downgrade.
+  it('keeps native Pi tools when an application explicitly selects native execution', { timeout: 90_000 }, async () => {
+    echoCalls.length = 0;
+    const { requests, requestBodies } = await runOneTurn('bypassPermissions', async () => ({ kind: 'permission', behavior: 'allow' }), 'local', 'local host tool isolation', 'native');
+    const tools = (requests[0].tools as Array<{ name: string }>).map(tool => tool.name);
+    expect(tools).toContain('bash'); expect(tools).toContain('read');
+    expect(echoCalls.map(call => call.text)).toEqual(['hello-pi']);
+    const system = JSON.stringify(requests[0].system);
+    for (const segment of ['CINDY_HOST_IDENTITY_CANARY', 'CINDY_ANSWER_DELIVERY_CANARY', 'CLIENT_INSTRUCTIONS_CANARY', 'WORKDIR_GHOST_ROSTER_CANARY'])
+      expect(system).toContain(segment);
+    expect(requests.every(request => JSON.stringify(request.system) === system)).toBe(true);
+    expect(requestBodies.join('')).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
   });
 
   it(
@@ -1403,18 +1503,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-    'known tools cannot execute or prompt until their exact input schema has been inspected',
+    'an uninspected tool call is blocked once, then executes once on the re-send',
     { timeout: 90_000 },
     async () => {
       echoCalls.length = 0;
       opaqueTurnCaptures.length = 0;
       let permissionCount = 0;
+      const sessionId = 'mcp-itest-uninspected-first-call';
       const { permissionAsked, requestBodies } = await runOneTurn(
         'ask',
         async (req) => {
           permissionCount += 1;
           expect(req.kind).toBe('permission');
           if (req.kind === 'permission') {
+            // 首次调用即便未 inspect 也要按完整 gateway 工具身份过权限（分类只认解析成功）。
             expect(req.toolName).toBe('mcp__cindy_echo__echo');
             expect(req.input).toEqual({ text: 'hello-pi' });
           }
@@ -1422,14 +1524,56 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         },
         'local',
         'call without schema inspection',
+        // localHostOnly 占位：本用例只要会话隔离，不要 local host 工具配置。
+        false,
+        sessionId,
       );
 
       expect(permissionAsked).toBe(true);
+      // 剧本：首次盲调在权限询问**之前**就被披露门拦下（不弹权限框、不执行工具，只回
+      // 一条指名路标的错误），模型照路标补 list_tools 后重发；重发时已披露，正常过一次
+      // 权限门才真正落到 MCP。
       expect(permissionCount).toBe(1);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
-      expect(requestBodies[1]).toContain('Inspect this tool before execution');
-      expect(requestBodies[2]).toContain('inputSchema');
-      await waitFor(() => opaqueTurnCaptures.length === 1);
+      expect(requestBodies.some((body) => body.includes('Inspect this tool before execution'))).toBe(true);
+      // 披露记录已按当前 schema 写入，模型随后补的 list_tools 仍返回 schema。
+      expect(requestBodies.some((body) => body.includes('inputSchema'))).toBe(true);
+      await waitFor(() => opaqueTurnCaptures.length >= 1);
+      expect(opaqueTurnCaptures[0]).toMatchObject({
+        sessionId,
+        provider: 'pi',
+      });
+    },
+  );
+
+  it(
+    'parallel uninspected calls are both gated: neither asks permission nor executes',
+    { timeout: 90_000 },
+    async () => {
+      echoCalls.length = 0;
+      opaqueTurnCaptures.length = 0;
+      let permissionCount = 0;
+      const sessionId = 'mcp-itest-parallel-uninspected';
+      const { requestBodies } = await runOneTurn(
+        'ask',
+        async (req) => {
+          // TOCTOU 回归：两个 hook 都看到未披露、都跳过权限；第二个 execute 不得
+          // 因为「此时已披露」而在没问过用户的情况下直接执行。
+          permissionCount += 1;
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'local',
+        'parallel uninspected double call',
+        false,
+        sessionId,
+      );
+
+      expect(permissionCount).toBe(0);
+      expect(echoCalls).toEqual([]);
+      // 两次 execute 都回同一条指名路标的错误。
+      const signposts = requestBodies.filter((body) => body.includes('Inspect this tool before execution'));
+      expect(signposts.length).toBeGreaterThanOrEqual(1);
+      await waitFor(() => opaqueTurnCaptures.length >= 1);
     },
   );
 

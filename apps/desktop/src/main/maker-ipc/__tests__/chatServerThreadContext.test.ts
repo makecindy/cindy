@@ -4,11 +4,13 @@ vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-to
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
+vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: () => true, readFileSync: () => '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
-vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => null, getDbClient: () => ({ drizzle: {
   select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }) }) }),
   insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
 } }) }));

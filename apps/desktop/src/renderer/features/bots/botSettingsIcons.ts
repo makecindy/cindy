@@ -5,6 +5,7 @@ export const botSettingsIcons = {
   profile: Info,
   personality: UserRound,
   memory: Brain,
+  projects: FolderOpen,
   model: Sparkles,
   voice: AudioLines,
   capabilities: Settings2,

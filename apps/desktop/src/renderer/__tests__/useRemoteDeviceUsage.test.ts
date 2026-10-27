@@ -383,6 +383,19 @@ describe('remote account parity', () => {
   });
 });
 
+// Unit: the remote mirror must retain the daily-limit switch on reads and pushes,
+// including a switch-off update without dropping the monthly quota.
+it('mirrors enterprise daily-limit changes through device-link', async () => {
+  const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: 1, fetchedAt: 1, dailyLimitEnabled: true };
+  mocks.invoke.mockResolvedValue(quota);
+  const view = renderHook(() => useRemoteClaudeAccountUsage('daily-switch'));
+  await flushMicrotasks();
+  expect(view.result.current).toEqual(quota);
+  const disabled = { ...quota, todaySpend: null, dailyLimitEnabled: false };
+  act(() => emitPush({ deviceId: 'daily-switch', channel: 'usage:claude-account-changed', payload: disabled }));
+  expect(view.result.current).toEqual(disabled);
+});
+
 it.each(['unlimited', 'invalidated'])('retains remote quota on unavailable reads but replays a missed %s clear', async (quotaState) => {
   const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 };
   mocks.invoke.mockResolvedValue(quota);

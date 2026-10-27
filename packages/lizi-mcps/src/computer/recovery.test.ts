@@ -33,6 +33,87 @@ async function harness(dispatch: ComputerMcpDeps["callTool"]) {
 }
 
 describe("bounded Computer Use recovery", () => {
+  // Production MCP entry, unit tier: the 0.37 audit exposed redundant reads and
+  // lost CLI leases. Existing recovery tests deliberately forbid token reuse;
+  // explicit observe must instead keep the session and return usable new tokens.
+  it('returns one usable observation after an action, preserving the read scope and session', async () => {
+    let reads = 0;
+    const dispatch = vi.fn(async (name: string) => name === 'get_window_state'
+      ? {
+          snapshot_id: `s${++reads}`,
+          tree_markdown: '- [0] AXButton Next',
+          elements: [{ element_index: 0, element_token: `s${reads}:0`, frame: { x: 1, y: 1, w: 20, h: 20 } }],
+        }
+      : { effect: 'unverifiable' });
+    const call = await harness(dispatch);
+    await call('get_window_state', { pid: 1, window_id: 2, query: 'Next', max_elements: 70, max_depth: 6 });
+    const result = await call('click', { pid: 1, element_token: 's1:0', observe: {} });
+    expect(result).toMatchObject({
+      ok: true, outcome: { status: 'unknown' },
+      observation: { ok: true, snapshot_id: expect.any(String), data: { snapshot_id: 's2' } },
+    });
+    expect(result).not.toHaveProperty('postcheck');
+    expect(result.observation.data).not.toHaveProperty('elements');
+    expect(dispatch).toHaveBeenLastCalledWith('get_window_state', {
+      pid: 1, window_id: 2, session: 'recovery-test', query: 'Next', max_elements: 70, max_depth: 6, include_screenshot: false,
+    }, { sessionId: 'recovery-test', signal: expect.any(AbortSignal) });
+    expect(dispatch.mock.calls.map(([name]) => name)).toEqual(['get_window_state', 'click', 'get_window_state']);
+    expect(await call('click', { pid: 1, element_token: 's1:0' })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+    expect(await call('click', { pid: 1, element_token: 's2:0', observe: { include_screenshot: true } }))
+      .toMatchObject({ ok: true, observation: { data: { snapshot_id: 's3' } } });
+    expect(dispatch).toHaveBeenLastCalledWith('get_window_state', expect.objectContaining({ include_screenshot: true }), expect.any(Object));
+  });
+
+  it.each([
+    { pid: 1, x: 1, y: 2, observe: {} },
+    { pid: 1, window_id: 2, observe: {}, postcondition: [{ window: { exists: true } }] },
+    { pid: 1, window_id: 2, observe: { pid: 3 } },
+  ])('rejects invalid follow-up observations before dispatch: %j', async (args) => {
+    const dispatch = vi.fn();
+    const call = await harness(dispatch);
+    expect(await call('click', args)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('preserves action delivery when its explicit observation fails, without retrying input', async () => {
+    const dispatch = vi.fn(async (name: string) => {
+      if (name === 'get_window_state') throw new Error('Capture unavailable');
+      return { effect: 'confirmed' };
+    });
+    const call = await harness(dispatch);
+    expect(await call('click', { pid: 1, window_id: 2, x: 1, y: 2, observe: {} })).toMatchObject({
+      ok: true, outcome: { status: 'confirmed' },
+      observation: { ok: false, errorCode: 'COMPUTER_DRIVER_ERROR' },
+    });
+    expect(dispatch.mock.calls.map(([name]) => name)).toEqual(['click', 'get_window_state']);
+  });
+
+  it('does not follow a refused action with an explicit observation', async () => {
+    const dispatch = vi.fn(async () => ({ effect: 'refused', code: 'background_unavailable' }));
+    const call = await harness(dispatch);
+    expect(await call('click', { pid: 1, window_id: 2, observe: {} })).toMatchObject({ ok: false });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a Markdown diff with the prior scope for automatic evidence, never reusing its tokens', async () => {
+    let reads = 0;
+    const dispatch = vi.fn(async (name: string) => name === 'click'
+      ? { effect: 'unverifiable' }
+      : ++reads === 1
+        ? { snapshot_id: 's1', elements: [{ element_index: 0, element_token: 's1:0' }] }
+        : { snapshot_id: 's2', tree_diff: 'no change since s1', since_status: 'no_change' });
+    const call = await harness(dispatch);
+    await call('get_window_state', { pid: 1, window_id: 2, query: 'Next', max_elements: 70, max_depth: 6 });
+    expect(await call('click', { pid: 1, element_token: 's1:0' })).toMatchObject({
+      postcheck: { ok: true, reusable_snapshot: false, data: { since_status: 'no_change' } },
+    });
+    expect(dispatch).toHaveBeenLastCalledWith('get_window_state', {
+      pid: 1, window_id: 2, session: 'recovery-test', query: 'Next', max_elements: 70, max_depth: 6,
+      include_screenshot: false, tree_format: 'markdown', since: 'latest',
+    }, expect.objectContaining({ observationPurpose: 'recovery' }));
+    expect(await call('click', { pid: 1, element_token: 's2:0' })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+  });
+
   it("preserves interrupted typing progress without replaying input", async () => {
     const inputProgress = { completed_chars: 400, attempted_chars: 0, remaining_chars: 450 };
     const dispatch = vi.fn(async (name: string) => {
@@ -47,6 +128,67 @@ describe("bounded Computer Use recovery", () => {
       data: { outcome_unknown: true, input_progress: inputProgress },
     });
     expect(dispatch.mock.calls.map(([name]) => name)).toEqual(["type_text", "get_window_state"]);
+  });
+
+  // PR #6811 P1: unlike returned uncertainty, a thrown partial input skipped
+  // explicit observe. Unit MCP entry: assert usable tokens AND preserved failure.
+  it.each([false, true])('honors observe after partial input without replay, even if observation fails (failedRead=%s)', async (failedRead) => {
+    let reads = 0;
+    const inputProgress = { completed_chars: 2, remaining_chars: 3 };
+    const dispatch = vi.fn(async (name: string) => {
+      if (name === 'type_text') throw Object.assign(new Error('Agent yielded'), {
+        code: 'DESKTOP_INPUT_YIELDED', outcomeUnknown: true, inputProgress,
+      });
+      if (name !== 'get_window_state') return { effect: 'confirmed' };
+      if (++reads === 2 && failedRead) throw new Error('Capture unavailable');
+      return { snapshot_id: `s${reads}`, elements: [{ element_index: 0, element_token: `s${reads}:0` }] };
+    });
+    const call = await harness(dispatch);
+    await call('get_window_state', { pid: 1, window_id: 2, query: 'Next', max_elements: 70, max_depth: 6 });
+    const result = await call('type_text', { pid: 1, element_token: 's1:0', text: 'hello', observe: {} });
+    expect(result).toMatchObject({
+      ok: false, errorCode: 'DESKTOP_INPUT_YIELDED',
+      data: { outcome_unknown: true, input_progress: inputProgress },
+      observation: failedRead
+        ? { ok: false, errorCode: 'COMPUTER_DRIVER_ERROR' }
+        : { ok: true, snapshot_id: expect.any(String), data: { snapshot_id: 's2' } },
+    });
+    expect(result).not.toHaveProperty('postcheck');
+    expect(dispatch).toHaveBeenLastCalledWith('get_window_state', {
+      pid: 1, window_id: 2, session: 'recovery-test', query: 'Next', max_elements: 70, max_depth: 6, include_screenshot: false,
+    }, expect.objectContaining({ sessionId: 'recovery-test' }));
+    expect(dispatch.mock.calls.map(([name]) => name)).toEqual(['get_window_state', 'type_text', 'get_window_state']);
+    expect(await call('click', { pid: 1, element_token: 's1:0' })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+    expect(await call('click', { pid: 1, element_token: 's2:0' })).toMatchObject(failedRead
+      ? { errorCode: 'STALE_SNAPSHOT' }
+      : { ok: true });
+  });
+
+  // PR #6811 P2: recovery and failed reads invalidated both tokens and scope.
+  // Existing unit tests only observed immediately after a successful read.
+  it.each(['automatic evidence', 'failed read', 'failed verification'])('inherits the last successful scope after %s while keeping old tokens stale', async (invalidation) => {
+    let reads = 0;
+    const dispatch = vi.fn(async (name: string) => {
+      if (name === 'click') return { effect: 'unverifiable' };
+      if (++reads === 2 && invalidation !== 'automatic evidence') throw new Error('Capture unavailable');
+      return { snapshot_id: `s${reads}`, elements: [{ element_index: 0, element_token: `s${reads}:0` }] };
+    });
+    const call = await harness(dispatch);
+    await call('get_window_state', { pid: 1, window_id: 2, query: 'Next', max_elements: 70, max_depth: 6 });
+    if (invalidation === 'automatic evidence') {
+      await call('click', { pid: 1, element_token: 's1:0' });
+    } else if (invalidation === 'failed verification') {
+      await call('verify_state', { pid: 1, window_id: 2, expect: [{ window: { exists: true } }] });
+    } else {
+      await call('get_window_state', { pid: 1, window_id: 2, query: 'Failed override' });
+    }
+    expect(await call('click', { pid: 1, element_token: 's1:0' })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+    expect(await call('click', { pid: 1, window_id: 2, x: 1, y: 2, observe: { max_elements: 90 } }))
+      .toMatchObject({ observation: { ok: true, data: { snapshot_id: 's3' } } });
+    expect(dispatch).toHaveBeenLastCalledWith('get_window_state', {
+      pid: 1, window_id: 2, session: 'recovery-test', query: 'Next', max_elements: 90, max_depth: 6, include_screenshot: false,
+    }, expect.any(Object));
+    expect(await call('click', { pid: 1, element_token: 's3:0' })).toMatchObject({ ok: true });
   });
 
   it("observes unknown input exactly once, preserving uncertainty and session provenance", async () => {
@@ -431,7 +573,7 @@ describe("bounded Computer Use recovery", () => {
     ]);
   });
 
-  it("does not create recovery traffic after the host has closed an action session", async () => {
+  it.each([false, true])("does not create recovery traffic after the host has closed an action session (observe=%s)", async (observe) => {
     const dispatch = vi.fn(async () => {
       throw Object.assign(new Error("Closed"), {
         code: "REQUEST_CANCELLED",
@@ -440,7 +582,7 @@ describe("bounded Computer Use recovery", () => {
     });
     const call = await harness(dispatch);
     expect(
-      await call("click", { pid: 1, window_id: 2, x: 2, y: 3 }),
+      await call("click", { pid: 1, window_id: 2, x: 2, y: 3, ...(observe ? { observe: {} } : {}) }),
     ).toMatchObject({ errorCode: "REQUEST_CANCELLED" });
     expect(dispatch).toHaveBeenCalledTimes(1);
   });

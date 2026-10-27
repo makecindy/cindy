@@ -5,9 +5,11 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "archive-task", "status": "proposed", "en": "Archive", "translations": {"zh-CN": "归档", "zh-TW": "歸檔", "ja": "アーカイブ", "ko": "보관"}, "checkCase": false, "note": "任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。"},
     {"id": "speech-speed", "status": "proposed", "en": "Speech speed", "translations": {"zh-CN": "语速", "zh-TW": "語速", "ja": "読み上げ速度", "ko": "읽기 속도"}, "checkCase": false, "note": "伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。"},
     {"id": "read-by-sentence", "status": "proposed", "en": "Read by sentence", "translations": {"zh-CN": "按句朗读", "zh-TW": "逐句朗讀", "ja": "文ごとに読み上げ", "ko": "문장별로 읽기"}, "checkCase": false, "note": "伙伴语音设置：默认在最终答复生成过程中按完整句子提前朗读；关闭后等待完整回复。需要回复后处理或无法识别最终答复阶段时延后。"},
     {"id": "voice-mode", "status": "proposed", "en": "Voice Mode", "translations": {"zh-CN": "语音模式", "zh-TW": "語音模式", "ja": "音声モード", "ko": "음성 모드"}, "checkCase": false, "note": "桌面伙伴一对一的连续语音交互方式；停顿发送、最终回复朗读和插话，沿用伙伴主任务。"},
+    {"id":"connection-code","status":"proposed","en":"Connection code","translations":{"zh-CN":"连接码","zh-TW":"連線碼","ja":"接続コード","ko":"연결 코드"},"checkCase":false,"note":"本机应用临时连接的端点定位文本，不是授权令牌；连接仍需目标 Cindy 原生确认。"},
     {"id":"side-chat","status":"proposed","en":"Side chat","translations":{"zh-CN":"侧边追问","zh-TW":"側邊追問","ja":"サイドチャット","ko":"사이드 채팅"},"checkCase":false,"note":"在右侧独立提问，继承主任务已完成的上下文；追问不自动写回主任务。"},
     {"id": "detached-head", "status": "proposed", "en": "Detached HEAD", "translations": {"zh-CN": "分离 HEAD", "zh-TW": "分離 HEAD", "ja": "Detached HEAD", "ko": "Detached HEAD"}, "checkCase": false, "note": "沿用会话顶栏分支徽标现有译法"},
     {"id": "mivo-library", "status": "proposed", "en": "Mivo Library", "translations": {"zh-CN": "Mivo 作品库", "zh-TW": "Mivo 作品庫", "ja": "Mivo ライブラリ", "ko": "Mivo 라이브러리"}, "note": "#5929：引用目录系统项沿用 Mivo 品牌，仅本地化展示；通用 library 能力的品牌命名仍待维护者裁决。"},
@@ -1720,7 +1722,19 @@
         "ja": "iOS シミュレータ",
         "ko": "iOS 시뮬레이터"
       },
-      "note": "Apple Simulator 的用户可见名称，也用于原内置模拟器的下线说明。Cindy 已移除内置查看器能力。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。"
+      "note": "Apple Simulator 的用户可见名称，也用于原内置 iOS 模拟器的历史与下线说明。Cindy 已移除内置查看器能力；替代插件 cindy-simulator 使用独立术语 Device Simulator。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。"
+    },
+    {
+      "id": "device-simulator",
+      "status": "proposed",
+      "en": "Device Simulator",
+      "translations": {
+        "zh-CN": "设备模拟器",
+        "zh-TW": "裝置模擬器",
+        "ja": "デバイスシミュレータ",
+        "ko": "기기 시뮬레이터"
+      },
+      "note": "官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。"
     },
     {
       "id": "lead",
@@ -1871,6 +1885,18 @@
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。"
     },
     {
+      "id": "model-category-decision",
+      "status": "proposed",
+      "en": "Decision",
+      "translations": {
+        "zh-CN": "决策",
+        "zh-TW": "決策",
+        "ja": "意思決定",
+        "ko": "의사결정"
+      },
+      "note": "模型分类 evaluation 对应 Decisions 接口，不进入 Agent 对话模型清单。日文沿用 Jev 开发者项目中的意思決定モデル，韩文沿用 IBM 韩文文档与 KAIST 文献中的 의사결정 모델，分类标签省略模型。"
+    },
+    {
       "id": "model-category-compression",
       "status": "proposed",
       "en": "Compression",
@@ -1990,6 +2016,19 @@
       },
       "checkCase": false,
       "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
+    },
+    {
+      "id": "nightly-learning",
+      "status": "proposed",
+      "en": "Nightly learning",
+      "translations": {
+        "zh-CN": "夜间学习",
+        "zh-TW": "夜間學習",
+        "ja": "夜間の学習",
+        "ko": "야간 학습"
+      },
+      "checkCase": false,
+      "note": "伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。"
     },
     {
       "id": "group-chat",
@@ -2453,16 +2492,17 @@
       "note": "供应商分享申请的 4 位数字，只在受邀者「等待同意」界面与分享者审批弹窗 / 管理页待处理一栏出现，供双方核对是同一个人；不是密钥，不参与鉴权。与 OAuth 的 Device Code（设备码）是不同概念。"
     },
     {
-      "id": "bot-workbench",
+      "id": "bot-glance",
       "status": "proposed",
-      "en": "Workbench",
+      "en": "At a glance",
       "translations": {
-        "zh-CN": "工作台",
-        "zh-TW": "工作台",
-        "ja": "ワークベンチ",
-        "ko": "작업대"
+        "zh-CN": "近况",
+        "zh-TW": "近況",
+        "ja": "近況",
+        "ko": "근황"
       },
-      "note": "伙伴主任务右侧栏里的标签：一眼看清这位伙伴手上「等你」与「在做」的任务，加一行页脚（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
+      "checkCase": false,
+      "note": "伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
     },
     {
       "id": "follow-up-all-sessions",

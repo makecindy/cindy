@@ -128,7 +128,75 @@ export function getWorkerPermissionModeFromCreationPrefs(): OrcaWorkerPermission
 
 /** Renderer push handler 调; 整体替换 providerModelMemory 镜像。 */
 export function setProviderModelMemoryCache(snapshot: ProviderModelMemorySnapshot): void {
-  providerMemoryCache = snapshot;
+  providerMemoryCache = applyPinnedThinkingIntents(snapshot);
+}
+
+/**
+ * 跨引擎切换提交时写入的思考开关「钉子」：renderer 的全量快照推送可能仍基于尚未
+ * 学习到本次选择的状态（远端推送未回流 / 旧快照在途），整体替换会把刚写入的值抹掉。
+ * 钉子叠加在每次快照替换之上，直到快照自己带上同一个值（renderer 已追上）才撤掉；
+ * 撤掉之后 renderer 就是该值的唯一来源，后续改动不会再被压住。
+ */
+const pinnedThinkingIntents = new Map<string, Map<string, boolean>>();
+
+function applyPinnedThinkingIntents(
+  snapshot: ProviderModelMemorySnapshot,
+): ProviderModelMemorySnapshot {
+  if (pinnedThinkingIntents.size === 0) return snapshot;
+  let next: ProviderModelMemorySnapshot | null = null;
+  for (const [key, pinned] of pinnedThinkingIntents) {
+    const incoming = snapshot[key]?.thinkingByModel ?? {};
+    let merged: Record<string, boolean> | null = null;
+    for (const [model, value] of pinned) {
+      if (incoming[model] === value) {
+        // renderer 已追上该选择：撤钉，之后的改动以 renderer 为准。
+        pinned.delete(model);
+        continue;
+      }
+      merged ??= { ...incoming };
+      merged[model] = value;
+    }
+    if (pinned.size === 0) pinnedThinkingIntents.delete(key);
+    if (merged) {
+      next ??= { ...snapshot };
+      next[key] = {
+        effortByModel: snapshot[key]?.effortByModel ?? {},
+        fastByModel: snapshot[key]?.fastByModel ?? {},
+        thinkingByModel: merged,
+      };
+    }
+  }
+  return next ?? snapshot;
+}
+
+/**
+ * 局部写入某 (agent, provider, model) 的思考开关。跨引擎切换提交后由主进程调用：
+ * 普通 send 的 lazy-create 只读镜像（不经过 bootstrap），远端推送尚未回流时也能
+ * 读到用户刚选的值，避免新建会话用旧偏好。
+ */
+export function setThinkingEnabledInMemory(
+  agentKind: 'claude-code' | 'codex' | 'pi',
+  providerId: string | null | undefined,
+  model: string | undefined,
+  enabled: boolean,
+): void {
+  if (!providerId || !model) return;
+  const key = `${agentKind}:${providerId}`;
+  // 镜像已经带上同一个值：renderer 自己就是该值的来源，不需要钉，钉住只会
+  // 压住后来的用户改动。
+  if (providerMemoryCache?.[key]?.thinkingByModel?.[model] === enabled) return;
+  const entry = providerMemoryCache?.[key];
+  providerMemoryCache = {
+    ...(providerMemoryCache ?? {}),
+    [key]: {
+      effortByModel: entry?.effortByModel ?? {},
+      fastByModel: entry?.fastByModel ?? {},
+      thinkingByModel: { ...entry?.thinkingByModel, [model]: enabled },
+    },
+  };
+  const pinned = pinnedThinkingIntents.get(key) ?? new Map<string, boolean>();
+  pinned.set(model, enabled);
+  pinnedThinkingIntents.set(key, pinned);
 }
 
 export interface WorkerDefaultsFromNewMaker {

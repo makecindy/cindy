@@ -4,7 +4,6 @@ import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // 工作台在右侧栏里有自己的数据订阅，这里只验证伙伴对话的挂载与读位。
-vi.mock('@/features/right-sidebar/lib/openBotWorkbenchTab', () => ({ ensureBotWorkbenchTab: vi.fn(async () => {}) }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -14,14 +13,20 @@ const mocks = vi.hoisted(() => ({
   read: undefined as undefined | ((at: number) => void),
   params: { botId: 'bot-1', sessionId: 'session-1' } as Record<string, string | undefined>,
   demoted: [] as string[],
+  cached: [] as unknown[],
 }));
+vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.cached, getBotProfiles: () => mocks.cached }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: mocks.demoted }) }));
 vi.mock('../CompanionShadowBanner', () => ({ CompanionShadowBanner: ({ botId }: { botId: string }) => <div data-testid="shadow-banner">{botId}</div> }));
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
   useParams: () => mocks.params,
+  useLocation: () => ({ search: '', state: null }),
+  Navigate: () => <div data-testid="original-task" />,
 }));
+// The private-chat topic host belongs to the chat surface these tests isolate.
+vi.mock('../BotDmThreadHost', () => ({ BotDmThreadHost: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
   CCAgentSessionView: ({ botUnreadBoundaryAt, onBotReadThrough, readOnly, botIdentity }: { botUnreadBoundaryAt?: number | null; onBotReadThrough?: (at: number) => void; readOnly?: boolean; botIdentity?: { canonicalChat?: boolean } }) => {
     mocks.read = onBotReadThrough;
@@ -71,12 +76,14 @@ const readyBot = {
 };
 
 beforeEach(() => {
+  mocks.read = undefined;
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
   setBotReadStateOwner('owner-1');
   mocks.params = { botId: 'bot-1', sessionId: 'session-1' };
   mocks.demoted = [];
+  mocks.cached = [];
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(10_000);
   installElectronApi(readyBot);
@@ -89,6 +96,19 @@ afterEach(() => {
 });
 
 describe('Bot conversation read position', () => {
+  // Reopening must render the existing local chat before delayed metadata returns.
+  // Existing tests only observed the final resolved gate. Unit: a cached binding + pending IPC.
+  it('shows the cached chat read-only during validation and removes it on a revoked binding', async () => {
+    mocks.cached = [readyBot];
+    let resolve!: (value: unknown) => void;
+    vi.mocked(window.electronAPI.localDb.bots.get).mockImplementation(() => new Promise(r => { resolve = r; }) as any);
+    const view = render(<BotSessionView />);
+    expect(view.getByTestId('chat').dataset.readonly).toBe('yes');
+    expect(mocks.read).toBeUndefined();
+    await act(async () => resolve({ ...readyBot, status: 'deleted' }));
+    expect(view.queryByTestId('chat')).toBeNull();
+  });
+
   it('waits for a rendered reply rather than marking a mounted chat read to wall-clock time', async () => {
     const view = render(<BotSessionView />);
     await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
@@ -115,8 +135,8 @@ describe('Bot conversation read position', () => {
     markBotRead('bot-1', 5_000);
     installElectronApi({ ...readyBot, sessions: [{ id: 'session-1', kind: 'chat', role: 'history', status: 'active' }] });
     const view = render(<BotSessionView />);
-    await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
-    expect(view.getByTestId('chat').dataset.canonicalChat).toBe('false');
+    await waitFor(() => expect(view.getByTestId('original-task')).toBeTruthy());
+    expect(view.queryByTestId('chat')).toBeNull();
     expect(mocks.read).toBeUndefined();
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
   });

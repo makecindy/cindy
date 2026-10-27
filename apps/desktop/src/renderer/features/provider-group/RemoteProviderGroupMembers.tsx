@@ -20,7 +20,6 @@ import type {
   ProviderGroupView,
 } from '../../../shared/providerGroup';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
-import { GroupMemberPace } from './GroupMemberPace';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersion';
 import { memberStatusText } from './ProviderGroupSection';
@@ -287,12 +286,6 @@ function MemberRow({
               <span className="[font-variant-numeric:tabular-nums]">
                 {t('providerGroup.member.runningCount', { count: running })}
               </span>
-            </>
-          )}
-          {status?.quota && (
-            <>
-              <span aria-hidden="true">·</span>
-              <GroupMemberPace quota={status.quota} />
             </>
           )}
         </span>

@@ -58,6 +58,8 @@ export interface ProviderGroupMember {
 }
 
 export interface ProviderGroupConfig {
+  /** Subscription-only speed policy. Absent preserves the existing allowed default. */
+  allowFast?: boolean;
   strategy: ProviderGroupStrategy;
   /** 组内电脑失败时自动换一台继续，默认开启。 */
   autoSwitch: boolean;
@@ -109,8 +111,8 @@ export interface ProviderGroupMemberStatus {
   /** 冷却到何时(unix ms)。 */
   coolingUntil?: number;
   /**
-   * 选电脑时排序用的那个配额窗口(provider-groups.md §5、§10)：本机与同账号电脑的订阅才有，读不到时省略。
-   * 发给同账号电脑，不进受邀者的匿名状态。
+   * 选电脑时排序用的那个配额窗口(provider-groups.md §5)：本机与同账号电脑的订阅才有，读不到时省略。
+   * 发给同账号电脑，用来提议任务进行中换号(§6.2)，界面不显示；不进受邀者的匿名状态。
    */
   quota?: ProviderGroupMemberQuota;
   /**
@@ -130,7 +132,7 @@ export interface ProviderGroupMemberStatus {
   reshare?: ProviderGroupReshareSummary;
 }
 
-/** 一个配额窗口此刻的用量：组内电脑行的进度条按它画已用多少、按时间该用到哪。 */
+/** 一个配额窗口此刻的用量：已用多少、何时重置、窗口多长，够算出这个账号的额度有多急着用。 */
 export interface ProviderGroupMemberQuota {
   usedPercent: number;
   /** 重置时刻(unix ms)；null = 这个窗口还没开始计时。 */
@@ -190,6 +192,8 @@ export interface ProviderGroupReshareSummary {
 }
 
 export interface ProviderGroupView {
+  /** Some executors have not confirmed this group's subscription speed policy yet. */
+  fastPolicyPending?: boolean;
   providerId: string;
   /** null = 还没有组。 */
   config: ProviderGroupConfig | null;
@@ -383,7 +387,8 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
     members.push(member);
   }
   if (members.length === 0) return null;
-  return { strategy, autoSwitch: value.autoSwitch !== false, members };
+  return { strategy, autoSwitch: value.autoSwitch !== false, members,
+    ...(typeof value.allowFast === 'boolean' ? { allowFast: value.allowFast } : {}) };
 }
 
 // ─── 同账号电脑之间(`maker:provider:list` 的 `group` 字段与 `provider-group:remote` 通道) ─────
@@ -393,6 +398,7 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
  * 组员的坐标是组所在电脑视角(`local` = 组所在电脑自己)。并发上限与权重只在组所在电脑上生效，不外发。
  */
 export interface ProviderGroupWireSummary {
+  allowFast?: boolean;
   strategy: ProviderGroupStrategy;
   autoSwitch: boolean;
   members: Array<Pick<ProviderGroupMember,
@@ -401,6 +407,7 @@ export interface ProviderGroupWireSummary {
 
 export function providerGroupSummaryForWire(config: ProviderGroupConfig): ProviderGroupWireSummary {
   return {
+    ...(config.allowFast !== undefined ? { allowFast: config.allowFast } : {}),
     strategy: config.strategy,
     autoSwitch: config.autoSwitch,
     members: config.members.map((m) => ({
@@ -754,5 +761,6 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       ...(fiveHourTight ? { fiveHourTight: true as const } : {}),
     }];
   });
-  return { providerId: groupProviderId, config, members, ...(model ? { model } : {}) };
+  return { providerId: groupProviderId, config, members, ...(model ? { model } : {}),
+    ...(value.fastPolicyPending === true ? { fastPolicyPending: true } : {}) };
 }

@@ -25,6 +25,21 @@ function stamp(content: string) {
 }
 
 describe('SQLite history outline', () => {
+  // 2026-10-25: repeated SDK bookkeeping exhausted the 8 MiB scan before
+  // a long child-agent range could reach its header. This is an outline only;
+  // grouping metadata and unknown fields must survive, full hydration is unchanged.
+  it('excludes repeated SDK bookkeeping from outlined rows while retaining grouping metadata', () => {
+    const agentMeta = { parentUuid: 'agent', model: 'model', delivery: 'steer',
+      turnCompleted: true, turnUsageDetails: { totalTokens: 12 }, unknown: 'keep',
+      uuid: 'sdk-row', sdkSessionId: 'sdk-session', requestId: 'request',
+      replyToClientId: 'reply', usage: { details: 'x'.repeat(20000) } };
+    const source = { id: '1', clientId: '1', role: 'thinking', content: '', createdAt: '', agentMeta };
+    const projected = withHistoryArtifacts(source);
+    expect(projected.agentMeta).toEqual({ parentUuid: 'agent', model: 'model', delivery: 'steer',
+      turnCompleted: true, turnUsageDetails: { totalTokens: 12 }, unknown: 'keep' });
+    expect(source.agentMeta).toBe(agentMeta);
+    expect(source.agentMeta.usage.details).toHaveLength(20000);
+  });
   it('stamps a body with a short fact that changes when it is rewritten in place', () => {
     const summary = JSON.stringify('build summary');
     const full = JSON.stringify(`build summary\n${'full log line\n'.repeat(50000)}`);

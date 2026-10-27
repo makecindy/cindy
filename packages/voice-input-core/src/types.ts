@@ -88,7 +88,8 @@ export interface AsrProvider {
   flushAudio(): Promise<void>;
   onEvent(callback: (event: AsrEvent) => void): void;
   /**
-   * Best-effort reconnect for explicit transport failures. The controller does
+   * Best-effort reconnect for explicit transport failures or, when opted in,
+   * an audible recording that ends without any transcript. The controller does
    * not call this for ASR partial gaps: some realtime providers can legitimately
    * pause deltas and still return a complete transcript on flush. A provider
    * implementation should close the dead transport, re-establish the session,
@@ -240,7 +241,7 @@ export type VoiceTimelineEvent =
       type: 'asr_recovery_attempted';
       runId: string;
       at: number;
-      trigger: 'error' | 'disconnected';
+      trigger: 'error' | 'disconnected' | 'empty_transcript';
       attempt: number;
       audioMsSinceLastSignal: number;
       voicedAudioMsSinceLastSignal: number;
@@ -264,7 +265,7 @@ export type VoiceTimelineEvent =
       source: 'stable' | 'partial';
       accepted: boolean;
     }
-  | { type: 'error'; runId: string; at: number; message: string };
+  | { type: 'error'; runId: string; at: number; message: string; code?: VoiceInputErrorCode };
 
 export type VoiceInputCallbacks = {
   onStateChanged?: (state: VoiceInputState, outcome?: VoiceInputTerminalOutcome) => void;

@@ -83,7 +83,7 @@ function SegmentedRow<T extends string>(props: {
           label: props.optionLabel(option),
         }))}
       />
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {props.hint}
       </div>
     </div>
@@ -411,7 +411,7 @@ export function TelegramPersonaSettings() {
         >
           {t(`settings.telegramBot.persona.sync.${syncState}`)}
         </Button>
-        <span className="text-11 text-[var(--settings-section-desc)] opacity-80">
+        <span className="text-11 text-[var(--text-secondary)]">
           {t('settings.telegramBot.persona.syncHint')}
         </span>
       </div>
@@ -446,7 +446,7 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
   if (enabled === null) return null;
   if (enabled) {
     return (
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.contactsOn`)}
       </div>
     );
@@ -661,7 +661,7 @@ export function TelegramGroupActivationSettings({
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.groups.title`)}
       </div>
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.hint`)}
       </div>
       {error !== null && (
@@ -683,7 +683,7 @@ export function TelegramGroupActivationSettings({
               <div className="truncate text-12 font-medium text-[var(--settings-section-title)]">
                 {group.chatName || group.chatId}
               </div>
-              <div className="text-11 text-[var(--settings-section-desc)] opacity-70">
+              <div className="text-11 text-[var(--text-secondary)]">
                 {group.chatId}
               </div>
             </div>

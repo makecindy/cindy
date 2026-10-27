@@ -1,8 +1,14 @@
 ## agent-harness-runtime (6)
 AnyAgentTool, NodeListNode, callGatewayTool, listNodes, resolveNodeIdFromList, selectDefaultNodeFromList
 
+## browser-action-targets (1, local patch)
+resolveActionTargetIds
+
 ## browser-config (3)
 movePathToTrash, parseBrowserHttpUrl, redactCdpUrl
+
+## cdp-locality (1, local patch)
+isManagedLocalCdpConnection
 
 ## channel-actions (6)
 imageResultFromFile, jsonResult, optionalStringEnum, readPositiveIntegerParam, readStringParam, stringEnum

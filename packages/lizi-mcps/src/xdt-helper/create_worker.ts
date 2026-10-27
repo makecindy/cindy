@@ -79,8 +79,35 @@ export interface CreateWorkerDeps {
     /** Worker 的 Agent 所在位置：null = 任务所在电脑；省略 = 跟 Lead。 */
     agentDeviceId?: string | null;
     initialTask?: string;
+    initialTaskImages?: string[];
   }) => Promise<CreateWorkerControlResult>;
 }
+
+/**
+ * 图片地址列表的共享形状（send_to_worker / create_worker / create_workers 共用）。
+ * 要求扁平字符串数组；实测两类误传形态自愈而不是报参数错（glm 等 openai-completions 兼容层
+ * 把数组参数序列化成 <item> 重复标签，单元素时会折叠成标量）：
+ * 1. 多套一层：[[a],[b]] → 拍平；
+ * 2. XML 风格包装：{item:[a,b]} → 取 item；单元素折叠 {item:a} → [a]；裸标量 a → [a]。
+ */
+export const imagesListSchema = z.preprocess(
+  (value) => {
+    if (Array.isArray(value)) {
+      return value.some((item) => Array.isArray(item)) ? (value as unknown[]).flat(1) : value;
+    }
+    if (value && typeof value === 'object') {
+      const item = (value as { item?: unknown }).item;
+      if (item === undefined) return value;
+      value = item;
+      if (Array.isArray(value)) {
+        return value.some((x) => Array.isArray(x)) ? (value as unknown[]).flat(1) : value;
+      }
+    }
+    if (typeof value === 'string' && value.trim().length > 0) return [value];
+    return value;
+  },
+  z.array(z.string().min(1)).max(8),
+);
 
 /** 单个 worker 的稳定输入 schema；create_worker/create_workers 共用。 */
 export const createWorkerSpecSchema = z.object({
@@ -123,6 +150,9 @@ export const createWorkerSpecSchema = z.object({
     .min(1)
     .optional()
     .describe('可选, 创建后立即派给 worker 的第一条消息'),
+  images: imagesListSchema
+    .optional()
+    .describe('可选, 随 initial_task 发给 worker 的图片(png/jpeg/gif/webp, 最多 8 张); 必须是扁平字符串数组, 每张图一个字符串, 如 ["cindy-media://...png"]; 仅本机 worker 支持, SSH 远端 worker 会拒绝; 不传 initial_task 时忽略。地址两类: (a) 用户在对话里贴的图 — 把上下文 <cindy-host-image-references> 里的 uri 原样传入; (b) Lead 自己落盘的本机绝对路径'),
   working_dir: z.string().min(1).max(4096).refine((value) => value.trim().length > 0).optional()
     .describe('可选，Worker 所在主机上已存在的绝对目录。省略时继承 Lead 任务记录的工作目录（启动时的目录），不会跟随之后 cd 进入的 worktree。希望共用你当前的 worktree（含 git worktree add 自建的）时，请显式传其绝对路径；需要独立的新 worktree 时用 new_worktree。显式 working_dir / new_worktree 按会话权限审批。指定 execution_device_id 时目录属于那台电脑，省略由那台分配；校验失败不回退。'),
   new_worktree: z.object({
@@ -135,7 +165,7 @@ export const createWorkerSpecSchema = z.object({
   execution_device_id: z.string().trim().min(1).max(128).optional()
     .describe('可选，运行设备：同账号另一台电脑的设备 id，只能取 get_workspace_info 返回的 execution_devices 中 supported=true 的 device_id。指定后 Worker 的任务、目录、命令与文件都在那台电脑；省略则与 Lead 同一台。那台离线、未开启远程控制或版本过旧时创建失败，不会回退到本机。'),
   agent_device_id: z.string().trim().min(1).max(128).optional()
-    .describe('可选，Worker 的 Agent 在哪运行(远程供应商)：取 list_available_models 的 locations[].agent_device_id，"local" 为这台电脑；省略则与 Lead 相同。任务、目录与命令仍在这台电脑。不能与 execution_device_id 同用。'),
+    .describe('可选，Worker 的 Agent 位置：取 list_available_models 的 locations[].agent_device_id；"local" 为 Worker 工作电脑。指定 execution_device_id 时省略用那台的默认，否则省略跟 Lead。'),
 }).strict();
 
 export type CreateWorkerSpec = z.infer<typeof createWorkerSpecSchema>;
@@ -167,8 +197,9 @@ const DESCRIPTION = [
   '- working_dir: 可选，Worker 所在主机上已存在的绝对目录。省略时继承 Lead 任务记录的工作目录（启动时的目录），不会跟随之后 cd 进入的 worktree。希望共用你当前的 worktree（含 git worktree add 自建的）时，请显式传其绝对路径；需要独立的新 worktree 时用 new_worktree。显式 working_dir / new_worktree 按会话权限审批。指定 execution_device_id 时目录属于那台电脑，省略由那台分配；校验失败不回退。',
   '- new_worktree: 可选对象，为 Worker 新建自有 worktree；source_branch 可省略，默认目标目录当前分支或分离 HEAD 的提交。仅本机有提交的 Git 项目可用；SSH / execution_device_id 不支持，对话 Lead 需显式指定其他项目。返回 working_dir 为实际启动目录，worktree 包含自有检出目录和新分支；归档按普通任务规则回收，未提交改动先快照。',
   '- execution_device_id: 可选，运行设备(同账号另一台电脑)的 device_id，只能取 get_workspace_info 的 execution_devices 里 supported=true 的值；指定后 Worker 的任务、目录、命令与文件都在那台电脑，结果仍自动回报给你。用户没有要求放到别的电脑时不要传。',
-  '- agent_device_id: 可选，Worker 的 Agent 在哪运行(远程供应商，任务与文件仍在这台)：取 list_available_models 的 locations[].agent_device_id，"local" 为这台电脑；省略与 Lead 相同。model / provider_id 要取 list_available_models 按同一位置列出的值。',
+  '- agent_device_id: 可选，Agent 使用哪台电脑的远程供应商；"local" 为 Worker 工作电脑。指定 execution_device_id 时先用同参数的 list_available_models 查 model / provider_id / locations；省略位置用工作电脑默认，否则跟 Lead。',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
+  "- images: 可选, 随 initial_task 发的图片(最多 8 张, 仅本机 worker)。用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入; Lead 自己落盘的文件传本机绝对路径。",
   '',
   '【硬边界】',
   '- worker 数量达软上限 → 创建仍成功, payload.warning = WORKER_LIMIT_SOFT_EXCEEDED',
@@ -192,7 +223,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, working_dir, new_worktree, execution_device_id, agent_device_id }) => {
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, images, working_dir, new_worktree, execution_device_id, agent_device_id }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
@@ -213,6 +244,7 @@ export function registerCreateWorkerTool(
         fast,
         label,
         ...(working_dir !== undefined ? { workingDir: working_dir } : {}),
+        ...(images ? { initialTaskImages: images } : {}),
         ...(new_worktree !== undefined ? { worktree: new_worktree.source_branch === undefined ? {} : { sourceBranch: new_worktree.source_branch } } : {}),
         ...(execution_device_id !== undefined ? { executionDeviceId: execution_device_id } : {}),
         ...toHostAgentDeviceId(agent_device_id),

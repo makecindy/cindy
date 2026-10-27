@@ -32,6 +32,9 @@ import {
 
 interface Page {
   desktopSettings?: true;
+  documentEpoch?: number;
+  documentId?: string;
+  documentSources?: Set<string>;
   channels?: string[];
   authorizations?: Map<string, { path: string; body?: string; running: boolean; keepAlive?: () => boolean; result?: import('@cindy/device-link').PluginPageFetchResult }>;
   id: string;
@@ -82,7 +85,7 @@ interface Dependencies {
   bundle(ghost: InstalledGhost, entry: string): Promise<PluginPageFile[]>;
   asset(ghost: InstalledGhost, file: PluginPageFile, offset: number): Promise<PluginPageAsset>;
   connect(ghost: InstalledGhost, pageId: string, channels: string[]): Promise<void>;
-  post(ghost: InstalledGhost, pageId: string, channel: string, data: unknown): Promise<void>;
+  post(ghost: InstalledGhost, pageId: string, channel: string, data: unknown, sourceId?: string): Promise<void>;
   poll(ghost: InstalledGhost, pageId: string, after: number): Promise<PluginPagePoll['events']>;
   disconnect(pluginId: string, pageId: string): Promise<void>;
   fetch(
@@ -122,6 +125,12 @@ const record = (v: unknown): Record<string, unknown> =>
  * Writes are never replayed after reconnect. Reading/polling does not acknowledge unread content. */
 export class MobilePluginPages {
   private readonly pages = new Map<string, Page>();
+  // Retired document IDs remain notice-only until the lease closes.
+  private readonly documentSources = new Map<string, Page>();
+  private source(id: string): Page | undefined {
+    const page = this.pages.get(id) ?? this.documentSources.get(id);
+    return page && (page.documentId ?? page.id) === id ? page : undefined;
+  }
   constructor(private readonly deps: Dependencies) {}
   private now() {
     return this.deps.now?.() ?? Date.now();
@@ -160,6 +169,7 @@ export class MobilePluginPages {
   }
   private close(page: Page) {
     this.pages.delete(page.id);
+    for (const id of page.documentSources ?? []) this.documentSources.delete(id);
     for (const id of page.authorizations?.keys() ?? []) notifyOauthCardClosed(id);
     this.cancelDirectory(page);
     page.previews?.clear();
@@ -266,7 +276,8 @@ export class MobilePluginPages {
     const page = this.page(request.id, controller);
     if (!page.desktopSettings) return fail();
     const ghost = this.check(page),
-      command = request.command;
+      command = request.command,
+      sourceId = page.documentId ?? page.id;
     const current = () => {
       try {
         return this.page(page.id, controller) === page;
@@ -279,6 +290,24 @@ export class MobilePluginPages {
       return value;
     };
     switch (command.kind) {
+      case 'document': {
+        if (command.epoch < (page.documentEpoch ?? 0)) return fail();
+        if (command.epoch === page.documentEpoch) return {};
+        // Bound retained notice origins within this lease; a reload opens a fresh lease.
+        if ((page.documentSources?.size ?? 0) >= 1024) return fail();
+        page.documentEpoch = command.epoch;
+        page.documentId = randomUUID();
+        (page.documentSources ??= new Set()).add(page.documentId);
+        this.documentSources.set(page.documentId, page);
+        this.cancelDirectory(page);
+        for (const pending of page.confirms.values()) {
+          clearTimeout(pending.timer);
+          pending.answer(false);
+        }
+        page.confirms.clear();
+        page.directoryAnswers?.clear();
+        return {};
+      }
       case 'close':
         this.close(page);
         return {};
@@ -296,7 +325,7 @@ export class MobilePluginPages {
       }
       case 'post':
         if (!page.channels?.includes(command.channel)) return fail();
-        await this.deps.post(ghost, page.id, command.channel, command.data);
+        await this.deps.post(ghost, page.id, command.channel, command.data, sourceId);
         return done({});
       case 'unsubscribe': {
         const channels = (page.channels ?? []).filter((name) => name !== command.channel);
@@ -304,13 +333,16 @@ export class MobilePluginPages {
         page.channels = channels;
         return done({});
       }
-      case 'poll':
+      case 'poll': {
+        const events = page.channels?.length ? await this.deps.poll(ghost, page.id, command.after) : [];
+        const sameDocument = sourceId === (page.documentId ?? page.id);
         return done({
-          events: page.channels?.length ? await this.deps.poll(ghost, page.id, command.after) : [],
-          confirms: [...page.confirms.values()].map((p) => p.value),
+          events: sameDocument ? events : [],
+          confirms: sameDocument ? [...page.confirms.values()].map((p) => p.value) : [],
           notifications: page.notices.splice(0),
-          directories: page.directory ? [page.directory.value] : [],
+          directories: sameDocument && page.directory ? [page.directory.value] : [],
         });
+      }
       case 'confirm': {
         const pending = page.confirms.get(command.requestId);
         if (!pending || pending.value.expiresAt <= this.now()) return fail();
@@ -359,9 +391,9 @@ export class MobilePluginPages {
             url.pathname + url.search,
             command.method,
             command.body,
-            current,
+            () => current() && sourceId === (page.documentId ?? page.id),
             (label, host) =>
-              this.confirm(page.id, {
+              this.confirm(sourceId, {
                 ghostId: page.plugin,
                 ghostName: ghost.manifest.name,
                 iconDataUrl: ghost.iconDataUrl,
@@ -434,13 +466,13 @@ export class MobilePluginPages {
   }
   captureSource(pageId: unknown, pluginId: string): () => boolean {
     if (typeof pageId !== 'string') return fail();
-    const page = this.pages.get(pageId);
+    const page = this.source(pageId);
     if (!page || page.plugin !== pluginId || !page.active || page.sourceHidden) return fail();
     this.check(page);
     return () => {
       try {
-        this.page(pageId, page.controller);
-        return page.active && !page.sourceHidden;
+        this.page(page.id, page.controller);
+        return this.source(pageId) === page && page.active && !page.sourceHidden;
       } catch {
         return false;
       }
@@ -452,7 +484,7 @@ export class MobilePluginPages {
     purpose: string | null,
   ): Promise<string | null> {
     const current = this.captureSource(pageId, pluginId),
-      page = this.pages.get(pageId)!;
+      page = this.source(pageId)!;
     if (!current() || page.directory || !this.deps.validateDirectory) return fail();
     const ghost = this.check(page),
       id = randomUUID();
@@ -483,7 +515,7 @@ export class MobilePluginPages {
   ): boolean {
     try {
       if (!this.captureSource(pageId, pluginId)()) return false;
-      const page = this.pages.get(pageId)!,
+      const page = this.source(pageId)!,
         ghost = this.check(page);
       if ((page.intents?.length ?? 0) >= 8) return false;
       (page.intents ??= []).push({
@@ -499,7 +531,7 @@ export class MobilePluginPages {
   }
   notify(pageId: string, pluginId: string, text: string): boolean {
     this.sweep();
-    const page = this.pages.get(pageId);
+    const page = this.pages.get(pageId) ?? this.documentSources.get(pageId);
     if (
       !page ||
       !page.active ||
@@ -540,7 +572,7 @@ export class MobilePluginPages {
   /** Explicit page context supplied by a plugin handling that page's business request.
    * A missing/invalid context never falls back to a different phone. */
   async confirm(pageId: string, params: GhostConfirmShowParams): Promise<boolean> {
-    const page = this.pages.get(pageId);
+    const page = this.source(pageId);
     if (!page || !page.active || page.sourceHidden || page.plugin !== params.ghostId) return fail();
     this.check(page);
     if (this.now() - page.touchedAt > 120_000 || page.confirms.size) return fail();
@@ -885,6 +917,7 @@ export class MobilePluginPages {
               manifestId: ghost.manifest.id,
               name: ghost.manifest.name,
               controllerAuthorization: true,
+              documentIsolation: true,
               entry: ghost.manifest.settingsHtml,
               files: page.files,
             },

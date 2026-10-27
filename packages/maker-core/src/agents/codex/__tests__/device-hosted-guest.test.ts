@@ -679,6 +679,45 @@ describe('Codex device-hosted guest sessions', () => {
     await handle.close();
   });
 
+  // 2026-10-22 远程供应商调查：执行环境首次握手超时后，Codex 之后每一轮都跳过它(模型能回答，却没有 Shell 与
+  // 文件工具)，链路恢复也不会自己重连。隧道上已没有执行环境连接时，下一轮开始前按同一个 id 重新登记；
+  // 连接还开着时不发任何查询(正常发送不多一次往返)。
+  it.each([
+    ['re-registers a disconnected execution environment', 0, 'disconnected', 2],
+    ['leaves an execution environment that is still connecting', 0, 'pending', 1],
+    ['does not query a connected execution environment', 1, 'ready', 1],
+  ] as const)('%s before the next turn of a hosted session', async (_label, open, status, registered) => {
+    const linkActivity = vi.fn(() => ({
+      lastActivityAt: 1_234,
+      execRequests: 0,
+      execResponses: 0,
+      execMaxInFlight: 0,
+      httpInFlight: 0,
+      wsConnectionsOpen: open,
+    }));
+    const fixture = await startHosted({ guest: true, linkActivity });
+    const handle = await fixture.started;
+    const base = fixture.request.getMockImplementation()!;
+    fixture.request.mockImplementation(async (method: string, params: unknown) => (
+      method === Method.EnvironmentStatus
+        ? { status, error: 'timed out waiting for exec-server initialize handshake after 10s' }
+        : base(method, params)
+    ));
+    await handle.send({ type: 'user', content: 'hello' });
+    const methods = fixture.request.mock.calls.map(([method]) => method);
+    expect(methods.filter((method) => method === Method.EnvironmentAdd)).toHaveLength(registered);
+    expect(methods.includes(Method.EnvironmentStatus)).toBe(open === 0);
+    // 重新登记排在这一轮 turn/start 之前，turn/start 选的仍是同一个环境 id。
+    expect(methods.lastIndexOf(Method.EnvironmentAdd)).toBeLessThan(methods.indexOf(Method.TurnStart));
+    const environmentIds = fixture.request.mock.calls
+      .filter(([method]) => method === Method.EnvironmentAdd)
+      .map(([, params]) => (params as { environmentId: string }).environmentId);
+    expect(new Set(environmentIds).size).toBe(1);
+    const turnEnvironments = threadParams(fixture.request, Method.TurnStart).environments as Array<{ environmentId: string }>;
+    expect(turnEnvironments.map((environment) => environment.environmentId)).toEqual([environmentIds[0]]);
+    await handle.close();
+  });
+
   it('refuses a shared user on a provider other than the shared one', async () => {
     const fixture = await startHosted({ guest: true, providerId: 'openai' });
     await expect(fixture.started).rejects.toThrow(/^\[REMOTE_AGENT_PROVIDER_NOT_ALLOWED\]/);

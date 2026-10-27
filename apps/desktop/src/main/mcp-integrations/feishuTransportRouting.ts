@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { FeishuBotHostSession } from '@cindy/mcps';
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -57,7 +57,8 @@ export function createFeishuTransportResolver(deps: {
       .where(and(
         eq(botSessionLinks.sessionId, session.sessionId),
         eq(sessions.source, 'bot'),
-        eq(botSessionLinks.role, 'canonical'),
+        // The owner's Bot Chat: the main Chat or one of its private-chat topics.
+        inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
       ))
       .limit(1)
       .get();

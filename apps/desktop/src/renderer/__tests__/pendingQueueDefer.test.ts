@@ -66,8 +66,11 @@ vi.mock('@/lib/logger', () => ({
 
 vi.mock('@/lib/imageRef', () => ({
   parseUserContent: vi.fn((c: string) => ({ text: c, images: [], files: [] })),
-  stringifyUserContent: vi.fn((text: string, images = [], files = []) =>
-    JSON.stringify({ text, images, files }),
+  stringifyUserContent: vi.fn(
+    (text: string, images = [], files = [], ...rest: unknown[]) => {
+      const replyQuote = rest[5];
+      return JSON.stringify({ text, images, files, ...(replyQuote ? { replyQuote } : {}) });
+    },
   ),
 }));
 
@@ -415,6 +418,8 @@ describe('renderer input queue facade', () => {
     const item = queued('q-content', 'keep metadata');
     item.chatMessage.quotesEncoded = true;
     item.chatMessage.slashCommandRanges = [{ start: 0, end: 4 }];
+    const replyQuote = { clientId: 'quoted-1', role: 'assistant' as const, excerpt: 'the quoted reply' };
+    item.chatMessage.replyQuote = replyQuote;
 
     makerChatStore.initGlobalListeners();
     projectionHandler?.(projection(sid, { pendingQueue: [item] }));
@@ -452,9 +457,12 @@ describe('renderer input queue facade', () => {
         chatMessage: expect.objectContaining({
           quotesEncoded: true,
           slashCommandRanges: [{ start: 0, end: 4 }],
+          replyQuote,
         }),
       }),
     );
+    const replacement = input.updateContent.mock.calls.at(-1)?.[2] as AgentInputQueuedMessage;
+    expect(JSON.parse(replacement.persistedContent ?? '{}').replyQuote).toEqual(replyQuote);
   });
 
   it('accepts queue attachment projections after transport materializes base64', async () => {

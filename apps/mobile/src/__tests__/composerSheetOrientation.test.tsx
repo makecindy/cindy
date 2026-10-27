@@ -5,11 +5,11 @@ import { expect, it, vi } from 'vitest';
 import { ComposerSheet } from '../session/ComposerSheet.ios';
 import { CompanionSheet } from '../session/CompanionSheet.ios';
 import { ScrollView as RNScrollView } from 'react-native';
-import { presentationDetents } from '@expo/ui/swift-ui/modifiers';
+import { onGeometryChange, presentationDetents } from '@expo/ui/swift-ui/modifiers';
 const state = vi.hoisted(() => ({ width: 402, height: 874, sheet: null as any }));
 vi.mock('../session/ComposerSheet', async () => import('../session/ComposerSheet.ios'));
 vi.mock('react-native', () => ({
-  View: ({ children }: any) => <div>{children}</div>,
+  View: ({ children, style }: any) => <div style={style}>{children}</div>,
   ScrollView: ({ children, maintainVisibleContentPosition }: any) => <section data-rn-scroll data-preserve-position={maintainVisibleContentPosition?.minIndexForVisible}>{children}</section>,
   useWindowDimensions: () => ({ width: state.width, height: state.height }),
 }));
@@ -41,12 +41,46 @@ it('uses a plain list only when requested and preserves form sheets', () => {
   } finally { act(() => root.unmount()); }
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
+  containerRelativeFrame: vi.fn(() => ({})),
+  onGeometryChange: vi.fn(() => ({})),
   ...Object.fromEntries(['accessibilityLabel', 'contentShape', 'buttonStyle', 'font', 'foregroundStyle', 'frame', 'padding', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'scrollContentBackground', 'listStyle', 'scrollDismissesKeyboard'].map(name => [name, vi.fn(() => ({}))])),
   shapes: { rectangle: () => ({}) },
 }));
 vi.mock('@/theme', () => ({ iconSize: { lg: 20 }, useTheme: () => ({ mode: 'light', colors: {} }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+// PR #7036: existing cases omit aboveContent and never deliver native geometry.
+// Unit coverage exercises the real ComposerSheet's photo visibility and resizing;
+// zero width followed by 653 -> 500 models opening and resizing a Duo sheet.
+// This protects the RN state bridge, while native clipping is checked on-device.
+it('shows the photo strip only after measurement and follows changes to the sheet width', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const measure = (width: number) => act(() => {
+    const callback = vi.mocked(onGeometryChange).mock.calls.at(-1)![0];
+    callback({ width, height: 627, x: 0, y: 0 });
+  });
+  try {
+    act(() => root.render(
+      <ComposerSheet visible title="" nativeContent onClose={() => {}}
+        aboveContent={<span data-photo-strip>Recent photos</span>}>
+        <span>Menu</span>
+      </ComposerSheet>,
+    ));
+    measure(0);
+    expect(container.querySelector('[data-photo-strip]')).toBeNull();
+    measure(653);
+    const strip = container.querySelector('[data-photo-strip]')!;
+    expect(strip.textContent).toBe('Recent photos');
+    expect(strip.parentElement?.style.width).toBe('653px');
+    measure(500);
+    expect(strip.parentElement?.style.width).toBe('500px');
+    measure(0);
+    expect(container.querySelector('[data-photo-strip]')).toBe(strip);
+    expect(strip.parentElement?.style.width).toBe('500px');
+  } finally { act(() => root.unmount()); }
+});
 
 it('selects a supported native detent when opening and rotating a menu', () => {
   const root = createRoot(document.createElement('div'));

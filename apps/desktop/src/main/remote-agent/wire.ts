@@ -128,6 +128,18 @@ export interface RemoteAgentWireAncestorFile {
 }
 
 /**
+ * 项目各级上级目录里有没有 Codex 沿上级目录查找的那几个名字(`.git`、插件清单目录等)，打开任务时一次带过去：
+ * 被控端对不存在的直接回答「不存在」，不再逐个经设备互联往返。只报这几个名字存不存在，Agent 本来就能逐个
+ * 查到，不多泄露上级目录里的其它内容。
+ */
+export interface RemoteAgentWireAncestorMarkers {
+  /** 控制端检查过的名字：新旧版本的名单可能不同，被控端只按这里列出的判断。 */
+  names: string[];
+  /** 各级上级目录(up 从 1 起，到根目录为止)里存在的名字；没列出的级别按不知道处理。 */
+  levels: Array<{ up: number; present: string[] }>;
+}
+
+/**
  * Claude Code 说明文件里 `@` 导入的文件(controller/projectFiles.ts collectInstructionImports)。
  * `workspace`：相对影子目录(可带 `..`，落在工作目录的各级上级目录镜像里，须在虚拟工作区根内)；
  * `session`：相对会话目录(个人说明所在的那一级，只放 ~/.claude 下被个人说明导入的文件)。
@@ -193,6 +205,8 @@ export interface RemoteAgentOpenPayload {
   projectFiles: RemoteAgentWireFile[];
   /** 项目上级目录里的说明文件。 */
   ancestorFiles: RemoteAgentWireAncestorFile[];
+  /** 项目上级目录里有没有 Codex 要找的那几个名字；旧控制端不带，旧被控端解码时丢弃。 */
+  ancestorMarkers?: RemoteAgentWireAncestorMarkers;
   /** 说明文件里 `@` 导入的文件；旧被控端不认识，按没有处理。 */
   importFiles?: RemoteAgentWireImportFile[];
   /** 你这台的个人配置。 */
@@ -204,6 +218,15 @@ export interface RemoteAgentOpenPayload {
 /** 上级目录说明文件只认这几个名字，最多向上这么多级。 */
 export const ANCESTOR_INSTRUCTION_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'] as const;
 export const MAX_ANCESTOR_LEVELS = 24;
+/**
+ * Codex 建线程时在各级上级目录里查找的名字(固定 Codex 0.159.2 实测：每级 `.git` 与三种插件清单目录；
+ * 项目根在上级时还会查 `.agents`、`.codex` 与说明文件)。控制端按它报告各级有没有。
+ */
+export const ANCESTOR_MARKER_NAMES = [
+  '.git', '.agents', '.codex', '.codex-plugin', '.claude-plugin', '.cursor-plugin', 'AGENTS.md', 'AGENTS.override.md',
+] as const;
+/** 解码时接受的名字个数上限(给新版本加名字留余量)。 */
+const MAX_ANCESTOR_MARKER_NAMES = 32;
 /**
  * 同步到影子目录的项目文件白名单(控制端按它收集；被控端对不受信任的控制端按它复核)：
  * 工作目录根上的说明文件、Claude Code 项目设置(只保留权限规则)，以及这些目录下的
@@ -349,6 +372,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     workspace: decodeWorkspace(value.workspace),
     projectFiles,
     ancestorFiles,
+    ...decodeAncestorMarkers(value.ancestorMarkers),
     ...decodeImportFiles(value.importFiles),
     personal: decodePersonal(value.personal),
     mcpServers: (stringArray(value.mcpServers, 128) ?? []).filter((name) => /^[a-z0-9_-]{1,64}$/i.test(name)),
@@ -360,6 +384,33 @@ export function isSafeImportPath(relative: string): boolean {
   if (!relative || relative.length > 1024 || relative.includes('\0') || relative.includes('\\')) return false;
   if (relative.startsWith('/') || /^[A-Za-z]:/.test(relative)) return false;
   return relative.split('/').every((part) => part !== '' && part !== '.');
+}
+
+/** 上级目录标记名只能是单个路径段。 */
+function isMarkerName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 64 && value !== '.' && value !== '..'
+    && !/[\\/\0:]/.test(value);
+}
+
+/**
+ * 格式不对的整段丢掉(按没带处理，被控端照常转发每次查询)：宁可慢，不能把存在的路径答成不存在。
+ */
+function decodeAncestorMarkers(value: unknown): { ancestorMarkers?: RemoteAgentWireAncestorMarkers } {
+  if (!isRecord(value) || !Array.isArray(value.names) || !Array.isArray(value.levels)) return {};
+  if (value.names.length > MAX_ANCESTOR_MARKER_NAMES || value.levels.length > MAX_ANCESTOR_LEVELS) return {};
+  if (!value.names.every(isMarkerName)) return {};
+  const names = [...new Set(value.names)];
+  const seen = new Set<number>();
+  const levels: RemoteAgentWireAncestorMarkers['levels'] = [];
+  for (const item of value.levels) {
+    if (!isRecord(item) || !Array.isArray(item.present)) return {};
+    const { up } = item;
+    if (typeof up !== 'number' || !Number.isInteger(up) || up < 1 || up > MAX_ANCESTOR_LEVELS || seen.has(up)) return {};
+    if (!item.present.every((name) => isMarkerName(name) && names.includes(name))) return {};
+    seen.add(up);
+    levels.push({ up, present: [...new Set(item.present as string[])] });
+  }
+  return names.length && levels.length ? { ancestorMarkers: { names, levels } } : {};
 }
 
 function decodeImportFiles(value: unknown): { importFiles?: RemoteAgentWireImportFile[] } {

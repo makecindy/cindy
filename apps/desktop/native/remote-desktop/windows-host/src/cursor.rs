@@ -205,13 +205,23 @@ unsafe fn raster(handle: HCURSOR) -> Option<(i32, i32, u32, u32, Vec<u8>)> {
 
 fn standard_shape(handle: HCURSOR) -> &'static str {
     for (id, shape) in [
-        (IDC_ARROW, "default"), (IDC_IBEAM, "text"), (IDC_HAND, "pointer"),
-        (IDC_CROSS, "crosshair"), (IDC_WAIT, "wait"), (IDC_APPSTARTING, "progress"),
-        (IDC_SIZEWE, "ew-resize"), (IDC_SIZENS, "ns-resize"),
-        (IDC_SIZENWSE, "nwse-resize"), (IDC_SIZENESW, "nesw-resize"),
-        (IDC_SIZEALL, "move"), (IDC_NO, "not-allowed"), (IDC_HELP, "help"),
+        (IDC_ARROW, "default"),
+        (IDC_IBEAM, "text"),
+        (IDC_HAND, "pointer"),
+        (IDC_CROSS, "crosshair"),
+        (IDC_WAIT, "wait"),
+        (IDC_APPSTARTING, "progress"),
+        (IDC_SIZEWE, "ew-resize"),
+        (IDC_SIZENS, "ns-resize"),
+        (IDC_SIZENWSE, "nwse-resize"),
+        (IDC_SIZENESW, "nesw-resize"),
+        (IDC_SIZEALL, "move"),
+        (IDC_NO, "not-allowed"),
+        (IDC_HELP, "help"),
     ] {
-        if unsafe { LoadCursorW(ptr::null_mut(), id) } == handle { return shape; }
+        if unsafe { LoadCursorW(ptr::null_mut(), id) } == handle {
+            return shape;
+        }
     }
     "default"
 }
@@ -243,8 +253,12 @@ mod tests {
 
     #[test]
     fn identifies_standard_native_shapes() {
-        for (id, expected) in [(IDC_ARROW, "default"), (IDC_IBEAM, "text"),
-            (IDC_HAND, "pointer"), (IDC_SIZEWE, "ew-resize")] {
+        for (id, expected) in [
+            (IDC_ARROW, "default"),
+            (IDC_IBEAM, "text"),
+            (IDC_HAND, "pointer"),
+            (IDC_SIZEWE, "ew-resize"),
+        ] {
             let handle = unsafe { LoadCursorW(ptr::null_mut(), id) };
             assert!(!handle.is_null());
             assert_eq!(standard_shape(handle), expected);

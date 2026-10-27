@@ -109,8 +109,15 @@ export function useMessageReadAloud(options: {
   }, [enabled, controller]);
 
   useEffect(() => {
-    if (state.phase === 'error') toast.warning(t('bots.voiceMode.readAloudFailed'));
-  }, [state.phase, t]);
+    if (state.phase === 'error')
+      toast.warning(
+        t(
+          state.error === 'speechTimeout'
+            ? 'bots.voiceMode.errors.speechTimeout'
+            : 'bots.voiceMode.readAloudFailed',
+        ),
+      );
+  }, [state.phase, state.error, t]);
 
   const toggle = useCallback(
     (messageId: string, text: string) => {

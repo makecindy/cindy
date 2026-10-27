@@ -98,7 +98,7 @@
     "sessionExpiredOrForbidden": "{{appName}} 语音服务的登录已失效或没有权限，请确认登录状态后重试（状态码 {{status}}）。",
     "incomplete": "语音输入未完成，请重试。",
     "missingRefinerTargetProvider": "语音润色暂不可用，请重新登录 {{appName}} 后重试。",
-    "emptyTranscript": "没听清，请检查麦克风或靠近一点再试。",
+    "emptyTranscript": "语音识别未返回文字，请重新录音。",
     "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
     "recognitionStalled": "语音识别没有继续返回结果，请重试。",
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",

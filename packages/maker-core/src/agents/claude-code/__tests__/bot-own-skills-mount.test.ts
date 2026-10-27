@@ -13,6 +13,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
+import { LOCAL_AGENT_CLIENT } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -62,7 +63,10 @@ function createDeps(): AgentDeps {
   };
   return {
     auth,
-    runtimeConfig: { systemPrompt: 'GLOBAL CINDY HOST PROMPT' },
+    runtimeConfig: {
+      systemPrompt: 'GLOBAL CINDY HOST PROMPT',
+      answerDeliveryPrompt: 'CINDY ANSWER DELIVERY FIXTURE',
+    },
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: vi.fn(() => 'GLOBAL GHOST ROSTER'),
@@ -99,6 +103,7 @@ async function startBotSession(input: {
   reviewMode?: boolean;
   remote?: boolean;
   ordinary?: boolean;
+  localHostOnly?: boolean;
   managed?: boolean;
   disabled?: boolean;
   allowManaged?: boolean;
@@ -130,6 +135,11 @@ async function startBotSession(input: {
     sessionId: 'session-bot-skills',
     model: 'claude-opus-4-6',
     workingDir,
+    ...(input.localHostOnly !== undefined ? {
+      [LOCAL_AGENT_CLIENT]: {url:'http://127.0.0.1:12345/mcp/fixture',token:'fixture-token',hostToolsOnly:input.localHostOnly,mcpName:'notebook'},
+      makerMemoryEnabled: false,
+      makerMemoryIndexSnapshot: 'PRIVATE_MEMORY_INDEX_CANARY',
+    } : {}),
     ...(input.remote ? { remoteHostId: 'remote-bot-host' } : {}),
     permissionMode: 'acceptEdits',
     botProfilePrompt: 'BOT SOUL',
@@ -165,6 +175,8 @@ async function startBotSession(input: {
   const options = (input.remote ? remoteOptions : sdkMock.query.mock.calls.at(-1)?.[0]?.options) as
     | {
         plugins?: Array<{ type: string; path: string }>;
+        tools?: string[];
+        mcpServers?: Record<string, {type:string;url:string;headers?:Record<string,string>}>;
         settingSources?: string[];
         disallowedTools?: string[];
         strictMcpConfig?: boolean;
@@ -175,6 +187,33 @@ async function startBotSession(input: {
   if (!options) throw new Error('expected sdk query options');
   return options;
 }
+
+// 测试价值：实际 adapter 的 SDK 启动选项是 Claude 工具隔离执行点；普通伙伴挂载用例不覆盖本机接入。
+// 最小输入：一个受管技能与独立客户端 MCP；tier unit，无进程或网络。
+// 2026-10-22 维护者裁决：接入保持 Cindy 提示词装配，权限由实际工具面约束。
+// 普通任务对照锁住完整追加段，不复制提示词常量；禁用记忆仍不得带出已有索引。
+it('local client-only sessions expose their own MCP namespace, while native policy retains engine tools', async () => {
+  const ordinary = await startBotSession({ordinary:true,managed:true});
+  const partner = await startBotSession({ordinary:true,managed:true,localHostOnly:true});
+  expect(partner.tools).toEqual([]);
+  expect(partner.settingSources).toEqual([]);
+  expect(partner.plugins ?? []).toEqual([]);
+  expect(partner.strictMcpConfig).toBe(true);
+  expect(Object.keys(partner.mcpServers ?? {})).toEqual(['notebook']);
+  expect(partner.mcpServers?.notebook.headers?.Authorization).toBe('Bearer fixture-token');
+  const prompt = partner.systemPrompt?.append ?? '';
+  expect(prompt).toContain('GLOBAL CINDY HOST PROMPT');
+  expect(prompt).toContain('CINDY ANSWER DELIVERY FIXTURE');
+  // Existing enabled-but-unregistered Contacts semantics remain unchanged.
+  expect(prompt).not.toContain('Smart Contacts');
+  expect(prompt).toContain('GLOBAL GHOST ROSTER');
+  expect(prompt).toContain('GLOBAL USER PROMPT');
+  expect(prompt).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
+  expect(prompt).toBe(ordinary.systemPrompt?.append);
+  const delegated = await startBotSession({ordinary:true,localHostOnly:false});
+  expect(delegated.tools).toBeUndefined();
+  expect(delegated.systemPrompt?.append).toBe(prompt);
+});
 
 afterEach(async () => {
   await Promise.all(liveHandles.splice(0).map((handle) => handle.close()));

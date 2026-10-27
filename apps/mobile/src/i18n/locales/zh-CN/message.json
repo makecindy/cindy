@@ -69,6 +69,7 @@
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
     "copyStateCopy": "复制",
+    "copyCode": "复制代码",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -171,7 +172,9 @@
     "diffEditCount": "{{n}} 处编辑",
     "groupSentNamed": "从群聊「{{name}}」发送",
     "groupSent": "从群聊发送",
-    "sourceGroupId": "群聊 ID：{{id}}"
+    "sourceGroupId": "群聊 ID：{{id}}",
+    "selectText": "选择文字",
+    "you": "你"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -232,6 +235,10 @@
     "cancel": "取消",
     "edit": "编辑",
     "steer": "插话",
+    "steerQueued": "暂未送达，消息仍保留在队列中。",
+    "moveUp": "提前一位",
+    "moveDown": "延后一位",
+    "cancelSend": "取消发送",
     "collapseQueued": "收起排队消息",
     "expandRemainingQueued": "展开剩余 {{n}} 条排队消息",
     "collapse": "收起",
@@ -405,6 +412,10 @@
     "skillUpdated": "已更新技能：{{title}}"
   },
   "richAnswer": {
+    "send": "发送消息",
+    "sending": "正在发送…",
+    "sent": "已提交",
+    "sendFailed": "消息未提交，已保留填写内容",
     "playVideo": "播放视频",
     "openVideoSource": "打开原视频",
     "calculationUnavailable": "此项暂时无法计算。",

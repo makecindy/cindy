@@ -82,3 +82,26 @@ it('defaults to sentence playback, keeps explicit choices across reloads and res
       .conversationSentencePlayback,
   ).toEqual({ valid: false });
 });
+
+// Unit tier: exercise the persisted-settings normalizer, not just the UI type;
+// native overrides must survive reopen without altering another companion.
+it.each(['qwen-tts', 'dashscope-tts'] as const)(
+  'preserves the %s native override across settings reload and reset',
+  (protocol) => {
+    const choice = { ...a, protocol, modelId: 'private-tts', voice: 'my-clone' };
+    const settings = normalizeVoiceInputSettings(
+      JSON.parse(
+        JSON.stringify({
+          conversationSelections: { native: choice, existing: b },
+        }),
+      ),
+    );
+    expect(companionVoicePreference(settings, 'native').selection).toEqual(choice);
+    const reset = normalizeVoiceInputSettings({
+      ...settings,
+      conversationSelections: updateCompanionVoicePreference(settings, 'native', null),
+    });
+    expect(companionVoicePreference(reset, 'native').selection).toBeNull();
+    expect(companionVoicePreference(reset, 'existing').selection).toEqual(b);
+  },
+);

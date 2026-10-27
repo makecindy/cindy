@@ -44,6 +44,8 @@ type VoiceInputControllerOptions = {
   stableWaitMs?: number;
   /** Host opt-in: refine during a speech pause and publish a live draft. */
   pauseRefinementEnabled?: boolean;
+  /** Replay retained audio once after an audible recording ends without text. */
+  retryEmptyTranscript?: boolean;
   /** Host opt-in for known recovery failures; undefined keeps the generic error. */
   recoveryErrorMessage?: (error: unknown) => string | undefined;
   /**
@@ -100,6 +102,7 @@ export class VoiceInputController {
   private readonly callbacks: VoiceInputCallbacks;
   private readonly stableWaitMs: number;
   private readonly pauseRefinementEnabled: boolean;
+  private readonly retryEmptyTranscript: boolean;
   private readonly recoveryErrorMessage?: (error: unknown) => string | undefined;
   private readonly audioGate?: AudioGate;
   private lastSoundAt = 0;
@@ -167,6 +170,7 @@ export class VoiceInputController {
     this.callbacks = options.callbacks;
     this.stableWaitMs = options.stableWaitMs ?? 500;
     this.pauseRefinementEnabled = options.pauseRefinementEnabled ?? false;
+    this.retryEmptyTranscript = options.retryEmptyTranscript ?? false;
     this.recoveryErrorMessage = options.recoveryErrorMessage;
     this.audioGate = options.audioGate;
 
@@ -274,16 +278,32 @@ export class VoiceInputController {
     if (this.audioGate) await this.audioGate.finish().catch(() => undefined);
     if (runId !== this.runId || this.leftSubmittingState()) return;
     const optimisticRefinement = this.startOptimisticRefinement(runId);
+    const interrupted = (): boolean => {
+      if (runId !== this.runId) return true;
+      if (!this.currentRunCancelled) return false;
+      this.discardRefinement(runId, optimisticRefinement, 'cancelled');
+      return true;
+    };
 
+    let stable: string | undefined;
     try {
       await this.asr.flushAudio();
+      if (interrupted()) return;
+      if (!this.leftSubmittingState()) stable = await this.waitForStable(this.stableWaitMs);
+      if (interrupted()) return;
+      if (!this.leftSubmittingState() && !normalizeSubmittedText(stable || this.latestTranscript)
+        && this.speechActivitySeen && this.retryEmptyTranscript && this.asr.recover
+        && !this.networkRecoveryInFlight) {
+        stable = await this.retryEmptyRecording(runId);
+      }
     } catch (error) {
-      this.fail(error instanceof Error ? error.message : String(error));
+      if (interrupted()) return;
+      this.fail(this.recoveryErrorMessage?.(error) ?? (error instanceof Error ? error.message : String(error)));
       await this.asr.stop();
       return;
     }
 
-    const stable = await this.waitForStable(this.stableWaitMs);
+    if (interrupted()) return;
     const text = normalizeSubmittedText(stable || this.latestTranscript);
     const source = stable ? 'stable' : this.latestTranscriptSource;
 
@@ -299,6 +319,7 @@ export class VoiceInputController {
     // transcriptEmitted is checked too: it is the direct invariant ("this run has
     // already given the host its text"), so it holds even if a future failure
     // path leaves the state alone.
+    if (runId !== this.runId) return;
     if (this.leftSubmittingState() || this.transcriptEmitted) {
       // cancel() also lands here (it moves the run to 'done'); logging that as
       // a failure would misread the timeline for an intentional abort.
@@ -364,6 +385,41 @@ export class VoiceInputController {
     } else {
       this.discardRefinement(runId, optimisticRefinement, 'no_editable_range');
       this.setState('done');
+    }
+  }
+
+  private async retryEmptyRecording(runId: string): Promise<string | undefined> {
+    const startedAt = performance.now();
+    this.logger.record({
+      type: 'asr_recovery_attempted', runId, at: Date.now(), trigger: 'empty_transcript', attempt: 1,
+      audioMsSinceLastSignal: this.audioMsSinceLastSignal,
+      voicedAudioMsSinceLastSignal: this.voicedAudioMsSinceLastSignal,
+      wallMsSinceLastSignal: startedAt - this.lastAsrSignalAt,
+      everSawSignal: this.everSawAsrSignal,
+    });
+    try {
+      // recover() owns replay of unconfirmed in-memory audio. stop() would
+      // clear that audio, so only tear the provider down after this one attempt.
+      await this.asr.recover!();
+      if (runId !== this.runId || this.leftSubmittingState()) return;
+      await this.asr.flushAudio();
+      if (runId !== this.runId || this.leftSubmittingState()) return;
+      const stable = await this.waitForStable(this.stableWaitMs);
+      if (runId !== this.runId || this.leftSubmittingState()) return;
+      const elapsedMs = performance.now() - startedAt;
+      if (normalizeSubmittedText(stable || this.latestTranscript)) {
+        this.logger.record({ type: 'asr_recovery_succeeded', runId, at: Date.now(), elapsedMs });
+      } else {
+        this.logger.record({ type: 'asr_recovery_failed', runId, at: Date.now(), elapsedMs, reason: 'empty_transcript' });
+      }
+      return stable;
+    } catch (error) {
+      if (runId !== this.runId || this.leftSubmittingState()) return;
+      this.logger.record({
+        type: 'asr_recovery_failed', runId, at: Date.now(), elapsedMs: performance.now() - startedAt,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
   }
 
@@ -748,7 +804,7 @@ export class VoiceInputController {
     if (this.state === 'error' || this.state === 'done') return;
     this.audioGate?.abort();
     if (this.runId) {
-      this.logger.record({ type: 'error', runId: this.runId, at: Date.now(), message });
+      this.logger.record({ type: 'error', runId: this.runId, at: Date.now(), message, code });
     }
     this.stopStallWatchdog();
     this.pendingStableResolvers.splice(0).forEach((resolve) => resolve(undefined));

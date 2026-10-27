@@ -7,6 +7,7 @@ import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { countDirtyWorktreesForRemoval } from '@/lib/worktreeRemovalWarning';
+import { archiveScheduleWarningMany } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
@@ -146,6 +147,7 @@ export function useSessionGroupArchive({
         return;
       }
 
+      const scheduleWarning = await archiveScheduleWarningMany(t, candidates);
       const dirtyCount = await countDirtyWorktreesForRemoval(candidates);
 
       const skipNotes: string[] = [];
@@ -168,7 +170,8 @@ export function useSessionGroupArchive({
             t('ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning', {
               count: dirtyCount,
             })
-          : '');
+          : '') +
+        (scheduleWarning ? ' ' + scheduleWarning : '');
 
       const ok = await confirmDialog({
         title: t('ccAgent.sidebar.archiveAll.title'),

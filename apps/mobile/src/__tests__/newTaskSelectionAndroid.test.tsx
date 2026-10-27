@@ -139,6 +139,19 @@ it("selects a device and retains the native presentation until its closing anima
   expect(modal.props.visible).toBe(false);
   expect(modal.props.nativePresentation).toBe(true);
 });
+
+// #7237 / unit: the real selection sheet must disambiguate two ID-as-name
+// computers, a missing input in the single-device tests, and keep routing IDs.
+it("distinguishes unnamed device choices without changing their selection targets", () => {
+  render({ devices: [
+    { deviceId: "host-b", name: "host-b" },
+    { deviceId: "host-a", name: "host-a" },
+  ] });
+  const rows = [...container.querySelectorAll('[data-testid="newSession.deviceOption"]')] as HTMLButtonElement[];
+  expect(rows.map(row => row.textContent)).toEqual(["another computer (2)", "another computer (1)"]);
+  act(() => rows[0].click());
+  expect(props.onDevice).toHaveBeenCalledExactlyOnceWith("host-b");
+});
 it("keeps directory Back separate from backdrop dismissal and uses remote paths", () => {
   render({ page: "directory" });
   expect(modal.props.nativePresentation).toBe(false);

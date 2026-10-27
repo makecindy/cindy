@@ -108,7 +108,10 @@ export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScop
   return channel === 'wecom' || channel === 'dingtalk' || channel === 'discord' || channel === 'wechat' || channel === 'x';
 }
 
-export type ChannelToolScope = TelegramToolScope | FeishuToolScope | LaneTurnScope;
+export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | LaneTurnScope) & {
+  /** Local durable input, stamped by the IM runner after persistence succeeds. */
+  inputClientId?: string;
+};
 
 interface ActiveScope {
   sessionInstanceId: string;

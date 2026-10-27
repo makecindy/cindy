@@ -56,6 +56,8 @@ export interface AutonomyRuntimeDeps {
   push(payload: { botIds?: string[] }): void;
   /** 订阅灵动岛活动；返回 null 表示服务还没就绪（下次扫描再试）。 */
   subscribeActivity(watch: TaskWatch): (() => void) | null;
+  /** 与跟进同时落地的其它默认内置规则（夜间学习）；同样只对在用、主力电脑上的伙伴调用。 */
+  ensureOwnBuiltins?(botId: string): Promise<void>;
 }
 
 /** 「一眼」的调用方附加限制（远程端排除不可见伙伴）。 */
@@ -245,6 +247,10 @@ export class BotAutonomyRuntime {
           id,
           FOLLOW_UP_BUILTIN_VERSION,
         );
+        if (this.stopped) return false;
+        // 夜间学习落地失败只记日志：不能因此让跟进被判为未就绪、挡住事件发布。
+        await this.deps.ensureOwnBuiltins?.(botId).catch((error) =>
+          this.deps.log.warn('default builtin routine ensure failed', { error: errorCode(error) }));
         if (this.stopped) return false;
         this.ensured.add(botId);
         return true;

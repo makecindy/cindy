@@ -531,6 +531,7 @@ export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean):
     isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user' && !isSteerUserRow(item.message),
     isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message),
     isAnswer: isAssistantAnswerCandidate,
+    canPrependToAnswer: (item) => item.type !== 'message' || item.message.assistantPhase !== 'commentary',
     isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
     isCompactBoundary: isCompactBoundaryItem,
     isActivity: isWorkActivityItem,

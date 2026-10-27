@@ -113,7 +113,8 @@ afterEach(() => {
 });
 
 describe('multiplexed poll', () => {
-  it.each([130, 1000])('refreshes all %i idle runs before host expiry with at most two polls', async count => {
+  // 长等待最多两个，另留一个给没有在途覆盖的任务，持续到普通 poll 接手；合计不超过 3 个。
+  it.each([130, 1000])('refreshes all %i idle runs before host expiry with at most three polls', async count => {
     vi.useFakeTimers();
     const host = fakeHost(REMOTE_AGENT_READ_WAIT_MS);
     const lastRead = new Map<string, number>();
@@ -138,13 +139,42 @@ describe('multiplexed poll', () => {
         await vi.advanceTimersByTimeAsync(5_000);
         expect(Math.max(...[...lastRead.values()].map(at => Date.now() - at))).toBeLessThan(REMOTE_AGENT_HOST_IDLE_MS);
       }
-      expect(peak).toBeLessThanOrEqual(2);
+      expect(peak).toBeLessThanOrEqual(3);
       expect(sinks.every(sink => sink.lost === null)).toBe(true);
     } finally {
       sinks.forEach(sink => poller.unregister(sink.run.runId));
       await vi.advanceTimersByTimeAsync(REMOTE_AGENT_READ_WAIT_MS);
     }
   });
+  // provider-sharing.md §3「闲置收回由提供方决定」：本机还有对方看不到的工作(Codex 在本机起的进程)时，拉取带 hold，
+  // 对方不按闲置收回；工作结束就不再带。判断出错时照常拉取、不带 hold(否则可能永远不收回)。
+  it('marks only runs with local work as held, and stops once that work ends', async () => {
+    const host = fakeHost(20);
+    const busy = collector('busy');
+    const idle = collector('idle');
+    const broken = collector('broken');
+    let holding = true;
+    busy.run.holdsRemote = () => holding;
+    broken.run.holdsRemote = () => { throw new Error('boom'); };
+    const sinks = [busy, idle, broken];
+    for (const sink of sinks) host.add(sink.run.runId);
+    const poller = new RemoteAgentPoller((args) => host.invoke(args));
+    const held = (call: (typeof host.calls)[number]) =>
+      (call.runs as Array<{ runId: string; hold?: true }>).filter((run) => run.hold).map((run) => run.runId);
+    try {
+      for (const sink of sinks) poller.register(sink.run);
+      await until(() => host.calls.some((call) => call.runs.length === 3));
+      expect(held(host.calls.find((call) => call.runs.length === 3)!)).toEqual(['busy']);
+      holding = false;
+      const seen = host.calls.length;
+      await until(() => host.calls.length > seen + 2);
+      expect(held(host.calls.at(-1)!)).toEqual([]);
+      expect(sinks.every((sink) => sink.lost === null)).toBe(true);
+    } finally {
+      sinks.forEach((sink) => poller.unregister(sink.run.runId));
+    }
+  });
+
   it('keeps pulling a run registered during a long wait, without waiting for the old poll to time out', async () => {
     // 被控端照实挂满等待时间：旧的长等待只覆盖第一个任务。
     const host = fakeHost(10_000);
@@ -169,7 +199,40 @@ describe('multiplexed poll', () => {
     await until(() => firstSink.done && secondSink.done);
   });
 
-  it.each([12, 130])('delivers %i runs exactly once with at most two polls in flight', async count => {
+  // 2026-10-22 远程供应商调查：两个旧任务的长等待都在途且都没有数据时，新任务第一个事件(Codex 执行环境
+  // 的 initialize 握手)要等旧长等待超时 10 秒才有人拉，正好撞上 Codex 握手的 10 秒上限。
+  it('pulls a run registered behind two idle long waits within one round trip', async () => {
+    vi.useFakeTimers();
+    const host = fakeHost(REMOTE_AGENT_READ_WAIT_MS);
+    const poller = new RemoteAgentPoller((args) => host.invoke(args));
+    const sinks = [randomUUID(), randomUUID(), randomUUID()].map((runId) => {
+      host.add(runId);
+      return collector(runId);
+    });
+    poller.register(sinks[0].run);
+    poller.register(sinks[1].run);
+    await vi.advanceTimersByTimeAsync(1);
+    poller.register(sinks[2].run);
+    // #6844 review：首包只有连接打开，initialize 与后续文件查询分别到达；补位必须持续到普通 poll 接手。
+    for (const data of ['open', 'initialize', 'fs/getMetadata']) {
+      const appendedAt = Date.now();
+      host.runs.get(sinks[2].run.runId)!.log.append({ t: 'ws', kind: 'message', data });
+      await vi.waitFor(() => expect(sinks[2].text()).toContain(data));
+      expect(Date.now() - appendedAt).toBeLessThan(1_000);
+    }
+    // 补位 poll 也在等待时，再登记第四个任务：不能再次被三个旧长等待挡住 10 秒。
+    const fourth = collector(randomUUID());
+    host.add(fourth.run.runId).append({ step: 'fourth-started' });
+    poller.register(fourth.run);
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(fourth.text()).toContain('fourth-started');
+    for (const run of host.runs.values()) run.log.end();
+    await vi.advanceTimersByTimeAsync(REMOTE_AGENT_READ_WAIT_MS);
+    expect(sinks.every((sink) => sink.done)).toBe(true);
+    expect(fourth.done).toBe(true);
+  });
+
+  it.each([12, 130])('delivers %i runs exactly once with at most three polls in flight', async count => {
     const host = fakeHost();
     let inflight = 0;
     let peak = 0;
@@ -196,7 +259,7 @@ describe('multiplexed poll', () => {
       const expected = Array.from({ length: 5 }, (_, round) => `${JSON.stringify({ run: index, round })}\n`).join('');
       expect(sink.text()).toBe(expected);
     });
-    expect(peak).toBeLessThanOrEqual(2);
+    expect(peak).toBeLessThanOrEqual(3);
     expect(poller.size).toBe(0);
   });
 

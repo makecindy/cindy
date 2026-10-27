@@ -9,12 +9,15 @@ import {
   applyAgentIslandInteractionDismissed,
   applyAgentIslandInteractionRequest,
   applyAgentIslandMetadata,
+  syncAgentIslandGroupChat,
+  revealAgentIslandGroupChat,
   applyAgentIslandUserPrompt,
   AGENT_ISLAND_COMPLETION_DWELL_MS,
   AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS,
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
   buildAgentIslandDisplayState,
+  buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completedReplySummary,
@@ -33,9 +36,133 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandPointerZones,
   setAgentIslandVisibleSession,
+  type AgentIslandCompanionChatProjection,
 } from '../state.js';
 
+// Regression: a chat can be unread after runtime expiry/restart; existing tests only supplied
+// runtime events. Exercise the public display builder with one old unread chat (unit tier).
+describe('companion chat unread projection', () => {
+  const chat: AgentIslandCompanionChatProjection = {
+    sessionId: 'companion-chat', deviceId: null, visible: true, unread: true,
+    lastMessageAt: 1, preview: 'Reply waiting to be read', token: 'chat-token',
+    companion: { name: 'Cindy', hue: 'blue', glyph: 'C', glyphIsInitial: true },
+  };
+  // Unit: a blocking card clips the island surface but must not clip the menu's badge candidates.
+  it('keeps the full counted overview while an interaction card occupies the island', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandUserPrompt(state, { sessionId: 'waiting' }, 'question', 100);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, { kind: 'ask_user_question', requestId: 'q', questions: [] }, 101);
+    applyAgentIslandUserPrompt(state, { sessionId: 'working' }, 'work', 102);
+    const display = buildAgentIslandDisplayState(state, 103, [chat]);
+    const overview = buildAgentIslandTaskOverview(state, 103, [chat]);
+    expect(overview.map(row => row.sessionId).sort()).toEqual(['companion-chat', 'waiting', 'working']);
+    expect(overview.filter(row => row.attention)).toHaveLength(display.pillSnapshot.attentionCount);
+    expect(overview.find(row => row.sessionId === chat.sessionId)).toMatchObject({ companion: { name: 'Cindy' }, attention: true });
+    expect(buildAgentIslandTaskOverview(state, 104, [{ ...chat, unread: false }]).some(row => row.sessionId === chat.sessionId)).toBe(false);
+  });
+  it.each([null, 'offline-home'])('restores old unread without runtime activity or notifications (%s)', deviceId => {
+    const state = createAgentIslandState();
+    const now = AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS * 2;
+    const display = buildAgentIslandDisplayState(state, now, [{ ...chat, deviceId }]);
+    expect(display.pillSnapshot.attentionCount).toBe(1);
+    expect(display.mode).toBe('compact');
+    expect(display.sessions[0]).toMatchObject({ phase: 'completed', attention: true,
+      completionToken: 'chat-token', completionNotification: 'silent', companion: { name: 'Cindy' } });
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, now, [{ ...chat, unread: false }]).sessions).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, now, [{ ...chat, visible: false }]).sessions).toEqual([]);
+  });
+
+  it('deduplicates live activity, retains running and waiting, and removes a read completion immediately', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: chat.sessionId };
+    applyAgentIslandUserPrompt(state, meta, 'continue', 100);
+    let display = buildAgentIslandDisplayState(state, 101, [chat]);
+    expect(display.sessions).toHaveLength(1);
+    expect(display.sessions[0].phase).toBe('running');
+    expect(display.pillSnapshot).toMatchObject({ attentionCount: 1, runningSessionCount: 0 });
+    // Hiding restored chat unread must leave genuine runtime work observable (unit regression #7134).
+    const hidden = { ...chat, visible: false };
+    expect(buildAgentIslandDisplayState(state, 101, [hidden]).pillSnapshot)
+      .toMatchObject({ attentionCount: 0, runningSessionCount: 1 });
+    display = buildAgentIslandDisplayState(state, 102, [{ ...chat, unread: false }]);
+    expect(display.pillSnapshot).toMatchObject({ attentionCount: 0, runningSessionCount: 1 });
+    applyAgentIslandInteractionRequest(state, meta, { kind: 'ask_user_question', requestId: 'question', questions: [] }, 103);
+    display = buildAgentIslandDisplayState(state, 104, [{ ...chat, unread: false }]);
+    expect(display.sessions[0]).toMatchObject({ phase: 'needs-interaction', attention: true });
+    expect(buildAgentIslandDisplayState(state, 104, [hidden]).sessions[0])
+      .toMatchObject({ phase: 'needs-interaction', attention: true });
+    applyAgentIslandInteractionDismissed(state, chat.sessionId, 'question', 105);
+    applyAgentIslandEvent(state, meta, doneEvent(), 106);
+    display = buildAgentIslandDisplayState(state, 107, [chat]);
+    expect(display.sessions[0].completionToken).toBe('chat-token');
+    expect(buildAgentIslandDisplayState(state, 108, [{ ...chat, unread: false }]).sessions).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, 108, [hidden]).sessions).toEqual([]);
+    // Reading chat replies must not suppress an independent terminal error.
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('failed'), 109);
+    expect(buildAgentIslandDisplayState(state, 110, [{ ...chat, unread: false }]).sessions[0])
+      .toMatchObject({ phase: 'error', attention: true });
+    expect(buildAgentIslandDisplayState(state, 110, [hidden]).sessions[0])
+      .toMatchObject({ phase: 'error', attention: true });
+  });
+});
+
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
+
+// Unit: group unread has no task lifecycle. Cover restore/live/read transitions at the real
+// display builder, which the existing companion projection and task-only tests cannot exercise.
+describe('group message cards', () => {
+  const input = { groupId: 'group', name: 'Product', messageId: 'message', mentioned: false,
+    preview: 'Chris: hello', lastMessageAt: 1, members: [] };
+  const sync = (state: ReturnType<typeof createAgentIslandState>, extra = {}, now = 100) =>
+    syncAgentIslandGroupChat(state, input.groupId, { ...input, ...extra }, [], '@you', now);
+
+  it('restores one persistent unread card silently, without task actions or relay activity', () => {
+    const state = createAgentIslandState();
+    const now = AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS * 2;
+    sync(state, {}, now);
+    const display = buildAgentIslandDisplayState(state, now);
+    expect(display.mode).toBe('compact');
+    expect(display.pillSnapshot.attentionCount).toBe(1);
+    expect(display.sessions[0]).toMatchObject({ title: 'Product', compactDetail: 'Chris: hello', attention: true, groupChat: { avatars: [] } });
+    expect(display.sessions[0].completionToken).toBeUndefined();
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
+    expect(state.remoteUnreadTerminals.size).toBe(0);
+    syncAgentIslandGroupChat(state, input.groupId, null, [], '@you', now + 1);
+    expect(buildAgentIslandDisplayState(state, now + 1).pillSnapshot.attentionCount).toBe(0);
+  });
+
+  it.each([false, true])('coalesces a burst without extending its dwell (mention during dwell: %s)', mentionDuringDwell => {
+    const state = createAgentIslandState();
+    sync(state);
+    revealAgentIslandGroupChat(state, input.groupId, 100);
+    expect(buildAgentIslandDisplayState(state, 100).displayPolicy).toBe('transient');
+    const until = state.sessions.get('chat-group:group')!.revealUntil!;
+    sync(state, { messageId: 'next', preview: 'Sam: next', mentioned: mentionDuringDwell }, 200);
+    revealAgentIslandGroupChat(state, input.groupId, 200);
+    expect(state.sessions.get('chat-group:group')!.revealUntil).toBe(until);
+    expect(buildAgentIslandDisplayState(state, 200).sessions).toHaveLength(1);
+    expect(buildAgentIslandDisplayState(state, until + 1).mode).toBe('compact');
+    sync(state, { mentioned: true }, until + 2);
+    revealAgentIslandGroupChat(state, input.groupId, until + 2);
+    expect(buildAgentIslandDisplayState(state, until + 2).sessions[0].groupChat?.mentionLabel).toBe('@you');
+    expect(buildAgentIslandDisplayState(state, until + 2).mode).toBe(mentionDuringDwell ? 'compact' : 'expanded');
+  });
+
+  it('keeps a pending approval above mentions, and pins existing rows under the pointer', () => {
+    const state = createAgentIslandState();
+    sync(state);
+    revealAgentIslandGroupChat(state, input.groupId, 100);
+    syncAgentIslandGroupChat(state, 'other', { ...input, groupId: 'other', mentioned: true }, [], '@you', 100);
+    requestAgentIslandManualExpand(state, 101);
+    const order = buildAgentIslandDisplayState(state, 101).sessions.map(s => s.sessionId);
+    expect(order[0]).toBe('chat-group:other');
+    sync(state, { mentioned: true, lastMessageAt: 200 }, 200);
+    expect(buildAgentIslandDisplayState(state, 200).sessions.map(s => s.sessionId)).toEqual(order);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'approval' }, { kind: 'ask_user_question', requestId: 'q', questions: [] }, 201);
+    expect(buildAgentIslandDisplayState(state, 201).sessions[0].sessionId).toBe('approval');
+  });
+});
 
 type PermissionInteractionRequest = Extract<InteractionRequest, { kind: 'permission' }>;
 

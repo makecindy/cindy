@@ -7,6 +7,8 @@ import {
   type ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import { resolveSpeechConnection, speechModels, type SpeechCatalogDeps } from '../models.js';
+import { speechRequest } from '../speechProtocols.js';
+import { loadSpeechVoices } from '../voices.js';
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
 import { voiceModelKey } from '../../../shared/voiceConversation.js';
 
@@ -39,6 +41,31 @@ function custom(
   );
 }
 
+// PR #6768 unit regression: speechModels must honor the wizard's saved deselection
+// and later Settings switches. Existing route tests only covered the disable gate.
+// Minimal input: two discovered TTS models, one unchecked, on two separate connections.
+it('lists only selected speech models and applies connection-scoped display overrides', () => {
+  const models: ProviderRuntimeModelConfig[] = [
+    { id: 'eleven_flash_v2_5', name: 'Flash', discoveredMetadata: { mode: 'audio_speech' } },
+    { id: 'eleven_v3', name: 'V3', discoveredMetadata: { mode: 'audio_speech' }, defaultEnabled: false },
+  ];
+  const d = deps([
+    custom('a', 'https://api.elevenlabs.io/v1', models),
+    custom('b', 'https://api.elevenlabs.io/v1', models),
+  ]);
+  const choices = () => speechModels(d).filter((item) => item.pickerVisible !== false).map((item) => [item.providerId, item.id]);
+  expect(choices()).toEqual([['a', 'eleven_flash_v2_5'], ['b', 'eleven_flash_v2_5']]);
+  d.visibilityOverride = (agent, provider, id) => agent === 'codex' && provider === 'a'
+    ? id === 'eleven_v3' : undefined;
+  expect(choices()).toEqual([['a', 'eleven_v3'], ['b', 'eleven_flash_v2_5']]);
+  d.disabled = (provider, id) => provider === 'a' && id === 'eleven_v3';
+  expect(choices()).toEqual([['b', 'eleven_flash_v2_5']]);
+  // Hiding remains a display preference, not a replacement for route admission.
+  expect(resolveSpeechConnection(d, { providerId: 'a', agent: 'codex', modelId: 'eleven_flash_v2_5' }).protocol).toBe('elevenlabs');
+  d.visibilityOverride = () => undefined;
+  expect(choices()).toEqual([['a', 'eleven_flash_v2_5'], ['b', 'eleven_flash_v2_5']]);
+});
+
 // Protocol authority comes from the real endpoint, not the UI's override.
 it('rejects unsupported speed on an official binding before opening a call', () => {
   const d = deps([
@@ -66,6 +93,27 @@ it('rejects unsupported speed on an official binding before opening a call', () 
   );
 });
 
+// Unit regression: the real Gateway Qwen route rejects OpenAI's wider speed
+// range. Exercise admission and request serialization at the verified boundaries.
+it('uses Qwen Audio 3.1 Plus speed limits on the OpenAI-compatible Gateway', () => {
+  const modelId = 'qwen/qwen-audio-3.1-tts-plus';
+  const d = deps([{ id: 'xd', audioModels: [model(modelId)] }] as Catalog['providers']);
+  const choice = { providerId: 'xd', modelId, voice: 'longanlingxin_v3.1' };
+  for (const speed of [0.5, 2]) {
+    const selected = { ...choice, speed };
+    const connection = resolveSpeechConnection(d, selected);
+    expect(connection.protocol).toBe('openai');
+    expect(JSON.parse(speechRequest(connection, { ...selected, text: 'hello' }).body)).toMatchObject({
+      model: modelId,
+      speed,
+      response_format: 'pcm',
+    });
+  }
+  for (const speed of [0.25, 4]) {
+    expect(() => resolveSpeechConnection(d, { ...choice, speed })).toThrow('invalid_speech_speed');
+  }
+});
+
 it('keeps Gateway entitlement and supported-protocol gates', () => {
   const d = deps([
     {
@@ -85,6 +133,94 @@ it('keeps Gateway entitlement and supported-protocol gates', () => {
   d.disabled = (provider, id) => provider === 'xd' && id === 'override';
   expect(speechModels(d).map((m) => m.id)).toEqual(['new-speech']);
   expect(speechModels({ ...d, gatewayAllowed: false })).toEqual([]);
+});
+
+// Unit: a new Gateway selection needs a usable reference default, while a saved
+// manual ID remains the request value. Qwen 3.1 Plus was advertised as audio_speech
+// but its chat-family rule excluded it; the earlier vendor cases missed this route.
+it.each([
+  'elevenlabs/eleven_multilingual_v2',
+  'minimax/speech-2.8-hd',
+  'qwen/qwen-audio-3.1-tts-plus',
+])(
+  'uses the reference default without restricting manual voices for %s',
+  async (modelId) => {
+    const d = deps([{ id: 'xd', audioModels: [model(modelId)] }] as Catalog['providers']);
+    const selected = speechModels(d)[0];
+    expect(selected.defaultVoice).not.toBe('');
+    const choice = { providerId: 'xd', modelId, voice: 'saved-manual-voice' };
+    const connection = resolveSpeechConnection(d, choice);
+    const fetcher = vi.fn();
+    const catalog = await loadSpeechVoices(connection, modelId, fetcher, () => {}, 'xd');
+    expect(catalog.voices[0]?.id).toBe(selected.defaultVoice);
+    expect(JSON.parse(speechRequest(connection, { ...choice, text: 'hello' }).body)).toMatchObject({
+      model: modelId,
+      voice: choice.voice,
+      response_format: 'pcm',
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  },
+);
+
+// Unit regression: both Registry layers must receive the discovered media mode.
+// Without it, a previously unknown Qwen TTS ID inherits the bundled chat prefix.
+// Exact declarations (including null) remain authoritative over the mode hint.
+it.each(['current', 'bundled'] as const)(
+  'keeps Gateway speech mode when resolving %s Registry protocols',
+  (layer) => {
+    const modelId = 'qwen/qwen-audio-3.1-tts-plus';
+    const media = model(modelId);
+    const d = deps([{ id: 'xd', audioModels: [media] }] as Catalog['providers']);
+    if (layer === 'bundled') d.catalog.modelRegistry = undefined;
+    expect(speechModels(d)).toMatchObject([{ id: modelId, protocol: 'openai' }]);
+    const selected = { providerId: 'xd', modelId, voice: 'longanlingxin_v3.1' };
+    expect(resolveSpeechConnection(d, selected).protocol).toBe('openai');
+    for (const nativeApi of [null, 'openai-completions'] as const) {
+      media.nativeApi = nativeApi;
+      expect(speechModels(d)).toEqual([]);
+      expect(() => resolveSpeechConnection(d, selected)).toThrow('model_unavailable');
+    }
+  },
+);
+
+// Unit regression: resolveSpeechConnection -> speechRequest must send Gateway TTS
+// to /v1/audio/speech. Live root endpoints returned 404; previous fixtures already
+// included /v1. Cover the root, existing API base and deployment prefix without I/O.
+it.each([
+  ['https://gateway.test', 'https://gateway.test/v1/audio/speech'],
+  ['https://gateway.test/', 'https://gateway.test/v1/audio/speech'],
+  ['https://gateway.test/v1', 'https://gateway.test/v1/audio/speech'],
+  ['https://gateway.test/v1/', 'https://gateway.test/v1/audio/speech'],
+  ['https://gateway.test/prefix/', 'https://gateway.test/prefix/v1/audio/speech'],
+  ['https://gateway.test/prefix/v1/', 'https://gateway.test/prefix/v1/audio/speech'],
+])('uses the Gateway speech API path for %s', (baseUrl, expectedUrl) => {
+  const credentials = { baseUrl, apiKey: 'gateway-key' };
+  const d = deps([
+    { id: 'xd', audioModels: [model('gateway-speech', { nativeApi: 'openai-audio-speech' })] },
+  ] as Catalog['providers']);
+  d.gatewayConnection = () => credentials;
+  const input = { modelId: 'gateway-speech', voice: 'voice-id', text: 'hello' };
+  const connection = resolveSpeechConnection(d, input);
+  const request = speechRequest(connection, input);
+  expect(request.url.href).toBe(expectedUrl);
+  expect(JSON.parse(request.body)).toEqual({
+    model: input.modelId,
+    voice: input.voice,
+    input: input.text,
+    response_format: 'pcm',
+  });
+  expect(connection.headers).toEqual({ authorization: 'Bearer gateway-key' });
+  // The shared server credential endpoint must remain unchanged for chat/media callers.
+  expect(credentials).toEqual({ baseUrl, apiKey: 'gateway-key' });
+});
+
+it('keeps a BYOK speech API prefix without adding the Gateway version path', () => {
+  const d = deps([custom('proxy', 'https://speech-proxy.test/tts-api')]);
+  const input = { modelId: 'tts', voice: 'voice-id', text: 'hello' };
+  const connection = resolveSpeechConnection(d, { ...input, providerId: 'proxy', agent: 'codex' });
+  expect(speechRequest(connection, input).url.href).toBe(
+    'https://speech-proxy.test/tts-api/audio/speech',
+  );
 });
 
 it('distinguishes two user connections with the same upstream ID and uses only the selected runtime key', () => {
@@ -306,6 +442,114 @@ it.each(['openai', 'elevenlabs', 'minimax'] as const)(
         protocol === 'elevenlabs'
           ? { 'xi-api-key': 'proxy-codex-key' }
           : { authorization: 'Bearer proxy-codex-key' },
+    });
+  },
+);
+
+// Unit tier, real catalog -> connection projection. HTTP protocol selection must
+// bind both documented model and official origin; a matching brand is insufficient.
+it.each([
+  ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen3-tts-flash', 'qwen-tts', 'Cherry'],
+  [
+    'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    'qwen3-tts-flash',
+    'qwen-tts',
+    'Cherry',
+  ],
+  [
+    'https://work.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+    'cosyvoice-v3-flash',
+    'dashscope-tts',
+    'longanyang',
+  ],
+  ['https://work.cn-beijing.maas.aliyuncs.com/api/v1', 'cosyvoice-v3.5-plus', 'dashscope-tts', ''],
+  [
+    'https://work.ap-southeast-1.maas.aliyuncs.com/api/v1',
+    'qwen-audio-3.1-tts-flash',
+    'dashscope-tts',
+    'longanhuan_v3.1',
+  ],
+  [
+    'https://work.ap-southeast-1.maas.aliyuncs.com/api/v1',
+    'qwen-audio-3.0-tts-plus',
+    'dashscope-tts',
+    'longanlingxin',
+  ],
+] as const)(
+  'binds %s %s to its verified HTTP adapter',
+  (baseUrl, modelId, protocol, defaultVoice) => {
+    const d = deps([
+      custom('ali', baseUrl, [
+        { id: modelId, name: modelId, mode: 'audio_speech', nativeApi: null },
+      ]),
+    ]);
+    expect(speechModels(d)[0]).toMatchObject({ protocol, protocolLocked: true, defaultVoice });
+    expect(
+      resolveSpeechConnection(d, {
+        providerId: 'ali',
+        agent: 'codex',
+        modelId,
+        protocol: 'elevenlabs',
+      }),
+    ).toEqual({
+      protocol,
+      baseUrl: `${new URL(baseUrl).origin}/api/v1`,
+      headers: { authorization: 'Bearer ali-codex-key' },
+    });
+    if (protocol === 'qwen-tts')
+      expect(() =>
+        resolveSpeechConnection(d, {
+          providerId: 'ali',
+          agent: 'codex',
+          modelId,
+          voice: 'Cherry',
+          speed: 1,
+        }),
+      ).toThrow('invalid_speech_speed');
+  },
+);
+it.each([
+  ['https://dashscope.aliyuncs.com/api/v1', 'qwen3-tts-flash-realtime'],
+  ['https://dashscope.aliyuncs.com/api/v1', 'qwen-future-tts'],
+  ['https://dashscope.aliyuncs.com/api/v1', 'cosyvoice-v3-flash'],
+  ['https://work.ap-southeast-1.maas.aliyuncs.com/api/v1', 'cosyvoice-v3-flash'],
+  ['https://dashscope.aliyuncs.com.untrusted.test/api/v1', 'qwen3-tts-flash'],
+  ['http://dashscope.aliyuncs.com/api/v1', 'qwen3-tts-flash'],
+  ['https://dashscope.aliyuncs.com:8443/api/v1', 'qwen3-tts-flash'],
+])(
+  'does not infer native HTTP from an unsupported model/region/origin: %s %s',
+  (baseUrl, modelId) => {
+    const d = deps([
+      custom('ali', baseUrl, [
+        { id: modelId, name: modelId, mode: 'audio_speech', nativeApi: null },
+      ]),
+    ]);
+    expect(speechModels(d)[0]?.protocol).toBeUndefined();
+    expect(() =>
+      resolveSpeechConnection(d, { providerId: 'ali', agent: 'codex', modelId }),
+    ).toThrow('model_unavailable');
+  },
+);
+it.each(['qwen-tts', 'dashscope-tts'] as const)(
+  'keeps explicit %s proxy choices on the same origin, prefix and key',
+  (protocol) => {
+    const d = deps([
+      custom('proxy', 'https://proxy.test/tenant/api/v1', [
+        { id: 'speech', name: 'Speech', mode: 'audio_speech', nativeApi: null },
+      ]),
+    ]);
+    expect(speechModels(d)[0].protocolLocked).toBe(false);
+    expect(
+      resolveSpeechConnection(d, {
+        providerId: 'proxy',
+        agent: 'codex',
+        modelId: 'speech',
+        protocol,
+      }),
+    ).toEqual({
+      protocol,
+      baseUrl: 'https://proxy.test/tenant/api/v1',
+      headers: { authorization: 'Bearer proxy-codex-key' },
     });
   },
 );

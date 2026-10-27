@@ -26,6 +26,7 @@ export interface PluginSettingsDocument {
   entry: string;
   files: PluginPageFile[];
   controllerAuthorization?: true;
+  documentIsolation?: true;
 }
 export interface PluginSettingsSession {
   request(request: PluginOauthRequest): Promise<unknown>;
@@ -103,6 +104,7 @@ export function parsePluginSettingsDocument(
     name: doc.name,
     entry: doc.entry,
     files: doc.files.map((file) => ({ ...file })),
+    ...(doc.documentIsolation === true ? { documentIsolation: true as const } : {}),
     ...(doc.controllerAuthorization === true ? { controllerAuthorization: true as const } : {}),
   };
 }

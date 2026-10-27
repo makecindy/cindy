@@ -1,0 +1,101 @@
+{
+  "sourceCommit": "d6517ea6bd4c6a31ae2e287bdff78cbfb90642f3",
+  "startedAt": "2026-10-26T08:36:10.290Z",
+  "stages": [
+    {
+      "stage": "inject-old-state",
+      "at": "2026-10-26T08:36:10.973Z",
+      "baselineInjected": true,
+      "target": "isolated-QA-only"
+    },
+    {
+      "stage": "preaccept-blocked",
+      "at": "2026-10-26T08:36:13.409Z",
+      "pending": 1,
+      "error": "[INVALID_PARAMS] provider \"<legacy-provider>\" is unavailable; select an available provider before sending",
+      "recovery": {
+        "kind": "queue-head"
+      },
+      "turnInProgress": false,
+      "replyCount": 0
+    },
+    {
+      "stage": "accept-historical-saved-choice",
+      "at": "2026-10-26T08:36:13.428Z",
+      "beforeVersion": 2,
+      "afterVersion": 3,
+      "savedConfigUnchanged": true
+    },
+    {
+      "stage": "retry-original-input",
+      "at": "2026-10-26T08:36:19.739Z",
+      "pending": 0,
+      "error": null,
+      "recovery": null,
+      "turnInProgress": false,
+      "replyCount": 1
+    },
+    {
+      "stage": "manual-routine-started",
+      "at": "2026-10-26T08:36:19.754Z",
+      "automaticEnabled": false
+    },
+    {
+      "stage": "manual-routine-completed",
+      "at": "2026-10-26T08:36:23.765Z",
+      "status": "success",
+      "result": "QA7177_D6517EA6_ROUTINE_OK"
+    },
+    {
+      "stage": "ordinary-input-after-routine",
+      "at": "2026-10-26T08:36:26.192Z",
+      "pending": 0,
+      "error": null,
+      "recovery": null,
+      "turnInProgress": false,
+      "replyCount": 1
+    },
+    {
+      "stage": "inject-current-state",
+      "at": "2026-10-26T08:36:26.845Z",
+      "baselineInjected": true,
+      "target": "isolated-QA-only"
+    },
+    {
+      "stage": "accept-current-shared-choice",
+      "at": "2026-10-26T08:36:27.271Z",
+      "beforeVersion": 2,
+      "afterVersion": 3,
+      "savedConfigUnchanged": true
+    },
+    {
+      "stage": "current-shared-route-response",
+      "at": "2026-10-26T08:36:51.793Z",
+      "pending": 0,
+      "error": null,
+      "recovery": null,
+      "turnInProgress": false,
+      "replyCount": 1
+    },
+    {
+      "stage": "durable-readback",
+      "at": "2026-10-26T08:36:57.136Z",
+      "routes": [
+        {
+          "kind": "pi",
+          "savedRoutePreserved": true,
+          "baselineCleared": true
+        },
+        {
+          "kind": "codex",
+          "savedRoutePreserved": true,
+          "baselineCleared": true
+        }
+      ],
+      "originalFormalStateUnchanged": true,
+      "retainedInputRows": 1
+    }
+  ],
+  "completedAt": "2026-10-26T08:36:57.136Z",
+  "passed": true
+}

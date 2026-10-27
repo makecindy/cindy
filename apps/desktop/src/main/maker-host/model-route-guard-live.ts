@@ -299,10 +299,25 @@ export async function resolveLenientSessionRoute(
   return route;
 }
 
-/** Resolve one provider-specific snapshot after route admission for fresh and bound sends. */
+/**
+ * Resolve one provider-specific snapshot after route admission for fresh and bound sends.
+ * An Agent on another computer resolves against that computer's authorized catalog and
+ * never falls back to a local provider with the same id.
+ */
 export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
+  location?: { agentDeviceId: string },
 ): Promise<ScheduledModelSelection> {
+  if (location?.agentDeviceId) {
+    const { readRemoteProviderRoute } = await import('../remote-agent/controller/deviceCatalog.js');
+    const { provider } = await readRemoteProviderRoute({
+      agentDeviceId: location.agentDeviceId,
+      agentKind: selection.agentKind,
+      providerId: selection.providerId,
+      model: selection.model,
+    });
+    return resolveScheduledModelSelection({ ...selection, providerId: provider.id }, [provider]);
+  }
   const providers = await getDesktopProviderService().listProviders({
     allowSideEffects: false, catalog: getActiveCatalog(),
   });

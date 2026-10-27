@@ -11,6 +11,7 @@ vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), debug: vi
 vi.mock('../../maker-host/auth-adapters', () => ({ readClaudeApiKey: () => 'fixture-key' }));
 vi.mock('../../maker-host/outbound-fetch', () => ({ outboundFetch: mocks.outbound }));
 vi.mock('../../maker-host/runtime-configs', () => ({ claudeUpstreamEndpoint: () => mocks.endpoint }));
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
 vi.mock('../modelPricing', () => ({ getGatewayAccountCurrency: async () => 'CNY' }));
 vi.mock('../ledgerCurrency', () => ({ currentLedgerCurrency: () => 'CNY' }));
 vi.mock('../organizationAccountUsage.js', () => ({ readOrganizationAccountUsage: mocks.managed }));

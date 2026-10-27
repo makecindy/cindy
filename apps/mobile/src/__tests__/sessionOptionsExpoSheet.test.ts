@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null, TaskMenuHeading: () => null }));
+vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
 vi.mock('@/session/ComposerNativeRow', () => import('@/session/ComposerNativeRow.ios'));
 vi.mock('@/session/ComposerNativeSection', () => import('@/session/ComposerNativeSection.ios'));
@@ -58,6 +58,7 @@ vi.mock('@expo/ui/swift-ui', () => ({
   Text: 'Text',
   VStack: 'VStack',
   Section: 'Section',
+  Rectangle: 'Rectangle',
   ZStack: 'ZStack',
 }));
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
@@ -66,6 +67,7 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
       'accessibilityAddTraits',
       'accessibilityLabel',
       'contentShape',
+      'containerRelativeFrame',
       'buttonStyle',
       'disabled',
       'font',

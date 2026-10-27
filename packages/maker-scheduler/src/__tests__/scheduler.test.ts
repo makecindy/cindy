@@ -499,6 +499,30 @@ describe('Scheduler', () => {
     expect(keepFast.fastMode).toBe(true);
   });
 
+  it('update() 改了模型或来源却没带运行位置时回到本机(旧版远程编辑的全量表单)', async () => {
+    // 来源属于运行位置那台电脑的目录。旧手机端 / 旧桌面远程编辑不认识 agentDeviceId,
+    // 它们选的是本机目录;沿用旧位置会把本机来源派到另一台电脑上。
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      modelAgentKind: 'claude-code',
+      model: 'claude-opus-5-5',
+      providerId: 'remote-sub',
+      agentDeviceId: 'studio',
+    });
+    expect(sch.agentDeviceId).toBe('studio');
+    // 路由原样回传(全量表单只改了名字)→ 位置保留
+    const renamed = await h.scheduler.update(sch.id, {
+      name: 'renamed', agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'remote-sub',
+    });
+    expect(renamed.agentDeviceId).toBe('studio');
+    const moved = await h.scheduler.update(sch.id, { model: 'claude-sonnet-5-5', providerId: 'anthropic' });
+    expect(moved.agentDeviceId).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(h.storage.schedules.get(sch.id)!, 'agentDeviceId')).toBe(true);
+    // 远程位置只配显式模型(那台的默认模型本机解析不了)
+    await expect(h.scheduler.create({ ...baseInput, agentDeviceId: 'studio' }))
+      .rejects.toThrow('agentDeviceId requires an explicit model');
+  });
+
   it('update() 给了真实 workingDir 时翻成 project(与 create 推断对称)', async () => {
     // 对话任务后来被显式改了项目目录 → 不能仍留 dialogue,否则 fire 时
     // 新目录会被管理工作区分配覆盖,显式设置被静默丢弃
@@ -885,6 +909,15 @@ describe('Scheduler', () => {
     await h.scheduler.delete(sch.id);
     expect(await h.storage.get(sch.id)).toBeNull();
     expect(sawDelete).toBe(true);
+  });
+
+  it('delete rejects a missing schedule without emitting changed', async () => {
+    const changed = vi.fn();
+    const missingId = 'does-not-exist';
+    h.scheduler.on('changed', changed);
+
+    await expect(h.scheduler.delete(missingId)).rejects.toThrow(/schedule not found/i);
+    expect(changed).not.toHaveBeenCalled();
   });
 
   it('start() loads active schedules and recomputes nextFireAt for stale ones', async () => {

@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
-import { startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
+import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -185,7 +185,10 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function createHost(readLimits: () => RemoteAgentLimits = () => DEFAULT_REMOTE_AGENT_LIMITS) {
+function createHost(
+  readLimits: () => RemoteAgentLimits = () => DEFAULT_REMOTE_AGENT_LIMITS,
+  log?: StartRemoteAgentDeps['log'],
+) {
   return createRemoteAgentHost({
     readLimits,
     isAgentAvailable: () => true,
@@ -197,10 +200,117 @@ function createHost(readLimits: () => RemoteAgentLimits = () => DEFAULT_REMOTE_A
     captureOwner: () => 'owner',
     isOwnerCurrent: () => true,
     runsRoot: hostRoot,
+    log,
   });
 }
 
 describe('remote agent round trip', () => {
+  // 测试价值：真实两端启动入口的诊断协议；此前 24 秒创建等待无阶段记录。
+  // 原覆盖只验证执行结果，未保护成功/失败计时及内容不入日志。最小输入：一次启动或 MCP 拒绝。
+  // tier: unit，沿用本文件 loopback fixture，不启动真实 Agent、不做真实等待。
+  // 本机单文件 Vitest 5.62s（既有 19 项共用 fixture，collect 3.29s；本次两项不另开测试文件）。
+  it('reports controller, transport and host startup stages without configuration contents', async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const host = createHost(undefined, log);
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await startRemoteAgentSession(
+        'codex',
+        {
+          sessionId: 'startup-timing-task',
+          workingDir: project,
+          model: 'm',
+          userPrompt: 'private user instruction',
+        },
+        { ...makeDeps(host), log },
+      );
+      expect(handle.id).toBe('sdk-session-1');
+      const fields = log.debug.mock.calls.map(([, data]) => data);
+      expect(fields).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ side: 'controller', stage: 'mcp-prepare', status: 'ok' }),
+          expect.objectContaining({ side: 'controller', stage: 'personal-config', status: 'ok' }),
+          expect.objectContaining({
+            side: 'controller',
+            stage: 'capability-handshake',
+            status: 'ok',
+          }),
+          expect.objectContaining({
+            side: 'transport',
+            stage: 'session-ready',
+            status: 'ok',
+            sessionRef: 'startup-',
+          }),
+          expect.objectContaining({
+            side: 'host',
+            stage: 'agent-session',
+            status: 'ok',
+            sessionRef: 'startup-',
+          }),
+        ]),
+      );
+      const transport = fields.find((data) => data.side === 'transport' && data.stage === 'total');
+      expect(fields.find(data => data.side === 'host' && data.stage === 'total')?.execServer).toEqual({
+        shortcutEnabled: true, ancestorLevels: 0, connections: 0, answered: 0, forwarded: 0,
+      });
+      expect(fields).toContainEqual(
+        expect.objectContaining({
+          side: 'host',
+          stage: 'total',
+          status: 'ok',
+          runRef: transport.runRef,
+        }),
+      );
+      const serialized = JSON.stringify(log.debug.mock.calls);
+      for (const secret of [
+        project,
+        'private user instruction',
+        Buffer.from('# rules').toString('base64'),
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    } finally {
+      await handle?.close();
+      await host.dispose();
+    }
+  });
+
+  it('attributes failed MCP preparation without changing or logging its original error', async () => {
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const host = createHost();
+    const failure = new Error('private endpoint credential');
+    try {
+      await expect(
+        startRemoteAgentSession(
+          'codex',
+          {
+            sessionId: 'startup-failure-task',
+            workingDir: project,
+            model: 'm',
+          },
+          {
+            ...makeDeps(host),
+            log,
+            prepareMcp: async () => {
+              throw failure;
+            },
+          },
+        ),
+      ).rejects.toBe(failure);
+      const fields = log.debug.mock.calls.map(([, data]) => data);
+      expect(fields).toContainEqual(
+        expect.objectContaining({ stage: 'mcp-prepare', status: 'failed' }),
+      );
+      expect(fields).toContainEqual(
+        expect.objectContaining({ side: 'controller', stage: 'total', status: 'failed' }),
+      );
+      expect(fields.some((data) => data.stage === 'capability-handshake')).toBe(false);
+      expect(JSON.stringify(log.debug.mock.calls)).not.toContain(failure.message);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   // provider-sharing §9：走 HTTP → 执行器 → Session → 真实交互路由，检查取消卡片及迟到授权。
   // 现有往返用例没有挂起确认后取消；最小输入是一次 .env 读取，tier: unit(仅 loopback)。
   it.each(['request', 'stop', 'permission', 'close'])('dismisses a shared-provider credential card on %s cancellation', async (end) => {
@@ -588,8 +698,8 @@ describe('remote agent round trip', () => {
       await reader;
       expect(texts[0]).toBe('read:from-controller');
     }));
-    // 六个任务同时进行，拉取始终最多两个在途，不会挤占设备互联的其它请求。
-    expect(peakPolls).toBeLessThanOrEqual(2);
+    // 六个任务同时进行，拉取最多两个长等待加一个给新任务的补位，不会挤占设备互联的其它请求。
+    expect(peakPolls).toBeLessThanOrEqual(3);
     expect(peakAll).toBeLessThan(12);
     await Promise.all(handles.map((handle) => handle.close({ reason: 'navigation' })));
     expect(host.runCount()).toBe(0);
@@ -613,6 +723,78 @@ describe('remote agent round trip', () => {
     await expect(startRemoteAgentSession('claude-code', { sessionId: 's2', workingDir: project, model: 'm' }, makeDeps(host)))
       .rejects.toMatchObject({ name: 'AgentNotAuthenticatedError', message: 'Claude Code is not signed in' });
     host.dispose();
+  });
+
+  // 2026-10-22 远程供应商调查：慢启动期间任务被删除，控制端不再等了，对方却在几分钟后仍启动 Agent 并跑完
+  // 这一轮(供应商组还会换电脑接着启动)。删除或归档时要让对方结束这个任务，迟到完成的启动也立刻关掉。
+  // #6844 review：旧用例只覆盖远端已开始启动；MCP 准备是更早的异步等待，删除后不得发出 open，已准备资源要释放。
+  it('does not open a remote run after the task was removed while preparing MCP', async () => {
+    const host = createHost();
+    const base = makeDeps(host);
+    let finishPrepare!: () => void;
+    const prepareGate = new Promise<void>((resolve) => { finishPrepare = resolve; });
+    const dispose = vi.fn();
+    const prepareMcp = vi.fn(async () => {
+      await prepareGate;
+      return { servers: new Map(), dispose };
+    });
+    const invoke = vi.fn(base.invoke);
+    const sessionId = randomUUID();
+    const starting = startRemoteAgentSession('claude-code', { sessionId, workingDir: project, model: 'm' }, {
+      ...base, invoke, prepareMcp,
+    });
+    void starting.catch(() => undefined);
+    let handle: AgentSessionHandle | undefined;
+    try {
+      expect(prepareMcp).toHaveBeenCalledTimes(1);
+      cancelPendingRemoteStart(sessionId);
+      finishPrepare();
+      const result = await starting.then((value) => { handle = value; return null; }, (error: unknown) => error);
+      expect(result).toBeInstanceOf(Error);
+      expect(String(result)).toContain('[REMOTE_AGENT_EXPIRED]');
+      expect(invoke).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(host.limitUsage().total).toBe(0);
+    } finally {
+      finishPrepare();
+      await handle?.close({ reason: 'navigation' });
+      host.dispose();
+    }
+  });
+
+  it('ends the run on the other computer when the task is removed while it is still starting', async () => {
+    let finishStart!: () => void;
+    const startGate = new Promise<void>((resolve) => { finishStart = resolve; });
+    const closed = vi.fn();
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        await startGate;
+        const agent = fakeHostedAgent(input);
+        return { ...agent, async close() { closed(); await agent.close(); } };
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const sessionId = randomUUID();
+    const starting = startRemoteAgentSession('claude-code', { sessionId, workingDir: project, model: 'm' }, makeDeps(host));
+    void starting.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(hostInputs).toHaveLength(1));
+      expect(host.limitUsage().total).toBe(1);
+      cancelPendingRemoteStart(sessionId);
+      await expect(starting).rejects.toThrow('[REMOTE_AGENT_EXPIRED]');
+      expect(host.limitUsage().total).toBe(0);
+      finishStart();
+      await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+      expect(hostSends).toEqual([]);
+    } finally {
+      finishStart();
+      host.dispose();
+    }
   });
 
   // #6420: a new remote run carries the task Host clear epoch, independent of source clocks.

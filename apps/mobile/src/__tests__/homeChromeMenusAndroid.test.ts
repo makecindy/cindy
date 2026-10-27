@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
 vi.mock("react-native", () => ({
-  Keyboard: { dismiss: vi.fn() },
   Platform: { OS: "android" },
   NativeModules: {},
   UIManager: { getViewManagerConfig: () => ({}) },
@@ -14,11 +13,11 @@ vi.mock("@/theme", () => ({ useTheme: () => ({ colors: {} }) }));
 vi.mock("@/platform/chrome/AnchoredPullDownMenu", () => ({ AnchoredPullDownMenu: () => null }));
 
 import { usesNativePullDownMenu } from "@/platform/chrome/NativePullDownMenu";
-import { Keyboard } from "react-native";
 import { buildPullDownMenuSections, resolvePullDownSubmenu } from "@/platform/chrome/pullDownMenuModel";
 import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
+  homeScopeCollections,
   openHomeRemoteCollection,
   parseHomeScopePullDownAction,
 } from "@/session/homeChromeMenus";
@@ -141,31 +140,20 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(nativeHeader).toContain('<Stack.Toolbar.Menu');
   });
 
-  it("opens Teammates from both scope menus through the teammate home path", () => {
-    vi.mocked(Keyboard.dismiss).mockClear();
+  it("never offers Teammates as a scope: they are the home's own section", () => {
     const collections = [
       { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
       { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
     ];
-    const actions = buildHomeScopePullDownActions([], "All", collections);
-    const teammateAction = actions.find(action => action.id === "scope.collection:teammates")!;
-    const genericAction = actions.find(action => action.id === "scope.collection:tools")!;
-    const setMode = vi.fn(); const push = vi.fn(); const onModeChange = vi.fn();
-    for (const action of [teammateAction, genericAction]) {
-      const parsed = parseHomeScopePullDownAction(action.id);
-      const collection = parsed.kind === "collection" ? collections.find(item => item.id === parsed.collectionId) : undefined;
-      expect(collection).toBeDefined();
-      openHomeRemoteCollection({ collection: collection!, teammateCollectionId: "teammates", embedded: true, setMode, push, onModeChange, dismissKeyboard: Keyboard.dismiss });
-    }
-    expect(setMode).toHaveBeenCalledExactlyOnceWith("teammates");
-    expect(push).toHaveBeenNthCalledWith(1, "/devices");
-    expect(push).toHaveBeenNthCalledWith(2, expect.objectContaining({ pathname: "/resources/[collectionId]", params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
-    expect(onModeChange).not.toHaveBeenCalled();
-    expect(Keyboard.dismiss).toHaveBeenCalledOnce();
-    onModeChange.mockImplementation(() => expect(Keyboard.dismiss).toHaveBeenCalledTimes(2));
-    openHomeRemoteCollection({ collection: collections[0], teammateCollectionId: "teammates", embedded: false, setMode, push, onModeChange, dismissKeyboard: Keyboard.dismiss });
-    expect(onModeChange).toHaveBeenCalledExactlyOnceWith("teammates");
-    expect(push).toHaveBeenCalledTimes(2);
+    const offered = homeScopeCollections(collections, "teammates");
+    const actions = buildHomeScopePullDownActions([], "All", offered);
+    expect(actions.map(action => action.id)).not.toContain("scope.collection:teammates");
+    const parsed = parseHomeScopePullDownAction("scope.collection:tools");
+    const collection = parsed.kind === "collection" ? offered.find(item => item.id === parsed.collectionId) : undefined;
+    const push = vi.fn();
+    openHomeRemoteCollection(collection!, push);
+    expect(push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: "/resources/[collectionId]",
+      params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
   });
 
   it("routes settings pickers through the pull-down on Android", () => {

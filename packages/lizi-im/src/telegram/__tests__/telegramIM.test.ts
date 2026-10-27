@@ -235,6 +235,44 @@ async function connect(): Promise<void> {
 }
 
 describe('TelegramIM', () => {
+  it.each(['startup', 'poll'])('honors the full rate-limit wait during %s', async (phase) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const method = phase === 'startup' ? 'getMe' : 'getUpdates';
+    const rateLimit = new TelegramApiError(method, 429, 'Too Many Requests', 90);
+    if (phase === 'startup') api.failNextCall(method, rateLimit);
+    try {
+      await im.init();
+      if (phase === 'poll') api.failNextGetUpdates(rateLimit);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(89_999);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(2);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['recover', 'offline', 'dispose', 'invalid-token'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    api.failNextCall('getMe', outcome === 'invalid-token'
+      ? new TelegramApiError('getMe', 401, 'invalid token') : new Error('network down'));
+    try {
+      await im.init();
+      if (outcome === 'offline') await im.goOffline();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.calls.filter((call) => call.method === 'getMe')).toHaveLength(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
@@ -1634,7 +1672,7 @@ describe('TelegramIM', () => {
     try {
       for (const [index, emoji] of PROCESSING_REACTION_POOL.entries()) {
         random.mockReturnValue((index + 0.5) / PROCESSING_REACTION_POOL.length);
-        expect(await im.reactToMessage('111|5', '👨‍💻')).toBe(emoji);
+        expect(await im.reactToMessage('111|5', '🤔')).toBe(emoji);
         const sent = api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!;
         expect(sent.params.reaction).toEqual([{ type: 'emoji', emoji }]);
         expect(sent.params.is_big).toBeUndefined();
@@ -1657,12 +1695,12 @@ describe('TelegramIM', () => {
         'setMessageReaction',
         new TelegramApiError('setMessageReaction', 400, 'REACTION_INVALID'),
       );
-      expect(await im.reactToMessage('111|5', '👨‍💻')).toBe('👨‍💻');
+      expect(await im.reactToMessage('111|5', '🤔')).toBe('🤔');
       expect(
         api.calls
           .filter((call) => call.method === 'setMessageReaction')
           .map((call) => call.params.reaction),
-      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '👨‍💻' }]]);
+      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '🤔' }]]);
     } finally {
       random.mockRestore();
     }
@@ -1680,7 +1718,7 @@ describe('TelegramIM', () => {
     await connect();
     // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
     expect(await im.reactToMessage('111|5', '👍')).toBeNull();
-    expect(await im.reactToMessage('111|5', '👨‍💻')).toBeNull();
+    expect(await im.reactToMessage('111|5', '🤔')).toBeNull();
     expect(await im.reactToMessage('111|5', '👀')).toBeNull();
     expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
     // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂

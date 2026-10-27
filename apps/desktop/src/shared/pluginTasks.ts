@@ -50,6 +50,8 @@ export interface PluginTaskRun {
   inputMessageId: string;
   status: PluginTaskRunStatus;
   acceptedAt: number;
+  /** Opaque Host invocation correlation; never a permission grant. */
+  invocationId?: string;
   acceptedConfig: PluginTaskRoute;
   execution?: { instanceId: string; generation: number };
   /** Host-observed retry input aliases; never supplied by the plugin. */
@@ -105,6 +107,8 @@ export type PluginTaskRequest = (
       expectedRevision: number;
       text: string;
       attachments?: PluginMessageAttachment[];
+      /** Optional Host-issued parent invocation; correlation only, not execution authority. */
+      invocationId?: string;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

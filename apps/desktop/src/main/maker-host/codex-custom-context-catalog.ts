@@ -352,6 +352,10 @@ export async function prepareCodexCustomContextCatalog(params: {
   modelId: string;
   contextWindow: number;
   scanChunkBytes?: number;
+  /** Same-provider model IDs, including aliases absent from native discovery. */
+  modelIds?: readonly string[];
+  /** Same-provider budgets for native previous-model compaction after cold resume. */
+  resolveContextWindow?: (modelId: string) => number | null;
   /** In-memory smart Subagent catalog to preserve in the one-session custom-context Host. */
   baseCatalog?: unknown;
 }): Promise<{ catalogPath: string; extraArgs: string[] }> {
@@ -359,12 +363,23 @@ export async function prepareCodexCustomContextCatalog(params: {
   let base = params.baseCatalog === undefined
     ? bundled
     : normalizeNativeCatalog(parseCodexModelCatalog(JSON.stringify(params.baseCatalog)));
-  base = await catalogWithModels(base, bundled, [params.modelId], params.binaryPath);
+  base = await catalogWithModels(base, bundled, [params.modelId, ...(params.modelIds ?? [])], params.binaryPath);
   const patched = patchCodexModelMaxContextWindow(
     base,
     params.modelId,
     params.contextWindow,
   );
+  // A global model_context_window override also applies to the previous model
+  // reconstructed by Codex. Keep budgets per descriptor so native can see the
+  // old > new relationship and compact with the old model before downshifting.
+  patched.models = patched.models.map((model) => {
+    const window = model.slug === params.modelId
+      ? params.contextWindow : params.resolveContextWindow?.(model.slug);
+    if (typeof window !== 'number' || !Number.isSafeInteger(window) || window <= 0) return model;
+    return { ...model, context_window: window,
+      max_context_window: Math.max(Number(model.max_context_window) || 0, window),
+      auto_compact_token_limit: Math.max(1, Math.floor(window * 0.9)) };
+  });
   const content = `${JSON.stringify(patched)}\n`;
   const catalogPath = await persistCatalog(params.codexHome, content);
   return {

@@ -18,6 +18,8 @@ import {
 import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
 import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import { registerLoadedBotProfilesReader } from './botSessionOwners';
+import { canonicalBotSession } from './botSessionOwners';
+export { canonicalBotSession } from './botSessionOwners';
 import type { BotGender } from '../../../shared/botGender';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
@@ -54,6 +56,8 @@ export interface BotCapabilities {
   toolsets: string[];
   mcpMode: 'inherit' | 'allowlist';
   mcpServers: string[];
+  /** Display names of MCP servers this computer may not have (ids alone mean nothing to a person). */
+  mcpServerNames?: Record<string, string>;
   memory: boolean;
   permissions: 'ask' | 'auto' | 'trusted';
   /** 代输入: may this companion ask the owner to finish an on-screen step. Missing = allowed. */
@@ -152,12 +156,14 @@ export interface BotSessionProjection {
    * Telegram / Feishu group handed to the Bot); see botGroupLane.ts before
    * counting sessions.
    */
-  kind: 'chat' | 'worker' | 'history' | 'group' | 'channel';
+  kind: 'chat' | 'worker' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   updatedAt: number;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel';
+  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   /** Group-lane only: the group whose chat owns this hidden Session. */
   groupId?: string;
+  /** Private-chat topic only: the main-chat message the topic was opened on. */
+  threadRoot?: { rootSessionId: string; rootClientId: string };
   profileVersion?: number;
   runtimeSnapshot?: {
     profileVersion: number;
@@ -220,11 +226,6 @@ export interface BotProfile {
  * Resolve canonical ownership from the projected bot_session_links registry.
  * The top-level canonicalSessionId remains a migration/output mirror only.
  */
-export function canonicalBotSession(bot: BotProfile): BotSessionProjection | undefined {
-  const matches = bot.sessions.filter((session) => session.role === 'canonical');
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
 export function canonicalBotSessionId(bot: BotProfile): string | undefined {
   return canonicalBotSession(bot)?.id;
 }
@@ -557,7 +558,7 @@ function botsApi(): NonNullable<typeof window.electronAPI.localDb>['bots'] | nul
   return window.electronAPI?.localDb?.bots ?? null;
 }
 
-function normalizeDbProfile(value: unknown): BotProfile | null {
+export function normalizeDbProfile(value: unknown): BotProfile | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<BotProfile>;
   if (typeof item.id !== 'string' || typeof item.name !== 'string') return null;
@@ -670,6 +671,9 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
       toolsets,
       mcpMode: normalizeCapabilityMode(rawCapabilities?.mcpMode),
       mcpServers: normalizeStringList(rawCapabilities?.mcpServers),
+      ...(rawCapabilities?.mcpServerNames && typeof rawCapabilities.mcpServerNames === 'object' && !Array.isArray(rawCapabilities.mcpServerNames)
+        ? { mcpServerNames: Object.fromEntries(Object.entries(rawCapabilities.mcpServerNames as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
     },
     canonicalSessionId:
       typeof item.canonicalSessionId === 'string' ? item.canonicalSessionId : undefined,

@@ -1,4 +1,16 @@
-import { RolePillDropdown } from '../../../src/renderer/features/cc-agent/RolePillDropdown';
+import { useEffect } from 'react';
+import {
+  addSessionAttention,
+  clearSessionAttention,
+} from '../../../src/renderer/lib/sessionAttentionStore';
+import {
+  markWorkerAttention,
+  clearWorkerAttention,
+} from '../../../src/renderer/features/cc-agent/lib/workerAttentionStore';
+import {
+  RolePillDropdown,
+  WorkerListToolbar,
+} from '../../../src/renderer/features/cc-agent/RolePillDropdown';
 import type { WorkerInfo } from '../../../src/renderer/features/cc-agent/hooks/useWorkers';
 import { mountPage } from '../../ui-page/harness';
 import {
@@ -68,8 +80,50 @@ function WorkersFixture() {
     </main>
   );
 }
+/** 真实 store 驱动提醒，Worker 运行状态始终 idle，以覆盖原来的漏报。 */
+function AttentionFixture({ kind }: { kind: 'error' | 'awaiting' | 'done' }) {
+  useEffect(() => {
+    if (kind === 'done') markWorkerAttention('reviewer');
+    else addSessionAttention('reviewer', kind);
+    return () => {
+      clearSessionAttention('reviewer', { intent: 'explicit' });
+      clearWorkerAttention('reviewer');
+    };
+  }, [kind]);
+  return (
+    <main className="mx-auto w-full max-w-[480px] space-y-12 p-5">
+      <section data-testid="attention-tabs">
+        <WorkerListToolbar
+          worker={workers[0]}
+          workers={workers}
+          selectedWorkerId="frontend"
+          activeWorkerCount={2}
+          softLimit={5}
+          hardLimit={8}
+          clearAttentionWhenVisible={false}
+          onSwitchFocus={() => {}}
+          onArchiveWorker={() => {}}
+          onOpenCreate={() => {}}
+          onOpenSettings={() => {}}
+        />
+      </section>
+      <section data-testid="attention-dropdown">
+        <RolePillDropdown
+          worker={workers[0]}
+          workers={workers}
+          selectedWorkerId="frontend"
+          activeWorkerCount={2}
+          onSwitchFocus={() => {}}
+          onArchiveWorker={() => {}}
+        />
+      </section>
+    </main>
+  );
+}
 void mountPage({
   host: (ctx) => ({
+    notificationMarkSessionAttention: async () => {},
+    notificationClearSessionAttention: async () => {},
     showOpenDirectoryDialog: async () => {
       if (ctx.case === 'same-repo') return { canceled: false, path: '/projects/cindy' };
       throw new Error('fixture dialog unavailable');
@@ -137,9 +191,28 @@ void mountPage({
         },
       },
     },
+    worktreeBranchSyncStatus: async ({ branch }: { branch: string }) => ({ branch, remote: 'origin', remoteBranch: branch, remoteOnly: false, ahead: 0, behind: 3, dirtyFiles: 2, checkoutPath: inherited.directory }),
+    worktreeSyncBranch: async ({ branch }: { branch: string }) => ({ updated: 3, status: { branch, remote: 'origin', remoteBranch: branch, remoteOnly: false, ahead: 0, behind: 0, dirtyFiles: 2 } }),
     worktreeListBranches: async () => ({
+      remoteDefaultBranch: 'refs/remotes/origin/main',
       branches: ['main', 'feat/worker-project-picker', 'release/v2'],
     }),
   }),
-  render: (ctx) => (ctx.case === 'workers' ? <WorkersFixture /> : <Fixture />),
+  render: (ctx) => {
+    if (ctx.case.startsWith('attention-')) {
+      localStorage.setItem('orca-worker-list-layout-v1', 'tabs');
+      return (
+        <AttentionFixture
+          kind={
+            ctx.case === 'attention-error'
+              ? 'error'
+              : ctx.case === 'attention-awaiting'
+                ? 'awaiting'
+                : 'done'
+          }
+        />
+      );
+    }
+    return ctx.case === 'workers' ? <WorkersFixture /> : <Fixture />;
+  },
 });

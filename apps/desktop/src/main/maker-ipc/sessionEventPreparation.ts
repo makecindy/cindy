@@ -1,4 +1,5 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
+import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
@@ -37,6 +38,7 @@ import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-erro
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
+  type SessionListActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
@@ -63,6 +65,7 @@ interface DismissedInteraction {
 }
 
 export interface PrepareSessionEventDeps {
+  readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn'>;
@@ -150,7 +153,8 @@ export function prepareSessionEvent(
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
-  if (event.type === 'compact_boundary') deps.botCompactRuntimeRefreshCoordinator.noteBoundary(session);
+  // Native compaction keeps its current runtime. Only explicit resource/configuration
+  // changes register a companion refresh; compaction itself is not such a change.
   if (event.type === 'compact_boundary') deps.workingMemoryRefresh?.markCompacted(session.id);
   if (event.type === 'compact_boundary') deps.wireNoteMemory?.reset(session.id);
   if (
@@ -183,7 +187,6 @@ export function prepareSessionEvent(
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
   if (event.type === 'text' && event.standaloneText === true) {
-    if (taskCoordination && !event.runtimeRecovery) return;
     if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
     // Deliver through the existing persisted-row channel only. Sending a text
     // event as well would let older renderers adopt the notice as their active
@@ -224,14 +227,27 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          botPrivateReply: isBotPrivateInput(activeInputId) || (taskCoordination && !event.runtimeRecovery),
+          // Coordination hides the incoming report, not the teammate's reply.
+          botPrivateReply: isBotPrivateInput(activeInputId),
+          // Retain provenance for the existing quiet completion notification policy.
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
+          // The user input this turn answers; companion chats can show it above the reply
+          // (cindy-bots-runtime.md「回复对应的消息」). Hidden trigger inputs are skipped on display.
+          replyToClientId: activeInputId,
           // A group-lane turn is delivered into the group chat; its hidden Session never
           // raises completion/error attention of its own (docs/product-rules/bot-group-chat.md §3).
           ...(groupLaneInputClientId && isBotGroupClientId(groupLaneInputClientId) ? { botGroupLane: true } : {}),
         },
       }
     : event;
+  // Personal IM dispatches directly, outside AgentInputCoordinator. Preserve
+  // its accepted durable input on the reply before the turn lease is released.
+  if (!activeInputId && event.turnScope !== 'background') {
+    const inputClientId = readChannelToolScope({ sessionId: session.id, sessionInstanceId: session.instanceId })?.inputClientId;
+    if (inputClientId) attributedEvent = {
+      ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, replyToClientId: inputClientId },
+    };
+  }
   if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
     const reason =
       !session.remoteHostId && session.agentKind === 'claude-code'
@@ -336,6 +352,11 @@ export function prepareSessionEvent(
         clearPending: typeof event.turnAttemptToken === 'number',
       });
       const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
+      if (!wasInTurn || event.sessionTurnGeneration !== undefined) {
+        deps.sessionListActivityTracker.start(session.id, event.sessionTurnGeneration === undefined
+          ? undefined
+          : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`);
+      }
       if (!wasInTurn && event.source === 'claude-code') {
         const startedProductTurn = deps.productTurnWallClockTracker.start(session.id);
         if (startedProductTurn) deps.productTurnUsageTargetTracker.clear(session.id);
@@ -590,7 +611,6 @@ export function prepareSessionEvent(
     attributedEvent,
     botTaskResultInputIds,
     groupLaneInputClientId,
-    taskCoordination,
     broadcastEvent,
     eventAgentMeta,
     pendingContextSnapshot,

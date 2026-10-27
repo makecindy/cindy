@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, StartSessionOptions } from '../../base-agent.js';
 import { Session } from '../../../session.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -206,6 +206,8 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    fastMode?: boolean;
+    fastModePolicy?: StartSessionOptions['fastModePolicy'];
     model?: string;
     effort?: Effort;
     availableModels?: ModelDescriptor[];
@@ -252,6 +254,8 @@ async function startRewindableSession(
     ...(options.effort ? { effort: options.effort } : {}),
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(options.fastMode !== undefined ? { fastMode: options.fastMode } : {}),
+    ...(options.fastModePolicy ? { fastModePolicy: options.fastModePolicy } : {}),
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
@@ -277,6 +281,28 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('keeps the explicit standard override when a suppressed task restarts after relaxation', async () => {
+    const policy = { isAllowed: () => true, isRequestAllowed: () => false, subscribe: () => () => {} };
+    const { handle } = await startRewindableSession({ fastMode: false, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('starts with explicit standard settings, clamps stale Fast enables and never re-enables on relaxation', async () => {
+    let allowed = false;
+    const policy = { isAllowed: () => allowed, subscribe: () => () => {} };
+    const { handle, firstQuery } = await startRewindableSession({ fastMode: true, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      await handle.setFastMode?.(true);
+      expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({ fastMode: false });
+      expect(handle.getFastMode?.()).toBe(false);
+      allowed = true;
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
   it('does not relabel an in-flight result with a newly saved budget', async () => {
     let budget = 1_000;
     const { handle, firstQuery } = await startRewindableSession({ resolveModelContextLimit: () => budget });

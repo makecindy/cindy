@@ -159,6 +159,7 @@ export async function loginCodexAccount(
   reason?: string;
   firstLogin?: boolean;
   previousIdentity?: string;
+  identityChanged?: boolean;
   rollbackCredentials?: () => boolean;
 }> {
   if (!isCodexAccountProvider(providerId)) throw new Error('Unknown Codex account provider');
@@ -263,7 +264,8 @@ export async function loginCodexAccount(
     accountAuthTransitionStarted = true;
     await retireAccount(providerId);
     if (!current()) return { ok: false, reason: 'login_cancelled' };
-    const files = ['auth.json', 'account.json', 'config.toml', 'disconnected', 'invalidated'];
+    const identityChanged = previous?.principal !== identity.principal;
+    const files = ['auth.json', 'account.json', 'config.toml', 'disconnected', 'invalidated', 'models_cache.json'];
     const before = files.map((file) => {
       try {
         return fs.readFileSync(path.join(home, file));
@@ -280,11 +282,20 @@ export async function loginCodexAccount(
           if (previous === null) fs.rmSync(path.join(home, file), { force: true });
           else fs.writeFileSync(path.join(home, file), previous, { mode: 0o600 });
         });
+        // The replacement's ready event may already have started a quota read.
+        // Invalidate those renderer reads, then resume from the restored identity.
+        if (getActiveAppSession().generation === owner.generation) {
+          broadcastCodexAccountAuthStarted(providerId);
+          broadcastCodexAccountAuthReady(providerId);
+        }
         return true;
       } catch {
         return false;
       }
     };
+    // Invalidation can fail (e.g. Windows delete sharing). Do it before changing
+    // credentials so failure leaves the original identity and grant intact.
+    if (identityChanged) fs.rmSync(path.join(home, 'models_cache.json'), { force: true });
     // Synchronous commit after the final ownership check; no other request can interleave.
     fs.writeFileSync(path.join(home, 'account.json'), JSON.stringify(identity), { mode: 0o600 });
     fs.writeFileSync(path.join(home, 'config.toml'), 'cli_auth_credentials_store = "file"\n', {
@@ -295,7 +306,7 @@ export async function loginCodexAccount(
     fs.rmSync(path.join(home, 'invalidated'), { force: true });
     broadcastCodexAccountAuthReady(providerId);
     accountAuthReadySent = true;
-    return { ok: true, firstLogin: previous === null, previousIdentity: previous?.label, rollbackCredentials };
+    return { ok: true, firstLogin: previous === null, previousIdentity: previous?.label, identityChanged, rollbackCredentials };
   } finally {
     onBrowserUrl?.(null);
     if (logins.get(home) === operation) logins.delete(home);

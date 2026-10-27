@@ -72,6 +72,13 @@ export type LoginHandoffPhase =
 export type LoginHandoffBranch = 'unauthenticated' | 'authenticated' | null;
 export type LoginBrandLayout = 'splash' | 'login';
 
+export interface LoginHandoffStartSignals {
+  brandAssetsReady: boolean;
+  splashExited: boolean;
+  splashExitCompleted: boolean;
+  loginPanelMounted: boolean;
+}
+
 export interface LoginHandoffContextValue {
   phase: LoginHandoffPhase;
   branch: LoginHandoffBranch;
@@ -92,6 +99,8 @@ export interface LoginHandoffContextValue {
   panelRevealed: boolean;
   /** Slogan 已进入可见段(slogan/done)——必须最后出现。 */
   sloganRevealed: boolean;
+  /** 推进锚收到情况,只读,供开屏卡住诊断判断停在哪一步。 */
+  startSignals: LoginHandoffStartSignals;
   reportBrandAssetsReady: () => void;
   /** Splash 开始淡出；用于启动 handoff 时序，但不代表布局可以切换。 */
   reportSplashExited: () => void;
@@ -118,6 +127,12 @@ const FALLBACK_VALUE: LoginHandoffContextValue = Object.freeze({
   brandExiting: false,
   panelRevealed: true,
   sloganRevealed: true,
+  startSignals: Object.freeze({
+    brandAssetsReady: true,
+    splashExited: true,
+    splashExitCompleted: true,
+    loginPanelMounted: false,
+  }),
   reportBrandAssetsReady: () => {},
   reportSplashExited: () => {},
   reportSplashExitCompleted: () => {},
@@ -298,6 +313,12 @@ export function LoginHandoffProvider({
       brandExiting: phase === 'brand-exit',
       panelRevealed: phase === 'panel' || phase === 'slogan' || phase === 'done',
       sloganRevealed: phase === 'slogan' || phase === 'done',
+      startSignals: {
+        brandAssetsReady: brandReady,
+        splashExited,
+        splashExitCompleted,
+        loginPanelMounted: panelMounted,
+      },
       reportBrandAssetsReady,
       reportSplashExited,
       reportSplashExitCompleted,
@@ -310,6 +331,7 @@ export function LoginHandoffProvider({
     branch,
     panelMounted,
     coverHeld,
+    brandReady,
     splashExited,
     splashExitCompleted,
     panelBottomReserve,

@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
@@ -214,6 +215,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     status,
     agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
+    lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
@@ -226,6 +228,9 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   }
   const totalMoney = normalizeRemoteMoney(item.totalMoney);
   if (totalMoney) session.totalMoney = totalMoney;
+  // Project aliases distinguish a host's local directory from its SSH workspaces.
+  // Keep that identity in the cold-start list too; otherwise an SSH row can borrow a local alias.
+  if (typeof item.remoteHostId === 'string') session.remoteHostId = item.remoteHostId;
   if (typeof item.source === 'string') session.source = item.source;
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
@@ -240,7 +245,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
 }
 
 function lastActivityTime(session: RemoteSession): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function truncateText(value: string): string {

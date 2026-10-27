@@ -1289,8 +1289,11 @@ describe('sentence playback', () => {
     f.controller.end();
   });
 
-  it('prefetches only one segment and drops pending audio on a committed interruption', async () => {
+  // Unit: encoded results must retain the same prefetch/interruption contract;
+  // the old PCM-only fixtures could not detect a dropped MP3 format at playback.
+  it.each(['pcm', 'mp3'] as const)('prefetches only one %s segment and drops pending audio on a committed interruption', async format => {
     const f = fixture();
+    if (format === 'mp3') f.api.speak.mockResolvedValue({ format: 'mp3', data: new Uint8Array([1]).buffer });
     let finish!: () => void;
     f.player.play.mockImplementationOnce(async (_read, _rate, started) => {
       started?.();
@@ -1304,6 +1307,8 @@ describe('sentence playback', () => {
     await Promise.resolve();
     f.controller.updateMessages([user(), streamingReply('第一句话。')]);
     await vi.waitFor(() => expect(f.player.play).toHaveBeenCalledOnce());
+    expect(f.player.play.mock.calls[0][1]).toEqual(format === 'mp3'
+      ? { format: 'mp3', data: new Uint8Array([1]).buffer } : 24000);
     f.controller.updateMessages([user(), streamingReply('第一句话。第二句话。')]);
     f.controller.updateMessages([user(), streamingReply('第一句话。第二句话。第三句话。')]);
     expect(f.api.speak.mock.calls.map(([value]) => value.text)).toEqual([
@@ -1321,11 +1326,12 @@ describe('sentence playback', () => {
     f.controller.end();
   });
 
-  it('plays prepared sentences in order, pauses lookahead, and listens only after the final tail drains', async () => {
+  it.each(['pcm', 'mp3'] as const)('plays prepared %s sentences in order, pauses lookahead, and listens only after the final tail drains', async format => {
     const f = fixture();
+    if (format === 'mp3') f.api.speak.mockResolvedValue({ format: 'mp3', data: new Uint8Array([1]).buffer });
     const finishes: Array<() => void> = [];
-    f.player.play.mockImplementation(async (read, _rate, started) => {
-      await read();
+    f.player.play.mockImplementation(async (read, audio, started) => {
+      if (typeof audio === 'number') await read();
       started?.();
       await new Promise<void>((resolve) => finishes.push(resolve));
     });
@@ -1351,7 +1357,7 @@ describe('sentence playback', () => {
     finishes[1]();
     await vi.waitFor(() => expect(finishes).toHaveLength(3));
     expect(f.api.readSpeech.mock.calls.map((call) => call[1])).toEqual(
-      f.api.speak.mock.calls.map(([request]) => request.requestId),
+      format === 'mp3' ? [] : f.api.speak.mock.calls.map(([request]) => request.requestId),
     );
     finishes[2]();
     await vi.waitFor(() => expect(f.controller.getSnapshot().phase).toBe('listening'));
@@ -1802,29 +1808,48 @@ describe('companion voice loop', () => {
   });
 });
 
-it('keeps the ordinary final text and stops voice on a BYOK synthesis failure without fallback or resend', async () => {
-  const f = fixture();
-  f.api.speak.mockRejectedValueOnce(new Error('upstream error'));
-  await f.controller.start({
-    ...selection,
-    providerId: 'byok',
-    agent: 'codex',
-    protocol: 'openai',
-  });
-  f.utterance();
-  await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
-  await Promise.resolve();
-  const messages = [user(), reply()];
-  f.controller.updateMessages(messages);
-  await vi.waitFor(() => expect(f.controller.getSnapshot().phase).toBe('error'));
-  expect(f.controller.getSnapshot().error).toBe('speech');
-  expect(f.microphone.stop).toHaveBeenCalledOnce();
-  expect(messages[1]).toEqual(reply());
-  expect(f.api.start).toHaveBeenCalledOnce();
-  expect(f.api.speak).toHaveBeenCalledOnce();
-  expect(f.send).toHaveBeenCalledOnce();
-  f.controller.end();
-});
+// Oct 21 TTS stall: the existing failure case did not distinguish preparation
+// and audio-read timeouts. Unit: real controller/queue, serialized IPC failures.
+it.each([
+  { stage: 'prepare', code: 'PRECONDITION_FAILED', error: 'speech' },
+  { stage: 'prepare', code: 'VOICE_SPEECH_TIMEOUT', error: 'speechTimeout' },
+  { stage: 'read', code: 'VOICE_SPEECH_TIMEOUT', error: 'speechTimeout' },
+] as const)(
+  'retains text and reports $code during $stage without fallback or resend',
+  async ({ stage, code, error }) => {
+    const f = fixture();
+    const failure = new Error(
+      `Error invoking remote method 'voice-conversation:${stage === 'prepare' ? 'speak' : 'read-speech'}': Error: [${code}] Safe failure.`,
+    );
+    if (stage === 'prepare') f.api.speak.mockRejectedValueOnce(failure);
+    else {
+      f.api.readSpeech.mockRejectedValueOnce(failure);
+      f.player.play.mockImplementationOnce(async (read, _rate, onStarted) => {
+        onStarted?.();
+        await read();
+      });
+    }
+    await f.controller.start({
+      ...selection,
+      providerId: 'byok',
+      agent: 'codex',
+      protocol: 'openai',
+    });
+    f.utterance();
+    await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    const messages = [user(), reply()];
+    f.controller.updateMessages(messages);
+    await vi.waitFor(() => expect(f.controller.getSnapshot().phase).toBe('error'));
+    expect(f.controller.getSnapshot().error).toBe(error);
+    expect(f.microphone.stop).toHaveBeenCalledOnce();
+    expect(messages[1]).toEqual(reply());
+    expect(f.api.start).toHaveBeenCalledOnce();
+    expect(f.api.speak).toHaveBeenCalledOnce();
+    expect(f.send).toHaveBeenCalledOnce();
+    f.controller.end();
+  },
+);
 
 describe('microphone-only mute', () => {
   it('keeps the same call and spoken reply running, and rejects stale input after unmute', async () => {

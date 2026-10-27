@@ -4,18 +4,20 @@ const h = vi.hoisted(() => ({
   verdict: vi.fn(),
   provider: vi.fn<(sessionId: string) => string | null>(),
   ensureLlama: vi.fn(async () => undefined),
+  preparePermission: vi.fn(async () => () => {}),
 }));
 
 vi.mock('../../maker-host/model-route-guard-live.js', () => ({ verdictForModelRoute: h.verdict }));
 vi.mock('../../maker-host/session-provider-store.js', () => ({ getSessionProvider: h.provider }));
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: h.ensureLlama }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ debug: vi.fn() }) }));
+vi.mock('../botPermissionDispatch.js', () => ({ prepareBotPermissionDispatch: h.preparePermission }));
 
 import type { Session } from '@cindy/maker-core';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 
-type Observer = { beforeProviderStart: (turnGeneration: number) => Promise<void> };
+type Observer = { beforeProviderStart: (turnGeneration: number) => Promise<void>; onDispatching?: () => void };
 
 function setup(fields: { remoteHostId?: string | null; agentDeviceId?: string | null }) {
   let observer: Observer | null = null;
@@ -38,7 +40,7 @@ function setup(fields: { remoteHostId?: string | null; agentDeviceId?: string | 
     log: { debug: vi.fn() },
   };
   installSessionTurnObserver(deps, session);
-  return { deps, start: () => observer!.beforeProviderStart(1) };
+  return { deps, start: () => observer!.beforeProviderStart(1), dispatch: () => observer!.onDispatching?.() };
 }
 
 describe('installSessionTurnObserver provider precheck', () => {
@@ -46,8 +48,22 @@ describe('installSessionTurnObserver provider precheck', () => {
     h.verdict.mockReset();
     h.provider.mockReset();
     h.ensureLlama.mockClear();
+    h.preparePermission.mockReset().mockResolvedValue(() => {});
     h.verdict.mockResolvedValue({ kind: 'reject', reason: 'explicit-source-unavailable' });
     h.provider.mockReturnValue('magpie-2e446a11');
+  });
+
+  // The common observer covers direct Desktop, IM and internal Session.send;
+  // preparation success cannot suppress its final permission authorization.
+  it('checks captured Bot permissions again at the synchronous provider boundary', async () => {
+    let current = true;
+    h.preparePermission.mockResolvedValue(() => { if (!current) throw new Error('permission changed'); });
+    h.verdict.mockResolvedValue({ kind: 'pass' });
+    const { start, dispatch } = setup({});
+    await start();
+    expect(() => dispatch()).not.toThrow();
+    current = false;
+    expect(() => dispatch()).toThrow('permission changed');
   });
 
   it('still rejects a local session whose explicit source is gone from this computer', async () => {

@@ -182,7 +182,7 @@ export function shouldPreserveWaitingContinuationOnlyAutoResume(input: {
   return input.hasLiveSchedule || input.hasQueuedAutoResume;
 }
 
-/** Keep only the exact fallback callback across its requested runtime rebuild. */
+/** Keep only the exact fallback callback across a runtime rebuild or cross-harness switch. */
 export function shouldPreserveRuntimeFallbackAutoResume(input: {
   closeReason: unknown;
   leasedAttemptToken: number | undefined;
@@ -192,7 +192,7 @@ export function shouldPreserveRuntimeFallbackAutoResume(input: {
   isAutoResumePending: boolean;
   hasLiveSchedule: boolean;
 }): boolean {
-  return (input.closeReason === 'requested' || input.closeReason === 'runtime-refresh')
+  return (input.closeReason === 'requested' || input.closeReason === 'runtime-refresh' || input.closeReason === 'agent-switch')
     && input.leasedAttemptToken !== undefined
     && input.guardIsCurrentAttempt && input.bookIsCurrentAttempt
     && input.coordinatorAttemptToken === input.leasedAttemptToken

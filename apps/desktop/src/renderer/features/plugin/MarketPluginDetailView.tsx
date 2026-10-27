@@ -1,8 +1,8 @@
+import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-
 
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
@@ -57,6 +57,11 @@ export function MarketPluginDetailView({
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
+        actions={
+          detail.sourceType === 'server' && detail.scope === 'public' ? (
+            <PluginShareButton pluginId={detail.pluginId} />
+          ) : undefined
+        }
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <header>

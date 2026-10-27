@@ -1,6 +1,8 @@
 import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION, type RemoteActionDescriptor, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
+import { isBotDeliverableFile } from '@cindy/maker-shared/bot-deliverable';
+import type { BotDelegationListResult } from '@cindy/maker-shared/botDelegation';
 
 export type ProfileValues = Record<string, string | boolean>;
 export interface ProfilePanel {
@@ -135,6 +137,31 @@ export function companionArtifactRows(value: unknown, botId: string): Array<{ id
     return files.length ? [{ id: row.id, title: string(row.title, 2000) ? row.title : '', childSessionId: string(row.childSessionId, 160) ? row.childSessionId : null, files }] : [];
   });
 }
+const GLANCE_OUTPUT_LIMIT = 30;
+export interface GlanceOutput { key: string; name: string; childSessionId: string; taskTitle: string; at: number }
+
+/** Finished deliverables of this teammate's own delegated tasks, newest first (same rule as Desktop). */
+export function companionGlanceOutputs(value: BotDelegationListResult | null | undefined, botId: string): GlanceOutput[] {
+  if (!value?.ok) return [];
+  const files: GlanceOutput[] = [];
+  for (const delegation of value.delegations) {
+    if (delegation.requestingBotId !== botId || delegation.status !== 'completed' || !delegation.childSessionId) continue;
+    for (const artifact of delegation.artifacts ?? []) {
+      if (artifact.status === 'deleted') continue;
+      const name = artifact.path.split(/[\\/]/).at(-1) || artifact.path;
+      if (!isBotDeliverableFile({ path: artifact.path, name })) continue;
+      files.push({
+        key: `${delegation.id}:${artifact.path}`,
+        name,
+        childSessionId: delegation.childSessionId,
+        taskTitle: delegation.title,
+        at: delegation.completedAt ?? delegation.updatedAt,
+      });
+    }
+  }
+  return files.sort((a, b) => b.at - a.at).slice(0, GLANCE_OUTPUT_LIMIT);
+}
+
 export function profileFormDirty(panel: ProfilePanel | undefined, values: ProfileValues): boolean {
   return !!panel?.action?.fields?.some(field => (values[field.id] ?? '') !== (panel.values[field.id] ?? ''));
 }

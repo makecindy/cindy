@@ -1,3 +1,4 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
@@ -82,7 +83,7 @@ export default function CompanionDirectMessages() {
           {!ownSide ? avatar : null}
           <View style={[styles.column, ownSide ? styles.columnOwn : styles.columnPeer]}>
             <Text style={styles.meta}>{`${sender.name} · ${formatBotMessageGroupTime(message.createdAt, i18n.language)}`}</Text>
-            <Text selectable style={[styles.bubble, ownSide ? styles.bubbleOwn : styles.bubblePeer]}>{message.content}</Text>
+            <Text selectable style={[styles.bubble, ownSide ? styles.bubbleOwn : styles.bubblePeer]}>{forwardedRequestDisplayText(message.content)}</Text>
           </View>
           {ownSide ? avatar : null}
         </View>;

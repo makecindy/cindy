@@ -78,14 +78,14 @@ import {
   probeMetroOwnership,
 } from './sim-metro.mjs';
 
-import { readSimEnvironment } from './lib/sim-environment.mjs';
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
 import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity, resolveSimulatorDeviceSets, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs } from './lib/sim-whoami.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const iosDir = join(mobileDir, 'ios');
 const buildDir = join(iosDir, 'build');
-const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const clean = passthrough.includes('--clean');
 const forceBuild = passthrough.includes('--force-build');
 const buildOnly = passthrough.includes('--build-only');
@@ -191,7 +191,8 @@ async function ensureMetroOwnershipBeforeLaunch(packageName) {
   });
   if (verdict.healthy) return true;
   console.error(`Native package installed (${packageName}); launch blocked: ${verdict.code}.`);
-  console.error(`Run pnpm mobile:sim:start -- --region=${region}, then mobile:sim:whoami with the same region.`);
+  const mock = readSimEnvironment(mobileDir, buildEnv).uiMock ? ' --mock' : '';
+  console.error(`Run pnpm mobile:sim:start -- --region=${region}${mock}, then mobile:sim:whoami with the same options.`);
   process.exitCode = 1;
   return false;
 }

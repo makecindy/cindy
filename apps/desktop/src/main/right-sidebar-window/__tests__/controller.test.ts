@@ -175,6 +175,31 @@ const ctx = { sessionId: 's1', workdir: '/w', remoteHostId: null, available: tru
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
+// PR #6939 discussion_r4357929340：点击来源必须跨即刻投递/切任务排队保持一致。
+// unit：真实 routeCommand，旧上下文 → 排队 → 目标上下文；原覆盖没有插件来源字段。
+describe('plugin task focus intent', () => {
+  it.each([true, false, undefined])('preserves explicit intent through queued adoption: %s', async (userInitiated) => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    // 即使 command 自报 true，也只能沿用信封里显式给出的来源。
+    const command = { type: 'open-plugin-task' as const, sessionId: 's1', instanceId: 'sim', userInitiated: true };
+    await expect(h.controller.routeCommand({ command, allowOpen: true, userInitiated })).resolves.toBe('queued');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    h.controller.setContext(ctx);
+    const expected = [
+      { channel: 'cmd-channel', payload: { ...command, userInitiated: userInitiated === true } },
+    ];
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual(expected);
+    // 同一来源在宿主已就绪的直接投递路径不能得到另一套语义。
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand({ command, allowOpen: true, userInitiated })).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual(expected);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // prewarm: 后台预热
 // ═══════════════════════════════════════════════════════════════════════

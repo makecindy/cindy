@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
+import { isValidPluginResourceId } from '@cindy/plugin-protocol';
 
-import { openMainWindowSession, setDeepLinkMainWindow } from '../../main/deepLink';
+import { handleIncomingDeepLink, openMainWindowRemoteControlSettings, openMainWindowSession, setDeepLinkMainWindow, takePendingDeepLink } from '../../main/deepLink';
 
 vi.mock('electron', () => ({ app: { focus: vi.fn() }, BrowserWindow: class {} }));
 vi.mock('../../main/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn() }) }));
@@ -21,12 +22,13 @@ const compiled = ts.transpileModule(`const bridge = {${source.slice(start, end)}
 
 function connect() {
   let listener: ((payload: unknown) => void) | undefined;
-  const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', `${compiled}; return bridge;`)(
+  const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', 'isValidPluginResourceId', `${compiled}; return bridge;`)(
     (callback: (payload: unknown) => void) => {
       listener = callback;
       return () => { listener = undefined; };
     },
     () => false,
+    isValidPluginResourceId,
   ) as { onDeepLinkNavigate(callback: (payload: unknown) => void): () => void };
   const received: unknown[] = [];
   bridge.onDeepLinkNavigate((payload) => received.push(payload));
@@ -46,7 +48,37 @@ function connect() {
 
 afterEach(() => setDeepLinkMainWindow(null));
 
+// Unit regression: a menu-bar click focused the app but preload silently dropped
+// the new settings tab. Exercise the real main dispatch and production bridge.
+it('delivers remote-control settings through the live bridge and cold-start buffer', () => {
+  const { received, deliver } = connect();
+  openMainWindowRemoteControlSettings();
+  const expected = { type: 'settings', tab: 'remote-control' };
+  expect(received).toEqual([expected]);
+  deliver({ type: 'settings', tab: 'unknown' });
+  deliver({ type: 'settings', tab: 'remote-control', connect: 'codex' });
+  expect(received).toEqual([expected]);
+  setDeepLinkMainWindow(null);
+  openMainWindowRemoteControlSettings();
+  expect(takePendingDeepLink()).toEqual(expected);
+  expect(takePendingDeepLink()).toBeNull();
+});
+
 describe('Agent Island click id across the preload deep-link bridge', () => {
+  // External links must keep their owning computer through both the live bridge
+  // and the cold-start buffer; otherwise a same-id local task wins.
+  it('preserves a remote task and message through live delivery and cold start', () => {
+    const href = 'cindy://session/same?device=other-mac&message=m-1';
+    const expected = { type: 'session', id: 'same', deviceId: 'other-mac', messageClientId: 'm-1' };
+    const { received } = connect();
+    handleIncomingDeepLink(href, 'open-url');
+    expect(received).toEqual([expected]);
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(href, 'argv');
+    expect(takePendingDeepLink()).toEqual(expected);
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
   it('carries the click id main put on a loaded main window session entry', () => {
     const { received } = connect();
     openMainWindowSession('lane-1', { islandEntryId: '42' });
@@ -69,5 +101,45 @@ describe('Agent Island click id across the preload deep-link bridge', () => {
       { type: 'session', id: 's' },
       { type: 'session', id: 's', messageClientId: 'm-1', islandEntryId: '9' },
     ]);
+  });
+});
+
+// PR #7240: the new plugin intent was parsed by main but dropped by preload,
+// and a loaded login page lost it before MainLayout mounted. The existing
+// session cases cover neither branch. Unit inputs use a public resource ID,
+// a loaded window, and the real one-shot main queue; no Electron is started.
+describe('public plugin entry through the production bridge', () => {
+  const pluginId = 'c123456789012345678901234';
+  const href = `cindy://plugin/${pluginId}`;
+  const expected = { type: 'plugin', pluginId };
+
+  it('delivers a live wake-up and retains the intent for exactly one consumer', () => {
+    const { received } = connect();
+    handleIncomingDeepLink(href, 'open-url');
+    expect(received).toEqual([expected]);
+    expect(takePendingDeepLink()).toEqual(expected);
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  it('retains the last plugin during login and cold start until the mount pull', () => {
+    connect();
+    handleIncomingDeepLink('cindy://plugin/c223456789012345678901234', 'open-url');
+    handleIncomingDeepLink(href, 'open-url');
+    expect(takePendingDeepLink()).toEqual(expected);
+    expect(takePendingDeepLink()).toBeNull();
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(href, 'argv');
+    expect(takePendingDeepLink()).toEqual(expected);
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  it('drops invalid plugin identifiers and projects only the navigation fields', () => {
+    const { received, deliver } = connect();
+    for (const pluginId of [undefined, null, 7, '', 'cindy-github', '../file', 'c123?install=true']) {
+      deliver({ type: 'plugin', pluginId });
+    }
+    expect(received).toEqual([]);
+    deliver({ ...expected, install: true, url: 'https://untrusted.example.test' });
+    expect(received).toEqual([expected]);
   });
 });

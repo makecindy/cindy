@@ -40,7 +40,7 @@ describe('retired feature page', () => {
     render(
       <RetiredFeatureDetail
         {...props()}
-        replacement={{ manifest: { id: 'baguette-simulator' }, enabled } as InstalledGhost}
+        replacement={{ manifest: { id: 'cindy-simulator' }, enabled } as InstalledGhost}
       />,
     );
     expect(

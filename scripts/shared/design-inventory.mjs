@@ -575,6 +575,7 @@ export function catalogSurfaces() {
         '/bots/groups/:groupId',
         '/bots/remote/:deviceId/:botId',
         '/bots/remote/:deviceId/:botId/history/:sessionId',
+        '/bots/remote/:deviceId/:botId/session/:sessionId',
       ],
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
@@ -588,6 +589,7 @@ export function catalogSurfaces() {
         '/bots/groups/:groupId': 'BotGroupChatView',
         '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
         '/bots/remote/:deviceId/:botId/history/:sessionId': 'BotHistorySessionView',
+        '/bots/remote/:deviceId/:botId/session/:sessionId': 'RemoteBotSessionView',
       },
     },
     {

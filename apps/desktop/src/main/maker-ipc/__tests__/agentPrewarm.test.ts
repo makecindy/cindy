@@ -12,9 +12,11 @@ function harness(maxWarm = 2) {
   let nextTimer = 0;
   const start = vi.fn<AgentPrewarmDeps['start']>(async () => true);
   const closeIfUnused = vi.fn<AgentPrewarmDeps['closeIfUnused']>(async () => {});
+  const closedRuntimes = new Set<string>();
   const prewarmer = createAgentPrewarmer(
     {
       start,
+      isLive: (sessionId) => !closedRuntimes.has(sessionId),
       closeIfUnused,
       setTimer: (fn) => {
         const id = ++nextTimer;
@@ -31,7 +33,7 @@ function harness(maxWarm = 2) {
     timers.clear();
     for (const fn of pending) fn();
   };
-  return { prewarmer, start, closeIfUnused, fireAll, timers };
+  return { prewarmer, start, closeIfUnused, fireAll, timers, closedRuntimes };
 }
 
 describe('Agent prewarm lifecycle', () => {
@@ -54,6 +56,20 @@ describe('Agent prewarm lifecycle', () => {
     expect(start).toHaveBeenCalledTimes(2);
     expect(closeIfUnused.mock.calls.map(([id]) => id)).toEqual(['idle']);
     expect(prewarmer.warmSessionIds()).toEqual([]);
+  });
+
+  it('starts again when the warm runtime was closed by a settings change, without closing anything', async () => {
+    const { prewarmer, start, closeIfUnused, closedRuntimes } = harness();
+    await prewarmer.request('a', {});
+    // e.g. the user switched model: the runtime switch closed the old runtime.
+    closedRuntimes.add('a');
+    const next = prewarmer.request('a', { model: 'new' });
+    closedRuntimes.delete('a');
+    await expect(next).resolves.toBe('started');
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start.mock.calls[1]).toEqual(['a', { model: 'new' }]);
+    expect(closeIfUnused).not.toHaveBeenCalled();
+    expect(prewarmer.warmSessionIds()).toEqual(['a']);
   });
 
   it('does not track a task whose runtime was not started by prewarm', async () => {
@@ -103,13 +119,11 @@ describe('Agent prewarm lifecycle', () => {
       remoteHostId: null,
       agentDeviceId: null,
       orcaRole: null,
-      sdkSessionId: 'native-1',
       ...patch,
     });
 
-    it('prewarms only a task the user has already sent in, so typing alone never runs a directory\'s hooks', () => {
+    it('prewarms an ordinary local task whether or not it has been sent in yet', () => {
       expect(isAgentPrewarmEligible(row())).toBe(true);
-      expect(isAgentPrewarmEligible(row({ sdkSessionId: null }))).toBe(false);
     });
 
     it.each([

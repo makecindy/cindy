@@ -29,6 +29,6 @@ describe('RemoteAgentRunClient.close', () => {
       message: expect.stringMatching(/DEVICE_LINK_NOT_CONNECTED/),
     });
     expect(client.isClosed).toBe(true);
-    expect(seen.onClosed).toHaveBeenCalledWith('closed', undefined);
+    expect(seen.onClosed).toHaveBeenCalledWith('closed', undefined, false);
   });
 });

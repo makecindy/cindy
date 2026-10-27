@@ -28,7 +28,7 @@ vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (.
 vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: (p: any) => { h.inputs[p.accessibilityLabel] = p; return null; } }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: (p: any) => { h.buttons[p.action.label] = p.action; return null; } }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
-vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, usesNativePullDownMenu: () => false }));
+vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, NativeSwitch: () => null, usesNativePullDownMenu: () => false }));
 vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (p: any) => { if (p.testID) h.pressables[p.testID] = p; return null; } }));
 vi.mock('@/session/CompanionSheet', async () => {
   const { createElement: el } = await import('react');

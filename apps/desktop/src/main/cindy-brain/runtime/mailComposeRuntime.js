@@ -183,6 +183,7 @@ var cindyMail = (function () {
               adapter.draftStorage === "server"
                 ? "正在同步到 " + provider + "…"
                 : "正在保存本地草稿…",
+            waiting: "修改已保留，等待同步",
             sent: "邮件已发送",
             busy: "正在处理…",
             failed: "未能完成，请先核对邮箱中的草稿和已发送邮件。",
@@ -226,6 +227,7 @@ var cindyMail = (function () {
               adapter.draftStorage === "server"
                 ? "Syncing to " + provider + "…"
                 : "Saving local draft…",
+            waiting: "Changes retained, waiting to sync",
             sent: "Message sent",
             busy: "Working…",
             failed:
@@ -316,6 +318,15 @@ var cindyMail = (function () {
       return result;
     }
     function mergeFields(base, local, remote) {
+      // The browser edits a full document; saving extracts an outgoing fragment.
+      // Compare all three revisions in that same representation, so our own
+      // formatting is not mistaken for a concurrent replacement of the body.
+      // Keep authored text unchanged and leave validation to the save boundary.
+      if (adapter.richText) {
+        if (base) base = formatMailFields(base, [], 'text').fields;
+        local = formatMailFields(local, [], 'text').fields;
+        remote = formatMailFields(remote, [], 'text').fields;
+      }
       const fields = { ...remote }, conflicts = [];
       for (const name of Object.keys(remote)) {
         const l = local[name] ?? '', r = remote[name], b = base?.[name];
@@ -391,7 +402,7 @@ var cindyMail = (function () {
       if (formatted) {
         edits = formatted.fields;
         if (formatted.issue) note = copy[formatted.issue];
-        else if (!sameFields(edits, originalValues)) note ||= copy.syncing;
+        else if (!sameFields(edits, originalValues)) note ||= copy.waiting;
       }
       var fields = ["to", "cc", "bcc", "subject", "body", "quote"].map(
         function (name) {
@@ -434,7 +445,7 @@ var cindyMail = (function () {
         from: readBack.headers.from || account.accountEmail, fields,
         attachments: readBack.attachments.map(a => a.filename || a.mimeType || ""),
         ...(readBack.images ? { images: readBack.images } : {}),
-        state: unconfirmed ? "unconfirmed" : note === copy.syncing ? "syncing" : note ? "error" : "draft",
+        state: unconfirmed ? "unconfirmed" : note === copy.syncing ? "syncing" : note && note !== copy.waiting ? "error" : "draft",
         status: note || copy.saved, sendLabel: copy.send, fromLabel: copy.from,
         ...(typeof adapter.deleteDraft === "function" ? { deleteLabel: copy.delete } : {}) };
       if (!renderOnly)
@@ -485,7 +496,7 @@ var cindyMail = (function () {
         ...(message.sourceCallId ? { sourceCallId: message.sourceCallId } : {}), draft });
       const created = !renderOnly && mailEdits.get(key);
       if (presented?.ok && created && !created.error && created.revision !== created.savedRevision)
-        created.timer = setTimeout(() => runMailDraft(key, false).catch(() => mailStatus(message.callId, copy.failed)), 1100);
+        scheduleMailSave(key, message.callId, copy.failed);
       return presented?.ok === true;
     }
     async function continueMailTask(message, record, copy, key) {
@@ -527,7 +538,14 @@ var cindyMail = (function () {
     }
     // Both UI sends and Agent draft sends enter this same per-draft operation.
     // Change events capture text immediately; only adapter writes are debounced.
-    async function runMailDraft(key, send, sourceCallId) {
+    function scheduleMailSave(key, callId, failureMessage) {
+      const edit = mailEdits.get(key);
+      clearTimeout(edit.timer);
+      const timer = setTimeout(() => runMailDraft(key, false, undefined, timer)
+        .catch(() => mailStatus(callId, failureMessage)), 2000);
+      edit.timer = timer;
+    }
+    async function runMailDraft(key, send, sourceCallId, autosaveTimer) {
       return navigator.locks.request("mail-compose:" + key, async function () {
         var record = (await mailRecords())[key];
         if (!record)
@@ -569,6 +587,10 @@ var cindyMail = (function () {
             execution: "not_executed",
             message: "请重新读取草稿后再操作。",
           };
+        // A timer may have waited behind another save while the user resumed
+        // typing. Only the current debounce may start an automatic write.
+        if (autosaveTimer !== undefined && edit.timer !== autosaveTimer)
+          return { ok: true, deferred: true };
         clearTimeout(edit.timer);
         edit.timer = undefined;
         if (edit.error) return edit.error;
@@ -607,6 +629,9 @@ var cindyMail = (function () {
               true,
               sourceCallId,
             );
+          } else {
+            await showMailDraft({ callId: record.callId, sourceCallId }, selected,
+              edit.readBack, (await mailCopy()).syncing, key, edit.fields, true);
           }
           var response = undefined;
           try {
@@ -749,12 +774,15 @@ var cindyMail = (function () {
               return edit.error;
             }
           }
+          // Typing during an automatic save starts a fresh idle period. An
+          // explicit read/send still flushes all edits through the existing loop.
+          if (autosaveTimer !== undefined && edit.timer) break;
         } while (send || edit.savedRevision !== edit.revision);
         await showMailDraft(
           { callId: record.callId, sourceCallId: sourceCallId },
           selected,
           edit.readBack,
-          undefined,
+          edit.savedRevision !== edit.revision ? (await mailCopy()).waiting : undefined,
           key,
           edit.fields,
           true,
@@ -999,26 +1027,18 @@ var cindyMail = (function () {
       }
       clearTimeout(edit.timer);
       if (["change", "attach", "image"].includes(match[1])) {
-        if (!edit.timer) {
-          var selected = await adapter.selectAccount(record.account);
-          if (selected.ok)
-            await showMailDraft(
-              { callId: record.callId },
-              selected,
-              edit.readBack,
-              copy.syncing,
-              key,
-              edit.fields,
-              true,
-            );
-        }
-        edit.timer = setTimeout(
-          () =>
-            runMailDraft(key, false).catch(() =>
-              mailStatus(record.callId, copy.failed),
-            ),
-          1100,
-        );
+        var selected = await adapter.selectAccount(record.account);
+        if (selected.ok)
+          await showMailDraft(
+            { callId: record.callId },
+            selected,
+            edit.readBack,
+            copy.waiting,
+            key,
+            edit.fields,
+            true,
+          );
+        scheduleMailSave(key, record.callId, copy.failed);
         return;
       }
       var result = await requestMailSend(key);

@@ -66,6 +66,7 @@ function Fixture({
   const [countdown, setCountdown] = useState(mode === 'countdown');
   const [muted, setMuted] = useState(mode === 'muted');
   const [reading, setReading] = useState(mode === 'speaking');
+  const speechError = mode === 'speech' || mode === 'speechTimeout' ? mode : null;
   const call: VoiceCallRecord = {
     ...record,
     endedAt: live ? undefined : record.endedAt,
@@ -140,17 +141,17 @@ function Fixture({
             <CompanionVoiceToolbar
               bot={{ id: 'fixture', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }}
               state={{
-                phase: failed
+                phase: failed || speechError
                   ? 'error'
                   : reading
                     ? 'speaking'
                     : mode === 'thinking'
                       ? 'thinking'
                       : 'listening',
-                transcript: failed || empty ? '' : '听起来不错。',
+                transcript: failed || empty || speechError ? '' : '听起来不错。',
                 unsent: failed ? '还有一个想法，请先记下来。' : '',
                 level: 0.2,
-                error: failed ? 'send' : null,
+                error: failed ? 'send' : speechError,
                 muted,
                 microphonePending: false,
                 microphoneError: false,

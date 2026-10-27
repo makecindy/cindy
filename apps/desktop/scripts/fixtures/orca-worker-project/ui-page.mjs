@@ -7,6 +7,16 @@ export default {
   notCovered:
     'Full Worker creation popover, model/device selection, native folder dialog, filesystem discovery, IPC and actual worktree creation',
   cases: {
+    'attention-error': {
+      about: 'Idle Worker with unhandled task error in tabs, both menus and collapsed trigger',
+    },
+    'attention-awaiting': {
+      about: 'Waiting confirmation shown as blue avatar dots including collapsed trigger',
+    },
+    'attention-done': {
+      about:
+        'Completion unread stays green for unselected Worker and does not aggregate on trigger',
+    },
     default: {
       about:
         'Inherited Lead worktree, new-worktree branch chooser, project search and dirty other project',
@@ -28,6 +38,32 @@ export default {
     await page.getByRole('button').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('attention-')) {
+      const key =
+        ui.case === 'attention-error'
+          ? 'errorBadgeAria'
+          : ui.case === 'attention-awaiting'
+            ? 'awaitingBadgeAria'
+            : 'unread';
+      const label = await ui.t(`orca.rolePill.${key}`);
+      await page.getByTestId('attention-tabs').getByLabel(label).waitFor();
+      const dropdown = page.getByTestId('attention-dropdown');
+      if (ui.case !== 'attention-done') await dropdown.getByLabel(label).waitFor();
+      await ui.capture('tabs-and-collapsed');
+      await dropdown.getByRole('button', { name: /frontend/ }).click();
+      // ERR 是行按钮的相邻徽章；蓝 / 绿点在按钮头像里。
+      if (ui.case === 'attention-error') assert.equal(await dropdown.getByLabel(label).count(), 2);
+      else
+        await dropdown
+          .getByRole('button', { name: /reviewer/ })
+          .getByLabel(label)
+          .waitFor();
+      await ui.capture('dropdown-list');
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: await ui.t('orca.rolePill.layoutMenuLabel') }).click();
+      await ui.capture('layout-menu-list');
+      return;
+    }
     if (ui.case === 'workers') {
       await page.getByRole('button', { name: /frontend/ }).click();
       await page.getByText('design-system', { exact: true }).first().waitFor();

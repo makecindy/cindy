@@ -34,6 +34,12 @@ it('does not rewrite manual hosts, custom paths, or explicit protocol choices', 
     ['openrouter', 'https://proxy.example/v1', { id: 'model', name: 'Model', api: 'openai-completions' as const }],
     ['openrouter', 'https://openrouter.ai/api/v1', { id: 'model', name: 'Model', api: 'openai-completions' as const, route: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat' as const, requestPath: '/custom' } }],
     [undefined, 'https://openrouter.ai/api/v1', { id: 'model', name: 'Model', api: 'openai-completions' as const }],
-    ['openrouter', 'https://openrouter.ai/api/v1', { id: 'model', name: 'Model', api: 'anthropic-messages' as const }],
   ] as const) expect(providerInterfaceModelRoute(model, 'codex', preset, base)).toBe(model);
+  const explicit = { id: 'model', name: 'Model', api: 'anthropic-messages' as const };
+  const resolved = providerInterfaceModelRoute(explicit, 'codex', 'openrouter', 'https://openrouter.ai/api/v1');
+  expect(resolved).toMatchObject({ ...explicit,
+    route: { baseUrl: 'https://openrouter.ai/api', wireProtocol: 'anthropic-messages' },
+    selectedInterface: { api: 'anthropic-messages' },
+  });
+  expect(explicit).toEqual({ id: 'model', name: 'Model', api: 'anthropic-messages' });
 });

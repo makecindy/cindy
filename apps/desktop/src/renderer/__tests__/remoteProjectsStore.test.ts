@@ -53,6 +53,18 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  it('preserves an activity push while accepting an in-flight detail read', () => {
+    const session = mk('handoff');
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [session]);
+    const read = remoteProjectsStore.captureSessionRead('host', session.id);
+    const lastActivityAt = '2026-01-02T00:00:00.000Z';
+    remoteProjectsStore.applyPatch('host', session.id, { lastActivityAt });
+    expect(read()).toBe(true);
+    expect(read.mergeActivity(session)).toMatchObject({
+      lastActivityAt,
+      userSendAt: session.userSendAt,
+    });
+  });
   // Unit, #6529: ordinary lists deliberately omit side chats; a list refresh
   // must not erase detail loaded for an opened full-page follow-up.
   it('retains a hidden side chat across ordinary snapshots until an explicit deletion', () => {
@@ -142,6 +154,29 @@ describe('remoteProjectsStore', () => {
   });
 
   describe('origin 钉子(pinSessionOrigin)', () => {
+    // #7115: a copied task can exist on multiple computers with the same id.
+    // A link's explicit origin must survive both existing and later snapshots.
+    it('keeps an explicit origin ahead of same-id snapshots from another computer', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('same', { title: 'B task' })]);
+      remoteProjectsStore.setDeviceSessions('dev-C', 'C', [mk('same', { title: 'C task' })]);
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'same');
+      expect(getSessionDeviceId('same')).toBe('dev-B');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBe('B task');
+      remoteProjectsStore.setDeviceSessions('dev-C', 'C', [mk('same', { title: 'C changed' })]);
+      expect(getSessionDeviceId('same')).toBe('dev-B');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBe('B task');
+      remoteProjectsStore.pinSessionOrigin('dev-C', 'same');
+      expect(getSessionDeviceId('same')).toBe('dev-C');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBe('C changed');
+    });
+
+    it('does not borrow another computer\'s title while the pinned snapshot is unavailable', () => {
+      remoteProjectsStore.setDeviceSessions('dev-C', 'C', [mk('same', { title: 'C task' })]);
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'same');
+      expect(getSessionDeviceId('same')).toBe('dev-B');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBeNull();
+    });
+
     it('远程新建会话后 origin 立刻可判定,即使权威快照还没到', () => {
       remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
       // 传输层据此走隧道 —— 没有钉子时它返回 undefined,首条消息就发给本机 maker。

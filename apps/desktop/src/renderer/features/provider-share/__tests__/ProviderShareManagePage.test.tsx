@@ -4,13 +4,14 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import type { ProviderGroupConfig } from '../../../../shared/providerGroup';
 import type { ProviderOwnUsageView, ProviderShareOwnerState, ProviderUsageHistoryView } from '../../../../shared/providerShare';
 import { __testing as localGroupsTesting } from '../../provider-group/useLocalProviderGroups';
 import { ProviderShareVisibilitySection } from '../ProviderShareVisibilitySection';
 import { ProviderShareManagePage } from '../ProviderShareManagePage';
-import { RemoteAgentIdleReleaseSection } from '../RemoteAgentIdleReleaseSection';
+import { SubscriptionFastSetting } from '../SubscriptionFastSetting';
 import {
   getProviderSharePendingRequests,
   getProviderSharePendingReshares,
@@ -208,7 +209,6 @@ beforeEach(() => {
       value: { perDevice: 16, total: 64 }, defaults: { perDevice: 16, total: 64 },
       isCustomized: false, customizedKeys: [], usage: { total: 0, devices: 0, largestDevice: 0 },
     };
-    if (cmd.action === 'get-idle-release') return { value: { idleMinutes: 0 }, defaults: { idleMinutes: 0 }, isCustomized: false };
     if (cmd.action === 'received-snapshot') return { ownerStamp: { dataOwnerId: null, ownerGeneration: 0 }, received: [], confirmedRegions: [] };
     if (cmd.action === 'set-member' || cmd.action === 'approve' || cmd.action === 'reject') return { ok: true };
     throw new Error(`unexpected ${cmd.action}`);
@@ -241,6 +241,46 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+// Review R12: real setting + management IPC adapter, using this page's host
+// fixture. Prior page cases do not interleave a catalog push with save failure.
+// Unit tier: defer the IPC, refresh allowFast, then reject; the warning must
+// survive value refresh while identity/owner/unmount boundaries still discard it.
+describe('SubscriptionFastSetting save feedback', () => {
+  const subscription = (id = 'openai', allowFast = true) => ({
+    id, subscriptionFastPolicy: { allowFast },
+  } as ProviderView);
+
+  it('keeps the native failure warning after the committed catalog value arrives', async () => {
+    vi.mocked(toast.error).mockClear();
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('switch'));
+    expect(command).toHaveBeenCalledWith({ action: 'set-fast-policy', providerId: 'openai', allowFast: false });
+    view.rerender(<SubscriptionFastSetting provider={subscription('openai', false)} />);
+    await act(async () => { reject(new Error('native busy')); });
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith('subscriptionFastPolicy.saveFailed');
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each(['provider', 'device', 'owner', 'unmount'])('discards a late failure across the %s boundary', async boundary => {
+    vi.mocked(toast.error).mockClear();
+    setDataOwnerGeneration('fast-owner-a');
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    fireEvent.click(screen.getByRole('switch'));
+    if (boundary === 'provider') view.rerender(<SubscriptionFastSetting provider={subscription('anthropic')} />);
+    if (boundary === 'device') view.rerender(<SubscriptionFastSetting provider={subscription()} deviceId="other-computer" />);
+    if (boundary === 'owner') setDataOwnerGeneration('fast-owner-b');
+    if (boundary === 'unmount') view.unmount();
+    await act(async () => { reject(new Error('old native busy')); });
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+});
 
 /** 「你自己」一行先出来；分享的人等分享读到后才有。 */
 async function findMemberRow(memberId = 'mem-1'): Promise<HTMLElement> {
@@ -385,19 +425,6 @@ describe('ProviderShareManagePage', () => {
     expect(command).toHaveBeenCalledWith({ action: 'owned', range: 'all' });
     expect(getProviderSharePendingRequests().map((item) => item.request.requestId)).toEqual(['req-1']);
     expect(screen.getByText(/providerShare\.manage\.members\.statusRunning/)).toBeTruthy();
-  });
-
-  // 闲置释放只对这台电脑生效：管理另一台电脑时不显示，免得以为改的是那台。
-  it('shows the idle release setting only when managing this computer', async () => {
-    renderPage();
-    expect(await screen.findByTestId('remote-agent-idle-release')).toBeTruthy();
-    expect(command).toHaveBeenCalledWith({ action: 'get-idle-release' });
-    cleanup();
-    command.mockClear();
-    renderPage('on', { deviceId: 'studio' });
-    await screen.findByTestId('remote-agent-limits');
-    expect(screen.queryByTestId('remote-agent-idle-release')).toBeNull();
-    expect(command).not.toHaveBeenCalledWith({ action: 'get-idle-release' });
   });
 
   /*
@@ -916,54 +943,5 @@ describe('share visibility switches', () => {
       await act(async () => { finish({ quota: false, usage: false }); });
       expect(screen.getByRole('switch', { name: 'providerShare.insights.allowQuota' }).getAttribute('aria-checked')).toBe('true');
     } finally { vi.useRealTimers(); }
-  });
-});
-
-/*
- * 测试价值
- * - 生产入口与可观察结果：RemoteAgentIdleReleaseSection 读、存、恢复默认这台电脑的闲置释放分钟数，非法值不能保存。
- * - Bug／规则依据：protocol-compatibility.md「控制端连接池」，设置 0～120、默认 0 = 从不让出。
- * - 现有覆盖缺口：页面用例只断言显示与否；主进程校验见 providerShareManagement.test.ts，界面这一侧的输入拦截与命令没有覆盖。
- * - 最小失败输入：输入 121 / -1 / 1.5 / 空；保存 0 与默认值相同时也要按用户改过记下。
- * - tier：unit(jsdom)，并入同一功能的页面测试文件，共用宿主 mock。
- */
-const idleView = (idleMinutes = 0, isCustomized = false) => ({ value: { idleMinutes }, defaults: { idleMinutes: 0 }, isCustomized });
-const idleInput = () => screen.getByTestId('remote-agent-idle-release-minutes') as HTMLInputElement;
-const idleButton = (key: 'save' | 'reset') => screen.getByRole('button', { name: `providerShare.idleRelease.${key}` }) as HTMLButtonElement;
-
-describe('RemoteAgentIdleReleaseSection', () => {
-  beforeEach(() => {
-    command.mockImplementation(async (cmd: { action: string; value?: { idleMinutes: number } }) => (
-      cmd.action === 'set-idle-release' ? idleView(cmd.value!.idleMinutes, true) : idleView()
-    ));
-  });
-
-  it('reads and saves the setting on this computer, including 0 and an explicit default', async () => {
-    render(<RemoteAgentIdleReleaseSection />);
-    await waitFor(() => expect(idleInput().value).toBe('0'));
-    expect(command).toHaveBeenCalledWith({ action: 'get-idle-release' });
-    expect(screen.getByText('providerShare.idleRelease.hint')).toBeTruthy();
-    expect(idleButton('save').disabled).toBe(true);
-    fireEvent.change(idleInput(), { target: { value: '10' } });
-    fireEvent.click(idleButton('save'));
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'set-idle-release', value: { idleMinutes: 10 } }));
-    await waitFor(() => expect(idleButton('reset').disabled).toBe(false));
-    fireEvent.change(idleInput(), { target: { value: '0' } });
-    fireEvent.click(idleButton('save'));
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'set-idle-release', value: { idleMinutes: 0 } }));
-  });
-
-  it('rejects values outside 0–120 and restores the default', async () => {
-    command.mockImplementation(async (cmd: { action: string }) => (cmd.action === 'reset-idle-release' ? idleView() : idleView(30, true)));
-    render(<RemoteAgentIdleReleaseSection />);
-    await waitFor(() => expect(idleInput().value).toBe('30'));
-    for (const value of ['121', '-1', '1.5', '']) {
-      fireEvent.change(idleInput(), { target: { value } });
-      expect(idleButton('save').disabled).toBe(true);
-    }
-    expect(screen.getByRole('alert').textContent).toContain('providerShare.idleRelease.invalid');
-    fireEvent.click(idleButton('reset'));
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ action: 'reset-idle-release' }));
-    await waitFor(() => expect(idleInput().value).toBe('0'));
   });
 });

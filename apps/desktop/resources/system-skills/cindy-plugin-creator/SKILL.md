@@ -55,6 +55,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
+- [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)
 - [插件移动端页面接入与操作来源（§5.1）](references/plugin-mobile-pages.md)
 - [插件聊天卡片 card（§4.5）](references/plugin-chat-cards.md)
 - [插件设置页与自定义参数 settingsHtml / kv（§4.8）](references/plugin-settings.md)

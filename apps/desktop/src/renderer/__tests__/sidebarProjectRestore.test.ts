@@ -42,6 +42,22 @@ function projectSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('collectRestorableProjectKeys', () => {
+  // PR #6956: project restore must use the same provisional identity as the
+  // sidebar, even when its only row has not been sent yet (unit).
+  it('includes the current draft project without including unrelated empty drafts', () => {
+    const keys = collectRestorableProjectKeys({
+      sessions: [
+        projectSession({ userSendAt: null, _count: { messages: 0 } }),
+        projectSession({ id: 'other', workingDir: '/workspace/other', userSendAt: null, _count: { messages: 0 } }),
+      ],
+      provisionalDraftTaskId: 'session-1',
+      lastActivityCutoff: null,
+      pinnedProjectKeys: new Set(),
+      vendorPredicate: null,
+    });
+    expect(Array.from(keys)).toEqual([PROJECT_KEY]);
+  });
+
   it('excludes projects filtered out by vendor', () => {
     const keys = collectRestorableProjectKeys({
       sessions: [projectSession()],

@@ -324,8 +324,37 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
  * (`saveDraft` / `clearDraft` / `clearDraftAndNotify`), independent of the
  * `silent` flag — `silent` only gates the content `listeners` above.
  */
+/** Every write to a draft, including silent keystroke saves (the new-task title preview). */
+const contentListeners = new Map<string, Set<DraftListener>>();
+
+/** Subscribe to every save / clear of `sessionId`'s draft, including silent keystroke saves. */
+export function subscribeDraftContent(sessionId: string, handler: DraftListener): () => void {
+  const key = draftKey(sessionId);
+  let set = contentListeners.get(key);
+  if (!set) {
+    set = new Set();
+    contentListeners.set(key, set);
+  }
+  set.add(handler);
+  return () => {
+    const s = contentListeners.get(key);
+    if (!s) return;
+    s.delete(handler);
+    if (s.size === 0) contentListeners.delete(key);
+  };
+}
+
 function recomputeDraftPresence(sessionId: string): void {
   const key = draftKey(sessionId);
+  const contentSet = contentListeners.get(key);
+  if (contentSet)
+    for (const fn of contentSet) {
+      try {
+        fn();
+      } catch (err) {
+        log.warn('content listener threw:', err);
+      }
+    }
   const next = draftHasContent(drafts.get(key));
   const prev = presenceCache.get(key) ?? false;
   if (next === prev) return;

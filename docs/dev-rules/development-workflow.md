@@ -10,6 +10,11 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
 
+Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
+根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
+`.gitignore`，不影响已跟踪文件；写入失败不阻止创建或恢复。不扫描、排除任意第三方目录。
+实现见 `apps/desktop/src/main/worktree/managedWorktreeExclude.ts`。
+
 如果你是 Cindy 内嵌的 agent，且 cwd 位于 `<baseRepo>/.cindy-worktrees/<name>`（或迁移前的
 `.xdt-worktrees/<name>`）下（会话级 git worktree），遵守以下契约：
 
@@ -27,7 +32,8 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
 - **宿主 app 日志不在你的 cwd 下**：dev 日志在启动 checkout（通常是 baseRepo）的
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
 - **会话结束与工作区保留**：是否 commit 由用户或宿主工作流决定，不能仅因会话结束
-  强制提交。会话被删除或归档时脏 worktree 会先存内容快照再删目录。**PR
+  强制提交。会话被删除或归档时脏 worktree 会先把改动和新文件存进 Git 快照再删目录；
+  被 `.gitignore` 忽略的文件（依赖、构建产物）和 worktree 内克隆／初始化的嵌套仓库不保留。**PR
   merged／closed 不等于 Cindy 会话已结束**：只要 owning session 仍 active，任何外部 Git
   cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `cindy/*` / `xdt/*` 分支，交给
   用户显式归档／删除会话时回收；禁止手动 `git worktree remove` 造成 active session 的 cwd

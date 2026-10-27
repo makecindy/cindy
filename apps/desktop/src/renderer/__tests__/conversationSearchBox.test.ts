@@ -31,7 +31,8 @@ vi.mock('@/lib/conversationSearchService', () => ({
   searchConversations: vi.fn(),
 }));
 
-vi.mock('@/lib/orcaSessionIdentity', () => ({
+vi.mock('@/lib/orcaSessionIdentity', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/orcaSessionIdentity')>(),
   resolveSessionRoute: vi.fn(),
 }));
 
@@ -752,16 +753,16 @@ describe('ConversationSearchBox live search', () => {
   });
 });
 
-// Real search control: a hidden/unloaded companion must not fall back to an
-// ordinary writable task, and the selected message anchor must survive. Unit tier.
-it.each(['canonical', 'history'] as const)('opens %s companion search results without the loaded roster', async role => {
+// Explicit search opens the exact ordinary task regardless of companion role;
+// the selected message anchor survives even without a loaded roster. Unit tier.
+it.each(['canonical', 'history', 'channel'] as const)('opens %s companion search results without the loaded roster', async role => {
   const hit = { messageId: 'message', messageClientId: 'client', role: 'assistant' as const,
     createdAt: '2026-10-20T00:00:00Z', snippet: null, preview: 'needle reply', score: 1, ftsRank: 1, vectorRank: null };
   vi.mocked(searchConversations).mockResolvedValue({ query: 'needle', results: [{
     session: { id: 'chat', title: 'needle thread', workingDir: null, workspaceKind: 'dialogue',
       agentKind: 'pi', status: role === 'history' ? 'archived' : 'active', source: 'bot',
       userSendAt: null, updatedAt: '2026-10-20T00:00:00Z', createdAt: '2026-10-20T00:00:00Z', _count: { messages: 1 },
-      companion: { id: 'bot', name: 'Melody', role, readOnly: role === 'history' } },
+      companion: { id: 'bot', name: 'Melody', role, readOnly: role !== 'canonical' } },
     matchKind: 'content', titleMatchIndices: [], titleScore: null, contentHit: hit, contentHits: [hit], rankScore: 1,
   }], vectorUsed: false, vectorSkipReason: null, poolCapped: false });
   renderSearchBox();
@@ -771,7 +772,7 @@ it.each(['canonical', 'history'] as const)('opens %s companion search results wi
   expect(result.textContent).toContain('Melody');
   fireEvent.click(result);
   await waitFor(() => expect(navigate).toHaveBeenCalledWith(
-    role === 'history' ? '/bots/bot/history/chat' : '/bots/bot/session/chat',
+    '/cc-agent/chat',
     { state: { searchJump: { kind: 'conversation-search', sessionId: 'chat', messageId: 'message', messageClientId: 'client' } } },
   ));
 });

@@ -39,6 +39,7 @@ import {
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { resolveActionTargetIds } from "../../../../../shim/browser-action-targets.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   browserNavigationPolicyForProfile,
@@ -406,6 +407,7 @@ export function registerBrowserAgentActRoutes(
         );
       }
 
+      const requestedAction = action;
       await withRouteTabContext({
         req,
         res,
@@ -413,6 +415,14 @@ export function registerBrowserAgentActRoutes(
         targetId,
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+          let resolvedAction: BrowserActRequest;
+          try {
+            resolvedAction = resolveActionTargetIds(requestedAction, targetId, tab.targetId);
+          } catch {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId");
+          }
+          const action = resolvedAction;
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           const ssrfPolicy = navigationPolicy.ssrfPolicy;
@@ -449,14 +459,6 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
-            return jsonActError(
-              res,
-              403,
-              ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
-            );
-          }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
             const initialTabTargetIds = hasNavigationResultPolicy

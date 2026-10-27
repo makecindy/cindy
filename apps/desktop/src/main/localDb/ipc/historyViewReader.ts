@@ -92,6 +92,49 @@ function cutsHistoryToolContext(rows: readonly HistoryMessageSource[], start: nu
   return false;
 }
 
+/** Legal source cursors keep every deferred child with its owning Agent header. */
+function historyPageSafeStarts(rows: readonly HistoryMessageSource[]): Set<string> {
+  const scopes = historySubagentScopes(rows);
+  const headers = new Map<string, number>();
+  rows.forEach((row, index) => {
+    if (row.role === 'tool_use') {
+      const id = parseMessageToolUse(row).toolUseId;
+      if (id) headers.set(id, index);
+    }
+  });
+  const safe = new Set<string>();
+  let requiredStart = rows.length;
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const parent = scopes.get(rows[index].id);
+    if (parent) requiredStart = Math.min(requiredStart, headers.get(parent) ?? index);
+    if (requiredStart >= index) safe.add(rows[index].id);
+  }
+  return safe;
+}
+
+/** Twenty items is a target; the byte limit still bounds an intact tool span. */
+function historyPageStart<T extends HistoryMessageSource>(
+  items: readonly HistoryViewItem<T>[], safeStarts: ReadonlySet<string>, measureBytes: boolean,
+): number {
+  let start = items.length;
+  let bytes = 1024;
+  for (let index = items.length - 1; index >= 0; index--) {
+    if (measureBytes) {
+      bytes += Buffer.byteLength(JSON.stringify(items[index]), 'utf8');
+      // Preserve the existing single-item delivery exception. A multi-item
+      // Agent span may not bypass the page byte budget.
+      if (index < items.length - 1 && bytes > HISTORY_VIEW_PAGE_BYTES) break;
+    }
+    if (!safeStarts.has(firstId(items[index]))) continue;
+    start = index;
+    if (items.length - index >= HISTORY_VIEW_PAGE_ITEMS) break;
+  }
+  if (items.length && start === items.length) {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'History page would split tool context');
+  }
+  return start;
+}
+
 export function createHistoryViewReader<T extends HistoryMessageSource>(deps: HistoryViewReaderDependencies<T>) {
   let readRevision = 0;
   const readerEpoch = randomUUID();
@@ -178,10 +221,11 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       raw = chunks.slice().reverse().flat();
       const live = liveRows(raw);
       items = project(live);
+      const safeStarts = historyPageSafeStarts([...raw, ...live]);
       if (outlined) {
         // Select by visible objects before reading any hidden payloads. Every
         // hydrated row is rechecked against the current session/rewind epoch.
-        const candidate = items.slice(-HISTORY_VIEW_PAGE_ITEMS);
+        const candidate = items.slice(historyPageStart(items, safeStarts, false));
         const ids: string[] = [];
         mapHistoryViewMessages(candidate, (rows) => {
           ids.push(...rows.filter((row) => !row.id.startsWith('history-live:')).map((row) => row.id));
@@ -226,24 +270,8 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         // reading them. Unchanged snapshots retain their rendering identities.
         for (const summary of historyWorkSummaries(items)) summary.revision += `:${outlineRevision}`;
       }
-      const selected: HistoryViewItem<T>[] = [];
-      let bytes = 1024;
-      for (let index = items.length - 1; index >= 0; index--) {
-        const size = Buffer.byteLength(JSON.stringify(items[index]), 'utf8');
-        if (selected.length > 0 && (selected.length >= HISTORY_VIEW_PAGE_ITEMS || bytes + size > HISTORY_VIEW_PAGE_BYTES)) break;
-        selected.unshift(items[index]);
-        bytes += size;
-      }
+      const selected = items.slice(historyPageStart(items, safeStarts, true));
       const hasMore = !exhausted || selected.length < items.length;
-      if (hasMore && selected.length) {
-        const rows = [...raw, ...live];
-        const start = rows.findIndex((row) => row.id === firstId(selected[0]));
-        // A deferred card can own rows newer than its own header. A cursor inside
-        // that span would lose them on the older page; use the existing raw path.
-        if (start >= 0 && cutsHistoryToolContext(rows, start, historySubagentScopes(rows))) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'History page would split tool context');
-        }
-      }
       // A clear/rewind during the scan invalidates the whole snapshot, including
       // already-read rows. Never publish a prefix from the previous history epoch.
       // The cursor can also supply grouping context without appearing in raw.
@@ -270,15 +298,17 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         else for (const id of ids) await deps.anchor(sessionId, id, true);
         return page;
       };
-      if (ref.parentToolUseId && deps.outline && deps.hydrate) {
-        const first = await deps.anchor(sessionId, ref.firstMessageId, true);
-        const last = await deps.anchor(sessionId, ref.lastMessageId, true);
+      if (ref.parentToolUseId) {
+        const outlined = !!deps.outline && !!deps.hydrate;
+        const read = outlined ? deps.outline! : deps.list;
+        const first = await deps.anchor(sessionId, ref.firstMessageId, outlined);
+        const last = await deps.anchor(sessionId, ref.lastMessageId, outlined);
         if (compareRows(first, last) > 0) throwIpcError('INVALID_PARAMS', 'Invalid history range');
-        const cursorAnchor = after ? await deps.anchor(sessionId, after, true) : undefined;
+        const cursorAnchor = after ? await deps.anchor(sessionId, after, outlined) : undefined;
         if (cursorAnchor && (compareRows(cursorAnchor, first) < 0 || compareRows(cursorAnchor, last) > 0)) {
           throwIpcError('INVALID_PARAMS', 'Invalid detail cursor');
         }
-        const revision = !ref.liveMessageIds?.length && deps.revision ? await deps.revision() : undefined;
+        const revision = outlined && !ref.liveMessageIds?.length && deps.revision ? await deps.revision() : undefined;
         if (revision !== detailRevision) {
           detailRanges.clear(); detailCacheBytes = 0; detailRevision = revision;
         }
@@ -290,24 +320,31 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         }
         if (!scoped) {
           const headers: T[] = [];
+          let fullBytes = 0;
+          const append = (rows: T[]) => {
+            if (!outlined) fullBytes += Buffer.byteLength(JSON.stringify(rows), 'utf8');
+            if (headers.length + rows.length > (outlined ? 100000 : MAX_HISTORY_SCAN_ROWS)
+              || fullBytes > MAX_HISTORY_SCAN_BYTES) throwIpcError('INVALID_PARAMS', 'History detail range is too large');
+            headers.push(...rows);
+          };
           if (!first.id.startsWith('history-live:')) {
-            headers.push(first);
+            append([first]);
             let cursor = first.id;
+            const limit = outlined ? 1000 : 100;
             while (cursor !== (ref.lastStoredMessageId ?? last.id)) {
-              const batch = (await deps.outline(sessionId, { limit: 1000, after: cursor }, true)).slice().reverse();
+              const batch = (await read(sessionId, { limit, after: cursor }, true)).slice().reverse();
               if (!batch.length) break;
               const bounded = batch.filter((row) => compareRows(row, last) <= 0);
-              headers.push(...bounded);
-              if (headers.length > 100000) throwIpcError('INVALID_PARAMS', 'History detail range is too large');
+              append(bounded);
               const next = batch.at(-1)!.id;
               if (next === cursor) throwIpcError('INTERNAL', 'History detail cursor did not advance');
               cursor = next;
-              if (bounded.length < batch.length || batch.length < 1000) break;
+              if (bounded.length < batch.length || batch.length < limit) break;
             }
           }
           for (const id of ref.liveMessageIds ?? []) {
             const row = await deps.anchor(sessionId, id);
-            if (!headers.some((stored) => stored.clientId === row.clientId)) headers.push(row);
+            if (!headers.some((stored) => stored.clientId === row.clientId)) append([row]);
           }
           const scopes = historySubagentScopes(headers, ref.parentToolUseId);
           scoped = headers.filter((row) => scopes.get(row.id) === ref.parentToolUseId);
@@ -332,7 +369,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         for (let offset = 0; offset < candidates.length; offset += 100) {
           const batch = candidates.slice(offset, offset + 100);
           const stored = batch.filter((row) => !row.id.startsWith('history-live:'));
-          const full = new Map((await deps.hydrate(sessionId, stored.map((row) => row.id))).map((row) => [row.id, row]));
+          const full = new Map((outlined ? await deps.hydrate!(sessionId, stored.map((row) => row.id)) : stored).map((row) => [row.id, row]));
           for (const header of batch) {
             const row = full.get(header.id) ?? header;
             const size = Buffer.byteLength(JSON.stringify(row), 'utf8');

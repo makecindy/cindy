@@ -135,6 +135,12 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
     idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
     endTeam: vi.fn(async () => ({ ok: true as const })),
     archiveWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
+    updateWorker: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    })),
     listAvailableModels: vi.fn(async () => ({ ok: true as const })),
     getWorkspaceInfo: vi.fn(async () => ({
       ok: true as const,
@@ -171,7 +177,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
 }
 
 describe('dynamic lizi MCP session context', () => {
-  it('keeps the 20-tool Orca manifest order stable across server construction', () => {
+  it('keeps the 21-tool Orca manifest order stable across server construction', () => {
     const context = {
       agentKind: 'codex' as const,
       workingDir: 'C:\\repo',
@@ -181,8 +187,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    // 17 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(20);
+    // 18 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(21);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
@@ -191,6 +197,7 @@ describe('dynamic lizi MCP session context', () => {
     expect(first).toContain('merge_queued_messages');
     expect(first).toContain('steer_queued_message');
     expect(first).toContain('move_queued_message');
+    expect(first).toContain('update_worker');
     expect(first).not.toContain('list_worker_queue');
   });
 
@@ -204,8 +211,40 @@ describe('dynamic lizi MCP session context', () => {
     const schemaKeys = Object.keys(
       tools(server).send_to_worker.inputSchema?.shape ?? {},
     );
-    expect(schemaKeys).toEqual(['target_session_id', 'message', 'delivery']);
+    expect(schemaKeys).toEqual(['target_session_id', 'message', 'delivery', 'images']);
     expect(schemaKeys).not.toContain('interrupt');
+  });
+
+  it('routes update_worker through the caller lead context and rejects an empty patch', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = await tools(server).update_worker.handler({
+      worker_id: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+    expect(parse(result as never)).toMatchObject({
+      ok: true,
+      worker_id: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+    expect(deps.updateWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+
+    const empty = await tools(server).update_worker.handler({ worker_id: 'worker-1' });
+    expect(parse(empty as never)).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.updateWorker).toHaveBeenCalledTimes(1);
   });
 
   it('forwards explicit send_to_worker delivery and reports steered or fallback receipts', async () => {
@@ -280,6 +319,31 @@ describe('dynamic lizi MCP session context', () => {
     expect(result).toMatchObject({ ok: true, wake_kind: 'already-active' });
     expect(result).not.toHaveProperty('steer_fallback_reason');
     expect(vi.mocked(deps.sendToWorker).mock.calls[0]?.[0]).not.toHaveProperty('delivery');
+  });
+
+  it('forwards send_to_worker images to the host and omits them when absent', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'review this',
+      images: ['/tmp/a.png', '/tmp/b.jpg'],
+    } as never);
+    expect(vi.mocked(deps.sendToWorker).mock.calls[0]?.[0]).toMatchObject({
+      images: ['/tmp/a.png', '/tmp/b.jpg'],
+    });
+
+    await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'text only',
+    } as never);
+    expect(vi.mocked(deps.sendToWorker).mock.calls[1]?.[0]).not.toHaveProperty('images');
   });
 
   it('reads the caller own input queue when get_worker_queue_status omits worker_id', async () => {
@@ -1874,4 +1938,21 @@ describe('dynamic lizi MCP session context', () => {
       workerId: 'worker-1',
     });
   });
+});
+
+// Unit / #7253: all harnesses use the same current-task delivery tool; ambient
+// context must win over the server's captured context, and descendants cannot
+// announce their parent's delivery. Existing title tests do not cover this report.
+it.each([['claude-code', false], ['codex', false], ['pi', false], ['claude-code', true], ['codex', true], ['pi', true]] as const)('routes %s delivery only from the current task executor (SSH: %s)', async (agentKind, ssh) => {
+  const report = vi.fn(() => ({ ok: true as const }));
+  const server = createXdtHelperMcpServer({ taskDelivery: { report } }, { agentKind, workingDir: '' });
+  const call = () => tools(server).call_tool.handler({ name: 'report_task_delivery', args: { final_delivery: true } });
+  expect(parse(await call() as never)).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+  const context = { agentKind, workingDir: '/repo', sessionId: 'current', sessionInstanceId: 'runtime-1', ...(ssh ? { remoteHostId: 'ssh-host' } : {}) };
+  expect(parse(await runWithLiziMcpSessionContext(context, call) as never)).toMatchObject({ ok: true, recorded: true });
+  expect(report).toHaveBeenCalledWith('current', true, 'runtime-1');
+  report.mockClear();
+  expect(parse(await runWithLiziMcpSessionContext({ ...context, mcpCallerKind: 'descendant' }, call) as never))
+    .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+  expect(report).not.toHaveBeenCalled();
 });

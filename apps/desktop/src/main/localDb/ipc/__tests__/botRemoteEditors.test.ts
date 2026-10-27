@@ -242,3 +242,53 @@ it('keeps follow-up off until chosen and rejects an invitation made stale by ano
   const stale = await read(); f.owner('b');
   await expect(f.send(stale, { enabled: true })).rejects.toThrow();
 });
+
+// Restored project links use existing opaque settings actions. Minimal input: two projects and a stale save.
+// Covers list/detail/save, device paths withheld and owner-bound rejection; unit, no network.
+it('links multiple projects through settings while keeping paths private and rejecting stale or foreign saves', async () => {
+  const f = fixture();
+  const projects = [
+    { id: 'a'.repeat(64), name: 'First', path: '/PRIVATE/first', linked: true, available: true },
+    { id: 'b'.repeat(64), name: 'Second', path: '/PRIVATE/second', linked: false, available: true },
+    { id: 'c'.repeat(64), name: 'Remote', path: '/PRIVATE/remote', deviceId: 'other', linked: true, available: false },
+  ];
+  f.deps.projects = { list: vi.fn(async () => projects.map(project => ({ ...project }))), set: vi.fn(async (_bot, id, linked) => { projects.find(p => p.id === id)!.linked = linked; }) };
+  const list = await f.resource('settings:bot-a/projects');
+  expect(f.entries(list)).toHaveLength(3);
+  expect(JSON.stringify(list)).not.toContain('/PRIVATE');
+  const id = 'settings:bot-a/projects/' + projects[1].id;
+  const detail = await f.resource(id);
+  expect(JSON.stringify(detail)).not.toContain('/PRIVATE');
+  expect(f.deps.projects.set).not.toHaveBeenCalled();
+  await f.send(detail, { linked: true });
+  expect(projects.map(p => p.linked)).toEqual([true, true, true]);
+  await expect(f.send(detail, { linked: false })).rejects.toThrow();
+  const foreign = await f.resource(id); f.owner('other');
+  await expect(f.send(foreign, { linked: false })).rejects.toThrow();
+  expect(projects[1].linked).toBe(true);
+  f.owner('a');
+  await f.send(await f.resource(id), { linked: false });
+  expect(projects.map(p => p.linked)).toEqual([true, false, true]);
+});
+
+// PR #6813: equal carried paths on different devices previously had identical phone labels.
+// Unit: real resource/action projection, two device-specific links; existing path privacy retained.
+it('distinguishes equal project paths on different devices in the list and toggle detail', async () => {
+  const f = fixture();
+  const projects = ['desk-a', 'desk-b'].map((deviceId, index) => ({
+    id: String(index).repeat(64), name: 'app', path: '/PRIVATE/app', deviceId, linked: true, available: false,
+  }));
+  f.deps.projects = {
+    list: async () => projects.map(project => ({ ...project })),
+    set: async (_bot, id, linked) => { projects.find(project => project.id === id)!.linked = linked; },
+  };
+  const list = await f.resource('settings:bot-a/projects');
+  expect(f.entries(list)).toMatchObject([
+    { title: expect.stringContaining('desk-a') }, { title: expect.stringContaining('desk-b') },
+  ]);
+  const detail = await f.resource(f.entries(list)[0].resourceId);
+  expect(detail.display.title).toContain('desk-a');
+  expect(JSON.stringify([list, detail])).not.toContain('/PRIVATE');
+  await f.send(detail, { linked: false });
+  expect(projects.map(project => project.linked)).toEqual([false, true]);
+});

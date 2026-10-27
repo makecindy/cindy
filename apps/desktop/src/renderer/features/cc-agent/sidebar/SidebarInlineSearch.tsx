@@ -169,7 +169,7 @@ export function SidebarInlineSearch({
             // leading-none 与静息态「搜索」文字(及其余导航行)完全一致(2026-07
             // 已随导航行一起去掉 mt-0.5,改为纯 flex 垂直居中),避免 hover 展开成
             // 输入框时占位符相对「搜索」发生位移。
-            className="min-w-0 flex-1 bg-transparent text-sm leading-none text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+            className="min-w-0 flex-1 bg-transparent text-sm leading-none text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)]"
           />
           {search.query && (
             <Tip text={t('ccAgent.search.clear')} side="bottom">

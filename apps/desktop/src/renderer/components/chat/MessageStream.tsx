@@ -439,6 +439,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  /** Content before history, sharing its scrolling and measured content height. */
+  header?: ReactNode;
   historyVisibleAfter?: number;
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
@@ -2492,8 +2494,17 @@ export function buildCachedRenderItems(
 
 /** Build the displayed remote history without evaluating the raw transcript fallback. */
 export function buildMessageStreamRenderProjection({
-  historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
-  taskUpdates, ghostCardSnapshot, renderOptions, generatedFilesItemCache, buildRaw,
+  historyView,
+  historySnapshot,
+  historyLiveMessages,
+  isSessionStreaming,
+  handoff,
+  taskUpdates,
+  ghostCardSnapshot,
+  renderOptions,
+  generatedFilesItemCache,
+  historyProjection,
+  buildRaw,
 }: {
   historyView: HistoryViewController<HistoryChatMessage> | null | undefined;
   historySnapshot: HistoryViewSnapshot<HistoryChatMessage> | null;
@@ -2504,71 +2515,109 @@ export function buildMessageStreamRenderProjection({
   ghostCardSnapshot?: Parameters<typeof buildRenderItems>[2];
   renderOptions?: Parameters<typeof buildRenderItems>[3];
   generatedFilesItemCache: Map<string, GeneratedFilesRenderItemRef>;
+  /** Mounted-view cache for ready history, separate from the raw fallback. */
+  historyProjection?: ReturnType<typeof createStreamingMessageProjection>;
   buildRaw: () => RenderProjection;
 }): RenderProjection {
   if (historyView && historySnapshot?.ready) {
-    // Build only the displayed projection; the raw fallback is lazy below.
-    const results = new Map<string, string>();
-    const items = renderHistoryView<HistoryChatMessage, RenderItem>({
-      view: historyView,
-      snapshot: historySnapshot,
-      liveMessages: historyLiveMessages,
-      streaming: isSessionStreaming,
-      isLive: (row) => row.isStreaming === true,
-      pendingHandoff: handoff?.pending,
-      staleTail: handoff?.tail,
-      isLocalMessage: (row) => row.isLocalSystemCard === true,
-      isLocalUser: (row) =>
-        row.role === 'user' &&
-        (row.isPendingPersist === true ||
-          !!row.blockedByGhost ||
-          !!row.localSendPrecedingClientIds),
-      build: (rows, _streaming, historyArtifacts) => {
-        // History chunks are freshly assembled arrays, not reusable source snapshots.
-        const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
-          ...renderOptions,
-          historyWindowIncomplete: true,
-          historyArtifacts,
-        });
-        for (const [key, value] of chunk.singleResultMap) results.set(key, value);
-        return groupWorkRuns(chunk.items, isSessionStreaming);
-      },
-      structure: {
-        placeholder: (summary) => ({
-          id: summary.firstMessageId,
-          clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
-          role: 'thinking',
-          content: '',
-          createdAt: new Date(summary.startedAtMs).toISOString(),
-          thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
-          thinkingRedacted: true,
-          isStreaming: summary.isStreaming,
-        }),
-        children: (item) => (item.type === 'work_group' ? item.children : undefined),
-        sourceIds: (item) =>
-          item.type === 'message'
-            ? [item.message.clientId]
-            : item.type === 'tool_segment'
-              ? item.toolCalls.map((tool) => tool.clientId)
-              : item.type === 'agent_task' && item.toolCall
-                ? [item.toolCall.clientId]
-                : [],
-        rebuild: (item, children, deferred) =>
-          item.type === 'work_group'
-            ? { ...item, children: children as WorkGroupChildItem[], deferred }
-            : item,
-      },
-    });
-    const keys = new Set<string>();
-    const unique = items.filter((item) => {
-      if (keys.has(item.key)) return false;
-      keys.add(item.key);
-      return true;
-    });
-    return {
-      items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCache),
-      singleResultMap: results,
+    const buildHistory = (): RenderProjection => {
+      // Build only the displayed projection; the raw fallback is lazy below.
+      const results = new Map<string, string>();
+      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
+        view: historyView,
+        snapshot: historySnapshot,
+        liveMessages: historyLiveMessages,
+        streaming: isSessionStreaming,
+        isLive: (row) => row.isStreaming === true,
+        pendingHandoff: handoff?.pending,
+        staleTail: handoff?.tail,
+        isLocalMessage: (row) => row.isLocalSystemCard === true,
+        isLocalUser: (row) =>
+          row.role === 'user' &&
+          (row.isPendingPersist === true ||
+            !!row.blockedByGhost ||
+            !!row.localSendPrecedingClientIds),
+        build: (rows, _streaming, historyArtifacts) => {
+          // History chunks are freshly assembled arrays, not reusable source snapshots.
+          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
+            ...renderOptions,
+            historyWindowIncomplete: true,
+            historyArtifacts,
+          });
+          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
+          return groupWorkRuns(chunk.items, isSessionStreaming);
+        },
+        structure: {
+          placeholder: (summary) => ({
+            id: summary.firstMessageId,
+            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
+            role: 'thinking',
+            content: '',
+            createdAt: new Date(summary.startedAtMs).toISOString(),
+            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
+            thinkingRedacted: true,
+            isStreaming: summary.isStreaming,
+          }),
+          children: (item) => (item.type === 'work_group' ? item.children : undefined),
+          sourceIds: (item) =>
+            item.type === 'message'
+              ? [item.message.clientId]
+              : item.type === 'tool_segment'
+                ? item.toolCalls.map((tool) => tool.clientId)
+                : item.type === 'agent_task' && item.toolCall
+                  ? [item.toolCall.clientId]
+                  : [],
+          rebuild: (item, children, deferred) =>
+            item.type === 'work_group'
+              ? { ...item, children: children as WorkGroupChildItem[], deferred }
+              : item,
+        },
+      });
+      const keys = new Set<string>();
+      const unique = items.filter((item) => {
+        if (keys.has(item.key)) return false;
+        keys.add(item.key);
+        return true;
+      });
+      return {
+        items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCache),
+        singleResultMap: results,
+      };
     };
+    if (!historyProjection) return buildHistory();
+    const tail = historyLiveMessages.at(-1);
+    return historyProjection(
+      historyLiveMessages,
+      [
+        getDataOwnerGeneration(),
+        historyView,
+        historySnapshot,
+        isSessionStreaming,
+        taskUpdates,
+        ghostCardSnapshot,
+        ghostCardSnapshot?.version,
+        renderOptions?.sessionId,
+        renderOptions?.turnChangeSets,
+        renderOptions?.workingDir,
+        renderOptions?.botSessionId,
+        renderOptions?.activeVoiceCallId,
+        renderOptions?.subagentRunStatuses,
+        renderOptions?.cindyMakeSessionId,
+        renderOptions?.cindyMakeCompletionInComposer,
+        handoff?.pending.size,
+        ...(handoff?.pending ?? []),
+        handoff?.tail.size,
+        ...(handoff?.tail ?? []),
+      ],
+      buildHistory,
+      // Already-grouped history can only replace a standalone unsealed tail.
+      // Bot ordering and completed-answer grouping remain content dependent.
+      isSessionStreaming &&
+        !renderOptions?.botSessionId &&
+        !!tail &&
+        !isCompletedAssistantMessage(tail),
+      true,
+    );
   }
   const built = buildRaw();
   return {
@@ -2940,6 +2989,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
 });
 
 export function MessageStream({
+  header,
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
@@ -3211,6 +3261,7 @@ export function MessageStream({
     [metadataMessages],
   );
   const streamProjection = useMemo(createStreamingMessageProjection, [sessionId]);
+  const historyProjection = useMemo(createStreamingMessageProjection, [sessionId]);
   const workGroupProjection = useMemo(createStreamingWorkGroupProjection, [sessionId]);
   const renderMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
   const visibleMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
@@ -3229,6 +3280,7 @@ export function MessageStream({
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => buildMessageStreamRenderProjection({
     historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
     taskUpdates, ghostCardSnapshot,
+    historyProjection,
     generatedFilesItemCache: generatedFilesItemCacheRef.current,
     renderOptions: {
       sessionId, turnChangeSets, workingDir,
@@ -3294,6 +3346,7 @@ export function MessageStream({
     simplifiedBotConversation,
     sessionId,
     streamProjection,
+    historyProjection,
   ]);
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMetadataMessages),
@@ -6419,6 +6472,7 @@ export function MessageStream({
                   maxWidth: contentWidth ?? 880,
                 }}
               >
+                {header ? <div className="mb-3.5">{header}</div> : null}
                 {historyLoaded && historyCleared && <HistoryClearedMarker />}
                 {/* Keep pagination feedback inside the existing top padding so
                     toggling it never changes message positions or scrollHeight. */}
@@ -6565,7 +6619,7 @@ export function MessageStream({
                           item={item}
                           context={workGroupRenderContext}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
-                          // 组头按内容宽；做完整块不再出现（simplifyBotRenderItems 丢弃完成组）。
+                          // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
                           replyColumnSpacer={botReplyColumnSpacer}
                         />
@@ -6986,6 +7040,7 @@ const MessageItem = memo(function MessageItem({
             goalBadge={message.goalBadge}
             blockedByGhost={message.blockedByGhost}
             simplifiedBotConversation={simplifiedBotConversation}
+            replyQuote={message.replyQuote}
           />
           {message.usageLimitAutoResumeInfo && (
             <SystemCard
@@ -7041,6 +7096,7 @@ const MessageItem = memo(function MessageItem({
             isStreaming={message.isStreaming}
             createdAt={message.createdAt}
             messageClientId={message.clientId}
+            replyToClientId={message.replyToClientId}
             agentKind={agentKind}
             remoteHostId={remoteHostId}
             forkBlocked={assistantForkBlocked}

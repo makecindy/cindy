@@ -126,7 +126,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - 新插件统一使用 `schemaVersion: 3`，并填写插件实际依赖的首个 Cindy 正式版本作为
   `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
   v3 **没有** `slots`；
-  `tools`、`card`、`panel`、`mainView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
+  `tools`、`card`、`panel`、`mainView`、`taskView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
   `preview` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
 - 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
   `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
@@ -497,7 +497,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
   `ghost_call` 的 `attachments`／`dir`／`save_dir` 在目标位于 workdir 外时，普通权限档
-  仍沿用现有确认与授权记忆策略；Auto 档把真实过户动作交给当前会话的 AI 审阅器，
+  仍沿用现有确认与授权记忆策略；Auto 只有一个审批负责人：本地活跃 Harness 已用原生
+  审批接管工具调用时，交接不再调用 Cindy 模型复审；以运行时 `autoReviewOwner` 为准，
+  不从订阅、模型名或数据库快照推断。免复审要求原始路径与 canonical 目标一致；
+  symlink/junction 解析改变目标时，由 Cindy 审核真实路径。仅接收 canonical 路径、
+  无法核对原始工具参数的 Host 文件系统回调同样保留审核。没有原生接管时交 Cindy 审阅器，
   allow 逐次放行、block 返回原因、ask 或服务故障才交用户确认。Full Access 旁路则仅当
   Host 能现读到**本地活跃会话**的运行时权限恰为
   `bypassPermissions`（Full Access）时自动批准。该判定不得读取启动期 MCP context 快照，
@@ -517,10 +521,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   授权。切回 Ask 后新请求恢复确认。在途插件操作统一沿用当前会话的操作审批：包括工作区
   草稿创建、工作目录写入、媒体路径揭示，Forge 在工作目录外的打包／骨架，以及
   cindy-docs / 电脑工具读写工作目录外路径，
-  Full Access 不额外审批，Auto 进入现有统一审阅器，
+  Full Access 不额外审批，Auto 文件交接和媒体路径揭示沿用实际审批负责人，
+  原生接管免复审仅用于 Harness 调用链，不授权独立 Host 操作或远程任务访问控制端文件；
+  插件内部新发起的工作目录写入仍走既有真实路径和操作检查。
   Ask 沿用原确认流程。越界路径的确认与执行绑定裁决时解析到的规范路径，
   工作目录里的 symlink 不能把真实目标藏成相对路径。MCP 的 `prompt-each-time` 仅限制授权记忆，不得覆盖 Full Access，
-  也不得跳过 Auto 审阅。审批期间实例、权限或调用归属失效时，旧 allow 不可执行。
+  也不得跳过当前负责人的 Auto 审阅。审批期间实例、权限或调用归属失效时，旧 allow 不可执行。
   Plan 与操作审批档位正交：Host 副作用须先检查实时 Plan 状态，未知或切换中拒绝；
   Plan 切换代次也参与审批后和落盘前复核，不能以数据库镜像或切回原状态恢复旧授权。
   一次性 Plan 的 UI 开关在发送后熄灭，不代表当前 Plan 回合结束；授权判定使用 Provider
@@ -549,6 +555,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
+- 回环嵌入是第二个、也是更窄的页面网络例外：插件同时声明一种自绘页面（`panel`、`mainView`
+  或 `taskView`）、`node` 工作进程和 `preview.hosts` 中的 `localhost` / `127.0.0.1` 时
+  （`ghostPanelLoopbackEmbedAllowed`），
+  其页面 CSP 追加 `frame-src 'self' http://127.0.0.1:* http://localhost:*`，分区请求闸放行
+  三类请求：插件页面作为父帧发起的回环子帧导航；该子帧内部再套一层、**父帧与目标同
+  主机:端口**的子帧（本机页面自己的分层结构）；该子帧内回到**同一主机:端口**的资源、
+  XHR 与 WebSocket。面板页自身发出的回环 fetch/XHR、顶层导航到回环地址、换端口或换主机
+  的请求、带凭证的 URL 与 HTTPS 伪装一律继续拒绝。嵌入页由插件自己的随包 Node 进程在
+  本机提供，因此不扩大插件可达的网络范围；权限请求处理器不变（嵌入页不能申请摄像头、
+  定位等权限）。首个消费者是官方 `baguette-simulator`（iOS 模拟器的任务页与管理主视图）。
 - 所有插件 HTML 页面（`settingsHtml`、panel、mainView 与逻辑页）都可以通过 `<img>` 或
   CSS 图片直接加载任意 HTTPS 地址，这是唯一的页面网络直连例外。Host 统一生成包含
   `img-src https:` 的 CSP，并由 owner × plugin session 请求闸把外部请求严格限定为
@@ -639,6 +655,17 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 `instanceKey` 由安装目录推出，不另分配：旧 root 是 `helper`，新 root 是 `_root__helper`，企业是 `_ns__<namespace>__<ghostId>`。注册表丢失或损坏时按目录重建，KV、密钥和 OAuth 仍挂在这个键上。
 
+设备模拟器的官方 ID 迁移是单项例外：`baguette-simulator` → `cindy-simulator` 只接受
+同一 public 市场资源、root 实例、当前批准和已验证包。更新事务更换包目录、清单与 receipt，
+保留原 `instanceKey`；KV、凭据、Library、历史任务等继续使用原键，不复制数据。
+Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，注册表重建仍取原键；
+作者清单不能声明该字段。后续同 ID 更新继续保留此存储身份。
+事务在移走旧包前记录旧路径，receipt 提交前中断则恢复旧包，提交后清理旧包与旧 receipt。
+提交期间两端保持隔离。新 receipt 同时记录已验证的市场资源、版本资源和旧包 SHA；
+若进程在市场账本写入前中断，现有市场维护流程核对批准、现存清单和原账本后补写。
+此恢复证据不跨下一次包更新继承。组织同名插件、自定义来源、目标已占用及来源证据不符不自动迁移。
+权限确认仍使用正常更新判据，不能借改名扩大权限；`BaguetteCindy` 底层数据目录不变。
+
 `namespaceState`：
 
 - `confirmed`：身份已确认，可以按该 namespace 使用 Broker、OIDC 等新权限。
@@ -717,6 +744,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 `ghost_forge_install`、点击市场安装或服务端 `defaultInstall` 明确触发；Forge 安装与本地
 导入必须复用同一套 Main 安装／更新事务。
 
+Forge 新装默认 root，不按当前登录组织自动创建组织实例。已有 root 优先原位更新；仅有
+一份当前组织的旧实例时原位更新，保留其归属。新装组织实例必须明确传当前组织 `namespace`，
+不能从名称前缀或当前登录推断归属。无法唯一确定已有实例时返回 `INSTALL_TARGET_REQUIRED`
+与现有实例的身份、版本、启用状态，不默认新增并启用副本。用户选择更新时传 `target_instance_id`，另装时明确传
+`install_copy:true`，两者互斥。更新受体仅可为 root 或当前组织，不能借当前组织权限更新
+其它组织；落位前复核原受体 receipt 和实例键，变更后拒绝而非改选。换源或存在其它副本
+时复用既有确认卡，说明位置、旧账号数据隔离及独立连接要求。不会自动迁移凭证、停用
+旧副本或保存全局选择。本地文件导入仍只更新 root；新增 root 的确认框告知已有其它副本，
+换源更新即使没有扩权也要确认账号影响。已装插件不会因升级被停用或要求补确认。
+
 凡改动**插件作者可见的契约**，同一改动内必须同步更新手册对应章节：
 
 - (a) `ghost.json` 身份卡字段或校验规则（`shared/ghost.ts` 的 `validateGhostManifest`）；
@@ -733,6 +770,25 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 3. 内置 `cindy-plugin-creator/references/` 的对应章节（兼容导出为 `FORGE_GUIDE`）及 Forge 测试。
 
 `mainView` 的现行协议在 `FORGE_GUIDE` §4.20；v2 的 `main-view` 只保留输入兼容。
+
+`taskView`（跟对话的任务页）的现行协议在 `FORGE_GUIDE` §4.22；v2 对应 `task-view` 槽。
+任务页页签（右侧栏 kind `plugin-task`）存在各任务自己的页签桶里，随任务切换；页面与
+panel / mainView 同一 Ghost WebView 沙箱（零桥、专属分区），只经查询参数 `session`
+得知所在任务。逻辑页经 `cindy.taskView({sessionId?, focus?})`（管子 `task-view-request`）
+打开或聚焦它：只承载包内页面、不收网址，因此不设 preview 式白名单与限速。Host 做资格审
+（已装、启用、声明 taskView）与落点解析（显式任务优先，缺省台前任务），回执带回落点
+任务。缺省或 `focus: false` 只打开页签，不切换任务或抢前台。
+用户点击跳转时可传 `focus: true`：Host 须消费该插件实例最近 3 秒内的真实鼠标/键盘手势
+（复用派活的一次性账本），无手势、过期或已消费均返回 `PERMISSION_DENIED`，不开页也不导航。
+有效请求复用任务导航切到目标任务，并按用户操作显示任务页签；内嵌、分离侧栏和弹出页签均
+保留用户放置位置，分离命令由 Main 沿既有路由与排队路径传递来源，不在执行端降级为后台。
+成功回执的 `focusRequested: true` 仅表示导航请求已投递，不保证任务存在或已呈现；
+旧 Host 可能忽略 focus，缺该回执字段时插件应提示更新。`peek: true` 始终只查询落点，
+即使同时传 focus 也不消费手势或导航。实现与回归见 `taskViewSlot.ts`、`taskViewSlot.test.ts`
+和 right-sidebar 的 `openPluginTaskTab.test.ts`、`executeSidebarCommand.test.ts`。
+远程任务不投影本机插件的任务页；插件停用、卸载或不再声明 taskView 时页签隐藏。
+使用该能力的插件须声明实际支持且完成整包验收的最低宿主版本。旧 Host 可能保留未知顶层
+字段，但会拒绝 `locale.taskView` 或 v2 的 `task-view` 槽；运行时检测 API 不能替代安装兼容验证。
 `mainView.icon` 只接受 Cindy 系统线性图标
 `puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`、`image`、
 `message-circle`、`calendar-days`，缺省回退 `puzzle`。枚举值直接等于图标名，不设别名；

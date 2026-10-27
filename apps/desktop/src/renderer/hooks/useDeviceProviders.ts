@@ -46,6 +46,9 @@ export interface DeviceProvidersPayload {
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 const cache = new Map<string, DeviceProvidersPayload>();
+// Retained across a policy refresh failure; discarded on disconnect/owner
+// eviction. Otherwise a failed refresh loses the identity needed to retry it.
+const subscriptionFetchedAt = new Map<string, number>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 export type DeviceProvidersEvent =
@@ -230,6 +233,9 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {
         cache.set(deviceId, payload);
+        if (deviceId.startsWith('share:') && payload.providers.some(provider => !!provider.subscriptionFastPolicy))
+          subscriptionFetchedAt.set(deviceId, Date.now());
+        else subscriptionFetchedAt.delete(deviceId);
         inflight.delete(deviceId);
         notifyDeviceProviders(deviceId, { status: 'ready', ...payload });
       }
@@ -403,6 +409,16 @@ export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPaylo
   return cache.get(deviceId) ?? null;
 }
 
+/** Only subscription shares opt into freshness polling; custom API catalogs keep their existing lifetime. */
+export function hasSubscriptionShareCatalog(deviceId: string): boolean {
+  return subscriptionFetchedAt.has(deviceId);
+}
+
+export function isSubscriptionShareCatalogStale(deviceId: string, now = Date.now()): boolean {
+  return hasSubscriptionShareCatalog(deviceId)
+    && now - (subscriptionFetchedAt.get(deviceId) ?? 0) >= 60_000;
+}
+
 export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
   return (deviceGen.get(deviceId) ?? 0) === generation;
 }
@@ -412,6 +428,7 @@ export function evictDeviceProviders(
   options?: { retainDisplaySnapshot?: boolean },
 ): number {
   cache.delete(deviceId);
+  if (!options?.retainDisplaySnapshot) subscriptionFetchedAt.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProviders(deviceId, {

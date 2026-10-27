@@ -395,6 +395,7 @@ export function createMobileVoiceControllerSession(
     // Refine during a speech pause and show the result right away. The shared
     // controller only acts on it when a refiner exists (refinement enabled).
     pauseRefinementEnabled: true,
+    retryEmptyTranscript: true,
     // A reconnect allocates another managed session and can hit the account
     // limit; report that instead of the generic "stopped receiving" failure.
     recoveryErrorMessage: mobileVoiceRateLimitMessage,

@@ -23,8 +23,8 @@ const SCREEN = 'app/sessions/[sessionId].tsx';
 
 describe('mobile optimistic composer while session is not ready', () => {
   it('uses the shared unsent proof to cancel locally before requiring a remote receipt', () => {
-    const source = readSource(SCREEN);
-    const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('const outboxDisplayItems ='));
+    const source = readSource('src/session/usePendingSendActions.ts');
+    const remove = source.slice(source.indexOf('const removeOutboxItem ='), source.indexOf('return { findDurableOutboxRecord'));
     expect(remove).toContain('if (isDurableOutboxUnsent(record))');
     expect(remove).toContain("cleanupOutcome: 'cancelled'");
     expect(remove).toContain("else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' })");
@@ -129,10 +129,12 @@ describe('mobile optimistic composer while session is not ready', () => {
 
   it('lets the app owner obtain authoritative parameters before dispatch, independently of the page', () => {
     const bridge = readSource('src/session/MobileOutboxBridge.tsx');
-    expect(bridge).toContain('getNewSessionCreationTask(r.item.sessionId) === null');
-    expect(bridge).toContain('!isDurableOutboxCreationHeld(r.item.sessionId)');
-    // Preparation reads the Host's row; the policy check of the same message may share that read.
-    expect(bridge).toContain('const read = maker(r).getSession(r.item.sessionId)');
+    // Ownership/creation guards and shared reads run through the production
+    // adapter in cindyMakeOutboxBridge.test.ts; retain the app-owner wiring here.
+    expect(bridge).toContain('= createOutboxSessionAccess({');
+    expect(bridge).toContain('hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null');
+    expect(bridge).toContain('isCreationHeld: isDurableOutboxCreationHeld');
+    expect(bridge).toContain('readSession: (record) => maker(record).getSession(record.item.sessionId)');
     expect(bridge).toContain('const session = await readSessionOnce(r)');
     expect(bridge).toContain('if (!session?.workingDir)');
     expect(bridge).toContain('}, [link.status, link.connectionEpoch])');
@@ -198,11 +200,12 @@ describe('mobile optimistic composer while session is not ready', () => {
   it('keeps legacy Plan out of deferred delivery without affecting the modern Plan path', () => {
     const source = readSource(SCREEN);
     const guardStart = source.indexOf('const legacyPlanRequiresLiveDispatch =');
-    const optimisticClearStart = source.indexOf('if (text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    const optimisticClearStart = source.indexOf('if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
     const outboxStart = source.indexOf('if (useLocalOutbox) {', guardStart);
     const guard = source.slice(guardStart, outboxStart);
 
     expect(guardStart).toBeGreaterThan(-1);
+    expect(optimisticClearStart).toBeGreaterThan(-1);
     expect(guardStart).toBeLessThan(optimisticClearStart);
     expect(guard).toContain("runtimeOptions?.planModeSupported !== true");
     expect(guard).toContain('const useLocalOutbox = useDurableOutbox;');
@@ -235,7 +238,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     const bridge = readSource('src/session/MobileOutboxBridge.tsx');
     const delivery = readSource('src/session/durableOutboxDelivery.ts');
     expect(source).not.toContain('const dispatchOutboxItem =');
-    expect(bridge).toContain('preSend: guardRecord');
+    // The transport must use the record-scoped adapter, whose delayed pre-send
+    // invalidation is exercised by cindyMakeOutboxBridge.test.ts.
+    expect(bridge).toContain('invoke: invokeOwned(r),');
     expect(delivery).toMatch(/await update\(\{\s*state: ["']sending["'],\s*enqueueStarted: true,\s*error: undefined\s*\}\)/);
     expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
     expect(delivery).not.toContain('createOutboxClientId');
@@ -286,7 +291,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('const hydratedDocumentAtSend = await hydrateComposerMessageReferenceBodies(');
     expect(source).toContain('if (!sendScopeStillAlive()) {\n      recoverCapturedDraftForScopeExit();');
     expect(source).toContain('await waitForPastePlaceholdersSettled();\n          if (!sendScopeStillAlive()) {');
-    expect(source).toContain('const { failedCount } = await waitForPendingUploads();\n      if (!sendScopeStillAlive()) {');
+    expect(source).toContain('const { failedCount } = independent ? { failedCount: 0 } : await waitForPendingUploads();\n      if (!sendScopeStillAlive()) {');
     expect(source).toContain('if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) return;');
   });
 
@@ -303,11 +308,19 @@ describe('mobile optimistic composer while session is not ready', () => {
 
   it('copies attachment bytes before committing the ownership handoff', () => {
     const source = readSource(SCREEN);
-    const branch = source.slice(source.indexOf('const handoff = await beginOutboxAttachmentHandoff()'));
+    // 正文提交不接管输入框附件；普通发送仍须先准备/复制，再持久入队，最后释放。
+    const handoffStart = source.indexOf('const handoff = independent ? null : await beginOutboxAttachmentHandoff();');
+    expect(handoffStart).toBeGreaterThan(-1);
+    const branch = source.slice(handoffStart);
+    expect(branch).toContain('const pendingSources = handoff ? await handoff.prepare() : [];');
+    expect(branch).toContain('const readyAttachments = independent ? [] : [...attachmentsRef.current];');
+    for (const step of ['await handoff.prepare()', 'await retainOutboxFile', 'await mobileDurableOutbox.add(record)', 'handoff?.release(true)']) {
+      expect(branch.indexOf(step)).toBeGreaterThan(-1);
+    }
     expect(branch.indexOf('await handoff.prepare()')).toBeLessThan(branch.indexOf('await retainOutboxFile'));
     expect(branch.indexOf('await retainOutboxFile')).toBeLessThan(branch.indexOf('await mobileDurableOutbox.add(record)'));
-    expect(branch.indexOf('await mobileDurableOutbox.add(record)')).toBeLessThan(branch.indexOf('handoff.release(true)'));
-    expect(branch).toContain('handoff.release(committed)');
+    expect(branch.indexOf('await mobileDurableOutbox.add(record)')).toBeLessThan(branch.indexOf('handoff?.release(true)'));
+    expect(branch).toContain('handoff?.release(committed)');
   });
 
   it('carries follow-ups and a pending picker warning back when creation itself failed', async () => {
@@ -499,7 +512,8 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
     const gate = source.indexOf('commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)');
     expect(gate).toBeGreaterThan(-1);
-    const clear = source.indexOf('if (text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    const clear = source.indexOf('if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    expect(clear).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(clear);
     const branch = source.slice(gate, clear);
     expect(branch).toContain('isRemoteSessionMissing(readSessionRowNow())');

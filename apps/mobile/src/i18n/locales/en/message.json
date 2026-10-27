@@ -69,6 +69,7 @@
     "copyStateCopied": "Copied",
     "copyStateFailed": "Copy failed",
     "copyStateCopy": "Copy",
+    "copyCode": "Copy Code",
     "thinkingHidden": "Thinking hidden",
     "thinkingDone": "Thought for {{duration}}",
     "thinkingActive": "Thinking {{elapsed}}",
@@ -171,7 +172,9 @@
     "diffEditCount": "{{n}} edits",
     "groupSentNamed": "Sent from group “{{name}}”",
     "groupSent": "Sent from a group",
-    "sourceGroupId": "Group ID: {{id}}"
+    "sourceGroupId": "Group ID: {{id}}",
+    "selectText": "Select Text",
+    "you": "You"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -232,6 +235,10 @@
     "cancel": "Cancel",
     "edit": "Edit",
     "steer": "Interject",
+    "steerQueued": "Not delivered yet. Your message is still queued.",
+    "moveUp": "Move earlier",
+    "moveDown": "Move later",
+    "cancelSend": "Cancel send",
     "collapseQueued": "Collapse queued messages",
     "expandRemainingQueued": "Expand {{n}} more queued messages",
     "collapse": "Collapse",
@@ -405,6 +412,10 @@
     "skillUpdated": "Updated skill: {{title}}"
   },
   "richAnswer": {
+    "send": "Send Message",
+    "sending": "Sending…",
+    "sent": "Submitted",
+    "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",

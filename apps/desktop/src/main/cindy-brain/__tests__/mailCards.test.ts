@@ -58,6 +58,26 @@ it('sent is terminal and cannot restore editing or a second send', async () => {
   expect(f.rows.get('old')!.html).toContain('mail:continue:');
   expect((await f.publish('old')).ok).toBe(false);
 });
+// URL readers previously had no editor binding. Reuse only the latest owned row;
+// equal subjects or provider-supplied call IDs cannot authorize a foreign card.
+it('resolves draft links within the exact task, provider and mailbox without replacing edits', async () => {
+  const f = fixture(); f.register('edited'); f.register('open');
+  const draft = snapshot({ state: 'syncing' }); draft.fields[4].value = 'Typing';
+  await f.publish('edited', draft);
+  const resolve = (sender = 'gmail', session = 'session', source = 'open', account = 'account', id = 'draft', current = true) =>
+    f.service.resolveLink(sender, session, source, account, id, () => current);
+  expect(await resolve()).toBe('edited');
+  expect(readMailCard(f.rows.get('edited')!.html)?.fields[4].value).toBe('Typing');
+  expect(await resolve('qq')).toBeUndefined();
+  expect(await resolve('gmail', 'other')).toBeUndefined();
+  expect(await resolve('gmail', 'session', 'open', 'other')).toBeUndefined();
+  expect(await resolve('gmail', 'session', 'open', 'account', 'other')).toBeUndefined();
+  expect(await resolve('gmail', 'session', 'open', 'account', 'draft', false)).toBeUndefined();
+  f.register('foreign', 'gmail', 'other');
+  expect(await resolve('gmail', 'session', 'foreign')).toBeUndefined();
+  await f.publish('edited', snapshot({ state: 'sent' }));
+  expect(await resolve()).toBeUndefined();
+});
 // Restore must retain the last synchronized baseline and unsaved view without
 // granting another plugin/task access. Existing tests only covered publication.
 it('restores both versions only for the active owning call and keeps old cards readable', async () => {

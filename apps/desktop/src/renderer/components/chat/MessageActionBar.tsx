@@ -416,6 +416,27 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
+  // 伙伴私聊开了话题按钮时，原来的「回复」（把这条消息引用进输入框）挪到引用位，两者并存。
+  const botReplyBtn = !quoteAction && replyAction && simplifiedBotConversation && onAddToChat && (
+    <Tooltip.Root key="bot-reply">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onAddToChat();
+          }}
+          disabled={inFlight}
+          className={actionButtonClass}
+          aria-label={t('chat.messageActionBar.reply')}
+        >
+          <ChatReplyIcon size={14} strokeWidth={2} className={actionIconClass} />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{t('chat.messageActionBar.reply')}</Tooltip.Content>
+    </Tooltip.Root>
+  );
+
   const quoteBtn = quoteAction && (
     <Tip key="quote" text={quoteAction.label}>
       <button
@@ -789,7 +810,7 @@ export function MessageActionBar({
   // 伙伴对话:[copy][share][reply][more][time] / [time][copy][share][reply][edit][more]
   // 贴在气泡旁（compact，群聊与伙伴私聊）:[引用回复][话题][朗读][表情][编辑][more]，复制、分享与时间收进 more
   const items = compact
-    ? align === 'left' ? [quoteBtn, replyBtn, readAloudBtn, reactionBtn, editBtn, moreMenu] : [moreMenu, editBtn, reactionBtn, readAloudBtn, replyBtn, quoteBtn]
+    ? align === 'left' ? [quoteBtn || botReplyBtn, replyBtn, readAloudBtn, reactionBtn, editBtn, moreMenu] : [moreMenu, editBtn, reactionBtn, readAloudBtn, replyBtn, quoteBtn || botReplyBtn]
     : align === 'left'
       ? [
           copyBtn,

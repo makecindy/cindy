@@ -4,6 +4,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createXdtHelperMcpServer, getLiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger } from '@cindy/maker-core';
+import { withToolCallAuthority } from '../../../../../../packages/lizi-mcps/src/tool-call-authority.js';
+import { admitTaskAction, assertTaskActionCurrent, createTaskActionAuthorizer, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
 import {
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
@@ -156,6 +158,77 @@ describe('codexHttpBridge', () => {
   afterEach(async () => {
     await bridge?.shutdown();
     bridge = null;
+  });
+
+  // Regression: lazy bridge startup inside an admitted action must not attach that
+  // action to later requests. Existing routing tests started outside any action.
+  // Real HTTP/MCP entry, loopback ephemeral port, unit tier; no account or device IO.
+  it('isolates a stale bridge creator while enforcing each current tool authorization', async () => {
+    let creatorCurrent = true;
+    let allowCurrent = true;
+    let guardedCurrent = false;
+    let currentValid = true;
+    const authorize = createTaskActionAuthorizer({
+      capture: async () => guardedCurrent || !allowCurrent ? {
+        key: 'current-input', ownerInput: false, delegated: allowCurrent,
+        assertCurrent: async () => {
+          if (!currentValid) throw new Error('current-call-revoked');
+        },
+      } : null,
+      confirm: async () => false,
+    });
+    const creator = await admitTaskAction({
+      sessionId: 'bridge-creator', server: 'cindy_helper', tool: 'send_to_session', args: {},
+    }, {
+      key: 'creator-input', ownerInput: true, delegated: false,
+      assertCurrent: async () => {
+        if (!creatorCurrent) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      },
+    });
+    if (!creator.ok || !creator.run) throw new Error('missing creator admission');
+    bridge = await creator.run(() => startCodexHttpBridge({
+      serverFactories: { cindy_helper: () => {
+        const server = createTestServer();
+        server.tool('send_to_session', {}, async () => withToolCallAuthority(authorize, {
+          sessionId: getLiziMcpSessionContext()?.sessionId,
+          server: 'cindy_helper', tool: 'send_to_session', args: {},
+        }, async () => {
+          await assertTaskActionCurrent();
+          return { content: [{ type: 'text' as const, text: hasTaskActionAuthorization()
+            ? 'current-admission' : 'ordinary-current-call' }] };
+        }));
+        return server;
+      } }, logger: noopLogger(),
+    }));
+    creatorCurrent = false;
+    const current = bridge;
+    current.registerThreadContext('current-thread', {
+      agentKind: 'codex', sessionId: 'current-task', workingDir: '/test',
+    });
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${current.token}`, accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    let id = 0;
+    const request = (method: string, params: unknown) => fetch(current.url('cindy_helper'), {
+      method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }),
+    });
+    const initialized = await request('initialize', {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'auth-test', version: '1' },
+    });
+    headers['mcp-session-id'] = initialized.headers.get('mcp-session-id')!;
+    await initialized.text();
+    const invoke = async () => readRpcResponse(await request('tools/call', {
+      name: 'send_to_session', arguments: {}, _meta: { threadId: 'current-thread' },
+    }));
+    expect(await invoke()).toMatchObject({ result: { content: [{ text: 'ordinary-current-call' }] } });
+    allowCurrent = false;
+    expect(JSON.stringify(await invoke())).toContain('TASK_ACTION_AUTHORIZATION_REQUIRED');
+    allowCurrent = true;
+    guardedCurrent = true;
+    expect(await invoke()).toMatchObject({ result: { content: [{ text: 'current-admission' }] } });
+    currentValid = false;
+    expect(JSON.stringify(await invoke())).toContain('TASK_ACTION_AUTHORIZATION_EXPIRED');
   });
 
   it('scopes startup tools/list before thread registration without authorizing execution', async () => {

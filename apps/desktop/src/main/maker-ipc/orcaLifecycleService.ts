@@ -1,9 +1,9 @@
 import type { AgentKind } from '@cindy/maker-core';
 
+import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort } from './orcaTeamService.js';
-import { normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
 import type {
   OrcaTeamSnapshot,
   OrcaWorkerCreateInTeamParams,
@@ -105,6 +105,7 @@ export interface OrcaLifecycleDeps {
   dispatchWorkerTask(params: {
     targetSessionId: string;
     message: string;
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
@@ -219,6 +220,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   async function dispatchInitialTask(params: {
     workerSessionId: string;
     message: string | undefined;
+    imagePaths?: string[];
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult | undefined> {
     if (!params.message) return undefined;
@@ -238,6 +240,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       const result = await deps.dispatchWorkerTask({
         targetSessionId: params.workerSessionId,
         message: params.message,
+        ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
         dispatchMeta: {
           source: dispatchSource,
           context: params.context,
@@ -290,6 +293,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         dispatchResult = await dispatchInitialTask({
           workerSessionId: created.workerSessionId,
           message: initialTask,
+          ...(params.initialTaskImages ? { imagePaths: params.initialTaskImages } : {}),
           context: `create_worker/${created.workerSessionId}/initial_task`,
         }, assertCreatedCurrent);
       } else {

@@ -129,6 +129,9 @@ export interface BotGroupMemberView {
   /** The computer running this owned companion (its Chat Server actor home); live task cards read there. */
   homeDeviceId?: string | null;
   avatarUrl?: string | null;
+  /** Explicit group-only override; null follows the account avatar. */
+  groupAvatar?: string | null;
+  defaultAvatarUrl?: string | null;
   guestAccess?: 'none' | 'chat' | 'tools';
   accessRevision?: number;
   actorKind?: 'human' | 'bot' | 'integration';
@@ -153,6 +156,8 @@ export interface BotGroupMessageView {
   reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   id: string;
   sequence: number;
+  /** Stable decimal server position; presentation indices can change when history is loaded. */
+  serverSequence?: string;
   kind: BotGroupMessageKind;
   authorKind: BotGroupAuthorKind;
   authorBotId: string | null;
@@ -377,6 +382,17 @@ export interface BotGroupPlanView {
   /** Absolute work directory once started; git plans run in their own worktree. */
   workDir: string | null;
   branch: string | null;
+  /** Server groups: `talk` queues teammates answering in turn (the first five go on by themselves); `work` divides work into steps. */
+  kind?: 'talk' | 'work';
+  /** Server groups: the viewer may continue or stop it (creator, owner or admin). */
+  canManage?: boolean;
+  /** Server groups: what the viewer sends without naming anyone goes to the step under way (creator, or a human owner/admin). */
+  canAdd?: boolean;
+  /**
+   * Server 分工: this computer starts the next step once one is done, instead of waiting for 继续.
+   * A choice of the computer that made it, not shared chat state; absent where unsupported.
+   */
+  autoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -389,6 +405,8 @@ export interface BotGroupOpenPlanSummary {
   /** Bot of the current step (running, being redone, or last finished / failed). */
   currentBotName: string | null;
   currentStepStatus: BotGroupPlanStepStatus | null;
+  /** Server groups: a queue of teammates answering in turn (`talk`) or a division of work. */
+  kind?: 'talk' | 'work';
 }
 
 export function isBotGroupPlanOpen(status: BotGroupPlanStatus): boolean {
@@ -412,6 +430,11 @@ export type BotGroupSpeakerActivity = 'reply' | 'planning' | 'step';
 
 export interface BotGroupSpeaker {
   botId: string;
+  /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
+  executionId?: string;
+  startedAt?: number;
+  stopping?: boolean;
+  executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
   /** Hidden group lane or 分工 Session of the speaking Bot, for pending permission/question UI. */
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
@@ -423,19 +446,35 @@ export interface BotGroupRoundView {
   speakers: BotGroupSpeaker[];
   /** True when the latest round ended naturally and may be continued. */
   canContinue: boolean;
+  /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
+  othersActive?: boolean;
 }
 
 export interface BotGroupSummary {
+  /** Explicit direct-message landing; group management remains unavailable. */
+  conversationKind?: 'direct' | 'group';
   serverBacked?: boolean;
+  /** Authoritative unread window for this account, including followed thread replies. */
+  serverUnread?: { count: number; mentioned: boolean };
   /** Explicit server capabilities; absent on old servers/hosts. */
   supportsDissolve?: boolean;
   /** Upgraded host forwards leave explicitly; absent on old compatibility hosts. */
   supportsGroupLeave?: boolean;
   supportsListRemoval?: boolean;
+  supportsMemberAvatar?: boolean;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
   canInvite?: boolean;
+  /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
+  canStopAll?: boolean;
+  /**
+   * Server groups whose server gives each request one teammate (the lead when nobody is named)
+   * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
+   */
+  singleSpeaker?: boolean;
+  /** A single-speaker group whose computer arranges 「安排分工」 (older computers answered it as a queue). */
+  supportsDivision?: boolean;
   selfActorId?: string;
   topic?: string;
   description?: string;
@@ -449,6 +488,11 @@ export interface BotGroupSummary {
   organizerBotId: string | null;
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
+  /**
+   * Server groups: 分工 you start here go on to the next step by themselves instead of waiting
+   * for 继续 (§7.4). Kept on this computer like the project folder; absent where unsupported.
+   */
+  autoContinue?: boolean;
   lastMessage: BotGroupLastMessage | null;
   /** Latest visible incoming message (Bot or another human), excluding self and runtime activity. Older hosts omit it. */
   lastReplyAt?: number;
@@ -468,6 +512,10 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
+  historyRevision?: string;
+  /** Current authorized versions of already displayed messages, including deletion tombstones. */
+  messageUpdates?: BotGroupMessageView[];
   /** Room-wide; bumped when a reset skipped realtime events or the chat runtime was recreated, so every message's reactors count as changed. */
   reactionRevision?: number;
   /** Per message id; bumped by realtime reaction changes, so a same-count change of who reacted is noticed. */
@@ -549,6 +597,8 @@ export interface BotGroupUpdateInput {
   organizerBotId?: string | null;
   /** Absolute existing local directory; null uses the group's own folder. */
   projectDir?: string | null;
+  /** Server groups: whether 分工 you start go on by themselves (kept on this computer). */
+  autoContinue?: boolean;
 }
 
 export interface BotGroupSetMembersInput {
@@ -560,6 +610,7 @@ export interface BotGroupSetMembersInput {
 }
 
 export interface BotGroupSendInput {
+  conversationKind?: 'direct';
   groupId: string;
   text: string;
   mentions: BotGroupMention;
@@ -588,6 +639,9 @@ export interface BotGroupPlanEditInput extends BotGroupPlanActionInput {
 }
 
 export interface BotGroupGetOptions {
+  /** Local display snapshot only; callers separately request current server state. */
+  cacheOnly?: boolean;
+  conversationKind?: 'direct';
   /** Load messages with a smaller sequence (older page). */
   beforeSequence?: number;
   limit?: number;
@@ -640,6 +694,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
  */
 export type BotGroupRemoteActionId =
   | 'create'
+  | 'read'
   | 'send'
   | 'continue'
   | 'stop'
@@ -663,6 +718,8 @@ export type BotGroupRemoteActionId =
  */
 export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
+  /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
+  supportsReadReceipts?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would
    * drop them). Attachment `path`s are always null here.
@@ -693,7 +750,15 @@ export function chatGroupLaneRouteKey(groupId: string, access: ChatLaneAccess): 
   return `group:${groupId}:access:${access.mode}:${access.revision}`;
 }
 export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolean {
-  return /^group:[^:]+:access:chat:[1-9][0-9]*(?::plan:[^:]+|:thread:[^:]+)?$/.test(routeKey ?? '');
+  return /^group:[^:]+:access:chat:[1-9][0-9]*(?::plan:[^:]+|:thread:[^:]+|:talk:[^:]+)?$/.test(routeKey ?? '');
+}
+
+/**
+ * A queue's own lane (bot-group-chat.md §7.0): one hidden Session per queue, grant and teammate,
+ * so each turn reads only its card. It talks in the group lane's place, never a project folder.
+ */
+export function chatGroupTalkRouteKey(groupId: string, access: ChatLaneAccess, planId: string): string {
+  return `${chatGroupLaneRouteKey(groupId, access)}:talk:${planId}`;
 }
 
 /**
@@ -710,9 +775,9 @@ export function parseBotGroupThreadRouteKey(routeKey: string | null | undefined)
   return match ? { groupId: match[1]!, threadRootId: match[2]! } : null;
 }
 
-/** The group lane a Thread lane belongs to; a Thread works in the same place as its group lane. */
+/** The group lane a Thread or queue lane belongs to; both work in the same place as their group lane. */
 export function groupLaneOfRouteKey(routeKey: string): string {
-  return routeKey.replace(/:thread:[^:]+$/, '');
+  return routeKey.replace(/:(?:thread|talk):[^:]+$/, '');
 }
 
 export function botGroupLaneRouteKey(groupId: string): string {
@@ -751,8 +816,10 @@ export interface ChatInvitePreview {
   reusable?: boolean;
 }
 export type ChatGroupAction =
+  | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
   | { type: 'nickname'; actorId: string; nickname: string | null }
+  | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
   | { type: 'transfer'; actorId: string }
   | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number }
@@ -773,6 +840,9 @@ export interface ChatServerApi {
    */
   thread(input: { groupId: string; rootId: string; before?: number; sourceMessageIds?: string[]; markRead?: boolean }): Promise<ChatServerResult<{
     root: BotGroupMessageView; replies: BotGroupMessageView[]; hasMore: boolean;
+    /** Same room generation as the main timeline; reset before merging older pages. */
+    historyRevision?: string;
+    messageUpdates?: BotGroupMessageView[];
     /** Same authoritative state as the main timeline; root and replies use one projection. */
     executionFailures?: BotGroupExecutionFailureView[];
     readBefore?: number;

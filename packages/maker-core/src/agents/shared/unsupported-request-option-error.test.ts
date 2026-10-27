@@ -53,6 +53,70 @@ describe('unsupported request option error', () => {
     ).toBe(true);
   });
 
+  // #6649: these gateways identify an unknown field in Chinese or in code/data.field.
+  it.each([
+    '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"message":"未知请求字段：`prompt_cache_key`"}',
+    '400: {"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_retention"}}',
+    '400: {"error":{"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_key"}}}',
+  ])('maps an explicitly rejected cache field to the existing compat fix: %s', (message) => {
+    expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(true);
+    expect(unsupportedRequestOptionCompatOverride(message)).toEqual({ supportsLongCacheRetention: false });
+  });
+
+  it.each([
+    '401: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '429: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"type":"authentication_error","code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"param":"temperature","code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"temperature"}}',
+    '400: {"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_keyword"}}',
+    '400: {"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":null}}',
+    '400: {"code":"INVALID_VALUE","message":"Invalid value for prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"message":"未知请求字段：temperature；prompt_cache_key 已转发"}',
+    '400: {"message":"未知请求字段：prompt_cache_retention_policy"}',
+    '{"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_retention"}}',
+  ])('does not learn cache compatibility from an unrelated rejection: %s', (message) => {
+    expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+    expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
+  });
+
+  // #6570: a nullable param means no parameter was specified, as does an omitted key.
+  describe.each(['prompt_cache_key', 'prompt_cache_retention'])('structured rejection of %s', (field) => {
+    describe.each([false, true])('wrapped in error: %s', (wrapped) => {
+      it.each(['omitted', 'null', 'named'] as const)('accepts param %s', (paramForm) => {
+        const error = {
+          code: null,
+          message: `Validation: Unsupported parameter(s): \`${field}\``,
+          type: 'invalid_request_error',
+          ...(paramForm === 'omitted' ? {} : { param: paramForm === 'null' ? null : field }),
+        };
+        const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
+        expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(true);
+        expect(unsupportedRequestOptionCompatOverride(message)).toEqual({ supportsLongCacheRetention: false });
+      });
+
+      it.each(['temperature', 'prompt_cache_options', '', 0, false, [], {}].map(param => ({ param })))('rejects non-cache param $param', ({ param }) => {
+        const error = { code: null, param, type: 'invalid_request_error', message: `Unsupported parameter(s): ${field}` };
+        const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
+        expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+        expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
+      });
+    });
+  });
+
+  it.each([
+    [400, 'invalid_request_error', 'Invalid value for prompt_cache_key'],
+    [400, 'invalid_request_error', 'Unsupported parameter(s): temperature'],
+    [400, 'authentication_error', 'Unsupported parameter(s): prompt_cache_key'],
+    [401, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
+    [429, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
+  ])('keeps null param from bypassing rejection criteria: %s %s %s', (status, type, message) => {
+    const rejection = `${status}: ` + JSON.stringify({ error: { code: null, param: null, type, message } });
+    expect(isUnsupportedRequestOptionErrorMessage(rejection)).toBe(false);
+    expect(unsupportedRequestOptionCompatOverride(rejection)).toBeUndefined();
+  });
+
   it.each([
     ['generic invalid request', '400: {"error":{"message":"invalid api key"}}'],
     ['rate limit', '429: rate limit exceeded, retry later'],

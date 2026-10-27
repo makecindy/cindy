@@ -33,7 +33,7 @@ export function snapshotMismatch(what: string): string {
     `${what} 与 DS-2b 冻结快照不一致。`,
     '红灯不是禁令。有意改值的合法路径 = 修改 DTCG 源并生成生产输出 + 同一 PR 显式更新独立快照 + 按治理合同 §6 交证据 + 设计师批准。',
     `更新方式：把实时提取结果写回 ${SNAPSHOT_RELATIVE_PATH}，生产生成不可反向读取它；历史分类与导入 oracle 另行维护。`,
-    '保护值（CINDY 皮肤族 DESIGN.md §15、U2 二级信息色、annotation-accent）另有比「改快照 + 设计师批准」更严的门槛，不能只更新本文件。',
+    '保护值（CINDY 皮肤族 DESIGN.md §15、CINDY 文字墨水阶梯（原 U2 二级信息色）、annotation-accent）另有比「改快照 + 设计师批准」更严的门槛，不能只更新本文件。',
     '禁止为绿灯加豁免或绕加载路径。',
   ].join('\n');
 }

@@ -1,9 +1,17 @@
 import {
+  isQwenHttpModel,
+  isQwenAudioHttpModel,
+  isCosyVoiceHttpModel,
+} from '../../shared/speechProtocols.js';
+import {
   BUNDLED_CATALOG,
   isLoopbackProviderUrl,
+  isModelVisible,
+  providerOAuthContract,
   resolveModelNativeApi,
   type AgentKind,
   type Catalog,
+  type OAuthProviderDescriptor,
   type ProviderMediaModel,
 } from '@cindy/model-providers';
 import {
@@ -14,15 +22,18 @@ import {
   type SpeechModelSelection,
   type VoiceConversationSelection,
 } from '../../shared/voiceConversation.js';
-import { referenceSpeechVoices } from '../../shared/speechVoices.js';
+import { gatewayReferenceSpeechVoices, referenceSpeechVoices } from '../../shared/speechVoices.js';
 import type { SpeechConnection } from './speech.js';
+import { openRouterSpeechBaseUrl } from './openrouter.js';
 
 export type SpeechCatalogDeps = {
   catalog: Catalog;
   gatewayAllowed: boolean;
   disabled(providerId: string, modelId: string): boolean;
+  visibilityOverride?(agent: AgentKind, providerId: string, modelId: string): boolean | undefined;
   gatewayConnection(): { baseUrl: string; apiKey: string };
   readKey(providerId: string, agent: AgentKind): string | null;
+  readOAuthToken?(providerId: string, oauth: OAuthProviderDescriptor): string | null;
 };
 type Binding = { model: VoiceConversationModel; connection: SpeechConnection | null };
 
@@ -52,17 +63,20 @@ function apiBase(raw: string): URL | null {
  * See docs/product-rules/companion-voice-mode.md, "后续扩展计划".
  */
 function nativeProtocol(catalog: Catalog, providerId: string, model: ProviderMediaModel) {
+  // Family rules describe chat protocols. Pass the discovered mode so a new
+  // media model cannot inherit one; explicit route declarations still win.
   const declared =
     model.nativeApi !== undefined
       ? model.nativeApi
-      : resolveModelNativeApi(catalog.modelRegistry, providerId, model.id);
+      : resolveModelNativeApi(catalog.modelRegistry, providerId, model.id, model.mode);
   return declared !== undefined
     ? declared
-    : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
+    : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id, model.mode);
 }
 
-/** Official endpoints fix the adapter, independently of model names or catalog metadata. */
-function endpointProtocol(base: URL): SpeechProtocol | null {
+/** The provider endpoint owns the adapter. Alibaba exposes different APIs on its
+ * platform: also require a documented model/region pair, never a brand prefix. */
+function endpointProtocol(base: URL, modelId: string): SpeechProtocol | null {
   if (base.protocol !== 'https:' || base.port) return null;
   if (base.hostname === 'api.elevenlabs.io') return 'elevenlabs';
   if (
@@ -76,6 +90,20 @@ function endpointProtocol(base: URL): SpeechProtocol | null {
   )
     return 'minimax';
   if (base.hostname === 'api.openai.com') return 'openai';
+  if (
+    ['dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'].includes(base.hostname) &&
+    isQwenHttpModel(modelId)
+  )
+    return 'qwen-tts';
+  const workspace = /^[a-z0-9-]+\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/.exec(
+    base.hostname,
+  );
+  if (
+    workspace &&
+    (isQwenAudioHttpModel(modelId) ||
+      (workspace[1] === 'cn-beijing' && isCosyVoiceHttpModel(modelId)))
+  )
+    return 'dashscope-tts';
   return null;
 }
 
@@ -92,6 +120,12 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
         (media.availability !== undefined && media.availability !== 'available')
       )
         continue;
+      // Display preferences affect the picker, independently of route admission.
+      // BYOK media keeps the runtime that owns both its key and display override.
+      const pickerVisible = isModelVisible(
+        media.sourceAgent ? deps.visibilityOverride?.(media.sourceAgent, provider.id, media.id) : undefined,
+        media.defaultEnabled,
+      );
       const declared = nativeProtocol(deps.catalog, provider.id, media);
       if (provider.id === 'xd') {
         if (
@@ -101,28 +135,39 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
         )
           continue;
         const connection = deps.gatewayConnection();
-        if (!connection.apiKey || !apiBase(connection.baseUrl)) continue;
+        const base = apiBase(connection.baseUrl);
+        if (!connection.apiKey || !base) continue;
+        // Server credentials carry the deployment base shared by chat/media.
+        // Version only Gateway TTS; BYOK keeps its explicitly configured API prefix.
+        if (!base.pathname.endsWith('/v1'))
+          base.pathname = `${base.pathname.replace(/\/+$/, '')}/v1`;
         result.push({
           model: {
             id: media.id,
+            ...(pickerVisible ? {} : { pickerVisible: false }),
             name: media.name,
             providerId: 'xd',
             providerName: provider.name,
             protocol: 'openai',
-            defaultVoice: referenceSpeechVoices(media.id, 'openai')[0] ?? '',
+            defaultVoice:
+              gatewayReferenceSpeechVoices(media.id)[0]?.id ??
+              referenceSpeechVoices(media.id, 'openai')[0] ??
+              '',
           },
           connection: {
-            baseUrl: connection.baseUrl,
+            baseUrl: base.toString().replace(/\/+$/, ''),
             protocol: 'openai',
             headers: { authorization: `Bearer ${connection.apiKey}` },
           },
         });
         continue;
       }
+      const oauth = provider.auth.method === 'oauth' ? provider.auth.oauth : undefined;
+      const openRouterOAuth = !!oauth && providerOAuthContract(oauth) === 'openrouter';
       if (
         provider.source !== 'user' ||
         provider.auth.native ||
-        !['apiKey', 'none'].includes(provider.auth.method)
+        (!['apiKey', 'none'].includes(provider.auth.method) && !openRouterOAuth)
       )
         continue;
       const agent = media.sourceAgent;
@@ -133,7 +178,8 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
       const base = apiBase(model.route?.baseUrl ?? route.upstream);
       const ownerBase = apiBase(route.upstream);
       if (!base || !ownerBase || base.origin !== ownerBase.origin) continue;
-      const fixedProtocol = endpointProtocol(base);
+      const openRouterBase = openRouterSpeechBaseUrl(base.toString());
+      const fixedProtocol = openRouterBase ? 'openai' : endpointProtocol(base, media.id);
       const detectedProtocol =
         fixedProtocol ?? (declared === 'openai-audio-speech' ? 'openai' : null);
       // A saved override cannot turn an official endpoint into another provider's API.
@@ -141,11 +187,15 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
       const protocol = fixedProtocol ?? selection?.protocol ?? detectedProtocol;
       // Official native adapters use their documented origin endpoint. Compatible
       // OpenAI proxies keep the configured prefix (including a non-/v1 API base).
-      if (fixedProtocol && fixedProtocol !== 'openai') base.pathname = '/v1';
-      else if (!base.pathname || base.pathname === '/') base.pathname = '/v1';
+      const nativeBase =
+        protocol === 'qwen-tts' || protocol === 'dashscope-tts' ? '/api/v1' : '/v1';
+      if (openRouterBase) base.href = openRouterBase;
+      else if (fixedProtocol && fixedProtocol !== 'openai') base.pathname = nativeBase;
+      else if (!base.pathname || base.pathname === '/') base.pathname = nativeBase;
       const headers: Record<string, string> = {};
       for (const [name, value] of Object.entries(route.headerOverride ?? {})) {
         const lower = name.toLowerCase();
+        if (openRouterBase && ['anthropic-version', 'anthropic-beta'].includes(lower)) continue;
         if (
           [
             'authorization',
@@ -170,6 +220,14 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
       for (const name of route.headerDelete ?? []) delete headers[name.toLowerCase()];
       if (provider.auth.method === 'none') {
         if (route.authStrategy !== 'none' || !isLoopbackProviderUrl(base.toString())) continue;
+      } else if (provider.auth.method === 'oauth') {
+        // OpenRouter PKCE issues an API key into the generic OAuth store. Admit
+        // only that contract on its official API; subscription OAuth stays excluded.
+        if (!openRouterOAuth || !oauth || !openRouterBase ||
+            !openRouterSpeechBaseUrl(ownerBase.toString()) || route.authStrategy !== 'oauth-token') continue;
+        const token = deps.readOAuthToken?.(provider.id, oauth)?.trim();
+        if (!token) continue;
+        headers.authorization = `Bearer ${token}`;
       } else {
         if (route.authStrategy !== 'api-key-header') continue;
         const key = deps.readKey(provider.id, agent)?.trim();
@@ -180,16 +238,25 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
       result.push({
         model: {
           id: media.id,
+          ...(pickerVisible ? {} : { pickerVisible: false }),
           name: media.name,
           providerId: provider.id,
           providerName: provider.name,
           agent,
           protocol: detectedProtocol ?? undefined,
           protocolLocked: !!fixedProtocol,
-          defaultVoice: referenceSpeechVoices(media.id, protocol ?? undefined)[0] ?? '',
+          // OpenRouter's voices come from supported_voices, not vendor references.
+          defaultVoice: openRouterBase
+            ? '' : referenceSpeechVoices(media.id, protocol ?? undefined)[0] ?? '',
+          ...(openRouterBase ? { speedRange: null } : {}),
         },
         connection: protocol
-          ? { baseUrl: base.toString().replace(/\/+$/, ''), headers, protocol }
+          ? {
+              baseUrl: base.toString().replace(/\/+$/, ''), headers, protocol,
+              // OpenRouter speed is model/provider-dependent. Keep the provider
+              // default until its route advertises a verified range; many reject overrides.
+              ...(openRouterBase ? { speedRange: null } : {}),
+            }
           : null,
       });
     }
@@ -197,7 +264,8 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
   return result;
 }
 
-/** Registry entries alone never add catalog membership or grant a credential. */
+/** Admitted routes include hidden saved choices; pickerVisible only controls discovery UI.
+ * Registry entries alone never add catalog membership or grant a credential. */
 export function speechModels(deps: SpeechCatalogDeps): VoiceConversationModel[] {
   return bindings(deps).map((binding) => binding.model);
 }
@@ -211,7 +279,9 @@ export function resolveSpeechConnection(
   if (!binding?.connection) throw new Error('model_unavailable');
   if (
     'speed' in selection &&
-    !isSpeechSpeedSupported(selection.modelId, binding.connection.protocol, selection.speed)
+    !isSpeechSpeedSupported(
+      selection.modelId, binding.connection.protocol, selection.speed, binding.connection.speedRange,
+    )
   )
     throw new Error('invalid_speech_speed');
   return binding.connection;

@@ -77,6 +77,17 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
 - 字符串：该企业的 orgSlug。
 
+调用参数必须保留发现结果中的 JSON 类型：`null` 与字符串 `"null"` 不同，后者是合法的
+企业 slug，不能自动转成 root。插件名已安装但显式 namespace 不匹配时，共用可见性入口返回
+`GHOST_NAMESPACE_MISMATCH`，消息仅列出当前账号可用、保留 namespace 缺省／null／字符串三态的安装身份，
+供 Agent 核对目标后修正参数；原调用不进入 Setup、文件交接或插件派发，也不自动改选实例。
+修正参数后同一任务即可重新查询／调用，无需重新安装或新建任务。完全没有该插件名时仍返回
+`GHOST_NOT_FOUND`；账号切换期间或同名安装均不对当前账号可用时，也返回该错误且不披露身份。
+`GHOST_NAMESPACE_MISMATCH` 属于宿主保留码，插件交卷不能冒用；管子入口将其归一化为 `INTERNAL`，
+避免已执行的操作被误判为尚未派发。此错误码不改变安装数据、权限、实例解析或跨设备协议；
+旧 Host 仍返回原错误，旧查看端可照常显示文本。实现与回归见 `ghostVisibility.ts`、
+`ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
+
 同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
 
 ## 3. 花名册（roster）

@@ -69,6 +69,7 @@
     "copyStateCopied": "コピーしました",
     "copyStateFailed": "コピー失敗",
     "copyStateCopy": "コピー",
+    "copyCode": "コードをコピー",
     "thinkingHidden": "思考内容は非表示",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -171,7 +172,9 @@
     "diffEditCount": "{{n}} 件の編集",
     "groupSentNamed": "グループ「{{name}}」から送信",
     "groupSent": "グループから送信",
-    "sourceGroupId": "グループ ID: {{id}}"
+    "sourceGroupId": "グループ ID: {{id}}",
+    "selectText": "テキストを選択",
+    "you": "あなた"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
@@ -232,6 +235,10 @@
     "cancel": "キャンセル",
     "edit": "編集",
     "steer": "割り込み",
+    "steerQueued": "まだ届いていません。メッセージはキューに残っています。",
+    "moveUp": "1つ前へ",
+    "moveDown": "1つ後ろへ",
+    "cancelSend": "送信をキャンセル",
     "collapseQueued": "キュー内メッセージを折りたたむ",
     "expandRemainingQueued": "残り {{n}} 件のキュー内メッセージを展開",
     "collapse": "折りたたむ",
@@ -405,6 +412,10 @@
     "skillUpdated": "スキルを更新：{{title}}"
   },
   "richAnswer": {
+    "send": "メッセージを送信",
+    "sending": "送信中…",
+    "sent": "送信済み",
+    "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
     "openVideoSource": "元の動画を開く",
     "calculationUnavailable": "この値を計算できません。",
