@@ -188,7 +188,10 @@ describe('local voice capture independent of startup checks and cloud', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
     });
-    expect(h.api.prewarm).toHaveBeenCalledOnce();
+    // #7263 起 prepare（含 prewarm）推迟到长按满阈值才调：普通点击连预热都不做，
+    // 只有不打开麦克风还不够（#7283 的旧断言是「短按 prewarm 恰好一次」，与合并后的
+    // 手势语义冲突，见两 PR 合并竞态）。
+    expect(h.api.prewarm).not.toHaveBeenCalled();
     // Opening even an authorized device can switch Bluetooth headphones to call audio.
     expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
     expect(mocks.startEngine).not.toHaveBeenCalled();
