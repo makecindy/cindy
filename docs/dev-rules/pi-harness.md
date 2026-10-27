@@ -56,7 +56,9 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
   调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
   始终只注册 `cindy_mcp_list_tools` 与 `cindy_mcp_call_tool` 两个稳定网关 schema；完整工具目录与
-  input schema 留在 bridge 内部。先发现名称／描述，再按具体 server + tool 取单个 schema，
+  input schema 留在 bridge 内部。名称／描述发现每页最多 50 项，说明预览最多 240 字符；
+  可按 server 或 query 检索完整说明，并用 nextOffset 翻页，工具不会因分页丢失。
+  再按具体 server + tool 取完整说明及单个 schema，
   未检查 schema 的调用在 bridge 内 fail closed，不会触达 MCP 或弹权限框。门按会话与
   当前工具 schema 指纹记账：Pi 升级不再作废未变 schema 的披露，schema 真变动时门重新武装。
   首次未披露的调用在**发起权限询问之前**被拦下——不弹权限框、不触达 MCP，回执指名该查的

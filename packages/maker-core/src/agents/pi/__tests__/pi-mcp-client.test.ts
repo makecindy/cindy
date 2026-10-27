@@ -6,13 +6,14 @@ import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
 
 // Execute the generated extension's actual client and registered gateway. Pi
 // loads this standalone source, so importing a parallel client would miss bugs.
+const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+const compiled = ts.transpileModule(
+  source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+    + '\nglobalThis.Client = McpHttpClient; globalThis.Gateway = CindyMcpGateway;',
+  { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+).outputText;
+
 function gatewayWithFetch(fetchImpl: typeof fetch) {
-  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  const compiled = ts.transpileModule(
-    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
-      + '\nglobalThis.Client = McpHttpClient; globalThis.Gateway = CindyMcpGateway;',
-    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
-  ).outputText;
   const context: Record<string, any> = {
     fetch: fetchImpl, URL, Headers, AbortController, TextDecoder, process: { env: {} },
     // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
@@ -31,12 +32,39 @@ function gatewayWithFetch(fetchImpl: typeof fetch) {
   registered.find(t => t.name === 'cindy_mcp_list_tools').execute('list', { server: 'cindy', tool: 'ghost_call' });
   const call = (signal?: AbortSignal) => registered.find(t => t.name === 'cindy_mcp_call_tool')
     .execute('call', { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } }, signal);
-  return { call };
+  return { call, gateway, client, list: (params: unknown = {}) => registered.find(t => t.name === 'cindy_mcp_list_tools').execute('list', params) };
 }
 
 afterEach(() => vi.useRealTimers());
 
 describe('Pi MCP request lifecycle', () => {
+  it('bounds broad discovery, pages all tools, and inspects the full searchable description', async () => {
+    const h = gatewayWithFetch(vi.fn());
+    const description = 'Documentation '.repeat(200) + 'needle';
+    h.gateway.add('catalog', h.client, Array.from({ length: 117 }, (_, i) => ({
+      name: 'tool_' + String(i).padStart(3, '0'), description,
+      inputSchema: { type: 'object', properties: { value: { type: 'string' } } },
+    })));
+    const first = (await h.list()).details;
+    expect(first.tools).toHaveLength(50);
+    expect(first.total).toBe(118);
+    expect(JSON.stringify(first).length).toBeLessThan(18000);
+    const names = [...first.tools];
+    let next = first.nextOffset;
+    while (next !== undefined) {
+      const page = (await h.list({ offset: next })).details;
+      names.push(...page.tools);
+      next = page.nextOffset;
+    }
+    expect(new Set(names.map(tool => tool.server + ':' + tool.name)).size).toBe(118);
+    const search = (await h.list({ query: 'NEEDLE', server: 'catalog', offset: 100 })).details;
+    expect(search.total).toBe(117);
+    expect(search.tools).toHaveLength(17);
+    const exact = (await h.list({ server: 'catalog', tool: 'tool_116' })).details;
+    expect(exact.tools[0].description).toBe(description);
+    expect(exact.tools[0].inputSchema.properties.value.type).toBe('string');
+  });
+
   it('waits for card interaction beyond five minutes with one explicit deadline', async () => {
     vi.useFakeTimers();
     let complete!: (response: Response) => void;

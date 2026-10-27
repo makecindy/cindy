@@ -3374,9 +3374,21 @@ class CindyMcpGateway {
         unavailableServers,
       };
     } else {
+      const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const offset = Number.isSafeInteger(input.offset) && Number(input.offset) >= 0 ? Number(input.offset) : 0;
+      const limit = Number.isSafeInteger(input.limit) && Number(input.limit) > 0 ? Math.min(Number(input.limit), 50) : 50;
+      const matches = query ? tools.filter((tool) =>
+        [tool.server, tool.name, tool.description].some((value) => value.toLowerCase().includes(query))) : tools;
+      const page = matches.slice(offset, offset + limit);
       payload = {
         ok: true,
-        tools,
+        tools: page.map((tool) => ({ ...tool, description: tool.description.length > 240
+          ? tool.description.slice(0, 240) + '…' : tool.description })),
+        total: matches.length,
+        offset,
+        ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
+        availableServers: this.availableServers(),
+        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -3808,16 +3820,19 @@ class CindyMcpGateway {
       name: CINDY_MCP_LIST_TOOLS,
       label: 'Discover Cindy MCP tools',
       description:
-        'List every connected Cindy/MCP capability without loading their parameter schemas into startup context. ' +
-        'Omit arguments to discover names and descriptions. Before invoking a tool, pass its exact server and tool ' +
+        'Discover connected Cindy/MCP tools in pages of at most 50 short descriptions. Use query or server to narrow ' +
+        'results, or offset=nextOffset for more. Before invoking a tool, pass its exact server and tool ' +
         'names here once to inspect that single input schema, then use cindy_mcp_call_tool.',
       parameters: {
         type: 'object',
         properties: {
           server: {
             type: 'string',
-            description: 'Optional exact server name. Omit to list tools from every connected server.',
+            description: 'Optional exact server name. Omit to search across connected servers.',
           },
+          query: { type: 'string', description: 'Search tool names and full descriptions, case-insensitively.' },
+          offset: { type: 'integer', minimum: 0, description: 'Use the previous nextOffset to continue browsing.' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Page size; default 50.' },
           tool: {
             type: 'string',
             description: 'Optional exact tool name. Requires server and returns that tool\'s input schema.',
