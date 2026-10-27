@@ -120,6 +120,7 @@ vi.mock('../index', () => ({
   setKeepAwakeEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
+  closeLegacyBackgroundLinkIfIdle: vi.fn(),
   remoteInvoke: vi.fn(),
   providerShareHostInvoke: vi.fn(),
   remoteSubscribe: vi.fn(),
