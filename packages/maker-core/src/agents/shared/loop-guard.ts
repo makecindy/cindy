@@ -41,7 +41,7 @@ const READ_ONLY_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'read', 'grep', 'f
  * 节奏判据:本次普通调用距上一次普通调用开始至少这么久,或本次结果距上一次普通结果
  * 到达至少这么久,说明模型在等外部进度(sleep 后再查 CI、命令内自带等待、慢推理),
  * 不是快速空转。看结果间隔是因为模型可能一次发出多条相同的等待命令、再逐条排队执行:
- * 发出时刻挨在一起,实际每条都等了很久。这类结果不计入第 1-3 层的重复判据,只受下方
+ * 发出时刻挨在一起,实际每条都等了很久。这类结果仍推进最近调用窗口,但本次不触发第 1-3 层疑似判定,只受下方
  * 两条最终上限约束。
  */
 const DEFAULT_PACED_INTERVAL_MS = 30_000;
@@ -217,7 +217,7 @@ export interface ToolLoopGuardOptions {
   rotationDistinctLimit?: number;
   /** 第 4 层:同工具同类契约错误连续多少次判止损。 */
   contractConsecutiveLimit?: number;
-  /** 两次普通调用开始间隔或结果到达间隔达到此值即视为节奏轮询,不计入重复判据。 */
+  /** 两次普通调用开始间隔或结果到达间隔达到此值即视为节奏轮询,本次不触发疑似判定。 */
   pacedIntervalMs?: number;
   /**
    * 突发重复判据(缺省关闭):同一调用(name+input 相同)距它上一次开始不足此值,是一阵突发,
@@ -270,7 +270,7 @@ export type ToolLoopGuardVerdict =
  * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。因此 1-4 层的命中
  * 都是"疑似"(final=false),调用方可交给辅助模型复核;复核放行后由
  * acceptCurrentPattern() 暂缓疑似判定。距上一次普通调用开始或上一次普通结果
- * 到达 ≥ pacedIntervalMs 的结果视为节奏轮询,不计入重复判据。两条最终上限(快速完全相同
+ * 到达 ≥ pacedIntervalMs 的结果视为节奏轮询,仍推进调用窗口但本次不触发疑似。两条最终上限(快速完全相同
  * 连续 finalConsecutiveLimit 次、完全相同结果持续 finalStreakMs)与长只读
  * 轮转不经复核直接判定(final=true)。
  *
@@ -445,8 +445,17 @@ export class ToolLoopGuard {
     // 复核放行额度按普通结果计,节奏轮询同样消耗;突发重复不参与判定,也不消耗。
     const inGrace = this.suspicionGraceResults > 0;
     if (inGrace && !burstRepeat) this.suspicionGraceResults -= 1;
-    // 节奏轮询只参与完全相同 streak 的续接与最终时长上限,不计入任何疑似判据。
+    // 节奏结果续接完全相同 streak 与最终时长上限,本次不触发疑似判定。
     if (paced) {
+      // Preserve intervening paced actions: dropping a slow command but keeping
+      // its immediate Read(small.jpg) manufactures a read-only device-QA cycle.
+      // Collapse adjacent identical polls so a long healthy wait cannot fill
+      // the window and make the first following fast call look stuck.
+      if (!burstRepeat && this.callWindow.at(-1) !== callFingerprint) {
+        this.callWindow.push(callFingerprint);
+        const bufferSize = Math.max(this.windowSize, this.rotationWindowSize);
+        if (this.callWindow.length > bufferSize) this.callWindow.shift();
+      }
       // 写入或命令照常打断长只读窗口,节奏本身不改变这一点。
       if (!READ_ONLY_TOOL_NAMES.has(toolUse.name)) this.stableReadWindow = [];
       this.observeStreak(fullFingerprint, false);

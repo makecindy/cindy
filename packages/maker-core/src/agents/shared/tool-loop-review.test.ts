@@ -49,6 +49,23 @@ function deferredReviewer() {
 }
 
 describe('ToolLoopMonitor', () => {
+  // Device-QA regression through the production monitor: a progressing trace
+  // must neither spend review budget nor be stopped by a reviewer result.
+  it('does not review or interrupt paced device actions followed by refreshed image reads', async () => {
+    const reviewer = vi.fn<ToolLoopReviewer>(async () => 'stop');
+    const t = setup(reviewer);
+    for (let step = 0; step < 24; step++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      t.monitor.onToolUse(`action-${step}`, 'Bash', { command: `python device.py tap ${step} 100` });
+      expect(t.monitor.onToolResult(`action-${step}`, '').kind).toBe('ok');
+      t.monitor.onToolUse(`image-${step}`, 'Read', { file_path: 'small.jpg' });
+      expect(t.monitor.onToolResult(`image-${step}`, '').kind).toBe('ok');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.stops).toEqual([]);
+    }
+    expect(reviewer).not.toHaveBeenCalled();
+  });
+
   it('interrupts immediately when no reviewer is configured', () => {
     const t = setup();
     const verdicts = t.repeatTimes(4);
