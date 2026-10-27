@@ -1883,7 +1883,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(run.plan?.kind === 'talk' ? { talkPlanId: run.plan.id }
             : run.plan ? { plan: { planId: run.plan.id, workDir: run.workspace?.workDir ?? '', sessionId: run.workspace?.ownerSessionId ?? undefined } } : {}),
           ...(threadRootId ? { threadRootId } : {}) });
-        if (!lane.ok) throw new Error(lane.errorCode);
+        // Keep the lane message: botGroupRuntimeFailureCode classifies remote task quota (DEVICE/TOTAL limit) from it.
+        if (!lane.ok) throw new Error(lane.message ? `${lane.errorCode}: ${lane.message}` : lane.errorCode);
         run.sessionId = lane.sessionId;
         run.releaseToolAuthority = registerGroupToolAuthority(lane.sessionId, {
           botId: bot.id, mode: execution.access_mode,

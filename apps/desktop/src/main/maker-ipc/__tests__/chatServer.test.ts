@@ -979,6 +979,19 @@ describe('Chat Server result delivery and refresh', () => {
     expect(JSON.stringify(failures)).not.toContain('private preparation details');
   });
 
+  it.each([
+    ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private host', 'REMOTE_DEVICE_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private host', 'REMOTE_TOTAL_LIMIT'],
+  ])('keeps the remote task quota category of a lane preparation failure on the Chat Server path: %s', async (message, failureCode) => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    deps.ensureLane = vi.fn(async () => ({ ok: false as const, errorCode: 'LAZY_CREATE_FAILED', message }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failures).toHaveLength(1);
+    expect(failures[0][2]).toMatchObject({ detail: `cindy-runtime-error:${failureCode}` });
+    expect(JSON.stringify(failures)).not.toContain('private host');
+  });
+
   it.each(['failure', 'success'] as const)('starts attachment downloads only after lane preparation: %s', async (outcome) => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     const files = Array.from({ length: 12 }, (_, n) => ({ type: 'media', mediaId: `60000000-0000-4000-8000-${String(n + 1).padStart(12, '0')}`, caption: `f${n}.pdf` }));
