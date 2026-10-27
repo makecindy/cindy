@@ -173,7 +173,7 @@ export interface DeviceLinkIpcDeps {
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
-  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean }): Promise<InvokeResultPayload>;
+  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; passiveLink?: boolean }): Promise<InvokeResultPayload>;
   /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
   invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
@@ -242,7 +242,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
     apiFetch: (path, opts) => deviceLinkApiFetch(path, opts),
-    openLink: (deviceId: string) => openRemoteLink(deviceId),
+    openLink: (deviceId: string) => openRemoteLink(deviceId, { explicit: true }),
     closeLink: closeRemoteLink,
     invoke: (...args) => {
       requireDeviceLinkCapability();
@@ -742,6 +742,21 @@ export async function handleRestore(
  * 让控制端 renderer 调用方拿到的语义跟调本地 IPC 完全一致
  * (成功直接拿 result;失败 catch 到带 code 的 Error)。
  */
+/** These reads populate background mirrors; scheduling priority is independent of link intent. */
+const PASSIVE_LINK_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+  'local-db:sessions:get',
+  'local-db:sessions:get-many',
+  'maker:schedule:list-sidebar-index-runs',
+  'maker:schedule:list',
+  'maker:get-capabilities',
+  'maker:provider:list',
+  'maker:list-available-agents',
+  'maker:agent:status',
+  'maker:model-favorites:get',
+  'sidebar-settings:get-project-aliases',
+]);
+
 export async function handleInvoke(
   deps: DeviceLinkIpcDeps,
   deviceId: unknown,
@@ -893,8 +908,12 @@ export async function handleInvoke(
     // Local admission hint only: never forward this field or change authorization.
     const background = scheduling && typeof scheduling === 'object'
       && 'background' in scheduling && scheduling.background === true;
-    result = background
-      ? await deps.invoke(normalizedDeviceId, channel, callArgs, { background: true })
+    const passiveLink = PASSIVE_LINK_INVOKE_CHANNELS.has(channel);
+    result = background || passiveLink
+      ? await deps.invoke(normalizedDeviceId, channel, callArgs, {
+        ...(background ? { background: true } : {}),
+        ...(passiveLink ? { passiveLink: true } : {}),
+      })
       : await deps.invoke(normalizedDeviceId, channel, callArgs);
   } catch (err) {
     rethrowDeviceLinkError(err);

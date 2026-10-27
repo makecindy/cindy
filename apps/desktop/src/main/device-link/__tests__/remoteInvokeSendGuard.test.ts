@@ -127,12 +127,13 @@ function loadLegacyBackgroundOpen(overrides: Record<string, unknown> = {}) {
   const legacyBackgroundLinksNeedingCleanup = new Map<string, number>();
   const foregroundInvokesInFlight = new Map<string, { epoch: number; count: number }>();
   const foregroundLinkHolds = new Map<string, { epoch: number; count: number }>();
+  const explicitForegroundOpens = new Map<string, number>();
   const closeRemoteLink = vi.fn((id: string) => {
     legacyBackgroundLinksNeedingCleanup.delete(id);
     openLinkCloseEpochs.set(id, (openLinkCloseEpochs.get(id) ?? 0) + 1);
   });
   const dependencies = {
-    openLinkCloseEpochs, legacyBackgroundLinksNeedingCleanup,
+    openLinkCloseEpochs, legacyBackgroundLinksNeedingCleanup, explicitForegroundOpens,
     foregroundInvokesInFlight, foregroundLinkHolds, closeRemoteLink,
     snapshotSubscriptions: () => [], hasControlSubscription, linkOpenCapabilities,
     DeviceLinkError, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
@@ -150,8 +151,31 @@ function loadLegacyBackgroundOpen(overrides: Record<string, unknown> = {}) {
   const run = new Function(...Object.keys(dependencies), code + '; return { openRemoteLink, retainForegroundLink, closeLegacyBackgroundLinkIfIdle };')(
     ...Object.values(dependencies),
   );
-  return { ...run, closeRemoteLink, openLinkCloseEpochs, foregroundInvokesInFlight };
+  return { ...run, closeRemoteLink, openLinkCloseEpochs, foregroundInvokesInFlight,
+    legacyBackgroundLinksNeedingCleanup, explicitForegroundOpens };
 }
+
+it('preserves an explicit legacy open before its first foreground invoke', async () => {
+  const link = loadLegacyBackgroundOpen();
+  await expect(link.openRemoteLink('host', { explicit: true })).resolves.toEqual({ capabilities: [] });
+  link.closeLegacyBackgroundLinkIfIdle('host');
+  expect(link.closeRemoteLink).not.toHaveBeenCalled();
+  expect(link.explicitForegroundOpens.get('host')).toBe(0);
+});
+
+it('clears obsolete legacy cleanup when a capable peer reopens', async () => {
+  const openLink = vi.fn()
+    .mockResolvedValueOnce({ capabilities: [] })
+    .mockResolvedValueOnce({ capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
+  const link = loadLegacyBackgroundOpen({ client: { openLink } });
+  const releaseViewer = link.retainForegroundLink('host');
+  await link.openRemoteLink('host');
+  expect(link.legacyBackgroundLinksNeedingCleanup.get('host')).toBe(0);
+  await link.openRemoteLink('host');
+  expect(link.legacyBackgroundLinksNeedingCleanup.has('host')).toBe(false);
+  releaseViewer();
+  expect(link.closeRemoteLink).not.toHaveBeenCalled();
+});
 
 it('cleans up an old peer background open after the foreground viewer releases its link', async () => {
   const { openRemoteLink, retainForegroundLink, closeRemoteLink } = loadLegacyBackgroundOpen();
@@ -259,6 +283,23 @@ it('tracks a foreground invoke while it is pending without treating background r
   await foreground;
   expect(foregroundInvokesInFlight.has('host')).toBe(false);
   await remoteInvoke('host', 'provider-group:remote', [], { passiveLink: true });
+  expect(foregroundInvokesInFlight.has('host')).toBe(false);
+});
+
+it('does not confuse queue priority with foreground link intent', async () => {
+  const foregroundInvokesInFlight = new Map<string, { epoch: number; count: number }>();
+  let finish!: () => void;
+  const pending = new Promise<{ ok: true; result: null }>((resolve) => {
+    finish = () => resolve({ ok: true, result: null });
+  });
+  const remoteInvoke = loadRemoteInvoke({
+    foregroundInvokesInFlight,
+    client: { invoke: vi.fn().mockReturnValue(pending) },
+  });
+  const request = remoteInvoke('host', 'maker:send', [], { background: true });
+  expect(foregroundInvokesInFlight.get('host')).toEqual({ epoch: 0, count: 1 });
+  finish();
+  await request;
   expect(foregroundInvokesInFlight.has('host')).toBe(false);
 });
 
