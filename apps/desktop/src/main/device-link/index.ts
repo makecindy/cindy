@@ -1959,8 +1959,13 @@ async function ensureOnlineForRequest(deviceId?: string): Promise<void> {
 
 /** closeRemoteLink 的取消代次(per-device):翻代使在途建链等待在发送前失效。 */
 const openLinkCloseEpochs = new Map<string, number>();
-/** Keep an old peer's shared link while a foreground invoke (for example, remote desktop) opens it. */
-const foregroundInvokesInFlight = new Map<string, number>();
+/** Only foreground invokes started in the current link epoch may keep its shared link open. */
+const foregroundInvokesInFlight = new Map<string, { epoch: number; count: number }>();
+
+function hasForegroundInvokeInCurrentEpoch(deviceId: string): boolean {
+  const state = foregroundInvokesInFlight.get(deviceId);
+  return state?.epoch === (openLinkCloseEpochs.get(deviceId) ?? 0) && state.count > 0;
+}
 
 /** Long-lived consumers bind to this generation so later reads cannot undo an explicit close. */
 export function getRemoteLinkCloseEpoch(deviceId: string): number {
@@ -2204,13 +2209,16 @@ async function remoteInvokeLive(
   // (不占管道、不等 12~30s 超时),恢复由周期单飞探测驱动。tracker 未初始化时直通。
   const result = responsivenessTracker ? responsivenessTracker.guardInvoke(deviceId, channel, run) : run();
   if (passiveLink || options?.background) return result;
-  foregroundInvokesInFlight.set(deviceId, (foregroundInvokesInFlight.get(deviceId) ?? 0) + 1);
+  const previous = foregroundInvokesInFlight.get(deviceId);
+  const foreground = previous?.epoch === closeEpoch ? previous : { epoch: closeEpoch, count: 0 };
+  foreground.count++;
+  foregroundInvokesInFlight.set(deviceId, foreground);
   try {
     return await result;
   } finally {
-    const remaining = (foregroundInvokesInFlight.get(deviceId) ?? 1) - 1;
-    if (remaining > 0) foregroundInvokesInFlight.set(deviceId, remaining);
-    else foregroundInvokesInFlight.delete(deviceId);
+    foreground.count--;
+    if (foregroundInvokesInFlight.get(deviceId) === foreground && foreground.count === 0)
+      foregroundInvokesInFlight.delete(deviceId);
   }
 }
 
@@ -2305,7 +2313,7 @@ async function backgroundInvokeDeviceLive(deviceId: string, channel: string, arg
         hasOutboundControlSubscription: () => hasControlSubscription(
           snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
         ),
-        hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
+        hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId),
         closeLink: () => closeRemoteLink(deviceId),
       });
     }
@@ -2361,7 +2369,7 @@ export async function remoteSubscribe(
           hasOutboundControlSubscription: () => hasControlSubscription(
             snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
           ),
-          hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
+          hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId),
           closeLink: () => closeRemoteLink(deviceId),
         });
       }
