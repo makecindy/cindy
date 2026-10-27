@@ -13,7 +13,10 @@ export type ComposerEnterIntent = 'queue' | 'steer' | 'native' | 'ignore' | null
 export type ComposerEnterEvent = Pick<
   KeyboardEvent,
   'key' | 'shiftKey' | 'altKey' | 'metaKey' | 'ctrlKey' | 'repeat' | 'isComposing'
->;
+> & {
+  /** 229 is the DOM code for a key the IME is still processing. */
+  keyCode?: number;
+};
 
 export type ComposerSendShortcutUpdateResult =
   | { ok: true }
@@ -47,12 +50,27 @@ function parsePreference(raw: string | null): ComposerSendShortcutPreference | n
 export function resolveComposerEnterIntent(
   event: ComposerEnterEvent,
   preference: ComposerSendShortcutPreference,
-  options: { turnRunning: boolean; platform: string | undefined },
+  options: {
+    turnRunning: boolean;
+    platform: string | undefined;
+    /**
+     * True only while the editor has a live IME composition session.
+     * A stale isComposing / keyCode 229 on Cmd/Ctrl+Enter must not swallow
+     * the send shortcut after the candidate has already been committed.
+     */
+    compositionActive?: boolean;
+  },
 ): ComposerEnterIntent {
   if (event.key !== 'Enter' || event.shiftKey || event.altKey) return null;
-  if (event.isComposing) return 'native';
 
   const hasModifier = hasComposerModifier(event, options.platform);
+  // Plain Enter still belongs to the IME. A modifier shortcut is released only
+  // when the caller explicitly reports that the composition session is closed.
+  // Omitting compositionActive keeps the old rule, so composers that do not
+  // know the session state cannot send mid-composition.
+  if (event.isComposing && (options.compositionActive !== false || !hasModifier)) return 'native';
+  if (event.keyCode === 229 && options.compositionActive === true) return 'native';
+
   if (event.repeat) {
     const isSendShortcut = preference === 'enter' || hasModifier;
     return isSendShortcut ? 'ignore' : 'native';

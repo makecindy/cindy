@@ -67,6 +67,8 @@ describe('ChatInput steer shortcut contract', () => {
     expect(editorEnterBlock).toContain('getComposerSendShortcutPreference()');
     expect(editorEnterBlock).toContain('turnRunning: showStopButtonRef.current');
     expect(editorEnterBlock).toContain('platform: window.electronAPI?.platform');
+    expect(editorEnterBlock).toContain('compositionActive: view.composing');
+    expect(windowKeydownBlock).toContain('compositionActive');
     expect(editorEnterBlock).toContain("if (enterIntent === 'native') return false;");
     expect(editorEnterBlock).toContain("if (enterIntent === 'ignore')");
     expect(editorEnterBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
@@ -130,6 +132,34 @@ describe('ChatInput steer shortcut contract', () => {
     expect(modeB(makeEnterEvent({ shiftKey: true }))).toBeNull();
     expect(modeB(makeEnterEvent({ altKey: true }))).toBeNull();
     expect(modeB(makeEnterEvent({ isComposing: true }))).toBe('native');
+    expect(modeB(makeEnterEvent({ metaKey: true, isComposing: true }))).toBe('native');
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent({ metaKey: true, isComposing: true }), 'modifier-enter', {
+        turnRunning: true,
+        platform: 'darwin',
+        compositionActive: false,
+      }),
+    ).toBe('queue');
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent({ metaKey: true, isComposing: true }), 'enter', {
+        turnRunning: true,
+        platform: 'darwin',
+      }),
+    ).toBe('native');
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent({ metaKey: true, isComposing: true }), 'enter', {
+        turnRunning: true,
+        platform: 'darwin',
+        compositionActive: false,
+      }),
+    ).toBe('steer');
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent({ metaKey: true, isComposing: true }), 'enter', {
+        turnRunning: true,
+        platform: 'darwin',
+        compositionActive: true,
+      }),
+    ).toBe('native');
     expect(modeB(makeEnterEvent({ repeat: true }))).toBe('native');
     expect(modeB(makeEnterEvent({ metaKey: true, repeat: true }))).toBe('ignore');
   });
