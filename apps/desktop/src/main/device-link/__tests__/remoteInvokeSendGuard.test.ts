@@ -3,6 +3,7 @@ import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
+import { assertSubscriptionLinkAccepted } from '../backgroundLink';
 
 // Run the production adapter with only its host dependencies injected, without
 // importing Electron startup. The shared-client tests cover actual queue admission.
@@ -58,6 +59,86 @@ it.each(['host', providerShareHostPeer('share', 'host')])('sends a live recovery
   await expect(remoteBackgroundInvoke(target, 'maker:provider:list', [], { liveProviderMetadata: true }))
     .resolves.toMatchObject({ ok: true, result: { providers: [] } });
   expect(invoke).toHaveBeenCalledTimes(1); expect(metadata).not.toHaveBeenCalled();
+});
+
+function loadRemoteSubscribe(overrides: Record<string, unknown>) {
+  const node = source.statements.find((statement): statement is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === 'remoteSubscribe')!;
+  const code = ts.transpileModule(node.getText(source).replace(/^export /, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const dependencies = {
+    sharedTaskTopics: (_peer: string, topics: string[]) => topics,
+    assertNotStandby: () => {},
+    assertRemoteControlTargetEnabled: () => {},
+    assertRemoteControlTargetEnabledAfterReopen: () => {},
+    openLinkCloseEpochs: new Map<string, number>(),
+    foregroundInvokesInFlight: new Map<string, number>(),
+    ensureOnlineForRequest: async () => {},
+    snapshotSubscriptions: () => [{ deviceId: 'host', topics: ['sessions'] }],
+    requiresSessionLink: () => true,
+    openRemoteLink: vi.fn().mockResolvedValue({ capabilities: [] }),
+    assertSubscriptionLinkAccepted,
+    hasControlSubscription: (topics: string[]) => topics.some((topic) => topic.startsWith('session:')),
+    parseSharedTaskPeer: () => null,
+    closeRemoteLink: vi.fn(),
+    responsivenessTracker: null,
+    DL_SUBSCRIBE_CHANNEL: 'device-link:subscribe',
+    deviceName: () => 'Controller',
+    CONTROLLER_CAPABILITIES: [],
+    client: { needsLinkRecovery: () => true, isLinkReady: () => false,
+      invoke: vi.fn().mockResolvedValue({ ok: true, result: null }) },
+    ...overrides,
+  };
+  return new Function(...Object.keys(dependencies), code + '; return remoteSubscribe;')(...Object.values(dependencies));
+}
+
+it('subscribes to a shared task even though its scoped accept omits background-link-v1', async () => {
+  const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
+  const closeRemoteLink = vi.fn();
+  const peer = 'shared-task-peer';
+  const remoteSubscribe = loadRemoteSubscribe({
+    parseSharedTaskPeer: (id: string) => id === peer ? { role: 'host' } : null,
+    snapshotSubscriptions: () => [{ deviceId: peer, topics: ['session:shared'] }],
+    closeRemoteLink,
+    client: { needsLinkRecovery: () => true, isLinkReady: () => false, invoke },
+  });
+  await expect(remoteSubscribe(peer, ['session:shared'])).resolves.toEqual({ ok: true, result: null });
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(closeRemoteLink).not.toHaveBeenCalled();
+});
+
+it('reads a shared task through its scoped link without requiring background-link-v1', async () => {
+  const remoteInvoke = vi.fn().mockResolvedValue({ ok: true, result: null });
+  const assertBackgroundLinkAccepted = vi.fn();
+  const remoteBackgroundInvoke = loadBackgroundInvoke({
+    client: { isLinkReady: () => false },
+    parseSharedTaskPeer: () => ({ role: 'host' }),
+    openRemoteLink: vi.fn().mockResolvedValue({ capabilities: ['shared-task-v2'] }),
+    assertBackgroundLinkAccepted,
+    remoteInvoke,
+  });
+  await expect(remoteBackgroundInvoke('shared-task-peer', 'task:read', [])).resolves.toEqual({ ok: true, result: null });
+  expect(assertBackgroundLinkAccepted).not.toHaveBeenCalled();
+  expect(remoteInvoke).toHaveBeenCalledOnce();
+});
+
+it('allows a foreground subscription to join an in-flight legacy background open', async () => {
+  const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
+  const closeRemoteLink = vi.fn();
+  let topics = ['sessions'];
+  const remoteSubscribe = loadRemoteSubscribe({
+    snapshotSubscriptions: () => [{ deviceId: 'host', topics }],
+    openRemoteLink: vi.fn().mockImplementation(async () => {
+      topics = ['sessions', 'session:active'];
+      return { capabilities: [] };
+    }),
+    closeRemoteLink,
+    client: { needsLinkRecovery: () => true, isLinkReady: () => false, invoke },
+  });
+  await expect(remoteSubscribe('host', ['sessions', 'session:active'])).resolves.toEqual({ ok: true, result: null });
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(closeRemoteLink).not.toHaveBeenCalled();
 });
 
 it('tracks a foreground invoke while it is pending without treating background reads as foreground', async () => {

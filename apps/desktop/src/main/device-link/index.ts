@@ -2299,13 +2299,16 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
 async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
-    assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
-      hasOutboundControlSubscription: () => hasControlSubscription(
-        snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
-      ),
-      hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
-      closeLink: () => closeRemoteLink(deviceId),
-    });
+    const accepted = await openRemoteLink(deviceId);
+    if (!parseSharedTaskPeer(deviceId)) {
+      assertBackgroundLinkAccepted(accepted, {
+        hasOutboundControlSubscription: () => hasControlSubscription(
+          snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+        ),
+        hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
+        closeLink: () => closeRemoteLink(deviceId),
+      });
+    }
   }
   // 账号等调用方状态必须穿过建链、上线与排队等待，在实际发送边界复验。
   return remoteInvokeLive(deviceId, channel, args, { ...options, passiveLink: true });
@@ -2352,13 +2355,16 @@ export async function remoteSubscribe(
       const accepted = await openRemoteLink(deviceId, { observed: false });
       // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
       liveTopics = liveTopicsNow();
-      assertSubscriptionLinkAccepted(accepted, {
-        hasOutboundControlSubscription: () => hasControlSubscription(
-          snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
-        ),
-        hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
-        closeLink: () => closeRemoteLink(deviceId),
-      });
+      // Shared-task peers use their own scoped capability and never enter the legacy wildcard path.
+      if (!parseSharedTaskPeer(deviceId)) {
+        assertSubscriptionLinkAccepted(accepted, {
+          hasOutboundControlSubscription: () => hasControlSubscription(
+            snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+          ),
+          hasForegroundInvoke: () => (foregroundInvokesInFlight.get(deviceId) ?? 0) > 0,
+          closeLink: () => closeRemoteLink(deviceId),
+        });
+      }
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);
