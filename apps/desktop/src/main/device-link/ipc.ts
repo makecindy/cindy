@@ -70,6 +70,7 @@ import {
   setKeepAwakeEnabled,
   openRemoteLink,
   closeRemoteLink,
+  closeLegacyBackgroundLinkIfIdle,
   remoteInvoke,
   providerShareHostInvoke,
   remoteSubscribe,
@@ -176,6 +177,7 @@ export interface DeviceLinkIpcDeps {
   invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
+  onSubscriptionRefsChanged?(deviceId: string): void;
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
@@ -247,6 +249,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     invokeProviderShareHost: providerShareHostInvoke,
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
+    onSubscriptionRefsChanged: closeLegacyBackgroundLinkIfIdle,
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
@@ -1033,10 +1036,14 @@ export async function handleSubscribe(
     // 订阅失败 → 撤掉刚记的本窗口 ref(满足「失败不留 ref」);并发 unsubscribe 已移除则为幂等
     // no-op。失败时本就没订上,忽略 recordUnsubscribe 的降零返回(不向 relay 转发 unsubscribe)。
     recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    deps.onSubscriptionRefsChanged?.(normalizedDeviceId);
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常,如 ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED)同样视作未订上 → 撤 ref。
-  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+  if (!result.ok) {
+    recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    deps.onSubscriptionRefsChanged?.(normalizedDeviceId);
+  }
   return unwrapSubscribeResult(result);
 }
 

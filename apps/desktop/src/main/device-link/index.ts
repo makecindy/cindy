@@ -1961,10 +1961,49 @@ async function ensureOnlineForRequest(deviceId?: string): Promise<void> {
 const openLinkCloseEpochs = new Map<string, number>();
 /** Only foreground invokes started in the current link epoch may keep its shared link open. */
 const foregroundInvokesInFlight = new Map<string, { epoch: number; count: number }>();
+const foregroundLinkHolds = new Map<string, { epoch: number; count: number }>();
+/** An older peer accepted a background open without suppressing its legacy wildcard. */
+const legacyBackgroundLinksNeedingCleanup = new Map<string, number>();
 
 function hasForegroundInvokeInCurrentEpoch(deviceId: string): boolean {
   const state = foregroundInvokesInFlight.get(deviceId);
   return state?.epoch === (openLinkCloseEpochs.get(deviceId) ?? 0) && state.count > 0;
+}
+
+function hasForegroundLinkHoldInCurrentEpoch(deviceId: string): boolean {
+  const state = foregroundLinkHolds.get(deviceId);
+  return state?.epoch === (openLinkCloseEpochs.get(deviceId) ?? 0) && state.count > 0;
+}
+
+function hasOutboundControlSubscription(deviceId: string): boolean {
+  return hasControlSubscription(snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? []);
+}
+
+/** Release only a legacy link opened as background, after its last foreground consumer leaves. */
+export function closeLegacyBackgroundLinkIfIdle(deviceId: string): void {
+  const epoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  if (legacyBackgroundLinksNeedingCleanup.get(deviceId) !== epoch ||
+    hasOutboundControlSubscription(deviceId) || hasForegroundInvokeInCurrentEpoch(deviceId) ||
+    hasForegroundLinkHoldInCurrentEpoch(deviceId)) return;
+  closeRemoteLink(deviceId);
+}
+
+/** A remote viewer keeps its link until its final stop request has settled. */
+export function retainForegroundLink(deviceId: string): () => void {
+  const epoch = openLinkCloseEpochs.get(deviceId) ?? 0;
+  const previous = foregroundLinkHolds.get(deviceId);
+  const hold = previous?.epoch === epoch ? previous : { epoch, count: 0 };
+  hold.count++;
+  foregroundLinkHolds.set(deviceId, hold);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    hold.count--;
+    if (foregroundLinkHolds.get(deviceId) === hold && hold.count === 0)
+      foregroundLinkHolds.delete(deviceId);
+    closeLegacyBackgroundLinkIfIdle(deviceId);
+  };
 }
 
 /** Long-lived consumers bind to this generation so later reads cannot undo an explicit close. */
@@ -2028,6 +2067,16 @@ export async function openRemoteLink(
       // 没有会话实时流订阅时声明后台链路；列表/文件监听不应点亮对端接入提示。
       capabilities,
     });
+    if (capabilities.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1) &&
+      !accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1) &&
+      !parseSharedTaskPeer(deviceId)) {
+      legacyBackgroundLinksNeedingCleanup.set(deviceId, closeEpoch);
+      if (!hasOutboundControlSubscription(deviceId) && !hasForegroundInvokeInCurrentEpoch(deviceId) &&
+        !hasForegroundLinkHoldInCurrentEpoch(deviceId)) {
+        closeLegacyBackgroundLinkIfIdle(deviceId);
+        throw new Error('[UNSUPPORTED_CAPABILITY] remote device does not support background links');
+      }
+    }
     revokedByRemote.delete(deviceId);
     return accepted;
   };
@@ -2050,6 +2099,7 @@ export async function openRemoteLink(
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
   invalidateProviderMetadataContinuity(deviceId);
+  legacyBackgroundLinksNeedingCleanup.delete(deviceId);
   stopFilePeers(deviceId);
   invalidatePluginOauth(deviceId);
   // 取消义务清单(不变量 6):用户显式断开必须终止该设备**全部** per-device
@@ -2219,6 +2269,7 @@ async function remoteInvokeLive(
     foreground.count--;
     if (foregroundInvokesInFlight.get(deviceId) === foreground && foreground.count === 0)
       foregroundInvokesInFlight.delete(deviceId);
+    closeLegacyBackgroundLinkIfIdle(deviceId);
   }
 }
 
@@ -2313,7 +2364,7 @@ async function backgroundInvokeDeviceLive(deviceId: string, channel: string, arg
         hasOutboundControlSubscription: () => hasControlSubscription(
           snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
         ),
-        hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId),
+        hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId) || hasForegroundLinkHoldInCurrentEpoch(deviceId),
         closeLink: () => closeRemoteLink(deviceId),
       });
     }
@@ -2369,7 +2420,7 @@ export async function remoteSubscribe(
           hasOutboundControlSubscription: () => hasControlSubscription(
             snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
           ),
-          hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId),
+          hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId) || hasForegroundLinkHoldInCurrentEpoch(deviceId),
           closeLink: () => closeRemoteLink(deviceId),
         });
       }
@@ -2405,7 +2456,11 @@ export async function remoteUnsubscribe(
   topics = sharedTaskTopics(deviceId, topics);
   assertNotStandby();
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-  return client.invoke(deviceId, { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics }] });
+  try {
+    return await client.invoke(deviceId, { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics }] });
+  } finally {
+    closeLegacyBackgroundLinkIfIdle(deviceId);
+  }
 }
 
 // ─── 手机推送(notify 帧,经 relay 下发 APNs)───────────────────────────────────

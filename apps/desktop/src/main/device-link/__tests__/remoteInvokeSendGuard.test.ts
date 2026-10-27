@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
+import { DeviceLinkError, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
-import { assertBackgroundLinkAccepted, assertSubscriptionLinkAccepted, hasControlSubscription } from '../backgroundLink';
+import { assertBackgroundLinkAccepted, assertSubscriptionLinkAccepted, hasControlSubscription, linkOpenCapabilities } from '../backgroundLink';
 
 // Run the production adapter with only its host dependencies injected, without
 // importing Electron startup. The shared-client tests cover actual queue admission.
@@ -55,6 +55,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     resolveRemoteInvokeTimeoutMs: () => undefined,
     openRemoteLink: vi.fn(),
     closeRemoteLink: vi.fn(),
+    closeLegacyBackgroundLinkIfIdle: () => {},
     responsivenessTracker: null,
     ...overrides,
     client: { invoke: vi.fn(), isLinkReady: () => true, needsLinkRecovery: () => false, ...(overrides.client as object) },
@@ -90,6 +91,7 @@ function loadRemoteSubscribe(overrides: Record<string, unknown>) {
     openLinkCloseEpochs: new Map<string, number>(),
     foregroundInvokesInFlight: new Map<string, { epoch: number; count: number }>(),
     hasForegroundInvokeInCurrentEpoch: () => false,
+    hasForegroundLinkHoldInCurrentEpoch: () => false,
     ensureOnlineForRequest: async () => {},
     snapshotSubscriptions: () => [{ deviceId: 'host', topics: ['sessions'] }],
     requiresSessionLink: () => true,
@@ -98,6 +100,7 @@ function loadRemoteSubscribe(overrides: Record<string, unknown>) {
     hasControlSubscription: (topics: string[]) => topics.some((topic) => topic.startsWith('session:')),
     parseSharedTaskPeer: () => null,
     closeRemoteLink: vi.fn(),
+    closeLegacyBackgroundLinkIfIdle: () => {},
     responsivenessTracker: null,
     DL_SUBSCRIBE_CHANNEL: 'device-link:subscribe',
     deviceName: () => 'Controller',
@@ -108,6 +111,89 @@ function loadRemoteSubscribe(overrides: Record<string, unknown>) {
   };
   return new Function(...Object.keys(dependencies), code + '; return remoteSubscribe;')(...Object.values(dependencies));
 }
+
+function loadLegacyBackgroundOpen(overrides: Record<string, unknown> = {}) {
+  const names = new Set([
+    'hasForegroundInvokeInCurrentEpoch', 'hasForegroundLinkHoldInCurrentEpoch',
+    'hasOutboundControlSubscription', 'closeLegacyBackgroundLinkIfIdle',
+    'retainForegroundLink', 'openRemoteLink',
+  ]);
+  const declarations = source.statements.filter((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? ''));
+  const code = ts.transpileModule(declarations.map((node) => node.getText(source).replace(/^export /, '')).join(' '), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const openLinkCloseEpochs = new Map<string, number>();
+  const legacyBackgroundLinksNeedingCleanup = new Map<string, number>();
+  const foregroundInvokesInFlight = new Map<string, { epoch: number; count: number }>();
+  const foregroundLinkHolds = new Map<string, { epoch: number; count: number }>();
+  const closeRemoteLink = vi.fn((id: string) => {
+    legacyBackgroundLinksNeedingCleanup.delete(id);
+    openLinkCloseEpochs.set(id, (openLinkCloseEpochs.get(id) ?? 0) + 1);
+  });
+  const dependencies = {
+    openLinkCloseEpochs, legacyBackgroundLinksNeedingCleanup,
+    foregroundInvokesInFlight, foregroundLinkHolds, closeRemoteLink,
+    snapshotSubscriptions: () => [], hasControlSubscription, linkOpenCapabilities,
+    DeviceLinkError, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
+    assertNotStandby: () => {}, assertRemoteControlTargetEnabled: () => {},
+    ensureOnlineForRequest: async () => {},
+    openLinkInFlight: new Map(),
+    client: { openLink: vi.fn().mockResolvedValue({ capabilities: [] }) },
+    CONTROLLER_CAPABILITIES: [], deviceName: () => 'Controller',
+    app: { getVersion: () => 'test' },
+    parseSharedTaskPeer: () => null,
+    responsivenessTracker: null,
+    revokedByRemote: new Set(),
+    ...overrides,
+  };
+  const run = new Function(...Object.keys(dependencies), code + '; return { openRemoteLink, retainForegroundLink, closeLegacyBackgroundLinkIfIdle };')(
+    ...Object.values(dependencies),
+  );
+  return { ...run, closeRemoteLink, openLinkCloseEpochs, foregroundInvokesInFlight };
+}
+
+it('cleans up an old peer background open after the foreground viewer releases its link', async () => {
+  const { openRemoteLink, retainForegroundLink, closeRemoteLink } = loadLegacyBackgroundOpen();
+  const releaseViewer = retainForegroundLink('host');
+  await expect(openRemoteLink('host', { observed: false })).resolves.toEqual({ capabilities: [] });
+  expect(closeRemoteLink).not.toHaveBeenCalled();
+  releaseViewer();
+  expect(closeRemoteLink).toHaveBeenCalledOnce();
+  releaseViewer();
+  expect(closeRemoteLink).toHaveBeenCalledOnce();
+});
+
+it('cleans up an old peer background open after the last foreground session leaves', async () => {
+  let topics = ['sessions'];
+  const { openRemoteLink, closeLegacyBackgroundLinkIfIdle, closeRemoteLink } = loadLegacyBackgroundOpen({
+    snapshotSubscriptions: () => [{ deviceId: 'host', topics }],
+    client: { openLink: vi.fn().mockImplementation(async () => {
+      topics = ['sessions', 'session:active'];
+      return { capabilities: [] };
+    }) },
+  });
+  await expect(openRemoteLink('host', { observed: false })).resolves.toEqual({ capabilities: [] });
+  expect(closeRemoteLink).not.toHaveBeenCalled();
+  topics = ['sessions'];
+  closeLegacyBackgroundLinkIfIdle('host');
+  expect(closeRemoteLink).toHaveBeenCalledOnce();
+});
+
+it('cleans up an old peer background open when its only foreground invoke completes', async () => {
+  const link = loadLegacyBackgroundOpen();
+  const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
+  const remoteInvoke = loadRemoteInvoke({
+    openRemoteLink: link.openRemoteLink,
+    openLinkCloseEpochs: link.openLinkCloseEpochs,
+    foregroundInvokesInFlight: link.foregroundInvokesInFlight,
+    closeLegacyBackgroundLinkIfIdle: link.closeLegacyBackgroundLinkIfIdle,
+    client: { needsLinkRecovery: () => true, invoke },
+  });
+  await expect(remoteInvoke('host', 'file-browser:read', [])).resolves.toEqual({ ok: true, result: null });
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(link.closeRemoteLink).toHaveBeenCalledOnce();
+});
 
 it('subscribes to a shared task even though its scoped accept omits background-link-v1', async () => {
   const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });

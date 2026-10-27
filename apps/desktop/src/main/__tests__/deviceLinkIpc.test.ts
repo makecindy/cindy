@@ -1577,10 +1577,12 @@ describe('device-link controller handlers', () => {
         .fn()
         .mockResolvedValueOnce({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } })
         .mockResolvedValue({ ok: true, result: { ok: true } }),
+      onSubscriptionRefsChanged: vi.fn(),
     });
     await expect(handleSubscribe(deps, 'dev-2', ['sessions'], 1)).rejects.toThrowError(
       /\[DEVICE_LINK_ACCESS_REVOKED\]/,
     );
+    expect(deps.onSubscriptionRefsChanged).toHaveBeenCalledWith('dev-2');
 
     // 窗口 2 订阅成功 → 记 ref(count=1;窗口 1 的失败订阅没留残留)。
     await handleSubscribe(deps, 'dev-2', ['sessions'], 2);
