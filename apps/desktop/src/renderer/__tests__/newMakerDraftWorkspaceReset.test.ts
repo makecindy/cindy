@@ -64,7 +64,7 @@ describe('resetDraftWorkspaceTargets', () => {
     expect(getDraft()).toEqual(first);
   });
 
-  it('记住明确选择的无项目对话，并在新草稿复位时清除该选择', () => {
+  it('记住明确选择的无项目对话，功能引导保留而发送复位清除该选择', () => {
     setNewMakerDraftOwner('explicit-dialogue-owner');
     patchDraft({ workingDir: null, explicitNoProject: true });
     setNewMakerDraftOwner('other-owner');
@@ -72,6 +72,8 @@ describe('resetDraftWorkspaceTargets', () => {
     expect(getDraft().explicitNoProject).toBe(true);
 
     resetDraftWorkspaceTargets();
+    expect(getDraft().explicitNoProject).toBe(true);
+    resetDraftWorkspaceTargets({ explicitNoProject: false });
     expect(getDraft().explicitNoProject).toBe(false);
   });
 });
