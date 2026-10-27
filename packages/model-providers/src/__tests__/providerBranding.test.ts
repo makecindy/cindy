@@ -48,6 +48,9 @@ describe('provider branding', () => {
   it.each([
     ['ollama', 'ollama'],
     ['cindy-local-ollama', 'ollama'],
+    ['opencode', 'opencode'],
+    ['opencode-cli', 'opencode'],
+    ['cindy-local-opencode', 'opencode'],
     ['lmstudio', 'lmstudio'],
     ['cindy-local-lmstudio', 'lmstudio'],
     ['llamacpp', 'llamacpp'],

@@ -244,25 +244,36 @@ export function parseModelsListResponse(
       sourceUrl && !openRouterSpeech && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
         ? (record.pricing as Record<string, unknown> | undefined)
         : undefined;
+    const explicitCost =
+      record.discoveredCost && typeof record.discoveredCost === 'object' && !Array.isArray(record.discoveredCost)
+        ? (record.discoveredCost as Record<string, unknown>)
+        : undefined;
     const discoveredCost = Object.fromEntries(
-      (isVercel ? [
-        ['input', 'input'], ['output', 'output'],
-        ['input_cache_read', 'cacheRead'], ['input_cache_write', 'cacheWrite'],
-      ] : [
-        ["prompt", "input"],
-        ["completion", "output"],
-        ["input_cache_read", "cacheRead"],
-        ["input_cache_write", "cacheWrite"],
-      ]).flatMap(([source, target]) => {
-        const raw = prices?.[source!];
-        if (
-          (typeof raw !== "string" || raw.trim() === "") &&
-          typeof raw !== "number"
-        )
-          return [];
-        const amount = Number(raw) * 1_000_000;
-        return Number.isFinite(amount) && amount >= 0 ? [[target, amount]] : [];
-      }),
+      explicitCost
+        ? (['input', 'output', 'cacheRead', 'cacheWrite'] as const).flatMap((target) => {
+            const raw = explicitCost[target];
+            return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+              ? [[target, raw]]
+              : [];
+          })
+        : (isVercel ? [
+            ['input', 'input'], ['output', 'output'],
+            ['input_cache_read', 'cacheRead'], ['input_cache_write', 'cacheWrite'],
+          ] : [
+            ["prompt", "input"],
+            ["completion", "output"],
+            ["input_cache_read", "cacheRead"],
+            ["input_cache_write", "cacheWrite"],
+          ]).flatMap(([source, target]) => {
+            const raw = prices?.[source!];
+            if (
+              (typeof raw !== "string" || raw.trim() === "") &&
+              typeof raw !== "number"
+            )
+              return [];
+            const amount = Number(raw) * 1_000_000;
+            return Number.isFinite(amount) && amount >= 0 ? [[target, amount]] : [];
+          }),
     );
     out.push({
       id,

@@ -153,6 +153,8 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'volcengine-agent-plan': 'volcengine',
   'tencentcloud-coding-plan': 'tencentcloud',
   'opencode-go': 'opencode',
+  'opencode-cli': 'opencode',
+  'cindy-local-opencode': 'opencode',
   'vercel-ai-gateway': 'vercel',
   ollama: 'ollama',
   'cindy-local-ollama': 'ollama',

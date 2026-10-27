@@ -2195,6 +2195,30 @@
           "modelsUrl": "https://ai-gateway.vercel.sh/v1/models"
         }
       }
+    },
+    {
+      "id": "opencode-cli",
+      "name": "OpenCode CLI",
+      "docsUrl": "https://github.com/makecindy/cindy/tree/main/docs/examples/opencode-bridge",
+      "authMethod": "none",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "http://127.0.0.1:11437/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true
+        },
+        "codex": {
+          "baseUrl": "http://127.0.0.1:11437/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:11437/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true
+        }
+      }
     }
   ]
 }
