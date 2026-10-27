@@ -111,7 +111,7 @@ export function LocalDbFatalScreen({
                 {t('localDbFatal.preparing.progress', { progress: Math.round(progress) })}
               </p>
             )}
-            {view === 'corrupt' && (message || code) && (
+            {(view === 'corrupt' || view === 'init-failed') && (message || code) && (
               <button
                 type="button"
                 className="text-12 text-[var(--text-tertiary)] underline transition-colors hover:text-[var(--text-secondary)]"
