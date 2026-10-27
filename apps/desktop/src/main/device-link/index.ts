@@ -16,7 +16,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
 import os from 'node:os';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
-import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
+import { assertBackgroundLinkAccepted, hasControlSubscription, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName } from './deviceName';
 import { desktopTransferCodec } from './transferCodec';
 import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
@@ -28,6 +28,7 @@ import {
   DeviceLinkClient,
   RoutedDeviceLinkClient,
   type DeviceLinkClientOptions,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   FILE_PEER_CHANNEL,
   isProviderSharePeer,
   isScopedPeer,
@@ -2011,16 +2012,23 @@ export async function openRemoteLink(
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
     }
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+    const outboundTopics = snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [];
+    const capabilities = linkOpenCapabilities(CONTROLLER_CAPABILITIES, outboundTopics);
     const accepted = await client.openLink(deviceId, {
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
-      // 本机不在控制对端(无订阅)时声明后台链路,对端不进入受控状态(见 backgroundLink)。
-      capabilities: linkOpenCapabilities(
-        CONTROLLER_CAPABILITIES,
-        snapshotSubscriptions(deviceId).length > 0,
-      ),
+      // 没有会话实时流订阅时声明后台链路；列表/文件监听不应点亮对端接入提示。
+      capabilities,
     });
+    if (capabilities.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1)) {
+      assertBackgroundLinkAccepted(accepted, {
+        hasOutboundControlSubscription: () => hasControlSubscription(
+          snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+        ),
+        closeLink: () => closeRemoteLink(deviceId),
+      });
+    }
     revokedByRemote.delete(deviceId);
     return accepted;
   };
@@ -2206,7 +2214,7 @@ async function remoteInvokeLive(
 /**
  * 控制端:后台只读请求(如用量历史读取其它电脑)。本机不在控制对端时,建的链路声明后台能力,
  * 对端不进入受控状态。旧被控端不认该能力、仍会装 legacy '*':需要新建链路且对端未声明支持时,
- * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
+ * 若本机仍无控制订阅（sessions / fs-watch:* 不算）就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
  * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
  */
 /** Main-process observers of pushes from other computers: the source and channel only, never the payload. */
@@ -2289,7 +2297,9 @@ async function backgroundInvokeDeviceLive(deviceId: string, channel: string, arg
   options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
-      hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
+      hasOutboundControlSubscription: () => hasControlSubscription(
+        snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
+      ),
       closeLink: () => closeRemoteLink(deviceId),
     });
   }
