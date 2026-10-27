@@ -1079,12 +1079,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             {titleContent}
           </SidebarTitleMarquee>
           {/* 任务标签常显、紧跟标题，不属于任务信息复选；标题过长时标题截断让位。 */}
+          <TaskTagDots tags={session.tags} />
           {session.projectPinnedAt != null && (
             <span title={t('ccAgent.sidebar.sessionMenu.pinnedInProject')} className="inline-flex shrink-0 text-sidebar-action-icon">
               <Pin size={12} aria-hidden="true" />
             </span>
           )}
-          <TaskTagDots tags={session.tags} />
           {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
           <BotFollowMark followers={followers} />
           {remoteIconKind && (
