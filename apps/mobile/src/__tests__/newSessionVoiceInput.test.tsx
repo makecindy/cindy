@@ -282,10 +282,11 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
-function mountInput() {
+function mountInput(conversationActive = false) {
   const container = document.createElement('div');
   const ref = createRef<HTMLTextAreaElement>();
   const finishVoiceRecording = vi.fn();
+  const voiceConversation = { active: conversationActive, stop: vi.fn() };
   root = createRoot(container);
   function render(listening: boolean, draft: string, selection = { start: draft.length, end: draft.length }) {
     const colors = palettes[native.mode];
@@ -295,7 +296,7 @@ function mountInput() {
       onChangeText: vi.fn(), onPasteImages: vi.fn(),
       ...newSessionVoiceComposerProps({ platform: native.platform, voiceIsListening: listening,
         firstMessage: draft, firstMessageSelection: selection,
-        finishVoiceRecording, composerPlaceholder: 'Draft',
+        finishVoiceRecording, composerPlaceholder: 'Draft', voiceConversation,
         voiceStopGestureSelectionGuardRef: { current: false },
         voicePendingSelectionEchoesRef: { current: [] } }),
       inputOverlay: listening ? createElement('span', { 'data-testid': 'preview' }, draft) : null,
@@ -305,8 +306,18 @@ function mountInput() {
     const styles: unknown[] = [native.props.style];
     return Object.assign({}, ...styles.flat(Infinity).filter(Boolean)) as TextStyle;
   };
-  return { container, ref, render, inputStyle, finishVoiceRecording };
+  return { container, ref, render, inputStyle, finishVoiceRecording, voiceConversation };
 }
+
+it('ends an active voice conversation when editing starts without submitting its unfinished dictation', () => {
+  // Production helper boundary: existing fixtures cover stop/selection, this covers explicit-End.
+  const input = mountInput(true);
+  input.render(true, 'Unfinished voice draft');
+  act(() => input.ref.current!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+  expect(input.voiceConversation.stop).toHaveBeenCalledOnce();
+  expect(input.finishVoiceRecording).not.toHaveBeenCalled();
+  expect(input.ref.current?.value).toBe('Unfinished voice draft');
+});
 
 describe.each(['light', 'dark'] as const)('new-session dictation input (%s)', (mode) => {
   it('hides Android native drawing while keeping streamed drafts and the same mounted input', () => {

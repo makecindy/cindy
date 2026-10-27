@@ -1,3 +1,5 @@
+import { VoiceConversationBar } from '@/session/VoiceConversationBar';
+import { useVoiceConversation } from '@/session/useVoiceConversation';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
@@ -1034,6 +1036,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
+    voiceConversation?: string;
     notificationResponse?: string;
     resourceKind?: string;
     resourceCollectionId?: string;
@@ -1053,6 +1056,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     visualOpenSearch?: string;
     visualSearchQuery?: string;
   }>();
+  const voiceConversationRequestId = Platform.OS === 'ios' ? readRouteParam(params.voiceConversation) : null;
   const sessionId = readRouteParam(params.sessionId) ?? '';
   const notificationResponse = readRouteParam(params.notificationResponse);
   const syncedNotificationResponseRef = useRef<string | null>(null);
@@ -3196,7 +3200,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       },
     });
   }, [deviceId, deviceName, guardedPush, sessionId, t]);
+  const voiceConversationBridgeRef = useRef<ReturnType<typeof useVoiceConversation> | null>(null);
   const handleComposerInputPressIn = useCallback(() => {
+    if (voiceConversationBridgeRef.current?.active) {
+      voiceConversationBridgeRef.current.stop();
+      return;
+    }
     if (voiceRecordingActiveRef.current || voiceState === 'listening') {
       // Tapping the input to stop dictation means the user wants to type.
       finishVoiceRecordingRef.current?.({ focusInput: true });
@@ -5530,7 +5539,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(nextDocument);
   }, [applyComposerDocument]);
 
-  const startVoiceRecording = useCallback(async () => {
+  const startVoiceRecording = useCallback(async (forConversation = false) => {
     if (
       voicePermissionRequestInFlightRef.current
       || voiceStartupInFlightRef.current
@@ -5679,6 +5688,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           onDraftChanged: (text, selection, replacement) => {
             if (selection) input?.rememberSelection(text, selection);
             writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
+            voiceConversationBridgeRef.current?.onTranscriptChanged(draftRef.current);
           },
           onStateChanged: (next) => {
             // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
@@ -5694,7 +5704,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           // re-activates the AVAudioSession and stalls the record tap (see
           // mobileVoiceCue.ts). Only the end cue, which plays after capture
           // stops, is wired.
-          onReadyForEndCue: credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,
+          onReadyForEndCue: !forConversation && credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,
           recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text),
           updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text),
           onRefinementApplied: (input) => {
@@ -5799,7 +5809,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setVoiceState('idle');
     setVoiceError(null);
     discardPendingPrewarm();
-    if (controller) void controller.cancel().catch(() => undefined);
+    return controller?.cancel().catch(() => undefined);
   }, [setVoiceState]);
 
   useEffect(() => {
@@ -5823,7 +5833,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     voicePermissionRequestAbortRef.current?.abort();
     voicePermissionRequestAbortRef.current = null;
     voicePermissionRequestInFlightRef.current = false;
-    cancelVoiceForAppBackground();
+    return cancelVoiceForAppBackground();
   }, [cancelVoiceForAppBackground]);
 
   useEffect(() => {
@@ -5856,11 +5866,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     };
   }, [sessionId]);
 
-  const finishVoiceRecording = useCallback(async (options: { sendAfterTranscribe?: boolean; focusInput?: boolean } = {}) => {
-    if (voiceStopInFlightRef.current) return;
+  const finishVoiceRecording = useCallback(async (options: { sendAfterTranscribe?: boolean; focusInput?: boolean } = {}): Promise<string | null> => {
+    if (voiceStopInFlightRef.current) return null;
     const controller = voiceControllerSessionRef.current;
-    if (!controller) return;
-    if (!voiceRecordingActiveRef.current && voiceState !== 'listening') return;
+    if (!controller) return null;
+    if (!voiceRecordingActiveRef.current && voiceState !== 'listening') return null;
     voiceStopInFlightRef.current = true;
     voiceControllerSessionRef.current = null;
     voiceStopAfterStartRef.current = false;
@@ -5900,12 +5910,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         if (!sendLatest) throw new Error(t('session.screen.voiceSenderNotReady'));
         await sendLatest({ documentOverride: latestDocument });
       }
+      return latestDraft;
     } catch (err) {
       voiceControllerSessionRef.current = null;
       voiceRecordingActiveRef.current = false;
       if (voiceCaretPlacementSeqRef.current === caretPlacementSeq) setVoiceCaretPlacementPending(false);
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
+      return null;
     } finally {
       voiceStopInFlightRef.current = false;
     }
@@ -6422,6 +6434,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   async function send(options: {
     draftOverride?: string;
     documentOverride?: ComposerDocument;
+    onSubmitted?: (clientId: string) => void;
     independentText?: string;
   } = {}) {
     const independent = options.independentText !== undefined;
@@ -6790,6 +6803,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           committed = true;
           messageAccepted = true;
           if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
+          options.onSubmitted?.(record.item.clientId);
           handoff?.release(true);
           // Durable ownership precedes clearing the composer or deleting annotation sources.
           if (!isMobileAuthOwnerCurrent(ownerAtSend) || !sendScopeStillAlive()) {
@@ -7225,6 +7239,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       messageAccepted = enqueueAccepted;
       if (!sendScopeStillAlive()) return messageAccepted;
       if (enqueueAccepted) setFollowUpEngaged(followUpScope);
+      options.onSubmitted?.(queued.clientId);
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
         // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
@@ -7343,6 +7358,34 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       .finally(() => setStopPending(false));
   };
 
+  const voiceConversationFocused = useIsFocused();
+  const voiceConversation = useVoiceConversation({
+    requestId: voiceConversationRequestId,
+    scope: `${auth.accountGeneration}:${deviceId}:${sessionId}`,
+    deviceId, sessionId,
+    ready: canUseComposer && composerDraftHydrated && !loading && !!currentSession,
+    focused: voiceConversationFocused,
+    draft: draftRef.current,
+    getDraft: () => draftRef.current,
+    voiceError,
+    blocked: pending.length > 0 || !!error || !!inputProjection.error || !!queueEditingRef.current,
+    startListening: async () => {
+      await startVoiceRecording(true);
+      if (!voiceRecordingActiveRef.current) throw new Error('VOICE_START_CANCELLED');
+    },
+    finishListening: () => finishVoiceRecording(),
+    cancelListening: cancelVoiceForGestureTermination,
+    send: async text => {
+      let clientId: string | undefined;
+      await send({ draftOverride: text, onSubmitted: id => { clientId = id; } });
+      return clientId;
+    },
+    items: renderItems,
+    running: isSessionStreaming || makerTurnRunning,
+  });
+
+  voiceConversationBridgeRef.current = voiceConversation;
+
   const pendingImagePreview = useComposerPendingImagePreview({ attachments, previews: attachmentPreviews, pendingUploads, getUploadedAttachmentId });
   const renderComposerControls = ({ composerLayout, composerSendUnavailableReason, composerStopDisabledReason, composerStopDisabled, composerShowInlineStop, composerSendSlotIsStop, composerShowSendButton, composerSendDisabled, voiceIsListening, voiceIsProcessing, voiceProcessingIndicator, voiceIsBusy, voiceRecordingTimer, composerVoicePlacement }: SessionComposerControlState): SessionComposerControls => {
     composerSendTargetEnabledRef.current = composerShowSendButton && !composerLayout.send.disabled;
@@ -7448,7 +7491,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
         active={composerLayout.voice.active}
         busy={voiceIsProcessing}
-        disabled={composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
+        disabled={voiceConversation.active || composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
         // 停止后的短暂收尾期仍禁止操作,但保持录音胶囊原样、不置灰。voice.disabled 在
         // 语音处理中恒为 true,不能拿它判断;只有与语音无关的禁用原因(发送中)才置灰。
         disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}
@@ -7663,7 +7706,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
           onLayout={measureSendButtonTarget}
-          onPress={send}
+          onPress={voiceConversation.active ? voiceConversation.submit : send}
           pressedStyle={styles.sendButtonPressed}
           style={[
             styles.sendButton,
@@ -10974,6 +11017,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   <ChevronRight size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
                 </Pressable>
               ) : null}
+              <VoiceConversationBar conversation={voiceConversation} />
               {companionChat && pendingCompanionReplyQuote && sessionId && !shareSelectionActive
                 && sessionOperationLayout.composerSlot === 'editable' ? (
                 <View
@@ -11024,6 +11068,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 visualFocusComposer={visualFocusComposer}
                 applyRichComposerChange={applyTypedComposerChange}
                 setComposerDraft={setTypedComposerDraft}
+                voiceConversationActive={voiceConversation.active}
                 handleComposerInputPressIn={handleComposerInputPressIn}
                 beginPastePlaceholders={beginPastePlaceholders}
                 failPastePlaceholders={failPastePlaceholders}
@@ -11898,6 +11943,7 @@ interface SessionComposerInputProps {
   visualFocusComposer: boolean;
   applyRichComposerChange: (value: ComposerDocument) => void;
   setComposerDraft: (value: SetStateAction<string>) => void;
+  voiceConversationActive: boolean;
   handleComposerInputPressIn: () => void;
   onPasteImages: (uris: string[]) => void;
   beginPastePlaceholders: (count: number) => void;
@@ -11915,6 +11961,7 @@ interface SessionComposerInputProps {
 /** High-frequency editor, dictation, timer and resize state stops at this boundary. */
 function SessionComposerInput({
   promptRecommendation,
+  voiceConversationActive,
   onDismissPromptRecommendation,
   source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
@@ -12322,7 +12369,7 @@ function SessionComposerInput({
                     cardActive={composerCardActive}
                     caretHidden={voiceIsListening}
                     compact={compactComposer && !composerCardActive}
-                    editable={!composerLayout.input.disabled}
+                    editable={!voiceConversationActive && !composerLayout.input.disabled}
                     floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}
                     cursorColor={colors.inputCaret}
                     inputFrameAnimatedStyle={composerResize.frameStyle}
@@ -12336,7 +12383,7 @@ function SessionComposerInput({
                         accessibilityHint={composerLayout.input.disabledReason ?? undefined}
                         accessibilityLabel={t('session.screen.composerPlaceholder')}
                         document={composerDocument}
-                        editable={!composerLayout.input.disabled}
+                        editable={!voiceConversationActive && !composerLayout.input.disabled}
                         height={composerInputVisibleHeight}
                         animatedHeight={composerResize.contentHeight}
                         hidden={voiceIsListening && !nativeComposerAvailable}

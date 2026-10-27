@@ -742,6 +742,26 @@
     "failed": "保存失败，请重试。",
     "restore": "恢复默认"
   },
+  "voiceConversation": {
+    "idle": "语音对话已暂停",
+    "starting": "正在打开麦克风…",
+    "listening": "正在听",
+    "processing": "正在整理消息…",
+    "sending": "正在发送…",
+    "waiting": "正在等待回复…",
+    "speaking": "正在朗读回复",
+    "paused": "语音对话已暂停",
+    "resume": "继续",
+    "send": "立即发送",
+    "end": "结束语音对话",
+    "autoSend": "说话稍作停顿后会自动发送。",
+    "updateRequired": "请安装新版应用以使用语音回复。",
+    "existingDraft": "输入框中还有未发送的文字，请先发送或清空，再继续语音对话。",
+    "selectDevice": "请连接一台可用的电脑，再次打开语音对话。",
+    "sendFailed": "消息未发送，请查看下方提示。",
+    "interrupted": "语音播放已中断。",
+    "failed": "语音对话已暂停，请检查连接和麦克风权限后继续。"
+  },
   "followUp": {
     "title": "要我帮你跟进任务吗？",
     "start": "开始跟进",

@@ -14,6 +14,7 @@
 //
 // 纯 JS(不进 @expo/fingerprint / 不改 runtimeVersion),可随热更下发。
 
+import { Platform } from 'react-native';
 import { clearSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import {
   isProviderShareLinkPath,
@@ -22,9 +23,25 @@ import {
 } from '@/device-link/providerShareLinkIntent';
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
+import {
+  clearVoiceConversationIntent,
+  isVoiceConversationLink,
+  receiveVoiceConversationIntent,
+  voiceConversationIntentHref,
+} from '@/session/voiceConversationIntent';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
+    // Every delivered shortcut is a new launch. The route carries an opaque ID;
+    // only its live, account-bound in-memory intent may start recording.
+    if (isVoiceConversationLink(path)) {
+      // Action Button voice entry is iOS-only. Unsupported warm links leave the
+      // current page and ordinary dictation untouched.
+      if (Platform.OS !== 'ios') return initial ? '/' : null;
+      clearSharedTaskInvitationIntent();
+      const intent = receiveVoiceConversationIntent(path);
+      return intent ? voiceConversationIntentHref(intent) : '/';
+    }
     // OpenSDK 的授权及 Universal Link 校验回调也会被 Expo Linking 广播给 Router。
     // 它们由原生 delegate 消费，不能当页面显示（更不能在 404 中展示 code）。
     // 不把微信 code 交给 auth-server 的 /auth PKCE 交换：两者不是同一种票据。
@@ -36,7 +53,10 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // 状态与诊断(提示页从内存取走可复制的链接),不合法的链接同样落到提示页、什么都不留。
     if (receiveProviderShareLinkIntent(path)) return PROVIDER_SHARE_LINK_ROUTE;
     const invitationUrl = /^\/(?:shared-session|shared-task\/join)\?/.test(path) ? `cindy:/${path}` : path;
-    if (receiveSharedTaskInvitationIntent(invitationUrl)) return '/shared-session';
+    if (receiveSharedTaskInvitationIntent(invitationUrl)) {
+      clearVoiceConversationIntent();
+      return '/shared-session';
+    }
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';

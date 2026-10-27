@@ -175,6 +175,7 @@ export interface NewSessionVoiceComposerInput {
   voiceStopGestureSelectionGuardRef: RefObject<boolean>;
   voicePendingSelectionEchoesRef: RefObject<Selection[]>;
   finishVoiceRecording(): unknown;
+  voiceConversation?: { active: boolean; stop(): unknown };
 }
 
 /** Keep the same native input mounted while Android draws the streamed overlay. */
@@ -196,6 +197,10 @@ export function newSessionVoiceComposerProps(
       input.voicePendingSelectionEchoesRef.current = [];
     },
     onPressIn: () => {
+      if (input.voiceConversation?.active) {
+        void input.voiceConversation.stop();
+        return;
+      }
       if (input.voiceIsListening) {
         input.voiceStopGestureSelectionGuardRef.current = true;
         setTimeout(() => {

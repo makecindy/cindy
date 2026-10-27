@@ -13,6 +13,7 @@ function readCallbacks(page: string) {
     ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const callbacks = new Map<string, string>();
   let cardActive = '';
+  let recordingParameters = '';
   function visit(node: ts.Node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'composerCardActive' && node.initializer) {
       cardActive = node.initializer.getText(source);
@@ -21,7 +22,7 @@ function readCallbacks(page: string) {
       const options = node.arguments[0];
       if (ts.isObjectLiteralExpression(options)) {
         for (const prop of options.properties) {
-          if (ts.isPropertyAssignment(prop) && ['onStateChanged', 'onError'].includes(prop.name.getText(source))) {
+          if (ts.isPropertyAssignment(prop) && ['onStateChanged', 'onError', 'onReadyForEndCue'].includes(prop.name.getText(source))) {
             callbacks.set(prop.name.getText(source), prop.initializer.getText(source));
           }
         }
@@ -31,12 +32,31 @@ function readCallbacks(page: string) {
       && ts.isCallExpression(node.initializer)
       && node.initializer.expression.getText(source) === 'useCallback') {
       callbacks.set(node.name.getText(source), node.initializer.arguments[0].getText(source));
+      const callback = node.initializer.arguments[0];
+      if (node.name.getText(source) === 'startVoiceRecording' && ts.isArrowFunction(callback)) {
+        recordingParameters = callback.parameters.map(parameter => parameter.getText(source)).join(',');
+      }
+    }
+    if (ts.isCallExpression(node) && node.expression.getText(source) === 'useVoiceConversation') {
+      const options = node.arguments[0];
+      if (ts.isObjectLiteralExpression(options)) {
+        for (const prop of options.properties) {
+          if (ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'startListening') {
+            callbacks.set('conversationStartListening', prop.initializer.getText(source));
+          }
+        }
+      }
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
+  // Keep the production recording parameters (including their defaults) and
+  // cue expression. The unrelated permission/network/capture body is omitted.
+  if (!callbacks.has('onReadyForEndCue')) throw new Error(`Missing ${page} end cue`);
+  callbacks.set('selectEndCue', `(${recordingParameters}) => (${callbacks.get('onReadyForEndCue')})`);
   return (bindings: Record<string, unknown>) => {
-    const names = ['handleVoiceButtonPressIn', 'setVoiceState', 'onStateChanged', 'onError'];
+    const names = ['handleVoiceButtonPressIn', 'setVoiceState', 'onStateChanged', 'onError',
+      'selectEndCue', 'conversationStartListening'];
     const compiled = ts.transpileModule(
       `return { ${names.map((name) => {
         if (!callbacks.has(name)) throw new Error(`Missing ${page} callback: ${name}`);
@@ -57,6 +77,8 @@ function readCallbacks(page: string) {
       setVoiceState(state: MobileVoiceState): void;
       onStateChanged(state: MobileVoiceState): void;
       onError(message: string): void;
+      selectEndCue(forConversation?: boolean): (() => void) | undefined;
+      conversationStartListening(): Promise<void>;
       cardActive(pending: boolean, busy: boolean): boolean;
     };
   };
@@ -202,5 +224,29 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s voice startup feedback', (page
     run.controllerError('capture failed');
     expect(run.view()).toEqual({ expanded: false, counting: false, pending: false });
     expect(run.setVoiceError).toHaveBeenCalledWith('capture failed');
+  });
+
+  // Regression: ending voice conversation leaves its route ID on the page.
+  // Execute the real conversation startup adapter and the real cue selector:
+  // only that capture suppresses sound; the following manual capture restores
+  // the user's enabled cue. Existing startup-state tests never exercise cues.
+  // Minimal input is a stale route ID and two consecutive recording modes.
+  // Unit tier uses extracted production expressions and an in-memory cue spy.
+  it('restores ordinary dictation end cues after voice conversation with its route still present', async () => {
+    const playCue = vi.fn();
+    const startVoiceRecording = async (...args: [boolean?]) => {
+      run.selectEndCue(...args)?.();
+    };
+    const run = callbacks({
+      voiceConversationRequestId: 'ended-voice-conversation',
+      credential: { settings: { playInteractionSound: true } },
+      playMobileVoiceInputEndCue: playCue,
+      voiceRecordingActiveRef: { current: true },
+      startVoiceRecording,
+    });
+    await run.conversationStartListening();
+    expect(playCue).not.toHaveBeenCalled();
+    await startVoiceRecording();
+    expect(playCue).toHaveBeenCalledOnce();
   });
 });

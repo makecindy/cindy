@@ -7,6 +7,7 @@ Mobile controller for Cindy device link. The app logs in with the same Cindy acc
 - [Design guide](./docs/mobile-design-guide.md)
 - [Remote control plan](./docs/remote-control-plan.md)
 - [Simulator debugging guide](./docs/simulator-debugging.md)
+- [iOS Action Button voice conversation setup and native-build requirements](./docs/action-button-voice.md)
 
 ## Local Setup
 

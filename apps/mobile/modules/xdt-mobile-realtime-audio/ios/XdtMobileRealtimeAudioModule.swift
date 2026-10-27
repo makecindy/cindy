@@ -8,6 +8,10 @@ public class XdtMobileRealtimeAudioModule: Module {
   private let engine = AVAudioEngine()
   private var isCapturing = false
   private var ownsAudioSession = false
+  private var ownsSpeechAudioSession = false
+  // Speech synthesis and its delegate live on main; audio-session mutations
+  // still use sessionStateQueue, shared with capture and its keep-alive timer.
+  private var speechPlayer: MobileVoiceSpeechPlayer?
   private var targetSampleRate = 16_000.0
   private var chunkIndex = 0
   private var interruptionObserver: NSObjectProtocol?
@@ -37,6 +41,13 @@ public class XdtMobileRealtimeAudioModule: Module {
     Events(onAudioChunk, onAudioError)
 
     AsyncFunction("start") { (options: [String: Any]?) in
+      // Cancel playback on its owning queue, then retain capture's existing
+      // background startup path (audio activation must not block UI rendering).
+      if Thread.isMainThread {
+        self.speechPlayer?.stop()
+      } else {
+        DispatchQueue.main.sync { self.speechPlayer?.stop() }
+      }
       return try self.sessionStateQueue.sync { () -> [String: Any] in
         try self.startCaptureLocked(options: options)
         let session = AVAudioSession.sharedInstance()
@@ -62,15 +73,49 @@ public class XdtMobileRealtimeAudioModule: Module {
       self.prewarmAudioSession()
     }
 
+    AsyncFunction("speak") { (options: [String: Any], promise: Promise) in
+      if self.speechPlayer == nil {
+        self.speechPlayer = MobileVoiceSpeechPlayer(
+          prepareAudio: { [weak self] in
+            guard let self else { return }
+            try self.sessionStateQueue.sync {
+              self.stopCaptureLocked(deactivateImmediately: true)
+              let session = AVAudioSession.sharedInstance()
+              try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+              try session.setActive(true)
+              self.ownsSpeechAudioSession = true
+            }
+          },
+          releaseAudio: { [weak self] in
+            guard let self else { return }
+            self.sessionStateQueue.sync {
+              self.deactivateSpeechSessionLocked()
+            }
+          }
+        )
+      }
+      self.speechPlayer?.speak(options: options, promise: promise)
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopSpeech") { (requestId: String) in
+      self.speechPlayer?.stop(requestId: requestId)
+    }.runOnQueue(.main)
+
     // Voice input is foreground-only. Stop both live capture and a speculative
     // prewarm immediately when the app reaches the background; relying on iOS
     // suspension alone leaves the AVAudioSession active during lifecycle races.
     OnAppEntersBackground {
       self.stopCapture(deactivateImmediately: true)
+      DispatchQueue.main.async {
+        self.speechPlayer?.stop()
+      }
     }
 
     OnDestroy {
       self.stopCapture(deactivateImmediately: true)
+      DispatchQueue.main.async {
+        self.speechPlayer?.stop()
+      }
     }
   }
 
@@ -82,6 +127,8 @@ public class XdtMobileRealtimeAudioModule: Module {
 
   // Must run on sessionStateQueue.
   private func prewarmAudioSessionLocked() {
+    // A speculative mic press must not reconfigure an active reply's session.
+    if ownsSpeechAudioSession { return }
     cancelScheduledDeactivateLocked()
     if isCapturing {
       return
@@ -148,8 +195,22 @@ public class XdtMobileRealtimeAudioModule: Module {
     try? session.setActive(false, options: .notifyOthersOnDeactivation)
   }
 
+  private func deactivateSpeechSessionLocked() {
+    guard ownsSpeechAudioSession else { return }
+    ownsSpeechAudioSession = false
+    let session = AVAudioSession.sharedInstance()
+    guard session.category == .playback, session.mode == .spokenAudio,
+          session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers] else { return }
+    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+  }
+
   // Must run on sessionStateQueue.
   private func startCaptureLocked(options: [String: Any]?) throws {
+    // A newer reply can claim the session after start cancelled the previous
+    // synthesizer on main. Never overwrite that newer playback's configuration.
+    if ownsSpeechAudioSession {
+      throw Exception(name: "ERR_AUDIO_PLAYBACK_ACTIVE", description: "Stop the spoken reply before starting microphone capture.")
+    }
     cancelScheduledDeactivateLocked()
     if isCapturing {
       return

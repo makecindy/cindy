@@ -746,6 +746,26 @@
     "failed": "Could not save. Try again.",
     "restore": "Restore defaults"
   },
+  "voiceConversation": {
+    "idle": "Voice conversation paused",
+    "starting": "Opening the microphone…",
+    "listening": "Listening",
+    "processing": "Preparing your message…",
+    "sending": "Sending…",
+    "waiting": "Waiting for a reply…",
+    "speaking": "Reading the reply aloud",
+    "paused": "Voice conversation paused",
+    "resume": "Continue",
+    "send": "Send now",
+    "end": "End voice conversation",
+    "autoSend": "A short pause in your speech sends the message automatically.",
+    "updateRequired": "Install the latest app version to use voice replies.",
+    "existingDraft": "There is unsent text. Send or clear it before continuing voice conversation.",
+    "selectDevice": "Connect an available computer, then open voice conversation again.",
+    "sendFailed": "The message was not sent. Check the message below.",
+    "interrupted": "Voice playback was interrupted.",
+    "failed": "Voice conversation paused. Check the connection and microphone access, then continue."
+  },
   "followUp": {
     "title": "Would you like me to follow up on your sessions?",
     "start": "Start Following Up",
