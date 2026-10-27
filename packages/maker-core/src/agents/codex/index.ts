@@ -6088,10 +6088,8 @@ assertRouteCurrent();
       if (descendantThreadId === threadId || descendantMcpThreadIds.has(descendantThreadId)) return;
       descendantMcpThreadIds.add(descendantThreadId);
       registerCodexMcpContext(descendantThreadId, 'descendant');
-      if (opts.fastModePolicy?.isAllowed() === false) {
-        void host.request(Method.ThreadSettingsUpdate, { threadId: descendantThreadId, serviceTier: null })
-          .catch(error => log.warn('descendant standard-mode update failed', { error: String(error) }));
-      }
+      // Native descendants inherit the root tier. V2 rejects direct child
+      // settings updates; the trusted request exit also clamps stale tiers.
     };
     const unregisterDescendantCodexMcpContexts = (): void => {
       for (const descendantThreadId of descendantMcpThreadIds) {
@@ -7296,10 +7294,12 @@ assertRouteCurrent();
      *   回带的 thread/settings/updated 通知会乱序到达, reconcile 出现中间态闪现 (实测过
      *   null→fast→default)。串行后 server 按序处理、通知按序回, 最终态一次到位。
      * - serviceTier 双 Option: 调用方传 'fast' (开) / null (清空); 不传该 key = 不变。
-     * - **失败吞错**: settings/update 失败绝不抛 — turn/start 携带仍是兜底, 会话不受
-     *   影响。server 回 ack 后真正状态经 thread/settings/updated 通知回带 (见 handlers)。
+     * - 只更新根线程，子线程由原生继承；V2 禁止直接更新子线程。
+     * - settings/update 失败通常只记录警告，后续 turn/start 与可信请求出口继续兜底。
+     *   仅在必须禁止 Fast 且没有请求代理时抛错，避免把未受保护的发送当作成功。
+     *   server 回 ack 后真正状态经 thread/settings/updated 通知回带 (见 handlers)。
      *
-     * 返回入队任务的 promise (链已 catch, 永不 reject), 调用方可 await 到本次发送完成。
+     * 返回本次入队任务的 promise；队列本身恢复后续任务，不吞必须执行的失败。
      */
     let settingsUpdateChain: Promise<void> = Promise.resolve();
     const pushThreadSettings = (patch: Omit<ThreadSettingsUpdateParams, 'threadId'>, requireApplied = false): Promise<void> => {
@@ -7309,15 +7309,16 @@ assertRouteCurrent();
         if (skipIfStaleHost('thread/settings/update')) return;
         try {
           const effectivePatch = opts.fastModePolicy?.isAllowed() === false ? { ...patch, serviceTier: null } : patch;
-          await Promise.all([threadId, ...(requireApplied ? descendantMcpThreadIds : [])].map(id =>
-            host.request<ThreadSettingsUpdateResponse>(Method.ThreadSettingsUpdate, { threadId: id, ...effectivePatch })));
+          await host.request<ThreadSettingsUpdateResponse>(Method.ThreadSettingsUpdate, { threadId, ...effectivePatch });
         } catch (e) {
-          log.warn('thread/settings/update failed (turn/start carry remains fallback)', {
+          const mustApplyNative = requireApplied && !hostUsesCodexProxy;
+          log.warn('thread/settings/update failed', {
             threadId,
             patchKeys: Object.keys(patch),
+            mustApplyNative,
             error: e instanceof Error ? e.message : String(e),
           });
-          if (requireApplied) throw e;
+          if (mustApplyNative) throw e;
         }
       });
       settingsUpdateChain = run.catch(() => undefined);

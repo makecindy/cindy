@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { voiceTaskFailure } from '../bots/voice/VoiceReplyTracker';
@@ -560,6 +561,8 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 打开就是为了输入的紧凑视图（伙伴私聊话题面板）：照常把焦点放进输入框。 */
+  focusComposerOnOpen?: boolean;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
@@ -843,6 +846,7 @@ function CCAgentSessionContent({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  focusComposerOnOpen = false,
   readOnly = false,
   botMentions,
   botIdentity,
@@ -6074,6 +6078,8 @@ function CCAgentSessionContent({
                     <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
                       getMessage={getQuoteMessage} names={botQuoteNames} />
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
+                  // Picking 「回复」 brings the caret here, ready to type the reply.
+                  focusRequest={pendingReplyQuote}
                   onSend={handleSend}
                   onComposerTyping={handleComposerTyping}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
@@ -6137,7 +6143,7 @@ function CCAgentSessionContent({
                       : botChatIdentity
                       ? t(botChatIdentity.deviceId ? 'bots.devicePicker.remotePlaceholder' : botComposerPlaceholderKey(botChatIdentity.name), {
                           name: botChatIdentity.name,
-                          device: botChatIdentity.deviceName || botChatIdentity.deviceId,
+                          device: deviceDisplayName(botChatIdentity.deviceId ?? '', botChatIdentity.deviceName),
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }
@@ -6168,8 +6174,8 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail || disableAutofocus}
-                  focusOnStorageKeyChange={ownsRoute}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
                   // (worker 自己不能再开协同)。

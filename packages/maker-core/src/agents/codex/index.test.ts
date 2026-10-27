@@ -12,6 +12,7 @@ import {
 } from './index.js';
 import { CodexForkError } from './fork-error.js';
 import { Session } from '../../session.js';
+import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
 import { Method, type TurnStartParams } from './app-server/protocol.js';
 import type { Effort } from '../../types/common.js';
@@ -7438,6 +7439,84 @@ describe('CodexAgent fast mode service tier', () => {
 });
 
 describe('CodexAgent thread/settings/update channel', () => {
+  // Unit regression for #6894: use the real adapter + send policy wrapper.
+  // Previous tests had no descendant when enforcing a prohibition. V2 rejects
+  // direct child settings; creating/completing one must not break the next send.
+  it('continues standard-mode sends after a V2 descendant completes without updating child settings', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turns = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadSettingsUpdate) {
+        if ((params as { threadId: string }).threadId !== 'start-thread-id') {
+          throw new Error('codex app-server thread/settings/update error -32600: direct app-server input is not allowed for multi-agent v2 sub-agents');
+        }
+        return {};
+      }
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turns}` } };
+      return undefined;
+    }, { codexProxyActive: true });
+    const policy = { isAllowed: () => false, subscribe: () => () => {} };
+    const handle = withFastModePolicy(await agent.startSession({
+      sessionId: 's-policy-v2', model: 'gpt-5.4', workingDir: '/repo',
+      fastMode: true, fastModePolicy: policy,
+    }), policy);
+    try {
+      await handle.send({ type: 'user', content: 'spawn a child' }, { throwOnStartFailure: true });
+      const handlers = host.getThreadHandlers()!;
+      handlers.itemStarted!({
+        threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { id: 'spawn-v2', type: 'subAgentActivity', kind: 'started', agentThreadId: 'child-v2' },
+      });
+      handlers.descendantNotification!('child-v2', 'turn/completed', {
+        threadId: 'child-v2', turn: { id: 'child-turn', status: 'completed' },
+      });
+      handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
+      await handle.send({ type: 'user', content: 'hello' }, { throwOnStartFailure: true });
+      await handle.setFastMode!('ultrafast');
+      expect(turns).toBe(2);
+      expect(handle.getFastMode!()).toBe(false);
+      expect(host.registerDescendantLineage).toHaveBeenCalledWith('child-v2', 'start-thread-id');
+      const updates = host.request.mock.calls.filter(([method]) => method === Method.ThreadSettingsUpdate);
+      expect(updates.length).toBeGreaterThan(0);
+      expect(updates.every(([, params]) =>
+        (params as { threadId: string; serviceTier: unknown }).threadId === 'start-thread-id' &&
+        (params as { serviceTier: unknown }).serviceTier === null)).toBe(true);
+      const turnCalls = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+      expect(turnCalls.every(([, params]) => (params as { serviceTier: unknown }).serviceTier === null)).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // A proxy enforces the wire policy even if native settings are unavailable;
+  // without that exit, native enforcement must still fail closed.
+  it.each([true, false])('handles a failed root policy update with proxy=%s', async codexProxyActive => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadSettingsUpdate) throw new Error('native settings unavailable');
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      return undefined;
+    }, { codexProxyActive });
+    const policy = { isAllowed: () => false, subscribe: () => () => {} };
+    const handle = withFastModePolicy(await agent.startSession({
+      sessionId: 's-policy-root', model: 'gpt-5.4', workingDir: '/repo', fastModePolicy: policy,
+    }), policy);
+    try {
+      const send = handle.send({ type: 'user', content: 'hello' }, { throwOnStartFailure: true });
+      if (codexProxyActive) {
+        await expect(send).resolves.toBeUndefined();
+        expect(host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1])
+          .toMatchObject({ serviceTier: null });
+        expect(handle.getFastMode!()).toBe(false);
+      } else {
+        await expect(send).rejects.toThrow('native settings unavailable');
+        expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('forces standard native requests despite stale tier defaults, notifications and re-enables under a host prohibition', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.ThreadSettingsUpdate ? {} : method === Method.ThreadStart ? {

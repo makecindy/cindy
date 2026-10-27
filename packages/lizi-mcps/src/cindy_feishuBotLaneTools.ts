@@ -25,6 +25,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { FeishuBotLaneScope } from './types.js';
+import { sendFileWithImagePreview, type PrepareOutboundImage } from './outboundImage.js';
 
 const TEXT_MAX_CHARS = 30_000;
 const EMOJI_TYPE_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -208,6 +209,7 @@ async function pinCallApiTarget(
 export function registerFeishuLaneTools(
   server: McpServer,
   getLaneScope: () => FeishuBotLaneScope | null,
+  prepareOutboundImage?: PrepareOutboundImage,
 ): void {
   const replyArg = z
     .string()
@@ -291,11 +293,12 @@ export function registerFeishuLaneTools(
         sendPath = real;
       }
       try {
-        const sent = await scope.im.sendFile(scope.laneUserId, sendPath, display_name);
+        const sent = await sendFileWithImagePreview(sendPath, display_name, prepareOutboundImage,
+          (file, name) => scope.im.sendFile(scope.laneUserId, file, name));
         if (!sent.ok) {
           return result({ ok: false, errorCode: sent.reason ?? 'SEND_FAILED', error: sent.reason ?? 'unknown' }, true);
         }
-        return result({ ok: true, ...(sent.messageId ? { messageId: sent.messageId } : {}) });
+        return result({ ...sent });
       } catch (err) {
         return failure(err, 'send_file');
       }

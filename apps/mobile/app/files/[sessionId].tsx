@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { FileTypeIcon, pickFileIcon } from '@/components/FileTypeIcon';
 import { FileTypeTile } from '@/components/FileTypeTile';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
@@ -147,7 +148,7 @@ function RemoteFileBrowserContent() {
   const sessionId = String(params.sessionId ?? '');
   const routeDeviceId = readRouteString(params.deviceId);
   const deviceId = routeDeviceId ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
-  const deviceName = readRouteString(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteString(params.deviceName));
   const relPath = readRouteString(params.relPath) ?? '';
   const router = useRouter();
   const guardedPush = useGuardedPush();

@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
+import { useVideoContextMenu } from './useVideoContextMenu';
 
 interface VideoLightboxProps {
   src: string;
@@ -40,7 +41,7 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
   const [isVisible, setIsVisible] = useState(false);
   const isClosingRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(videoRef, src);
   const lastMenuCloseAt = useRef(0);
 
   const handleClose = useCallback(() => {
@@ -179,12 +180,15 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
         onError={() => {
-          toast.warning(t('chat.media.videoMissing'));
+          // Playback errors also include blocked sources, offline devices and
+          // unsupported codecs; they do not prove that a file was deleted.
+          toast.warning(t('chat.media.videoUnavailable'));
           handleClose();
         }}
       />
       {canRevealInFolder ? (
         <DropdownMenu
+          modal={!portalContainer}
           open={menuPos !== null}
           onOpenChange={(open) => {
             if (!open) {
@@ -206,7 +210,12 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
               }}
             />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={2} className="z-[10000]">
+          <DropdownMenuContent
+            align="start" sideOffset={2} className="z-[10000]"
+            portalContainer={portalContainer}
+            style={portalContainer ? { pointerEvents: 'auto' } : undefined}
+            onCloseAutoFocus={restoreVideoFocus}
+          >
             <DropdownMenuItem onClick={handleCopyVideo}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyVideo')}

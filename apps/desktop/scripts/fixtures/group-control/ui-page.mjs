@@ -6,6 +6,18 @@ const members = [
 ];
 const base = { name: 'Design review', members, messages: 0, sidebar: true };
 const QUEUE_CROWD = ['Aster', 'Nova', 'Mira', 'Orin', 'Pax', 'Quill', 'Rhea'].map((name, i) => ({ botId: 'abcdefg'[i], name }));
+/** Nine members across three accounts, as in a real cross-account group (owner request 2026-10-26). */
+const CROWD = [
+  { botId: 'a', name: 'Aster', ownerName: 'Ada', isOwned: false, actorKind: 'bot' },
+  { botId: 'b', name: 'Nova', ownerName: 'Leo', isOwned: false, actorKind: 'bot' },
+  { botId: 'c', name: 'Leo', actorKind: 'human', isOwned: false },
+  { botId: 'd', name: 'Mira', ownerName: 'Ada', isOwned: false, actorKind: 'bot' },
+  { botId: 'e', name: 'Orin', ownerName: 'Kai', isOwned: false, actorKind: 'bot' },
+  { botId: 'f', name: 'Quill', actorKind: 'bot', isOwned: true },
+  { botId: 'g', name: 'Ada', actorKind: 'human', isOwned: false },
+  { botId: 'h', name: 'Kai', actorKind: 'human', isOwned: false },
+  { botId: 'i', name: 'Rhea', ownerName: 'Ada', isOwned: false, actorKind: 'bot' },
+];
 const LONG_DEVICE = 'Mac Studio · A very long device name for layout verification';
 
 /** Migrated from check-group-control-layout.mjs (remote-control notice above the composer). */
@@ -38,6 +50,11 @@ export default {
       controller: LONG_DEVICE,
     },
     multiline: { about: 'Eight-line draft pushes the composer up', data: base, lines: 8 },
+    crowded: {
+      about: 'Nine members from three accounts: the header names the group and a member count, not every member',
+      viewport: { width: 800, height: 600 },
+      data: { ...base, members: CROWD, bubbles: true },
+    },
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
       about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',

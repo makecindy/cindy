@@ -34,7 +34,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { notificationPreview } from '../notificationPreview.js';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
-import { createChatMessageNotifications } from './chatMessageNotifications.js';
+import { createChatMessageNotifications, selectChatAttentionMessage } from './chatMessageNotifications.js';
 import WebSocket from 'ws';
 import { z } from 'zod';
 import { and, asc, eq, gt } from 'drizzle-orm';
@@ -369,12 +369,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let supportsListRemoval = false;
   let supportsMemberAvatar = false;
   const personalList = createConversationListState();
+  const attentionGroups = new Set<string>();
+  const clearGroupAttention = (roomId: string) => {
+    attentionGroups.delete(roomId);
+    deps.onChatGroupAttention?.(roomId, null, current);
+  };
   const syncPersonalList = async (force = false) => {
     if (supportsListRemoval) await (force ? personalList.sync(api) : personalList.ensureSynced(api));
   };
   personalList.subscribe(row => {
     if (!current()) return;
-    if (row.hidden) { displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); }
+    if (row.hidden) { displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); clearGroupAttention(row.conversationId); }
     deps.onChanged?.({ groupId: row.conversationId, change: 'list', listState: row }, scope);
     for (const [source, target] of upgradedGroups) if (target === row.conversationId)
       deps.onChanged?.({ groupId: source, change: 'list', listState: row }, scope);
@@ -531,14 +536,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Local writes always notify: HTTP can finish before the server handles subscribe,
   // even on an open socket. Nearby realtime echoes join the same bounded window.
   const pendingChanges = new Map<string, ReturnType<typeof setTimeout>>();
+  // The first snapshot of each connection is a quiet baseline; use server sequences, not device clocks.
+  const notificationBaselines = new Map<string, bigint>();
   const chatNotifications = deps.onChatMessageNotification ? createChatMessageNotifications<Message>({
     current, selfId: () => selfId,
     message: (groupId, messageId) => api<Message>(`/conversations/${groupId}/messages/${messageId}`),
     snapshot: async groupId => {
+      const version = generation(groupId);
+      const connection = snapshotConnection;
       const snapshot = await api<Snapshot>(`/conversations/${groupId}/snapshot`);
       if (personalList.hidden(groupId)) throw new Error('CHAT_HIDDEN');
+      if (current() && generation(groupId) === version && snapshotConnection === connection) publishGroupAttention(snapshot);
       return snapshot;
     },
+    // Replayed group history restores unread above, but is not a new popup. Direct chats keep their existing delivery policy.
+    shouldAlert: (message, snapshot, groupId) => snapshot.room.kind === 'direct'
+      || BigInt(message.seq) > (notificationBaselines.get(groupId) ?? BigInt(message.seq)),
+    revision: groupId => `${snapshotConnection}:${generation(groupId)}:${personalList.hidden(groupId)}`,
     present: async (groupId, message) => {
       const snapshot = await recentSnapshot(groupId);
       const member = snapshot.members.find(member => member.id === message.authorId);
@@ -574,6 +588,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     pendingChanges.set(roomId, setTimeout(() => {
       pendingChanges.delete(roomId);
       if (!current()) return;
+      if (roomId && deps.onChatGroupAttention && rooms.has(roomId)) void refreshGroupAttention(roomId);
       deps.onChanged?.({ groupId: roomId, change: 'messages' }, scope);
       // A restored route may still contain the local ID until the user navigates.
       for (const [sourceId, targetId] of upgradedGroups)
@@ -988,6 +1003,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       try {
         const event = JSON.parse(String(raw));
         if (event.type === 'ready') {
+          notificationBaselines.clear();
           memberJoinedClaims = true;
           claimWakeVersion++;
           idleClaims.clear();
@@ -1001,7 +1017,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           for (const roomId of rooms.keys()) invalidate(roomId);
           ws.send(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '0' }));
           for (const [roomId, cursor] of rooms) ws.send(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: cursor }));
-          void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) { changed(roomId); autoContinuePlans(roomId); } changed(''); } }).catch(() => ws.close());
+          void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) {
+            if (deps.onChatGroupAttention) void refreshGroupAttention(roomId);
+            changed(roomId); autoContinuePlans(roomId);
+          } changed(''); } }).catch(() => ws.close());
         } else if (event.type === 'changes') {
           // Durable UI projections commit before ACK. Serial frames preserve the cursor order.
           if (event.scope.startsWith('conversation:')) {
@@ -1080,6 +1099,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             }).catch(() => ws.close());
           } else {
             rooms.delete(roomId);
+            clearGroupAttention(roomId);
             displayHistory.forget(roomId); sendJournal.forgetRoom(roomId);
             // Access may come back with a narrower history; re-read every reference.
             threads.reset();
@@ -1104,9 +1124,49 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const value = await api<Snapshot>(`/conversations/${roomId}/snapshot`);
     if (value.room.dissolved_at) retirePlanning(roomId);
     // A prior connection or room change makes this answer ineligible for reuse.
-    if (current() && snapshotConnection === connection && generation(roomId) === read)
+    if (current() && snapshotConnection === connection && generation(roomId) === read) {
       snapshots.set(roomId, { value, generation: read, at: Date.now() });
+      publishGroupAttention(value);
+    }
     return value;
+  }
+
+  function publishGroupAttention(s: Snapshot): void {
+    if (!current() || (!deps.onChatGroupAttention && !deps.onChatMessageNotification) || !isGroupRoom(s.room)) return;
+    if (!notificationBaselines.has(s.room.id)) notificationBaselines.set(s.room.id,
+      s.messages.reduce((max, message) => BigInt(message.seq) > max ? BigInt(message.seq) : max, 0n));
+    if (!deps.onChatGroupAttention) return;
+    const unavailable = personalList.hidden(s.room.id) || s.members.some(m => m.id === selfId && m.state !== 'joined');
+    const selected = unavailable ? null : selectChatAttentionMessage(s, selfId);
+    if (!selected) { clearGroupAttention(s.room.id); return; }
+    const view = messageView(selected, s.members, s.members);
+    const preview = notificationPreview(botGroupMessageSummaryText(view) || mediaNames(selected), 240)
+      || t('settings.notifications.chat.message');
+    const context = selected.threadRootId ? `${t('settings.notifications.chat.thread')} · ` : '';
+    attentionGroups.add(s.room.id);
+    deps.onChatGroupAttention(s.room.id, {
+      groupId: s.room.id, name: s.room.name, messageId: selected.id,
+      ...(selected.threadRootId ? { threadRootId: selected.threadRootId } : {}),
+      mentioned: selected.mentions?.includes(selfId) === true,
+      preview: `${context}${notificationPreview(view.authorName)}: ${preview}`,
+      lastMessageAt: Date.parse(selected.createdAt),
+      members: s.members.filter(m => m.state === 'joined').slice(0, 5).map(m => ({
+        name: memberName(m, s.members), avatar: m.groupAvatar ?? m.avatar ?? m.defaultAvatarUrl ?? localBot(m.id)?.avatar ?? '',
+        avatarColor: localBot(m.id)?.avatarColor ?? '',
+      })),
+    }, current);
+  }
+
+  async function refreshGroupAttention(roomId: string): Promise<void> {
+    const version = generation(roomId);
+    const connection = snapshotConnection;
+    try {
+      const value = await (history()?.snapshot<Snapshot>(roomId) ?? recentSnapshot(roomId));
+      if (current() && generation(roomId) === version && snapshotConnection === connection) publishGroupAttention(value);
+    } catch (error) {
+      if (current() && generation(roomId) === version && snapshotConnection === connection
+        && error instanceof ChatResponseError && [403, 404].includes(error.status)) clearGroupAttention(roomId);
+    }
   }
   async function snapshot(roomId: string) {
     const value = await readSnapshot(roomId);
@@ -1405,6 +1465,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function detail(roomId: string, options?: unknown, summaryOnly = false, attempt = 0): Promise<BotGroupDetail> {
     id.parse(roomId);
+    const attentionGeneration = generation(roomId);
+    const attentionConnection = snapshotConnection;
     const o = z.object({ conversationKind: z.literal('direct').optional(), beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
       sourceMessageIds: z.array(id).optional(),
       shownShares: z.array(z.object({ id, messageId: id, threadRootId: id, sharerId: z.string().min(1).max(200).optional() })).optional() }).parse(options ?? {});
@@ -1465,6 +1527,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       return detail(roomId, options, summaryOnly, attempt + 1);
     }
     const threadShareUpdates = shares?.updates;
+    if (current() && generation(roomId) === attentionGeneration && snapshotConnection === attentionConnection) publishGroupAttention(s);
     const reads = threadReads(s);
     const unread = reads ? s.messages.filter(m => !m.deleted && m.origin !== 'system' && m.origin !== 'import' && m.authorId !== selfId
       && (!m.threadRootId || m.mentions?.includes(selfId) || s.reads?.some(read => read.thread_key === m.threadRootId && read.following))
@@ -2869,14 +2932,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     listGroups: () => safe(async () => {
       await ensureRegistered(); await syncPersonalList(); beginUpgrade();
       const groups: BotGroupDetail[] = [];
+      const joinedIds = new Set<string>();
       let after: string | undefined;
       do {
         const page = await api<Array<Room & { state: string; head?: unknown }>>(`/conversations?limit=100${after ? `&after=${after}` : ''}`);
         // Only group rooms belong in the group list.
         const joined = page.filter(r => r.state === 'joined' && isGroupRoom(r) && !personalList.hidden(r.id));
+        for (const room of joined) joinedIds.add(room.id);
         groups.push(...settledValues(await settleBounded(joined, SUMMARY_CONCURRENCY, room => summary(room))));
         after = page.length === 100 ? page.at(-1)!.id : undefined;
       } while (after);
+      if (current()) for (const roomId of attentionGroups) if (!joinedIds.has(roomId)) clearGroupAttention(roomId);
       return { ok: true as const, groups: groups.filter(group => !personalList.hidden(group.id)) };
     }),
     getGroup: (roomId, options) => safe(async () => {
@@ -3115,6 +3181,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     editPlanStep: input => safe(() => actPlan(input, 'reassign')),
     dispose: () => {
       chatNotifications?.dispose();
+      for (const roomId of attentionGroups) clearGroupAttention(roomId);
       unsubscribeProfiles();
       disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); clearTimeout(claimTrigger); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();

@@ -156,3 +156,5 @@ Host 不因当前输入缺少主人标记再追加行动同意判定。只认运
 当前调用的委托、权限撤销和延迟交付检查继续保留；不恢复过期授权，不自动重发。
 实现见 `maker-ipc/taskActionAuthorization.ts`、`taskActionHost.ts` 与
 `mcp-integrations/codexHttpBridge.ts`；回归见各自授权及 HTTP 桥接测试。
+
+执行任务的模型可用 `cindy_helper` 的 cindy 类 `report_task_delivery` 报告本轮是否新交付最终结果；只限当前任务执行者，子 Agent 不可代报。三个 Harness 共用此入口；它不结束任务或授予操作权限。跟进通知门控见 `cindy-bots-runtime.md` §6.3。

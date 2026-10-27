@@ -147,7 +147,7 @@ export interface FinishSessionTerminalEventDeps {
     ReturnType<typeof createWorkerTurnStartSequencer>,
     'waitForStart'
   >;
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn'> | null;
+  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal'> | null;
 }
 
 export function finishSessionTerminalEvent(
@@ -753,6 +753,7 @@ export function finishSessionTerminalEvent(
       if (providerGroupHeldWorkerTerminal) {
         // 已与产品终态一起暂存，由同一次恢复登记结算。
       } else {
+        deps.orcaTeamServiceForEvents?.noteWorkerProductTerminal(workerTerminalCapture);
         void (async () => {
           try {
             await deps.workerTurnStartSequencer.waitForStart(session.id);

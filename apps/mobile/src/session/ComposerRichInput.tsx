@@ -176,6 +176,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         return;
       }
       inject('window.cindyComposer.focus();');
+      if (Platform.OS === 'android') webViewRef.current?.requestFocus();
     }, [inject]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
       if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
@@ -186,6 +187,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         return;
       }
       inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
+      if (focusAfter && Platform.OS === 'android') webViewRef.current?.requestFocus();
     }, [inject]);
 
     useEffect(() => {

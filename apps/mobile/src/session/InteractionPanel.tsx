@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
@@ -1900,7 +1901,7 @@ function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; 
   const devices = useRemoteDeviceIdentity();
   const styles = useInteractionStyles();
   const { t } = useTranslation();
-  const deviceName = devices.find(device => device.deviceId === deviceId)?.name || deviceId;
+  const deviceName = deviceDisplayName(deviceId, undefined, devices);
   const label = t('interaction.pluginSetup.remoteDesktop');
   return <InteractionTouchButton accessibilityLabel={label} disabled={busy}
     style={styles.primaryButton} testID="interaction.pluginSetup.remoteDesktop"

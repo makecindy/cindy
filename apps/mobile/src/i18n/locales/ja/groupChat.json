@@ -1,8 +1,8 @@
 {
   "title": "グループチャット",
   "memberSeparator": "、",
-  "memberCount_one": "仲間 {{count}} 人",
-  "memberCount_other": "仲間 {{count}} 人",
+  "memberCount_one": "メンバー {{count}} 人",
+  "memberCount_other": "メンバー {{count}} 人",
   "organizer": "まとめ役",
   "waitingConfirm": "{{name}} があなたの確認を待っています",
   "loadFailedTitle": "このグループチャットを読み込めません",

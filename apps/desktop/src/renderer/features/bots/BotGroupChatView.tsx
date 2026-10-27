@@ -80,7 +80,6 @@ import {
 import { ChatInviteButton, messageReactionRevision } from './ChatServerControls';
 import { animateThreadPanelWidth, ChatThreadPanel } from './ChatThreadPanel';
 import {
-  BotGroupOrganizerTag,
   BotGroupPlanFollowUpRow,
   type BotGroupFollowUpAction,
   type BotGroupPlanCardAction,
@@ -717,35 +716,29 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerStatus = headerGroup ? botGroupHeaderStatus(headerGroup, displayName, t) : null;
-  // A single-speaker group has no organizer: requests queue everyone or the named teammates.
-  const organizerBotId = headerGroup?.singleSpeaker ? null : headerGroup?.organizerBotId ?? null;
   const header = useMemo(() => {
     if (!headerGroup) return null;
-    const names = botGroupMemberNames(members.map((member) => ({ name: botGroupMemberDisplayName(member) })), separator);
+    const shown = direct ? members.filter(member => !member.isSelf) : members;
+    const names = botGroupMemberNames(shown.map((member) => ({ name: botGroupMemberDisplayName(member) })), separator);
+    // A group reads its size, not a roll call (owner request 2026-10-26); the names stay in the
+    // tooltip and the settings drawer. Live activity takes the line over while it lasts.
+    const summary = direct ? names : t('bots.groupChat.memberCount', { count: members.length });
     return (
       <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="flex h-full w-full min-w-0 items-center gap-2 pr-2">
         <button
           type="button"
           onClick={direct ? undefined : openSettings}
           disabled={direct}
+          title={names}
           className="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-[var(--surface-hover)]"
           style={WINDOW_NO_DRAG_STYLE}
         >
-          <BotGroupAvatarStack members={direct ? members.filter(member => !member.isSelf) : members} />
+          <BotGroupAvatarStack members={shown} />
           <span className="flex min-w-0 flex-col">
             <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>
-            <span className="flex min-w-0 items-center gap-2 text-11 leading-4 text-[var(--text-tertiary)]">
-              <span className="hidden min-w-0 items-center gap-1 truncate sm:flex" title={names}>
-                {(direct ? members.filter(member => !member.isSelf) : members).map((member, index) => (
-                  <Fragment key={member.botId}>
-                    {index > 0 ? <span aria-hidden>{separator}</span> : null}
-                    <span className="shrink-0">{botGroupMemberDisplayName(member)}</span>
-                    {member.botId === organizerBotId ? <BotGroupOrganizerTag /> : null}
-                  </Fragment>
-                ))}
-              </span>
-              {headerStatus ? <BotGroupHeaderStatusText text={headerStatus} /> : null}
-            </span>
+            {headerStatus
+              ? <BotGroupHeaderStatusText text={headerStatus} className="text-11 leading-4" />
+              : <span data-testid="bot-group-header-summary" className="min-w-0 truncate text-11 leading-4 tabular-nums text-[var(--text-tertiary)]">{summary}</span>}
           </span>
         </button>
         <div className="ml-auto flex shrink-0 items-center">
@@ -764,7 +757,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, members, organizerBotId, headerStatus, openSettings, separator, settingsLabel]);
+  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, members, headerStatus, openSettings, separator, settingsLabel, t]);
   useRegisterContentHeader(header);
 
   const running = group?.round.status === 'running';

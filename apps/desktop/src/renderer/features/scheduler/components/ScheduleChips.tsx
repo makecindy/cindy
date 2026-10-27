@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
@@ -1154,7 +1155,7 @@ export function ModelEffortChip({
       : undefined;
   }, [agentDeviceId, remoteLocation, routeDevices.devices]);
   const agentDeviceName = agentDeviceId
-    ? (routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name || agentDeviceId)
+    ? (deviceDisplayName(agentDeviceId, undefined, routeDevices.devices ?? []))
     : null;
   const xdConnected = providers.some((p) => p.id === 'xd' && p.connected);
   const availableModels = caps.capabilities?.availableModels;

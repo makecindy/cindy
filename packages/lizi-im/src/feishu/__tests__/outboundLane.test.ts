@@ -154,12 +154,15 @@ describe('feishu outbound lane routing', () => {
       handle.replace('revised');
       await vi.advanceTimersByTimeAsync(1500);
       await handle.finalize('finished');
-      expect(larkMocks.patch).toHaveBeenCalledTimes(2);
+      expect(larkMocks.patch).toHaveBeenCalledTimes(3);
       for (const client of larkMocks.patch.mock.contexts) expect(client).toBe(creator);
       expect(larkMocks.create.mock.contexts.at(-1)).toBe(creator);
-      expect(larkMocks.create).toHaveBeenLastCalledWith(expect.objectContaining({
+      expect(larkMocks.create).toHaveBeenCalledTimes(1);
+      expect(larkMocks.patch).toHaveBeenLastCalledWith(expect.objectContaining({
+        path: { message_id: handle.messageId },
         data: expect.objectContaining({ content: expect.stringContaining('finished') }),
       }));
+      expect(larkMocks.request).not.toHaveBeenCalled();
     },
   );
 
@@ -186,16 +189,36 @@ describe('feishu outbound lane routing', () => {
     const handle = await start(lane);
     expect(larkMocks.reply.mock.calls[0][0].path).toEqual({ message_id: 'om_first' });
     await handle.finalize('answer');
+    if (!thread) expect(larkMocks.reply.mock.calls[0][0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+    expect(larkMocks.patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      path: { message_id: handle.messageId },
+      data: expect.objectContaining({ content: expect.stringContaining('answer') }),
+    }));
+    expect(larkMocks.request).not.toHaveBeenCalled();
+    const next = await start(lane);
+    expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
+    next.close();
+  });
+
+  it.each([false, true])('failed final edit falls back in the same lane without taking the next turn (thread=%s)', async (thread) => {
+    const lane = thread ? 'g/oc_chat/omt_topic' : 'g/oc_chat';
+    outbound.pushReplyAnchor(lane, 'om_first');
+    outbound.pushReplyAnchor(lane, 'om_second');
+    const handle = await start(lane);
+    larkMocks.patch.mockRejectedValueOnce(new Error('card no longer editable'));
+    await handle.finalize('answer');
     if (thread) {
       expect(larkMocks.reply.mock.calls[1][0].path).toEqual({ message_id: 'om_first' });
       expect(larkMocks.create).not.toHaveBeenCalled();
     } else {
-      expect(larkMocks.reply.mock.calls[0][0].data).not.toHaveProperty('reply_in_thread');
-      expect(larkMocks.create).toHaveBeenCalledWith(expect.objectContaining({
+      expect(larkMocks.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         params: { receive_id_type: 'chat_id' },
         data: expect.objectContaining({ receive_id: 'oc_chat', content: expect.stringContaining('answer') }),
       }));
     }
+    expect(larkMocks.request).not.toHaveBeenCalled();
     const next = await start(lane);
     expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
     next.close();

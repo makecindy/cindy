@@ -200,6 +200,28 @@ it('does not replace the empty editor after an external empty-draft notification
   expect(h.editor!.state.selection.from).toBe(1);
 });
 
+// Companion chat 「回复」 bug: the quote appeared above the composer but focus stayed on the
+// message's button. Each new quote (also a second one on the same message) is a new request.
+it('focuses the editor for each new focus request, not on mount or a repeated value', async () => {
+  supplyRangeGeometry();
+  const quote = { clientId: 'm1' };
+  const view = renderComposer({ focusRequest: quote });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  expect(h.editor!.isFocused).toBe(false);
+  const outside = document.body.appendChild(document.createElement('button'));
+  view.rerender(<ChatInput {...view.props} focusRequest={quote} />);
+  expect(h.editor!.isFocused).toBe(false);
+  view.rerender(<ChatInput {...view.props} focusRequest={null} />);
+  expect(h.editor!.isFocused).toBe(false);
+  view.rerender(<ChatInput {...view.props} focusRequest={{ clientId: 'm1' }} />);
+  await waitFor(() => expect(h.editor!.isFocused).toBe(true));
+  outside.focus();
+  expect(h.editor!.isFocused).toBe(false);
+  view.rerender(<ChatInput {...view.props} focusRequest={{ clientId: 'm1' }} />);
+  await waitFor(() => expect(h.editor!.isFocused).toBe(true));
+  outside.remove();
+});
+
 it('does not rehydrate an empty stored document when voice busy state changes', async () => {
   saveDraft('composer-regression', { text: { type: 'doc', content: [{ type: 'paragraph' }] }, attachments: [] });
   const view = renderComposer();

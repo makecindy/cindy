@@ -88,6 +88,7 @@ import {
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata.js';
+import { collectInlineMessageReferenceKeys } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendRecoveryCheckpointPrompt,
   buildRecoveryCheckpoint,
@@ -486,6 +487,7 @@ export interface AgentInputCoordinatorDeps {
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
+    options?: { inlineMessageKeys?: ReadonlySet<string> },
   ) => Promise<AgentInputSessionReferenceContext[]>;
   /**
    * Refresh ephemeral structured-reference state at the actual dispatch
@@ -4589,7 +4591,10 @@ export class AgentInputCoordinator {
       throw new Error('Remote session reference snapshot is missing; edit and resend the message.');
     }
     try {
-      return await (this.deps.resolveSessionReferences?.(item.sessionRefs) ?? []);
+      return await (this.deps.resolveSessionReferences?.(item.sessionRefs, {
+        // 引用的消息正文已经在用户消息里逐字送达，引用载荷不再重复投递。
+        inlineMessageKeys: collectInlineMessageReferenceKeys(item.agentReferences),
+      }) ?? []);
     } catch (error) {
       // Session links are still useful as ordinary Agent-facing text when the
       // referenced session belongs to another account, was deleted, or is

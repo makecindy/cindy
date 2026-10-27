@@ -158,6 +158,8 @@ export interface OrcaBridgeMcpDeps {
     makerMemoryEnabled?: boolean;
   }>;
   orcaTeamStore?: OrcaTeamStore;
+  /** Capture before dispatch; finish once on acceptance or failure, never at queued drain. */
+  captureLocalWorkerReport?: (sessionId: string) => (accepted: boolean) => Promise<void>;
   /**
    * Worker-scoped read-only transcript access. The bridge resolves the owning Lead from the
    * attested Worker link; callers never choose an arbitrary session id.
@@ -593,17 +595,6 @@ async function ensureSessionFromMeta(
   return session;
 }
 
-function updatePersistedWorkerStatus(
-  deps: OrcaBridgeMcpDeps,
-  workerId: string,
-  status: OrcaWorkerStatus,
-  log: Logger,
-): void {
-  deps.orcaTeamStore?.updateWorkerStatus(workerId, status).catch((err) => {
-    log.warn('update worker status failed', { err: String(err), workerId, status });
-  });
-}
-
 function readWorkerIdentity(
   vendorOptions: Record<string, unknown> | undefined,
   workerIdParam?: string,
@@ -799,93 +790,88 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             liveEntry.status = 'running';
             liveEntry.lastEventAt = Date.now();
           };
-          // worker 回报被 host 接收(直发 accept 或入队成功)即视为"已回报": 立刻标 done +
-          // Host 负责结清 auto-bridge pending。不能等排队消息 drain 到 lead 才清 —— lead 忙时 worker
-          // 自己的 turn 会先结束, turn-end 兜底看到 pending 还在会把它当"忘了回报"再补
-          // 一条桥接, lead 收到两条重复报告。幂等守卫同时防住 drain 时 hostOnAccepted
-          // 二次触发: 那时 worker 可能已被重新派活(running), 不能再改回 done。
-          let workerReportSettled = false;
-          const settleWorkerReport = () => {
-            if (workerReportSettled) return;
-            workerReportSettled = true;
-            // The remote Host owns input-specific settlement; a later queued assignment
-            // must not be marked done by this older turn's report. Local MCP stays unchanged.
-            if (options.manageWorkerStatus !== false)
-              updatePersistedWorkerStatus(deps, link.workerId, 'done', log);
-          };
-          const dispatchError = await dispatchOrcaToolMessage({
-            session: liveEntry.session,
-            // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
-            // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
-            message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
-            deps,
-            rawContent: message,
-            source: 'worker',
-            senderLabel: link.workerId,
-            ...(delivery ? { delivery } : {}),
-            log,
-            meta: {
-              source: 'mcp-tool',
-              entrypoint: 'orca_worker_bridge.send_to_lead',
-              sessionId: link.leadSessionId,
-              agentKind: link.leadSession.agentKind,
-              action: 'dispatch-to-lead',
-              context: makeOrcaSendContext(
-                'orca_worker_bridge.send_to_lead',
-                link.leadSessionId,
-                'dispatch-to-lead',
-              ),
-              workerId: link.workerId,
-              leadSessionId: link.leadSessionId,
-            },
-            getLogState: () => ({
-              workerStatus: liveEntry.status,
-              // 自动回报 pending 由 Host 管理；保留既有诊断字段。
-              autoBridgePending: false,
-            }),
-            onAccepted: markLeadDispatchAccepted,
-            hostOnAccepted: () => {
-              markLeadDispatchAccepted();
-              settleWorkerReport();
-            },
-          });
-          if (isHostOrcaDispatch(dispatchError)) {
-            // 排队与插话都视为已回报;直发仍由 hostOnAccepted 结清(settle 幂等)。
-            if (dispatchError.queued || dispatchError.steered) settleWorkerReport();
+          // Reporting settles the obligation, not the turn. The Host retains its captured
+          // identity until the product terminal; execution-device settlement stays separate.
+          const finishReport = options.manageWorkerStatus !== false
+            ? deps.captureLocalWorkerReport?.(link.workerSessionId)
+            : undefined;
+          let reportAccepted = false;
+          try {
+            const dispatchError = await dispatchOrcaToolMessage({
+              session: liveEntry.session,
+              // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
+              // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
+              message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
+              deps,
+              rawContent: message,
+              source: 'worker',
+              senderLabel: link.workerId,
+              ...(delivery ? { delivery } : {}),
+              log,
+              meta: {
+                source: 'mcp-tool',
+                entrypoint: 'orca_worker_bridge.send_to_lead',
+                sessionId: link.leadSessionId,
+                agentKind: link.leadSession.agentKind,
+                action: 'dispatch-to-lead',
+                context: makeOrcaSendContext(
+                  'orca_worker_bridge.send_to_lead',
+                  link.leadSessionId,
+                  'dispatch-to-lead',
+                ),
+                workerId: link.workerId,
+                leadSessionId: link.leadSessionId,
+              },
+              getLogState: () => ({
+                workerStatus: liveEntry.status,
+                // 自动回报 pending 由 Host 管理；保留既有诊断字段。
+                autoBridgePending: false,
+              }),
+              onAccepted: markLeadDispatchAccepted,
+              hostOnAccepted: () => {
+                markLeadDispatchAccepted();
+              },
+            });
+            if (isHostOrcaDispatch(dispatchError)) {
+              // Host acceptance includes direct, queued and same-turn steered delivery.
+              reportAccepted = true;
+              return text({
+                ok: true,
+                ...(dispatchError.steered ? { steered: true } : {}),
+                ...(dispatchError.queued ? { queued: true } : {}),
+                ...(dispatchError.queued && dispatchError.steerFallbackReason
+                  ? { steer_fallback_reason: dispatchError.steerFallbackReason }
+                  : {}),
+                worker_id: link.workerId,
+                lead_session_id: link.leadSessionId,
+              });
+            }
+            if (dispatchError) {
+              liveEntry.status = previousStatus;
+              liveEntry.finalText = previousFinalText;
+              liveEntry.lastEventAt = previousLastEventAt;
+              return dispatchError;
+            }
+            markLeadDispatchAccepted();
+            await deps.persistUserMessage(link.leadSessionId, {
+              clientId: randomUUID(),
+              content: formatOrcaCommunicationMessage('worker', message),
+            }).catch((err) => {
+              log.warn('persist lead message failed', {
+                err: String(err),
+                workerId: link.workerId,
+                leadSessionId: link.leadSessionId,
+              });
+            });
+            reportAccepted = true;
             return text({
               ok: true,
-              ...(dispatchError.steered ? { steered: true } : {}),
-              ...(dispatchError.queued ? { queued: true } : {}),
-              ...(dispatchError.queued && dispatchError.steerFallbackReason
-                ? { steer_fallback_reason: dispatchError.steerFallbackReason }
-                : {}),
               worker_id: link.workerId,
               lead_session_id: link.leadSessionId,
             });
+          } finally {
+            await finishReport?.(reportAccepted);
           }
-          if (dispatchError) {
-            liveEntry.status = previousStatus;
-            liveEntry.finalText = previousFinalText;
-            liveEntry.lastEventAt = previousLastEventAt;
-            return dispatchError;
-          }
-          markLeadDispatchAccepted();
-          await deps.persistUserMessage(link.leadSessionId, {
-            clientId: randomUUID(),
-            content: formatOrcaCommunicationMessage('worker', message),
-          }).catch((err) => {
-            log.warn('persist lead message failed', {
-              err: String(err),
-              workerId: link.workerId,
-              leadSessionId: link.leadSessionId,
-            });
-          });
-          settleWorkerReport();
-          return text({
-            ok: true,
-            worker_id: link.workerId,
-            lead_session_id: link.leadSessionId,
-          });
         },
       );
 

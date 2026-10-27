@@ -1,3 +1,4 @@
+import { readTaskDeliveryNote } from '../bot-autonomy/hub.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -641,7 +642,7 @@ import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupCha
 import { settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
-import { showDesktopChatMessage } from '../notificationService.js';
+import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -1991,6 +1992,7 @@ export function cancelSchedulerAutoResume(sessionId: string, runId: string): boo
  * Worker 状态与 auto-bridge(把异常终止回报给 Lead)。
  */
 function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppressedTerminal): void {
+  orcaTeamServiceForEvents?.noteWorkerProductTerminal(payload.capture as WorkerTerminalTurnCapture | undefined);
   void (async () => {
     try {
       await workerTurnStartSequencer.waitForStart(sessionId);
@@ -3121,6 +3123,12 @@ type DispatchOrcaInterAgentMessage = (
 ) => Promise<DispatchOrcaInterAgentMessageResult>;
 
 let dispatchInterAgentMessageHolder: DispatchOrcaInterAgentMessage | null = null;
+
+/** Local/SSH sessions settle reports without completing the Worker turn. */
+export function captureLocalWorkerReport(sessionId: string): (accepted: boolean) => Promise<void> {
+  if (!orcaTeamServiceForEvents) throw new Error('Orca team service is not initialized');
+  return orcaTeamServiceForEvents.captureLocalWorkerReport(sessionId);
+}
 
 export async function dispatchInterAgentMessage(
   params: DispatchOrcaInterAgentMessageParams,
@@ -11722,9 +11730,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             { visibleText: source.persistedText ?? message },
           )
         : null;
-      const outgoingMessage: UserMessage = sourceNote
+      const sourcedMessage: UserMessage = sourceNote
         ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
         : withHandoff;
+      const deliveryNote = shouldPrependMobileClientPromptNote(message, session.agentKind)
+        ? await readTaskDeliveryNote(session.id) : null;
+      const deliveryPlan = wireNoteMemory.plan(session.id, { 'task-delivery': deliveryNote }, { force: !!pendingHandoff, partial: true });
+      const outgoingMessage = deliveryPlan.notes['task-delivery']
+        ? prependNoteToWireUserMessage(sourcedMessage as HandoffWireMessage, deliveryPlan.notes['task-delivery']) as UserMessage
+        : sourcedMessage;
       // Idle direct sends never carry internal coordination (that is force-queued).
       const releaseTurnSource = noteChannelTurnSource(session.id, channelTurnSourceFor(source?.origin, false));
       try {
@@ -11757,7 +11771,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (pendingHandoff && sendResult.accepted) {
           agentHandoffPending.consume(session.id);
         }
-        if (sendResult.accepted) void touchSessionActivityInDb(session.id);
+        if (sendResult.accepted) {
+          deliveryPlan.commit();
+          void touchSessionActivityInDb(session.id);
+        }
         return sendResult;
       } catch (err) {
         if (turnChangeSetStarted) {
@@ -13173,7 +13190,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return result.ok ? { ok: true as const } : { ok: false as const, errorCode: result.errorCode };
       },
     }),
-    onChatMessageNotification: (event, current) => { void showDesktopChatMessage(event, current).catch(() => log.warn('Chat notification unavailable')); },
+    onChatGroupAttention: (groupId, input, current) => {
+      if (current()) getAgentIslandService()?.setGroupChat(groupId, input);
+    },
+    onChatMessageNotification: (event, current) => {
+      if (!current() || !getDesktopNotificationsEnabled()) return;
+      if (event.conversationKind !== 'direct' && getAgentIslandService()?.notifyGroupChat(event.groupId)) return;
+      void showDesktopChatMessage(event, current).catch(() => log.warn('Chat notification unavailable'));
+    },
     onStepSettled: (event, scope) => {
       const ownerScope = scope as ReturnType<typeof captureDataOwnerBroadcastScope> | undefined;
       if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -18204,6 +18228,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readReplyQuoteNote,
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
+    readTaskDeliveryNote,
     planRepeatableWireNotes: (sessionId, notes, opts) => wireNoteMemory.plan(sessionId, notes, opts),
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);

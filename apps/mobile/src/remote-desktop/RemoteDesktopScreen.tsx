@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
@@ -218,7 +219,7 @@ export default function RemoteDesktopScreen() {
     handoff?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
-  const deviceName = typeof rawName === "string" ? rawName : deviceId;
+  const deviceName = deviceDisplayName(deviceId, typeof rawName === "string" ? rawName : undefined);
   const handoff =
     typeof rawHandoff === "string" && rawHandoff ? rawHandoff : undefined;
   const router = useRouter();

@@ -181,6 +181,79 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+
+  // Unit: exercise the real transport and read.changed path. The former notification-only
+  // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.
+  it('projects one group reminder, follows server reads and mute, and restores reconnect history without alerting it', async () => {
+    service.dispose();
+    const attention = vi.fn();
+    const notify = vi.fn();
+    deps.onChatGroupAttention = attention;
+    deps.onChatMessageNotification = notify;
+    const peer = { id: botId, kind: 'human', name: 'Chris', state: 'joined', role: 'member', ownerActorId: botId, avatar: '👋' };
+    const message = (seq: string, threadRootId: string | null = null) => ({
+      id: `50000000-0000-4000-8000-${seq.padStart(12, '0')}`, seq, authorId: botId, author: { kind: 'human', name: 'Chris' },
+      content: [{ type: 'text', text: `Message ${seq}` }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId,
+      mentions: threadRootId ? [selfId] : [],
+    });
+    const topic = '70000000-0000-4000-8000-000000000001';
+    const snapshot = { room: room(roomId), members: [peer], messages: [message('3'), message('2', topic)], cursor: '3',
+      reads: [{ thread_key: 'main', read_seq: '0', muted: false }, { thread_key: topic, read_seq: '0', muted: false }] };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/conversations?limit=100') return { body: [snapshot.room] };
+      if (route === '/executions/claim') return { body: { execution: null } };
+      if (route.endsWith('/snapshot')) return { body: snapshot };
+      if (route.includes('/messages?')) return { body: snapshot.messages };
+      return response(route);
+    });
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    expect((await service.listGroups()).ok).toBe(true);
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ groupId: roomId, messageId: message('2').id,
+      threadRootId: topic, mentioned: true, members: [{ name: 'Chris', avatar: '👋' }] });
+    expect(notify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets.at(-1)!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(150);
+    const readChanged = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '5',
+      changes: [{ type: 'read.changed', entityId: roomId }] }));
+    snapshot.reads[1].read_seq = '2'; readChanged();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('3').id, mentioned: false });
+    snapshot.reads[0].muted = true; readChanged();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toBeNull();
+    snapshot.reads[0].muted = false;
+    readChanged();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('3').id, mentioned: false });
+    const received = (seq: string) => socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: seq,
+      changes: [{ type: 'message.created', entityId: message(seq).id }] }));
+    received('3');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).not.toHaveBeenCalled();
+    snapshot.messages.unshift(message('6')); received('6');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('6').id, mentioned: false });
+    // Server/device timestamps deliberately stay equal: only server sequences decide replay.
+    socket.emit('close');
+    snapshot.messages.unshift(message('7'));
+    await vi.advanceTimersByTimeAsync(500);
+    const reconnected = fixture.sockets.at(-1)!;
+    Object.defineProperty(reconnected, 'readyState', { value: 1 });
+    reconnected.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(150);
+    reconnected.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '7',
+      changes: [{ type: 'message.created', entityId: message('7').id }] }));
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('7').id });
+    reconnected.emit('message', JSON.stringify({ type: 'scope_error', scope: `conversation:${roomId}`, error: { code: 'FORBIDDEN' } }));
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toBeNull();
+  });
   // #6907: getGroup feeds Desktop and remote phones. Existing fixtures never pair group name A
   // with the bot's account ownerName B; exercise the production projection (unit tier).
   it.each(['Nickname A', 'Account B', '   ', null] as const)('uses the current room owner name %s with safe account fallback', async name => {
