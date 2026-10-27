@@ -1132,7 +1132,7 @@ function sessionsSetStatus(readyDb, args) {
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, project_pinned_at = CASE WHEN ? = 1 THEN NULL ELSE project_pinned_at END, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
@@ -1150,7 +1150,7 @@ function sessionsSetStatus(readyDb, args) {
           code: 'PRECONDITION_FAILED',
         });
       }
-      const updated = updateSession.get(status, now, sessionId);
+      const updated = updateSession.get(status, status === 'archived' ? 1 : 0, now, sessionId);
       if (closeSharedTasks && status === 'archived') {
         readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
       }
@@ -1185,11 +1185,11 @@ function sessionsSetTerminalStatus(readyDb, args) {
     const now = Date.now();
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+      'UPDATE sessions SET status = ?, project_pinned_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
     ).get(status, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
-      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
+      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', project_pinned_at = NULL, updated_at = ? " +
           "WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted' " +
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
@@ -1328,7 +1328,7 @@ function sessionImportShare(readyDb, args) {
     // 覆盖导入的替换必须与新图落库同事务:失败时旧 session 状态原子回滚。
     // 不能走带异步资源清理副作用的 patchSessionMetaInDb。
     const deleteReplacedSession = readyDb.prepare(
-      "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
+      "UPDATE sessions SET status = 'deleted', project_pinned_at = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'",
     );
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
     for (const replacedSession of replaceSessions) {
@@ -1398,7 +1398,7 @@ function orcaRemoveWorker(readyDb, args) {
   const now = expectNumber(payload.now, 'now');
   const selectWorker = readyDb.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
+  const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', project_pinned_at = NULL, orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   return readyDb.transaction(() => {
     const row = selectWorker.get(workerId);
     if (!row) return null;
@@ -1432,7 +1432,7 @@ function orcaArchiveWorkersByTeam(readyDb, args) {
   );
   const now = expectNumber(payload.now, 'now');
   const archiveSession = readyDb.prepare(
-    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers WHERE orca_workers.session_id = sessions.id AND orca_workers.team_id = ?)",
+    "UPDATE sessions SET status = 'archived', project_pinned_at = NULL, updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers WHERE orca_workers.session_id = sessions.id AND orca_workers.team_id = ?)",
   );
   return readyDb.transaction(() => {
     const updatedIds = [];
@@ -1454,7 +1454,7 @@ function orcaReconcileInactiveTeamWorkersForLead(readyDb, args) {
     "UPDATE orca_workers SET status = 'done', updated_at = ? WHERE team_id IN (SELECT id FROM orca_teams WHERE lead_session_id = ? AND status != 'active')",
   );
   const archiveSession = readyDb.prepare(
-    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id WHERE orca_workers.session_id = sessions.id AND orca_teams.lead_session_id = ? AND orca_teams.status != 'active')",
+    "UPDATE sessions SET status = 'archived', project_pinned_at = NULL, updated_at = ? WHERE id = ? AND status = 'active' AND EXISTS (SELECT 1 FROM orca_workers INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id WHERE orca_workers.session_id = sessions.id AND orca_teams.lead_session_id = ? AND orca_teams.status != 'active')",
   );
   return readyDb.transaction(() => {
     finishWorkers.run(now, leadSessionId);

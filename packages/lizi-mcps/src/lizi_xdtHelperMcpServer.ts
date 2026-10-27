@@ -77,6 +77,7 @@ import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js'
 import type { AppUpdateCallbacks } from './xdt-helper/app_update.js';
 import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
+import { registerSetSessionProjectPinTool, type SetSessionProjectPin } from './xdt-helper/set_session_project_pin.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { SendToRemoteSessionCallback, SendToSessionCallback } from './xdt-helper/send_to_session.js';
@@ -149,7 +150,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   cindy: `${BRAND_NAME} 能力说明与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引。本机。`,
   auth: '本机窗口的账号、密码、验证码、二维码交给主人填写或扫码（request_input_handoff）；Grok 设备码授权。',
-  control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改仅本机。',
+  control: '管理任务与项目：项目内置顶、归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改仅本机。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；其余本机。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: '给已有任务发消息，或新建任务。发给已有任务可跨电脑（deviceId::sessionId）；新建只在本机。',
@@ -841,6 +842,7 @@ export interface XdtHelperMcpDeps {
    * 工具层负责 dry-run token 护栏; host 负责读取当前标题、校验前置条件和写库。
    */
   renameSessions?: RenameSessionsDeps['renameSessions'];
+  setSessionProjectPin?: SetSessionProjectPin;
   /**
    * 批量归档 / 取消归档 session 回调。host 注入后, control 类工具 archive_sessions /
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
@@ -944,6 +946,12 @@ export function createXdtHelperMcpServer(
     registerMoveSessionTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       moveSession: deps.moveSession,
+    });
+  }
+  if (deps.setSessionProjectPin) {
+    registerSetSessionProjectPinTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionProjectPin: deps.setSessionProjectPin,
     });
   }
   if (deps.renameSessions) {

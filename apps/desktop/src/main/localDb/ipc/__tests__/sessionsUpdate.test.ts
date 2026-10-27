@@ -253,6 +253,7 @@ function createDb(): void {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      project_pinned_at INTEGER,
       hidden_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
@@ -406,6 +407,49 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  // #7402: existing global-pin tests do not cover independent project metadata.
+  // The public IPC writers and real isolated SQLite prove persistence and push (unit).
+  it.each([invokeUpdate, invokePatchMeta])('persists independent project pins through %s', async (write) => {
+    const at = '2026-10-27T04:00:00.000Z';
+    h.sqlite!.prepare("UPDATE sessions SET pinned_at = 1 WHERE id = 'cc-remote'").run();
+    expect(await write('cc-remote', { projectPinnedAt: at })).toMatchObject({
+      projectPinnedAt: at, pinnedAt: new Date(1).toISOString(), updatedAt: new Date(1).toISOString(),
+    });
+    expect(h.sqlite!.prepare("SELECT project_pinned_at FROM sessions WHERE id = 'cc-remote'").get())
+      .toEqual({ project_pinned_at: Date.parse(at) });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched',
+      expect.objectContaining({ patch: expect.objectContaining({ projectPinnedAt: at }) }));
+    await write('cc-remote', { pinnedAt: null });
+    expect(h.sqlite!.prepare("SELECT project_pinned_at FROM sessions WHERE id = 'cc-remote'").get())
+      .toEqual({ project_pinned_at: Date.parse(at) });
+  });
+  it.each([invokeUpdate, invokePatchMeta])('rejects invalid project pins through %s', async (write) => {
+    const projectPinnedAt = '2026-10-27T04:00:00.000Z';
+    await expect(write('cc-remote', { projectPinnedAt: 'invalid' })).rejects.toThrow('[INVALID_PARAMS]');
+    await expect(write('cc-local', { projectPinnedAt })).rejects.toThrow('[PRECONDITION_FAILED]');
+    await write('cc-remote', { status: 'archived' });
+    await expect(write('cc-remote', { projectPinnedAt })).rejects.toThrow('[PRECONDITION_FAILED]');
+  });
+  it.each(['archived', 'deleted'] as const)('clears project pins on %s', async (status) => {
+    await invokePatchMeta('cc-remote', { projectPinnedAt: '2026-10-27T04:00:00.000Z' });
+    await invokePatchMeta('cc-remote', { status });
+    expect(h.sqlite!.prepare("SELECT project_pinned_at FROM sessions WHERE id = 'cc-remote'").get())
+      .toEqual({ project_pinned_at: null });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched',
+      expect.objectContaining({ patch: expect.objectContaining({ projectPinnedAt: null }) }));
+  });
+  it('clears project pins when moved to another project', async () => {
+    await invokeUpdate('cc-remote', { projectPinnedAt: '2026-10-27T04:00:00.000Z' });
+    await invokeUpdate('cc-remote', { workingDir: '/another/project' });
+    expect(h.sqlite!.prepare("SELECT project_pinned_at FROM sessions WHERE id = 'cc-remote'").get())
+      .toEqual({ project_pinned_at: null });
+  });
+  it('keeps project pins when moving within the same worktree project', async () => {
+    const projectPinnedAt = '2026-10-27T04:00:00.000Z';
+    await invokeUpdate('cc-remote', { projectPinnedAt });
+    expect(await invokeUpdate('cc-remote', { workingDir: '/remote/dir/.worktrees/feature' }))
+      .toMatchObject({ projectPinnedAt });
+  });
   // Terminal lifecycle through both real public handlers: an ordinary fork survives,
   // but a hidden side chat must not remain running after its parent becomes unreachable (unit).
   it.each([invokeUpdate, invokePatchMeta])('deletes dependent side chats without deleting ordinary forks (%#)', async update => {
@@ -423,7 +467,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.runtimeCleanup).toHaveBeenCalledWith('codex-local');
     expect(h.runtimeCleanup).not.toHaveBeenCalledWith('pi-local');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
-      sessionId: 'codex-local', patch: { status: 'deleted' },
+      sessionId: 'codex-local', patch: { status: 'deleted', projectPinnedAt: null },
     });
   });
   it.each([invokeUpdate, invokePatchMeta])(
@@ -1059,7 +1103,7 @@ describe('local-db:sessions:update handler wiring', () => {
       'local-db:sessions:patched',
       expect.objectContaining({
         sessionId: 'cc-local',
-        patch: { status: 'deleted' },
+        patch: { status: 'deleted', projectPinnedAt: null },
       }),
     );
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
@@ -1226,7 +1270,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.pinnedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null },
+      patch: { status: 'archived', pinnedAt: null, projectPinnedAt: null, summary: null },
     });
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
@@ -1396,7 +1440,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'deleted' },
+      patch: { status: 'deleted', projectPinnedAt: null },
     });
     // 不再出现携带请求值的回滚广播
     const statusPatches = h.tapWindowBroadcast.mock.calls

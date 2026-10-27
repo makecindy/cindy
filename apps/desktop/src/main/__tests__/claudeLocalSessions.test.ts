@@ -78,7 +78,7 @@ function createLocalDb(): Database.Database {
       context_window INTEGER NOT NULL DEFAULT 0,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, project_pinned_at INTEGER,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,

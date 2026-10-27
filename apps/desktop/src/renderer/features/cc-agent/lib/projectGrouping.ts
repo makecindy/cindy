@@ -142,8 +142,8 @@ export interface GroupSessionsOptions {
   projectAliasMembers?: readonly Session[];
   /**
    * Build a project catalogue that also contains individually pinned sessions.
-   * The normal sidebar keeps this false so a pinned conversation only appears
-   * once; project pinning uses true so the project itself does not disappear
+   * The normal sidebar excludes globally pinned tasks unless they are also
+   * explicitly pinned within their project; project pinning uses true so the project itself does not disappear
    * when every conversation inside it is pinned.
    */
   includePinnedInProjects?: boolean;
@@ -510,7 +510,7 @@ export function groupSessions(
   // 2. 剩余 = 未 pin 的
   const remaining = options.includePinnedInProjects
     ? sessions
-    : sessions.filter((s) => s.pinnedAt == null);
+    : sessions.filter((s) => s.pinnedAt == null || (s.projectPinnedAt != null && s.workspaceKind !== 'dialogue'));
 
   const localRepresentativeByComparison = new Map<
     string,

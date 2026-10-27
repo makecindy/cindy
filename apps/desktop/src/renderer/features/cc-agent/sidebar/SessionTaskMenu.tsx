@@ -7,6 +7,8 @@ import {
   type SharedTaskHostState,
 } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import * as sessionService from '@/lib/sessionService';
+import { sessionsStore } from '@/lib/sessionsStore';
 import { SharedTaskButton } from '@/features/device-link/SharedTaskButton';
 import {
   SharedTaskExitDialog,
@@ -201,6 +203,28 @@ function ActiveSessionTaskMenu({
   const archived = session.status === 'archived';
   const empty = isEmptyDraftSession(session);
   const ownerActionsBlocked = writeBlocked || guest;
+  const projectPinPending = useRef(false);
+  // Missing metadata means an older host. It must not show an action that the
+  // remote writer cannot persist. Independent tasks have no project-local pin.
+  const canProjectPin = session.projectPinnedAt !== undefined &&
+    session.workspaceKind !== 'dialogue' && !!session.workingDir;
+  const toggleProjectPin = async () => {
+    if (ownerActionsBlocked || projectPinPending.current) return;
+    projectPinPending.current = true;
+    const owner = getDataOwnerGeneration();
+    try {
+      const updated = await sessionService.patchMeta(session.id, {
+        projectPinnedAt: session.projectPinnedAt ? null : new Date().toISOString(),
+      });
+      if (isDataOwnerGenerationCurrent(owner)) {
+        sessionsStore.patchLocal(session.id, { projectPinnedAt: updated.projectPinnedAt });
+      }
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t('ccAgent.sidebar.pinFailed'));
+    } finally {
+      projectPinPending.current = false;
+    }
+  };
   const item = (key: string, action: () => void, disabled = false) => (
     <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={disabled} onSelect={action}>
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
@@ -227,7 +251,12 @@ function ActiveSessionTaskMenu({
           <>
             {!archived &&
               !empty &&
-              item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+              item(canProjectPin
+                ? (session.pinnedAt != null ? 'unpinGlobally' : 'pinGlobally')
+                : (session.pinnedAt != null ? 'unpin' : 'pin'), onPin, ownerActionsBlocked)}
+            {!archived && !empty && canProjectPin && item(
+              session.projectPinnedAt ? 'unpinInProject' : 'pinInProject',
+              () => { void toggleProjectPin(); }, ownerActionsBlocked)}
             {item('rename', onRename, ownerActionsBlocked)}
             {tags}
             {separator}

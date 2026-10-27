@@ -248,6 +248,7 @@ const SESSION_FIELD_WHITELIST = [
   'orcaRole',
   'parentSessionId',
   'pinnedAt',
+  'projectPinnedAt',
   'preview',
   'userSendAt',
   'lastActivityAt',

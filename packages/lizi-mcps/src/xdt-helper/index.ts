@@ -241,3 +241,5 @@ export {
   listCapabilityIndex,
 } from './capabilities.js';
 export type { CapabilityEntry } from './capabilities.js';
+
+export { registerSetSessionProjectPinTool, type SetSessionProjectPin } from './set_session_project_pin.js';

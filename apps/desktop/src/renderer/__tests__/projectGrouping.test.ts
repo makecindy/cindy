@@ -80,6 +80,15 @@ function s(partial: Partial<Session>): Session {
 /* ============================== normalizeWorkingDir ============================== */
 
 describe('host project alias display', () => {
+  // #7402: a dual pin creates two entries for one task; a global-only pin stays extracted.
+  it('retains dual-pinned tasks inside their project without copying global-only pins', () => {
+    const both = { ...s({ id: 'both', workingDir: '/repo', pinnedAt: '2026-10-27T00:00:00Z' }),
+      projectPinnedAt: '2026-10-27T01:00:00Z' };
+    const globalOnly = s({ id: 'global', workingDir: '/repo', pinnedAt: '2026-10-27T00:00:00Z' });
+    const grouped = groupSessions([both, globalOnly]);
+    expect(grouped.pinned.map(row => row.id).sort()).toEqual(['both', 'global']);
+    expect(grouped.projects.flatMap(project => project.sessions.map(row => row.id))).toEqual(['both']);
+  });
   it('mirrors each host independently and keeps controller-local overrides first', () => {
     const sessions = [
       s({ workingDir: '/repo', deviceLinkDeviceId: 'a' }),

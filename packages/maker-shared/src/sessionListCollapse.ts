@@ -9,6 +9,8 @@ export interface SessionListCollapseViewInput<T> {
   isFiltering: boolean;
   isActiveEntry: (entry: T) => boolean;
   hasAttentionEntry: (entry: T) => boolean;
+  /** Project pins are always visible and do not consume the ordinary-row budget. */
+  isPinnedEntry?: (entry: T) => boolean;
   /** 传入(配套 getActivityMs)则启用「最近 recentWindowMs 内有活动的条目不折叠」豁免,
    *  用于会话/聊天列表;不传则纯硬性上限(如项目列表)。 */
   nowMs?: number;
@@ -36,6 +38,7 @@ export function getSessionListCollapseView<T>({
   isFiltering,
   isActiveEntry,
   hasAttentionEntry,
+  isPinnedEntry,
 }: SessionListCollapseViewInput<T>): SessionListCollapseView<T> {
   const totalCount = entries.length;
   const allVisible = {
@@ -54,12 +57,15 @@ export function getSessionListCollapseView<T>({
   //   2. 当前打开的会话若落在折叠区(罕见),整段展开,避免正在看的会话被收起。
   // 注:当天会话很多的重度用户,24h 豁免会让会话列表几乎不折叠 —— 有意取舍(用户要求今天的不藏)。
   const visibleHeadCount = Math.max(0, Math.round(minVisibleCount));
+  let ordinaryCount = 0;
+  const visibleHead = entries.map((entry) =>
+    isPinnedEntry?.(entry) || ordinaryCount++ < visibleHeadCount);
   const recentSinceMs =
     getActivityMs && typeof nowMs === 'number' && Number.isFinite(nowMs)
       ? nowMs - Math.max(0, recentWindowMs)
       : Infinity;
   const isEntryVisible = (entry: T, index: number): boolean =>
-    index < visibleHeadCount ||
+    visibleHead[index] ||
     (getActivityMs ? getActivityMs(entry) >= recentSinceMs : false) ||
     hasAttentionEntry(entry);
 

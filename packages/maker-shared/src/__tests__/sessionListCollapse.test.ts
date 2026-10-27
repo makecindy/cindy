@@ -65,6 +65,14 @@ function collapse(entries: readonly TestEntry[], overrides = {}) {
 }
 
 describe('session list collapse view', () => {
+  // #7402: project pins are exempt without consuming the normal row budget.
+  it('shows all project pins plus the first ordinary entries', () => {
+    const entries = ['p1', 'p2', 'p3', 's1', 's2', 's3'].map(id => session(id));
+    const view = collapse(entries, { minVisibleCount: 2,
+      isPinnedEntry: (entry: TestEntry) => entry.id.startsWith('p') });
+    expect(view.visibleEntries.map(entry => entry.id)).toEqual(['p1', 'p2', 'p3', 's1', 's2']);
+    expect(view.hiddenCount).toBe(1);
+  });
   it('keeps the first five entries visible', () => {
     const entries = ['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => session(id));
     const view = collapse(entries);

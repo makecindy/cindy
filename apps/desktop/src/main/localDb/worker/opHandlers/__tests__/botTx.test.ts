@@ -21,7 +21,7 @@ describe('Bot named worker transactions', () => {
         scheduled_model_baseline TEXT,
         sdk_session_id TEXT, total_token_usage INTEGER NOT NULL, total_cost_usd REAL NOT NULL,
         context_tokens INTEGER NOT NULL, context_window INTEGER NOT NULL, fast_mode INTEGER NOT NULL,
-        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, user_send_at INTEGER,
+        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, project_pinned_at INTEGER, user_send_at INTEGER,
         agent_kind TEXT NOT NULL, orca_role TEXT, parent_session_id TEXT, forked_at_message_id TEXT,
         worktree_path TEXT, extra_dirs TEXT NOT NULL, remote_host_id TEXT, provider_id TEXT, agent_device_id TEXT,
         source TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL

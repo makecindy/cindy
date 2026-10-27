@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { sortProjectPinnedSessions } from '@cindy/maker-shared/session-list';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
@@ -209,8 +210,16 @@ export function SessionEntryList({
   const { t } = useTranslation();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
   const entries = useMemo(
-    () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
-    [notifications, scheduleSessionIndex, sessions],
+    () => {
+      if (!props.indented) return groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex });
+      const pinned = sortProjectPinnedSessions(sessions.filter((session) => session.projectPinnedAt != null));
+      return [
+        ...pinned.map((session): SidebarSessionEntry => ({ kind: 'session', session })),
+        ...groupAutomationSidebarEntries(sessions.filter((session) => session.projectPinnedAt == null),
+          { notifications, scheduleSessionIndex }),
+      ];
+    },
+    [notifications, scheduleSessionIndex, sessions, props.indented],
   );
 
   if (!collapsible) {
@@ -238,6 +247,7 @@ export function SessionEntryList({
     nowMs: Date.now(),
     getActivityMs: getEntryActivityMs,
     isActiveEntry: (entry) => entryIsActive(entry, props.activeSessionId),
+    isPinnedEntry: (entry) => !!props.indented && entry.kind === 'session' && entry.session.projectPinnedAt != null,
     hasAttentionEntry: (entry) =>
       entryHasAttention(entry, notifications) ||
       entryHasAttention(entry, props.runningSessionIds) ||
