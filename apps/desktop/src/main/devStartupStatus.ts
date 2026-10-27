@@ -99,6 +99,17 @@ function atomicWriteJson(filePath: string, value: unknown): void {
   atomicWriteFileSync(filePath, `${JSON.stringify(value)}\n`);
 }
 
+/** Early process marker only: it never claims window, auth or database readiness. */
+export function markDesktopDevRuntimeStarted(): void {
+  const statusPath = process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE;
+  if (!statusPath) return;
+  try {
+    const current = readJson(statusPath);
+    if (current?.state !== 'pending' || current.runtimeStartedAt !== undefined) return;
+    atomicWriteJson(statusPath, {...current, runtimeStartedAt: Date.now(), pid: process.pid});
+  } catch { /* Diagnostic failure must never prevent app startup. */ }
+}
+
 function readJson(filePath: string): Record<string, unknown> | null {
   try {
     const value = JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
@@ -116,13 +127,15 @@ function updateExternalStartupStatus(
   if (!statusPath) return;
 
   try {
-    const currentState = readJson(statusPath)?.state;
+    const current = readJson(statusPath);
+    const currentState = current?.state;
     const canTransition =
       state === 'window-ready'
         ? currentState === 'pending'
         : currentState === 'pending' || currentState === 'window-ready';
     if (!canTransition) return;
-    atomicWriteJson(statusPath, { state, pid: process.pid, at: Date.now(), ...detail });
+    atomicWriteJson(statusPath, { state, pid: process.pid, at: Date.now(),
+      ...(current?.runtimeStartedAt !== undefined ? {runtimeStartedAt: current.runtimeStartedAt} : {}), ...detail });
   } catch {
     // Startup reporting is diagnostic-only; never turn a report failure into the app failure.
   }

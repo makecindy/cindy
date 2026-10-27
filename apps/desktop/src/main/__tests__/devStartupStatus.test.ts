@@ -12,6 +12,7 @@ import {
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
   observeDesktopStartupResult,
+  markDesktopDevRuntimeStarted,
 } from '../devStartupStatus.js';
 import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
 
@@ -37,8 +38,25 @@ describe('devStartupStatus', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  // Real status entry: compile completion must not claim readiness or revive a
+  // timed-out startup. Existing ready tests begin after the process starts.
+  it('marks the runtime once, preserves the window gate, and leaves abandoned runs alone', () => {
+    fs.writeFileSync(statusPath, '{"state":"pending"}');
+    markDesktopDevRuntimeStarted();
+    const first = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+    expect(first.state).toBe('pending');
+    expect(first.runtimeStartedAt).toBeTypeOf('number');
+    markDesktopDevRuntimeStarted();
+    expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toEqual(first);
+    fs.writeFileSync(statusPath, '{"state":"abandoned"}');
+    markDesktopDevRuntimeStarted();
+    expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toEqual({state: 'abandoned'});
+  });
+
   it('marks startup ready only after both the window and application are ready', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
+    markDesktopDevRuntimeStarted();
+    const runtimeStartedAt = JSON.parse(fs.readFileSync(statusPath, 'utf8')).runtimeStartedAt;
     cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
       dbFilePrefix: 'cindy',
@@ -60,6 +78,7 @@ describe('devStartupStatus', () => {
 
     expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toMatchObject({
       state: 'window-ready',
+      runtimeStartedAt,
     });
     expect(
       JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8')),

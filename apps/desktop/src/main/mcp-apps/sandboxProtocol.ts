@@ -9,10 +9,7 @@ import {
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
 
-export const mcpAppSchemePrivilege = {
-  scheme: 'cindy-mcp-app',
-  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
-};
+export { mcpAppSchemePrivilege } from '../protocolPrivileges.js';
 const frameHeader = 'X-Cindy-Mcp-App-Frame';
 let callerCleanup: ((caller: string) => Promise<void>) | undefined;
 export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<void>): void {

@@ -1,4 +1,4 @@
-import { BrowserWindow, session, webContents, type CustomScheme } from 'electron';
+import { BrowserWindow, session, webContents } from 'electron';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
@@ -53,18 +53,8 @@ const log = createLogger('brain-runtime');
 
 const SCHEME = GHOST_SCHEME;
 
-/** 汇入 bootstrap 一次性 registerSchemesAsPrivileged 的特权声明。 */
-export const cindyGhostSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+/** 由 index.ts 在首次 await 前统一登记的特权声明，保留原导出供旧调用方使用。 */
+export { cindyGhostSchemePrivilege } from '../../protocolPrivileges.js';
 
 /**
  * 曾经/现在属于意识沙箱的 webContents id。lifecycle 的全局

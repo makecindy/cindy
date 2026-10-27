@@ -5,8 +5,8 @@
  * 等按后缀渲染。老协议(xdt-image/-video/-model)永久保留只读服务老地址,
  * 新写入一律出本协议的地址。
  *
- * 两步注册(与 imageProtocol 同模式,原因见 bootstrap-electron.ts 注释):
- *   1. cindyMediaSchemePrivilege —— 由 bootstrap 收集进唯一一次
+ * 两步注册(与 imageProtocol 同模式,原因见 protocolPrivileges.ts 注释):
+ *   1. cindyMediaSchemePrivilege —— 由 index.ts 收集进唯一一次
  *      registerSchemesAsPrivileged(app.whenReady() 之前);
  *   2. registerCindyMediaProtocolHandler() —— app.whenReady() 之后接 handler。
  *
@@ -15,7 +15,8 @@
  * privilege 保持 stream:false);图片请求不带 Range 头,行为不变。
  */
 
-import { protocol, type CustomScheme } from 'electron';
+import { protocol } from 'electron';
+import { cindyMediaSchemePrivilege } from '../protocolPrivileges.js';
 
 import * as blobStore from './blobStore';
 import * as ledger from './ledger';
@@ -24,20 +25,10 @@ import { createLogger } from '../logger';
 
 const log = createLogger('cindyMediaProtocol');
 
-const SCHEME = 'cindy-media';
+const SCHEME = cindyMediaSchemePrivilege.scheme;
 
-/** 特权条目(bootstrap 单点注册;supportFetchAPI 供未来 model-viewer fetch)。 */
-export const cindyMediaSchemePrivilege: CustomScheme = {
-  scheme: SCHEME,
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    bypassCSP: false,
-    stream: false,
-    corsEnabled: false,
-  },
-};
+/** 特权条目(index.ts 单点注册;supportFetchAPI 供未来 model-viewer fetch)。 */
+export { cindyMediaSchemePrivilege };
 
 export function registerCindyMediaProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {

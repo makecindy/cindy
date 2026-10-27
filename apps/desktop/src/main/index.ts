@@ -12,11 +12,16 @@ import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/c
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
-import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
+import { beginDesktopDevInstance, markDesktopDevRuntimeStarted, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
 import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
+import { registerDesktopSchemePrivileges } from './protocolPrivileges.js';
+
+// Source startup only; packaged apps ignore the dev coordinator's environment.
+if (!app.isPackaged) markDesktopDevRuntimeStarted();
+registerDesktopSchemePrivileges();
 
 if (process.platform === 'linux' && app.isPackaged) {
   const installation = recognizeLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);

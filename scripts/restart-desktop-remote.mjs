@@ -30,6 +30,9 @@ const gracefulTimeoutMs = 3000;
 const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
 const startupReadyTimeoutMs = 120_000;
+// Serial Forge builds are not Electron window/auth/database initialization.
+// Bound both phases; never spend the runtime's readiness budget compiling.
+const startupBuildTimeoutMs = 300_000;
 export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
 const isolatedAuthLaunchProofTtlMs = 10 * 60_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
@@ -1183,10 +1186,22 @@ function attachStartupFailure(error, status) {
   return error;
 }
 
-export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs, options = {}) {
+  const now = options.now ?? Date.now;
+  const pause = options.pause ?? (() => sleep(pollIntervalMs));
+  const startedAt = now();
+  let deadline = startedAt + (options.buildTimeoutMs ?? timeoutMs);
+  let runtimeStarted = false;
+  while (now() < deadline) {
     const status = readDesktopStartupStatus(statusPath);
+    // Accept the first observed timestamp only. Repeated/replaced records may
+    // not extend a stuck runtime indefinitely or resurrect an abandoned run.
+    if (!runtimeStarted && Number.isSafeInteger(status?.runtimeStartedAt)
+      && status.runtimeStartedAt >= startedAt && status.runtimeStartedAt <= now()) {
+      runtimeStarted = true;
+      deadline = status.runtimeStartedAt + timeoutMs;
+    }
+    if (now() >= deadline) break;
     if (status?.state === 'ready') {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
@@ -1201,19 +1216,24 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
         status,
       );
     }
-    await sleep(pollIntervalMs);
+    await pause();
   }
   // Keep a tombstone so a late Electron startup signal cannot recreate a stale
   // status file after this waiter has already reported timeout to its caller.
   writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
+  const buildExpired = !runtimeStarted && options.buildTimeoutMs !== undefined;
+  const phase = buildExpired ? 'build' : 'runtime';
+  const seconds = Math.round((buildExpired ? options.buildTimeoutMs : timeoutMs) / 1000);
+  const message = `Desktop dev did not finish ${buildExpired ? 'build' : 'window/auth/database startup'} within ${seconds}s.`;
   throw attachStartupFailure(
     new Error(
-      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
+      `${message} Check the dev terminal and apps/desktop/logs/.`,
     ),
     {
       state: 'failed',
       code: 'STARTUP_TIMEOUT',
-      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
+      message,
+      phase,
     },
   );
 }
@@ -1643,7 +1663,9 @@ async function main() {
   };
   if (startupStatusPath) {
     try {
-      await waitForDesktopStartup(startupStatusPath);
+      await waitForDesktopStartup(startupStatusPath, startupReadyTimeoutMs, {
+        buildTimeoutMs: startupBuildTimeoutMs,
+      });
       const report = collectDesktopWhoamiReport({
         rootDir,
         userDataDir: process.env.XDT_USER_DATA_DIR,
