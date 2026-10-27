@@ -112,7 +112,8 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
       db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133]);
+      expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
       expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
       expect(columnNames(db, 'sessions')).toContain('last_activity_at');
       expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });

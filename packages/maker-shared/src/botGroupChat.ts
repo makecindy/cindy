@@ -507,6 +507,10 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
+  historyRevision?: string;
+  /** Current authorized versions of already displayed messages, including deletion tombstones. */
+  messageUpdates?: BotGroupMessageView[];
   /** Room-wide; bumped when a reset skipped realtime events or the chat runtime was recreated, so every message's reactors count as changed. */
   reactionRevision?: number;
   /** Per message id; bumped by realtime reaction changes, so a same-count change of who reacted is noticed. */

@@ -1,3 +1,4 @@
+import { readTaskDeliveryNote } from '../bot-autonomy/hub.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -575,7 +576,7 @@ import {
   schedules,
 } from '../localDb/schema.js';
 import { nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
-import { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
+import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import {
   cindyAutoRouteToFollow,
   followMovedCindyAutoRoutes,
@@ -640,6 +641,7 @@ import {
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { withChatServer } from './chatServer.js';
+import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
@@ -1990,6 +1992,7 @@ export function cancelSchedulerAutoResume(sessionId: string, runId: string): boo
  * Worker 状态与 auto-bridge(把异常终止回报给 Lead)。
  */
 function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppressedTerminal): void {
+  orcaTeamServiceForEvents?.noteWorkerProductTerminal(payload.capture as WorkerTerminalTurnCapture | undefined);
   void (async () => {
     try {
       await workerTurnStartSequencer.waitForStart(sessionId);
@@ -3120,6 +3123,12 @@ type DispatchOrcaInterAgentMessage = (
 ) => Promise<DispatchOrcaInterAgentMessageResult>;
 
 let dispatchInterAgentMessageHolder: DispatchOrcaInterAgentMessage | null = null;
+
+/** Local/SSH sessions settle reports without completing the Worker turn. */
+export function captureLocalWorkerReport(sessionId: string): (accepted: boolean) => Promise<void> {
+  if (!orcaTeamServiceForEvents) throw new Error('Orca team service is not initialized');
+  return orcaTeamServiceForEvents.captureLocalWorkerReport(sessionId);
+}
 
 export async function dispatchInterAgentMessage(
   params: DispatchOrcaInterAgentMessageParams,
@@ -11721,9 +11730,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             { visibleText: source.persistedText ?? message },
           )
         : null;
-      const outgoingMessage: UserMessage = sourceNote
+      const sourcedMessage: UserMessage = sourceNote
         ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
         : withHandoff;
+      const deliveryNote = shouldPrependMobileClientPromptNote(message, session.agentKind)
+        ? await readTaskDeliveryNote(session.id) : null;
+      const deliveryPlan = wireNoteMemory.plan(session.id, { 'task-delivery': deliveryNote }, { force: !!pendingHandoff, partial: true });
+      const outgoingMessage = deliveryPlan.notes['task-delivery']
+        ? prependNoteToWireUserMessage(sourcedMessage as HandoffWireMessage, deliveryPlan.notes['task-delivery']) as UserMessage
+        : sourcedMessage;
       // Idle direct sends never carry internal coordination (that is force-queued).
       const releaseTurnSource = noteChannelTurnSource(session.id, channelTurnSourceFor(source?.origin, false));
       try {
@@ -11756,7 +11771,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (pendingHandoff && sendResult.accepted) {
           agentHandoffPending.consume(session.id);
         }
-        if (sendResult.accepted) void touchSessionActivityInDb(session.id);
+        if (sendResult.accepted) {
+          deliveryPlan.commit();
+          void touchSessionActivityInDb(session.id);
+        }
         return sendResult;
       } catch (err) {
         if (turnChangeSetStarted) {
@@ -13052,6 +13070,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const companionTurnActive = (sessionId: string) => !!maker.getSession(sessionId)?.isTurnRunning?.()
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
   const botGroupChatDeps: BotGroupChatServiceDeps = {
+    chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
     ensureLane: async (input) => {
       try {
         return await ensureBotGroupLaneSession(input);
@@ -16683,21 +16702,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
     },
-    apply: async (sessionId, route, current) => {
-      await stageSessionRouteSelection(sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind);
-      // A changed permanent companion choice supersedes the automation's saved
-      // preference, even if it selects the already-running temporary model.
-      // Profile saves retire it atomically in the DB; other route changes retire
-      // it only after staging succeeds. Never detach IM default following.
-      await updateScheduledPreference(sessionId, null);
-      // Consume the same model/Harness intent as the normal send path. Its
-      // verified window protection and history handoff also apply here; a Bot
-      // settings save need not wait for a second user message. Busy runtimes
-      // retain their intent for the existing safe-boundary coordinator.
-      if (isSessionIdleForRouteApply(sessionId)) {
-        await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true });
-      }
-    },
+    apply: createBotModelRouteApplier({
+      stage: (sessionId, route, current) => stageSessionRouteSelection(
+        sessionId, { ...route, agentDeviceId: route.agentDeviceId ?? null }, current.agentKind),
+      isIdle: isSessionIdleForRouteApply,
+      applyPendingSwitch: (sessionId) => applyPendingAgentSwitchIfIdle(
+        agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true }),
+      hasPendingSwitch: (sessionId) => !!agentSwitchPending.get(sessionId),
+      onApplied: async (sessionId) => { await updateScheduledPreference(sessionId, null); },
+    }),
   });
 
   configureBotModelSelectionCoordinator(createBotModelSelectionCoordinator({
@@ -18208,6 +18221,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readReplyQuoteNote,
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
+    readTaskDeliveryNote,
     planRepeatableWireNotes: (sessionId, notes, opts) => wireNoteMemory.plan(sessionId, notes, opts),
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);

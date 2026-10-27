@@ -15,6 +15,8 @@ import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
 import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
+import { createChatHistory } from '@cindy/maker-shared/chat-history';
+import { createMobileChatHistoryStore } from './chatHistoryStore';
 import { cacheChatMessages, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
 
 // Shared only within the current authenticated account generation and realm.
@@ -58,9 +60,19 @@ export function useChatClient() {
       const url = await endpoint(); check();
       const result = await deps.current.apiFetch<T>(`/v1${path}`, { baseUrl: url, method, cache: 'no-store', ...(body !== undefined ? { body } : {}),
         ...(actorId ? { headers: { 'X-Chat-Actor': actorId } } : {}), ...(signal ? { signal } : {}), assertCurrent: check });
-      check(); return result;
+      check();
+      if (method !== 'GET') {
+        const room = path.match(/^\/conversations\/([^/]+)/)?.[1];
+        if (room) client.invalidateHistory(room, path.endsWith('/read'));
+      }
+      return result;
     };
-    const client = createChatServerClient(request, listFor(owner));
+    const client = createChatServerClient(request, listFor(owner), async human => {
+      const url = await endpoint(); check();
+      const { randomUUID } = await import('expo-crypto');
+      return createChatHistory({ api: request, current, newGeneration: randomUUID,
+        store: createMobileChatHistoryStore(auth.user!.id, realm, url, human, current) });
+    });
     return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client,
       token: async () => { check(); await client.me(); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
@@ -102,8 +114,9 @@ export function useChatServerRoster(enabled: boolean) {
           try {
             const cached = snapshots.current.get(room.id);
             const value = cached?.owner === api.owner && room.head !== undefined && cached.head === room.head
-              && !run.reasons.some(reason => ['changed', 'connected', 'visible'].includes(reason))
-              ? cached.value : await api.client.snapshot(room.id);
+              && !run.reasons.some(reason => ['focus', 'changed', 'connected', 'visible'].includes(reason))
+              ? cached.value : await api.client.snapshot(room.id, room.head === undefined
+                || run.reasons.some(reason => ['focus', 'connected', 'visible'].includes(reason)));
             fresh.set(room.id, { owner: api.owner, head: room.head, value });
             // An archive can land between the list and the newer snapshot.
             if (!value.room.archived) rows.push(chatRoomRow(room, value, self));
@@ -171,7 +184,17 @@ export function useChatServerRoster(enabled: boolean) {
           }
           await read({ reason: 'connected' });
           return { scope: `actor:${actorId}`, cursor };
-        }, reset: () => api.client.resyncListState(), changed: changes => { for (const change of changes ?? []) if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data); void read({ reason: 'changed' }); }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; } });
+        }, reset: async () => { await api.client.resyncListState(); await read({ reason: 'connected' }); }, changed: changes => {
+          for (const change of changes ?? []) {
+            if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
+            // Personal read positions live in actor scope and do not advance room.head.
+            if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+              api.client.invalidateHistory(change.entityId, true);
+              snapshots.current.delete(change.entityId);
+            }
+          }
+          return read({ reason: 'changed' });
+        }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; } });
       }).catch(() => {}); // HTTP read presents endpoint errors.
     };
     start();
@@ -258,7 +281,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       else setState(old => ({ identity, value: old.identity === identity && old.value.kind === 'ready' ? old.value : { kind: 'error', message: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_READ_FAILED' }, online: false, loadingOlder: false }));
     }
   }, identity);
-  const reload = useCallback(() => { void request({ reason: 'changed' }); }, [request]);
+  const reload = useCallback(() => { api.client.invalidateHistory(groupId, true); void request({ reason: 'changed' }); }, [api, groupId, request]);
   useFocusEffect(useCallback(() => {
     if (!enabled || !api.enabled || !groupId) return;
     let stop: (() => void) | undefined;
@@ -281,12 +304,17 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
             if ((error as { code?: string }).code !== 'RESET_REQUIRED') throw error;
             return '0';
           }) : null;
+          api.client.invalidateHistory(groupId, true);
           await request({ reason: 'connected' });
           const latest = page.current;
           if (!freshRead.current || !latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
           return head === null ? { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }
             : [{ scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }, { scope: `actor:${actorId}`, cursor: head }];
-        }, reset: () => api.client.resyncListState(), changed: changes => { for (const change of changes ?? []) if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data); reload(); }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; } });
+        }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); }, changed: async changes => {
+          for (const change of changes ?? []) if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
+          try { await api.client.refreshHistory(groupId, changes?.some(change => change.type === 'read.changed')); }
+          finally { void request({ reason: 'changed' }); }
+        }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; api.client.invalidateHistory(groupId); } });
       }).catch(() => {}); // Read presents endpoint errors.
     };
     start();

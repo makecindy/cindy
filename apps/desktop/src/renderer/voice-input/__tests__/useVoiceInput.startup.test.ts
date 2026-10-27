@@ -53,7 +53,9 @@ vi.mock('../WebMicAudioEngine', () => ({
     constructor(readonly options: { keepAlive: boolean }) {
       mocks.engines.push(this);
     }
-    get keepAlive() { return this.options.keepAlive; }
+    get keepAlive() {
+      return this.options.keepAlive;
+    }
     onPcm16k(callback: (chunk: PcmChunk) => void) {
       this.emit = callback;
     }
@@ -81,7 +83,10 @@ vi.mock('../WebMicAudioEngine', () => ({
 
 import { useVoiceInput } from '../useVoiceInput';
 import { prewarmVoiceInputAudio } from '../audioContextPool';
-import { createComposerLongPressVoiceGesture } from '../composerLongPressGesture';
+import {
+  COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
+  createComposerLongPressVoiceGesture,
+} from '../composerLongPressGesture';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -204,12 +209,13 @@ describe('local voice capture independent of startup checks and cloud', () => {
       expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
       expect(mocks.startEngine).not.toHaveBeenCalled();
       gesture.release();
-      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS); });
       expect(h.result.current.state).toBe('idle');
       expect(h.api.start).not.toHaveBeenCalled();
+      expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
 
       gesture.press({ x: 0, y: 0 });
-      await act(async () => { await vi.advanceTimersByTimeAsync(599); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1); });
       expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
       expect(mocks.startEngine).not.toHaveBeenCalled();
       await act(async () => { await vi.advanceTimersByTimeAsync(1); });

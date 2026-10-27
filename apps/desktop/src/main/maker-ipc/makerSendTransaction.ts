@@ -591,6 +591,7 @@ export interface MakerSendTransactionDeps {
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
+  readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
   /**
    * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
    * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
@@ -1593,6 +1594,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
         'bot-thread': botThreadNote,
+        'task-delivery': allowsEnvironmentNotes ? await deps.readTaskDeliveryNote?.(sessionId) ?? null : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
         'ui-language': uiLanguageNote,
@@ -1612,6 +1614,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withCindyMakeNote;
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
+      }
+      if (plannedNotes['task-delivery']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['task-delivery']);
       }
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);

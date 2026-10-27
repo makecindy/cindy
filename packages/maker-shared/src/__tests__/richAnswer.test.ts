@@ -56,6 +56,19 @@ describe('streaming answer documents', () => {
     expect(doc.nodes.get('text')?.props.text).toBe('Readable');
     expect(doc.issues).toBe(1);
   });
+  it('commits later operations after a malformed or skipped sequence instead of orphaning them', () => {
+    // Real-world regression (session 3c876950): one unescaped quote in a props.text
+    // used to reject every following line via the strict +1 gate, dropping 9 of 13 ops.
+    const heading = (seq: number, id: string) => line(seq, { op: 'create', id, kind: 'heading', props: { text: id } });
+    const malformed = '{"seq":3,"op":"create","id":"bad","kind":"markdown","props":{"text":"记了"注入"缺陷"}}\n';
+    const doc = new RichAnswerStream().update(heading(1, 'a') + heading(2, 'b') + malformed + heading(4, 'c') + heading(5, 'd'));
+    expect(doc.roots).toEqual(['a', 'b', 'c', 'd']);
+    expect(doc.nodes.has('bad')).toBe(false);
+    expect(doc.issues).toBe(2); // the malformed line itself + the skipped sequence 3
+    const skipped = new RichAnswerStream().update(heading(1, 'a') + heading(3, 'c') + heading(4, 'd'));
+    expect(skipped.roots).toEqual(['a', 'c', 'd']);
+    expect(skipped.issues).toBe(1);
+  });
 });
 it('restores persisted controls without overwriting input entered during a slow load', async () => {
   let release!: (value: string | null) => void;

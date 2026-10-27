@@ -15,6 +15,7 @@ import {
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
   buildAgentIslandDisplayState,
+  buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completedReplySummary,
@@ -44,6 +45,19 @@ describe('companion chat unread projection', () => {
     lastMessageAt: 1, preview: 'Reply waiting to be read', token: 'chat-token',
     companion: { name: 'Cindy', hue: 'blue', glyph: 'C', glyphIsInitial: true },
   };
+  // Unit: a blocking card clips the island surface but must not clip the menu's badge candidates.
+  it('keeps the full counted overview while an interaction card occupies the island', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandUserPrompt(state, { sessionId: 'waiting' }, 'question', 100);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, { kind: 'ask_user_question', requestId: 'q', questions: [] }, 101);
+    applyAgentIslandUserPrompt(state, { sessionId: 'working' }, 'work', 102);
+    const display = buildAgentIslandDisplayState(state, 103, [chat]);
+    const overview = buildAgentIslandTaskOverview(state, 103, [chat]);
+    expect(overview.map(row => row.sessionId).sort()).toEqual(['companion-chat', 'waiting', 'working']);
+    expect(overview.filter(row => row.attention)).toHaveLength(display.pillSnapshot.attentionCount);
+    expect(overview.find(row => row.sessionId === chat.sessionId)).toMatchObject({ companion: { name: 'Cindy' }, attention: true });
+    expect(buildAgentIslandTaskOverview(state, 104, [{ ...chat, unread: false }]).some(row => row.sessionId === chat.sessionId)).toBe(false);
+  });
   it.each([null, 'offline-home'])('restores old unread without runtime activity or notifications (%s)', deviceId => {
     const state = createAgentIslandState();
     const now = AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS * 2;

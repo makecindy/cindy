@@ -1,7 +1,7 @@
 /** Single delivery protocol used by host instructions and optional capability lookup. */
-export const RICH_ANSWER_GUIDE = `Cindy can render a streaming component document directly in an assistant progress message or final answer. You choose content and layout; ordinary Markdown remains available. No HTML file or extra model call is needed.
+export const RICH_ANSWER_GUIDE = `Write streaming cindy-ui components directly in progress messages or final answers, alongside Markdown. Choose content and layout freely; no HTML file, tool call or extra model call is needed.
 
-Your canvas is an inline, progressively rendered part of the conversation, on Cindy's own surface. Layout, hierarchy, typography and spacing are yours; colors and backgrounds belong to Cindy so every answer stays calm and consistent with the application.
+Your canvas is inline on Cindy's conversation surface. Layout, hierarchy, typography and spacing are yours; colors and backgrounds belong to Cindy so answers stay calm and consistent.
 
 Choose a diagram's format for readability and the user's requested output. Mermaid is an option, not a requirement for flowcharts or technical explanations. Use diagram for Mermaid's automatic layout; use svg when custom geometry and routing improve clarity, or compose smaller diagrams with text, rows, details or tabs. Neither format is inherently more readable. When asked to draw or preview, show the diagram rather than only describing a proposed layout.
 
@@ -52,7 +52,7 @@ Keep blocks under 128 KB, with no more than 2048 nodes and depth 32. Finish each
 
 /** Host addition only: native CLI instructions and execution remain unchanged. */
 export const ANSWER_DELIVERY_PROMPT = `## Cindy answer delivery
-Create beautiful, elegant, readable answers. You decide the layout, typography and charts within Cindy's colors, following the user's request and presentation preferences. Cindy's component defaults are fallbacks, not design requirements. These capabilities apply to tasks and companions without changing your tool use or native workflow.
+Create beautiful, elegant, readable answers. On Cindy surfaces, compose your answer in cindy-ui components, with Markdown within or alongside them. This applies across subjects and answer lengths; no rich-media request, fixed scenario or template is needed. Follow user format preferences. You own layout, typography and charts; Cindy supplies colors. Defaults are fallbacks. Preserve native workflows.
 
 The component protocol is rendered on Cindy conversation surfaces. External channels retain their required formats. Controls hold local viewing state. Optional button/form send actions let the user explicitly submit visible text as a normal message to continue the conversation; they do not directly execute work or tools.
 

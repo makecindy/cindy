@@ -98,7 +98,7 @@ export function listAllFiles(args: ListAllFilesArgs): Promise<ListAllFilesResult
       }
       setTimeout(() => {
         try {
-          if (!child.killed) child.kill('SIGKILL');
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
         } catch {
           // ignore
         }

@@ -185,7 +185,16 @@ it('denies app display/legacy capture while preserving physical microphone and c
   expect(reply).toHaveBeenLastCalledWith(true);
   request(voice, 'media', reply, { ...details, mediaTypes: ['audio'] });
   expect(reply).toHaveBeenLastCalledWith(true);
-  for (const permission of ['notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
+  // Regression: the capture filter also denied the native video Fullscreen API.
+  // Tier 1: real permission handlers must allow host playback but keep automatic
+  // entry, foreign frames, voice windows and desktop capture denied.
+  expect(check(owner, 'fullscreen', '', details)).toBe(true);
+  request(owner, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(true);
+  expect(check(voice, 'fullscreen', '', details)).toBe(false);
+  request(voice, 'fullscreen', reply, details);
+  expect(reply).toHaveBeenLastCalledWith(false);
+  for (const permission of ['automatic-fullscreen', 'notifications', 'geolocation', 'midi', 'hid', 'display-capture', 'unknown']) {
     expect(check(owner, permission, '', details)).toBe(false);
     request(owner, permission, reply, details);
     expect(reply).toHaveBeenLastCalledWith(false);
@@ -199,6 +208,9 @@ it('denies app display/legacy capture while preserving physical microphone and c
   ]) {
     expect(check(candidate, 'media', '', { ...requestDetails, mediaType: 'audio' })).toBe(false);
     request(candidate, 'media', reply, { ...requestDetails, mediaTypes: ['audio'] });
+    expect(reply).toHaveBeenLastCalledWith(false);
+    expect(check(candidate, 'fullscreen', '', requestDetails)).toBe(false);
+    request(candidate, 'fullscreen', reply, requestDetails);
     expect(reply).toHaveBeenLastCalledWith(false);
   }
   expect(check(owner, 'clipboard-sanitized-write', '', details)).toBe(true);

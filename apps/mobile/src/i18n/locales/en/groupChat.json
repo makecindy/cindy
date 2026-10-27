@@ -1,8 +1,8 @@
 {
   "title": "Group Chats",
   "memberSeparator": ", ",
-  "memberCount_one": "{{count}} teammate",
-  "memberCount_other": "{{count}} teammates",
+  "memberCount_one": "{{count}} member",
+  "memberCount_other": "{{count}} members",
   "organizer": "Organizer",
   "waitingConfirm": "{{name}} is waiting for your go-ahead",
   "loadFailedTitle": "Couldn’t Load This Group Chat",

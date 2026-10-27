@@ -13,20 +13,6 @@ public class XdtIosActionSheetModule: Module {
     View(CindyWindowLayoutView.self) {
       Events("onGeometryChange")
     }
-    Constant("keyboardViewportAvailable") { true }
-    Constant("composerViewportAvailable") { true }
-    View(CindyComposerViewportAnchor.self) {
-      ViewName("ComposerViewportAnchor")
-      Prop("surfaceId") { (view, id: String) in view.surfaceId = id }
-    }
-    View(CindyKeyboardViewport.self) {
-      ViewName("KeyboardViewport")
-      Events("onKeyboardTransition", "onViewportInsetChange")
-      Prop("enabled") { (view, enabled: Bool) in view.enabled = enabled }
-      Prop("followLatest") { (view, follow: Bool) in view.followLatest = follow }
-      Prop("composerSurfaceId") { (view, id: String?) in view.composerSurfaceId = id ?? "" }
-      Prop("composerContentPadding") { (view, padding: Double?) in view.composerContentPadding = padding ?? 0 }
-    }
     Constant("residentHistoryAvailable") { true }
     View(CindyResidentHistoryHost.self) {
       ViewName("ResidentHistoryHost")

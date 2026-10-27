@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
   useEffect,
@@ -804,6 +805,11 @@ interface ChatInputProps {
    */
   focusOnStorageKeyChange?: boolean;
   /**
+   * Each new non-null value (after mount) brings the caret back into the editor, e.g. picking
+   * 「回复」 on a companion message puts its quote above this composer, ready to type the reply.
+   */
+  focusRequest?: unknown;
+  /**
    * Whether this composer should consume hardware send / voice / text commands.
    * Split panes keep every ChatInput mounted; only the focused owner may act.
    */
@@ -1302,6 +1308,7 @@ export function ChatInput({
   draftKey,
   disableAutofocus = false,
   focusOnStorageKeyChange = false,
+  focusRequest,
   ownsHardwareComposerActions = true,
   extraDirs,
   writableDirs,
@@ -4297,6 +4304,16 @@ export function ChatInput({
       })();
     }
   }, [editor, storageKey]);
+
+  // A focus request from the owner (see the `focusRequest` prop). The caret goes back to where
+  // it was; an editor that already has focus (mid IME composition included) is left alone.
+  const focusRequestRef = useRef(focusRequest);
+  useEffect(() => {
+    if (focusRequestRef.current === focusRequest) return;
+    focusRequestRef.current = focusRequest;
+    if (focusRequest == null || !editor || editor.isDestroyed || !editor.isEditable || editor.isFocused) return;
+    editor.commands.focus();
+  }, [editor, focusRequest]);
 
   // ── External draft writes for the CURRENT session (e.g. rewind / fork
   // pre-fill called saveComposerDraft from outside) ──
@@ -7630,7 +7647,7 @@ export function ChatInput({
             ? t('newChat.chatInput.agentRelocation.titleOther', { device: target.name })
             : deviceLinkDeviceId
               ? t('newChat.chatInput.agentRelocation.titleOther', {
-                  device: deviceLinkDeviceName || deviceLinkDeviceId,
+                  device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
           description: t('newChat.chatInput.agentRelocation.description'),
@@ -8988,24 +9005,10 @@ export function ChatInput({
   });
   // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
   // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
-  const voiceHintEmpty =
-    !!editor && !editor.isDestroyed && composerDocIsEmpty(editor.state.doc) && !hasVoiceDraftText;
-  const voiceHint = voiceHintEmpty
-    ? voiceBusyOnCurrentComposer && voiceInput.state === 'listening'
-      ? t(
-          composerVoiceHolding || voiceButtonHolding
-            ? 'newChat.chatInput.voiceInput.speakRelease'
-            : 'newChat.chatInput.voiceInput.speakPressAgain',
-        )
-      : composerVoiceHovered && composerVoiceHoverHintReady && composerLongPressVoiceInputEnabled && !composerTypingLocked
-        ? t('newChat.chatInput.voiceInput.holdComposer')
-        : null
-    : null;
-  const showRecommendationOverlay =
-    !voiceHint && shouldShowComposerPromptRecommendation({
-      ...recommendationComposerState,
-      prompt: recommendedPrompt,
-    });
+  const showRecommendationOverlay = shouldShowComposerPromptRecommendation({
+    ...recommendationComposerState,
+    prompt: recommendedPrompt,
+  });
   // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
   showRecommendationRef.current = showRecommendationOverlay;
   // 首页建议悬停预览:输入框锁定(发送中 / 语音占用 / 禁用)时不预览,免得遮住进行中的状态。
@@ -9014,7 +9017,26 @@ export function ChatInput({
   const [dismissedPreviewPrompt, setDismissedPreviewPrompt] = useState<string | null>(null);
   if (!previewPrompt && dismissedPreviewPrompt !== null) setDismissedPreviewPrompt(null);
   const showPromptPreview =
-    !!previewPrompt && previewPrompt !== dismissedPreviewPrompt && !composerMutationLocked && !voiceHint;
+    !!previewPrompt && previewPrompt !== dismissedPreviewPrompt && !composerMutationLocked;
+  const voiceHintEmpty =
+    !!editor && !editor.isDestroyed && composerDocIsEmpty(editor.state.doc) && !hasVoiceDraftText;
+  // 已有推荐或建议预览优先于语音入门提示；实际录音仍由输入框锁定状态切换为录音指引。
+  const voiceHint = voiceHintEmpty
+    ? voiceBusyOnCurrentComposer && voiceInput.state === 'listening'
+      ? t(
+          composerVoiceHolding || voiceButtonHolding
+            ? 'newChat.chatInput.voiceInput.speakRelease'
+            : 'newChat.chatInput.voiceInput.speakPressAgain',
+        )
+      : !showRecommendationOverlay &&
+          !showPromptPreview &&
+          composerVoiceHovered &&
+          composerVoiceHoverHintReady &&
+          composerLongPressVoiceInputEnabled &&
+          !composerTypingLocked
+        ? t('newChat.chatInput.voiceInput.holdComposer')
+        : null
+    : null;
   promptPreviewInputGuardRef.current = () => {
     if (!showPromptPreview) return false;
     setDismissedPreviewPrompt(previewPrompt ?? null);

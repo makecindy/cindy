@@ -176,13 +176,26 @@ describe('LibraryVault', () => {
       const parent = path.join(tmpRoot, 'picked-no-init');
       const custom = path.join(parent, 'mivo-canvas');
       await fs.promises.mkdir(parent, { recursive: true });
+      // Unit contract: a persisted binding must not recreate a MISSING tree.
+      // Inject the helper result so Windows cold PowerShell startup (15s in
+      // PR #7281 CI) cannot turn this policy test into an unrelated IO failure.
+      // Real existing-open/init coverage remains in the custom-tree cases below.
+      const openExistingCustom = vi.fn(async () => ({ ok: false as const, code: 'MISSING' as const }));
+      const initCustomTree = vi.fn(async () => {
+        throw new Error('An existing custom library must not be reinitialized');
+      });
       const vault = makeVault({
         rootDir: () => custom,
         locationKind: 'custom',
         allowCustomInit: false,
+        openExistingCustom,
+        initCustomTree,
       });
       const missing = await vault.open();
       expect(missing).toMatchObject({ ok: true, state: 'unavailable', reason: 'disk-missing' });
+      expect(openExistingCustom).toHaveBeenCalledOnce();
+      expect(initCustomTree).not.toHaveBeenCalled();
+      expect(fs.existsSync(custom)).toBe(false);
       expect(fs.existsSync(path.join(custom, '.cindy-library', 'meta.json'))).toBe(false);
     });
 

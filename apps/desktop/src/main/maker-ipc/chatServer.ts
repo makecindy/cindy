@@ -7,7 +7,7 @@ import { app, net, nativeImage } from 'electron';
 import { validateAvatarUpload } from '../profileEdit.js';
 import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.js';
+import { signalBotAutonomyBotsChanged, subscribeBotProfilesChanged } from '../bot-autonomy/botsChangedSignal.js';
 import { t } from '../i18n.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
@@ -61,6 +61,8 @@ import { createThreadProjection, isShareableThreadReply, threadPreviewAttachment
 import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/homes.js';
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
 import { DIRECT_ROOM_COMPLETION, deliverDirectRoomMessage, directRoomClientId } from '../companion-cloud/directRoom.js';
+import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
+import { readAllRoomMessages } from '../companion-cloud/room.js';
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
@@ -131,6 +133,10 @@ const THREAD_LIST_LIMIT = 50;
 const CHANGE_COALESCE_MS = 150;
 /** A realtime notice of newly queued work claims it this soon instead of on the next 2s tick. */
 const CLAIM_TRIGGER_MS = 250;
+const ACTOR_REFRESH_MS = 60_000;
+const PROFILE_REFRESH_MS = 300_000;
+/** Room notices are hints, not a complete work feed: keep a bounded fallback for unopened rooms. */
+const IDLE_CLAIM_MAX_MS = 15_000;
 /** How often a busy companion's rooms are re-read for work queued in its other conversations. */
 const LANE_SWEEP_MS = 10_000;
 /** A room snapshot reused for a send while its realtime subscription reports no change since. */
@@ -341,11 +347,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let savedShadows = JSON.stringify(deps.companionCloud?.homes.persistedShadows() ?? []);
   let connected = false;
   const current = () => !disposed && (!scope || !deps.isOwnerScopeCurrent || deps.isOwnerScopeCurrent(scope));
-  const history = chatLocalHistory(config.baseUrl, current);
+  const displayHistory = chatLocalHistory(config.baseUrl, current);
   const sendJournal = chatSendJournal<SavedChatSend>(config.baseUrl, current);
   const executorId = `desktop:${randomUUID()}`;
   let actors: Actor[] = [];
   let selfId = '';
+  const histories = new Map<string, ChatHistory>();
+  const transcriptViews = new Map<string, { generation: string; cursor: string; messages: Awaited<ReturnType<typeof readAllRoomMessages>> }>();
+  function history(reader = selfId): ChatHistory | undefined {
+    if (!selfId || !deps.chatHistoryStore) return undefined;
+    let value = histories.get(reader);
+    if (!value) {
+      value = createChatHistory({ api: route => api(route, 'GET', undefined, reader === selfId ? undefined : reader),
+        store: deps.chatHistoryStore(config.baseUrl, selfId, reader, current), current, newGeneration: randomUUID });
+      if (connected) value.reconnect();
+      histories.set(reader, value);
+    }
+    return value;
+  }
   let supportsDissolve = false;
   let supportsListRemoval = false;
   let supportsMemberAvatar = false;
@@ -355,7 +374,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   personalList.subscribe(row => {
     if (!current()) return;
-    if (row.hidden) { history.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); }
+    if (row.hidden) { displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); }
     deps.onChanged?.({ groupId: row.conversationId, change: 'list', listState: row }, scope);
     for (const [source, target] of upgradedGroups) if (target === row.conversationId)
       deps.onChanged?.({ groupId: source, change: 'list', listState: row }, scope);
@@ -367,6 +386,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let companion: CompanionCloudRuntime | undefined;
   let companionSelf: string | null = null;
   let actorsStale = false;
+  let claimWakeVersion = 0;
+  const unsubscribeProfiles = subscribeBotProfilesChanged(() => {
+    actorsStale = true;
+    claimWakeVersion++;
+    idleClaims.clear();
+  });
   // Who reacted can change while counts stay the same. A realtime reaction change versions only its
   // message; a reset that skipped events versions the whole room (and makes per-message versions moot).
   // Both ride on the group, so every loaded page and the Thread see them on refresh. A recreated runtime
@@ -470,6 +495,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const queuedHints = new Map<string, Map<string, string>>();
   /** When each busy companion's own rooms are next re-read for work its realtime notices missed. */
   const laneSweeps = new Map<string, number>();
+  const idleClaims = new Map<string, { misses: number; next: number }>();
   const metadata = new Map<string, Promise<void>>();
   /**
    * Followed room scopes, each with the newest cursor this process has read or acked. It only
@@ -540,9 +566,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     notify: deps.onChatMessageNotification,
   }) : undefined;
-  const changed = (roomId: string) => {
+  const changed = (roomId: string, synchronized = false) => {
     if (!current()) return;
     invalidate(roomId);
+    if (!synchronized) history()?.invalidate(roomId);
     if (pendingChanges.has(roomId)) return;
     pendingChanges.set(roomId, setTimeout(() => {
       pendingChanges.delete(roomId);
@@ -628,7 +655,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   const media = createChatMedia(api, current, deps.log, { allowLoopback: !app.isPackaged && process.env.XDT_ISOLATED === '1' && config.baseUrl === 'http://127.0.0.1:3018' });
   const threads = createThreadProjection<Message>({
-    threadPage: (roomId, rootId, limit, before) => api<Message[]>(`/conversations/${roomId}/messages?threadRootId=${rootId}&limit=${limit}${before ? `&before=${before}` : ''}`),
+    threadPage: (roomId, rootId, limit, before) => history()?.page<Message>(roomId,
+      new URLSearchParams({ threadRootId: rootId, limit: String(limit), ...(before ? { before } : {}) }))
+      ?? api<Message[]>(`/conversations/${roomId}/messages?threadRootId=${rootId}&limit=${limit}${before ? `&before=${before}` : ''}`),
     // The same visibility rule as every other single-message read.
     message: async (roomId, messageId) => await readMessage(roomId, messageId) ?? null,
     filled: roomId => changed(roomId),
@@ -783,7 +812,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   /**
    * Read and send paths use the registration they already have and refresh it in the background
-   * (same five-second throttle, 60-second profile refresh and auth backoff as before); only the
+   * (one-minute actor refresh, five-minute profile refresh and the auth backoff); only the
    * first registration of this account is awaited. Management paths that map local companions to
    * actors still await `register()`.
    */
@@ -796,7 +825,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let registryKey = '';
   async function register() {
     if (refreshActors) return refreshActors;
-    if (Date.now() - registeredAt < 5000 && !actorsStale) return;
+    if (selfId && Date.now() - registeredAt < ACTOR_REFRESH_MS && !actorsStale) return;
     refreshActors = (async () => {
       actorsStale = false;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
@@ -812,7 +841,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // a server without the capability never sees the field (its strict contract would reject it).
       directRoomClaims = companionHome && me.capabilities?.directRoomClaim === true;
       // Refresh from the issuing auth server, never overwrite with a stale device cache.
-      if (Date.now() - profileRefreshedAt > 60000) {
+      if (Date.now() - profileRefreshedAt > PROFILE_REFRESH_MS) {
         await api('/profile/refresh', 'POST').then(() => { profileRefreshedAt = Date.now(); }).catch(() => undefined);
       }
       actors = await api<Actor[]>('/actors');
@@ -843,7 +872,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // refresh, or actor.changed racing its own list notice): tell them to read again.
         if (replaced) { changed(''); for (const roomId of rooms.keys()) changed(roomId); }
       }
-    })().finally(() => { refreshActors = undefined; });
+    })().catch(error => {
+      // A forced refresh consumes the stale flag before I/O. On failure, keep it
+      // pending so a recent successful pass cannot defer recovery for a minute.
+      actorsStale = true;
+      throw error;
+    }).finally(() => { refreshActors = undefined; });
     return refreshActors;
   }
   /** Claim empty homes for this computer and publish where every companion runs. */
@@ -859,6 +893,28 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (companion && companionSelf !== self) { companion.dispose(); companion = undefined; }
     companionSelf = self;
     companion ??= startCompanionCloud({ api, host, endpoint: config.baseUrl, humanActorId: selfId, selfDeviceId: self, current, log: deps.log,
+      transcript: deps.chatHistoryStore ? async (roomId, actorId, refresh) => {
+        // Keep message-time ordering for imported history, but reuse covered pages after delta sync.
+        const cache = history()!;
+        const key = `${actorId}:${roomId}`;
+        if (refresh) cache.invalidate(roomId);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const snapshot = await cache.snapshot(roomId);
+          const previous = transcriptViews.get(key);
+          // Even older pages pass ensure() for expiry, reconnect and authorization.
+          // Unchanged room revisions can reuse the sorted transcript without rescanning 500 pages.
+          if (previous?.generation === snapshot.cacheGeneration && previous.cursor === snapshot.cursor) return previous.messages;
+          const messages = await readAllRoomMessages(async <T>(route: string): Promise<T> => {
+            const query = new URL(`https://chat.invalid${route}`).searchParams;
+            return await cache.page(roomId, query) as T;
+          }, roomId, actorId);
+          if (cache.generation(roomId) === snapshot.cacheGeneration) {
+            transcriptViews.set(key, { generation: snapshot.cacheGeneration, cursor: snapshot.cursor, messages });
+            return messages;
+          }
+        }
+        throw new Error('CHAT_HISTORY_CHANGED');
+      } : undefined,
       bots: () => actors.filter(a => a.kind === 'bot' && !a.disabled && a.homeDeviceId === self && localBot(a.id)?.status === 'active'
         && !companion?.isShadowed(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
       paused: botId => profiles.find(p => p.id === botId)?.status === 'paused',
@@ -926,12 +982,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!current() || socket !== ws) { ws.close(); return; }
       ws.send(JSON.stringify({ type: 'auth', token: getAccessToken() }));
     });
-    ws.on('message', raw => {
+    let frames = Promise.resolve();
+    ws.on('message', raw => { frames = frames.then(async () => {
       if (!current() || socket !== ws) return;
       try {
         const event = JSON.parse(String(raw));
         if (event.type === 'ready') {
           memberJoinedClaims = true;
+          claimWakeVersion++;
+          idleClaims.clear();
+          for (const cache of histories.values()) cache.reconnect();
           reconnectDelay = 500; connected = true;
           threads.reset();
           // Replay and list sync may lag behind ready. Fence all snapshot reads,
@@ -943,10 +1003,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           for (const [roomId, cursor] of rooms) ws.send(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: cursor }));
           void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) { changed(roomId); autoContinuePlans(roomId); } changed(''); } }).catch(() => ws.close());
         } else if (event.type === 'changes') {
-          // This adapter stores no client history. Each invalidation re-reads authoritative
-          // state; a reconnect resumes after the last cursor this process has read or acked.
+          // Durable UI projections commit before ACK. Serial frames preserve the cursor order.
           if (event.scope.startsWith('conversation:')) {
             const roomId = event.scope.slice(13);
+            await history()?.receive(roomId, event, rooms.get(roomId));
+            if (!current() || socket !== ws) return;
             if ((event.changes ?? []).some((change: { type?: string; data?: { dissolvedAt?: unknown } }) => change.type === 'conversation.updated' && change.data?.dissolvedAt)) retirePlanning(roomId);
             if (rooms.has(roomId)) advanceRoom(roomId, event.cursor);
             for (const change of event.changes ?? []) {
@@ -955,7 +1016,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               if (change.type === 'message.updated' || change.type === 'message.deleted') threads.invalidate(roomId, change.entityId);
               if (change.type === 'reaction.changed' && typeof change.entityId === 'string') bumpMessageReactions(roomId, change.entityId);
             }
-            changed(roomId);
+            changed(roomId, true);
             const changes: unknown[] = Array.isArray(event.changes) ? event.changes : [];
             const types = changes.map(change => (change as { type?: unknown } | null)?.type);
             // Lease renewals append no change; ordinary chatter cannot revoke a lease, so it does
@@ -985,9 +1046,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               if (change.type === 'conversation.updated' && change.data?.dissolvedAt) retirePlanning(change.entityId);
               if (change.type === 'membership.changed' || change.type === 'conversation.updated') changed(change.entityId);
               // A Thread read on another device clears its unread here too.
-              if (change.type === 'read.changed' && typeof change.entityId === 'string') changed(change.entityId);
+              if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+                history()?.invalidate(change.entityId, true); changed(change.entityId);
+              }
             }
-            if (companionHome && (event.changes ?? []).some((change: { type?: unknown }) => change?.type === 'actor.changed')) void refreshHomes();
+            if ((event.changes ?? []).some((change: { type?: unknown }) => change?.type === 'actor.changed')) void refreshHomes();
             changed('');
           }
           ws.send(JSON.stringify({ type: 'ack', scope: event.scope, cursor: event.cursor }));
@@ -996,6 +1059,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (event.error?.code !== 'RESET_REQUIRED' || typeof head !== 'string' || !/^\d+$/.test(head)) { ws.close(); return; }
           void (async () => {
             if (supportsListRemoval) await personalList.resync(api);
+            for (const cache of histories.values()) cache.reconnect();
             if (!current() || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
             for (const roomId of rooms.keys()) changed(roomId);
             changed('');
@@ -1003,6 +1067,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           })().catch(() => ws.close());
         } else if (event.type === 'scope_error' && event.scope.startsWith('conversation:')) {
           const roomId = event.scope.slice(13);
+          await history()?.clear(roomId);
           if (event.error?.code === 'RESET_REQUIRED') {
             void api<Snapshot>(`/conversations/${roomId}/snapshot`).then(value => {
               if (!current() || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
@@ -1015,18 +1080,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             }).catch(() => ws.close());
           } else {
             rooms.delete(roomId);
-            history.forget(roomId); sendJournal.forgetRoom(roomId);
+            displayHistory.forget(roomId); sendJournal.forgetRoom(roomId);
             // Access may come back with a narrower history; re-read every reference.
             threads.reset();
             changed(roomId);
           }
         }
       } catch { ws.close(); }
-    });
+    }).catch(() => ws.close()); });
     ws.on('error', () => ws.close());
     ws.on('close', () => {
       if (!current() || socket !== ws) return;
       connected = false;
+      for (const cache of histories.values()) cache.reconnect();
       reconnect = setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 15000);
     });
@@ -1294,6 +1360,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return { version, updates: Object.fromEntries(shownShares.filter(share => !byId.has(share.id)).map(({ id: shareId, sharerId, ...card }) =>
       [shareId, shareView(card, sharerId && (actors.find(actor => actor.externalId === sharerId)?.id ?? sharerId))])) };
   }
+  async function writeReadState<T = unknown>(roomId: string, data: Record<string, unknown>): Promise<T> {
+    const value = await api<T>(`/conversations/${roomId}/read`, 'POST', data);
+    // Reads/follows advance actor scope, not the conversation cursor. Apply the
+    // same metadata invalidation for every local writer, even without a WS echo.
+    history()?.invalidate(roomId, true);
+    changed(roomId);
+    return value;
+  }
   /**
    * The reader is looking at this Thread's latest page: move its server read position to the
    * newest reply read. Only a forward move is written, so the refresh it causes writes nothing.
@@ -1307,8 +1381,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const newest = newestFirst.reduce((max, m) => BigInt(m.seq) > max ? BigInt(m.seq) : max, BigInt(root.seq));
     if (newest > before) {
       try {
-        await api(`/conversations/${roomId}/read`, 'POST', { operationId: randomUUID(), threadRootId: root.id, readSeq: String(newest) });
-        changed(roomId);
+        await writeReadState(roomId, { operationId: randomUUID(), threadRootId: root.id, readSeq: String(newest) });
       } catch (error) {
         deps.log?.warn('Chat thread read not recorded', { groupId: roomId, ...chatErrorDiagnostic(error) });
       }
@@ -1326,12 +1399,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const read = s.reads.find(entry => entry.thread_key === rootId);
     if (next === undefined) return read?.following === true;
     // The read position the server keeps never moves back, so restating it changes nothing else.
-    const written = await api<{ following: boolean }>(`/conversations/${roomId}/read`, 'POST', {
+    const written = await writeReadState<{ following: boolean }>(roomId, {
       operationId: randomUUID(), threadRootId: rootId, readSeq: read?.read_seq ?? '0', following: next });
-    changed(roomId);
     return written.following;
   }
-  async function detail(roomId: string, options?: unknown, summaryOnly = false): Promise<BotGroupDetail> {
+  async function detail(roomId: string, options?: unknown, summaryOnly = false, attempt = 0): Promise<BotGroupDetail> {
     id.parse(roomId);
     const o = z.object({ conversationKind: z.literal('direct').optional(), beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
       sourceMessageIds: z.array(id).optional(),
@@ -1344,9 +1416,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // A followed room reports every later change, so its snapshot may run alongside. A new
     // room first takes the snapshot cursor it will follow from, before the rest is read.
     const direct = o.conversationKind === 'direct';
-    const snapshotRead = direct ? directSnapshot(roomId) : groupSnapshot(roomId);
+    let cacheGeneration: string | undefined;
+    const snapshotRead = deps.chatHistoryStore ? (async () => {
+      await ensureRegistered();
+      const value = await history()!.snapshot<Snapshot>(roomId);
+      cacheGeneration = value.cacheGeneration;
+      if (direct ? value.room.kind !== 'direct' : !isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
+      subscribe(roomId, value.cursor);
+      return value;
+    })() : direct ? directSnapshot(roomId) : groupSnapshot(roomId);
     if (!rooms.has(roomId)) await snapshotRead;
-    const messagesRead = summaryOnly ? null : api<Message[]>(`/conversations/${roomId}/messages?${query}`);
+    const messagesRead = summaryOnly ? null : history()?.page<Message>(roomId, query) ?? api<Message[]>(`/conversations/${roomId}/messages?${query}`);
     const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>(`/conversations/${roomId}/executions`);
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
@@ -1376,13 +1456,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning' });
     // Sidebar refresh must not download every attachment in every group's history.
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
-    const shares = summaryOnly || direct ? undefined : await decorateThreads(roomId, messages, page, s.messages, s.members, true, o.shownShares);
+    const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
+    const messageUpdates = projection ? await messageViews(roomId, projection.messages, s.members, ownerMembers) : undefined;
+    const shares = summaryOnly || direct ? undefined : await decorateThreads(roomId, [...messages, ...(messageUpdates ?? [])],
+      [...page, ...(projection?.messages ?? [])], s.messages, s.members, true, o.shownShares);
+    if (cacheGeneration && history()?.generation(roomId) !== cacheGeneration) {
+      if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
+      return detail(roomId, options, summaryOnly, attempt + 1);
+    }
     const threadShareUpdates = shares?.updates;
     const reads = threadReads(s);
     const unread = reads ? s.messages.filter(m => !m.deleted && m.origin !== 'system' && m.origin !== 'import' && m.authorId !== selfId
       && (!m.threadRootId || m.mentions?.includes(selfId) || s.reads?.some(read => read.thread_key === m.threadRootId && read.following))
       && BigInt(m.seq) > (reads.get(m.threadRootId ?? 'main') ?? 0n)) : null;
-    if (reads) for (const view of messages) if (!view.threadRootId && (view.replyCount ?? 0) > 0) view.threadUnread = threadUnread(view.id, s.messages, reads);
+    if (reads) for (const view of [...messages, ...(messageUpdates ?? [])]) if (!view.threadRootId && (view.replyCount ?? 0) > 0) view.threadUnread = threadUnread(view.id, s.messages, reads);
     const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads) : undefined;
     messages.sort((a, b) => a.sequence - b.sequence);
     const last = s.messages[0];
@@ -1411,7 +1498,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       incomingMessageTimes: incomingMessageTimes(s.messages, s.members),
       ...(unread ? { serverUnread: { count: Math.min(99, unread.length), mentioned: unread.some(m => m.mentions?.includes(selfId)) } } : {}),
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
-      messages, executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
+      messages, ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
       round: { status: deciding || executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers,
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
@@ -2157,6 +2244,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function forgetRun(run: Running) {
     running.delete(run.execution.id);
     const botId = run.execution.bot_id;
+    idleClaims.delete(botId);
     if (!runsOf(botId).length) return;
     const hints = queuedHints.get(botId) ?? new Map<string, string>();
     hints.set(`room:${run.execution.conversation_id}`, run.execution.conversation_id);
@@ -2227,11 +2315,22 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     settledValues(await settleBounded(ready, ready.length, async actor => {
       const runs = runsOf(actor.id);
       if (runs.length) { await claimBesideRuns(actor.id, runs); return; }
+      const idle = idleClaims.get(actor.id);
+      if (idle && Date.now() < idle.next) return;
       // An idle companion takes the oldest work wherever it is. Notices of its other queued work stay,
       // so that work starts beside this turn; with nothing left to take, they are stale.
       laneSweeps.delete(actor.id);
+      const wakeVersion = claimWakeVersion;
       const execution = await claim(actor.id);
-      if (!execution) { queuedHints.delete(actor.id); return; }
+      if (!execution) {
+        queuedHints.delete(actor.id);
+        const misses = Math.min((idle?.misses ?? 0) + 1, 4);
+        // Positive jitter prevents installations started together from staying in lockstep.
+        if (wakeVersion === claimWakeVersion)
+          idleClaims.set(actor.id, { misses, next: Date.now() + Math.min(2000 * 2 ** (misses - 1), IDLE_CLAIM_MAX_MS) + Math.random() * 1000 });
+        return;
+      }
+      idleClaims.delete(actor.id);
       queuedHints.get(actor.id)?.delete(execution.id);
       void runExecution(execution);
     }));
@@ -2246,8 +2345,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return claiming;
   }
   let claimTrigger: ReturnType<typeof setTimeout> | undefined;
-  /** Claims newly queued work shortly after its realtime notice; the two-second poll stays the fallback. */
+  /** A work notice bypasses idle backoff, but never the auth/rate-limit backoff. */
   function triggerClaim() {
+    claimWakeVersion++;
+    idleClaims.clear();
     if (claimTrigger || !current()) return;
     claimTrigger = setTimeout(() => {
       claimTrigger = undefined;
@@ -2413,8 +2514,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (message.threadRootId) throw new Error('MAIN_MESSAGE_REQUIRED');
         const read = snapshot.reads.find(entry => entry.thread_key === 'main')?.read_seq ?? '0';
         if (BigInt(message.seq) > BigInt(read)) {
-          await api(`/conversations/${target}/read`, 'POST', { operationId: `read-main:${message.seq}`, readSeq: message.seq });
-          changed(target);
+          await writeReadState(target, { operationId: `read-main:${message.seq}`, readSeq: message.seq });
         }
         return {};
       }
@@ -2781,7 +2881,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     getGroup: (roomId, options) => safe(async () => {
       if ((options as { cacheOnly?: boolean } | undefined)?.cacheOnly === true) {
-        const group = history.read(id.parse(roomId));
+        const group = displayHistory.read(id.parse(roomId));
         if (!group || personalList.hidden(group.id)) throw new Error('CONVERSATION_NOT_FOUND');
         return { ok: true as const, group };
       }
@@ -2791,13 +2891,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (personalList.hidden(target)) throw new Error('CONVERSATION_NOT_FOUND');
         const group = await detail(target, options);
         if (personalList.hidden(target)) throw new Error('CONVERSATION_NOT_FOUND');
-        if (!(options as { beforeSequence?: number } | undefined)?.beforeSequence) history.save(target, group);
+        if (!(options as { beforeSequence?: number } | undefined)?.beforeSequence) displayHistory.save(target, group);
         return { ok: true as const, group };
       }
       catch (error) {
         const failure = chatGroupFailure(error);
         if (['NOT_FOUND', 'PERMISSION_DENIED'].includes(failure.errorCode)) {
-          history.forget(id.parse(roomId)); history.forget(target); sendJournal.forgetRoom(target);
+          displayHistory.forget(id.parse(roomId)); displayHistory.forget(target); sendJournal.forgetRoom(target);
         }
         throw error;
       }
@@ -2998,7 +3098,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (s.members.some(m => m.ownerActorId === selfId && m.role === 'owner')) await api(`/conversations/${room}`, 'PATCH', { operationId: randomUUID(), expectedRevision: s.room.revision, archived: true }, managementActor(s));
       else await api(`/conversations/${room}/members`, 'POST', { operationId: randomUUID(), actorId: selfId, action: 'leave' });
       resolvedGroups.delete(id.parse(groupId));
-      history.forget(room); history.forget(id.parse(groupId)); sendJournal.forgetRoom(room);
+      displayHistory.forget(room); displayHistory.forget(id.parse(groupId)); sendJournal.forgetRoom(room);
       changed(room); return { ok: true as const };
     }),
     continueRound: groupId => safe(async () => {
@@ -3015,6 +3115,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     editPlanStep: input => safe(() => actPlan(input, 'reassign')),
     dispose: () => {
       chatNotifications?.dispose();
+      unsubscribeProfiles();
       disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); clearTimeout(claimTrigger); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);

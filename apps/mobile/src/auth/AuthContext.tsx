@@ -125,6 +125,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
+import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -895,6 +896,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages(),
+      clearMobileChatHistoryStore(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
@@ -2973,6 +2975,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('[auth] speaker filter cleanup pending; will retry');
     });
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearMobileChatHistoryStore().catch(() => undefined);
     await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);

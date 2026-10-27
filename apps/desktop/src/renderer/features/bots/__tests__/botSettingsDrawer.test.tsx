@@ -95,6 +95,51 @@ afterEach(() => {
 });
 
 describe('BotSettingsDrawer', () => {
+  // Unit regression for the reported inert scrim (DESIGN.md §4: side drawers dismiss outside).
+  // Existing cases cover navigation, Escape and ×, but not pointer dismissal through the real
+  // BotSettingsDrawer. A pointer on the scrim must close only when the save/draft guard permits;
+  // pointers inside the drawer or its portal must leave it open.
+  it('closes from the scrim only after the draft guard allows leaving', async () => {
+    guard.mockResolvedValue(false);
+    const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+      initialEntries: ['/bots/bot-1?settings=1&settingsPage=memory&keep=1'],
+    });
+    render(<RouterProvider router={router} />);
+    // Radix installs its document pointer listener on the next task.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const scrim = screen.getByRole('dialog').parentElement!;
+    fireEvent.pointerDown(scrim, { pointerType: 'mouse', button: 0 });
+    fireEvent.click(scrim);
+    await waitFor(() => expect(guard).toHaveBeenCalledOnce());
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(router.state.location.search).toContain('settings=1');
+
+    guard.mockResolvedValue(true);
+    fireEvent.pointerDown(scrim, { pointerType: 'mouse', button: 0 });
+    fireEvent.click(scrim);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(guard).toHaveBeenCalledTimes(2);
+    expect(router.state.location.pathname).toBe('/bots/bot-1');
+    expect(router.state.location.search).toBe('?keep=1');
+  });
+
+  it('keeps settings open when clicking inside the drawer or its portaled controls', async () => {
+    render(<RouterProvider router={createMemoryRouter(
+      [{ path: '*', element: <BotSettingsDrawer /> }],
+      { initialEntries: ['/bots/bot-1?settings=1'] },
+    )} />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    fireEvent.pointerDown(screen.getByTestId('simple-bot-settings'), { pointerType: 'mouse', button: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
+    const option = await screen.findByRole('button', { name: 'Model row' });
+    await act(async () => {
+      fireEvent.pointerDown(option, { pointerType: 'mouse', button: 0 });
+      fireEvent.click(option);
+    });
+    expect(screen.getByTestId('simple-bot-settings')).toBeTruthy();
+    expect(guard).not.toHaveBeenCalled();
+  });
+
   it('does not open editable settings for a copy demoted to another computer', async () => {
     cloud.demotedBotIds = ['bot-1'];
     const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }],

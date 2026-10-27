@@ -105,6 +105,7 @@ import {
   applyAgentIslandInteractionRequest,
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
+  buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
@@ -343,6 +344,7 @@ function canonicalSessionActivity(
 export class AgentIslandService {
   private attentionCount = 0;
   private readonly attentionCountListeners = new Set<(count: number) => void>();
+  private readonly taskOverviewListeners = new Set<() => void>();
   private readonly sessionActivityListeners = new Set<
     (transition: SessionActivityTransition) => void
   >();
@@ -1897,12 +1899,32 @@ export class AgentIslandService {
     return this.attentionCount;
   }
 
+  getTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
+  }
+
+  subscribeTaskOverview(listener: () => void): () => void {
+    this.taskOverviewListeners.add(listener);
+    return () => this.taskOverviewListeners.delete(listener);
+  }
+
+  /** Menu-bar entry uses the same device/companion navigation and read acknowledgement. */
+  openTaskOverviewSession(sessionId: string): void {
+    this.focusSession(sessionId);
+  }
+
   subscribeAttentionCount(listener: (count: number) => void): () => void {
     this.attentionCountListeners.add(listener);
     return () => this.attentionCountListeners.delete(listener);
   }
 
   private publishAttentionCount(count: number): void {
+    // Content can change without changing the count (including restored companion chats).
+    for (const listener of this.taskOverviewListeners) {
+      try { listener(); } catch (error) {
+        log.warn('task overview listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     if (count === this.attentionCount) return;
     this.attentionCount = count;
     for (const listener of this.attentionCountListeners) {

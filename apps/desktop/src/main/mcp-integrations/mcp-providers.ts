@@ -1,3 +1,4 @@
+import { reportTaskDelivery } from '../bot-autonomy/hub.js';
 import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
@@ -795,6 +796,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
         setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
+      taskDelivery: { report: reportTaskDelivery },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { useIncomingShareComposer } from '@/session/useIncomingShareComposer';
@@ -82,7 +83,7 @@ import {
 } from 'expo-audio';
 import { renderConversationShareHtmlToPng } from 'xdt-screenshot-monitor';
 import { Stack, useFocusEffect, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { forwardRef, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -116,7 +117,7 @@ import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { usePromptRecommendation } from '@/session/usePromptRecommendation';
-import { PromptRecommendationSlot } from '@/session/PromptRecommendation';
+import { PromptRecommendation } from '@/session/PromptRecommendation';
 import { usePromptRecommendationVisibility } from '@/session/usePromptRecommendationVisibility';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
@@ -340,8 +341,6 @@ import {
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
 import { useComposerDock } from '@/session/composerMorph';
 import { DockKeyboardLift, DockKeyboardViewportSpacer } from '@/session/ComposerDockKeyboardFollow';
-import { NativeAndroidComposerAnchor, nativeAndroidComposerViewportAvailable, nativeAndroidKeyboardViewportAvailable } from '@/session/NativeChatViewport';
-import { NativeComposerViewportAnchor, nativeComposerViewportAvailable, nativeKeyboardViewportAvailable } from '@/session/NativeKeyboardViewport';
 import { useComposerPillOpen } from '@/session/useComposerPillOpen';
 import { composerBottomContentPadding, composerGeometry } from '@/session/composerGeometry';
 import {
@@ -485,8 +484,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
-import { AnimatedContentHeight } from '@/session/AnimatedContentHeight';
-import { ComposerOverlayHeight, ComposerOverlayLayout, useComposerOverlayLayout } from '@/session/ComposerOverlayLayout';
+import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
 import { ComposerPullThroughScrollView, useComposerPullThroughBridge, type ComposerPullThroughBridge } from '@/session/composerPullThrough';
@@ -1068,7 +1066,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 覆盖切回后新发起的预览);代际每次 session 变化都递增,能正确作废这类请求,也能让同一 session 内
   // 新发起的请求作废旧请求。
   const rewindRequestSeqRef = useRef(0);
-  const deviceName = readRouteParam(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteParam(params.deviceName));
   useFocusEffect(useCallback(() => {
     rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId, deviceName, sessionId } });
   }, [deviceId, deviceName, sessionId]));
@@ -1147,8 +1145,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const windowDimensions = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const keyboardLayoutAnimation = useRef(true);
-  const keyboardState = useMobileKeyboardState(true, keyboardLayoutAnimation);
+  const keyboardState = useMobileKeyboardState();
   const {
     connectionEpoch,
     connectionIssue,
@@ -1237,7 +1234,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }
   const conversationShareSvgRef = useRef<ConversationShareSvgHandle | null>(null);
   const topOverlayRef = useRef<View>(null);
-  const composerSurfaceId = useId();
+  const bottomOverlayRef = useRef<View>(null);
   const shareSelectionActiveRef = useRef(shareSelectionActive);
   shareSelectionActiveRef.current = shareSelectionActive;
   const shareSelectionRevisionRef = useRef(shareSelectionRevision);
@@ -1752,8 +1749,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // Only pre-accept composer continuations belong to this page; delivery belongs to the app.
   const outboxSessionAliveRef = useRef<string | null>(sessionId);
   const [messageListFollowLatestRequestKey, setMessageListFollowLatestRequestKey] = useState(0);
-  const composerOverlayLayout = useComposerOverlayLayout();
-  const nativeComposerClearance = useRef(false);
+  const [bottomOverlayContentHeight, setBottomOverlayContentHeight] = useState(0);
+  // Where the input starts inside the bottom overlay. Status rows and bars
+  // above it carry their own surfaces, so the edge blur starts at the input.
+  const [composerInputTop, setComposerInputTop] = useState(0);
   const [topOverlayHeight, setTopOverlayHeight] = useState(0);
   const composerResizeDraggingRef = useRef(false);
   const pendingBottomOverlayHeightRef = useRef<number | null>(null);
@@ -2417,6 +2416,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     deviceId, deviceName, sessionId, currentSession?.source, remoteSessionRunning,
   );
   // Without a mounted input there is no marker; fall back to the whole bottom layer.
+  const composerBackdropTop = sessionResourceCards.blocked ? 0 : composerInputTop;
   // AppState 门槛:锁屏 / 切后台时导航焦点不变,useFocusEffect 的 cleanup 不会跑,
   // 驻留计时器可能在没有真实前台展示的情况下(甚至后台恢复补跑时)发出 explicit
   // 回执。把 AppState 作为回执 effect 的重算信号:离开 active 立刻取消未到期的
@@ -3024,7 +3024,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   })();
   const remoteAgentDeviceName = useCallback(
     (agentDeviceId: string) =>
-      remoteAgentCatalogs.find((item) => item.deviceId === agentDeviceId)?.name ?? agentDeviceId,
+      deviceDisplayName(agentDeviceId, undefined, remoteAgentCatalogs),
     [remoteAgentCatalogs],
   );
   const adaptiveWindow = useAdaptiveWindow();
@@ -3166,7 +3166,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       discardSessionComposerAttachmentStateRef.current();
       switchDrawerSessionInPlace(navigation, {
         deviceId: targetDeviceId,
-        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+        deviceName: deviceDisplayName(targetDeviceId, targetSession.deviceLinkDeviceName),
         sessionId: targetSession.id,
         ...(focusClientId ? { focusClientId } : {}),
       });
@@ -3236,6 +3236,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     setVoiceReleaseToSendActive(active);
     return active;
   }, [isPointInsideSendButton]);
+  // Bottom padding the message list needs to clear the composer = the composer's own height only.
+  // The keyboard lift is already applied once by ComposerKeyboardAvoidingView,
+  // so ALSO adding keyboardBottomInset here double-counted the keyboard and shoved the conversation
+  // up (badly visible once the list bottom-anchors its content). Keyboard-closed is unchanged —
+  // keyboardBottomInset is 0 then, so this matches the previous value.
+  const bottomOverlayHeight = useMemo(
+    () => Math.ceil(bottomOverlayContentHeight),
+    [bottomOverlayContentHeight],
+  );
   // Android 输入区与顶栏一样半透明:整块挂到根浮层盖在常驻消息层上。伙伴对话保持实底。
   const androidFrostedComposer = Platform.OS === 'android' && !companionChat;
   // 浮层不在键盘避让容器里,按容器缩高后的实际高度摆放,输入框才会被键盘照旧顶上去。
@@ -6015,13 +6024,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
     pendingBottomOverlayHeightRef.current = null;
-    composerOverlayLayout.update({ height: nextHeight }, nativeComposerClearance.current);
-  }, [composerOverlayLayout]);
+    setBottomOverlayContentHeight((currentHeight) => (
+      Math.abs(currentHeight - nextHeight) > 1 ? nextHeight : currentHeight
+    ));
+  }, []);
 
   const handleComposerInputTopLayout = useCallback((event: LayoutChangeEvent) => {
     const nextTop = Math.floor(event.nativeEvent.layout.y);
-    composerOverlayLayout.update({ inputTop: nextTop });
-  }, [composerOverlayLayout]);
+    setComposerInputTop((currentTop) => (Math.abs(currentTop - nextTop) > 1 ? nextTop : currentTop));
+  }, []);
 
   const handleComposerDragActiveChange = useCallback((active: boolean) => {
     composerResizeDraggingRef.current = active;
@@ -6029,8 +6040,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const pendingHeight = pendingBottomOverlayHeightRef.current;
     if (pendingHeight === null) return;
     pendingBottomOverlayHeightRef.current = null;
-    composerOverlayLayout.update({ height: pendingHeight });
-  }, [composerOverlayLayout]);
+    setBottomOverlayContentHeight((height) => Math.abs(height - pendingHeight) > 1 ? pendingHeight : height);
+  }, []);
 
   // 顶部 chrome(半透明工具栏)是绝对定位浮层:量出实高喂给消息列表做顶部让位
   // (滚到历史最顶端时第一条消息不被工具栏盖住),与 bottomOverlayHeight 同款模式。
@@ -9784,14 +9795,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && adaptiveWindow.regions.length === 0
     && (sessionOperationLayout.composerSlot === 'editable' || pendingInteractionDock)
     && !shareSelectionActive && !isSharedTaskAccessRevoked;
-  const androidComposerClearance = Platform.OS === 'android' && nativeAndroidComposerViewportAvailable
-    && adaptiveWindow.regions.length === 0 && !shareSelectionActive && !isSharedTaskAccessRevoked;
-  const androidKeyboardFollow = androidComposerClearance && nativeAndroidKeyboardViewportAvailable;
-  const ComposerViewportAnchor = Platform.OS === 'android' ? NativeAndroidComposerAnchor : NativeComposerViewportAnchor;
-  nativeComposerClearance.current = (dockKeyboardFollow && nativeComposerViewportAvailable) || androidComposerClearance;
-  // The UI-thread dock already follows native keyboard frames. A simultaneous
-  // global LayoutAnimation would animate those same frames a second time.
-  keyboardLayoutAnimation.current = !(dockKeyboardFollow || androidKeyboardFollow);
   const companionHeaderShown = companionChat && !!companionResource && !shareSelectionActive;
   const headerNode = (
     <>
@@ -9877,7 +9880,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       <ComposerKeyboardAvoidingView
         keyboard={keyboardState}
         // iOS composer dock: the spacer / lift below follow the keyboard per frame instead.
-        enabled={!(dockKeyboardFollow || androidKeyboardFollow)}
+        enabled={!dockKeyboardFollow}
         // 抽屉开着时把背后内容从读屏树里摘掉:iOS 用 accessibilityElementsHidden
         // (与抽屉侧 accessibilityViewIsModal 配对),Android 用 importantForAccessibility
         // ——后者才对 TalkBack 生效(与 ComposerRichInput 的双平台配对惯例一致)。
@@ -9908,7 +9911,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           <View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== 'ios' && { backgroundColor: colors.surface }]}>
             {headerNode}
 
-            <AnimatedContentHeight open={!!cloudHomeActor && cloudHomeUnreachable}>
             {cloudHomeActor && cloudHomeUnreachable ? (
               <CloudHomeUnreachableNotice deviceName={deviceName} onSwitch={() => router.push({
                 pathname: '/companions/cloud/[actorId]',
@@ -9916,8 +9918,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   title: resolveRemoteText(companionResource!.display.title, i18nInstance.language) },
               })} />
             ) : null}
-            </AnimatedContentHeight>
-            <AnimatedContentHeight open={!isSharedTaskAccessRevoked && !quietConnection && (showConnectionBanner || showCachedHistoryNotice)}>
             {!isSharedTaskAccessRevoked && !quietConnection && (showConnectionBanner || showCachedHistoryNotice) ? (
               <ConnectionBanner
                 density="compact"
@@ -9938,7 +9938,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 variant="inline"
               />
             ) : null}
-            </AnimatedContentHeight>
           </View>
         </View>
         </SessionChromeLayer>
@@ -10396,7 +10395,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 : undefined}
             />
           ) : (
-            <ComposerOverlayHeight source={composerOverlayLayout}>{(bottomOverlayHeight) => (<>
+            <>
               <RewindPreviewPanel
                 committing={!!messageActionBusy && isCommitReadyRewindState(rewindState)}
                 onCancel={() => setRewindState({ kind: 'idle' })}
@@ -10422,7 +10421,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   // Android 的常驻消息层画在页面之上;顶栏经 SessionChromeLayer 盖在它上面,
                   // 所以消息层从顶部开始绘制,滚动时能透过半透明顶栏看到。
                   topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}
-                  bottomInset={androidFrostedComposer || androidComposerClearance ? 0 : bottomOverlayHeight}
+                  bottomInset={androidFrostedComposer ? 0 : bottomOverlayHeight}
                   interactive={!sessionListDrawerOverlayMounted}>
 
                 <SessionQuickSendProvider value={canUseComposer ? async text => (await send({ independentText: text })) === true : null}>
@@ -10435,8 +10434,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     showPluginInvocations={!companionChat && Boolean(currentSession && currentSession.source !== 'bot')}
                     bottomOverlayHeight={bottomOverlayHeight}
                     renderScrollComponent={renderMessageScroll}
-                    nativeKeyboardViewport={dockKeyboardFollow && nativeKeyboardViewportAvailable}
-                    composerSurfaceId={(dockKeyboardFollow && nativeComposerViewportAvailable) || androidComposerClearance ? composerSurfaceId : undefined}
                     contentBottomInset={companionInlineInteraction && !shareSelectionActive
                       ? spacing.md
                       : nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
@@ -10556,18 +10553,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 </RecentMessageHistories>
               ) : null}
 
-            </>)}</ComposerOverlayHeight>
+            </>
           )}
         </View>
 
         {!isSharedTaskAccessRevoked && nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive ? (
           <DockKeyboardLift active={dockKeyboardFollow} restingBottom={composerDock.restingBottom} keyboardGap={composerDock.keyboardGap}
             pointerEvents="none" style={StyleSheet.absoluteFill}>
-            <ComposerOverlayLayout source={composerOverlayLayout}>{({ height, inputTop }) => <SessionHeaderNativeBlur
+            <SessionHeaderNativeBlur
               edge="bottom"
-              height={Math.max(0, height - (sessionResourceCards.blocked ? 0 : inputTop))}
+              height={Math.max(0, bottomOverlayHeight - composerBackdropTop)}
               inset={dockKeyboardFollow ? 0 : nativeShellLayout.keyboardBottomInset}
-            />}</ComposerOverlayLayout>
+            />
           </DockKeyboardLift>
         ) : null}
         {Platform.OS === 'android' ? (
@@ -10575,7 +10572,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           <View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />
         ) : null}
         <SessionChromeLayer
-          enabled={androidFrostedComposer || androidComposerClearance}
+          enabled={androidFrostedComposer}
           height={keyboardAreaHeight ?? windowDimensions.height}
           hiddenFromAccessibility={sessionListDrawerOverlayMounted}
           left={paneLayout.detail.x}
@@ -10602,9 +10599,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               overflow: 'hidden',
             },
           ]}
-        ><ComposerViewportAnchor
-          surfaceId={composerSurfaceId}
-          {...(Platform.OS === 'android' ? { followKeyboard: androidKeyboardFollow } : {})}
+        ><View
+          ref={bottomOverlayRef}
           onLayout={handleBottomOverlayLayout}
           pointerEvents="box-none"
           style={[
@@ -10629,12 +10625,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           {androidFrostedComposer ? (
             // 与顶栏同一底:半透明 surface + 模糊,消息从输入区下面滚过时能透出一点。
             // 从输入框顶部起算:上方的状态胶囊自带底,再垫一层会叠成两层底。
-            <ComposerOverlayLayout source={composerOverlayLayout}>{({ inputTop }) => <View pointerEvents="none" style={[
+            <View pointerEvents="none" style={[
               StyleSheet.absoluteFill,
-              sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive && { top: sessionResourceCards.blocked ? 0 : inputTop },
+              sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive && { top: composerBackdropTop },
             ]} testID="session.composerFrost">
               <BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />
-            </View>}</ComposerOverlayLayout>
+            </View>
           ) : null}
           <View
             pointerEvents="box-none"
@@ -10819,16 +10815,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   例外:新建任务慢发送时这一行要说明卡在哪一步,不能被同步占位藏掉。
                   判据必须带 messageCount:syncingWhileEmpty 只要 loading 就为真,而收口后
                   还会再来几轮 load(实测日志),只看它会让已有消息的会话反复熄灭活动条。 */}
-              {/* Animate occupied space through completion, keeping the last status during exit. */}
+              {/* 保留活动行的位置：提示出现、切换与结束不改变消息列表底部留白。 */}
               {!companionChat ? (
-                <AnimatedContentHeight open={!!(showComposerActivity || pendingRecoveryStatus)
-                  && (creationSlowPhase !== null || !(syncingWhileEmpty && !hasRenderedMessages))}>
                 <View
                   pointerEvents="box-none"
                   style={[
                     styles.composerActivityFrame,
                     {
                       paddingHorizontal: composerTouchLayout.composerPaddingHorizontal,
+                      minHeight: 44,
                     },
                   ]}
                 >
@@ -10854,7 +10849,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     />
                   ) : null}
                 </View>
-                </AnimatedContentHeight>
               ) : null}
               {companionChat && companionResource?.ref.id === 'cindy-default'
                 && companionResource.links.some(link => link.rel === 'conversation' && link.target.kind === 'session' && link.target.sessionId === sessionId)
@@ -10864,9 +10858,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               ) : null}
               {/* Desktop BotWorkingStatus: a teammate's paced public status stays above the composer,
                   also while the user reads older messages. Interactions carry their own panel. */}
-              {companionChat ? (
-                <AnimatedContentHeight open={!!companionWorkingLabel && !companionInlineInteraction
-                  && !(syncingWhileEmpty && !hasRenderedMessages)}>
+              {companionChat && companionWorkingLabel && !companionInlineInteraction
+                && !(syncingWhileEmpty && !hasRenderedMessages) ? (
                 <View
                   style={[
                     styles.composerActivityFrame,
@@ -10875,11 +10868,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 >
                   <CompanionWorkingStatus
                     key={JSON.stringify([auth.accountGeneration, deviceId, sessionId])}
-                    label={companionWorkingLabel ?? ''}
+                    label={companionWorkingLabel}
                     avatar={companionPortrait(COMPANION_STATUS_AVATAR_SIZE)}
                   />
                 </View>
-                </AnimatedContentHeight>
               ) : null}
               {!shareSelectionActive && currentSession?.source === 'side-chat'
                 && currentSession.parentSessionId ? (
@@ -11060,10 +11052,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             />
           ) : null}
           </View>
-        </ComposerViewportAnchor>
+        </View>
         </DockKeyboardLift>}
         </SessionChromeLayer>
-        <DockKeyboardViewportSpacer active={dockKeyboardFollow && !nativeKeyboardViewportAvailable} />
+        <DockKeyboardViewportSpacer active={dockKeyboardFollow} />
       </ComposerKeyboardAvoidingView>
       </PaneViewportProvider>
 
@@ -12054,6 +12046,7 @@ function SessionComposerInput({
     setComposerDraft((current) => current ? `${current}\n${promptRecommendation}` : promptRecommendation);
     composerInputRef.current?.focus();
   }, [promptRecommendation, recommendationPresentation.hide, setComposerDraft, composerInputRef]);
+  useComposerCardTransition(composerCardActive, keyboardState);
   const composerChromeHeight = useMemo(() => {
     const statusReserve = voiceStatusVisible
       ? COMPOSER_STATUS_ROW_RESERVED_HEIGHT + COMPOSER_STACK_GAP_HEIGHT
@@ -12256,15 +12249,18 @@ function SessionComposerInput({
   const controls = renderControls({ composerLayout, composerSendUnavailableReason, composerStopDisabledReason, composerStopDisabled, composerShowInlineStop, composerSendSlotIsStop, composerShowSendButton, composerSendDisabled, voiceIsListening, voiceIsProcessing, voiceProcessingIndicator, voiceIsBusy, voiceRecordingTimer, composerVoicePlacement });
   return (
     <>
-      <PromptRecommendationSlot key={sessionId}
-        prompt={visibleRecommendation}
-        paddingHorizontal={composerTouchLayout.composerPaddingHorizontal}
-        onAccept={acceptRecommendation}
-        onDismiss={onDismissPromptRecommendation}
-      />
+      {visibleRecommendation ? (
+        <View style={{ paddingHorizontal: composerTouchLayout.composerPaddingHorizontal }}>
+          <PromptRecommendation
+            key={`${sessionId}:${visibleRecommendation}`}
+            prompt={visibleRecommendation}
+            onAccept={acceptRecommendation}
+            onDismiss={onDismissPromptRecommendation}
+          />
+        </View>
+      ) : null}
       {/* Zero-height marker: the edge backdrop starts at the input, not at cards above it. */}
       <View onLayout={onInputTopLayout} pointerEvents="none" testID="session.composerInputTop" />
-      <AnimatedContentHeight allowOverflow>
               <Reanimated.View
                 style={[
                   styles.composer,
@@ -12406,7 +12402,6 @@ function SessionComposerInput({
                 </View>
                 </ComposerFrame>
               </Reanimated.View>
-      </AnimatedContentHeight>
     </>
 
   );
@@ -12929,14 +12924,13 @@ function ComposerActivityStatus({
   const usageMeta = (
     <View style={[pillStyles.composerActivityPill, styles.composerActivityMeta]}>
       <BlurBackdrop intensity={FLOATING_CHROME_BLUR_INTENSITY} overlayColor={composerActivityPillOverlayColor(colors)} style={pillStyles.composerActivityPillBackdrop} />
-      <Text numberOfLines={1} style={styles.composerActivityMetaText}>{elapsedText}</Text>
+      <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
       {showUsageMeta ? (
         <>
-          <Text numberOfLines={1} style={styles.composerActivityMetaText}>·</Text>
+          <Text style={styles.composerActivityMetaText}>·</Text>
           {rateText ? (
             <Text
               accessibilityLabel={rateText}
-              numberOfLines={1}
               style={styles.composerActivityMetaText}
             >
               {rateText}
@@ -12946,7 +12940,6 @@ function ComposerActivityStatus({
               <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
               <Text
                 accessibilityLabel={tokenA11yText}
-                numberOfLines={1}
                 style={styles.composerActivityMetaText}
               >
                 {tokenText}

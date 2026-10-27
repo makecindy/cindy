@@ -336,6 +336,9 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         }
         ctx.assertOwner();
         await updateBotProfile({ id: ctx.botId,
+          // Supplying a model selection explicitly accepts it even when its
+          // value is unchanged; unrelated profile edits retain automation state.
+          ...(modelChain !== undefined ? { acceptSavedModelSelectionVersion: input.expectedVersion } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.identitySource !== undefined ? { identitySource: input.identitySource } : {}),

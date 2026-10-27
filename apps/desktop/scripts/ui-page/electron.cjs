@@ -9,7 +9,7 @@ if (![profile, bundleDir, evidenceDir].every((dir) => dir && path.isAbsolute(dir
   throw new Error('Missing isolated UI profile, bundle or evidence directory');
 // Same policy the runner sends with the page document in Chromium mode.
 const csp =
-  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
 fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
 app.setPath('sessionData', profile);

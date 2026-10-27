@@ -1,18 +1,13 @@
 import { withoutBotHiddenLanes } from './botGroupLane';
 import type { BotProfile } from './botStore';
+import { deviceDisplayName } from '@/lib/deviceName';
 
 /** Keep unnamed and identically named hosts distinguishable without changing routing IDs. */
 export function botDeviceLabel(
   device: { deviceId: string; name: string },
   devices: readonly { deviceId: string; name: string }[],
 ): string {
-  const name = device.name.trim();
-  if (!name) return device.deviceId;
-  const duplicate = devices.some(
-    (other) => other.deviceId !== device.deviceId
-      && other.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
-  );
-  return duplicate ? `${name} (${device.deviceId})` : name;
+  return deviceDisplayName(device.deviceId, device.name, devices);
 }
 
 function finiteTimestamp(value: unknown): number {

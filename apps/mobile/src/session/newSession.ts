@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
@@ -1192,7 +1193,7 @@ function readNewSessionDeviceOptionsParam(value: unknown): NewSessionDeviceOptio
       const record = item as Record<string, unknown>;
       const deviceId = readString(record.deviceId)?.trim() ?? '';
       if (!deviceId) return [];
-      const name = readString(record.name)?.trim() || deviceId;
+      const name = deviceDisplayName(deviceId, readString(record.name));
       return [{ deviceId, name }];
     });
   } catch {
@@ -1209,7 +1210,7 @@ function normalizeNewSessionDeviceOptions(
     const deviceId = option.deviceId.trim();
     if (!deviceId || seen.has(deviceId)) continue;
     seen.add(deviceId);
-    result.push({ deviceId, name: option.name.trim() || deviceId });
+    result.push({ deviceId, name: deviceDisplayName(deviceId, option.name) });
   }
   return result;
 }

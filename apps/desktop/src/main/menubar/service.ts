@@ -87,6 +87,7 @@ import {
   type MenubarSubscriptionInput,
 } from './snapshot.js';
 import { buildMenubarUiStrings, createMenubarTranslate } from './strings.js';
+import { buildMenubarActivities } from './activity.js';
 
 const log = createLogger('menubar');
 
@@ -253,7 +254,7 @@ export class MenubarService {
     const island = getAgentIslandService();
     if (island) {
       this.disposers.push(
-        island.subscribeAttentionCount((count) => this.publishAttentionCount(count)),
+        island.subscribeTaskOverview(() => this.publishTaskOverview()),
         island.subscribeSessionActivity(({ previous, current }) => {
           const wasRunning = previous ? isSessionActivityRunning(previous) : false;
           const isRunning = current ? isSessionActivityRunning(current) : false;
@@ -477,7 +478,7 @@ export class MenubarService {
       ...(gate ? { gate } : {}),
     };
     const view = buildMenubarView(input);
-    view.attentionCount = gate ? 0 : (getAgentIslandService()?.getAttentionCount() ?? 0);
+    Object.assign(view, this.taskOverview(gate));
     Object.assign(view, this.controlState(gate));
     this.lastView = view;
     this.host.publish(view);
@@ -490,10 +491,20 @@ export class MenubarService {
   }
 
   /** Unread changes must not wait for quota/history/network reads to finish. */
-  private publishAttentionCount(count: number): void {
-    if (!this.started || !this.lastView || this.lastView.gate) return;
-    if (this.lastView.attentionCount === count) return;
-    this.lastView = { ...this.lastView, attentionCount: count };
+  private taskOverview(gate?: MenubarGate): Pick<MenubarView, 'activities' | 'attentionCount'> {
+    const locale = getResolvedMainLocale();
+    const activities = gate ? [] : buildMenubarActivities(
+      getAgentIslandService()?.getTaskOverview() ?? [], this.settings.privacy,
+      createMenubarTranslate(locale, key => rawMainString(key, locale)),
+    );
+    return { activities, attentionCount: activities.filter(row => row.attention).length };
+  }
+
+  private publishTaskOverview(): void {
+    if (!this.started || !this.lastView || this.lastView.gate || isAppSessionBoundaryPending() || !hasDataOwner()) return;
+    const overview = this.taskOverview();
+    if (JSON.stringify(this.lastView.activities) === JSON.stringify(overview.activities)) return;
+    this.lastView = { ...this.lastView, ...overview };
     this.host.publish(this.lastView);
   }
 
@@ -660,7 +671,11 @@ export class MenubarService {
         this.showMainWindow();
         return;
       case 'open-session':
-        openMainWindowSession(message.sessionId);
+        if (this.lastView?.activities?.some(row => row.sessionId === message.sessionId)) {
+          getAgentIslandService()?.openTaskOverviewSession(message.sessionId);
+        } else {
+          openMainWindowSession(message.sessionId);
+        }
         return;
       case 'detail-action':
         void this.runDetailAction(message.sourceId);

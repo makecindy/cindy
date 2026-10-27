@@ -894,9 +894,6 @@
     "apps/desktop/src/renderer/hooks/__tests__/useDingTalkBot.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/hooks/__tests__/useFeishuBot.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/hooks/__tests__/useModelPricing.test.ts": {
       "resetModules": 1
     },

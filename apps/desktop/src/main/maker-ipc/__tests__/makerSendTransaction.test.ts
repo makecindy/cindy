@@ -3372,6 +3372,30 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain('[Side chat context]');
   });
 
+  // Unit / #7253: only wire context explains delivery reporting. The previous
+  // source-note coverage did not protect all harnesses, dedupe, or persistence.
+  it.each(['claude-code', 'codex', 'pi'] as const)('adds deduplicated delivery context to %s without saving it as user text', async (agentKind) => {
+    const memory = createWireNoteMemory();
+    const session = createSession({ agentKind });
+    const note = '[Task delivery] Report newly delivered results before ending.';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readTaskDeliveryNote: async () => note,
+      planRepeatableWireNotes: (id, notes, opts) => memory.plan(id, notes, opts),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Complete the work', undefined, {
+      persistUserMessage: { clientId: 'delivery-1', content: 'Complete the work' },
+    });
+    expect(vi.mocked(session.send).mock.calls[0][0]).toContain(note);
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Complete the work');
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).toBe('Continue');
+    memory.reset('session-1');
+    await transaction.sendToAgentAccepted('session-1', 'Continue after compaction');
+    expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
+  });
+
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const readTaskSource = vi.fn(async () => 'side-chat');

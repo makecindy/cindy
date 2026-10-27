@@ -1,4 +1,0 @@
-{
-  "platforms": ["android"],
-  "android": { "modules": ["expo.modules.cindychatviewport.CindyChatViewportModule"] }
-}

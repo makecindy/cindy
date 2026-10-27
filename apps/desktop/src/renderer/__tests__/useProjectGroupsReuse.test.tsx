@@ -96,7 +96,7 @@ describe('project grouping hook references', () => {
     const { result, rerender } = renderHook(({ rows }) => useProjectGroups(rows), {
       initialProps: { rows },
     });
-    expect(result.current.projects.every((p) => p.remoteMachineIdentity?.detail)).toBe(true);
+    expect(result.current.projects.map((p) => p.remoteMachineIdentity?.displayLabel).sort()).toEqual(['Same machine (1)', 'Same machine (2)']);
     const next = rows.slice();
     next[1] = { ...next[1], deviceLinkDeviceName: 'Renamed machine' };
     rerender({ rows: next });

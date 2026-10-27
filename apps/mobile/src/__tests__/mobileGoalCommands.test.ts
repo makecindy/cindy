@@ -10,6 +10,7 @@ import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposer
 import { captureNewSessionOwner } from '@/session/newSessionForm';
 import { reconcileNewSessionSubmitDraft } from '@/session/newSessionRuntimeReconciliation';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { deviceDisplayName } from '@/device-link/deviceName';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -47,6 +48,7 @@ function newHarness(text = '/goal target') {
   const noop = vi.fn();
   const draft = { agentKind: 'pi', model: 'test-model', providerId: 'test-provider', workspaceKind: 'dialogue', workingDir: '', firstMessage: text, agentDeviceId: 'agent-device' };
   const bindings = {
+    deviceDisplayName,
     parseGoalCommand, parseMobileDesktopCommand,
     firstMessageRef: { current: text }, slashCommands: [], pendingGoalSkillRef: { current: null as string | null },
     creatingRef: { current: false }, voiceIsBusy: false, attachmentsRef: { current: [] as unknown[] }, pendingUploads: [] as unknown[],

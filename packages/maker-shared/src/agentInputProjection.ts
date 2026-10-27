@@ -136,6 +136,33 @@ export function boundAgentReferenceText(
   return { text: text.slice(0, cap), truncated: true };
 }
 
+/** Stable identity of one quoted message across the composer and the session-reference resolver. */
+export function agentInputMessageReferenceKey(sessionId: string, messageClientId: string): string {
+  return `${sessionId}\u0000${messageClientId}`;
+}
+
+/**
+ * Messages whose body already reaches the model verbatim inside the user
+ * message. The quoted-history payload must not deliver those bodies a second
+ * time: a duplicate copy spends the shared quote budget and can arrive
+ * trimmed, so the model would see the same message twice — once complete,
+ * once mutilated.
+ */
+export function collectInlineMessageReferenceKeys(
+  references: readonly AgentInputReference[] | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const reference of references ?? []) {
+    if (reference.kind !== 'message') continue;
+    // No inline body, or a body that was cut at the reference cap: the quote
+    // still has to carry the message.
+    if (!reference.text?.trim()) continue;
+    if (reference.truncated === true) continue;
+    keys.add(agentInputMessageReferenceKey(reference.sessionId, reference.messageClientId));
+  }
+  return keys;
+}
+
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }

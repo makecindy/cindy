@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -1763,7 +1764,7 @@ function ModelSelectorContentView({
       const groupSize = groupMembers ? providerGroupDeviceCount(groupMembers) : readProviderShareGroupSize(provider);
       const values = {
         provider: provider ? providerDisplayName(provider, t) : providerId,
-        device: device?.name || targetDeviceId,
+        device: deviceDisplayName(targetDeviceId, device?.name),
       };
       return groupSize != null
         ? t('newChat.modelSelector.unified.railRemoteProviderGroup', {
@@ -1809,7 +1810,7 @@ function ModelSelectorContentView({
         );
         return {
           kind: 'running',
-          deviceName: homeDeviceId ? remoteAgent?.homeDeviceName || homeDeviceId : null,
+          deviceName: homeDeviceId ? deviceDisplayName(homeDeviceId, remoteAgent?.homeDeviceName) : null,
           usage: provider ? { provider, scope: { deviceId: homeDeviceId ?? null } } : null,
         };
       }
@@ -3407,7 +3408,7 @@ function ModelSelectorContentView({
       const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
       const agentDevice = {
         deviceId: targetDeviceId,
-        name: remoteAgentDevices?.find((device) => device.deviceId === targetDeviceId)?.name || targetDeviceId,
+        name: deviceDisplayName(targetDeviceId, undefined, remoteAgentDevices ?? []),
       };
       const dismissIfApplied = (applied: boolean) => {
         if (applied) {
