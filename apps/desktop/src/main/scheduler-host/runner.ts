@@ -3778,7 +3778,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
 function buildScheduledRunPrompt(schedule: Schedule, ctx: FireContext, checkOutput = ''): string {
   const routineWait = schedule.source === 'bot' && schedule.recurring
-    ? '\n\n[Routine checkpoint] For recurring checks with another trigger scheduled, inspect the current state and finish this run once actionable work is handled. If only external progress is pending, leave a concise checkpoint (identifiers, current state and next check) for the next scheduled trigger; do not keep this run alive with repeated sleep/poll calls. Complete one-time assignments and preserve explicit instructions requiring continuous observation or a delivery deadline.'
+    ? '\n\n[Routine checkpoint] For recurring checks with another trigger scheduled, inspect the current state and finish this run once actionable work is handled. If only external progress is pending, leave a concise checkpoint (identifiers, current state and next check) in the final result; do not keep this run alive with repeated sleep/poll calls. A later trigger may start with fresh context: when prior progress is needed, retrieve the previous result from the existing routine or schedule run history instead of assuming it is in this conversation. Complete one-time assignments and preserve explicit instructions requiring continuous observation or a delivery deadline.'
     : '';
   return `${schedule.prompt}${checkOutput}${buildScheduledRunContextInstruction(schedule, ctx)}${routineWait}${
     schedule.silentWhenIdle ? buildSilentRunInstruction(schedule.source === 'bot') : ''
