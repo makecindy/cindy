@@ -4731,6 +4731,15 @@
         "ariaLabel": "使用 {{shortcut}} 发送消息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务默认工作目录",
+      "label": "本机默认工作目录",
+      "hint": "新建本机任务且未选择项目时，预选此目录。明确选择的项目、对话或远程设备仍优先。",
+      "unset": "未设置（不预选目录）",
+      "choose": "选择目录",
+      "clear": "清除默认目录",
+      "failed": "保存默认工作目录失败，请重试"
+    },
     "linkOpen": {
       "title": "打开链接",
       "description": "选择消息链接的打开位置，右键可临时更换",

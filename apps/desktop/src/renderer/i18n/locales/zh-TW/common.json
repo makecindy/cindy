@@ -4731,6 +4731,15 @@
         "ariaLabel": "使用 {{shortcut}} 傳送訊息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務預設工作目錄",
+      "label": "本機預設工作目錄",
+      "hint": "建立本機任務且未選擇專案時，預先選取此目錄。明確選擇的專案、對話或遠端裝置仍優先。",
+      "unset": "未設定（不預選目錄）",
+      "choose": "選擇目錄",
+      "clear": "清除預設目錄",
+      "failed": "儲存預設工作目錄失敗，請重試"
+    },
     "linkOpen": {
       "title": "開啟連結",
       "description": "選擇訊息連結的開啟位置，右鍵可臨時更換",

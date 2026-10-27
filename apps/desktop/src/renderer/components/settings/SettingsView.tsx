@@ -35,6 +35,7 @@ import { SharedTaskDialog } from '@/features/device-link/SharedTaskDialog';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
+import { DefaultNewTaskWorkingDirSection } from './DefaultNewTaskWorkingDirSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
@@ -392,6 +393,14 @@ export function SettingsView() {
                       aria-label={t('settings.sections.composer')}
                     >
                       <ComposerSendShortcutSection />
+                    </section>
+
+                    <section
+                      id="settings-default-new-task-working-dir"
+                      className="py-[18px]"
+                      aria-label={t('settings.defaultNewTaskWorkingDir.title')}
+                    >
+                      <DefaultNewTaskWorkingDirSection ownerId={dataOwnerId} />
                     </section>
 
                     {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。

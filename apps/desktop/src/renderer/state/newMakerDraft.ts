@@ -108,6 +108,8 @@ export interface NewMakerDraft {
   vendor: MakerVendor;
   /** 选中的 workingDir;初次 null,Project 行内 + 会预填到此。 */
   workingDir: string | null;
+  /** 用户明确选过「对话（不在项目中）」；本次草稿不得再由默认目录回填。 */
+  explicitNoProject: boolean;
   /** 远程项目所属 host。null = 本地项目或对话。 */
   remoteHostId: string | null;
   /**
@@ -241,6 +243,7 @@ function makeDefault(): NewMakerDraft {
   return {
     vendor: 'cc',
     workingDir: null,
+    explicitNoProject: false,
     remoteHostId: null,
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
@@ -467,6 +470,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   return {
     vendor,
     workingDir,
+    explicitNoProject: workingDir == null && r.explicitNoProject === true,
     remoteHostId: workingDir == null ? null : remoteHostId,
     // device-link 目标**不跨重启恢复**:绑定的是活动设备,重启后可能已离线 → 一律置 null。
     deviceLinkDeviceId: null,
@@ -852,6 +856,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
         : null;
   }
   const next: NewMakerDraft = { ...currentDraft, ...normalizedPatch };
+  if ('workingDir' in normalizedPatch && next.workingDir != null) {
+    next.explicitNoProject = false;
+  }
   if ('workingDir' in patch && next.workingDir == null) {
     next.remoteHostId = null;
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
@@ -918,13 +925,18 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
  * fastModeByModel 等模型偏好保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
  *
  * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
+ * 功能引导默认保留「无项目」意图；发送成功后传 explicitNoProject=false，
+ * 让下一次通用新建可以选用用户设置的默认目录。
  * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
  * 访问权(#1103 review 实例:两个预填入口都手写了清单,把级联已经处理的三个字段
  * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
  */
-export function resetDraftWorkspaceTargets(): void {
+export function resetDraftWorkspaceTargets(
+  { explicitNoProject = true }: { explicitNoProject?: boolean } = {},
+): void {
   patchDraft({
     workingDir: null,
+    explicitNoProject,
     extraDirs: [],
     writableDirs: [],
     collab: { ...currentDraft.collab, enabled: false },

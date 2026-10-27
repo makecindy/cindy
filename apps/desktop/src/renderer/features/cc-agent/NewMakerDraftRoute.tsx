@@ -47,6 +47,7 @@ import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
+import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
@@ -186,6 +187,7 @@ import {
   isSameNewMakerDevice,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  shouldPrefillDefaultNewTaskWorkingDir,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -679,7 +681,7 @@ function getCurrentRoutePath(): string {
  * 该语义已提到 store 侧共享,其它「另起一段干净对话」的入口也走同一个函数。
  */
 function resetDraftWorkspaceAfterSend(): void {
-  resetDraftWorkspaceTargets();
+  resetDraftWorkspaceTargets({ explicitNoProject: false });
 }
 
 /**
@@ -696,6 +698,8 @@ interface DraftTargetRequest {
   deviceName: string | null;
   /** 目标工作区;null = 该设备上的「对话」(不绑项目)。 */
   workingDir: string | null;
+  /** Only explicit dialogue selections suppress the saved default for this draft. */
+  explicitNoProject?: boolean;
   /**
    * 已经 inline 拉到的被控端快照。只有「添加远程项目」那条路径有 —— 它为了验证设备可达,本来就
    * 直接 invoke 过 capabilities / providers / defaults,于是能立刻 seed,不必等 effect 再跑一轮隧道往返。
@@ -724,6 +728,7 @@ export function NewMakerDraftRoute() {
     [location.state],
   );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
+  const handledGenericDefaultLocationRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
   const handledFolderPickerRequestRef = useRef<string | null>(null);
   // Writable picker evidence is Main-owned and bound to the actual local task id.
@@ -2403,6 +2408,7 @@ export function NewMakerDraftRoute() {
         deviceLinkDeviceId: req.deviceId,
         deviceLinkDeviceName: req.deviceName,
         workingDir: req.workingDir,
+        explicitNoProject: req.workingDir == null && req.explicitNoProject === true,
         // device-link 与 SSH 互斥。
         remoteHostId: null,
         // 换设备 → 上一台的路径全失效;进「对话」→ 单次授权不该跨上下文延续。
@@ -2435,22 +2441,48 @@ export function NewMakerDraftRoute() {
     // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
     // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
     modePickerSelectionSeqRef.current += 1;
+    const currentDraft = getDraft();
+    const sameDevice = isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft);
+    const defaultDir =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic' &&
+      dialogueTargetRequest.deviceId === null
+        ? getDefaultNewTaskWorkingDir(dataOwnerId)
+        : null;
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
-      !isSameNewMakerDevice(dialogueTargetRequest.deviceId, getDraft())
+      !sameDevice
     ) {
       patchCollab({ enabled: false });
       applyDraftTarget({
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
-        workingDir: null,
+        workingDir: defaultDir,
+        explicitNoProject:
+          (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue',
       });
+    } else if (
+      defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
+    ) {
+      applyDraftTarget({ deviceId: null, deviceName: null, workingDir: defaultDir });
     }
     navigate(`${location.pathname}${location.search}${location.hash}`, {
       replace: true,
       state: consumeNewMakerDialogueTargetRequest(location.state),
     });
-  }, [applyDraftTarget, dialogueTargetRequest, location, navigate]);
+  }, [applyDraftTarget, dataOwnerId, dialogueTargetRequest, location, navigate]);
+
+  // The sidebar's generic action has no target request when its source is not a task.
+  // Apply the local default once for that navigation; later manual "Dialogue" selections win.
+  useLayoutEffect(() => {
+    if (!dataOwnerId || dialogueTargetRequest) return;
+    const token = `${dataOwnerId}:${location.key}`;
+    if (handledGenericDefaultLocationRef.current === token) return;
+    handledGenericDefaultLocationRef.current = token;
+    const defaultDir = getDefaultNewTaskWorkingDir(dataOwnerId);
+    if (defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, getDraft())) {
+      applyDraftTarget({ deviceId: null, deviceName: null, workingDir: defaultDir });
+    }
+  }, [applyDraftTarget, dataOwnerId, dialogueTargetRequest, location.key, location.state]);
 
   // 弹窗确认添加后的落点:SSH 立即建会话 + navigate;device-link 把当前草稿指向被控端项目,
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。
@@ -3078,6 +3110,7 @@ export function NewMakerDraftRoute() {
         deviceId: draft.deviceLinkDeviceId,
         deviceName: draft.deviceLinkDeviceName,
         workingDir: dir,
+        explicitNoProject: dir === null,
       });
     },
     [applyDraftTarget, draft.deviceLinkDeviceId, draft.deviceLinkDeviceName],
@@ -3211,7 +3244,7 @@ export function NewMakerDraftRoute() {
       // 快照未就绪期间由 send / goal 的 capabilitiesLoading / deviceProvidersLoading /
       // remoteDraftState.status 三重 gate 兜住。也因此不必 prefetch:上面已把「重选同一设备」
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
-      applyDraftTarget({ deviceId, deviceName, workingDir: null });
+      applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });
     },
     [effectiveDeviceLinkDeviceId, applyDraftTarget],
   );

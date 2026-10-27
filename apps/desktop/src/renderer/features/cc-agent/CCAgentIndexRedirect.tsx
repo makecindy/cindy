@@ -64,12 +64,15 @@ export function CCAgentIndexRedirect() {
     if (isLoading || hasRedirected.current) return;
 
     let cancelled = false;
-    const redirect = (route: string) => {
+    const redirect = (route: string, genericNew = false) => {
       if (cancelled || hasRedirected.current) return;
       // Lock only once navigation commits: an effect cancelled by a newer
       // snapshot (or StrictMode) must be allowed to resolve the route again.
       hasRedirected.current = true;
-      navigate(route, { replace: true });
+      navigate(route, {
+        replace: true,
+        ...(genericNew ? { state: { workspacePrompt: 'generic' } } : {}),
+      });
     };
     void (async () => {
       const last = loadLastChatView();
@@ -91,7 +94,7 @@ export function CCAgentIndexRedirect() {
       };
 
       if (last?.kind === 'new') {
-        redirect('/cc-agent/new');
+        redirect('/cc-agent/new', true);
         return;
       }
 
@@ -129,7 +132,7 @@ export function CCAgentIndexRedirect() {
         }
       }
       // 列表为空 → transient draft route(无后端 session)
-      redirect('/cc-agent/new');
+      redirect('/cc-agent/new', true);
     })();
 
     return () => {

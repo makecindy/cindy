@@ -12,6 +12,7 @@ export default {
     { id: 'general.bots', tab: 'general', targetId: 'settings-bots', titleKey: 'settings.sections.bots', sectionKey: 'settings.sections.bots' },
     { id: 'general.windowBehavior', tab: 'general', targetId: 'settings-window-behavior', titleKey: 'settings.sections.windowBehavior', sectionKey: 'settings.sections.windowBehavior' },
     { id: 'general.composer', tab: 'general', targetId: 'settings-composer', titleKey: 'settings.sections.composer', sectionKey: 'settings.sections.composer' },
+    { id: 'general.defaultNewTaskWorkingDir', tab: 'general', targetId: 'settings-default-new-task-working-dir', titleKey: 'settings.defaultNewTaskWorkingDir.title', sectionKey: 'settings.tabs.general', descriptionKey: 'settings.defaultNewTaskWorkingDir.hint' },
     { id: 'general.collaboration', tab: 'general', targetId: 'settings-collaboration', titleKey: 'settings.sections.collaboration', sectionKey: 'settings.sections.collaboration', aliases: ['collaboration'] },
     { id: 'general.agentResource', tab: 'general', targetId: 'settings-agent-resource', titleKey: 'settings.sections.agentResource', sectionKey: 'settings.sections.agentResource' },
     { id: 'general.gitSafety', tab: 'general', targetId: 'settings-search-target-general-git-safety', titleKey: 'settings.sections.gitSafety', sectionKey: 'settings.sections.gitSafety' },

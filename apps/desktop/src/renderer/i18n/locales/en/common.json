@@ -4828,6 +4828,15 @@
         "ariaLabel": "Use {{shortcut}} to send messages"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Default working directory for new tasks",
+      "label": "Default directory on this computer",
+      "hint": "Preselect this directory for new local tasks with no project chosen. An explicitly selected project, dialogue, or remote computer takes priority.",
+      "unset": "Not set (no directory preselected)",
+      "choose": "Choose directory",
+      "clear": "Clear default",
+      "failed": "Could not save the default working directory. Try again."
+    },
     "linkOpen": {
       "title": "Open Links",
       "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
